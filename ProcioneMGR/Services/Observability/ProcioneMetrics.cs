@@ -55,8 +55,11 @@ public sealed class ProcioneMetrics : IDisposable
     public void RecordPipelineRun(string status) =>
         _pipelineRuns.Add(1, new KeyValuePair<string, object?>("status", status));
 
-    public void RecordTradeExecuted(string mode, string side) =>
-        _tradesExecuted.Add(1, new KeyValuePair<string, object?>("mode", mode), new KeyValuePair<string, object?>("side", side));
+    public void RecordTradeExecuted(string mode, string side, string action = "Open") =>
+        _tradesExecuted.Add(1,
+            new KeyValuePair<string, object?>("mode", mode),
+            new KeyValuePair<string, object?>("side", side),
+            new KeyValuePair<string, object?>("action", action));
 
     public void RecordExecutionJob(string algorithm, string status) =>
         _executionJobs.Add(1, new KeyValuePair<string, object?>("algorithm", algorithm), new KeyValuePair<string, object?>("status", status));

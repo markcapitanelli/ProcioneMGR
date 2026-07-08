@@ -41,7 +41,8 @@ public sealed class TradingEngine(
     IOptionsMonitor<SafetyConfiguration> safety,
     IOptionsMonitor<LiveExecutionOptions> liveExecution,
     IExecutionAlgorithmFactory executionAlgorithms,
-    ILogger<TradingEngine> logger) : ITradingEngine
+    ILogger<TradingEngine> logger,
+    ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null) : ITradingEngine
 {
     public int LaneId => laneId;
 
@@ -249,6 +250,7 @@ public sealed class TradingEngine(
             job.CompletedAtUtc = ts;
             _executionJobs.Remove(job);
             await PersistExecutionJobAsync(job, ct);
+            metrics?.RecordExecutionJob(job.Algorithm, "Cancelled");
         }
 
         await SaveStateAsync(ct);
@@ -570,6 +572,7 @@ public sealed class TradingEngine(
         order.FilledQuantity = fillQty;
         order.FilledAtUtc = ts;
         order.ExchangeOrderId = exchangeOrderId;
+        metrics?.RecordTradeExecuted(_state.Mode.ToString(), side.ToString(), "Open");
 
         OpenPosition pos;
         if (mergeInto is null)
@@ -699,6 +702,7 @@ public sealed class TradingEngine(
         order.FilledQuantity = fillQty;
         order.FilledAtUtc = ts;
         order.ExchangeOrderId = exchangeOrderId;
+        metrics?.RecordTradeExecuted(_state.Mode.ToString(), side.ToString(), "Open");
 
         OpenPosition pos;
         if (mergeInto is null)
@@ -847,9 +851,11 @@ public sealed class TradingEngine(
             TotalQuantity = plan.PlannedQuantity, FilledQuantity = order.FilledQuantity ?? plan.Slices[0].Quantity,
             EntryPriceWeightedAvg = pos.EntryPrice, Algorithm = algoName!, WindowSeconds = windowSeconds,
             Status = "Running", CreatedAtUtc = ts, SlicesJson = ExecutionJobSlices.Serialize(slices),
+            ArrivalPrice = price,   // t0 di decisione: base per l'implementation shortfall a fine job
         };
         _executionJobs.Add(job);
         await PersistExecutionJobAsync(job, ct);
+        metrics?.RecordExecutionJob(algoName!, "Started");
         await AuditAsync("ExecutionPlanStarted", new { job.Id, algoName, slices = n, windowSeconds }, ts, ct);
     }
 
@@ -882,6 +888,7 @@ public sealed class TradingEngine(
                     job.Status = "Cancelled"; job.CompletedAtUtc = now;
                     _executionJobs.Remove(job);
                     await PersistExecutionJobAsync(job, ct);
+                    metrics?.RecordExecutionJob(job.Algorithm, "Cancelled");
                     continue;
                 }
 
@@ -930,6 +937,7 @@ public sealed class TradingEngine(
                     {
                         job.Status = "Failed"; job.CompletedAtUtc = now; job.FailureReason = "Fette residue non piazzabili entro finestra+grazia.";
                         _executionJobs.Remove(job);
+                        metrics?.RecordExecutionJob(job.Algorithm, "Failed");
                         logger.LogError("ExecutionJob {Id} fallito: fette abbandonate dopo finestra+grazia.", job.Id);
                     }
                 }
@@ -951,6 +959,17 @@ public sealed class TradingEngine(
             job.Status = "Completed";
             job.CompletedAtUtc = now;
             _executionJobs.Remove(job);
+            metrics?.RecordExecutionJob(job.Algorithm, "Completed");
+
+            // Implementation shortfall del job: prezzo medio ponderato realizzato vs prezzo di arrivo
+            // (t0), segnato come costo per il lato dell'ordine — stessa convenzione di ExecutionSimulator.
+            // Saltato se ArrivalPrice non è disponibile (job sopravvissuto a un riavvio, vedi ExecutionJob).
+            if (job.ArrivalPrice > 0m && job.EntryPriceWeightedAvg > 0m)
+            {
+                var sign = job.Side == OrderSide.Buy ? 1m : -1m;
+                var bps = sign * (job.EntryPriceWeightedAvg - job.ArrivalPrice) / job.ArrivalPrice * 10_000m;
+                metrics?.RecordExecutionSlippage((double)bps, job.Algorithm);
+            }
         }
     }
 
@@ -1045,6 +1064,7 @@ public sealed class TradingEngine(
             job.CompletedAtUtc = ts;
             _executionJobs.Remove(job);
             await PersistExecutionJobAsync(job, ct);
+            metrics?.RecordExecutionJob(job.Algorithm, "Cancelled");
             await AuditAsync("ExecutionJobCancelled", new { job.Id, job.PositionId, reason }, ts, ct);
         }
 
@@ -1056,6 +1076,11 @@ public sealed class TradingEngine(
         {
             await CloseSpotPositionAsync(pos, exitPrice, reason, ts, ct);
         }
+
+        // La chiusura può rientrare senza chiudere (rete incerta / rifiuto exchange): la posizione
+        // resta in _positions. Registro il trade di chiusura SOLO se la posizione è stata rimossa.
+        if (!_positions.Contains(pos))
+            metrics?.RecordTradeExecuted(_state.Mode.ToString(), pos.Side.ToString(), "Close");
     }
 
     /// <summary>Chiusura SPOT (comportamento INVARIATO rispetto a prima dell'introduzione dei Futures).</summary>

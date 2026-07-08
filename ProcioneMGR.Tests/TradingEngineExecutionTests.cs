@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -109,7 +110,8 @@ public sealed class TradingEngineExecutionTests : IAsyncDisposable
     // --- Setup -------------------------------------------------------------------------------
 
     private async Task<(TradingEngine Engine, IDbContextFactory<ApplicationDbContext> DbFactory)> BuildAsync(
-        EnsembleStrategy strategy, Func<int, Signal> script, Queue<decimal> fillPrices, SafetyConfiguration? safety = null, bool liveExecEnabled = true)
+        EnsembleStrategy strategy, Func<int, Signal> script, Queue<decimal> fillPrices, SafetyConfiguration? safety = null, bool liveExecEnabled = true,
+        ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
@@ -142,7 +144,7 @@ public sealed class TradingEngineExecutionTests : IAsyncDisposable
             new FakeExchangeClientFactory(new FakeSpotClient(fillPrices)), new FakeEnsembleManager(config),
             new StaticOptionsMonitor<SafetyConfiguration>(safety ?? new SafetyConfiguration { MinOrderIntervalSeconds = 0 }),
             new StaticOptionsMonitor<LiveExecutionOptions>(new LiveExecutionOptions { Enabled = liveExecEnabled, DefaultWindowMinutes = 5, AbandonGraceMinutes = 5 }),
-            new ExecutionAlgorithmFactory(), NullLogger<TradingEngine>.Instance);
+            new ExecutionAlgorithmFactory(), NullLogger<TradingEngine>.Instance, metrics);
 
         return (engine, dbFactory);
     }
@@ -255,6 +257,45 @@ public sealed class TradingEngineExecutionTests : IAsyncDisposable
         await using var db = await dbFactory.CreateDbContextAsync();
         Assert.Empty(await db.ExecutionJobs.ToListAsync());   // nessun job creato
         Assert.Contains(await db.TradingAuditLogs.ToListAsync(), a => a.Action == "ExecutionPlanRejected");
+    }
+
+    [Fact]
+    public async Task Metrics_TwapExecutionAndClose_EmitTradeJobAndSlippageCounters()
+    {
+        // Osservabilità (follow-up Fase 2): il TradingEngine emette i contatori di ProcioneMetrics
+        // sui punti-evento reali. Stesso pattern di ObservabilityTests, ma end-to-end nel motore:
+        // apertura a fette (TWAP) → job Started/Completed + N trade → chiusura → 1 trade Close.
+        using var metrics = new ProcioneMGR.Services.Observability.ProcioneMetrics();
+        var prices = new Queue<decimal>([100m, 102m, 104m, 106m]);
+        var (engine, _) = await BuildAsync(TwapStrategy(), i => i == 4 ? Signal.Long : Signal.Hold, prices, metrics: metrics);
+        await engine.StartAsync(TradingMode.Testnet);
+
+        var longs = new List<(string Name, long Value)>();
+        var doubles = new List<(string Name, double Value)>();
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (inst, l) =>
+            {
+                if (inst.Meter.Name == ProcioneMGR.Services.Observability.ProcioneMetrics.MeterName) l.EnableMeasurementEvents(inst);
+            },
+        };
+        listener.SetMeasurementEventCallback<long>((inst, val, _, _) => longs.Add((inst.Name, val)));
+        listener.SetMeasurementEventCallback<double>((inst, val, _, _) => doubles.Add((inst.Name, val)));
+        listener.Start();
+
+        await WarmUpAndSignalAsync(engine);       // fetta #1 @100 → apertura (1 trade) + job Started
+        BackdateJobs(engine);
+        for (var i = 0; i < 3; i++) await engine.ProcessDueExecutionSlicesAsync();  // fette @102/104/106 → 3 trade + job Completed
+
+        var pos = Assert.Single(await engine.GetOpenPositionsAsync());
+        await engine.ClosePositionAsync(pos.PositionId);   // chiusura → 1 trade Close
+
+        // 4 aperture (fetta #1 + 3 fette) + 1 chiusura = 5 trade eseguiti.
+        Assert.Equal(5, longs.Count(m => m.Name == "procione.trades.executed"));
+        // Job: esattamente 1 "Started" + 1 "Completed".
+        Assert.Equal(2, longs.Count(m => m.Name == "procione.execution.jobs"));
+        // Implementation shortfall: media ponderata 103 vs prezzo di arrivo 100 = +300 bps (il buy paga di più).
+        Assert.Contains(("procione.execution.slippage_bps", 300.0), doubles);
     }
 
     public async ValueTask DisposeAsync()

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json;
 
 namespace ProcioneMGR.Services.Trading;
@@ -51,6 +52,15 @@ public class ExecutionJob
     public DateTime CreatedAtUtc { get; set; }
     public DateTime? CompletedAtUtc { get; set; }
     public string? FailureReason { get; set; }
+
+    /// <summary>
+    /// Prezzo di arrivo/decisione (t0) del piano, per il calcolo dell'implementation shortfall
+    /// alla chiusura del job. NON persistito (solo osservabilità, in-memory per la durata del job):
+    /// un job che sopravvive a un riavvio lo ricarica a 0 e la metrica di slippage viene saltata
+    /// (guardia ArrivalPrice &gt; 0), invece di emettere un valore falso.
+    /// </summary>
+    [NotMapped]
+    public decimal ArrivalPrice { get; set; }
 
     /// <summary>JSON: List&lt;ExecutionJobSlice&gt; (le fette del piano con il loro stato).</summary>
     public string SlicesJson { get; set; } = "[]";
