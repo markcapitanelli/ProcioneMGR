@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Backtesting;
+using ProcioneMGR.Services.Optimization.Bayesian;
 
 namespace ProcioneMGR.Services.Optimization;
 
@@ -56,14 +57,19 @@ public sealed class OptimizationEngine(
                 "Nessuna finestra walk-forward generata: il range è troppo corto per InSample + OutOfSample.");
         }
 
-        // 3) Genera tutte le combinazioni di parametri (prodotto cartesiano).
-        var combos = GenerateCombinations(config.ParameterRanges);
-        if (combos.Count == 0)
+        // 3) Prepara lo spazio di ricerca. GridSearch: prodotto cartesiano esaustivo. Bayesian:
+        //    nessun prodotto — i punti vengono proposti per finestra dal Gaussian Process.
+        var bayesian = config.SearchStrategy == SearchStrategy.Bayesian;
+        List<Dictionary<string, decimal>> combos = bayesian ? [] : GenerateCombinations(config.ParameterRanges);
+        if (!bayesian && combos.Count == 0)
         {
             throw new InvalidOperationException("Nessuna combinazione di parametri generata.");
         }
 
-        var totalWork = combos.Count * windows.Count;
+        var perWindowBudget = bayesian
+            ? Math.Max(1, config.BayesianInitialRandom) + Math.Max(0, config.BayesianIterations)
+            : combos.Count;
+        var totalWork = perWindowBudget * windows.Count;
         var tested = 0;
         var bestSoFar = decimal.MinValue;
         var bestLock = new object();
@@ -79,8 +85,8 @@ public sealed class OptimizationEngine(
             CancellationToken = ct,
         };
 
-        logger.LogInformation("Ottimizzazione {Strategy}: {Combos} combinazioni × {Windows} finestre = {Total} backtest-coppie.",
-            config.StrategyName, combos.Count, windows.Count, totalWork);
+        logger.LogInformation("Ottimizzazione {Strategy} ({Mode}): {Budget} valutazioni × {Windows} finestre = {Total} backtest-coppie.",
+            config.StrategyName, bayesian ? "Bayesian" : "GridSearch", perWindowBudget, windows.Count, totalWork);
 
         for (var w = 0; w < windows.Count; w++)
         {
@@ -92,7 +98,9 @@ public sealed class OptimizationEngine(
             var comboResults = new ConcurrentBag<ComboResult>();
             var currentWindow = w;
 
-            await Parallel.ForEachAsync(combos, parallelOpts, async (combo, ct2) =>
+            // Valutazione di UNA combinazione (IS+OOS su candele già in memoria) + bookkeeping
+            // condiviso (agg/best/progress). Identica per grid e Bayesian: unico punto di verità.
+            async Task<ComboResult?> EvaluateAsync(Dictionary<string, decimal> combo, CancellationToken ct2)
             {
                 ComboResult? cr = null;
                 try
@@ -140,10 +148,20 @@ public sealed class OptimizationEngine(
                         CurrentWindow = currentWindow + 1,
                         TotalWindows = windows.Count,
                         BestSharpeSoFar = best == decimal.MinValue ? 0m : best,
-                        Message = $"Window {currentWindow + 1}/{windows.Count} — combinazione {n}/{totalWork}",
+                        Message = $"Window {currentWindow + 1}/{windows.Count} — valutazione {n}/{totalWork}",
                     });
                 }
-            });
+                return cr;
+            }
+
+            if (bayesian)
+            {
+                RunBayesianWindow(config, EvaluateAsync, ct);
+            }
+            else
+            {
+                await Parallel.ForEachAsync(combos, parallelOpts, async (combo, ct2) => await EvaluateAsync(combo, ct2));
+            }
 
             // Selezione dei parametri migliori della finestra.
             var valid = comboResults.ToList();
@@ -310,6 +328,54 @@ public sealed class OptimizationEngine(
         StrategyName = config.StrategyName,
         StrategyParameters = new Dictionary<string, decimal>(combo),
     };
+
+    // ---------------------------------------------------------------- ricerca bayesiana
+
+    /// <summary>
+    /// Ramo Bayesian per UNA finestra: il Gaussian Process propone i punti (invece del prodotto
+    /// cartesiano) massimizzando l'Expected Improvement sullo Sharpe della finestra (surrogato
+    /// economico e stazionario, in-sample o OOS secondo <c>SelectionMetric</c>). Sequenziale per
+    /// costruzione (ogni proposta dipende dallo storico). La valutazione riusa <paramref name="evaluateAsync"/>
+    /// — lo STESSO percorso del grid (IS+OOS, agg, best, progress). Il verdetto Deflated Sharpe
+    /// resta calcolato UNA VOLTA a fine sweep in <see cref="BuildResult"/>, sui punti visitati.
+    /// </summary>
+    private static void RunBayesianWindow(
+        OptimizationConfiguration config,
+        Func<Dictionary<string, decimal>, CancellationToken, Task<ComboResult?>> evaluateAsync,
+        CancellationToken ct)
+    {
+        var space = BuildParameterSpace(config.ParameterRanges);
+        var search = new BayesianSearch(new BayesianOptimizationEngine(new BayesianOptions { Seed = config.BayesianSeed }));
+        var selectOos = config.SelectionMetric == OptimizationSelectionMetric.OutOfSampleSharpe;
+
+        double Objective(double[] vector)
+        {
+            ct.ThrowIfCancellationRequested();
+            var combo = ToCombo(space, vector);
+            var cr = evaluateAsync(combo, ct).GetAwaiter().GetResult();
+            if (cr is null) return double.MinValue;   // combinazione invalida: regione da evitare
+            return (double)(selectOos ? cr.OosSharpe : cr.IsSharpe);
+        }
+
+        search.Maximize(space, Objective, config.BayesianIterations, config.BayesianInitialRandom, config.BayesianSeed);
+    }
+
+    private static ParameterSpace BuildParameterSpace(List<ParameterRange> ranges)
+    {
+        var dims = ranges
+            .Select(r => new ParameterDimension(r.Name, (double)r.Min, (double)r.Max, r.IsInteger, (double)r.Step))
+            .ToList();
+        return new ParameterSpace(dims);
+    }
+
+    /// <summary>Vettore reale (già agganciato a intero/passo da <c>Denormalize</c>) → combinazione parametri.</summary>
+    private static Dictionary<string, decimal> ToCombo(ParameterSpace space, double[] vector)
+    {
+        var combo = new Dictionary<string, decimal>(vector.Length);
+        for (var i = 0; i < vector.Length; i++)
+            combo[space.Dimensions[i].Name] = Math.Round((decimal)vector[i], 8);
+        return combo;
+    }
 
     // ---------------------------------------------------------------- equity concatenata
 

@@ -30,10 +30,14 @@ public sealed class BayesianOptions
 /// provare. Alternativa al grid search esaustivo quando lo spazio dei parametri è grande e ogni
 /// valutazione è costosa (un walk-forward completo). Rif. docs/ROADMAP-QLIB §1.6.
 ///
-/// VINCOLO METODOLOGICO (Fase 6): l'obiettivo da massimizzare deve essere il <b>Deflated Sharpe</b>
-/// (Fase 1), non lo Sharpe grezzo — altrimenti si ottimizza il rumore in modo più efficiente. Il
-/// contratto è agnostico rispetto all'obiettivo (riceve punteggi), ma il chiamante è tenuto a
-/// passare il DSR come punteggio.
+/// METODOLOGIA (decisione presa nell'aggancio a OptimizationEngine): l'obiettivo che GUIDA la
+/// ricerca è lo <b>Sharpe</b> della finestra (la stessa <c>Statistics.SharpeRatio</c> usata dal
+/// grid, in-sample o out-of-sample secondo <c>SelectionMetric</c>) — un surrogato economico e
+/// STAZIONARIO. Il <b>Deflated Sharpe</b> NON è ricalcolato a ogni iterazione (sarebbe
+/// non-stazionario: la correzione da test multipli cambia con ogni nuovo trial) bensì applicato UNA
+/// VOLTA a fine ricerca come VERDETTO sul migliore, sulla distribuzione di TUTTI i punti visitati —
+/// esattamente il ruolo che il DSR ha per il grid. Il contratto resta agnostico rispetto
+/// all'obiettivo (riceve solo punteggi).
 /// </summary>
 public interface IHyperparameterOptimizer
 {
