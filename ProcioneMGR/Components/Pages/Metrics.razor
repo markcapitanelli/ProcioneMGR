@@ -1,0 +1,208 @@
+@page "/metrics"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.JSInterop
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Observability
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IAsyncDisposable
+
+@inject MetricsCollector Collector
+@inject IJSRuntime JS
+
+<PageTitle>Metriche</PageTitle>
+
+<h1>Osservabilità <span class="badge bg-secondary">metriche runtime</span></h1>
+
+<GuidaPanel Title="Metriche — cosa sta facendo la piattaforma, in numeri">
+    <p>
+        Questa dashboard legge i contatori interni emessi dal motore (<code>ProcioneMetrics</code>)
+        e li mostra dal vivo — <strong>senza</strong> alcun servizio esterno. I totali sono
+        <em>dalla partenza del processo</em>: si azzerano a ogni riavvio dell'applicazione. Se un
+        numero è a zero, quell'evento non è ancora avvenuto in questa sessione (es. nessun trade
+        eseguito, nessun job di esecuzione a fette, nessuna promozione di corsia).
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Trade eseguiti</dt>
+        <dd class="col-sm-9">Aperture e chiusure di posizione dal motore (per lato Buy/Sell e azione Open/Close).</dd>
+        <dt class="col-sm-3">Job di esecuzione</dt>
+        <dd class="col-sm-9">Piani di esecuzione a fette (TWAP/VWAP/Iceberg) per esito: avviati, completati, falliti, annullati.</dd>
+        <dt class="col-sm-3">Slippage</dt>
+        <dd class="col-sm-9">Implementation shortfall (bps) dei job completati: quanto il prezzo medio realizzato si è discostato dal prezzo di arrivo.</dd>
+        <dt class="col-sm-3">Promozioni / Drift / Ritiri / Pipeline</dt>
+        <dd class="col-sm-9">Eventi del ciclo autonomo: promozioni/retrocessioni di corsia, feature in drift, modelli ritirati dal registry, run di pipeline.</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="mb-3 d-flex align-items-center gap-2">
+    <button class="btn btn-outline-secondary btn-sm" @onclick="Refresh">🔄 Aggiorna</button>
+    <span class="text-muted small">Aggiornamento automatico ogni 5s · ultimo: @_lastRefresh.ToLocalTime().ToString("HH:mm:ss")</span>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-auto">@Tile("Trade eseguiti", _s.Total("procione.trades.executed").ToString("N0"), "bi-arrow-left-right")</div>
+    <div class="col-auto">@Tile("Job esecuzione", _s.Total("procione.execution.jobs").ToString("N0"), "bi-list-check")</div>
+    <div class="col-auto">@Tile("Promozioni corsia", _s.Total("procione.lane.promotions").ToString("N0"), "bi-arrow-up-circle")</div>
+    <div class="col-auto">@Tile("Feature in drift", _s.Total("procione.drift.alerts").ToString("N0"), "bi-exclamation-triangle")</div>
+    <div class="col-auto">@Tile("Modelli ritirati", _s.Total("procione.models.retired").ToString("N0"), "bi-trash")</div>
+    <div class="col-auto">@Tile("Run pipeline", _s.Total("procione.pipeline.runs").ToString("N0"), "bi-diagram-3")</div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header">Trade per azione e lato</div>
+            <div class="card-body">
+                @if (_s.Total("procione.trades.executed") == 0)
+                {
+                    <div class="text-muted">Nessun trade eseguito in questa sessione.</div>
+                }
+                else
+                {
+                    <div id="m_trades" style="width:100%;"></div>
+                }
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header">Job di esecuzione per esito</div>
+            <div class="card-body">
+                @if (_s.Total("procione.execution.jobs") == 0)
+                {
+                    <div class="text-muted">Nessun job di esecuzione a fette in questa sessione.</div>
+                }
+                else
+                {
+                    <div id="m_jobs" style="width:100%;"></div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Slippage dei job completati (bps)</span>
+        @if (_s.SlippageCount > 0)
+        {
+            <span class="small text-muted">
+                n=@_s.SlippageCount · media @_s.SlippageMean.ToString("F1") · min @_s.SlippageMin.ToString("F1") · max @_s.SlippageMax.ToString("F1")
+            </span>
+        }
+    </div>
+    <div class="card-body">
+        @if (_s.SlippageCount == 0)
+        {
+            <div class="text-muted">Nessun job completato con slippage misurato in questa sessione.</div>
+        }
+        else
+        {
+            <div id="m_slip" style="width:100%;"></div>
+        }
+    </div>
+</div>
+
+@code {
+    private MetricsSnapshot _s = default!;
+    private DateTime _lastRefresh = DateTime.UtcNow;
+    private System.Threading.Timer? _timer;
+
+    private IJSObjectReference? _charts;
+    private bool _renderPending;
+
+    protected override void OnInitialized()
+    {
+        _s = Collector.Snapshot();
+        _timer = new System.Threading.Timer(_ => InvokeAsync(Refresh), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    private void Refresh()
+    {
+        _s = Collector.Snapshot();
+        _lastRefresh = DateTime.UtcNow;
+        _renderPending = true;
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) _renderPending = true;
+        if (!_renderPending) return;
+        _renderPending = false;
+        await RenderChartsAsync();
+    }
+
+    private async Task RenderChartsAsync()
+    {
+        _charts ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/charts.js");
+
+        if (_s.Total("procione.trades.executed") > 0)
+        {
+            var byAction = _s.GroupByTag("procione.trades.executed", "action");
+            var bySide = _s.GroupByTag("procione.trades.executed", "side");
+            var labels = byAction.Select(x => "Azione: " + x.Value).Concat(bySide.Select(x => "Lato: " + x.Value)).ToArray();
+            var values = byAction.Select(x => x.Count).Concat(bySide.Select(x => x.Count)).ToArray();
+            await _charts.InvokeVoidAsync("bar", "m_trades", labels, values, "trade", (object?)null);
+        }
+
+        if (_s.Total("procione.execution.jobs") > 0)
+        {
+            var byStatus = _s.GroupByTag("procione.execution.jobs", "status");
+            var colors = byStatus.Select(x => x.Value switch
+            {
+                "Completed" => "#1a9850",
+                "Failed" => "#d73027",
+                "Cancelled" => "#8c8c8c",
+                "Started" => "#2962FF",
+                _ => "#fdae61",
+            }).ToArray();
+            await _charts.InvokeVoidAsync("bar", "m_jobs",
+                byStatus.Select(x => x.Value).ToArray(), byStatus.Select(x => x.Count).ToArray(), "job", colors);
+        }
+
+        if (_s.SlippageCount > 0)
+        {
+            var xs = _s.SlippageRecent.Select(p => new DateTimeOffset(DateTime.SpecifyKind(p.T, DateTimeKind.Utc)).ToUnixTimeSeconds()).ToArray();
+            var ys = _s.SlippageRecent.Select(p => p.V).ToArray();
+            var trace = new { name = "Slippage bps", x = xs, y = ys, color = "#FB8C00" };
+            await _charts.InvokeVoidAsync("timeseries", "m_slip", new[] { trace }, "bps");
+        }
+    }
+
+    private static RenderFragment Tile(string label, string value, string icon) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "card text-center");
+        builder.AddAttribute(2, "style", "min-width: 9rem;");
+        builder.OpenElement(3, "div");
+        builder.AddAttribute(4, "class", "card-body py-2");
+        builder.OpenElement(5, "div");
+        builder.AddAttribute(6, "class", "h4 mb-0");
+        builder.AddContent(7, value);
+        builder.CloseElement();
+        builder.OpenElement(8, "div");
+        builder.AddAttribute(9, "class", "text-muted small");
+        builder.AddMarkupContent(10, $"<i class=\"bi {icon}\"></i> ");
+        builder.AddContent(11, label);
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        _timer?.Dispose();
+        try
+        {
+            if (_charts is not null)
+            {
+                await _charts.InvokeVoidAsync("dispose", "m_trades");
+                await _charts.InvokeVoidAsync("dispose", "m_jobs");
+                await _charts.InvokeVoidAsync("dispose", "m_slip");
+                await _charts.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException) { }
+    }
+}
