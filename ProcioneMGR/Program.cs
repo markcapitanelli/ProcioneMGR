@@ -307,7 +307,10 @@ for (var lane = 0; lane < LaneCount; lane++)
         sp.GetRequiredService<IOptionsMonitor<LiveExecutionOptions>>(),
         sp.GetRequiredService<ProcioneMGR.Services.Execution.IExecutionAlgorithmFactory>(),
         sp.GetRequiredService<ILogger<TradingEngine>>(),
-        sp.GetRequiredService<ProcioneMGR.Services.Observability.ProcioneMetrics>()));
+        sp.GetRequiredService<ProcioneMGR.Services.Observability.ProcioneMetrics>(),
+        sp.GetRequiredService<ProcioneMGR.Services.Registry.IModelRegistry>(),
+        sp.GetRequiredService<ProcioneMGR.Services.Alpha.IAlphaFactorFactory>(),
+        sp.GetRequiredService<ProcioneMGR.Services.Alpha.IFactorCache>()));
 
     builder.Services.AddSingleton<IHostedService>(sp => new TradingWorker(
         sp.GetRequiredKeyedService<ITradingEngine>(laneId),
