@@ -157,6 +157,35 @@ h1:focus {
     text-align: start;
 }
 
+/* --- Breadcrumb contestuale (sotto la top-row, sopra il contenuto pagina) --- */
+.app-breadcrumb {
+    margin-bottom: 0.9rem;
+}
+
+.app-breadcrumb .breadcrumb {
+    font-size: 0.82rem;
+    --bs-breadcrumb-divider: '›';
+}
+
+.app-breadcrumb .breadcrumb-item + .breadcrumb-item::before {
+    content: '›';
+    color: #94a3b8;
+}
+
+.app-breadcrumb .breadcrumb-item a {
+    color: #0f766e;
+    text-decoration: none;
+}
+
+.app-breadcrumb .breadcrumb-item a:hover {
+    text-decoration: underline;
+}
+
+.app-breadcrumb .breadcrumb-item.active {
+    color: #475569;
+    font-weight: 600;
+}
+
 /* --- Pannello Guida (spiegazione pagina, espandibile) --- */
 .guida-panel-header {
     background-color: #eef6fc;

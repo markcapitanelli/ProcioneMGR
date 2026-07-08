@@ -30,14 +30,79 @@
     font-size: 1.4rem;
 }
 
-/* Intestazioni di sezione nella sidebar */
-.nav-section {
-    color: rgba(255, 255, 255, 0.45);
+/* --- Intestazioni dei blocchi (Fondamenta / Analisi / Specialistico / Account) --- */
+.nav-section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    color: rgba(255, 255, 255, 0.55);
     text-transform: uppercase;
     font-size: 0.7rem;
-    font-weight: 600;
+    font-weight: 700;
     letter-spacing: 0.08em;
-    padding: 0.65rem 1.5rem 0.3rem;
+    padding: 0.7rem 1.5rem 0.35rem;
+    background: none;
+    border: none;
+    text-align: left;
+}
+
+/* I blocchi collassabili sono bottoni cliccabili: cursore e feedback hover. */
+.nav-section-header.collapsible {
+    cursor: pointer;
+    border-radius: 6px;
+}
+
+.nav-section-header.collapsible:hover {
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.nav-section-header.collapsible:focus-visible {
+    outline: 2px solid rgba(45, 212, 191, 0.6);
+    outline-offset: -2px;
+}
+
+/* Pallino colorato per identificare il blocco (verde/giallo/rosso). */
+.section-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    box-shadow: 0 0 6px 0 currentColor;
+}
+
+.section-title {
+    flex: 1 1 auto;
+}
+
+/* Freccia che ruota all'apertura del blocco. */
+.section-caret {
+    flex: 0 0 auto;
+    width: auto;
+    margin-right: 0;
+    font-size: 0.7rem;
+    transition: transform 0.2s ease;
+    opacity: 0.7;
+}
+
+.section-caret.open {
+    transform: rotate(180deg);
+}
+
+/* Corpo collassabile: animazione morbida via max-height. */
+.nav-section-body {
+    overflow: hidden;
+    transition: max-height 0.25s ease, opacity 0.2s ease;
+}
+
+.nav-section-body.open {
+    max-height: 40rem; /* Capiente per ~10 voci; nessun blocco supera questo limite. */
+    opacity: 1;
+}
+
+.nav-section-body.collapsed {
+    max-height: 0;
+    opacity: 0;
 }
 
 .bi {
