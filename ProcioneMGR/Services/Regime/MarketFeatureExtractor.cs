@@ -49,7 +49,7 @@ public sealed class MarketFeatureExtractor(
     }
 
     /// <summary>Calcolo puro (testabile) su una lista di candele già ordinata cronologicamente.</summary>
-    internal List<MarketFeatures> ComputeFeatures(IReadOnlyList<OhlcvData> candles, string timeframe, CancellationToken ct = default)
+    public List<MarketFeatures> ComputeFeatures(IReadOnlyList<OhlcvData> candles, string timeframe, CancellationToken ct = default)
     {
         var n = candles.Count;
         var result = new List<MarketFeatures>();
