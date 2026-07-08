@@ -250,6 +250,10 @@ builder.Services.AddHostedService<ProcioneMGR.Services.Monitoring.Drift.FeatureD
 // --- Observability (Fase 5): meter unico degli eventi di autonomia; export OTLP opzionale sotto. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Observability.ProcioneMetrics>();
 
+// Collettore in-processo dei contatori: alimenta la dashboard /metrics senza backend OTel.
+builder.Services.AddSingleton<ProcioneMGR.Services.Observability.MetricsCollector>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Observability.MetricsCollector>());
+
 // Export OpenTelemetry OPT-IN (default OFF): senza questo blocco il meter emette a vuoto (costo ~0).
 // Con Observability:Enabled=true si esporta via OTLP verso il collector (endpoint da config, default
 // localhost:4317). Nessun impatto sul comportamento dell'app, solo telemetria in uscita.

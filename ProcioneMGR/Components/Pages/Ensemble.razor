@@ -12,12 +12,15 @@
 @using ProcioneMGR.Services.ML
 @using ProcioneMGR.Services.Monitoring
 @using ProcioneMGR.Services.Monitoring.Drift
+@using ProcioneMGR.Services.Registry
+@using ProcioneMGR.Services.Trading
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 @implements IDisposable
 
 @inject IServiceProvider Services
 @inject IStrategyFactory StrategyFactory
 @inject IFeatureDriftMonitor DriftMonitor
+@inject IModelRegistry Registry
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 
 <PageTitle>Ensemble</PageTitle>
@@ -294,6 +297,38 @@ else
                 }
             </div>
 
+            <div class="row g-2 align-items-end mt-1 p-2 border rounded bg-body-tertiary">
+                <div class="col-auto">
+                    <label class="form-label small mb-0 fw-semibold">🏆 Champion del registry (@_config!.Symbol @_config.Timeframe)</label>
+                    <div class="form-text mt-0">
+                        Il modello <strong>Champion</strong> corrente si aggiorna da solo quando il registry ne promuove uno migliore.
+                        <span class="text-danger fw-semibold">Solo Paper/Testnet — mai Live</span> (rifiutato dal motore per costruzione).
+                    </div>
+                </div>
+                @if (_champion is null)
+                {
+                    <div class="col-auto"><span class="badge bg-secondary">Nessun Champion per questo symbol/timeframe</span> <a href="registry" class="small ms-1">→ Registry</a></div>
+                }
+                else if (_config.Strategies.Any(s => s.StrategyName == TradingEngine.ChampionStrategyName))
+                {
+                    <div class="col-auto"><span class="badge bg-success">Champion già in questa corsia</span></div>
+                }
+                else
+                {
+                    <div class="col-auto">
+                        <span class="badge bg-info text-dark">@_champion.Name · v@_champion.Version · @_champion.ModelType</span>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label small mb-0">Soglie</label>
+                        <div class="d-flex gap-1">
+                            <input type="number" step="any" class="form-control form-control-sm" style="width:5.5rem" placeholder="Long" @bind="_addChampionLong" />
+                            <input type="number" step="any" class="form-control form-control-sm" style="width:5.5rem" placeholder="Short" @bind="_addChampionShort" />
+                        </div>
+                    </div>
+                    <div class="col-auto"><button class="btn btn-sm btn-warning" @onclick="AddChampion">+ Aggiungi Champion</button></div>
+                }
+            </div>
+
             <div class="mt-3 d-flex gap-2 flex-wrap">
                 <button class="btn btn-primary" @onclick="SaveAsync">💾 Save Configuration</button>
                 <button class="btn btn-outline-secondary" @onclick="RebalanceNowAsync" disabled="@_busy">🔄 Rebalance Now</button>
@@ -567,6 +602,9 @@ else
     private string _addPredefined = "EmaCross";
     private int _addSavedId;
     private int _addMlModelId;
+    private SavedMlModel? _champion;
+    private decimal _addChampionLong = 0.002m;
+    private decimal _addChampionShort = 0.002m;
     private decimal _addMlLongThreshold = 0.005m;
     private decimal _addMlShortThreshold = 0.005m;
     private bool _busy;
@@ -607,9 +645,29 @@ else
     private async Task LoadLaneAsync()
     {
         _config = await EnsembleMgr.GetConfigurationAsync();
+        _champion = await Registry.GetChampionAsync(_config.Symbol, _config.Timeframe);
         await RefreshAsync();
         await LoadDecayReportsAsync();
         await LoadExecutionJobsAsync();
+    }
+
+    private void AddChampion()
+    {
+        if (_config is null || _champion is null) return;
+        if (_config.Strategies.Any(s => s.StrategyName == TradingEngine.ChampionStrategyName)) return;   // una sola corsia-Champion
+
+        // Il Champion NON è pinnato per Id: è una sentinella risolta a runtime dal registry, così la
+        // corsia segue sempre il modello promosso corrente. Il motore rifiuta l'esecuzione su Live.
+        _config.Strategies.Add(new EnsembleStrategy
+        {
+            StrategyName = TradingEngine.ChampionStrategyName,
+            DisplayName = $"🏆 Champion ({_config.Symbol} {_config.Timeframe})",
+            Parameters = new Dictionary<string, decimal>
+            {
+                ["LongThreshold"] = _addChampionLong,
+                ["ShortThreshold"] = _addChampionShort,
+            },
+        });
     }
 
     private async Task LoadExecutionJobsAsync()
