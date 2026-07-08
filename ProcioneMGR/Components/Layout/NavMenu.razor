@@ -1,0 +1,200 @@
+@implements IDisposable
+
+@inject NavigationManager NavigationManager
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand d-flex align-items-center gap-2" href="">
+            <span class="brand-logo">🦝</span>
+            <span>ProcioneMGR</span>
+        </a>
+    </div>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="nav flex-column">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <i class="bi bi-house-door-fill"></i> Home
+            </NavLink>
+        </div>
+
+        <AuthorizeView>
+            <Authorized>
+                <div class="nav-section">Trading</div>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="dashboard">
+                        <i class="bi bi-bar-chart-line-fill"></i> Dashboard
+                    </NavLink>
+                </div>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="backtest">
+                        <i class="bi bi-graph-up-arrow"></i> Backtest
+                    </NavLink>
+                </div>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="market-analysis">
+                        <i class="bi bi-clipboard-data"></i> Analisi serie
+                    </NavLink>
+                </div>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="strategies">
+                        <i class="bi bi-collection-fill"></i> Le mie strategie
+                    </NavLink>
+                </div>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="settings/exchanges">
+                        <i class="bi bi-key-fill"></i> Credenziali Exchange
+                    </NavLink>
+                </div>
+
+                <AuthorizeView Roles="@($"{AppRoles.Admin},{AppRoles.Manager}")" Context="mgrCtx">
+                    <div class="nav-section">Amministrazione</div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="market/watchlist">
+                            <i class="bi bi-eye-fill"></i> Watchlist
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="optimization">
+                            <i class="bi bi-sliders"></i> Optimization
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="discovery">
+                            <i class="bi bi-search"></i> Discovery
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="pipeline">
+                            <i class="bi bi-robot"></i> Pipeline
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="execution">
+                            <i class="bi bi-stack"></i> Execution Lab
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="experiments">
+                            <i class="bi bi-journals"></i> Esperimenti
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="registry">
+                            <i class="bi bi-award"></i> Registry modelli
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="ensemble">
+                            <i class="bi bi-diagram-3-fill"></i> Ensemble
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="regimes">
+                            <i class="bi bi-grid-3x3-gap-fill"></i> Regimes
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="ml">
+                            <i class="bi bi-cpu-fill"></i> ML Lab
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="alpha-mining">
+                            <i class="bi bi-diagram-2"></i> Alpha Mining
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="pairs-trading">
+                            <i class="bi bi-arrow-left-right"></i> Pairs Trading
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="volatility">
+                            <i class="bi bi-activity"></i> Volatilità
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="sentiment">
+                            <i class="bi bi-newspaper"></i> Sentiment
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="trading">
+                            <i class="bi bi-currency-exchange"></i> Trading
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="admin/ai-supervisor">
+                            <i class="bi bi-robot"></i> Supervisione AI
+                        </NavLink>
+                    </div>
+                </AuthorizeView>
+                <AuthorizeView Roles="@AppRoles.Admin" Context="adminCtx">
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="admin/users">
+                            <i class="bi bi-people-fill"></i> Gestione Utenti
+                        </NavLink>
+                    </div>
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="admin/backup">
+                            <i class="bi bi-database-fill-down"></i> Backup Database
+                        </NavLink>
+                    </div>
+                </AuthorizeView>
+
+                <div class="nav-section">Account</div>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="Account/Manage">
+                        <i class="bi bi-person-fill"></i> @context.User.Identity?.Name
+                    </NavLink>
+                </div>
+                <div class="nav-item px-3">
+                    <form action="Account/Logout" method="post">
+                        <AntiforgeryToken />
+                        <input type="hidden" name="ReturnUrl" value="@currentUrl" />
+                        <button type="submit" class="nav-link">
+                            <i class="bi bi-box-arrow-left"></i> Logout
+                        </button>
+                    </form>
+                </div>
+            </Authorized>
+            <NotAuthorized>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="Account/Register">
+                        <i class="bi bi-person-plus-fill"></i> Registrati
+                    </NavLink>
+                </div>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="Account/Login">
+                        <i class="bi bi-box-arrow-in-right"></i> Login
+                    </NavLink>
+                </div>
+            </NotAuthorized>
+        </AuthorizeView>
+    </nav>
+</div>
+
+@code {
+    private string? currentUrl;
+
+    protected override void OnInitialized()
+    {
+        currentUrl = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        NavigationManager.LocationChanged += OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        currentUrl = NavigationManager.ToBaseRelativePath(e.Location);
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        NavigationManager.LocationChanged -= OnLocationChanged;
+    }
+}

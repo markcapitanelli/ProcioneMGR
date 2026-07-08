@@ -1,0 +1,280 @@
+@page "/settings/exchanges"
+@rendermode InteractiveServer
+@using System.ComponentModel.DataAnnotations
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Exchanges
+@attribute [Authorize]
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IExchangeClientFactory ExchangeFactory
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Le mie credenziali Exchange</PageTitle>
+
+<h1>Credenziali Exchange</h1>
+
+<GuidaPanel Title="Credenziali Exchange — come collegare il tuo account reale a un exchange">
+    <p>
+        Per il <strong>backtest</strong> (simulazione sul passato) e la modalità <strong>Paper</strong>
+        del trading live non servono credenziali: bastano i dati di mercato pubblici. Le chiavi
+        API servono solo se vuoi passare a <strong>Testnet</strong> (un ambiente di prova
+        dell'exchange con soldi finti ma ordini reali) o <strong>Live</strong> (soldi veri) nella
+        pagina <a href="trading">Trading</a>. Le chiavi si generano dal sito dell'exchange
+        (Binance/Bitget), nella sezione "API Management" del tuo account — questa pagina le
+        salva così la piattaforma può firmare gli ordini per tuo conto.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Etichetta</dt>
+        <dd class="col-sm-9">Un nome a tua scelta per riconoscere questa credenziale (es. "Binance Main"), utile se ne salvi più di una.</dd>
+        <dt class="col-sm-3">API Key / API Secret</dt>
+        <dd class="col-sm-9">
+            La coppia di chiavi generata dall'exchange. Sono <strong>cifrate</strong> nel database
+            (AES-256-GCM): il Secret non viene più mostrato dopo il salvataggio, l'API Key è
+            visibile solo mascherata (es. <code>abcd••••wxyz</code>).
+        </dd>
+        <dt class="col-sm-3">Passphrase</dt>
+        <dd class="col-sm-9">Richiesta solo da Bitget, in aggiunta a Key/Secret — lasciala vuota per Binance.</dd>
+        <dt class="col-sm-3">⚠️ Binance Futures e MiCA</dt>
+        <dd class="col-sm-9">
+            Dal 1° luglio 2026 Binance ha cessato i servizi di <strong>derivati e leva
+            finanziaria</strong> per i residenti nello Spazio Economico Europeo (regolamento
+            MiCA) — lo <strong>Spot</strong> resta invece disponibile. Per operare a leva usa
+            credenziali <strong>Bitget</strong>.
+        </dd>
+        <dt class="col-sm-3">Testnet</dt>
+        <dd class="col-sm-9">Spunta questa casella se la coppia di chiavi è generata sull'ambiente di test dell'exchange (consigliato prima di rischiare soldi veri).</dd>
+        <dt class="col-sm-3">Test</dt>
+        <dd class="col-sm-9">Verifica subito che le chiavi funzionino davvero, chiedendo all'exchange il saldo dell'account — senza piazzare ordini.</dd>
+        <dt class="col-sm-3">Elimina</dt>
+        <dd class="col-sm-9">Rimuove definitivamente la credenziale salvata (non revoca la chiave lato exchange: fallo anche lì se non ti serve più).</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="row">
+    <div class="col-lg-5">
+        <div class="card mb-4">
+            <div class="card-header">Aggiungi credenziale</div>
+            <div class="card-body">
+                <EditForm Model="Input" OnValidSubmit="AddAsync" FormName="addCredential">
+                    <DataAnnotationsValidator />
+                    <ValidationSummary class="text-danger" />
+
+                    <div class="mb-3">
+                        <label class="form-label">Exchange</label>
+                        <InputSelect class="form-select" @bind-Value="Input.ExchangeName">
+                            @foreach (var ex in Enum.GetValues<ExchangeName>())
+                            {
+                                <option value="@ex">@ex</option>
+                            }
+                        </InputSelect>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Etichetta</label>
+                        <InputText class="form-control" @bind-Value="Input.Label" placeholder="es. Binance Main" />
+                        <ValidationMessage For="() => Input.Label" class="text-danger" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">API Key</label>
+                        <InputText class="form-control" @bind-Value="Input.ApiKey" autocomplete="off" />
+                        <ValidationMessage For="() => Input.ApiKey" class="text-danger" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">API Secret</label>
+                        <InputText type="password" class="form-control" @bind-Value="Input.ApiSecret" autocomplete="off" />
+                        <ValidationMessage For="() => Input.ApiSecret" class="text-danger" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">
+                            Passphrase
+                            @if (Input.ExchangeName == ExchangeName.Bitget)
+                            {
+                                <span class="text-danger">*obbligatoria per Bitget</span>
+                            }
+                        </label>
+                        <InputText type="password" class="form-control" @bind-Value="Input.Passphrase" autocomplete="off" />
+                        <ValidationMessage For="() => Input.Passphrase" class="text-danger" />
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <InputCheckbox class="form-check-input" id="testnet" @bind-Value="Input.IsTestnet" />
+                        <label class="form-check-label" for="testnet">Testnet</label>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Salva credenziale</button>
+                </EditForm>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-7">
+        @if (!string.IsNullOrEmpty(message))
+        {
+            <div class="alert @(isError ? "alert-danger" : "alert-success")">@message</div>
+        }
+
+        <div class="card">
+            <div class="card-header">Credenziali salvate</div>
+            @if (credentials is null)
+            {
+                <div class="card-body"><em>Caricamento…</em></div>
+            }
+            else if (credentials.Count == 0)
+            {
+                <div class="card-body text-muted">Nessuna credenziale ancora.</div>
+            }
+            else
+            {
+                <table class="table table-striped mb-0 align-middle">
+                    <thead>
+                        <tr>
+                            <th>Exchange</th>
+                            <th>Etichetta</th>
+                            <th>API Key</th>
+                            <th>Testnet</th>
+                            <th class="text-end">Azioni</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in credentials)
+                        {
+                            <tr>
+                                <td><span class="badge bg-dark">@c.ExchangeName</span></td>
+                                <td>@c.Label</td>
+                                <td><code>@c.MaskedApiKey</code></td>
+                                <td>@(c.IsTestnet ? "Sì" : "No")</td>
+                                <td class="text-end">
+                                    <button class="btn btn-sm btn-outline-secondary"
+                                            @onclick="() => TestAsync(c)">Test</button>
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            @onclick="() => DeleteAsync(c.Id)">Elimina</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<ExchangeCredential>? credentials;
+    private string? userId;
+    private string? message;
+    private bool isError;
+
+    [SupplyParameterFromForm]
+    private CredentialInput Input { get; set; } = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (userId is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        credentials = await db.ExchangeCredentials
+            .Where(c => c.UserId == userId)
+            .OrderByDescending(c => c.CreatedAt)
+            .ToListAsync();
+    }
+
+    private async Task AddAsync()
+    {
+        if (userId is null) return;
+
+        var entity = new ExchangeCredential
+        {
+            UserId = userId,
+            ExchangeName = Input.ExchangeName,
+            Label = Input.Label.Trim(),
+            ApiKey = Input.ApiKey.Trim(),
+            ApiSecret = Input.ApiSecret.Trim(),
+            Passphrase = string.IsNullOrWhiteSpace(Input.Passphrase) ? null : Input.Passphrase.Trim(),
+            IsTestnet = Input.IsTestnet,
+        };
+
+        // Validazione di dominio (Bitget richiede passphrase) — difesa in profondita'
+        // oltre alla validazione di form.
+        var domainError = entity.ValidateBusinessRules();
+        if (domainError is not null)
+        {
+            SetMessage(domainError, error: true);
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.ExchangeCredentials.Add(entity); // ApiKey/Secret/Passphrase cifrati dal converter
+        await db.SaveChangesAsync();
+
+        Input = new CredentialInput();
+        SetMessage("Credenziale salvata e cifrata.", error: false);
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        if (userId is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // Vincolo a userId: un utente non puo' eliminare credenziali altrui.
+        await db.ExchangeCredentials
+            .Where(c => c.Id == id && c.UserId == userId)
+            .ExecuteDeleteAsync();
+        SetMessage("Credenziale eliminata.", error: false);
+        await LoadAsync();
+    }
+
+    private async Task TestAsync(ExchangeCredential c)
+    {
+        // Test pubblico di raggiungibilita' dell'exchange (non usa ancora le chiavi private).
+        var client = ExchangeFactory.Create(c.ExchangeName);
+        var ok = await client.TestConnectionAsync();
+        SetMessage(ok ? $"{c.ExchangeName}: connessione OK." : $"{c.ExchangeName}: non raggiungibile.", error: !ok);
+    }
+
+    private void SetMessage(string text, bool error)
+    {
+        message = text;
+        isError = error;
+    }
+
+    private sealed class CredentialInput : IValidatableObject
+    {
+        public ExchangeName ExchangeName { get; set; } = ExchangeName.Binance;
+
+        [Required(ErrorMessage = "L'etichetta e' obbligatoria.")]
+        [MaxLength(64)]
+        public string Label { get; set; } = "";
+
+        [Required(ErrorMessage = "L'API key e' obbligatoria.")]
+        public string ApiKey { get; set; } = "";
+
+        [Required(ErrorMessage = "L'API secret e' obbligatorio.")]
+        public string ApiSecret { get; set; } = "";
+
+        public string? Passphrase { get; set; }
+
+        public bool IsTestnet { get; set; }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (ExchangeName == ExchangeName.Bitget && string.IsNullOrWhiteSpace(Passphrase))
+            {
+                yield return new ValidationResult(
+                    "La passphrase e' obbligatoria per Bitget.",
+                    [nameof(Passphrase)]);
+            }
+        }
+    }
+}

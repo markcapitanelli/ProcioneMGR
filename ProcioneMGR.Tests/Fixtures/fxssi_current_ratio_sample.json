@@ -1,0 +1,9 @@
+{
+  "command": "/api/current-ratio",
+  "broker_titles": {"myfxbook": "MyFxBook", "fxssi": "FXSSI"},
+  "broker_weights": {"myfxbook": 2001, "fxssi": 1},
+  "brokers": {
+    "fxssi": {"BTCUSD": "56.79", "ETHUSD": "81.13", "EURUSD": "54.02", "GBPUSD": "46.69", "USDJPY": "14.02"},
+    "myfxbook": {"EURUSD": "65.21", "GBPUSD": "43.52", "USDJPY": "10.30"}
+  }
+}

@@ -1,0 +1,91 @@
+@using Microsoft.JSInterop
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Indicators
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div @ref="_container" style="width: 100%; height: @(Height)px;"></div>
+
+@code {
+    /// <summary>Candele OHLCV (ordine cronologico crescente). Ignorate se <see cref="ShowCandles"/> è false.</summary>
+    [Parameter] public IReadOnlyList<OhlcvData> Candles { get; set; } = Array.Empty<OhlcvData>();
+
+    /// <summary>Serie sovrapposte (EMA, Bollinger, RSI, MACD, equity curve...).</summary>
+    [Parameter] public IReadOnlyList<IndicatorSeries> Indicators { get; set; } = Array.Empty<IndicatorSeries>();
+
+    /// <summary>Se false, nasconde candlestick/volume (modalità solo-linee, es. equity curve).</summary>
+    [Parameter] public bool ShowCandles { get; set; } = true;
+
+    [Parameter] public int Height { get; set; } = 480;
+
+    private ElementReference _container;
+    private IJSObjectReference? _module;
+    private readonly string _chartId = "chart_" + Guid.NewGuid().ToString("N");
+    private bool _initialized;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/ohlcvChart.js");
+            await _module.InvokeVoidAsync("init", _container, _chartId, ShowCandles);
+            _initialized = true;
+            await PushAllAsync();
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_initialized)
+        {
+            await PushAllAsync();
+        }
+    }
+
+    private async Task PushAllAsync()
+    {
+        if (_module is null) return;
+
+        if (ShowCandles)
+        {
+            var candlePayload = Candles.Select(c => new
+            {
+                time = ToUnixSeconds(c.TimestampUtc),
+                open = (double)c.Open,
+                high = (double)c.High,
+                low = (double)c.Low,
+                close = (double)c.Close,
+                volume = (double)c.Volume,
+            }).ToArray();
+            await _module.InvokeVoidAsync("setData", _chartId, candlePayload);
+        }
+
+        var indicatorPayload = Indicators.Select(s => new
+        {
+            title = s.Title,
+            color = s.Color,
+            type = s.Type.ToString(),
+            scale = s.Scale,
+            data = s.Points.Select(p => new { time = p.Time, value = p.Value }).ToArray(),
+        }).ToArray();
+        await _module.InvokeVoidAsync("setIndicators", _chartId, indicatorPayload);
+    }
+
+    private static long ToUnixSeconds(DateTime utc) =>
+        new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc)).ToUnixTimeSeconds();
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_module is not null)
+            {
+                await _module.InvokeVoidAsync("dispose", _chartId);
+                await _module.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+}

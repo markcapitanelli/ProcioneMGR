@@ -1,0 +1,374 @@
+@page "/dashboard"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.Ingestion
+@using ProcioneMGR.Services.Trading
+@attribute [Authorize]
+
+@inject IOhlcvIngestionService Ingestion
+@inject IExchangeClientFactory ExchangeFactory
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ITechnicalIndicatorsService Indicators
+@inject IPromotionEvaluator PromotionEval
+
+<PageTitle>Dashboard</PageTitle>
+
+<h1>Dashboard</h1>
+
+<GuidaPanel Title="Dashboard — guarda i dati storici ed esplorane di nuovi al volo">
+    <p>
+        Questa pagina serve a due cose: <strong>vedere</strong> un grafico a candele di un
+        simbolo con gli indicatori tecnici sovrapposti, e <strong>scaricare al volo</strong> dati
+        che non hai ancora. È diversa da <a href="market/watchlist">Watchlist</a>: lì configuri
+        cosa tenere <strong>automaticamente</strong> aggiornato in background (e resta lì finché
+        non lo rimuovi); qui invece fai un fetch <strong>una tantum</strong> per esplorare subito
+        un simbolo/periodo e vederne il grafico — utile per una prima occhiata prima di decidere se
+        vale la pena tracciarlo stabilmente.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Carica simboli</dt>
+        <dd class="col-sm-9">Chiede all'exchange l'elenco delle coppie disponibili, per sapere cosa puoi effettivamente richiedere.</dd>
+        <dt class="col-sm-3">Fetch Data</dt>
+        <dd class="col-sm-9">Scarica le candele storiche per il symbol/timeframe/periodo scelto (se già presenti nel database, non le riscarica) e le mostra nel grafico sotto.</dd>
+        <dt class="col-sm-3">EMA 20/50, Bollinger, RSI, MACD</dt>
+        <dd class="col-sm-9">Indicatori tecnici sovrapposti al grafico — si possono attivare/disattivare senza dover riscaricare i dati, vengono ricalcolati subito sulle candele già in memoria.</dd>
+    </dl>
+</GuidaPanel>
+
+<AuthorizeView Roles="@(AppRoles.Admin + "," + AppRoles.Manager)">
+    <Authorized>
+        @if (_promotionHighlights.Count > 0)
+        {
+            <div class="card mb-3 border-warning">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>🚦 Promozioni corsie</span>
+                    <a class="btn btn-sm btn-outline-primary" href="trading">Dettagli in Trading</a>
+                </div>
+                <div class="card-body py-2">
+                    <ul class="mb-0 small">
+                        @foreach (var p in _promotionHighlights)
+                        {
+                            <li>
+                                <strong>Corsia @p.LaneId</strong> (@(string.IsNullOrEmpty(p.Symbol) ? "—" : p.Symbol)):
+                                @if (p.ReadyForTestnet && p.CurrentMode == TradingMode.Paper)
+                                {
+                                    <span class="badge bg-warning text-dark">Pronta per Testnet</span>
+                                }
+                                else if (p.ShouldDemote)
+                                {
+                                    <span class="badge bg-warning text-dark">Retrocessione consigliata a Paper</span>
+                                }
+                                <span class="text-muted">@p.Reason</span>
+                            </li>
+                        }
+                    </ul>
+                </div>
+            </div>
+        }
+    </Authorized>
+</AuthorizeView>
+
+<AuthorizeView>
+    <Authorized>
+        <div class="card mb-3">
+            <div class="card-header">📈 Dati di mercato (OHLCV)</div>
+            <div class="card-body">
+                <div class="row g-3 align-items-end">
+                    <div class="col-auto">
+                        <label class="form-label">Exchange</label>
+                        <select class="form-select" @bind="_exchange" disabled="@_busy">
+                            @foreach (var ex in Enum.GetValues<ExchangeName>())
+                            {
+                                <option value="@ex">@ex</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label">Symbol</label>
+                        <input class="form-control" list="symbols" @bind="_symbol" style="width: 12rem;" disabled="@_busy" />
+                        <datalist id="symbols">
+                            @foreach (var s in _availableSymbols)
+                            {
+                                <option value="@s"></option>
+                            }
+                        </datalist>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label">Timeframe</label>
+                        <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                            @foreach (var tf in Timeframes.Supported.Keys)
+                            {
+                                <option value="@tf">@tf</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label">Da</label>
+                        <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label">A</label>
+                        <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-primary" @onclick="FetchAsync" disabled="@_busy">
+                            @if (_busy)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            Fetch Data
+                        </button>
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-outline-secondary" @onclick="LoadSymbolsAsync" disabled="@_busy">
+                            Carica simboli
+                        </button>
+                    </div>
+                    @if (_busy)
+                    {
+                        <div class="col-auto">
+                            <button class="btn btn-outline-danger" @onclick="Cancel">Annulla</button>
+                        </div>
+                    }
+                </div>
+
+                @if (_busy && _progress.Estimated > 0)
+                {
+                    <div class="progress mt-3" style="height: 20px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                             role="progressbar" style="width: @(_progress.Percent)%">
+                            @_progress.Ingested / @_progress.Estimated (@_progress.Percent%)
+                        </div>
+                    </div>
+                }
+
+                @if (!string.IsNullOrEmpty(_status))
+                {
+                    <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+                }
+            </div>
+        </div>
+
+        @if (_candles.Count > 0)
+        {
+            <div class="card">
+                <div class="card-header d-flex flex-wrap gap-3 align-items-center">
+                    <span>@_symbol · @_timeframe · @_exchange — @_candles.Count candele</span>
+                    <div class="d-flex flex-wrap gap-3 ms-auto">
+                        <div class="form-check form-check-inline m-0">
+                            <input class="form-check-input" type="checkbox" id="ind_ema20" @bind="_showEma20" @bind:after="RefreshIndicatorsAsync" />
+                            <label class="form-check-label" for="ind_ema20"><span style="color:#2962FF">●</span> EMA 20</label>
+                        </div>
+                        <div class="form-check form-check-inline m-0">
+                            <input class="form-check-input" type="checkbox" id="ind_ema50" @bind="_showEma50" @bind:after="RefreshIndicatorsAsync" />
+                            <label class="form-check-label" for="ind_ema50"><span style="color:#E53935">●</span> EMA 50</label>
+                        </div>
+                        <div class="form-check form-check-inline m-0">
+                            <input class="form-check-input" type="checkbox" id="ind_boll" @bind="_showBollinger" @bind:after="RefreshIndicatorsAsync" />
+                            <label class="form-check-label" for="ind_boll">Bollinger</label>
+                        </div>
+                        <div class="form-check form-check-inline m-0">
+                            <input class="form-check-input" type="checkbox" id="ind_rsi" @bind="_showRsi" @bind:after="RefreshIndicatorsAsync" />
+                            <label class="form-check-label" for="ind_rsi">RSI</label>
+                        </div>
+                        <div class="form-check form-check-inline m-0">
+                            <input class="form-check-input" type="checkbox" id="ind_macd" @bind="_showMacd" @bind:after="RefreshIndicatorsAsync" />
+                            <label class="form-check-label" for="ind_macd">MACD</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <OhlcvChart Candles="_candles" Indicators="_indicators" />
+                </div>
+            </div>
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1h";
+    private DateTime _from = DateTime.UtcNow.Date.AddDays(-30);
+    private DateTime _to = DateTime.UtcNow.Date;
+
+    private List<string> _availableSymbols = new();
+    private List<OhlcvData> _candles = new();
+
+    // Indicatori sovrapposti (EMA 20/50 ON di default, gli altri OFF).
+    private bool _showEma20 = true;
+    private bool _showEma50 = true;
+    private bool _showBollinger;
+    private bool _showRsi;
+    private bool _showMacd;
+    private List<IndicatorSeries> _indicators = new();
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+    private IngestionProgress _progress;
+    private CancellationTokenSource? _cts;
+
+    // Corsie che richiedono attenzione (pronte per Testnet o da retrocedere) — solo Admin/Manager.
+    private List<PromotionDecision> _promotionHighlights = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var decisions = await PromotionEval.EvaluateAllLanesAsync();
+            _promotionHighlights = decisions
+                .Where(d => d.IsRunning && ((d.ReadyForTestnet && d.CurrentMode == TradingMode.Paper) || d.ShouldDemote))
+                .ToList();
+        }
+        catch { /* il widget è best-effort: la dashboard resta valida anche senza */ }
+    }
+
+    private async Task FetchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbol))
+        {
+            SetStatus("Inserisci un symbol (es. BTC/USDT).", error: true);
+            return;
+        }
+        if (_to <= _from)
+        {
+            SetStatus("L'intervallo non è valido: 'A' deve essere dopo 'Da'.", error: true);
+            return;
+        }
+
+        _busy = true;
+        _isError = false;
+        _status = null;
+        _progress = default;
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var progress = new Progress<IngestionProgress>(p =>
+            {
+                _progress = p;
+                InvokeAsync(StateHasChanged);
+            });
+
+            // 'to' a fine giornata per includere l'intera data selezionata.
+            var toInclusive = _to.Date.AddDays(1).AddSeconds(-1);
+            var result = await Ingestion.IngestHistoricalDataAsync(
+                _exchange.ToString(), _symbol.Trim(), _timeframe, _from.Date, toInclusive, progress, _cts.Token);
+
+            await LoadCandlesAsync(toInclusive);
+            await RefreshIndicatorsAsync();
+            SetStatus($"Completato: {result.CandlesProcessed} candele processate, {_candles.Count} nel grafico.", error: false);
+        }
+        catch (OperationCanceledException)
+        {
+            await LoadCandlesAsync(_to.Date.AddDays(1).AddSeconds(-1));
+            await RefreshIndicatorsAsync();
+            SetStatus("Operazione annullata. Mostro le candele già salvate.", error: false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+            _cts?.Dispose();
+            _cts = null;
+        }
+    }
+
+    private async Task LoadCandlesAsync(DateTime toInclusive)
+    {
+        var fromUtc = DateTime.SpecifyKind(_from.Date, DateTimeKind.Utc);
+        var toUtc = DateTime.SpecifyKind(toInclusive, DateTimeKind.Utc);
+        var symbol = _symbol.Trim();
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _candles = await db.OhlcvData
+            .Where(c => c.Symbol == symbol
+                        && c.Timeframe == _timeframe
+                        && c.TimestampUtc >= fromUtc
+                        && c.TimestampUtc <= toUtc)
+            .OrderBy(c => c.TimestampUtc)
+            .Take(50_000)   // tetto di sicurezza per il payload del grafico
+            .ToListAsync();
+    }
+
+    private async Task LoadSymbolsAsync()
+    {
+        try
+        {
+            var client = ExchangeFactory.Create(_exchange);
+            _availableSymbols = await client.GetSymbolsAsync();
+            SetStatus($"{_availableSymbols.Count} simboli caricati da {_exchange}.", error: false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore nel caricamento simboli: {ex.Message}", error: true);
+        }
+    }
+
+    /// <summary>
+    /// Ricalcola gli indicatori selezionati lato server sulle candele già caricate
+    /// (nessun re-fetch dell'OHLCV) e aggiorna la lista passata al grafico.
+    /// </summary>
+    private async Task RefreshIndicatorsAsync()
+    {
+        var list = new List<IndicatorSeries>();
+        if (_candles.Count == 0)
+        {
+            _indicators = list;
+            return;
+        }
+
+        var closes = _candles.Select(c => c.Close).ToList();
+        var times = _candles
+            .Select(c => new DateTimeOffset(DateTime.SpecifyKind(c.TimestampUtc, DateTimeKind.Utc)).ToUnixTimeSeconds())
+            .ToList();
+
+        if (_showEma20)
+        {
+            var ema = await Indicators.CalculateEmaAsync(closes, 20);
+            list.Add(IndicatorSeries.FromAligned("EMA 20", "#2962FF", times, ema));
+        }
+        if (_showEma50)
+        {
+            var ema = await Indicators.CalculateEmaAsync(closes, 50);
+            list.Add(IndicatorSeries.FromAligned("EMA 50", "#E53935", times, ema));
+        }
+        if (_showBollinger)
+        {
+            var (upper, middle, lower) = await Indicators.CalculateBollingerAsync(closes, 20, 2.0m);
+            list.Add(IndicatorSeries.FromAligned("BB Upper", "#9E9E9E", times, upper));
+            list.Add(IndicatorSeries.FromAligned("BB Middle", "#FB8C00", times, middle));
+            list.Add(IndicatorSeries.FromAligned("BB Lower", "#9E9E9E", times, lower));
+        }
+        if (_showRsi)
+        {
+            var rsi = await Indicators.CalculateRsiAsync(closes, 14);
+            list.Add(IndicatorSeries.FromAligned("RSI 14", "#8E24AA", times, rsi, scale: "osc"));
+        }
+        if (_showMacd)
+        {
+            var (macd, signal, hist) = await Indicators.CalculateMacdAsync(closes, 12, 26, 9);
+            list.Add(IndicatorSeries.FromAligned("MACD Hist", "#90A4AE", times, hist, IndicatorSeriesType.Histogram, "osc"));
+            list.Add(IndicatorSeries.FromAligned("MACD", "#2962FF", times, macd, scale: "osc"));
+            list.Add(IndicatorSeries.FromAligned("Signal", "#FB8C00", times, signal, scale: "osc"));
+        }
+
+        _indicators = list;
+    }
+
+    private void Cancel() => _cts?.Cancel();
+
+    private void SetStatus(string text, bool error)
+    {
+        _status = text;
+        _isError = error;
+    }
+}

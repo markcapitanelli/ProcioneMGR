@@ -1,0 +1,900 @@
+@page "/ml"
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.ML
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Alpha
+@using ProcioneMGR.Services.AlphaMining
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.ML
+@using ProcioneMGR.Services.Optimization
+@using ProcioneMGR.Services.Experiments
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IDisposable
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IBacktestEngine Engine
+@inject IAlphaFactorFactory FactorFactory
+@inject IDatasetBuilder Builder
+@inject IExperimentTracker Tracker
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>ML Lab</PageTitle>
+
+<h1>ML Lab</h1>
+
+<GuidaPanel Title="ML Lab — insegnare a un modello a prevedere il prezzo, onestamente">
+    <p>
+        Invece di scrivere regole fisse (es. "compra quando la media veloce supera quella lenta"),
+        qui si addestra un modello di <strong>machine learning</strong> a prevedere il rendimento
+        futuro a partire da alcuni indicatori numerici (i "fattori alpha": momentum, volatilità,
+        RSI, ecc.). Il punto cruciale è la <strong>disciplina anti-imbroglio</strong>: il modello
+        si allena SOLO sul periodo "Train" e viene poi testato SOLO sul periodo "Test" successivo,
+        che non ha mai visto — esattamente come si dovrebbe valutare qualunque previsione, altrimenti
+        sembrerebbe "geniale" solo perché ha memorizzato il passato invece di aver imparato uno
+        schema utile.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">% Train</dt>
+        <dd class="col-sm-9">Che percentuale del periodo selezionato usare per l'allenamento (es. 70% train, 30% test) — il test avviene sempre sulla parte più recente, mai vista.</dd>
+        <dt class="col-sm-3">Orizzonte forward</dt>
+        <dd class="col-sm-9">Quante candele nel futuro il modello prova a prevedere (es. 1 = il rendimento della prossima candela).</dd>
+        <dt class="col-sm-3">Modello</dt>
+        <dd class="col-sm-9">
+            Il tipo di algoritmo: <strong>Lineare</strong> (semplice, veloce, spiegabile),
+            <strong>Random Forest</strong> e <strong>Gradient Boosting</strong> (più complessi,
+            possono catturare relazioni non lineari ma richiedono più dati per non "imparare a
+            memoria" il rumore).
+        </dd>
+        <dt class="col-sm-3">Fattori alpha</dt>
+        <dd class="col-sm-9">Gli indicatori numerici che il modello userà come indizi per la previsione — più ne selezioni, più informazione ha a disposizione, ma anche più rischio di rumore se sono ridondanti tra loro.</dd>
+        <dt class="col-sm-3">Correlazione in-sample</dt>
+        <dd class="col-sm-9">Quanto bene il modello si adatta ai dati di allenamento — un numero alto qui NON garantisce che funzionerà fuori campione, è solo un primo controllo.</dd>
+        <dt class="col-sm-3">Feature importance</dt>
+        <dd class="col-sm-9">Quanto peggiora la qualità delle previsioni se si "confonde" un singolo fattore — i fattori con importanza più alta sono quelli su cui il modello si affida di più.</dd>
+        <dt class="col-sm-3">Soglia Long / Short</dt>
+        <dd class="col-sm-9">Il rendimento previsto minimo, in positivo o negativo, oltre il quale il modello apre effettivamente una posizione (sotto soglia resta fuori dal mercato).</dd>
+        <dt class="col-sm-3">Esegui backtest (out-of-sample)</dt>
+        <dd class="col-sm-9">Il vero momento della verità: simula le operazioni SOLO sul periodo "Test" mai visto in addestramento — è questo risultato, non la correlazione in-sample, quello a cui prestare attenzione.</dd>
+        <dt class="col-sm-3">Salva modello</dt>
+        <dd class="col-sm-9">Salva il modello addestrato per riusarlo in <a href="optimization">Optimization</a> o <a href="ensemble">Ensemble</a> senza doverlo riaddestrare ogni volta.</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">1. Dati e fattori</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Exchange</label>
+                <select class="form-select" @bind="_exchange" disabled="@_busy">
+                    @foreach (var ex in Enum.GetValues<ExchangeName>())
+                    {
+                        <option value="@ex">@ex</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" list="ml_symbols" @bind="_symbol" style="width: 11rem;" disabled="@_busy" />
+                <datalist id="ml_symbols">
+                    @foreach (var s in _knownSymbols)
+                    {
+                        <option value="@s"></option>
+                    }
+                </datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                    @foreach (var tf in Timeframes.Supported.Keys)
+                    {
+                        <option value="@tf">@tf</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">% Train</label>
+                <input type="number" step="1" min="10" max="90" class="form-control" style="width: 7rem;" @bind="_trainSplitPercent" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Orizzonte forward</label>
+                <input type="number" step="1" min="1" class="form-control" style="width: 8rem;" @bind="_forwardHorizon" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Modello</label>
+                <select class="form-select" @bind="_modelType" disabled="@_busy">
+                    <option value="Linear">Lineare (SDCA)</option>
+                    <option value="RandomForest">Random Forest</option>
+                    <option value="GradientBoosting">Gradient Boosting (LightGBM)</option>
+                    <option value="Mlp">Rete neurale (MLP, C# puro)</option>
+                    <option value="Stacked">Stacking (ensemble di modelli)</option>
+                    <option value="Attention">Attention / Transformer (C# puro)</option>
+                </select>
+            </div>
+        </div>
+
+        @if (_modelType == "Stacked")
+        {
+            <div class="border rounded p-2 mt-2 bg-light">
+                <label class="form-label d-block mb-1">Modelli base dello stacking</label>
+                <div class="d-flex flex-wrap gap-3">
+                    @foreach (var bt in ReturnPredictorCatalog.BaseTypes)
+                    {
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="@("sb_" + bt)"
+                                   checked="@_stackBaseModels.Contains(bt)"
+                                   @onchange="e => ToggleStackBase(bt, e.Value is true)" disabled="@_busy" />
+                            <label class="form-check-label" for="@("sb_" + bt)">@bt</label>
+                        </div>
+                    }
+                    <div class="col-auto ms-3">
+                        <label class="form-label mb-0 me-1">Combinazione</label>
+                        <select class="form-select form-select-sm d-inline-block" style="width: auto;" @bind="_stackMode" disabled="@_busy">
+                            <option value="Average">Media semplice</option>
+                            <option value="InverseRmse">Peso ∝ 1/RMSE</option>
+                            <option value="StackedRidge">Meta-learner ridge (OOF)</option>
+                        </select>
+                    </div>
+                </div>
+                <p class="small text-muted mb-0 mt-1">
+                    Lo stacking combina le predizioni di più modelli. «Meta-learner ridge» usa predizioni
+                    out-of-fold (purged CV) per pesarli senza leakage.
+                </p>
+            </div>
+        }
+
+        @if (_modelType == "Attention")
+        {
+            <div class="border rounded p-2 mt-2 bg-light">
+                <div class="d-flex flex-wrap align-items-end gap-3">
+                    <div>
+                        <label class="form-label mb-0">Finestra (timestep)</label>
+                        <input type="number" min="2" max="60" class="form-control form-control-sm" style="width: 8rem;" @bind="_attnWindow" disabled="@_busy" />
+                    </div>
+                    <div>
+                        <label class="form-label mb-0">Dim. embedding</label>
+                        <input type="number" min="4" max="64" class="form-control form-control-sm" style="width: 8rem;" @bind="_attnEmbed" disabled="@_busy" />
+                    </div>
+                    <p class="small text-muted mb-0">
+                        Self-attention su una finestra di T candele (i fattori come input), in C# puro
+                        (niente TorchSharp): il modello impara quali istanti passati contano di più.
+                    </p>
+                </div>
+            </div>
+        }
+
+        <hr />
+
+        <label class="form-label d-block">Fattori alpha (feature del modello)</label>
+        <div class="d-flex flex-wrap gap-3">
+            @foreach (var proto in FactorFactory.Prototypes)
+            {
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="@("f_" + proto.Name)"
+                           checked="@_selectedFactors.Contains(proto.Name)"
+                           @onchange="e => ToggleFactor(proto.Name, e.Value is true)" disabled="@_busy" />
+                    <label class="form-check-label" for="@("f_" + proto.Name)">@proto.DisplayName</label>
+                </div>
+            }
+        </div>
+
+        @if (_savedFactors.Count > 0)
+        {
+            <label class="form-label d-block mt-3">Fattori minati (Alpha Mining)</label>
+            <div class="d-flex flex-wrap gap-3">
+                @foreach (var sf in _savedFactors)
+                {
+                    <div class="form-check" title="@sf.Expression">
+                        <input class="form-check-input" type="checkbox" id="@("sf_" + sf.Id)"
+                               checked="@_selectedSavedFactorIds.Contains(sf.Id)"
+                               @onchange="e => ToggleSavedFactor(sf.Id, e.Value is true)" disabled="@_busy" />
+                        <label class="form-check-label" for="@("sf_" + sf.Id)">
+                            @sf.Name <span class="text-muted small">(@sf.Symbol @sf.Timeframe)</span>
+                        </label>
+                    </div>
+                }
+            </div>
+        }
+
+        <div class="mt-3">
+            <button class="btn btn-primary" @onclick="TrainAsync" disabled="@(_busy || (_selectedFactors.Count == 0 && _selectedSavedFactorIds.Count == 0))">
+                @if (_busy && _stage == Stage.Training)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                2. Addestra
+            </button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_savedModels.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-header">Modelli salvati</div>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Nome</th><th>Tipo</th><th>Symbol</th><th>Timeframe</th>
+                        <th>Periodo train</th><th class="text-end">Righe</th><th class="text-end">Corr. in-sample</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var m in _savedModels)
+                    {
+                        <tr>
+                            <td>@m.Name</td>
+                            <td>@m.ModelType</td>
+                            <td>@m.Symbol</td>
+                            <td>@m.Timeframe</td>
+                            <td>@m.TrainingDataFrom.ToString("yyyy-MM-dd") → @m.TrainingDataTo.ToString("yyyy-MM-dd")</td>
+                            <td class="text-end">@m.TrainRowCount</td>
+                            <td class="text-end">@m.TrainCorrelation.ToString("F3")</td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-primary" @onclick="() => LoadSavedModelAsync(m.Id)" disabled="@_busy">Carica</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteSavedModelAsync(m.Id)" disabled="@_busy">Elimina</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_predictor is not null)
+{
+    <div class="card mb-3">
+        <div class="card-header">Modello addestrato</div>
+        <div class="card-body">
+            <div class="row g-3 mb-3">
+                <div class="col-auto">@MetricCard("Righe train", $"{_trainRowCount}")</div>
+                <div class="col-auto">@MetricCard("Correlazione in-sample", $"{_trainCorrelation:F3}")</div>
+                <div class="col-auto">@MetricCard("Candele test (OOS)", $"{_testCandles?.Count ?? 0}")</div>
+            </div>
+
+            @if (_featureImportance.Count > 0)
+            {
+                <div class="mb-3">
+                    <label class="form-label d-block">Feature importance (permutation, in-sample)</label>
+                    <table class="table table-sm" style="max-width: 30rem;">
+                        <thead><tr><th>Fattore</th><th class="text-end">Calo R² se permutato</th></tr></thead>
+                        <tbody>
+                            @foreach (var fi in _featureImportance)
+                            {
+                                <tr>
+                                    <td>@fi.FeatureName</td>
+                                    <td class="text-end">@fi.MeanDecreaseInRSquared.ToString("F4")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Soglia Long</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_longThreshold" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Soglia Short</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_shortThreshold" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Capitale iniziale</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_initialCapital" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Position size %</label>
+                    <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_positionSizePercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Fee %</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-success" @onclick="BacktestAsync" disabled="@_busy">
+                        @if (_busy && _stage == Stage.Backtesting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        3. Esegui backtest (out-of-sample)
+                    </button>
+                </div>
+            </div>
+
+            <hr />
+
+            <div class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Nome modello da salvare</label>
+                    <input class="form-control" style="width: 18rem;" placeholder="es. RF momentum BTC 1h" @bind="_saveModelName" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-outline-secondary" @onclick="SaveModelAsync" disabled="@_busy">Salva modello</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_result is not null)
+{
+    <div class="row g-3 mb-3">
+        @{
+            var positive = _result.TotalReturnPercent >= 0;
+        }
+        <div class="col-auto">@MetricCard("Final Capital", $"{_result.FinalCapital:N2}")</div>
+        <div class="col-auto">@MetricCard("Total Return", $"{_result.TotalReturnPercent:N2}%", positive)</div>
+        <div class="col-auto">@MetricCard("Win Rate", $"{_result.WinRate:N1}%")</div>
+        <div class="col-auto">@MetricCard("Max Drawdown", $"{_result.MaxDrawdownPercent:N2}%", false)</div>
+        <div class="col-auto">@MetricCard("Trades", $"{_result.TotalTrades} ({_result.WinningTrades}W/{_result.LosingTrades}L)")</div>
+    </div>
+
+    @if (_tearsheet is not null)
+    {
+        <div class="row g-3 mb-3">
+            <div class="col-auto">@MetricCard("Sharpe", $"{_tearsheet.Sharpe:F2}")</div>
+            <div class="col-auto">@MetricCard("Sortino", $"{_tearsheet.Sortino:F2}")</div>
+            <div class="col-auto">@MetricCard("Calmar", $"{_tearsheet.Calmar:F2}")</div>
+            <div class="col-auto">@MetricCard("Omega", $"{_tearsheet.Omega:F2}")</div>
+            <div class="col-auto">@MetricCard("VaR 95%", $"{_tearsheet.ValueAtRisk95:P2}")</div>
+            <div class="col-auto">@MetricCard("CVaR 95%", $"{_tearsheet.ConditionalValueAtRisk95:P2}")</div>
+            <div class="col-auto">@MetricCard("Max DD durata", $"{_tearsheet.MaxDrawdownDurationPeriods} periodi")</div>
+            <div class="col-auto">@MetricCard("Esposizione", $"{_tearsheet.ExposurePercent:F1}%")</div>
+        </div>
+    }
+
+    <div class="card mb-3">
+        <div class="card-header">Equity curve (out-of-sample)</div>
+        <div class="card-body">
+            @if (_equitySeries.Count > 0)
+            {
+                <OhlcvChart ShowCandles="false" Indicators="_equitySeries" Height="320" />
+            }
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Trade list (@_result.Trades.Count)</div>
+        <div class="table-responsive" style="max-height: 460px; overflow:auto;">
+            <table class="table table-sm table-striped mb-0">
+                <thead class="table-light" style="position: sticky; top: 0;">
+                    <tr>
+                        <th>#</th><th>Dir</th><th>Entry</th><th>Exit</th>
+                        <th class="text-end">Entry px</th><th class="text-end">Exit px</th>
+                        <th class="text-end">PnL</th><th class="text-end">PnL %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{
+                        var idx = 0;
+                    }
+                    @foreach (var t in _result.Trades.Take(500))
+                    {
+                        idx++;
+                        <tr>
+                            <td>@idx</td>
+                            <td><span class="badge @(t.Direction == "Long" ? "bg-success" : "bg-danger")">@t.Direction</span></td>
+                            <td>@t.EntryTime.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td>@(t.ExitTime?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                            <td class="text-end">@t.EntryPrice.ToString("N2")</td>
+                            <td class="text-end">@(t.ExitPrice?.ToString("N2") ?? "—")</td>
+                            <td class="text-end @(t.Pnl >= 0 ? "text-success" : "text-danger")">@t.Pnl.ToString("N2")</td>
+                            <td class="text-end @(t.PnlPercent >= 0 ? "text-success" : "text-danger")">@t.PnlPercent.ToString("N2")%</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (_result.Trades.Count > 500)
+        {
+            <div class="card-footer text-muted">Mostrati i primi 500 di @_result.Trades.Count trade.</div>
+        }
+    </div>
+}
+
+@code {
+    private enum Stage { Idle, Training, Backtesting }
+
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1h";
+    private DateTime _from = DateTime.UtcNow.Date.AddDays(-120);
+    private DateTime _to = DateTime.UtcNow.Date;
+    private int _trainSplitPercent = 70;
+    private int _forwardHorizon = 1;
+
+    private List<string> _knownSymbols = new();
+    private readonly HashSet<string> _selectedFactors = new() { "Momentum", "RsiFactor", "MacdFactor" };
+
+    private decimal _longThreshold = 0.005m;
+    private decimal _shortThreshold = 0.005m;
+    private decimal _initialCapital = 10_000m;
+    private decimal _positionSizePercent = 20m;
+    private decimal _feePercent = 0.1m;
+
+    private string _modelType = "Linear";
+    private readonly HashSet<string> _stackBaseModels = new() { "Linear", "RandomForest" };
+    private StackingMode _stackMode = StackingMode.StackedRidge;
+    private int _attnWindow = 8;
+    private int _attnEmbed = 16;
+    private IReturnPredictor? _predictor;
+    private List<FactorSpec>? _trainedFactors;
+    private List<OhlcvData>? _testCandles;
+    private int _trainRowCount;
+    private double _trainCorrelation;
+    private List<FeatureImportance> _featureImportance = new();
+
+    private BacktestResult? _result;
+    private TearsheetMetrics? _tearsheet;
+    private List<IndicatorSeries> _equitySeries = new();
+
+    private Stage _stage = Stage.Idle;
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    private string? _userId;
+    private string _saveModelName = "";
+    private List<SavedMlModel> _savedModels = new();
+    private List<SavedFactor> _savedFactors = new();
+    private readonly HashSet<int> _selectedSavedFactorIds = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        if (_userId is not null)
+        {
+            _savedFactors = await db.SavedFactors
+                .Where(f => f.UserId == _userId)
+                .OrderByDescending(f => f.CreatedAtUtc)
+                .ToListAsync();
+        }
+
+        await LoadSavedModelsListAsync();
+    }
+
+    private async Task LoadSavedModelsListAsync()
+    {
+        if (_userId is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _savedModels = await db.SavedMlModels
+            .Where(m => m.UserId == _userId)
+            .OrderByDescending(m => m.CreatedAtUtc)
+            .ToListAsync();
+    }
+
+    private void ToggleFactor(string name, bool selected)
+    {
+        if (selected) _selectedFactors.Add(name);
+        else _selectedFactors.Remove(name);
+    }
+
+    private void ToggleSavedFactor(int id, bool selected)
+    {
+        if (selected) _selectedSavedFactorIds.Add(id);
+        else _selectedSavedFactorIds.Remove(id);
+    }
+
+    private void ToggleStackBase(string name, bool selected)
+    {
+        if (selected) _stackBaseModels.Add(name);
+        else _stackBaseModels.Remove(name);
+    }
+
+    private async Task TrainAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbol) || _to <= _from)
+        {
+            SetStatus("Controlla symbol e intervallo date.", error: true);
+            return;
+        }
+
+        _busy = true;
+        _stage = Stage.Training;
+        _isError = false;
+        _status = null;
+        _predictor?.Dispose();
+        _predictor = null;
+        _featureImportance = new();
+        _result = null;
+        _tearsheet = null;
+        _equitySeries = new();
+
+        try
+        {
+            var fromUtc = DateTime.SpecifyKind(_from, DateTimeKind.Utc);
+            var toUtc = DateTime.SpecifyKind(_to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
+
+            List<OhlcvData> candles;
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                candles = await db.OhlcvData
+                    .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe
+                                && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+                    .OrderBy(c => c.TimestampUtc)
+                    .ToListAsync();
+            }
+
+            if (candles.Count < 50)
+            {
+                SetStatus("Dati insufficienti nel range selezionato (servono almeno 50 candele).", error: true);
+                return;
+            }
+
+            var splitIndex = candles.Count * Math.Clamp(_trainSplitPercent, 10, 90) / 100;
+            var trainCandles = candles.Take(splitIndex).ToList();
+            var testCandles = candles.Skip(splitIndex).ToList();
+            if (trainCandles.Count < 30 || testCandles.Count < 10)
+            {
+                SetStatus("Split train/test non praticabile: allarga il range o cambia la percentuale.", error: true);
+                return;
+            }
+
+            var factors = _selectedFactors.Select(name =>
+            {
+                var factor = FactorFactory.Create(name);
+                var defaults = factor.ParameterDefinitions.ToDictionary(d => d.Key, d => d.Default);
+                return new FactorSpec(name, factor, defaults);
+            }).ToList();
+
+            // Fattori minati (Alpha Mining) scelti dall'utente: il nome "expr:…" li fa ricostruire dalla
+            // factory al reload, quindi il round-trip del modello resta valido come per gli altri fattori.
+            foreach (var sf in _savedFactors.Where(f => _selectedSavedFactorIds.Contains(f.Id)))
+            {
+                var factor = FactorFactory.Create(AlphaExpressionFactor.NamePrefix + sf.Expression);
+                factors.Add(new FactorSpec(sf.Name, factor, new Dictionary<string, decimal>()));
+            }
+
+            if (factors.Count == 0)
+            {
+                SetStatus("Seleziona almeno un fattore (alpha o minato).", error: true);
+                return;
+            }
+
+            var dataset = Builder.Build(trainCandles, factors, _forwardHorizon);
+            if (dataset.RowCount < 20)
+            {
+                SetStatus("Troppo poche righe utilizzabili dopo il warm-up dei fattori: allarga il periodo di train.", error: true);
+                return;
+            }
+
+            if (_modelType == "Stacked" && _stackBaseModels.Count == 0)
+            {
+                SetStatus("Seleziona almeno un modello base per lo stacking.", error: true);
+                return;
+            }
+
+            var mlContext = new MLContext(seed: 42);
+            IReturnPredictor predictor = _modelType switch
+            {
+                "Stacked" => new StackedReturnPredictor(_stackBaseModels.OrderBy(b => b).ToList(), _stackMode),
+                "Attention" => new AttentionReturnPredictor(windowLength: _attnWindow, embedDim: _attnEmbed),
+                "RandomForest" => new RandomForestReturnPredictor(),
+                "GradientBoosting" => new GradientBoostingReturnPredictor(),
+                "Mlp" => new MlpReturnPredictor(),
+                _ => new LinearReturnPredictor(),
+            };
+
+            // I modelli sequenziali (attention) si addestrano su finestre di T candele: la stessa
+            // matrice di fattori, vista come sequenze. Gli altri restano puntuali.
+            var mlData = predictor is ISequencePredictor seq ? SequenceWindowing.Build(dataset, seq.WindowLength) : dataset;
+            if (mlData.RowCount < 20)
+            {
+                SetStatus("Troppe poche finestre dopo il windowing: riduci la finestra o allarga il periodo di train.", error: true);
+                return;
+            }
+
+            var trainDataView = mlData.ToDataView(mlContext);
+            predictor.Fit(mlContext, trainDataView);
+
+            // Diagnostica in-sample: correlazione fra predizione e rendimento forward realizzato.
+            var predicted = new double[mlData.RowCount];
+            var actual = new double[mlData.RowCount];
+            for (var i = 0; i < mlData.RowCount; i++)
+            {
+                predicted[i] = predictor.Predict(mlData.Rows[i].Features);
+                actual[i] = mlData.Rows[i].Label;
+            }
+
+            _predictor = predictor;
+            _trainedFactors = factors;
+            _testCandles = testCandles;
+            _trainRowCount = mlData.RowCount;
+            _trainCorrelation = Correlation.Pearson(predicted, actual);
+            _featureImportance = predictor.ComputeFeatureImportance(mlContext, trainDataView, mlData.FeatureNames).ToList();
+
+            // Experiment tracking (osservabilità confrontabile): registra questo training accanto
+            // a ogni altro run, così "modello con 8 fattori vs con Alpha158" è una query, non un
+            // ricordo. Best-effort: non fa mai cadere il training.
+            var mlRunId = await Tracker.SafeStartRunAsync(
+                "MlTraining",
+                $"{_modelType} · {_symbol.Trim()} · {factors.Count} fattori",
+                new
+                {
+                    ModelType = _modelType,
+                    Symbol = _symbol.Trim(),
+                    Timeframe = _timeframe,
+                    ForwardHorizon = _forwardHorizon,
+                    TrainSplitPercent = _trainSplitPercent,
+                    From = _from,
+                    To = _to,
+                    FactorCount = factors.Count,
+                    Factors = factors.Select(f => f.FeatureName).OrderBy(n => n).ToList(),
+                },
+                _symbol.Trim(), _timeframe, _userId);
+            await Tracker.SafeLogMetricsAsync(mlRunId, new Dictionary<string, decimal>
+            {
+                ["TrainRows"] = dataset.RowCount,
+                ["FeatureCount"] = dataset.FeatureCount,
+                ["TrainCorrelation"] = (decimal)_trainCorrelation,
+            });
+            await Tracker.SafeCompleteAsync(mlRunId, "Completed");
+
+            SetStatus($"Modello addestrato su {dataset.RowCount} righe (train). Ora esegui il backtest sul periodo di test, mai visto in addestramento.", error: false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore in addestramento: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+            _stage = Stage.Idle;
+        }
+    }
+
+    private async Task BacktestAsync()
+    {
+        if (_predictor is null || _trainedFactors is null || _testCandles is null) return;
+
+        _busy = true;
+        _stage = Stage.Backtesting;
+        _isError = false;
+        _result = null;
+        _tearsheet = null;
+        _equitySeries = new();
+
+        try
+        {
+            var strategy = new MlStrategy(_predictor, _trainedFactors);
+            var config = new BacktestConfiguration
+            {
+                ExchangeName = _exchange.ToString(),
+                Symbol = _symbol.Trim(),
+                Timeframe = _timeframe,
+                InitialCapital = _initialCapital,
+                PositionSizePercent = _positionSizePercent,
+                FeePercent = _feePercent,
+                StrategyName = "Ml",
+                StrategyParameters = new Dictionary<string, decimal>
+                {
+                    ["LongThreshold"] = _longThreshold,
+                    ["ShortThreshold"] = _shortThreshold,
+                },
+            };
+
+            _result = await Engine.RunBacktestAsync(config, _testCandles, strategy, CancellationToken.None);
+            _tearsheet = Statistics.ComputeTearsheet(_result.EquityCurve, _result.Trades, Statistics.PeriodsPerYear(_timeframe));
+
+            _equitySeries = new()
+            {
+                new IndicatorSeries
+                {
+                    Title = "Equity",
+                    Color = "#2962FF",
+                    Type = IndicatorSeriesType.Line,
+                    Points = _result.EquityCurve
+                        .Select(p => new IndicatorPoint(
+                            new DateTimeOffset(DateTime.SpecifyKind(p.Timestamp, DateTimeKind.Utc)).ToUnixTimeSeconds(),
+                            (double)p.Capital))
+                        .ToList(),
+                },
+            };
+
+            SetStatus($"Backtest out-of-sample completato su {_result.CandlesEvaluated} candele mai viste in training.", error: false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore nel backtest: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+            _stage = Stage.Idle;
+        }
+    }
+
+    private async Task SaveModelAsync()
+    {
+        if (_predictor is null || _trainedFactors is null || _userId is null) return;
+        if (string.IsNullOrWhiteSpace(_saveModelName))
+        {
+            SetStatus("Inserisci un nome per salvare il modello.", error: true);
+            return;
+        }
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"mlmodel_save_{Guid.NewGuid():N}.zip");
+        try
+        {
+            _predictor.Save(new MLContext(), tempPath);
+            var bytes = await File.ReadAllBytesAsync(tempPath);
+
+            var factorsDto = _trainedFactors
+                .Select(f => new SavedFactorSpecDto(f.FeatureName, f.Factor.Name, new Dictionary<string, decimal>(f.Parameters)))
+                .ToList();
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.SavedMlModels.Add(new SavedMlModel
+            {
+                UserId = _userId,
+                Name = _saveModelName.Trim(),
+                ModelType = _modelType,
+                Symbol = _symbol.Trim(),
+                Timeframe = _timeframe,
+                TrainingDataFrom = _from,
+                TrainingDataTo = _to,
+                ForwardHorizon = _forwardHorizon,
+                FactorsJson = JsonSerializer.Serialize(factorsDto),
+                ModelBytes = bytes,
+                TrainRowCount = _trainRowCount,
+                TrainCorrelation = _trainCorrelation,
+            });
+            await db.SaveChangesAsync();
+
+            _saveModelName = "";
+            await LoadSavedModelsListAsync();
+            SetStatus("Modello salvato.", error: false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore nel salvataggio: {ex.Message}", error: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+        }
+    }
+
+    private async Task LoadSavedModelAsync(int id)
+    {
+        _busy = true;
+        _isError = false;
+        _result = null;
+        _tearsheet = null;
+        _equitySeries = new();
+        _predictor?.Dispose();
+        _predictor = null;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var saved = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == id && m.UserId == _userId);
+            if (saved is null)
+            {
+                SetStatus("Modello non trovato.", error: true);
+                return;
+            }
+
+            IReturnPredictor predictor = saved.ModelType switch
+            {
+                "Stacked" => new StackedReturnPredictor(),
+                "Attention" => new AttentionReturnPredictor(), // config reale letta dal blob al Load
+                "RandomForest" => new RandomForestReturnPredictor(),
+                "GradientBoosting" => new GradientBoostingReturnPredictor(),
+                "Mlp" => new MlpReturnPredictor(),
+                _ => new LinearReturnPredictor(),
+            };
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"mlmodel_load_{Guid.NewGuid():N}.zip");
+            try
+            {
+                await File.WriteAllBytesAsync(tempPath, saved.ModelBytes);
+                predictor.Load(new MLContext(), tempPath);
+            }
+            finally
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
+
+            var factorsDto = JsonSerializer.Deserialize<List<SavedFactorSpecDto>>(saved.FactorsJson) ?? [];
+            var factors = factorsDto
+                .Select(dto => new FactorSpec(dto.FeatureName, FactorFactory.Create(dto.FactorName), dto.Parameters))
+                .ToList();
+
+            // Nessuno split: il modello è già addestrato. L'intero intervallo Da/A selezionato
+            // sopra viene usato direttamente come test out-of-sample.
+            var fromUtc = DateTime.SpecifyKind(_from, DateTimeKind.Utc);
+            var toUtc = DateTime.SpecifyKind(_to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
+            List<OhlcvData> candles;
+            await using (var db2 = await DbFactory.CreateDbContextAsync())
+            {
+                candles = await db2.OhlcvData
+                    .Where(c => c.Symbol == saved.Symbol && c.Timeframe == saved.Timeframe
+                                && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+                    .OrderBy(c => c.TimestampUtc)
+                    .ToListAsync();
+            }
+
+            _symbol = saved.Symbol;
+            _timeframe = saved.Timeframe;
+            _modelType = saved.ModelType;
+            _predictor = predictor;
+            _trainedFactors = factors;
+            _testCandles = candles;
+            _trainRowCount = saved.TrainRowCount;
+            _trainCorrelation = saved.TrainCorrelation;
+            _featureImportance = new(); // non ricalcolata: servirebbe il dataset di training originale
+
+            var warn = candles.Count == 0 ? " ATTENZIONE: nessuna candela nell'intervallo Da/A selezionato." : "";
+            SetStatus($"Modello '{saved.Name}' caricato (addestrato su {saved.TrainingDataFrom:yyyy-MM-dd}→{saved.TrainingDataTo:yyyy-MM-dd}). " +
+                      $"L'intervallo Da/A sopra ({_from:yyyy-MM-dd}→{_to:yyyy-MM-dd}, {candles.Count} candele) verrà usato per il backtest: " +
+                      $"assicurati che sia successivo al periodo di addestramento originale.{warn}", error: candles.Count == 0);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore nel caricamento: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteSavedModelAsync(int id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var saved = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == id && m.UserId == _userId);
+        if (saved is null) return;
+        db.SavedMlModels.Remove(saved);
+        await db.SaveChangesAsync();
+        await LoadSavedModelsListAsync();
+    }
+
+    private void SetStatus(string text, bool error)
+    {
+        _status = text;
+        _isError = error;
+    }
+
+    public void Dispose() => _predictor?.Dispose();
+
+    private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
+    {
+        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
+        builder.AddMarkupContent(0, $@"
+            <div class='card text-center' style='min-width: 9rem;'>
+                <div class='card-body py-2'>
+                    <div class='text-muted small'>{label}</div>
+                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
+                </div>
+            </div>");
+    };
+}

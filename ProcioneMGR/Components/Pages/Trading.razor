@@ -1,0 +1,715 @@
+@page "/trading"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.Extensions.DependencyInjection
+@using Microsoft.Extensions.Options
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.Trading
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IDisposable
+
+@inject IServiceProvider Services
+@inject IOptionsMonitor<SafetyConfiguration> Safety
+@inject ISafetyConfigWriter SafetyWriter
+@inject AuthenticationStateProvider AuthProvider
+@inject IPromotionEvaluator PromotionEval
+@inject ILanePromoter Promoter
+
+<PageTitle>Trading</PageTitle>
+<h1>Trading
+    @if (_status is not null)
+    {
+        <span class="badge @ModeBadge(_status.Mode)">@_status.Mode</span>
+        @if (_status.MarketType == MarketType.Futures)
+        {
+            <span class="badge bg-dark">FUTURES @(_status.Leverage)x</span>
+        }
+        else
+        {
+            <span class="badge bg-light text-dark border">SPOT</span>
+        }
+        @if (_status.IsRunning) { <span class="badge bg-success">RUNNING</span> }
+        else { <span class="badge bg-secondary">STOPPED</span> }
+    }
+</h1>
+
+<div class="mb-3 d-flex align-items-center gap-2">
+    <label class="form-label mb-0">Corsia</label>
+    <select class="form-select form-select-sm" style="width: auto" value="@_laneId" @onchange="OnLaneChangedAsync">
+        @for (var i = 0; i < LaneCount; i++)
+        {
+            <option value="@i">Corsia @i@(i == 0 ? " (default)" : "")</option>
+        }
+    </select>
+    <span class="text-muted small">Motore di trading indipendente per corsia — stessa isolazione della configurazione in <a href="ensemble">Ensemble</a>.</span>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Promozioni — da Paper a Testnet (mai a Live in automatico)</span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshPromotionsAsync" disabled="@_promoBusy">Rivaluta ora</button>
+    </div>
+    <div class="card-body">
+        <GuidaPanel Title="Come funziona la promozione automatica">
+            <p class="mb-1">
+                Una corsia in <strong>Paper</strong> che performa bene abbastanza a lungo (Sharpe, numero di
+                trade, drawdown, win rate e settimane di osservazione tutti sopra soglia) può passare
+                automaticamente a <strong>Testnet</strong> — stesso protocollo del Live ma senza soldi veri.
+                La promozione è <strong>reversibile</strong>: se in Testnet l'edge svanisce, la corsia torna a Paper.
+            </p>
+            <p class="mb-0">
+                <strong>Confine non negoziabile:</strong> il passaggio a <strong>Live</strong> non è mai
+                automatico — richiede sempre la conferma manuale qui sotto, dietro i controlli di sicurezza.
+            </p>
+        </GuidaPanel>
+        @if (_promotions.Count == 0)
+        {
+            <p class="text-muted mb-0">Nessuna valutazione disponibile (avvia una corsia in Paper per iniziare a raccogliere metriche).</p>
+        }
+        else
+        {
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Corsia</th><th>Simbolo</th><th>Modalità</th><th>Sharpe</th><th>Trade</th>
+                        <th>Max DD</th><th>Win</th><th>Osserv.</th><th>Stato</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in _promotions)
+                    {
+                        <tr>
+                            <td>@p.LaneId</td>
+                            <td>@(string.IsNullOrEmpty(p.Symbol) ? "—" : p.Symbol)</td>
+                            <td><span class="badge @ModeBadge(p.CurrentMode)">@p.CurrentMode</span></td>
+                            <td>@p.Metrics.RealizedSharpe.ToString("F2")</td>
+                            <td>@p.Metrics.TradeCount</td>
+                            <td>@p.Metrics.MaxDrawdown.ToString("F1")%</td>
+                            <td>@p.Metrics.WinRate.ToString("P0")</td>
+                            <td>@p.Metrics.ObservationPeriod.TotalDays.ToString("F0")gg</td>
+                            <td>
+                                @if (p.CurrentMode == TradingMode.Testnet)
+                                {
+                                    <span class="badge bg-success">Testnet</span>
+                                    @if (p.ShouldDemote) { <span class="badge bg-warning text-dark ms-1">retrocessione consigliata</span> }
+                                }
+                                else if (p.CurrentMode == TradingMode.Live)
+                                {
+                                    <span class="badge bg-danger">Live (manuale)</span>
+                                }
+                                else if (p.ReadyForTestnet)
+                                {
+                                    <span class="badge bg-warning text-dark" title="@p.Reason">Pronta per Testnet</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary" title="@p.Reason">Paper</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                @if (p.CurrentMode == TradingMode.Paper && p.ReadyForTestnet)
+                                {
+                                    <button class="btn btn-sm btn-success" @onclick="() => PromoteAsync(p.LaneId, TradingMode.Testnet)" disabled="@_promoBusy">▲ Promuovi a Testnet</button>
+                                }
+                                <button class="btn btn-sm btn-outline-danger" disabled title="Live richiede conferma manuale dai controlli di modalità qui sotto.">▲ Promuovi a Live</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        @if (!string.IsNullOrEmpty(_promoMessage))
+        {
+            <div class="alert @(_promoIsError ? "alert-danger" : "alert-success") mt-2 mb-0 py-2">@_promoMessage</div>
+        }
+    </div>
+</div>
+
+<GuidaPanel Title="Trading — dal simulato ai soldi veri, con freni di sicurezza">
+    <p>
+        Questa pagina fa girare <strong>davvero</strong> le strategie (non è una simulazione come
+        il Backtest): valuta ogni nuova candela e apre/chiude posizioni in base ai segnali. Ha tre
+        modalità pensate per aumentare gradualmente il rischio, così puoi fidarti di una strategia
+        prima di rischiare soldi veri.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Modalità: Paper</dt>
+        <dd class="col-sm-9">Denaro <strong>finto</strong>, nessun ordine reale — perfetta per osservare come si comporterebbe una strategia "dal vivo" senza alcun rischio.</dd>
+        <dt class="col-sm-3">Modalità: Testnet</dt>
+        <dd class="col-sm-9">Ordini <strong>reali</strong> ma su un ambiente di prova dell'exchange (Binance Testnet) con soldi finti forniti dall'exchange stesso — serve una credenziale testnet salvata in <a href="settings/exchanges">Credenziali Exchange</a>. Un passo intermedio realistico prima del Live.</dd>
+        <dt class="col-sm-3">Modalità: Live</dt>
+        <dd class="col-sm-9">Soldi <strong>veri</strong>. Richiede una conferma esplicita per partire, e ogni singolo ordine automatico resta "in attesa" finché non lo confermi tu manualmente (vedi sotto) — un'ulteriore rete di sicurezza oltre alla configurazione.</dd>
+        <dt class="col-sm-3">Start / Stop Trading</dt>
+        <dd class="col-sm-9">Avvia o ferma il motore. In Paper riparte da zero ogni volta; in Testnet/Live riprende lo stato (posizioni aperte incluse) da dove era rimasto, anche dopo un riavvio dell'applicazione.</dd>
+        <dt class="col-sm-3">EMERGENCY STOP</dt>
+        <dd class="col-sm-9">Chiude <strong>immediatamente tutte</strong> le posizioni aperte e blocca nuovi ordini — da usare se qualcosa non va e vuoi uscire subito da ogni esposizione, senza aspettare i segnali della strategia.</dd>
+        <dt class="col-sm-3">Conferme in attesa (Live)</dt>
+        <dd class="col-sm-9">In modalità Live, ogni nuovo ordine proposto automaticamente resta qui finché non lo confermi o rifiuti tu — nessun ordine parte da solo senza la tua approvazione esplicita.</dd>
+        <dt class="col-sm-3">Spot vs Futures / Leva</dt>
+        <dd class="col-sm-9">
+            La modalità (Spot o Futures a leva) e la leva usata si impostano in
+            <a href="ensemble">Ensemble</a>, non qui — questa pagina mostra e opera con la
+            configurazione già salvata lì. In Futures il badge in alto mostra "FUTURES Nx" e le
+            metriche "Margine usato"/"Leva" sostituiscono quelle Spot.
+        </dd>
+        <dt class="col-sm-3">Posizioni aperte</dt>
+        <dd class="col-sm-9">
+            Le posizioni attualmente in corso, col guadagno/perdita non ancora realizzato. In
+            Futures compaiono anche Leva e <strong>Liq. Price</strong> (prezzo di liquidazione:
+            se il mercato lo raggiunge la posizione viene chiusa forzatamente in perdita — evidenziato
+            in rosso/giallo quando il prezzo corrente si avvicina). Se la gamba ha uno stop
+            validato nel backtest (configurato in <a href="ensemble">Ensemble</a>), Stop Loss/Take
+            Profit/Trailing % sono già compilati automaticamente all'apertura — puoi comunque
+            modificarli qui a mano in qualsiasi momento con "Set SL/TP" (l'ultima modifica manuale
+            ha sempre la precedenza). Il <strong>Trailing %</strong> segue il prezzo quando va a
+            favore e si blocca a quella distanza, invece di restare fisso come lo Stop Loss.
+            Oppure chiudi manualmente con "Close".
+        </dd>
+        <dt class="col-sm-3">Ordini recenti</dt>
+        <dd class="col-sm-9">Lo storico di ogni ordine tentato, incluso lo stato (eseguito, rifiutato dai controlli di sicurezza, in errore) — se un ordine è stato rifiutato, il motivo compare nella colonna "Error".</dd>
+        <dt class="col-sm-3">Configurazione di sicurezza (solo Admin)</dt>
+        <dd class="col-sm-9">
+            Soglie di protezione applicate a OGNI ordine prima che parta: dimensione massima per
+            posizione, esposizione totale massima, perdita giornaliera massima, drawdown massimo
+            (oltre il quale scatta un emergency stop automatico), numero massimo di posizioni
+            aperte contemporaneamente, e per i Futures la <strong>leva massima consentita</strong>
+            (l'avvio viene rifiutato se la leva richiesta in Ensemble la supera). Servono a
+            limitare i danni di una strategia che si comporta peggio del previsto.
+        </dd>
+    </dl>
+</GuidaPanel>
+
+@if (_status?.IsEmergencyStopped == true)
+{
+    <div class="alert alert-danger fw-bold">
+        🛑 EMERGENCY STOP ATTIVATO: @_status.EmergencyStopReason. Riavvia manualmente dopo aver verificato.
+    </div>
+}
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+}
+
+<div class="card mb-3">
+    <div class="card-header">Controllo</div>
+    <div class="card-body">
+        <div class="d-flex flex-wrap gap-4 align-items-center">
+            <div>
+                <label class="form-label d-block">Modalità</label>
+                @foreach (var m in new[] { "Paper", "Testnet", "Live" })
+                {
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="mode" id="m_@m" value="@m"
+                               checked="@(_mode == m)" @onchange="@(() => _mode = m)" disabled="@_running" />
+                        <label class="form-check-label" for="m_@m">@m</label>
+                    </div>
+                }
+            </div>
+
+            <div class="d-flex gap-2">
+                @if (!_running)
+                {
+                    <button class="btn btn-success" @onclick="StartAsync" disabled="@(_mode == "Live" && !_liveConfirmed)">▶ Start Trading</button>
+                }
+                else
+                {
+                    <button class="btn btn-warning" @onclick="StopAsync">⏸ Stop Trading</button>
+                }
+                @if (!_confirmEmergency)
+                {
+                    <button class="btn btn-danger" style="animation: pulse 1.2s infinite" @onclick="() => _confirmEmergency = true">🛑 EMERGENCY STOP</button>
+                }
+                else
+                {
+                    <span class="text-danger fw-bold">Chiuderà TUTTE le posizioni. Sei sicuro?</span>
+                    <button class="btn btn-danger" @onclick="EmergencyAsync">SÌ, FERMA TUTTO</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => _confirmEmergency = false">Annulla</button>
+                }
+            </div>
+        </div>
+
+        @if (_mode == "Live")
+        {
+            <div class="alert alert-danger mt-3 mb-0">
+                ⚠️ <strong>Stai per tradare con soldi veri.</strong>
+                <div class="form-check mt-1">
+                    <input class="form-check-input" type="checkbox" id="liveok" @bind="_liveConfirmed" />
+                    <label class="form-check-label" for="liveok">Confermo</label>
+                </div>
+            </div>
+        }
+        @if (_mode == "Testnet")
+        {
+            <div class="text-muted small mt-2">ℹ️ Testnet piazza ordini reali su <strong>Binance Testnet</strong> con firma HMAC: serve una credenziale <em>testnet</em> in <a href="settings/exchanges">/settings/exchanges</a>.</div>
+        }
+        @if (_mode == "Live")
+        {
+            <div class="text-muted small mt-2">ℹ️ In Live ogni ordine richiede <strong>conferma manuale</strong> (safety): gli ordini automatici del worker vengono rifiutati finché non c'è una UI di conferma per-ordine (step finale).</div>
+        }
+    </div>
+</div>
+
+@if (_status is not null)
+{
+    <div class="row g-2 mb-3">
+        <div class="col-auto">@Metric("Total Capital", _status.TotalCapital.ToString("N2"))</div>
+        <div class="col-auto">@Metric("Available", _status.AvailableCapital.ToString("N2"))</div>
+        <div class="col-auto">@Metric(_status.MarketType == MarketType.Futures ? "Margine usato" : "Used", _status.UsedCapital.ToString("N2"))</div>
+        @if (_status.MarketType == MarketType.Futures)
+        {
+            <div class="col-auto">@Metric("Leva", _status.Leverage + "x")</div>
+        }
+        <div class="col-auto">@Metric("Total PnL", _status.TotalPnl.ToString("N2"), _status.TotalPnl >= 0)</div>
+        <div class="col-auto">@Metric("PnL %", _status.TotalPnlPercent.ToString("F2") + "%", _status.TotalPnlPercent >= 0)</div>
+        <div class="col-auto">@Metric("Max DD %", _status.MaxDrawdown.ToString("F2"), false)</div>
+        <div class="col-auto">@Metric("Trades", _status.TotalTrades.ToString())</div>
+        <div class="col-auto">@Metric("Win Rate", _status.WinRate.ToString("F0") + "%")</div>
+    </div>
+
+    @if (_pending.Count > 0)
+    {
+        <div class="card mb-3 border-warning">
+            <div class="card-header bg-warning text-dark fw-bold">⏳ Conferme in attesa (Live) — @_pending.Count</div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead><tr><th>Creato</th><th>Side</th><th>Qty</th><th>Prezzo rif.</th><th class="text-end">Azioni</th></tr></thead>
+                    <tbody>
+                        @foreach (var o in _pending)
+                        {
+                            <tr>
+                                <td class="small">@o.CreatedAtUtc.ToString("MM-dd HH:mm")</td>
+                                <td><span class="badge @(o.Side == OrderSide.Buy ? "bg-success" : "bg-danger")">@(o.Side == OrderSide.Buy ? "Long" : "Short")</span></td>
+                                <td>@o.Quantity.ToString("N5")</td>
+                                <td>@(o.Price?.ToString("N2") ?? "—")</td>
+                                <td class="text-end">
+                                    <button class="btn btn-sm btn-success" @onclick="() => ConfirmAsync(o.OrderId)">✔ Conferma</button>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => RejectAsync(o.OrderId)">✕ Rifiuta</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    <div class="card mb-3">
+        <div class="card-header">Posizioni aperte (@_positions.Count)</div>
+        @if (_positions.Count == 0)
+        {
+            <div class="card-body text-muted">Nessuna posizione aperta.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead><tr><th>Strategy</th><th>Side</th><th>Entry</th><th>Current</th><th>Qty</th><th>Unreal. PnL</th><th>PnL %</th>
+                        @if (_status?.MarketType == MarketType.Futures) { <th>Leva</th><th>Liq. Price</th> }
+                        <th>Stop Loss</th><th>Take Profit</th><th>Trailing %</th><th class="text-end">Azioni</th></tr></thead>
+                    <tbody>
+                        @foreach (var p in _positions)
+                        {
+                            <tr>
+                                <td><code class="small">@p.StrategyId[..6]</code></td>
+                                <td><span class="badge @(p.Side == OrderSide.Buy ? "bg-success" : "bg-danger")">@(p.Side == OrderSide.Buy ? "Long" : "Short")</span></td>
+                                <td>@p.EntryPrice.ToString("N2")</td>
+                                <td>@p.CurrentPrice.ToString("N2")</td>
+                                <td>@p.Quantity.ToString("N5")</td>
+                                <td class="@(p.UnrealizedPnl >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnl.ToString("N2")</td>
+                                <td class="@(p.UnrealizedPnlPercent >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnlPercent.ToString("F2")%</td>
+                                @if (_status?.MarketType == MarketType.Futures)
+                                {
+                                    <td>@(p.Leverage)x</td>
+                                    <td class="@LiqPriceClass(p)">@(p.LiquidationPrice?.ToString("N2") ?? "—")</td>
+                                }
+                                <td><input type="number" step="any" class="form-control form-control-sm" style="width:7rem"
+                                           placeholder="—" value="@SlValue(p)" @onchange="e => OnSlChanged(p.PositionId, e.Value?.ToString())" /></td>
+                                <td><input type="number" step="any" class="form-control form-control-sm" style="width:7rem"
+                                           placeholder="—" value="@TpValue(p)" @onchange="e => OnTpChanged(p.PositionId, e.Value?.ToString())" /></td>
+                                <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:6rem"
+                                           placeholder="—" value="@TslValue(p)" @onchange="e => OnTslChanged(p.PositionId, e.Value?.ToString())" /></td>
+                                <td class="text-end text-nowrap">
+                                    <button class="btn btn-sm btn-outline-primary me-1" title="Salva SL/TP/Trailing" @onclick="() => SaveSlTpAsync(p.PositionId)">Set SL/TP</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => CloseAsync(p.PositionId)">Close</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    @if (_equity.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Equity curve</div>
+            <div class="card-body"><OhlcvChart ShowCandles="false" Indicators="_equity" Height="280" /></div>
+        </div>
+    }
+
+    <div class="card mb-3">
+        <div class="card-header">Ordini recenti (@_orders.Count)</div>
+        <div class="table-responsive" style="max-height: 320px; overflow:auto;">
+            <table class="table table-sm table-striped mb-0">
+                <thead class="table-light" style="position:sticky;top:0;"><tr><th>Timestamp</th><th>Side</th><th>Type</th><th>Qty</th><th>Price</th><th>Status</th><th>Error</th></tr></thead>
+                <tbody>
+                    @foreach (var o in _orders)
+                    {
+                        <tr>
+                            <td class="small">@o.CreatedAtUtc.ToString("MM-dd HH:mm")</td>
+                            <td>@o.Side</td>
+                            <td>@o.Type</td>
+                            <td>@o.Quantity.ToString("N5")</td>
+                            <td>@(o.Price?.ToString("N2") ?? "—")</td>
+                            <td><span class="badge @StatusBadge(o.Status)">@o.Status</span></td>
+                            <td class="small text-danger">@o.ErrorMessage</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <AuthorizeView Roles="@AppRoles.Admin">
+        <div class="card mb-3 border-warning">
+            <div class="card-header bg-warning-subtle d-flex justify-content-between align-items-center">
+                <span>⚙️ Configurazione di sicurezza <span class="badge bg-danger ms-1">solo Admin</span></span>
+                <small class="text-muted">salvata in appsettings.json · applicata a caldo</small>
+            </div>
+            <div class="card-body">
+                @if (_running)
+                {
+                    <div class="alert alert-info py-2 small mb-3">
+                        Il trading è in esecuzione: le modifiche alle soglie si applicano ai prossimi ordini valutati.
+                    </div>
+                }
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label small">Max size per posizione (% capitale)</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxPositionSizePercent" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Max esposizione totale (%)</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxTotalExposurePercent" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Max perdita giornaliera (%)</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxDailyLossPercent" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Max drawdown (%) <span class="text-danger">→ emergency stop</span></label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxDrawdownPercent" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Max posizioni aperte</label>
+                        <input type="number" step="1" min="1" class="form-control form-control-sm" @bind="_safety.MaxOpenPositions" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Intervallo minimo tra ordini (s)</label>
+                        <input type="number" step="1" min="0" class="form-control form-control-sm" @bind="_safety.MinOrderIntervalSeconds" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Leva massima consentita (Futures)</label>
+                        <input type="number" step="1" min="1" class="form-control form-control-sm" @bind="_safety.MaxLeverageAllowed" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Margine di mantenimento stimato (%)</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaintenanceMarginPercent" />
+                        <div class="form-text">Usato per stimare il prezzo di liquidazione quando l'exchange non lo riporta ancora.</div>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="reqConfirm" @bind="_safety.RequireManualConfirmationForLive" />
+                            <label class="form-check-label" for="reqConfirm">
+                                Richiedi conferma manuale per ogni ordine in <strong>Live</strong>
+                                <span class="text-muted">(consigliato: attivo)</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button class="btn btn-warning btn-sm" @onclick="SaveSafetyAsync">Salva configurazione</button>
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="ReloadSafety">Annulla modifiche</button>
+                </div>
+            </div>
+        </div>
+    </AuthorizeView>
+}
+
+<style>
+    @@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
+</style>
+
+@code {
+    private TradingEngineStatus? _status;
+    private List<OpenPosition> _positions = new();
+    private List<Order> _orders = new();
+    private List<Order> _pending = new();
+    private List<IndicatorSeries> _equity = new();
+    private string? _userId;
+
+    // Valori SL/TP/Trailing in modifica (sopravvivono al refresh automatico finché non salvati).
+    private readonly Dictionary<string, decimal?> _slEdits = new();
+    private readonly Dictionary<string, decimal?> _tpEdits = new();
+    private readonly Dictionary<string, decimal?> _tslEdits = new();
+
+    // Copia di lavoro delle soglie di sicurezza (form Admin).
+    private SafetyConfiguration _safety = new();
+
+    private string _mode = "Paper";
+    private bool _liveConfirmed;
+    private bool _confirmEmergency;
+    private bool _isError;
+    private string? _message;
+
+    private System.Threading.Timer? _timer;
+    private bool _running => _status?.IsRunning == true;
+
+    /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): stesso numero registrato in Program.cs.</summary>
+    private const int LaneCount = 3;
+    private int _laneId;
+
+    /// <summary>Motore della corsia selezionata (keyed DI): risolto ad ogni accesso, mai messo in cache tra un cambio corsia e l'altro.</summary>
+    private ITradingEngine Engine => Services.GetRequiredKeyedService<ITradingEngine>(_laneId);
+
+    // Stato del pannello Promozioni (valutato meno spesso del refresh a 2s: le metriche cambiano lentamente).
+    private List<PromotionDecision> _promotions = new();
+    private bool _promoBusy;
+    private string? _promoMessage;
+    private bool _promoIsError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        ReloadSafety();
+        await RefreshAsync();
+        await RefreshPromotionsAsync();
+        _timer = new System.Threading.Timer(async _ => await InvokeAsync(RefreshAsync), null,
+            TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
+
+    private async Task RefreshPromotionsAsync()
+    {
+        _promoBusy = true;
+        try
+        {
+            _promotions = (await PromotionEval.EvaluateAllLanesAsync()).ToList();
+        }
+        catch (Exception ex) { _promoMessage = $"Valutazione promozioni fallita: {ex.Message}"; _promoIsError = true; }
+        finally { _promoBusy = false; }
+    }
+
+    private async Task PromoteAsync(int laneId, TradingMode newMode)
+    {
+        _promoBusy = true;
+        _promoMessage = null;
+        try
+        {
+            await Promoter.PromoteLaneAsync(laneId, newMode, "Promozione manuale dall'operatore");
+            _promoIsError = false;
+            _promoMessage = $"Corsia {laneId} promossa a {newMode}.";
+            await RefreshPromotionsAsync();
+            if (laneId == _laneId) await RefreshAsync();
+        }
+        catch (Exception ex) { _promoIsError = true; _promoMessage = $"Promozione fallita: {ex.Message}"; }
+        finally { _promoBusy = false; }
+    }
+
+    private async Task OnLaneChangedAsync(ChangeEventArgs e)
+    {
+        _laneId = int.Parse((string)e.Value!);
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            _status = await Engine.GetStatusAsync();
+            _positions = await Engine.GetOpenPositionsAsync();
+            _orders = await Engine.GetOrderHistoryAsync();
+            _pending = await Engine.GetPendingOrdersAsync();
+            var perf = await Engine.GetPerformanceAsync();
+            _equity = perf.EquityCurve.Count > 0
+                ? new()
+                {
+                    new IndicatorSeries
+                    {
+                        Title = "Equity", Color = "#2962FF", Type = IndicatorSeriesType.Line,
+                        Points = perf.EquityCurve.Select(p => new IndicatorPoint(
+                            new DateTimeOffset(DateTime.SpecifyKind(p.Timestamp, DateTimeKind.Utc)).ToUnixTimeSeconds(), (double)p.Capital)).ToList(),
+                    },
+                }
+                : new();
+        }
+        catch { /* refresh resiliente */ }
+        StateHasChanged();
+    }
+
+    private async Task StartAsync()
+    {
+        var mode = Enum.Parse<TradingMode>(_mode);
+        try
+        {
+            await Engine.StartAsync(mode);
+            var note = mode switch
+            {
+                TradingMode.Paper => "Paper trading avviato. Il worker sta riproducendo le candele reali…",
+                TradingMode.Testnet => "Testnet avviato: gli ordini vengono piazzati su Binance Testnet con le tue credenziali.",
+                _ => "Live avviato. ⚠️ In Live ogni ordine richiede conferma manuale (safety): gli ordini automatici vengono rifiutati finché non confermati.",
+            };
+            SetMsg(note, false);
+            _confirmEmergency = false;
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            SetMsg($"Avvio {mode} fallito: {ex.Message}", true);
+        }
+    }
+
+    private async Task StopAsync()
+    {
+        await Engine.StopAsync();
+        SetMsg("Trading fermato (posizioni lasciate aperte).", false);
+        await RefreshAsync();
+    }
+
+    private async Task EmergencyAsync()
+    {
+        _confirmEmergency = false;
+        await Engine.EmergencyStopAsync("Stop manuale dall'operatore");
+        SetMsg("EMERGENCY STOP eseguito: tutte le posizioni chiuse.", false);
+        await RefreshAsync();
+    }
+
+    private async Task CloseAsync(string positionId)
+    {
+        await Engine.ClosePositionAsync(positionId);
+        await RefreshAsync();
+    }
+
+    private string? SlValue(OpenPosition p) =>
+        (_slEdits.TryGetValue(p.PositionId, out var v) ? v : p.StopLoss)?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private string? TpValue(OpenPosition p) =>
+        (_tpEdits.TryGetValue(p.PositionId, out var v) ? v : p.TakeProfit)?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private string? TslValue(OpenPosition p) =>
+        (_tslEdits.TryGetValue(p.PositionId, out var v) ? v : p.TrailingStopPercent)?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private void OnSlChanged(string id, string? raw) => _slEdits[id] = ParseLevel(raw);
+    private void OnTpChanged(string id, string? raw) => _tpEdits[id] = ParseLevel(raw);
+    private void OnTslChanged(string id, string? raw) => _tslEdits[id] = ParseLevel(raw);
+
+    private static decimal? ParseLevel(string? raw) =>
+        decimal.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d) && d > 0m
+            ? d : (decimal?)null;
+
+    private async Task SaveSlTpAsync(string positionId)
+    {
+        var pos = _positions.FirstOrDefault(p => p.PositionId == positionId);
+        var sl = _slEdits.TryGetValue(positionId, out var s) ? s : pos?.StopLoss;
+        var tp = _tpEdits.TryGetValue(positionId, out var t) ? t : pos?.TakeProfit;
+        var tsl = _tslEdits.TryGetValue(positionId, out var tr) ? tr : pos?.TrailingStopPercent;
+        await Engine.SetStopLossTakeProfitAsync(positionId, sl, tp, tsl);
+        _slEdits.Remove(positionId);
+        _tpEdits.Remove(positionId);
+        _tslEdits.Remove(positionId);
+        SetMsg($"SL/TP/Trailing aggiornati (SL={sl?.ToString("N2") ?? "—"}, TP={tp?.ToString("N2") ?? "—"}, Trailing={tsl?.ToString("F1") ?? "—"}%).", false);
+        await RefreshAsync();
+    }
+
+    private async Task ConfirmAsync(string orderId)
+    {
+        await Engine.ConfirmOrderAsync(orderId, _userId);
+        SetMsg("Ordine confermato e inviato all'exchange.", false);
+        await RefreshAsync();
+    }
+
+    private async Task RejectAsync(string orderId)
+    {
+        await Engine.RejectOrderAsync(orderId, _userId);
+        SetMsg("Ordine rifiutato.", false);
+        await RefreshAsync();
+    }
+
+    private void ReloadSafety()
+    {
+        var c = Safety.CurrentValue;
+        _safety = new SafetyConfiguration
+        {
+            MaxPositionSizePercent = c.MaxPositionSizePercent,
+            MaxTotalExposurePercent = c.MaxTotalExposurePercent,
+            MaxDailyLossPercent = c.MaxDailyLossPercent,
+            MaxDrawdownPercent = c.MaxDrawdownPercent,
+            MaxOpenPositions = c.MaxOpenPositions,
+            MinOrderIntervalSeconds = c.MinOrderIntervalSeconds,
+            RequireManualConfirmationForLive = c.RequireManualConfirmationForLive,
+            MaxLeverageAllowed = c.MaxLeverageAllowed,
+            MaintenanceMarginPercent = c.MaintenanceMarginPercent,
+        };
+    }
+
+    private async Task SaveSafetyAsync()
+    {
+        if (_safety.MaxPositionSizePercent <= 0 || _safety.MaxTotalExposurePercent <= 0 ||
+            _safety.MaxOpenPositions < 1 || _safety.MaxLeverageAllowed < 1)
+        {
+            SetMsg("Valori non validi: size/esposizione devono essere > 0, almeno 1 posizione e leva massima >= 1.", true);
+            return;
+        }
+        try
+        {
+            await SafetyWriter.SaveAsync(_safety);
+            SetMsg("Configurazione di sicurezza salvata (attiva entro pochi secondi).", false);
+        }
+        catch (Exception ex)
+        {
+            SetMsg($"Salvataggio fallito: {ex.Message}", true);
+        }
+    }
+
+    /// <summary>Colora il prezzo di liquidazione in base a quanto è vicino al prezzo corrente (rischio crescente).</summary>
+    private static string LiqPriceClass(OpenPosition p)
+    {
+        if (p.LiquidationPrice is not decimal liq || liq <= 0m || p.CurrentPrice <= 0m) return "text-muted";
+        var distance = Math.Abs(p.CurrentPrice - liq) / p.CurrentPrice;
+        return distance switch
+        {
+            < 0.05m => "text-danger fw-bold",
+            < 0.15m => "text-warning fw-semibold",
+            _ => "",
+        };
+    }
+
+    private static string ModeBadge(TradingMode m) => m switch
+    {
+        TradingMode.Paper => "bg-info text-dark",
+        TradingMode.Testnet => "bg-warning text-dark",
+        TradingMode.Live => "bg-danger",
+        _ => "bg-secondary",
+    };
+
+    private static string StatusBadge(OrderStatus s) => s switch
+    {
+        OrderStatus.Filled => "bg-success",
+        OrderStatus.Rejected => "bg-danger",
+        OrderStatus.Pending => "bg-secondary",
+        _ => "bg-warning text-dark",
+    };
+
+    private void SetMsg(string text, bool error) { _message = text; _isError = error; }
+
+    private RenderFragment Metric(string label, string value, bool? positive = null) => builder =>
+    {
+        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
+        builder.AddMarkupContent(0, $@"<div class='card text-center' style='min-width:8rem;'><div class='card-body py-2'>
+            <div class='text-muted small'>{label}</div><div class='fs-6 fw-semibold {cls}'>{value}</div></div></div>");
+    };
+
+    public void Dispose() => _timer?.Dispose();
+}

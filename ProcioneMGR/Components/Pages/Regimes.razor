@@ -1,0 +1,358 @@
+@page "/regimes"
+@rendermode InteractiveServer
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Ensemble
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Regime
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject IRegimeDetector Detector
+@inject IMarketFeatureExtractor Extractor
+@inject IEnsembleManager EnsembleMgr
+@inject IStrategyFactory StrategyFactory
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Market Regimes</PageTitle>
+<h1>Market Regime Detection <span class="badge bg-secondary">K-means</span></h1>
+
+<GuidaPanel Title="Regimi di mercato — il mercato non si comporta sempre allo stesso modo">
+    <p>
+        Un mercato "in forte tendenza" e uno "laterale/senza direzione" sono situazioni molto
+        diverse, e non è detto che la stessa strategia funzioni bene in entrambe (una strategia a
+        media mobile ama le tendenze, una a inversione ama i mercati laterali). Questa pagina
+        analizza lo storico e lo raggruppa automaticamente in "regimi" — cluster di periodi con
+        caratteristiche simili (volatilità, direzione, forza del trend) — usando una tecnica di
+        machine learning non supervisionato (K-means). Non ti dice il futuro: ti dice "in che tipo
+        di mercato siamo stati storicamente, e quale strategia ha reso meglio in ciascuno".
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Regimi (K)</dt>
+        <dd class="col-sm-9">In quanti gruppi dividere lo storico. Troppo pochi (2-3) rischiano di mischiare situazioni diverse; troppi (7-8) rischiano di creare gruppi poco significativi con pochi dati ciascuno.</dd>
+        <dt class="col-sm-3">Train Model / Activate Model</dt>
+        <dd class="col-sm-9">"Train" calcola i regimi in anteprima senza cambiare nulla di operativo; "Activate" lo rende il modello usato davvero dall'Ensemble (se l'opzione sotto è abilitata).</dd>
+        <dt class="col-sm-3">Silhouette Score</dt>
+        <dd class="col-sm-9">
+            Un punteggio da -1 a 1 che misura quanto i regimi trovati sono davvero "distinti" tra
+            loro (vicino a 1 = gruppi ben separati e coerenti; vicino a 0 o negativo = i gruppi si
+            sovrappongono troppo, il risultato è meno affidabile). Verde/giallo/rosso ti dice a
+            colpo d'occhio se fidarti del risultato.
+        </dd>
+        <dt class="col-sm-3">Profili regime</dt>
+        <dd class="col-sm-9">Le caratteristiche medie di ciascun regime trovato (quanto era volatile, se in tendenza al rialzo/ribasso, quanto forte, ecc.) — da qui viene l'etichetta suggerita (es. "Trend Up High-Vol").</dd>
+        <dt class="col-sm-3">Performance strategie per regime</dt>
+        <dd class="col-sm-9">Lo Sharpe medio ottenuto da ogni strategia in ciascun regime storico — la cella più verde in ogni colonna indica quale strategia ha reso meglio in quel tipo di mercato.</dd>
+        <dt class="col-sm-3">Timeline regimi</dt>
+        <dd class="col-sm-9">Una striscia colorata che mostra in che regime si trovava il mercato periodo per periodo, per farsi un'idea visiva di quanto spesso cambia "umore".</dd>
+        <dt class="col-sm-3">Enable Regime-Aware Weighting</dt>
+        <dd class="col-sm-9">
+            Se attivo, l'<a href="ensemble">Ensemble</a> userà anche il regime corrente per decidere
+            i pesi delle strategie (non solo la performance recente) — dando più capitale a chi ha
+            reso meglio storicamente nel regime in cui siamo <em>ora</em>.
+        </dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Training</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Exchange</label>
+                <select class="form-select" @bind="_exchange" disabled="@_busy">
+                    @foreach (var ex in Enum.GetValues<ExchangeName>()) { <option value="@ex">@ex</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" list="rg_symbols" @bind="_symbol" style="width:10rem" disabled="@_busy" />
+                <datalist id="rg_symbols">@foreach (var s in _symbols) { <option value="@s"></option> }</datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                    @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Regimi (K): @_k</label>
+                <input type="range" class="form-range" min="2" max="8" @bind="_k" disabled="@_busy" style="width:8rem" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="TrainAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Train Model
+                </button>
+            </div>
+            @if (_model is not null && !_model.IsActive)
+            {
+                <div class="col-auto"><button class="btn btn-success" @onclick="ActivateAsync" disabled="@_busy">✔ Activate Model</button></div>
+            }
+        </div>
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_model is not null && _profiles is not null)
+{
+    var silColor = _model.SilhouetteScore < 0.2 ? "danger" : _model.SilhouetteScore < 0.4 ? "warning" : "success";
+    <div class="row g-3 mb-3">
+        <div class="col-auto">
+            <div class="card text-center" style="min-width:11rem;">
+                <div class="card-body py-2">
+                    <div class="text-muted small">Silhouette Score</div>
+                    <div class="fs-4 fw-bold text-@silColor">@_model.SilhouetteScore.ToString("F3")</div>
+                    <div class="small text-muted">@(_model.IsActive ? "ATTIVO" : "preview")</div>
+                </div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="card h-100">
+                <div class="card-header">Profili regime</div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>ID</th><th>Label</th><th>Campioni</th><th>Volatility</th><th>Trend dir</th><th>Trend str</th><th>RSI</th></tr></thead>
+                        <tbody>
+                            @foreach (var p in _profiles.OrderBy(x => x.RegimeId))
+                            {
+                                <tr>
+                                    <td><span class="badge" style="background:@RegimeColor(p.RegimeId);color:#222">@p.RegimeId</span></td>
+                                    <td>@p.SuggestedLabel</td>
+                                    <td>@p.SampleCount</td>
+                                    <td>@p.MeanVolatility.ToString("F3")</td>
+                                    <td>@p.MeanTrendDirection.ToString("F2")</td>
+                                    <td>@p.MeanTrendStrength.ToString("F5")</td>
+                                    <td>@p.MeanRsiLevel.ToString("F1")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Performance strategie per regime (Sharpe medio) — quale strategia funziona in quale regime</div>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0 text-center">
+                <thead>
+                    <tr>
+                        <th class="text-start">Strategia</th>
+                        @foreach (var p in _profiles.OrderBy(x => x.RegimeId))
+                        {
+                            <th><span class="badge" style="background:@RegimeColor(p.RegimeId);color:#222">@p.SuggestedLabel</span></th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var stratName in StrategyNames())
+                    {
+                        <tr>
+                            <td class="text-start fw-semibold">@stratName</td>
+                            @foreach (var p in _profiles.OrderBy(x => x.RegimeId))
+                            {
+                                var sh = p.StrategyPerformances.TryGetValue(stratName, out var pf) ? pf.AverageSharpe : 0m;
+                                <td style="background:@SharpeColor(sh)">@sh.ToString("F2")</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    @if (_timeline.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Timeline regimi (modello attivo)</div>
+            <div class="card-body">
+                <div style="display:flex; height:36px; border-radius:4px; overflow:hidden; border:1px solid #ddd;">
+                    @foreach (var seg in _timeline)
+                    {
+                        <div style="flex:@seg.Weight; background:@RegimeColor(seg.RegimeId);" title="@seg.Label (@seg.Start.ToString("yyyy-MM-dd") → @seg.End.ToString("yyyy-MM-dd"))"></div>
+                    }
+                </div>
+                <div class="d-flex flex-wrap gap-3 mt-2">
+                    @foreach (var p in _profiles.OrderBy(x => x.RegimeId))
+                    {
+                        <span class="small"><span class="badge" style="background:@RegimeColor(p.RegimeId);color:#222">&nbsp;</span> @p.SuggestedLabel</span>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+}
+
+<div class="card">
+    <div class="card-header">Integrazione Ensemble</div>
+    <div class="card-body">
+        <div class="form-check form-switch mb-2">
+            <input class="form-check-input" type="checkbox" id="rgaw" @bind="_regimeAware" @bind:after="SaveRegimeAwareAsync" />
+            <label class="form-check-label" for="rgaw">
+                <strong>Enable Regime-Aware Weighting</strong> — peso = 0.6·Sharpe rolling + 0.4·performance nel regime corrente
+            </label>
+        </div>
+        @if (_currentRegimeLabel is not null)
+        {
+            <div>Regime corrente dell'ensemble:
+                <span class="badge" style="background:@RegimeColor(_currentRegimeId ?? 0);color:#222">@_currentRegimeLabel (ID @_currentRegimeId)</span>
+            </div>
+        }
+        else
+        {
+            <div class="text-muted small">Nessun regime corrente (attiva un modello e configura l'ensemble sullo stesso symbol/timeframe).</div>
+        }
+        <a class="btn btn-link p-0 mt-2" href="ensemble">→ Vai all'Ensemble</a>
+    </div>
+</div>
+
+@code {
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1h";
+    private DateTime _from = new(2024, 7, 1);
+    private DateTime _to = DateTime.UtcNow.Date;
+    private int _k = 4;
+
+    private List<string> _symbols = new();
+    private RegimeModel? _model;
+    private List<RegimeProfile>? _profiles;
+    private List<TimelineSegment> _timeline = new();
+    private bool _regimeAware;
+    private int? _currentRegimeId;
+    private string? _currentRegimeLabel;
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    private static readonly string[] Palette =
+        ["#A5D6A7", "#FFE082", "#EF9A9A", "#90CAF9", "#CE93D8", "#80CBC4", "#FFCC80", "#B0BEC5"];
+
+    private sealed record TimelineSegment(int RegimeId, string Label, DateTime Start, DateTime End, double Weight);
+
+    private string RegimeColor(int id) => Palette[id % Palette.Length];
+
+    private static string SharpeColor(decimal sharpe)
+    {
+        var s = Math.Clamp((double)sharpe, -3, 3);
+        // rosso (-3) -> giallo (0) -> verde (+3)
+        var r = s < 0 ? 220 : (int)(220 - s / 3 * 120);
+        var g = s > 0 ? 200 : (int)(120 + (s + 3) / 3 * 80);
+        return $"rgba({r},{g},120,0.55)";
+    }
+
+    private IEnumerable<string> StrategyNames() => StrategyFactory.Prototypes.Select(p => p.Name);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using (var db = await DbFactory.CreateDbContextAsync())
+        {
+            _symbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        }
+        var cfg = await EnsembleMgr.GetConfigurationAsync();
+        _regimeAware = cfg.RegimeAwareWeighting;
+
+        var active = await Detector.LoadLatestModelAsync();
+        if (active is not null)
+        {
+            _model = active;
+            _profiles = JsonSerializer.Deserialize<List<RegimeProfile>>(active.RegimeProfilesJson);
+            await BuildTimelineAsync();
+        }
+        await LoadCurrentRegimeAsync();
+    }
+
+    private async Task TrainAsync()
+    {
+        _busy = true; _isError = false; _status = null; _timeline = new();
+        try
+        {
+            _model = await Detector.TrainAsync(new TrainingConfiguration
+            {
+                ExchangeName = _exchange.ToString(), Symbol = _symbol.Trim(), Timeframe = _timeframe,
+                From = _from.Date, To = _to.Date, NumberOfRegimes = _k, MaxIterations = 100,
+            }, activate: false);
+            _profiles = JsonSerializer.Deserialize<List<RegimeProfile>>(_model.RegimeProfilesJson);
+            SetStatus($"Modello addestrato (preview): Silhouette {_model.SilhouetteScore:F3}. Premi 'Activate' per renderlo attivo.", false);
+        }
+        catch (Exception ex) { SetStatus($"Errore training: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private async Task ActivateAsync()
+    {
+        if (_model is null) return;
+        _busy = true;
+        try
+        {
+            await Detector.ActivateModelAsync(_model);
+            _model.IsActive = true;
+            await BuildTimelineAsync();
+            await LoadCurrentRegimeAsync();
+            SetStatus("Modello attivato.", false);
+        }
+        catch (Exception ex) { SetStatus($"Errore attivazione: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private async Task BuildTimelineAsync()
+    {
+        _timeline = new();
+        var active = await Detector.LoadLatestModelAsync();
+        if (active is null) return;
+
+        var feats = await Extractor.ExtractFeaturesAsync(active.ExchangeName, active.Symbol, active.Timeframe,
+            DateTime.UtcNow.AddMonths(-6), DateTime.UtcNow);
+        await Detector.LabelFeaturesAsync(feats);
+        if (feats.Count == 0) return;
+
+        var labelByRegime = (_profiles ?? new()).ToDictionary(p => p.RegimeId, p => p.SuggestedLabel);
+        var segs = new List<TimelineSegment>();
+        var startIdx = 0;
+        for (var i = 1; i <= feats.Count; i++)
+        {
+            if (i == feats.Count || feats[i].RegimeId != feats[startIdx].RegimeId)
+            {
+                var rid = feats[startIdx].RegimeId ?? 0;
+                segs.Add(new TimelineSegment(rid, labelByRegime.GetValueOrDefault(rid, $"R{rid}"),
+                    feats[startIdx].Timestamp, feats[i - 1].Timestamp, i - startIdx));
+                startIdx = i;
+            }
+        }
+        _timeline = segs;
+    }
+
+    private async Task LoadCurrentRegimeAsync()
+    {
+        var status = await EnsembleMgr.GetStatusAsync();
+        _currentRegimeId = status.CurrentRegimeId;
+        _currentRegimeLabel = status.CurrentRegimeLabel;
+    }
+
+    private async Task SaveRegimeAwareAsync()
+    {
+        var cfg = await EnsembleMgr.GetConfigurationAsync();
+        cfg.RegimeAwareWeighting = _regimeAware;
+        await EnsembleMgr.UpdateConfigurationAsync(cfg);
+        await LoadCurrentRegimeAsync();
+        SetStatus($"Regime-Aware Weighting {(_regimeAware ? "attivato" : "disattivato")}.", false);
+    }
+
+    private void SetStatus(string text, bool error) { _status = text; _isError = error; }
+}

@@ -1,0 +1,598 @@
+@page "/optimization"
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.Optimization
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IAsyncDisposable
+
+@inject IOptimizationEngine OptEngine
+@inject IStrategyFactory StrategyFactory
+@using ProcioneMGR.Services.Experiments
+@inject ProcioneMGR.Services.Experiments.IExperimentTracker Tracker
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+
+<PageTitle>Optimization</PageTitle>
+
+<h1>Parameter Optimization <span class="badge bg-secondary">Walk-Forward</span></h1>
+
+<GuidaPanel Title="Optimization — trova i parametri migliori senza illudersi">
+    <p>
+        Ogni strategia ha dei "numeri regolabili" (es. quanto veloce/lenta una media mobile).
+        Provare a mano decine di combinazioni è lento; questa pagina le prova <strong>tutte</strong>
+        automaticamente (grid search) e sceglie le migliori. Il problema è che una strategia
+        "ottimizzata" sui dati che hai già visto tende a sembrare migliore di quanto sarà davvero
+        in futuro (si dice che è "overfittata" — ha imparato a memoria il passato, non una regola
+        generale). Per questo la piattaforma usa il metodo <strong>walk-forward</strong>: divide
+        lo storico in finestre consecutive, ottimizza su una finestra (<em>in-sample</em>, i dati
+        "di allenamento") e verifica il risultato SOLO sulla finestra successiva, mai vista prima
+        (<em>out-of-sample</em>, il vero test). Il numero che conta davvero è lo Sharpe
+        <strong>out-of-sample</strong>, non quello in-sample.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Symbol / Timeframe / Da-A</dt>
+        <dd class="col-sm-9">Lo stesso significato del Backtest: la coppia, la granularità delle candele e il periodo storico complessivo su cui girare l'intera analisi walk-forward.</dd>
+        <dt class="col-sm-3">Strategia</dt>
+        <dd class="col-sm-9">
+            La regola da ottimizzare. "Modello ML (salvato)" è un caso speciale: invece di una
+            strategia a regole fisse, usa un modello di machine learning già addestrato in
+            <a href="ml">ML Lab</a> — qui si ottimizzano solo le sue soglie di decisione, non il
+            modello stesso.
+        </dd>
+        <dt class="col-sm-3">Range parametri (Grid Search)</dt>
+        <dd class="col-sm-9">
+            Per ogni parametro scegli un minimo, un massimo e un passo (step): la piattaforma
+            proverà ogni combinazione possibile. Attenzione: più parametri e passi più piccoli =
+            molte più combinazioni da testare (il numero è mostrato sotto la tabella) e tempi più
+            lunghi.
+        </dd>
+        <dt class="col-sm-3">In-Sample / Out-of-Sample / Step (mesi)</dt>
+        <dd class="col-sm-9">
+            Quanto è larga la finestra di allenamento (In-Sample), quanto quella di verifica
+            immediatamente successiva (Out-of-Sample), e di quanto si sposta in avanti la finestra
+            a ogni passo (Step) — finestre che si sovrappongono (Step &lt; In-Sample) riusano parte
+            dei dati, finestre non sovrapposte danno un test più severo ma richiedono più storico.
+        </dd>
+        <dt class="col-sm-3">Top 10</dt>
+        <dd class="col-sm-9">Le 10 combinazioni di parametri con il miglior Sharpe out-of-sample medio sulle finestre — quella evidenziata in verde è la migliore in assoluto.</dd>
+        <dt class="col-sm-3">Heatmap</dt>
+        <dd class="col-sm-9">
+            Visibile solo con esattamente 2 parametri: una mappa colorata che mostra dove si trova
+            la "zona buona" — colori uniformi e continui indicano una strategia robusta, macchie
+            isolate indicano un risultato fortunato/instabile su cui non fare troppo affidamento.
+        </dd>
+        <dt class="col-sm-3">Equity curve Walk-Forward</dt>
+        <dd class="col-sm-9">Il capitale ottenuto incollando in sequenza SOLO i risultati out-of-sample di ogni finestra — la stima più onesta di come sarebbe andata "dal vivo".</dd>
+        <dt class="col-sm-3">Finestre Walk-Forward</dt>
+        <dd class="col-sm-9">Il dettaglio finestra per finestra: se lo Sharpe in-sample è molto più alto di quello out-of-sample, è un segnale di overfitting in quella finestra.</dd>
+        <dt class="col-sm-3">Save Best Configuration</dt>
+        <dd class="col-sm-9">Salva la combinazione migliore in <a href="strategies">Le mie strategie</a>, taggata come "ottimizzata".</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Configurazione</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Exchange</label>
+                <select class="form-select" @bind="_exchange" disabled="@_busy">
+                    @foreach (var ex in Enum.GetValues<ExchangeName>())
+                    { <option value="@ex">@ex</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" list="opt_symbols" @bind="_symbol" style="width: 10rem;" disabled="@_busy" />
+                <datalist id="opt_symbols">
+                    @foreach (var s in _knownSymbols) { <option value="@s"></option> }
+                </datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                    @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+            </div>
+        </div>
+
+        <hr />
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Strategia</label>
+                <select class="form-select" value="@_strategyName" @onchange="OnStrategyChanged" disabled="@_busy">
+                    @foreach (var p in StrategyFactory.Prototypes) { <option value="@p.Name">@p.DisplayName</option> }
+                    <option value="@MlStrategyName">Modello ML (salvato)</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Capitale</label>
+                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_initialCapital" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Commissione %</label>
+                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_commission" disabled="@_busy" />
+            </div>
+        </div>
+
+        @if (_strategyName == MlStrategyName)
+        {
+            var compatibleMlModels = _mlModels.Where(m => m.Symbol == _symbol.Trim() && m.Timeframe == _timeframe).ToList();
+            <div class="row g-3 align-items-end mt-1">
+                <div class="col-auto">
+                    <label class="form-label">Modello ML (@_symbol @_timeframe)</label>
+                    @if (compatibleMlModels.Count == 0)
+                    {
+                        <div class="form-text text-warning">Nessun modello salvato per questo symbol/timeframe (addestralo in /ml).</div>
+                    }
+                    else
+                    {
+                        <select class="form-select" @bind="_addMlModelId" disabled="@_busy">
+                            <option value="0">—</option>
+                            @foreach (var m in compatibleMlModels)
+                            {
+                                <option value="@m.Id">@m.Name (@m.ModelType)</option>
+                            }
+                        </select>
+                    }
+                </div>
+            </div>
+        }
+
+        <div class="mt-3">
+            <label class="form-label fw-semibold">Range parametri (Grid Search)</label>
+            <table class="table table-sm" style="max-width: 720px;">
+                <thead><tr><th>Parametro</th><th>Min</th><th>Max</th><th>Step</th><th>Intero</th></tr></thead>
+                <tbody>
+                    @foreach (var r in _ranges)
+                    {
+                        <tr>
+                            <td>@r.Label</td>
+                            <td><input type="number" step="any" class="form-control form-control-sm" style="width:6rem" @bind="r.Min" disabled="@_busy" /></td>
+                            <td><input type="number" step="any" class="form-control form-control-sm" style="width:6rem" @bind="r.Max" disabled="@_busy" /></td>
+                            <td><input type="number" step="any" class="form-control form-control-sm" style="width:6rem" @bind="r.Step" disabled="@_busy" /></td>
+                            <td><input type="checkbox" class="form-check-input" @bind="r.IsInteger" disabled="@_busy" /></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <div class="text-muted small">Combinazioni totali: <strong>@TotalCombos()</strong></div>
+        </div>
+
+        <hr />
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">In-Sample (mesi)</label>
+                <input type="number" class="form-control" style="width:7rem" @bind="_inSampleMonths" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Out-of-Sample (mesi)</label>
+                <input type="number" class="form-control" style="width:7rem" @bind="_oosMonths" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Step (mesi)</label>
+                <input type="number" class="form-control" style="width:7rem" @bind="_stepMonths" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="StartAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Start Optimization
+                </button>
+            </div>
+            @if (_busy)
+            {
+                <div class="col-auto"><button class="btn btn-outline-danger" @onclick="Stop">Stop</button></div>
+            }
+        </div>
+
+        @if (_busy)
+        {
+            <div class="progress mt-3" style="height: 22px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width:@(Pct)%">
+                    @_progress.Message — best Sharpe @_progress.BestSharpeSoFar.ToString("F2") (@Pct%)
+                </div>
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_result is not null)
+{
+    @if (_result.Validation is { } v)
+    {
+        <div class="alert @(v.IsSignificant ? "alert-success" : "alert-warning") d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <strong>Deflated Sharpe: @((v.DeflatedSharpe * 100).ToString("F1"))%</strong>
+                @(v.IsSignificant ? " — edge difendibile dopo correzione per test multiplo" : " — NON significativo: probabile artefatto della ricerca (selection bias)")
+            </div>
+            <span class="small text-muted">
+                soglia attesa SR* (per-periodo): @v.ExpectedMaxSharpePerPeriod.ToString("F4") ·
+                osservato: @v.ObservedSharpePerPeriod.ToString("F4") ·
+                @v.Trials combinazioni · @v.Observations osservazioni
+            </span>
+        </div>
+    }
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Top 10 — Sharpe OOS medio (selezione finestra su in-sample)</span>
+            <span class="small text-muted">@_result.TotalCombinationsTested valutazioni in @_result.ExecutionTime.TotalSeconds.ToString("F1")s · Sharpe OOS medio finestre: <strong>@_result.WalkForwardAnalysis.AverageOutOfSampleSharpe.ToString("F3")</strong></span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead><tr><th>#</th><th>Parametri</th><th>Sharpe IS</th><th>Sharpe OOS</th><th>Return %</th><th>Max DD %</th><th>Trades</th></tr></thead>
+                <tbody>
+                    @{ var rank = 0; }
+                    @foreach (var s in _result.BestParameters)
+                    {
+                        rank++;
+                        <tr class="@(rank == 1 ? "table-success" : "")">
+                            <td>@rank</td>
+                            <td>@FormatParams(s.Parameters)</td>
+                            <td>@s.InSampleSharpe.ToString("F2")</td>
+                            <td class="fw-semibold">@s.OutOfSampleSharpe.ToString("F2")</td>
+                            <td class="@(s.TotalReturn >= 0 ? "text-success" : "text-danger")">@s.TotalReturn.ToString("F2")</td>
+                            <td class="text-danger">@s.MaxDrawdown.ToString("F2")</td>
+                            <td>@s.TotalTrades</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer">
+            <div class="input-group" style="max-width: 520px;">
+                <input class="form-control" placeholder="nome configurazione" @bind="_saveName" />
+                <button class="btn btn-success" @onclick="SaveBestAsync">💾 Save Best Configuration</button>
+            </div>
+        </div>
+    </div>
+
+    @if (_ranges.Count == 2 && _result.AllResults.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Heatmap robustezza (Sharpe OOS medio)</div>
+            <div class="card-body"><div id="opt_heatmap" style="width:100%;"></div></div>
+        </div>
+    }
+
+    <div class="card mb-3">
+        <div class="card-header">Equity curve Walk-Forward (out-of-sample concatenati)</div>
+        <div class="card-body">
+            @if (_equitySeries.Count > 0)
+            {
+                <OhlcvChart ShowCandles="false" Indicators="_equitySeries" Height="300" />
+            }
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Finestre Walk-Forward</div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead><tr><th>#</th><th>In-Sample</th><th>Out-of-Sample</th><th>Best params</th><th>Sharpe IS</th><th>Sharpe OOS</th><th>OOS Return %</th></tr></thead>
+                <tbody>
+                    @foreach (var win in _result.WalkForwardAnalysis.Windows)
+                    {
+                        <tr>
+                            <td>@win.WindowIndex</td>
+                            <td>@win.InSampleStart.ToString("yyyy-MM") → @win.InSampleEnd.ToString("yyyy-MM")</td>
+                            <td>@win.OutOfSampleStart.ToString("yyyy-MM") → @win.OutOfSampleEnd.ToString("yyyy-MM")</td>
+                            <td>@FormatParams(win.BestParameters)</td>
+                            <td>@win.InSampleSharpe.ToString("F2")</td>
+                            <td>@win.OutOfSampleSharpe.ToString("F2")</td>
+                            <td class="@(win.OutOfSampleReturn >= 0 ? "text-success" : "text-danger")">@win.OutOfSampleReturn.ToString("F2")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1h";
+    private DateTime _from = new(2024, 6, 1);
+    private DateTime _to = new(2026, 6, 1);
+    private decimal _initialCapital = 10_000m;
+    private decimal _commission = 0.1m;
+    private int _inSampleMonths = 12;
+    private int _oosMonths = 3;
+    private int _stepMonths = 3;
+
+    private const string MlStrategyName = "Ml";
+
+    private string _strategyName = "EmaCross";
+    private List<RangeInput> _ranges = new();
+    private List<string> _knownSymbols = new();
+    private List<SavedMlModel> _mlModels = new();
+    private int _addMlModelId;
+
+    private OptimizationResult? _result;
+    private List<IndicatorSeries> _equitySeries = new();
+    private string _saveName = "";
+    private string? _userId;
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+    private OptimizationProgress _progress = new();
+    private CancellationTokenSource? _cts;
+
+    private IJSObjectReference? _heatmapModule;
+    private bool _heatmapPending;
+
+    private int Pct => _progress.TotalCombinations == 0 ? 0 : (int)Math.Min(100, (long)_progress.CombinationsTested * 100 / _progress.TotalCombinations);
+
+    private sealed class RangeInput
+    {
+        public required string Key { get; init; }
+        public required string Label { get; init; }
+        public decimal Min { get; set; }
+        public decimal Max { get; set; }
+        public decimal Step { get; set; }
+        public bool IsInteger { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        BuildRanges();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        _mlModels = await db.SavedMlModels.OrderByDescending(m => m.CreatedAtUtc).ToListAsync();
+    }
+
+    private void OnStrategyChanged(ChangeEventArgs e)
+    {
+        _strategyName = e.Value?.ToString() ?? "EmaCross";
+        BuildRanges();
+    }
+
+    private void BuildRanges()
+    {
+        if (_strategyName == MlStrategyName)
+        {
+            // Le uniche "manopole" sweepabili per un modello ML già addestrato sono le soglie
+            // Long/Short di MlStrategy; il modello stesso si sceglie a parte (non è un range).
+            _ranges =
+            [
+                new() { Key = "LongThreshold", Label = "Soglia Long", Min = 0.0005m, Max = 0.02m, Step = 0.0025m, IsInteger = false },
+                new() { Key = "ShortThreshold", Label = "Soglia Short", Min = 0.0005m, Max = 0.02m, Step = 0.0025m, IsInteger = false },
+            ];
+            return;
+        }
+
+        var proto = StrategyFactory.Prototypes.FirstOrDefault(p => p.Name == _strategyName) ?? StrategyFactory.Prototypes[0];
+        _ranges = proto.ParameterDefinitions.Select(d =>
+        {
+            var isInt = d.Key.Contains("Period") || d.Key.Contains("Lookback");
+            var step = isInt ? Math.Max(1m, Math.Round(d.Default * 0.2m)) : Math.Round(d.Default * 0.1m, 4);
+            if (step <= 0m) step = isInt ? 1m : 0.01m;
+            return new RangeInput
+            {
+                Key = d.Key,
+                Label = d.Label,
+                Min = d.Default,
+                Max = d.Default + 4 * step,
+                Step = step,
+                IsInteger = isInt,
+            };
+        }).ToList();
+    }
+
+    private int TotalCombos()
+    {
+        var total = 1;
+        foreach (var r in _ranges)
+        {
+            if (r.Step <= 0m) return 0;
+            var count = (int)Math.Floor((double)((r.Max - r.Min) / r.Step)) + 1;
+            total *= Math.Max(1, count);
+        }
+        return total;
+    }
+
+    private async Task StartAsync()
+    {
+        _busy = true; _isError = false; _status = null; _result = null; _equitySeries = new();
+        _progress = new(); _cts = new CancellationTokenSource();
+        try
+        {
+            if (_strategyName == MlStrategyName && _addMlModelId == 0)
+            {
+                SetStatus("Seleziona un modello ML salvato per questo symbol/timeframe.", error: true);
+                _busy = false;
+                return;
+            }
+
+            var ranges = _ranges.Select(r => new ParameterRange
+            {
+                Name = r.Key, Min = r.Min, Max = r.Max, Step = r.Step, IsInteger = r.IsInteger,
+            }).ToList();
+            if (_strategyName == MlStrategyName)
+            {
+                // Range "pinnato" (Min=Max) per veicolare il riferimento al modello attraverso
+                // lo stesso meccanismo di sweep dei parametri: nessun cambiamento a OptimizationEngine.
+                ranges.Add(new ParameterRange { Name = "SavedModelId", Min = _addMlModelId, Max = _addMlModelId, Step = 1, IsInteger = true });
+            }
+
+            var config = new OptimizationConfiguration
+            {
+                ExchangeName = _exchange.ToString(),
+                Symbol = _symbol.Trim(),
+                Timeframe = _timeframe,
+                From = _from.Date,
+                To = _to.Date,
+                InitialCapital = _initialCapital,
+                CommissionPercent = _commission,
+                StrategyName = _strategyName,
+                ParameterRanges = ranges,
+                WalkForward = new WalkForwardConfiguration
+                {
+                    InSampleMonths = _inSampleMonths, OutOfSampleMonths = _oosMonths, StepMonths = _stepMonths,
+                },
+            };
+
+            var progress = new Progress<OptimizationProgress>(p => { _progress = p; InvokeAsync(StateHasChanged); });
+            _result = await OptEngine.OptimizeAsync(config, progress, _cts.Token);
+
+            _equitySeries = new()
+            {
+                new IndicatorSeries
+                {
+                    Title = "Equity WF", Color = "#2962FF", Type = IndicatorSeriesType.Line,
+                    Points = _result.WalkForwardAnalysis.CombinedEquityCurve
+                        .Select(p => new IndicatorPoint(new DateTimeOffset(DateTime.SpecifyKind(p.Timestamp, DateTimeKind.Utc)).ToUnixTimeSeconds(), (double)p.Capital))
+                        .ToList(),
+                },
+            };
+            _heatmapPending = _ranges.Count == 2 && _result.AllResults.Count > 0;
+
+            // Experiment tracking (best-effort): un run per sweep, con i parametri migliori e la
+            // dimensione dello spazio esplorato — così un grid e un futuro Bayesiano sono comparabili.
+            var best = _result.BestParameters.Count > 0 ? _result.BestParameters[0] : null;
+            var optRunId = await Tracker.SafeStartRunAsync(
+                "Optimization",
+                $"{_strategyName} · {_symbol.Trim()} · {_timeframe}",
+                new
+                {
+                    config.StrategyName,
+                    config.Symbol,
+                    config.Timeframe,
+                    config.From,
+                    config.To,
+                    Ranges = config.ParameterRanges.Select(r => new { r.Name, r.Min, r.Max, r.Step }).ToList(),
+                    config.WalkForward.InSampleMonths,
+                    config.WalkForward.OutOfSampleMonths,
+                    config.WalkForward.StepMonths,
+                    BestParameters = best?.Parameters,
+                },
+                config.Symbol, config.Timeframe, _userId);
+            var optMetrics = new Dictionary<string, decimal>
+            {
+                ["CombinationsTested"] = _result.TotalCombinationsTested,
+                ["Windows"] = _result.WalkForwardAnalysis.Windows.Count,
+                ["BestOosSharpe"] = best?.OutOfSampleSharpe ?? 0m,
+            };
+            if (_result.Validation is { } val)
+            {
+                // Verdetto anti-overfitting (Fase 1) tracciato accanto alle metriche grezze.
+                foreach (var (k, mv) in val.ToMetrics()) optMetrics[k] = mv;
+            }
+            await Tracker.SafeLogMetricsAsync(optRunId, optMetrics);
+            await Tracker.SafeCompleteAsync(optRunId, "Completed");
+
+            SetStatus($"Ottimizzazione completata: {_result.WalkForwardAnalysis.Windows.Count} finestre, {_result.TotalCombinationsTested} valutazioni.", false);
+        }
+        catch (OperationCanceledException) { SetStatus("Ottimizzazione annullata.", true); }
+        catch (Exception ex) { SetStatus($"Errore: {ex.Message}", true); }
+        finally { _busy = false; _cts?.Dispose(); _cts = null; }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_heatmapPending && _result is not null)
+        {
+            _heatmapPending = false;
+            await RenderHeatmapAsync();
+        }
+    }
+
+    private async Task RenderHeatmapAsync()
+    {
+        if (_result is null || _ranges.Count != 2) return;
+        _heatmapModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/heatmap.js");
+
+        var xName = _ranges[0].Key;
+        var yName = _ranges[1].Key;
+        // Valori distinti ordinati dalle chiavi "k1=v1,k2=v2".
+        var parsed = _result.AllResults.Select(kv =>
+        {
+            var dict = kv.Key.Split(',').Select(p => p.Split('=')).ToDictionary(a => a[0], a => decimal.Parse(a[1], System.Globalization.CultureInfo.InvariantCulture));
+            return (X: dict[xName], Y: dict[yName], Z: kv.Value);
+        }).ToList();
+
+        var xs = parsed.Select(p => p.X).Distinct().OrderBy(v => v).ToList();
+        var ys = parsed.Select(p => p.Y).Distinct().OrderBy(v => v).ToList();
+        var z = new double?[ys.Count][];
+        for (var yi = 0; yi < ys.Count; yi++)
+        {
+            z[yi] = new double?[xs.Count];
+            for (var xi = 0; xi < xs.Count; xi++)
+            {
+                var match = parsed.FirstOrDefault(p => p.X == xs[xi] && p.Y == ys[yi]);
+                z[yi][xi] = match.Z == 0m && !parsed.Any(p => p.X == xs[xi] && p.Y == ys[yi]) ? null : (double)match.Z;
+            }
+        }
+
+        await _heatmapModule.InvokeVoidAsync("renderHeatmap", "opt_heatmap",
+            xs.Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray(),
+            ys.Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray(),
+            z, xName, yName);
+    }
+
+    private void Stop() => _cts?.Cancel();
+
+    private async Task SaveBestAsync()
+    {
+        if (_userId is null || _result is null || _result.BestParameters.Count == 0) return;
+        if (string.IsNullOrWhiteSpace(_saveName)) { SetStatus("Inserisci un nome.", true); return; }
+
+        var best = _result.BestParameters[0];
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.SavedStrategies.Add(new SavedStrategy
+        {
+            UserId = _userId,
+            Name = _saveName.Trim(),
+            StrategyName = _strategyName,
+            ParametersJson = JsonSerializer.Serialize(best.Parameters),
+            IsOptimized = true,
+            OptimizationDate = DateTime.UtcNow,
+            OptimizationSharpe = best.OutOfSampleSharpe,
+        });
+        await db.SaveChangesAsync();
+        SetStatus($"Configurazione ottimizzata '{_saveName}' salvata (Sharpe OOS {best.OutOfSampleSharpe:F2}).", false);
+        _saveName = "";
+    }
+
+    private static string FormatParams(Dictionary<string, decimal> p) =>
+        string.Join(", ", p.Select(kv => $"{kv.Key}={kv.Value}"));
+
+    private void SetStatus(string text, bool error) { _status = text; _isError = error; }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_heatmapModule is not null)
+            {
+                await _heatmapModule.InvokeVoidAsync("dispose", "opt_heatmap");
+                await _heatmapModule.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException) { }
+    }
+}

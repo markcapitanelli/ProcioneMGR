@@ -1,0 +1,842 @@
+@page "/ensemble"
+@rendermode InteractiveServer
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.DependencyInjection
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Ensemble
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.ML
+@using ProcioneMGR.Services.Monitoring
+@using ProcioneMGR.Services.Monitoring.Drift
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IDisposable
+
+@inject IServiceProvider Services
+@inject IStrategyFactory StrategyFactory
+@inject IFeatureDriftMonitor DriftMonitor
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Ensemble</PageTitle>
+
+<h1>Multi-Strategy Ensemble
+    @if (_status?.IsRunning == true)
+    {
+        <span class="badge bg-success">RUNNING</span>
+    }
+    else
+    {
+        <span class="badge bg-secondary">STOPPED</span>
+    }
+</h1>
+
+<div class="mb-3 d-flex align-items-center gap-2">
+    <label class="form-label mb-0">Corsia</label>
+    <select class="form-select form-select-sm" style="width: auto" value="@_laneId" @onchange="OnLaneChangedAsync">
+        @for (var i = 0; i < LaneCount; i++)
+        {
+            <option value="@i">Corsia @i@(i == 0 ? " (default)" : "")</option>
+        }
+    </select>
+    <span class="text-muted small">Ogni corsia è un ensemble/trading indipendente e isolato (stesso database, dati separati).</span>
+</div>
+
+<GuidaPanel Title="Ensemble — più strategie insieme, pesate in base a chi sta rendendo meglio">
+    <p>
+        Invece di scommettere tutto su una sola strategia, un <strong>ensemble</strong> ne combina
+        più contemporaneamente, dividendo il capitale tra loro. La piattaforma ricalcola
+        periodicamente (rebalance) quanto capitale dare a ciascuna in base a come si è comportata
+        di recente (<em>rolling Sharpe</em>): le strategie che stanno rendendo bene ricevono più
+        capitale, quelle che stanno andando male ne ricevono meno — senza però mai escluderle del
+        tutto (i limiti Min/Max % lo impediscono), perché una strategia "in pausa" può tornare utile
+        quando cambiano le condizioni di mercato.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Capitale / Symbol / Timeframe</dt>
+        <dd class="col-sm-9">Il capitale totale gestito dall'ensemble e la coppia/timeframe su cui operano tutte le strategie al suo interno.</dd>
+        <dt class="col-sm-3">Futures (leva)</dt>
+        <dd class="col-sm-9">
+            Se attivo, il trading (in <a href="trading">Trading</a>) opera su Futures perpetui a
+            margine <strong>isolato</strong> invece che Spot: solo il margine allocato a ogni
+            posizione è a rischio, non l'intero capitale, ma il prezzo può raggiungere un livello
+            di <strong>liquidazione</strong> che chiude la posizione in perdita. La leva richiesta
+            qui è comunque limitata dal tetto di sicurezza impostabile in Trading (solo Admin).
+        </dd>
+        <dt class="col-sm-3">Rebalance (giorni)</dt>
+        <dd class="col-sm-9">Ogni quanti giorni l'ensemble ricalcola le percentuali di capitale da assegnare a ciascuna strategia.</dd>
+        <dt class="col-sm-3">Sharpe rolling (giorni)</dt>
+        <dd class="col-sm-9">Su quanti giorni recenti si misura la performance di ciascuna strategia per decidere i nuovi pesi (una finestra "mobile", non tutto lo storico).</dd>
+        <dt class="col-sm-3">Min % / Max %</dt>
+        <dd class="col-sm-9">Limiti di sicurezza: nessuna strategia scende sotto il minimo (resta sempre un po' in gioco) né sale sopra il massimo (nessuna concentrazione eccessiva su una sola).</dd>
+        <dt class="col-sm-3">Strategie nell'ensemble</dt>
+        <dd class="col-sm-9">
+            L'elenco delle strategie incluse, con la loro allocazione attuale. Puoi aggiungerne di
+            predefinite, oppure una già ottimizzata da <a href="optimization">Optimization</a>/
+            <a href="discovery">Discovery</a> (badge "Optimized"), oppure un modello di
+            machine learning da <a href="ml">ML Lab</a> (badge "ML") — solo quelli addestrati sullo
+            stesso symbol/timeframe di questo ensemble sono proposti, perché un modello addestrato
+            su un'altra coppia non avrebbe senso qui.
+        </dd>
+        <dt class="col-sm-3">SL % / TP % / Trailing %</dt>
+        <dd class="col-sm-9">
+            Stop loss, take profit e trailing stop validati nel backtest per ciascuna gamba
+            (precompilati automaticamente quando applichi una raccomandazione da <a href="pipeline">Pipeline</a>,
+            editabili qui a mano). Se compilati, <a href="trading">Trading</a> li applica da solo
+            all'apertura di ogni posizione — senza bisogno di impostarli manualmente per ogni trade.
+            Vuoto = nessuno stop automatico.
+        </dd>
+        <dt class="col-sm-3">Enable / Disable Ensemble</dt>
+        <dd class="col-sm-9">Avvia o ferma il ribilanciamento automatico in background (non è un backtest: gira davvero, periodicamente, finché resta abilitato).</dd>
+        <dt class="col-sm-3">Rebalance Now</dt>
+        <dd class="col-sm-9">Forza subito un ricalcolo delle allocazioni, senza aspettare la prossima scadenza automatica.</dd>
+        <dt class="col-sm-3">Rolling Sharpe (tabella live)</dt>
+        <dd class="col-sm-9">La performance recente di ciascuna strategia usata per decidere i pesi — la riga evidenziata in verde è quella che sta guidando l'allocazione in questo momento.</dd>
+        <dt class="col-sm-3">Rebalancing history</dt>
+        <dd class="col-sm-9">Il registro di ogni ribilanciamento passato: come sono cambiate le percentuali e perché (motivo).</dd>
+        <dt class="col-sm-3">Sharpe atteso / Monitor decadimento</dt>
+        <dd class="col-sm-9">
+            Attenzione a non confondere due cose diverse: il "Rolling Sharpe" qui sopra è una
+            <strong>ri-simulazione</strong> (un backtest sui dati recenti, per decidere i pesi),
+            mentre il <strong>Monitor decadimento</strong> più in basso confronta lo Sharpe atteso
+            dal backtest/holdout (compilato qui o automaticamente da Pipeline/strategie ottimizzate)
+            con lo Sharpe calcolato sui trade <strong>realmente eseguiti</strong> da
+            <a href="trading">Trading</a> (Paper/Testnet/Live) — la vera risposta a "questa
+            strategia si sta comportando come previsto?". Serve almeno una finestra di trade chiusi
+            (default: le ultime 20) prima che compaia un confronto.
+        </dd>
+    </dl>
+</GuidaPanel>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+}
+
+@if (_config is null)
+{
+    <p><em>Caricamento…</em></p>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-header">Configurazione</div>
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Exchange</label>
+                    <select class="form-select" @bind="_config.ExchangeName">
+                        @foreach (var ex in Enum.GetValues<ExchangeName>()) { <option value="@ex">@ex</option> }
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Symbol</label>
+                    <input class="form-control" style="width:9rem" @bind="_config.Symbol" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Timeframe</label>
+                    <select class="form-select" @bind="_config.Timeframe">
+                        @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Capitale</label>
+                    <input type="number" step="any" class="form-control" style="width:8rem" @bind="_config.TotalCapital" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Rebalance (gg)</label>
+                    <input type="number" class="form-control" style="width:6rem" @bind="_config.RebalanceIntervalDays" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Sharpe rolling (gg)</label>
+                    <input type="number" class="form-control" style="width:6rem" @bind="_config.SharpeRollingDays" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Min %</label>
+                    <input type="number" step="any" class="form-control" style="width:5rem" @bind="_config.MinAllocationPercent" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Max %</label>
+                    <input type="number" step="any" class="form-control" style="width:5rem" @bind="_config.MaxAllocationPercent" />
+                </div>
+                <div class="col-auto">
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="isFutures" @bind="_config.IsFutures" />
+                        <label class="form-check-label" for="isFutures">Futures (leva)</label>
+                    </div>
+                </div>
+                @if (_config.IsFutures)
+                {
+                    <div class="col-auto">
+                        <label class="form-label">Leva</label>
+                        <input type="number" step="1" min="1" class="form-control" style="width:6rem" @bind="_config.Leverage" />
+                    </div>
+                    <div class="col-auto text-muted small" style="max-width:16rem;">
+                        ⚠️ Margine isolato: rischio di liquidazione. Il limite massimo si imposta in <a href="trading">Trading</a> (solo Admin).
+                    </div>
+                }
+            </div>
+
+            @if (_config.IsFutures && _config.ExchangeName.Equals("Binance", StringComparison.OrdinalIgnoreCase))
+            {
+                <div class="alert alert-warning mt-3 mb-0 py-2">
+                    ⚠️ <strong>Binance Futures non è utilizzabile dall'Italia/UE</strong>: dal 1° luglio 2026,
+                    a seguito del regolamento MiCA, Binance ha cessato i servizi di derivati e leva
+                    finanziaria per i residenti nello Spazio Economico Europeo (lo Spot resta disponibile).
+                    Per operare a leva usa <strong>Bitget</strong>.
+                </div>
+            }
+
+            <hr />
+            <label class="form-label fw-semibold">Strategie nell'ensemble</label>
+            <p class="text-muted small mb-1">
+                Stop loss / take profit / trailing (%) validati nel backtest: se compilati, il
+                <a href="trading">Trading</a> li applica automaticamente a ogni posizione aperta per
+                questa gamba, senza bisogno di impostarli a mano. Lascia vuoto per nessuno stop
+                automatico (invariato rispetto a prima). Sharpe/PF/MaxDD attesi alimentano il
+                <a href="#decay-monitor">monitor di decadimento</a> qui sotto.
+            </p>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead><tr><th>Strategia</th><th>Parametri</th><th>Attiva</th><th>Alloc %</th><th>SL %</th><th>TP %</th><th>Trailing %</th><th>Sharpe atteso</th><th>PF atteso</th><th>MaxDD atteso %</th><th>Esecuzione</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var s in _config.Strategies)
+                        {
+                            <tr>
+                                <td>
+                                    @s.DisplayName
+                                    @if (s.SavedStrategyId is not null)
+                                    {
+                                        <span class="badge bg-info text-dark ms-1">Optimized</span>
+                                    }
+                                    @if (s.SavedMlModelId is not null)
+                                    {
+                                        <span class="badge bg-purple text-white ms-1" style="background-color:#8E24AA;">ML</span>
+                                    }
+                                </td>
+                                <td><code class="small">@FormatParams(s.Parameters)</code></td>
+                                <td><input type="checkbox" class="form-check-input" @bind="s.IsActive" /></td>
+                                <td>@s.CurrentAllocation.ToString("F1")%</td>
+                                <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:5.5rem" @bind="s.StopLossPercent" /></td>
+                                <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:5.5rem" @bind="s.TakeProfitPercent" /></td>
+                                <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:5.5rem" @bind="s.TrailingStopPercent" /></td>
+                                <td><input type="number" step="any" class="form-control form-control-sm" style="width:5.5rem" @bind="s.ExpectedSharpe" /></td>
+                                <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:5.5rem" @bind="s.ExpectedProfitFactor" /></td>
+                                <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:6rem" @bind="s.ExpectedMaxDrawdown" /></td>
+                                <td>
+                                    <div class="d-flex gap-1">
+                                        <select class="form-select form-select-sm" style="width:6.5rem" @bind="s.ExecutionAlgorithmName" title="Algoritmo di esecuzione (solo Testnet/Live)">
+                                            <option value="">Immediato</option>
+                                            <option value="Twap">TWAP</option>
+                                            <option value="Vwap">VWAP</option>
+                                            <option value="Iceberg">Iceberg</option>
+                                            <option value="Adaptive">Adaptive</option>
+                                        </select>
+                                        <input type="number" min="1" class="form-control form-control-sm" style="width:4rem" placeholder="5m" title="Finestra (minuti); vuoto = default" @bind="s.ExecutionWindowMinutes" />
+                                    </div>
+                                </td>
+                                <td><button class="btn btn-sm btn-outline-danger" @onclick="() => Remove(s.StrategyId)">×</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label small">Aggiungi predefinita</label>
+                    <select class="form-select form-select-sm" @bind="_addPredefined">
+                        @foreach (var p in StrategyFactory.Prototypes) { <option value="@p.Name">@p.DisplayName</option> }
+                    </select>
+                </div>
+                <div class="col-auto"><button class="btn btn-sm btn-outline-primary" @onclick="AddPredefined">+ Aggiungi</button></div>
+                @if (_optimizedStrategies.Count > 0)
+                {
+                    <div class="col-auto ms-3">
+                        <label class="form-label small">Aggiungi ottimizzata (Fase 5)</label>
+                        <select class="form-select form-select-sm" @bind="_addSavedId">
+                            <option value="0">—</option>
+                            @foreach (var so in _optimizedStrategies)
+                            {
+                                <option value="@so.Id">@so.Name (Sharpe @so.OptimizationSharpe?.ToString("F2"))</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto"><button class="btn btn-sm btn-outline-info" @onclick="AddFromSaved">+ Aggiungi</button></div>
+                }
+                @{
+                    // Solo i modelli addestrati sullo STESSO symbol/timeframe dell'ensemble: un modello
+                    // ETH non ha senso backtestato su candele BTC (i fattori sono per costruzione simbolo-specifici).
+                    var compatibleMlModels = _config is null ? [] : _savedMlModels.Where(m => m.Symbol == _config.Symbol && m.Timeframe == _config.Timeframe).ToList();
+                }
+                @if (compatibleMlModels.Count > 0)
+                {
+                    <div class="col-auto ms-3">
+                        <label class="form-label small">Aggiungi modello ML (@_config!.Symbol @_config.Timeframe)</label>
+                        <select class="form-select form-select-sm" @bind="_addMlModelId">
+                            <option value="0">—</option>
+                            @foreach (var m in compatibleMlModels)
+                            {
+                                <option value="@m.Id">@m.Name (@m.ModelType)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label small">Soglie</label>
+                        <div class="d-flex gap-1">
+                            <input type="number" step="any" class="form-control form-control-sm" style="width:5.5rem" placeholder="Long" @bind="_addMlLongThreshold" />
+                            <input type="number" step="any" class="form-control form-control-sm" style="width:5.5rem" placeholder="Short" @bind="_addMlShortThreshold" />
+                        </div>
+                    </div>
+                    <div class="col-auto"><button class="btn btn-sm" style="background-color:#8E24AA;color:white;" @onclick="AddFromMlModel">+ Aggiungi</button></div>
+                }
+            </div>
+
+            <div class="mt-3 d-flex gap-2 flex-wrap">
+                <button class="btn btn-primary" @onclick="SaveAsync">💾 Save Configuration</button>
+                <button class="btn btn-outline-secondary" @onclick="RebalanceNowAsync" disabled="@_busy">🔄 Rebalance Now</button>
+                @if (_config!.IsEnabled)
+                {
+                    <button class="btn btn-outline-danger" @onclick="StopAsync">⏸ Disable Ensemble</button>
+                }
+                else
+                {
+                    <button class="btn btn-success" @onclick="StartAsync">▶ Enable Ensemble</button>
+                }
+                <button class="btn btn-link" @onclick="RefreshAsync" disabled="@_busy">@(_busy ? "Aggiornamento…" : "Aggiorna status")</button>
+            </div>
+        </div>
+    </div>
+
+    @if (_status is not null)
+    {
+        <div class="row g-3 mb-3">
+            <div class="col-auto">@Metric("Total Capital", _status.TotalCapital.ToString("N2"))</div>
+            <div class="col-auto">@Metric("Total PnL", _status.TotalPnl.ToString("N2"), _status.TotalPnl >= 0)</div>
+            <div class="col-auto">@Metric("PnL %", _status.TotalPnlPercent.ToString("F2") + "%", _status.TotalPnlPercent >= 0)</div>
+            <div class="col-auto">@Metric("Last Rebalance", _status.LastRebalanceUtc?.ToString("yyyy-MM-dd") ?? "—")</div>
+            <div class="col-auto">@Metric("Next Rebalance", _status.NextRebalanceUtc?.ToString("yyyy-MM-dd") ?? "—")</div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header">Strategie (live)</div>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped mb-0">
+                    <thead><tr><th>Strategia</th><th>Capitale</th><th>Alloc %</th><th>PnL</th><th>PnL %</th><th>Rolling Sharpe</th><th>Trades</th><th>Win %</th><th>Attiva</th></tr></thead>
+                    <tbody>
+                        @{ var bestSharpe = _status.Strategies.Count > 0 ? _status.Strategies.Max(x => x.RollingSharpe) : 0m; }
+                        @foreach (var s in _status.Strategies.OrderByDescending(x => x.RollingSharpe))
+                        {
+                            <tr class="@(s.RollingSharpe == bestSharpe ? "table-success" : "")">
+                                <td>@s.DisplayName</td>
+                                <td>@s.CurrentCapital.ToString("N2")</td>
+                                <td>@s.Allocation.ToString("F1")%</td>
+                                <td class="@(s.Pnl >= 0 ? "text-success" : "text-danger")">@s.Pnl.ToString("N2")</td>
+                                <td class="@(s.PnlPercent >= 0 ? "text-success" : "text-danger")">@s.PnlPercent.ToString("F2")%</td>
+                                <td class="fw-semibold">@s.RollingSharpe.ToString("F2")</td>
+                                <td>@s.TotalTrades</td>
+                                <td>@s.WinRate.ToString("F0")%</td>
+                                <td>@(s.IsActive ? "✓" : "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    <div class="card mb-3" id="decay-monitor">
+        <div class="card-header d-flex flex-wrap align-items-center gap-2">
+            <span>📉 Monitor decadimento — realizzato vs atteso</span>
+            <div class="form-check form-check-inline ms-auto mb-0">
+                <input type="checkbox" class="form-check-input" id="onlyAlerts" @bind="_onlyAlerts" />
+                <label class="form-check-label small" for="onlyAlerts">Mostra solo gambe in alert</label>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="LoadDecayReportsAsync" disabled="@_decayBusy">
+                @(_decayBusy ? "Aggiornamento…" : "🔄 Aggiorna")
+            </button>
+        </div>
+        <div class="card-body">
+            @if (_decayReports.Count == 0)
+            {
+                <p class="text-muted small mb-0">Nessuna gamba con trade chiusi da analizzare ancora.</p>
+            }
+            else
+            {
+                <div class="row g-3">
+                    @foreach (var r in _decayReports.Where(r => !_onlyAlerts || r.IsAlert))
+                    {
+                        <div class="col-md-6 col-lg-4">
+                            <div class="card h-100 @(r.IsAlert ? "border-danger" : "")">
+                                <div class="card-body">
+                                    <h6 class="card-title d-flex justify-content-between align-items-start">
+                                        <span>@r.DisplayName</span>
+                                        @if (r.IsAlert)
+                                        {
+                                            <span class="badge bg-danger">Alert</span>
+                                        }
+                                        else if (r.RealizedSharpe is null)
+                                        {
+                                            <span class="badge bg-secondary">In attesa</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-success">In linea</span>
+                                        }
+                                    </h6>
+                                    <dl class="row small mb-2">
+                                        <dt class="col-6">Sharpe atteso</dt>
+                                        <dd class="col-6">@(r.ExpectedSharpe?.ToString("F2") ?? "—")</dd>
+                                        <dt class="col-6">Sharpe realizzato</dt>
+                                        <dd class="col-6">@(r.RealizedSharpe?.ToString("F2") ?? "—")</dd>
+                                        <dt class="col-6">Delta</dt>
+                                        <dd class="col-6 @(r.SharpeDelta is >= 0 ? "text-success" : "text-danger")">@(r.SharpeDelta?.ToString("F2") ?? "—")</dd>
+                                        <dt class="col-6">% dell'atteso</dt>
+                                        <dd class="col-6">@(r.SharpeRatio?.ToString("P0") ?? "—")</dd>
+                                        <dt class="col-6">Trade analizzati</dt>
+                                        <dd class="col-6">@r.TradeCount</dd>
+                                    </dl>
+                                    <p class="small mb-0 @(r.IsAlert ? "text-danger" : "text-muted")">@r.StatusMessage</p>
+                                    <a href="trading" class="small">Vedi i trade in Trading →</a>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="card mb-3" id="execution-jobs">
+        <div class="card-header d-flex flex-wrap align-items-center gap-2">
+            <span>⏳ Piani di esecuzione (TWAP/VWAP/Iceberg)</span>
+            <span class="text-muted small">apertura distribuita nel tempo su Testnet/Live</span>
+            <button class="btn btn-sm btn-outline-secondary ms-auto" @onclick="LoadExecutionJobsAsync">🔄 Aggiorna</button>
+        </div>
+        <div class="card-body">
+            @if (_executionJobs.Count == 0)
+            {
+                <p class="text-muted small mb-0">Nessun piano di esecuzione (recente) per questa corsia.</p>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light"><tr><th>Algoritmo</th><th>Lato</th><th>Stato</th><th class="text-end">Riempito / Totale</th><th class="text-end">Prezzo medio</th><th>Creato</th></tr></thead>
+                        <tbody>
+                            @foreach (var j in _executionJobs)
+                            {
+                                <tr>
+                                    <td>@j.Algorithm</td>
+                                    <td>@j.Side</td>
+                                    <td><span class="badge @ExecJobBadge(j.Status)">@j.Status</span></td>
+                                    <td class="text-end">@j.FilledQuantity.ToString("0.####") / @j.TotalQuantity.ToString("0.####")</td>
+                                    <td class="text-end">@(j.EntryPriceWeightedAvg > 0 ? j.EntryPriceWeightedAvg.ToString("0.####") : "—")</td>
+                                    <td class="small">@j.CreatedAtUtc.ToString("MM-dd HH:mm")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="card mb-3" id="drift-monitor">
+        <div class="card-header d-flex flex-wrap align-items-center gap-2">
+            <span>🌡️ Drift fattori — distribuzione training vs recente</span>
+            <span class="text-muted small">segnale anticipatore sugli input (affianca il monitor di decadimento)</span>
+            <div class="ms-auto d-flex align-items-center gap-2">
+                <select class="form-select form-select-sm" style="max-width: 260px;" @bind="_driftModelId">
+                    <option value="0">— scegli un modello ML —</option>
+                    @foreach (var m in _savedMlModels)
+                    {
+                        <option value="@m.Id">@m.Name (@m.Symbol @m.Timeframe)</option>
+                    }
+                </select>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="EvaluateDriftAsync" disabled="@(_driftBusy || _driftModelId == 0)">
+                    @(_driftBusy ? "Valutazione…" : "Valuta drift")
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <p class="small text-muted">
+                Confronta la distribuzione di ciascun fattore del modello nella finestra di training
+                (reference) con quella delle ultime @DriftRecentCandles candele (current), con tre test:
+                <strong>PSI</strong>, <strong>KS</strong> (p-value), <strong>Page-Hinkley</strong>.
+                Un drift NON è di per sé un allarme di PnL — è un avviso che gli input sono cambiati.
+            </p>
+            @if (!string.IsNullOrEmpty(_driftMsg))
+            {
+                <div class="alert @(_driftIsError ? "alert-danger" : "alert-info") py-2">@_driftMsg</div>
+            }
+            @if (_driftReports.Count > 0)
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Fattore</th>
+                                <th class="text-end">ref / cur</th>
+                                <th>PSI</th>
+                                <th>KS (p)</th>
+                                <th>Page-Hinkley</th>
+                                <th>Esito</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in _driftReports.OrderByDescending(r => r.Overall))
+                            {
+                                <tr class="@(r.Overall == DriftSeverity.Alert ? "table-danger" : r.Overall == DriftSeverity.Warning ? "table-warning" : "")">
+                                    <td>@r.FeatureName</td>
+                                    <td class="text-end small text-muted">@r.ReferenceCount / @r.CurrentCount</td>
+                                    @foreach (var det in new[] { "Psi", "Ks", "PageHinkley" })
+                                    {
+                                        var d = r.Results.FirstOrDefault(x => x.Detector == det);
+                                        <td class="small">
+                                            @if (d is not null)
+                                            {
+                                                <span class="badge @DriftBadge(d.Severity)" title="@d.Detail">@FormatDrift(d)</span>
+                                            }
+                                            else { <span class="text-muted">—</span> }
+                                        </td>
+                                    }
+                                    <td><span class="badge @DriftBadge(r.Overall)">@r.Overall</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (_perfSeries.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Performance — equity totale + per strategia</div>
+            <div class="card-body"><OhlcvChart ShowCandles="false" Indicators="_perfSeries" Height="340" /></div>
+        </div>
+    }
+
+    @if (_performance is not null && _performance.RebalanceHistory.Count > 0)
+    {
+        <div class="card">
+            <div class="card-header">Rebalancing history (@_performance.RebalanceHistory.Count)</div>
+            <div class="table-responsive" style="max-height: 360px; overflow:auto;">
+                <table class="table table-sm table-striped mb-0">
+                    <thead class="table-light" style="position:sticky;top:0;"><tr><th>Timestamp</th><th>Reason</th><th>Allocazioni</th></tr></thead>
+                    <tbody>
+                        @foreach (var ev in _performance.RebalanceHistory.AsEnumerable().Reverse())
+                        {
+                            <tr>
+                                <td>@ev.Timestamp.ToString("yyyy-MM-dd")</td>
+                                <td><span class="badge bg-secondary">@ev.Reason</span></td>
+                                <td class="small">@string.Join(" · ", ev.Allocations.Select(a => $"{a.DisplayName} {a.PreviousAllocation:F0}%→{a.NewAllocation:F0}% (Sh {a.RollingSharpe:F1})"))</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private EnsembleConfiguration? _config;
+    private EnsembleStatus? _status;
+    private EnsemblePerformance? _performance;
+    private List<IndicatorSeries> _perfSeries = new();
+    private List<SavedStrategy> _optimizedStrategies = new();
+    private List<SavedMlModel> _savedMlModels = new();
+    private List<DecayReport> _decayReports = new();
+    private bool _onlyAlerts;
+    private bool _decayBusy;
+
+    private List<ProcioneMGR.Services.Trading.ExecutionJob> _executionJobs = new();
+
+    private const int DriftRecentCandles = 200;
+    private int _driftModelId;
+    private List<FactorDriftReport> _driftReports = new();
+    private bool _driftBusy;
+    private bool _driftIsError;
+    private string? _driftMsg;
+
+    private string _addPredefined = "EmaCross";
+    private int _addSavedId;
+    private int _addMlModelId;
+    private decimal _addMlLongThreshold = 0.005m;
+    private decimal _addMlShortThreshold = 0.005m;
+    private bool _busy;
+    private bool _isError;
+    private string? _message;
+
+    private System.Threading.Timer? _refreshTimer;
+
+    private static readonly string[] Palette = ["#2962FF", "#E53935", "#43A047", "#FB8C00", "#8E24AA", "#00897B"];
+
+    /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): stesso numero registrato in Program.cs.</summary>
+    private const int LaneCount = 3;
+    private int _laneId;
+
+    /// <summary>Ensemble della corsia selezionata (keyed DI): risolto ad ogni accesso, mai messo in cache tra un cambio corsia e l'altro.</summary>
+    private IEnsembleManager EnsembleMgr => Services.GetRequiredKeyedService<IEnsembleManager>(_laneId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using (var db = await DbFactory.CreateDbContextAsync())
+        {
+            _optimizedStrategies = await db.SavedStrategies.Where(s => s.IsOptimized).OrderByDescending(s => s.OptimizationDate).ToListAsync();
+            _savedMlModels = await db.SavedMlModels.OrderByDescending(m => m.CreatedAtUtc).ToListAsync();
+        }
+        await LoadLaneAsync();
+
+        // Auto-refresh status ogni 15s.
+        _refreshTimer = new System.Threading.Timer(async _ => await InvokeAsync(RefreshAsync), null,
+            TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private async Task OnLaneChangedAsync(ChangeEventArgs e)
+    {
+        _laneId = int.Parse((string)e.Value!);
+        await LoadLaneAsync();
+    }
+
+    private async Task LoadLaneAsync()
+    {
+        _config = await EnsembleMgr.GetConfigurationAsync();
+        await RefreshAsync();
+        await LoadDecayReportsAsync();
+        await LoadExecutionJobsAsync();
+    }
+
+    private async Task LoadExecutionJobsAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _executionJobs = await db.ExecutionJobs.AsNoTracking()
+                .Where(j => j.LaneId == _laneId)
+                .OrderByDescending(j => j.CreatedAtUtc)
+                .Take(20)
+                .ToListAsync();
+        }
+        catch (Exception ex) { SetMsg($"Errore piani esecuzione: {ex.Message}", true); }
+    }
+
+    private static string ExecJobBadge(string status) => status switch
+    {
+        "Running" => "text-bg-primary",
+        "Completed" => "text-bg-success",
+        "Cancelled" => "text-bg-secondary",
+        "Failed" => "text-bg-danger",
+        _ => "text-bg-secondary",
+    };
+
+    private async Task RefreshAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            _status = await EnsembleMgr.GetStatusAsync();
+            _performance = await EnsembleMgr.GetPerformanceAsync(DateTime.UtcNow.AddDays(-90));
+            BuildPerfSeries();
+        }
+        catch (Exception ex) { SetMsg($"Errore status: {ex.Message}", true); }
+        finally { _busy = false; StateHasChanged(); }
+    }
+
+    private async Task LoadDecayReportsAsync()
+    {
+        if (_decayBusy) return;
+        _decayBusy = true;
+        try
+        {
+            _decayReports = (await EnsembleMgr.GetDecayReportsAsync()).ToList();
+        }
+        catch (Exception ex) { SetMsg($"Errore monitor decadimento: {ex.Message}", true); }
+        finally { _decayBusy = false; StateHasChanged(); }
+    }
+
+    private async Task EvaluateDriftAsync()
+    {
+        if (_driftBusy || _driftModelId == 0) return;
+        _driftBusy = true; _driftMsg = null; _driftIsError = false; _driftReports = new();
+        try
+        {
+            var model = _savedMlModels.FirstOrDefault(m => m.Id == _driftModelId);
+            if (model is null) { _driftMsg = "Modello non trovato."; _driftIsError = true; return; }
+
+            List<OhlcvData> recent;
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                recent = await db.OhlcvData.AsNoTracking()
+                    .Where(c => c.Symbol == model.Symbol && c.Timeframe == model.Timeframe)
+                    .OrderByDescending(c => c.TimestampUtc)
+                    .Take(DriftRecentCandles)
+                    .ToListAsync();
+            }
+            recent.Reverse(); // ordine cronologico
+
+            if (recent.Count < 20)
+            {
+                _driftMsg = "Candele recenti insufficienti per una valutazione (servono ≥20).";
+                _driftIsError = true;
+                return;
+            }
+
+            _driftReports = (await DriftMonitor.EvaluateAsync(model, recent)).ToList();
+            var drift = _driftReports.Count(r => r.Overall != DriftSeverity.None);
+            _driftMsg = drift == 0
+                ? $"Nessun drift rilevante: {_driftReports.Count} fattori valutati sulle ultime {recent.Count} candele."
+                : $"{drift}/{_driftReports.Count} fattori in drift sulle ultime {recent.Count} candele (input cambiati: controllare il monitor di decadimento per l'effetto sul PnL).";
+        }
+        catch (Exception ex) { _driftMsg = $"Errore valutazione drift: {ex.Message}"; _driftIsError = true; }
+        finally { _driftBusy = false; StateHasChanged(); }
+    }
+
+    private static string DriftBadge(DriftSeverity s) => s switch
+    {
+        DriftSeverity.Alert => "text-bg-danger",
+        DriftSeverity.Warning => "text-bg-warning",
+        _ => "text-bg-secondary",
+    };
+
+    private static string FormatDrift(DriftResult d) => d.Detector == "Ks" && d.PValue is double p
+        ? p.ToString("F3")
+        : d.Score.ToString("F2");
+
+    private void BuildPerfSeries()
+    {
+        var series = new List<IndicatorSeries>();
+        if (_performance is null) { _perfSeries = series; return; }
+
+        static long Ts(DateTime d) => new DateTimeOffset(DateTime.SpecifyKind(d, DateTimeKind.Utc)).ToUnixTimeSeconds();
+
+        if (_performance.TotalEquityCurve.Count > 0)
+        {
+            series.Add(new IndicatorSeries
+            {
+                Title = "Totale", Color = "#111827", Type = IndicatorSeriesType.Line,
+                Points = _performance.TotalEquityCurve.Select(p => new IndicatorPoint(Ts(p.Timestamp), (double)p.Capital)).ToList(),
+            });
+        }
+        var ci = 0;
+        foreach (var sc in _performance.StrategyCurves)
+        {
+            series.Add(new IndicatorSeries
+            {
+                Title = sc.DisplayName, Color = Palette[ci++ % Palette.Length], Type = IndicatorSeriesType.Line,
+                Points = sc.EquityCurve.Select(p => new IndicatorPoint(Ts(p.Timestamp), (double)p.Capital)).ToList(),
+            });
+        }
+        _perfSeries = series;
+    }
+
+    private void AddPredefined()
+    {
+        if (_config is null) return;
+        var proto = StrategyFactory.Prototypes.First(p => p.Name == _addPredefined);
+        _config.Strategies.Add(new EnsembleStrategy
+        {
+            StrategyName = proto.Name,
+            DisplayName = proto.DisplayName,
+            Parameters = proto.ParameterDefinitions.ToDictionary(d => d.Key, d => d.Default),
+        });
+    }
+
+    private void AddFromSaved()
+    {
+        if (_config is null || _addSavedId == 0) return;
+        var saved = _optimizedStrategies.FirstOrDefault(s => s.Id == _addSavedId);
+        if (saved is null) return;
+        var proto = StrategyFactory.Prototypes.FirstOrDefault(p => p.Name == saved.StrategyName);
+        _config.Strategies.Add(new EnsembleStrategy
+        {
+            StrategyName = saved.StrategyName,
+            DisplayName = $"{saved.Name} (opt)",
+            Parameters = JsonSerializer.Deserialize<Dictionary<string, decimal>>(saved.ParametersJson) ?? new(),
+            SavedStrategyId = saved.Id,
+            // Solo lo Sharpe è disponibile su SavedStrategy oggi (nessun ProfitFactor/MaxDrawdown
+            // persistito per le strategie salvate da /discovery) — vedi report per il dettaglio.
+            ExpectedSharpe = saved.OptimizationSharpe,
+        });
+        _addSavedId = 0;
+    }
+
+    private void AddFromMlModel()
+    {
+        if (_config is null || _addMlModelId == 0) return;
+        var model = _savedMlModels.FirstOrDefault(m => m.Id == _addMlModelId);
+        if (model is null) return;
+
+        _config.Strategies.Add(new EnsembleStrategy
+        {
+            StrategyName = "Ml",
+            DisplayName = $"{model.Name} (ML)",
+            Parameters = new Dictionary<string, decimal>
+            {
+                ["SavedModelId"] = model.Id,
+                ["LongThreshold"] = _addMlLongThreshold,
+                ["ShortThreshold"] = _addMlShortThreshold,
+            },
+            SavedMlModelId = model.Id,
+        });
+        _addMlModelId = 0;
+    }
+
+    private void Remove(string id) => _config?.Strategies.RemoveAll(s => s.StrategyId == id);
+
+    private async Task SaveAsync()
+    {
+        if (_config is null) return;
+        await EnsembleMgr.UpdateConfigurationAsync(_config);
+        SetMsg("Configurazione salvata.", false);
+        await RefreshAsync();
+    }
+
+    private async Task StartAsync()
+    {
+        if (_config is null) return;
+        await EnsembleMgr.UpdateConfigurationAsync(_config);
+        await EnsembleMgr.StartAsync();
+        _config.IsEnabled = true;
+        SetMsg("Ensemble avviato.", false);
+        await RefreshAsync();
+    }
+
+    private async Task StopAsync()
+    {
+        await EnsembleMgr.StopAsync();
+        if (_config is not null) _config.IsEnabled = false;
+        SetMsg("Ensemble fermato.", false);
+        await RefreshAsync();
+    }
+
+    private async Task RebalanceNowAsync()
+    {
+        if (_config is null) return;
+        await EnsembleMgr.UpdateConfigurationAsync(_config);
+        await EnsembleMgr.RebalanceAsync("Manual");
+        SetMsg("Rebalancing eseguito.", false);
+        _config = await EnsembleMgr.GetConfigurationAsync();
+        await RefreshAsync();
+    }
+
+    private static string FormatParams(Dictionary<string, decimal> p) =>
+        string.Join(", ", p.Select(kv => $"{kv.Key}={kv.Value}"));
+
+    private void SetMsg(string text, bool error) { _message = text; _isError = error; }
+
+    private RenderFragment Metric(string label, string value, bool? positive = null) => builder =>
+    {
+        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
+        builder.AddMarkupContent(0, $@"<div class='card text-center' style='min-width:9rem;'><div class='card-body py-2'>
+            <div class='text-muted small'>{label}</div><div class='fs-5 fw-semibold {cls}'>{value}</div></div></div>");
+    };
+
+    public void Dispose() => _refreshTimer?.Dispose();
+}

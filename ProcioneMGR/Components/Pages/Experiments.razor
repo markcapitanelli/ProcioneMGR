@@ -1,0 +1,333 @@
+@page "/experiments"
+@rendermode InteractiveServer
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Experiments
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Esperimenti</PageTitle>
+
+<h1>Esperimenti</h1>
+
+<GuidaPanel Title="Registro esperimenti — confrontare i run di ricerca, non ricordarli">
+    <p>
+        Ogni backtest, ottimizzazione, addestramento ML, campagna di discovery e run di pipeline
+        lascia qui una <strong>riga confrontabile</strong>: parametri, metriche finali e durata.
+        Serve a rispondere con una misura (non con un'impressione) a domande come
+        <em>"il modello con 8 fattori rende più o meno di quello con Alpha158?"</em>.
+    </p>
+    <p class="mb-0">
+        Seleziona <strong>due run</strong> con il pulsante «Confronta» per vedere affiancati i loro
+        parametri e le loro metriche, con le differenze evidenziate. L'<strong>hash</strong> dei
+        parametri è un'impronta "git-like": due run con hash identico hanno la stessa configurazione.
+    </p>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label mb-0">Tipo</label>
+                <select class="form-select form-select-sm" @bind="_kindFilter" @bind:after="ApplyFilters">
+                    <option value="">Tutti</option>
+                    @foreach (var k in _kinds)
+                    {
+                        <option value="@k">@k</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Symbol</label>
+                <input class="form-control form-control-sm" @bind="_symbolFilter" @bind:after="ApplyFilters" placeholder="es. BTCUSDT" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Cerca (nome)</label>
+                <input class="form-control form-control-sm" @bind="_search" @bind:after="ApplyFilters" placeholder="testo nel nome" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAsync">↻ Ricarica</button>
+            </div>
+            <div class="col-auto text-muted small">
+                @_filtered.Count run visualizzati (@_runs.Count totali)
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_compareA is not null && _compareB is not null)
+{
+    <div class="card mb-3 border-primary">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Confronto run</span>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="ClearSelection">Chiudi</button>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <h6 class="text-truncate" title="@_compareA.Name">A · @_compareA.Name</h6>
+                    <div class="small text-muted mb-2">@_compareA.Kind · @Fmt(_compareA.StartedAt) · hash @Short(_compareA.ParametersHash)</div>
+                </div>
+                <div class="col-md-6">
+                    <h6 class="text-truncate" title="@_compareB.Name">B · @_compareB.Name</h6>
+                    <div class="small text-muted mb-2">@_compareB.Kind · @Fmt(_compareB.StartedAt) · hash @Short(_compareB.ParametersHash)</div>
+                </div>
+            </div>
+
+            <h6 class="mt-2">Metriche</h6>
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead class="table-light"><tr><th>Metrica</th><th class="text-end">A</th><th class="text-end">B</th><th class="text-end">Δ (B−A)</th></tr></thead>
+                    <tbody>
+                        @foreach (var key in MetricKeys())
+                        {
+                            var a = MetricOf(_metricsA, key);
+                            var b = MetricOf(_metricsB, key);
+                            var delta = (a.HasValue && b.HasValue) ? b - a : (decimal?)null;
+                            <tr>
+                                <td>@key</td>
+                                <td class="text-end">@FmtNum(a)</td>
+                                <td class="text-end">@FmtNum(b)</td>
+                                <td class="text-end @(delta > 0 ? "text-success" : delta < 0 ? "text-danger" : "")">@FmtNum(delta)</td>
+                            </tr>
+                        }
+                        @if (MetricKeys().Count == 0)
+                        {
+                            <tr><td colspan="4" class="text-muted">Nessuna metrica registrata.</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <h6 class="mt-3">Parametri</h6>
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead class="table-light"><tr><th>Parametro</th><th>A</th><th>B</th></tr></thead>
+                    <tbody>
+                        @foreach (var key in ParamKeys())
+                        {
+                            var a = ParamOf(_paramsA, key);
+                            var b = ParamOf(_paramsB, key);
+                            var diff = !string.Equals(a, b, StringComparison.Ordinal);
+                            <tr class="@(diff ? "table-warning" : "")">
+                                <td>@key</td>
+                                <td><code class="small">@a</code></td>
+                                <td><code class="small">@b</code></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th></th>
+                    <th>Tipo</th>
+                    <th>Nome</th>
+                    <th>Symbol</th>
+                    <th>TF</th>
+                    <th>Stato</th>
+                    <th>Avvio</th>
+                    <th class="text-end">Durata</th>
+                    <th>Metriche</th>
+                    <th>Hash</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _filtered)
+                {
+                    var isSel = _selected.Contains(r.Id);
+                    <tr class="@(isSel ? "table-active" : "")">
+                        <td>
+                            <button class="btn btn-sm @(isSel ? "btn-primary" : "btn-outline-primary")"
+                                    @onclick="() => ToggleSelect(r.Id)"
+                                    disabled="@(!isSel && _selected.Count >= 2)"
+                                    title="Seleziona per confronto (max 2)">
+                                @(isSel ? "✓" : "Confronta")
+                            </button>
+                        </td>
+                        <td><span class="badge @KindBadge(r.Kind)">@r.Kind</span></td>
+                        <td class="text-truncate" style="max-width: 320px;" title="@r.Name">@r.Name</td>
+                        <td>@r.Symbol</td>
+                        <td>@r.Timeframe</td>
+                        <td><span class="badge @StatusBadge(r.Status)">@r.Status</span></td>
+                        <td class="small">@Fmt(r.StartedAt)</td>
+                        <td class="text-end small">@Duration(r)</td>
+                        <td class="small">@MetricsSummary(r)</td>
+                        <td class="small text-muted">@Short(r.ParametersHash)</td>
+                    </tr>
+                }
+                @if (_filtered.Count == 0)
+                {
+                    <tr><td colspan="10" class="text-center text-muted py-3">Nessun esperimento registrato con questi filtri.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private List<ExperimentRun> _runs = new();
+    private List<ExperimentRun> _filtered = new();
+    private List<string> _kinds = new();
+
+    private string _kindFilter = "";
+    private string _symbolFilter = "";
+    private string _search = "";
+
+    private readonly List<Guid> _selected = new();
+
+    private ExperimentRun? _compareA, _compareB;
+    private Dictionary<string, decimal> _metricsA = new(), _metricsB = new();
+    private Dictionary<string, string> _paramsA = new(), _paramsB = new();
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _runs = await db.ExperimentRuns
+            .OrderByDescending(r => r.StartedAt)
+            .Take(1000)
+            .ToListAsync();
+        _kinds = _runs.Select(r => r.Kind).Distinct().OrderBy(k => k).ToList();
+        ClearSelection();
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        IEnumerable<ExperimentRun> q = _runs;
+        if (!string.IsNullOrWhiteSpace(_kindFilter)) q = q.Where(r => r.Kind == _kindFilter);
+        if (!string.IsNullOrWhiteSpace(_symbolFilter))
+            q = q.Where(r => r.Symbol is not null && r.Symbol.Contains(_symbolFilter.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_search))
+            q = q.Where(r => r.Name.Contains(_search.Trim(), StringComparison.OrdinalIgnoreCase));
+        _filtered = q.ToList();
+    }
+
+    private void ToggleSelect(Guid id)
+    {
+        if (_selected.Contains(id)) _selected.Remove(id);
+        else if (_selected.Count < 2) _selected.Add(id);
+        BuildComparison();
+    }
+
+    private void ClearSelection()
+    {
+        _selected.Clear();
+        _compareA = _compareB = null;
+    }
+
+    private void BuildComparison()
+    {
+        _compareA = _compareB = null;
+        if (_selected.Count != 2) return;
+
+        _compareA = _runs.FirstOrDefault(r => r.Id == _selected[0]);
+        _compareB = _runs.FirstOrDefault(r => r.Id == _selected[1]);
+        if (_compareA is null || _compareB is null) return;
+
+        _metricsA = ParseMetrics(_compareA.MetricsJson);
+        _metricsB = ParseMetrics(_compareB.MetricsJson);
+        _paramsA = FlattenParams(_compareA.ParametersJson);
+        _paramsB = FlattenParams(_compareB.ParametersJson);
+    }
+
+    private List<string> MetricKeys()
+        => _metricsA.Keys.Union(_metricsB.Keys).OrderBy(k => k).ToList();
+
+    private List<string> ParamKeys()
+        => _paramsA.Keys.Union(_paramsB.Keys).OrderBy(k => k).ToList();
+
+    private static decimal? MetricOf(Dictionary<string, decimal> m, string k) => m.TryGetValue(k, out var v) ? v : null;
+    private static string ParamOf(Dictionary<string, string> m, string k) => m.TryGetValue(k, out var v) ? v : "—";
+
+    private static Dictionary<string, decimal> ParseMetrics(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try { return JsonSerializer.Deserialize<Dictionary<string, decimal>>(json) ?? new(); }
+        catch (JsonException) { return new(); }
+    }
+
+    /// <summary>Appiattisce il JSON parametri di primo livello a stringhe leggibili (oggetti/array come JSON compatto).</summary>
+    private static Dictionary<string, string> FlattenParams(string json)
+    {
+        var result = new Dictionary<string, string>();
+        if (string.IsNullOrWhiteSpace(json)) return result;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return result;
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                result[prop.Name] = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString() ?? "",
+                    JsonValueKind.Number => prop.Value.GetRawText(),
+                    JsonValueKind.True => "true",
+                    JsonValueKind.False => "false",
+                    JsonValueKind.Null => "null",
+                    _ => prop.Value.GetRawText(),
+                };
+            }
+        }
+        catch (JsonException) { /* parametri illeggibili: tabella vuota, non un crash */ }
+        return result;
+    }
+
+    private string MetricsSummary(ExperimentRun r)
+    {
+        var m = ParseMetrics(r.MetricsJson);
+        if (m.Count == 0) return "—";
+        return string.Join("  ·  ", m.OrderBy(kv => kv.Key).Take(4).Select(kv => $"{kv.Key}={FmtNum(kv.Value)}"));
+    }
+
+    private static string Fmt(DateTime t) => t.ToString("yyyy-MM-dd HH:mm");
+
+    private static string Duration(ExperimentRun r)
+    {
+        if (r.CompletedAt is null) return "—";
+        var d = r.CompletedAt.Value - r.StartedAt;
+        if (d.TotalSeconds < 0) return "—";
+        return d.TotalHours >= 1 ? $"{d.TotalHours:F1} h" : d.TotalMinutes >= 1 ? $"{d.TotalMinutes:F1} min" : $"{d.TotalSeconds:F0} s";
+    }
+
+    private static string FmtNum(decimal? v)
+    {
+        if (v is null) return "—";
+        var x = v.Value;
+        var abs = Math.Abs(x);
+        return abs >= 1000m ? x.ToString("N0") : abs >= 1m ? x.ToString("0.###") : x.ToString("0.####");
+    }
+
+    private static string Short(string hash) => string.IsNullOrEmpty(hash) ? "—" : hash[..Math.Min(8, hash.Length)];
+
+    private static string KindBadge(string kind) => kind switch
+    {
+        "Backtest" => "text-bg-primary",
+        "Optimization" => "text-bg-info",
+        "MlTraining" => "text-bg-success",
+        "Discovery" => "text-bg-warning",
+        "Pipeline" => "text-bg-dark",
+        "AlphaMining" => "text-bg-secondary",
+        _ => "text-bg-secondary",
+    };
+
+    private static string StatusBadge(string status) => status switch
+    {
+        "Completed" => "text-bg-success",
+        "Running" => "text-bg-primary",
+        "Failed" => "text-bg-danger",
+        _ => "text-bg-secondary",
+    };
+}

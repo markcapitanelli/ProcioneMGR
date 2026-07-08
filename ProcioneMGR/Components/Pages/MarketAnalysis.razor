@@ -1,0 +1,562 @@
+@page "/market-analysis"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Analysis
+@using ProcioneMGR.Services.Exchanges
+@attribute [Authorize]
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject GapLapAnalyzer GapLap
+@inject ExcursionAnalyzer Excursion
+@inject CyclicalAnalyzer Cyclical
+@inject CandlestickPatternDetector CandleDetector
+@inject SupportResistanceAnalyzer SupportResistance
+@inject ChartPatternDetector ChartPatterns
+@inject VolumeAnalyzer Volume
+
+<PageTitle>Analisi serie</PageTitle>
+
+<h1>Analisi statistica della serie</h1>
+
+<GuidaPanel Title="Analisi della serie — cerca inefficienze PRIMA di scrivere una strategia">
+    <p>
+        Questa pagina applica alla serie storica le analisi "a priori" del metodo quantitativo:
+        prima di costruire un trading system si misura se lo strumento abbia comportamenti
+        ripetitivi sfruttabili (gap che si richiudono, orari più attivi, giorni della settimana
+        con bias, memoria tra una barra e la successiva). Solo se emerge un'inefficienza
+        statisticamente consistente vale la pena codificare una strategia che la sfrutti.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Gap &amp; Lap</dt>
+        <dd class="col-sm-9">
+            Un <strong>gap</strong> è un salto di prezzo tra la chiusura di una barra e l'apertura
+            della successiva oltre il massimo/minimo precedente; un <strong>lap</strong> è la
+            versione debole (apertura tra chiusura e massimo/minimo precedenti). Se un'alta
+            percentuale viene "ricolmata" nella stessa barra, lo strumento ha vocazione mean
+            reverting (si può scommettere sul riassorbimento); se la barra tende a proseguire
+            nella direzione del salto, vocazione trend following. Sui mercati crypto spot i gap
+            veri sono rari (mercato continuo): l'analisi è più utile su timeframe alti.
+        </dd>
+        <dt class="col-sm-3">Stop loss suggerito</dt>
+        <dd class="col-sm-9">
+            Guarda quanto "ritracciano" al massimo le barre che poi chiudono positive: il 95°/99°
+            percentile di quella distribuzione è una distanza di stop sotto l'open oltre la quale
+            la probabilità che la barra si riprenda è molto bassa. Simmetrico per lo short.
+        </dd>
+        <dt class="col-sm-3">Effetto memoria</dt>
+        <dd class="col-sm-9">
+            Correlazione tra la variazione % di oggi e quelle dei giorni precedenti (lag 1..10) e
+            probabilità che dopo una variazione positiva ne segua un'altra. Correlazioni anche
+            "deboli" (10-30%) sono già sfruttabili come filtro.
+        </dd>
+        <dt class="col-sm-3">Activity Factor / Bias orario</dt>
+        <dd class="col-sm-9">
+            Volume medio e spinta media dei prezzi per ciascuna ora del giorno (UTC): serve a
+            operare negli orari più liquidi e a filtrare le operazioni contro il bias orario.
+            La % "concordi" dice quanto il bias è confermato dalle singole occorrenze (sopra il
+            50-55% inizia a essere affidabile). Usa un timeframe orario (1h).
+        </dd>
+        <dt class="col-sm-3">Giorno della settimana / Stagionalità</dt>
+        <dd class="col-sm-9">
+            Contributo medio intraday (close-open) e overnight (open vs close precedente) per
+            ciascun giorno della settimana, e curva cumulata per giorno dell'anno. Usa un
+            timeframe giornaliero (1d).
+        </dd>
+        <dt class="col-sm-3">Supporti / Resistenze &amp; trend</dt>
+        <dd class="col-sm-9">
+            Livelli di prezzo dove il mercato ha invertito più volte (più "tocchi" = livello più
+            significativo). Comprare vicino al supporto con stop appena sotto = rischio minimo.
+            Il trend è classificato dagli swing (massimi e minimi crescenti = uptrend); il
+            ritracciamento misura quanto il prezzo ha restituito dell'ultima gamba: fino al 50%
+            è fisiologico, oltre il 66% è un'allerta di inversione.
+        </dd>
+        <dt class="col-sm-3">Pattern candlestick e grafici</dt>
+        <dd class="col-sm-9">
+            Candele di inversione (doji, hammer, engulfing, key reversal...) rilevate SOLO dopo
+            un trend, come insegna l'analisi tecnica classica, e pattern grafici (doppi
+            massimi/minimi, testa e spalle) con l'indicazione se la neckline è stata violata
+            (pattern confermato). Il volume conferma: un breakout a basso volume è sospetto.
+        </dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Serie da analizzare</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" list="ma_symbols" @bind="_symbol" style="width: 11rem;" disabled="@_busy" />
+                <datalist id="ma_symbols">
+                    @foreach (var s in _knownSymbols)
+                    {
+                        <option value="@s"></option>
+                    }
+                </datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                    @foreach (var tf in Timeframes.Supported.Keys)
+                    {
+                        <option value="@tf">@tf</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                    @if (_busy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1"></span>
+                    }
+                    Analizza
+                </button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_gapReport is not null)
+{
+    <div class="card mb-3">
+        <div class="card-header">Gap &amp; Lap (@_gapReport.TotalBars barre)</div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Evento</th>
+                        <th class="text-end">N</th>
+                        <th class="text-end">% barre</th>
+                        <th class="text-end">Entità media</th>
+                        <th class="text-end">Refilled %</th>
+                        <th class="text-end">Deep refilled %</th>
+                        <th class="text-end">Barra positiva %</th>
+                        <th class="text-end">Barra negativa %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var (name, s) in new[] { ("Gap Up", _gapReport.GapUp), ("Gap Down", _gapReport.GapDown), ("Lap Up", _gapReport.LapUp), ("Lap Down", _gapReport.LapDown) })
+                    {
+                        <tr>
+                            <td>@name</td>
+                            <td class="text-end">@s.Count</td>
+                            <td class="text-end">@s.PercentOfBars.ToString("N1")%</td>
+                            <td class="text-end">@s.EntityAvg.ToString("N4")</td>
+                            <td class="text-end">@s.RefilledPercent.ToString("N1")%</td>
+                            <td class="text-end">@(s.DeepRefilledPercent?.ToString("N1") is string d ? d + "%" : "—")</td>
+                            <td class="text-end">@s.PositivePercent.ToString("N1")%</td>
+                            <td class="text-end">@s.NegativePercent.ToString("N1")%</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_stopLoss is not null)
+{
+    <div class="card mb-3">
+        <div class="card-header">Stop loss suggerito (distanza % dall'open di barra)</div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-auto">@Metric("Long 95° pct", $"-{_stopLoss.LongStopPercentile95:N2}%")</div>
+                <div class="col-auto">@Metric("Long 99° pct", $"-{_stopLoss.LongStopPercentile99:N2}%")</div>
+                <div class="col-auto">@Metric("Short 95° pct", $"+{_stopLoss.ShortStopPercentile95:N2}%")</div>
+                <div class="col-auto">@Metric("Short 99° pct", $"+{_stopLoss.ShortStopPercentile99:N2}%")</div>
+                <div class="col-auto">@Metric("Barre positive", $"{_stopLoss.PositiveBars}")</div>
+                <div class="col-auto">@Metric("Barre negative", $"{_stopLoss.NegativeBars}")</div>
+            </div>
+            <p class="text-muted small mt-2 mb-0">
+                Lettura: uno stop più stretto del 95° percentile chiuderebbe anche barre che poi
+                sarebbero finite positive (long) o negative (short) più del 5% delle volte.
+            </p>
+        </div>
+    </div>
+}
+
+@if (_lagCorrelations.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-header">Effetto memoria (autocorrelazione delle variazioni % delle chiusure)</div>
+        <div class="card-body">
+            <div class="d-flex flex-wrap gap-2 mb-2">
+                @foreach (var lag in _lagCorrelations)
+                {
+                    var pct = lag.Correlation * 100m;
+                    <span class="badge @(Math.Abs(pct) >= 10m ? (pct > 0 ? "bg-success" : "bg-danger") : "bg-secondary")">
+                        lag @lag.Lag: @pct.ToString("N1")%
+                    </span>
+                }
+            </div>
+            @if (_continuation is not null)
+            {
+                <p class="mb-0 small">
+                    Dopo una variazione positiva, la successiva è positiva nel
+                    <strong>@_continuation.SuccessPercent.ToString("N1")%</strong> dei casi
+                    (@_continuation.Successes su @_continuation.Setups occorrenze).
+                </p>
+            }
+        </div>
+    </div>
+}
+
+@if (_activity.Count > 0 && _hourlyBias.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-header">Activity Factor &amp; bias orario (UTC) — significativo su timeframe 1h</div>
+        <div class="table-responsive" style="max-height: 420px; overflow:auto;">
+            <table class="table table-sm table-striped mb-0">
+                <thead class="table-light" style="position: sticky; top: 0;">
+                    <tr>
+                        <th>Ora</th>
+                        <th class="text-end">Volume medio</th>
+                        <th class="text-end">Attività (0-1)</th>
+                        <th class="text-end">Body medio</th>
+                        <th class="text-end">Bias (-1..+1)</th>
+                        <th class="text-end">Concordi %</th>
+                        <th class="text-end">Campioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (var h = 0; h < 24; h++)
+                    {
+                        var a = _activity[h];
+                        var b = _hourlyBias[h];
+                        <tr>
+                            <td>@($"{h:00}:00")</td>
+                            <td class="text-end">@a.AverageVolume.ToString("N0")</td>
+                            <td class="text-end">@a.NormalizedMax.ToString("N2")</td>
+                            <td class="text-end @(b.AverageBody >= 0 ? "text-success" : "text-danger")">@b.AverageBody.ToString("N4")</td>
+                            <td class="text-end">@b.Normalized.ToString("N2")</td>
+                            <td class="text-end @(b.ConcordantPercent >= 55m ? "fw-bold" : "")">@b.ConcordantPercent.ToString("N1")%</td>
+                            <td class="text-end">@b.Samples</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_srReport is not null)
+{
+    <div class="card mb-3">
+        <div class="card-header">
+            Supporti / Resistenze &amp; trend —
+            <span class="badge @(_srReport.Trend switch { SwingTrend.Uptrend => "bg-success", SwingTrend.Downtrend => "bg-danger", _ => "bg-secondary" })">
+                @_srReport.Trend
+            </span>
+        </div>
+        <div class="card-body">
+            <div class="row g-3 mb-2">
+                @if (_srReport.NearestSupport is not null)
+                {
+                    <div class="col-auto">@Metric("Supporto più vicino", $"{_srReport.NearestSupport.Price:N2} ({_srReport.NearestSupport.Touches} tocchi)")</div>
+                }
+                @if (_srReport.NearestResistance is not null)
+                {
+                    <div class="col-auto">@Metric("Resistenza più vicina", $"{_srReport.NearestResistance.Price:N2} ({_srReport.NearestResistance.Touches} tocchi)")</div>
+                }
+                @if (_srReport.Retracement is not null)
+                {
+                    <div class="col-auto">@Metric("Ritracciamento ultimo swing", $"{_srReport.Retracement.CurrentRetracementPercent:N0}%")</div>
+                    <div class="col-auto">@Metric("Livelli 33/50/66", $"{_srReport.Retracement.Level33:N2} / {_srReport.Retracement.Level50:N2} / {_srReport.Retracement.Level66:N2}")</div>
+                }
+            </div>
+            @if (_srReport.Retracement?.IsReversalWarning == true)
+            {
+                <div class="alert alert-warning py-1 mb-2">Ritracciamento oltre il 66%: probabile inversione del trend in corso (McAllen cap. 15).</div>
+            }
+            <h6 class="mt-2">Livelli più significativi (per numero di tocchi)</h6>
+            <table class="table table-sm table-striped mb-2" style="max-width: 40rem;">
+                <thead class="table-light"><tr><th class="text-end">Prezzo</th><th class="text-end">Tocchi</th><th class="text-end">Barre dall'ultimo tocco</th></tr></thead>
+                <tbody>
+                    @foreach (var l in _srReport.Levels.Take(8))
+                    {
+                        <tr>
+                            <td class="text-end">@l.Price.ToString("N2")</td>
+                            <td class="text-end">@l.Touches</td>
+                            <td class="text-end">@l.BarsSinceLastTouch</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            @{
+                var recentBreakouts = _srReport.Breakouts.Where(b => b.Index >= _candleCount - 30).ToList();
+            }
+            @if (recentBreakouts.Count > 0)
+            {
+                <h6>Breakout recenti (ultime 30 barre)</h6>
+                <div class="d-flex flex-wrap gap-2">
+                    @foreach (var b in recentBreakouts.TakeLast(10))
+                    {
+                        <span class="badge @(b.VolumeConfirmed ? (b.IsUpside ? "bg-success" : "bg-danger") : "bg-secondary")"
+                              title="@(b.VolumeConfirmed ? "confermato dal volume" : "volume debole: possibile falso breakout")">
+                            @(b.IsUpside ? "▲" : "▼") @b.LevelPrice.ToString("N2") (@b.Timestamp.ToString("MM-dd")) vol @b.VolumeRatio.ToString("N1")x
+                        </span>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if (_candlePatterns.Count > 0 || _chartPatterns.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-header">Pattern candlestick &amp; grafici (McAllen)</div>
+        <div class="card-body">
+            @if (_chartPatterns.Count > 0)
+            {
+                <h6>Pattern grafici</h6>
+                <table class="table table-sm table-striped mb-3" style="max-width: 48rem;">
+                    <thead class="table-light"><tr><th>Pattern</th><th>Direzione</th><th class="text-end">Neckline</th><th>Confermato</th></tr></thead>
+                    <tbody>
+                        @foreach (var p in _chartPatterns.TakeLast(8))
+                        {
+                            <tr>
+                                <td>@p.Type</td>
+                                <td><span class="badge @(p.IsBullish ? "bg-success" : "bg-danger")">@(p.IsBullish ? "Bullish" : "Bearish")</span></td>
+                                <td class="text-end">@p.Neckline.ToString("N2")</td>
+                                <td>@(p.Confirmed ? "✔ sì" : "in attesa")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            @if (_candlePatterns.Count > 0)
+            {
+                <h6>Candele di inversione/continuazione recenti (ultime 30 barre)</h6>
+                <div class="d-flex flex-wrap gap-2">
+                    @foreach (var p in _candlePatterns.Where(p => p.Index >= _candleCount - 30).TakeLast(20))
+                    {
+                        <span class="badge @(p.IsBullish switch { true => "bg-success", false => "bg-danger", null => "bg-secondary" })"
+                              title="@(p.VolumeConfirmed ? "volume sopra la media" : "volume nella norma")">
+                            @p.Type (@p.Timestamp.ToString("MM-dd"))@(p.VolumeConfirmed ? " ▮" : "")
+                        </span>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if (_gapEvents.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-header">Classificazione dei gap (breakaway / runaway / exhaustion)</div>
+        <div class="table-responsive" style="max-height: 300px; overflow:auto;">
+            <table class="table table-sm table-striped mb-0">
+                <thead class="table-light" style="position: sticky; top: 0;">
+                    <tr><th>Data</th><th>Direzione</th><th>Tipo</th><th class="text-end">Entità %</th><th class="text-end">Trend prec. %</th><th class="text-end">Volume</th><th>Ricolmato</th><th>Island</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var g in _gapEvents.TakeLast(20))
+                    {
+                        <tr>
+                            <td>@g.Timestamp.ToString("yyyy-MM-dd")</td>
+                            <td>@(g.IsUp ? "▲ Up" : "▼ Down")</td>
+                            <td><span class="badge @(g.Type == GapType.Exhaustion ? "bg-warning text-dark" : g.Type == GapType.Breakaway ? "bg-info text-dark" : "bg-secondary")">@g.Type</span></td>
+                            <td class="text-end">@g.SizePercent.ToString("N2")%</td>
+                            <td class="text-end">@g.PriorTrendPercent.ToString("N1")%</td>
+                            <td class="text-end">@g.VolumeRatio.ToString("N1")x@(g.VolumeSpike ? " ▮" : "")</td>
+                            <td>@(g.IsFilled ? "✔" : "—")</td>
+                            <td>@(g.IsIslandReversal ? "⚠" : "")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_volumeConfirmation is not null)
+{
+    <div class="card mb-3">
+        <div class="card-header">Conferma volumetrica del trend (ultima finestra)</div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-auto">@Metric("Prezzo (finestra)", $"{_volumeConfirmation.PriceChangePercent:N2}%")</div>
+                <div class="col-auto">@Metric("Vol. medio barre UP", $"{_volumeConfirmation.UpVolumeAvg:N0}")</div>
+                <div class="col-auto">@Metric("Vol. medio barre DOWN", $"{_volumeConfirmation.DownVolumeAvg:N0}")</div>
+                <div class="col-auto">@Metric("Trend confermato", _volumeConfirmation.TrendConfirmed ? "sì" : "NO")</div>
+            </div>
+            @if (_volumeConfirmation.DivergenceWarning)
+            {
+                <div class="alert alert-warning py-1 mt-2 mb-0">
+                    Divergenza prezzo/volume: il movimento non è sostenuto dal volume
+                    (possibile distribuzione/accumulazione — McAllen cap. 15).
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if (_dowBias.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-header">Bias giorno della settimana — significativo su timeframe 1d</div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Giorno</th>
+                        <th class="text-end">Intraday medio %</th>
+                        <th class="text-end">Concordi %</th>
+                        <th class="text-end">Overnight medio %</th>
+                        <th class="text-end">Concordi %</th>
+                        <th class="text-end">Campioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var d in _dowBias.Where(d => d.Samples > 0))
+                    {
+                        <tr>
+                            <td>@d.Day</td>
+                            <td class="text-end @(d.IntradayAvgPercent >= 0 ? "text-success" : "text-danger")">@d.IntradayAvgPercent.ToString("N3")%</td>
+                            <td class="text-end @(d.IntradayConcordantPercent >= 55m ? "fw-bold" : "")">@d.IntradayConcordantPercent.ToString("N1")%</td>
+                            <td class="text-end @(d.OvernightAvgPercent >= 0 ? "text-success" : "text-danger")">@d.OvernightAvgPercent.ToString("N3")%</td>
+                            <td class="text-end">@d.OvernightConcordantPercent.ToString("N1")%</td>
+                            <td class="text-end">@d.Samples</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1d";
+    private DateTime _from = DateTime.UtcNow.Date.AddYears(-2);
+    private DateTime _to = DateTime.UtcNow.Date;
+
+    private List<string> _knownSymbols = new();
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    private GapLapReport? _gapReport;
+    private StopLossSuggestion? _stopLoss;
+    private IReadOnlyList<LagCorrelation> _lagCorrelations = [];
+    private ContinuationStats? _continuation;
+    private IReadOnlyList<HourlyActivity> _activity = [];
+    private IReadOnlyList<HourlyBias> _hourlyBias = [];
+    private IReadOnlyList<DayOfWeekBias> _dowBias = [];
+    private SupportResistanceReport? _srReport;
+    private IReadOnlyList<CandlePattern> _candlePatterns = [];
+    private IReadOnlyList<ChartPatternMatch> _chartPatterns = [];
+    private IReadOnlyList<GapEvent> _gapEvents = [];
+    private VolumeConfirmation? _volumeConfirmation;
+    private int _candleCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    private async Task RunAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbol) || _to <= _from)
+        {
+            _status = "Controlla symbol e intervallo date.";
+            _isError = true;
+            return;
+        }
+
+        _busy = true;
+        _isError = false;
+        _status = null;
+        _gapReport = null;
+        _stopLoss = null;
+        _lagCorrelations = [];
+        _continuation = null;
+        _activity = [];
+        _hourlyBias = [];
+        _dowBias = [];
+        _srReport = null;
+        _candlePatterns = [];
+        _chartPatterns = [];
+        _gapEvents = [];
+        _volumeConfirmation = null;
+
+        try
+        {
+            var fromUtc = DateTime.SpecifyKind(_from.Date, DateTimeKind.Utc);
+            var toUtc = DateTime.SpecifyKind(_to.Date.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
+            var symbol = _symbol.Trim();
+
+            List<OhlcvData> candles;
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                candles = await db.OhlcvData
+                    .Where(c => c.Symbol == symbol && c.Timeframe == _timeframe
+                                && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+                    .OrderBy(c => c.TimestampUtc)
+                    .ToListAsync();
+            }
+
+            if (candles.Count < 30)
+            {
+                _status = $"Trovate solo {candles.Count} candele: servono più dati (fai un Fetch/Sync).";
+                _isError = true;
+                return;
+            }
+
+            _candleCount = candles.Count;
+            _gapReport = GapLap.Analyze(candles);
+            _gapEvents = GapLap.ClassifyGaps(candles);
+            _stopLoss = Excursion.SuggestStopLoss(candles);
+            var closes = candles.Select(c => c.Close).ToList();
+            _lagCorrelations = Excursion.LaggedAutocorrelation(closes, maxLag: 10);
+            _continuation = Excursion.ContinuationProbability(closes);
+            _activity = Cyclical.ActivityFactor(candles);
+            _hourlyBias = Cyclical.HourlyPriceBias(candles);
+            _dowBias = Cyclical.DayOfWeekBias(candles);
+            _srReport = SupportResistance.Analyze(candles);
+            _candlePatterns = CandleDetector.Detect(candles);
+            _chartPatterns = ChartPatterns.Detect(candles);
+            var volumeSeries = Volume.ConfirmTrend(candles);
+            _volumeConfirmation = volumeSeries.Count > 0 ? volumeSeries[^1] : null;
+
+            _status = $"Analisi completata su {candles.Count} candele ({_timeframe}).";
+        }
+        catch (Exception ex)
+        {
+            _status = $"Errore: {ex.Message}";
+            _isError = true;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private RenderFragment Metric(string label, string value) => builder =>
+    {
+        builder.AddMarkupContent(0, $@"
+            <div class='card text-center' style='min-width: 9rem;'>
+                <div class='card-body py-2'>
+                    <div class='text-muted small'>{label}</div>
+                    <div class='fs-5 fw-semibold'>{value}</div>
+                </div>
+            </div>");
+    };
+}

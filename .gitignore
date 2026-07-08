@@ -1,0 +1,38 @@
+# ---- Build output ----
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+*.dll
+*.pdb
+
+# ---- Visual Studio / Rider ----
+.vs/
+*.user
+*.suo
+.idea/
+
+# ---- Databases (SQLite) ----
+*.db
+*.db-shm
+*.db-wal
+
+# ---- Backups ----
+*.bak
+*.bak-shm
+*.bak-wal
+backup/
+
+# ---- Local config & secrets ----
+# appsettings.json contains dev MasterKey (AES-256) + Postgres password.
+# Kept on disk (app needs it to decrypt existing ciphertext) but NEVER tracked.
+# Commit appsettings.json.example instead.
+ProcioneMGR/appsettings.json
+appsettings.*.local.json
+*.local.json
+.env
+.env.*
+secrets.json
+
+# ---- Misc ----
+*.log

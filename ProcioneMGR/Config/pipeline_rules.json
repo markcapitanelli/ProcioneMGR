@@ -1,0 +1,33 @@
+{
+  "VolatilityHighThresholdRatio": 1.3,
+  "VolatilityLowThresholdRatio": 0.8,
+  "HighVolSizingReductionPercent": 30,
+  "SentimentPositiveThreshold": 0.15,
+  "SentimentNegativeThreshold": -0.15,
+  "MeanReversionStrategies": [
+    "BollingerMeanReversion",
+    "RsiOversold",
+    "Stochastic",
+    "VwapReversion"
+  ],
+  "TrendStrategies": [
+    "PriceSmaCross",
+    "EmaCross",
+    "DonchianBreakout",
+    "Momentum",
+    "MacdTrend",
+    "Supertrend"
+  ],
+  "RegimeMatchWeightMultiplier": 1.5,
+  "MinHoldoutSharpe": 0.5,
+  "MinHoldoutTrades": 10,
+  "MaxMonteCarloRiskFactor95": 2.5,
+  "KellyFraction": 0.5,
+  "MaxSizingPercent": 10,
+  "MaxLegs": 3,
+  "AlertNewsCategories": [
+    "Regulatory",
+    "Security",
+    "CentralBanks"
+  ]
+}
