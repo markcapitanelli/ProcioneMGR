@@ -13,6 +13,18 @@ public enum OptimizationSelectionMetric
     OutOfSampleSharpe,
 }
 
+/// <summary>
+/// Come esplorare lo spazio dei parametri. GridSearch (default) = prodotto cartesiano esaustivo.
+/// Bayesian = ricerca guidata (Gaussian Process + Expected Improvement) quando lo spazio è grande
+/// e ogni valutazione (un walk-forward) è costosa. Entrambi restano vincolati allo stesso
+/// walk-forward e allo stesso verdetto finale (Deflated Sharpe su tutti i punti visitati).
+/// </summary>
+public enum SearchStrategy
+{
+    GridSearch,
+    Bayesian,
+}
+
 public class OptimizationConfiguration
 {
     public string ExchangeName { get; set; } = string.Empty;
@@ -32,6 +44,18 @@ public class OptimizationConfiguration
 
     /// <summary>Come selezionare i parametri della finestra. Default = in-sample (corretto).</summary>
     public OptimizationSelectionMetric SelectionMetric { get; set; } = OptimizationSelectionMetric.InSampleSharpe;
+
+    /// <summary>Strategia di ricerca. Default = GridSearch (comportamento storico bit-identico).</summary>
+    public SearchStrategy SearchStrategy { get; set; } = SearchStrategy.GridSearch;
+
+    /// <summary>Ramo Bayesian: passi guidati (Expected Improvement) DOPO l'esplorazione iniziale, per finestra.</summary>
+    public int BayesianIterations { get; set; } = 40;
+
+    /// <summary>Ramo Bayesian: punti iniziali casuali (esplorazione), per finestra.</summary>
+    public int BayesianInitialRandom { get; set; } = 8;
+
+    /// <summary>Ramo Bayesian: seme — la ricerca è deterministica a parità di seme e di storia.</summary>
+    public int BayesianSeed { get; set; } = 42;
 }
 
 public class ParameterRange
