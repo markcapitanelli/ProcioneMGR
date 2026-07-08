@@ -571,7 +571,7 @@
                 To = _to.Date.AddDays(1).AddSeconds(-1),
                 InitialCapital = _initialCapital,
                 PositionSizePercent = _positionSizePercent,
-                FeePercent = _feePercent,
+                FeePercent = Math.Max(0m, _feePercent),
                 StrategyName = _strategyName,
                 StrategyParameters = _paramInputs.ToDictionary(p => p.Key, p => p.Value),
                 StopLossPercent = Math.Max(0m, _stopLossPercent),

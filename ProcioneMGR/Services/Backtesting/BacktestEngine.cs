@@ -164,7 +164,10 @@ public sealed class BacktestEngine(
         await strategy.InitializeAsync(closes, candles, config.StrategyParameters ?? new(), indicators, ct);
 
         // 3) Loop event-driven.
-        var book = new Portfolio(config.InitialCapital, config.FeePercent, config.PositionSizePercent, config.Leverage);
+        // Difesa: una fee negativa verrebbe trattata come un rebate che paga a ogni fill,
+        // gonfiando artificialmente i rendimenti. La commissione non puo' essere < 0.
+        var feePercent = Math.Max(0m, config.FeePercent);
+        var book = new Portfolio(config.InitialCapital, feePercent, config.PositionSizePercent, config.Leverage);
         var equity = new List<EquityPoint>(n);
 
         // Overlay stop/target a livello di motore (0 = disattivi, comportamento invariato).
