@@ -438,19 +438,19 @@
         }
 
         var proto = StrategyFactory.Prototypes.FirstOrDefault(p => p.Name == _strategyName) ?? StrategyFactory.Prototypes[0];
+        // I range di default (incluso l'uso dei bound Min/Max e l'enumerazione dei flag/selettori
+        // discreti) vivono in DefaultParameterRanges, così sono unit-testabili senza il componente.
         _ranges = proto.ParameterDefinitions.Select(d =>
         {
-            var isInt = d.Key.Contains("Period") || d.Key.Contains("Lookback");
-            var step = isInt ? Math.Max(1m, Math.Round(d.Default * 0.2m)) : Math.Round(d.Default * 0.1m, 4);
-            if (step <= 0m) step = isInt ? 1m : 0.01m;
+            var r = DefaultParameterRanges.Build(d);
             return new RangeInput
             {
                 Key = d.Key,
                 Label = d.Label,
-                Min = d.Default,
-                Max = d.Default + 4 * step,
-                Step = step,
-                IsInteger = isInt,
+                Min = r.Min,
+                Max = r.Max,
+                Step = r.Step,
+                IsInteger = r.IsInteger,
             };
         }).ToList();
     }
