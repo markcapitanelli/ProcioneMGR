@@ -1,0 +1,287 @@
+@page "/feature-selection"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Alpha
+@using ProcioneMGR.Services.Alpha.Alpha158
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.ML
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IAsyncDisposable
+
+@inject IIcFeatureSelector Selector
+@inject IAlphaFactorFactory Factory
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>Selezione feature (IC)</PageTitle>
+
+<h1>Selezione feature <span class="badge bg-secondary">Information Coefficient</span></h1>
+
+<GuidaPanel Title="Feature selection — quali fattori valgono davvero">
+    <p>
+        Prima di addestrare un modello ML conviene sapere <em>quali</em> fattori (indicatori) hanno un
+        legame con i rendimenti futuri e quali sono solo rumore. L'<strong>Information Coefficient (IC)</strong>
+        è la correlazione (di Spearman) fra il valore del fattore oggi e il rendimento nei periodi
+        successivi (orizzonte forward): più è alto in valore assoluto, più il fattore "informa".
+        Il segno non conta (un segnale vale sia positivo che negativo), per questo si ordina per <strong>|IC|</strong>.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">IC / |IC|</dt>
+        <dd class="col-sm-9">Correlazione fattore→rendimento forward. |IC| è il criterio di ordinamento.</dd>
+        <dt class="col-sm-3">Information Ratio</dt>
+        <dd class="col-sm-9">Stabilità dell'IC nel tempo (IC medio ÷ deviazione standard su finestre mobili): un IC alto ma instabile vale meno di uno più basso ma costante.</dd>
+        <dt class="col-sm-3">Consistenza segno</dt>
+        <dd class="col-sm-9">Quota di finestre in cui l'IC ha lo STESSO segno del full-sample: ≥ 0.5 = segno affidabile.</dd>
+        <dt class="col-sm-3">Filtri</dt>
+        <dd class="col-sm-9">|IC| minimo, IR minimo e "solo segno consistente" scartano i fattori-rumore; i sopravvissuti (fino a Top N) sono quelli da passare a un modello ML.</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Configurazione</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Exchange</label>
+                <select class="form-select" @bind="_exchange" disabled="@_busy">
+                    @foreach (var ex in Enum.GetValues<ExchangeName>()) { <option value="@ex">@ex</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" list="fs_symbols" @bind="_symbol" style="width: 10rem;" disabled="@_busy" />
+                <datalist id="fs_symbols">@foreach (var s in _knownSymbols) { <option value="@s"></option> }</datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                    @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+            </div>
+        </div>
+
+        <hr />
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Orizzonte forward</label>
+                <input type="number" class="form-control" style="width:7rem" @bind="_forwardHorizon" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Top N</label>
+                <input type="number" class="form-control" style="width:6rem" @bind="_topN" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">|IC| minimo</label>
+                <input type="number" step="any" class="form-control" style="width:7rem" @bind="_minAbsIc" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">IR minimo</label>
+                <input type="number" step="any" class="form-control" style="width:7rem" @bind="_minIr" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="fs_sign" @bind="_requireConsistentSign" disabled="@_busy" />
+                    <label class="form-check-label" for="fs_sign">Solo segno consistente</label>
+                </div>
+            </div>
+            <div class="col-auto">
+                <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="fs_a158" @bind="_includeAlpha158" disabled="@_busy" />
+                    <label class="form-check-label" for="fs_a158">Includi catalogo Alpha158 (@_alpha158Count fattori, più lento)</label>
+                </div>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Valuta fattori
+                </button>
+            </div>
+        </div>
+        <div class="text-muted small mt-2">Candidati da valutare: <strong>@CandidateCount()</strong></div>
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-info") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_ranked is not null)
+{
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>|IC| per fattore (verde = IC positivo, rosso = negativo) — riquadro = supera i filtri</span>
+            <span class="small text-muted">@_kept.Count / @_ranked.Count tenuti · @_observations osservazioni</span>
+        </div>
+        <div class="card-body"><div id="fs_ic_chart" style="width:100%;"></div></div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Classifica fattori</div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead><tr><th>#</th><th>Fattore</th><th>IC</th><th>|IC|</th><th>Info Ratio</th><th>Consistenza</th><th>Oss.</th><th>Tenuto</th></tr></thead>
+                <tbody>
+                    @{ var rank = 0; }
+                    @foreach (var s in _ranked)
+                    {
+                        rank++;
+                        var kept = _kept.Contains(s.Spec.FeatureName);
+                        <tr class="@(kept ? "table-success" : "")">
+                            <td>@rank</td>
+                            <td>@s.Spec.FeatureName</td>
+                            <td class="@(s.Evaluation.InformationCoefficient >= 0 ? "text-success" : "text-danger")">@s.Evaluation.InformationCoefficient.ToString("F4")</td>
+                            <td class="fw-semibold">@s.AbsIc.ToString("F4")</td>
+                            <td>@s.Evaluation.InformationRatio.ToString("F3")</td>
+                            <td>@s.Evaluation.IcConsistency.ToString("P0")</td>
+                            <td>@s.Evaluation.Observations</td>
+                            <td>@(kept ? "✅" : "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1h";
+    private DateTime _from = new(2024, 6, 1);
+    private DateTime _to = new(2026, 6, 1);
+    private int _forwardHorizon = 1;
+    private int _topN = 20;
+    private double _minAbsIc = 0.02;
+    private double _minIr;
+    private bool _requireConsistentSign;
+    private bool _includeAlpha158;
+
+    private List<string> _knownSymbols = new();
+    private int _alpha158Count;
+
+    private IReadOnlyList<ScoredFactor>? _ranked;
+    private HashSet<string> _kept = new();
+    private int _observations;
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    private IJSObjectReference? _chartModule;
+    private bool _chartPending;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _alpha158Count = Factory.Prototypes.Count(IsAlpha158);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    private static bool IsAlpha158(IAlphaFactor f) => Alpha158Catalog.TryCreate(f.Name, out _);
+
+    private List<FactorSpec> Candidates() => Factory.Prototypes
+        .Where(f => _includeAlpha158 || !IsAlpha158(f))
+        .Select(f => new FactorSpec(f.Name, f, f.ParameterDefinitions.ToDictionary(d => d.Key, d => d.Default)))
+        .ToList();
+
+    private int CandidateCount() => Factory.Prototypes.Count(f => _includeAlpha158 || !IsAlpha158(f));
+
+    private async Task RunAsync()
+    {
+        _busy = true; _isError = false; _status = null; _ranked = null;
+        try
+        {
+            List<OhlcvData> candles;
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                var fromUtc = DateTime.SpecifyKind(_from.Date, DateTimeKind.Utc);
+                var toUtc = DateTime.SpecifyKind(_to.Date, DateTimeKind.Utc);
+                candles = await db.OhlcvData
+                    .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+                    .OrderBy(c => c.TimestampUtc)
+                    .ToListAsync();
+            }
+            if (candles.Count < 100)
+            {
+                SetStatus($"Solo {candles.Count} candele nel range: servono più dati (ingerisci in /market-analysis).", true);
+                return;
+            }
+
+            var config = new IcFeatureSelectionConfig
+            {
+                ForwardHorizon = _forwardHorizon,
+                TopN = _topN,
+                MinAbsIc = _minAbsIc,
+                MinInformationRatio = _minIr,
+                RequireConsistentSign = _requireConsistentSign,
+            };
+            var candidates = Candidates();
+
+            // CPU-bound (valuta N fattori): fuori dal thread del circuito.
+            var (ranked, selected) = await Task.Run(() =>
+            {
+                var r = Selector.Rank(candidates, candles, config);
+                var sel = Selector.Select(candidates, candles, config);
+                return (r, sel);
+            });
+
+            _ranked = ranked;
+            _kept = selected.Select(s => s.FeatureName).ToHashSet();
+            _observations = ranked.Count > 0 ? ranked.Max(s => s.Evaluation.Observations) : 0;
+            _chartPending = true;
+            SetStatus($"Valutati {ranked.Count} fattori su {candles.Count} candele: {_kept.Count} superano i filtri.", false);
+        }
+        catch (Exception ex) { SetStatus($"Errore: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_chartPending && _ranked is not null)
+        {
+            _chartPending = false;
+            await RenderChartAsync();
+        }
+    }
+
+    private async Task RenderChartAsync()
+    {
+        if (_ranked is null || _ranked.Count == 0) return;
+        _chartModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/charts.js");
+
+        var top = _ranked.Take(25).ToList();
+        var labels = top.Select(s => s.Spec.FeatureName).ToArray();
+        var values = top.Select(s => s.AbsIc).ToArray();
+        // Verde se IC positivo, rosso se negativo; bordo scuro se tenuto.
+        var colors = top.Select(s => s.Evaluation.InformationCoefficient >= 0 ? "#1a9850" : "#d73027").ToArray();
+
+        await _chartModule.InvokeVoidAsync("barh", "fs_ic_chart", labels, values, "|IC|", colors);
+    }
+
+    private void SetStatus(string text, bool error) { _status = text; _isError = error; }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_chartModule is not null)
+            {
+                await _chartModule.InvokeVoidAsync("dispose", "fs_ic_chart");
+                await _chartModule.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException) { }
+    }
+}
