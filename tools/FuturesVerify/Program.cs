@@ -100,6 +100,30 @@ foreach (var c in creds)
         Console.WriteLine($"[OK] GetOpenFuturesOrdersAsync: {open.Count} ordini aperti.");
     }
     catch (Exception ex) { Console.WriteLine($"[FAIL] GetOpenFuturesOrdersAsync: {ex.GetType().Name}: {ex.Message}"); }
+
+    // Bitget: la demo futures espone solo alcuni major. Verifichiamo il simbolo "buono" (ETH,
+    // atteso OK) e uno "cattivo" (SUI, atteso errore tradotto) per confermare dal vivo sia la
+    // disponibilità dei contratti demo sia la traduzione dell'errore 40034 (nessun ordine).
+    if (c.ExchangeName == ExchangeName.Bitget)
+    {
+        try
+        {
+            var ethLev = await client.SetLeverageAsync("ETH/USDT", 2, tc);
+            Console.WriteLine(ethLev.Success
+                ? $"[OK] SetLeverageAsync(ETH/USDT 2x): confermata leva={ethLev.Leverage}"
+                : $"[FAIL] SetLeverageAsync(ETH/USDT): {ethLev.Error}");
+        }
+        catch (Exception ex) { Console.WriteLine($"[FAIL] SetLeverageAsync(ETH/USDT): {ex.GetType().Name}: {ex.Message}"); }
+
+        try
+        {
+            var suiLev = await client.SetLeverageAsync("SUI/USDT", 2, tc);
+            Console.WriteLine(suiLev.Success
+                ? "[?] SetLeverageAsync(SUI/USDT): inatteso successo (SUI ora disponibile sulla demo?)"
+                : $"[OK] SetLeverageAsync(SUI/USDT) rifiutato con messaggio chiaro: {suiLev.Error}");
+        }
+        catch (Exception ex) { Console.WriteLine($"[FAIL] SetLeverageAsync(SUI/USDT): {ex.GetType().Name}: {ex.Message}"); }
+    }
 }
 
 Console.WriteLine();

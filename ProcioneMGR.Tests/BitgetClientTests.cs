@@ -74,4 +74,50 @@ public class BitgetClientTests
 
         Assert.Equal(0m, balance.AvailableMargin);
     }
+
+    [Fact]
+    public async Task SetLeverageAsync_DemoSymbolNotAvailable_ReturnsFriendlyError()
+    {
+        // Comportamento verificato dal vivo: la demo futures Bitget non ha SUI/USDT → 40034
+        // "Parameter SUIUSDT does not exist". L'errore grezzo va tradotto in un avviso chiaro.
+        var handler = new FakeHandler(HttpStatusCode.BadRequest,
+            """{"code":"40034","msg":"Parameter SUIUSDT does not exist","requestTime":1,"data":null}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.SetLeverageAsync("SUI/USDT", 2, Creds);
+
+        Assert.False(result.Success);
+        Assert.Contains("SUI/USDT", result.Error);
+        Assert.Contains("non disponibile su Bitget demo futures", result.Error);
+    }
+
+    [Fact]
+    public async Task SetLeverageAsync_ValidDemoSymbol_Succeeds()
+    {
+        // ETH/USDT è disponibile sulla demo: set-margin-mode + set-leverage rispondono OK.
+        var handler = new FakeHandler(HttpStatusCode.OK,
+            """{"code":"00000","msg":"success","requestTime":1,"data":{"symbol":"ETHUSDT","leverage":"2"}}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.SetLeverageAsync("ETH/USDT", 2, Creds);
+
+        Assert.True(result.Success);
+        Assert.Equal(2, result.Leverage);
+        Assert.Null(result.Error);
+    }
+
+    [Fact]
+    public async Task SetLeverageAsync_Live_DoesNotRewriteRawExchangeError()
+    {
+        // Il messaggio "demo" è specifico del testnet: in Live l'errore grezzo va lasciato intatto.
+        var liveCreds = new TradingCredentials("key", "secret", null, IsTestnet: false);
+        var handler = new FakeHandler(HttpStatusCode.BadRequest,
+            """{"code":"40034","msg":"Parameter FOOUSDT does not exist","requestTime":1,"data":null}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.SetLeverageAsync("FOO/USDT", 2, liveCreds);
+
+        Assert.False(result.Success);
+        Assert.DoesNotContain("non disponibile su Bitget demo futures", result.Error ?? "");
+    }
 }

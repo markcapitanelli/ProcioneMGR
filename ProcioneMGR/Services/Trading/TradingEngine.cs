@@ -188,6 +188,34 @@ public sealed class TradingEngine(
                     _filters = await futuresClient.GetFuturesSymbolFiltersAsync(cfg.Symbol, testnet, ct);
                     logger.LogInformation("Futures {Symbol}: leva impostata a {Lev}x, step={Step}, minQty={MinQ}.",
                         cfg.Symbol, _state.Leverage, _filters.StepSize, _filters.MinQty);
+
+                    // Testnet (demo): il sizing deve basarsi sul saldo VIRTUALE reale del conto
+                    // demo, non sul capitale di config (che è solo un default). Su Live NON
+                    // tocchiamo il capitale di config di proposito (comportamento invariato). Se
+                    // il saldo demo non è recuperabile (0 — es. fondi virtuali non ancora
+                    // riscattati, o su un conto di tipo diverso), resta il capitale di config con
+                    // un avviso, così l'avvio non fallisce ma il motivo è tracciato.
+                    if (testnet)
+                    {
+                        var fb = await futuresClient.GetFuturesBalanceAsync(_creds.Value, ct);
+                        var realCapital = fb.TotalEquity > 0m ? fb.TotalEquity : fb.AvailableMargin;
+                        if (realCapital > 0m)
+                        {
+                            _state.TotalCapital = realCapital;
+                            _state.AvailableCapital = realCapital;
+                            _state.PeakEquity = realCapital;
+                            logger.LogInformation(
+                                "Testnet futures {Exchange}: saldo demo reale {Real} USDT usato per il sizing (config era {Cfg}).",
+                                cfg.ExchangeName, realCapital, capital);
+                        }
+                        else
+                        {
+                            logger.LogWarning(
+                                "Testnet futures {Exchange}: saldo demo non recuperato (0) — uso il capitale di config {Cfg}. " +
+                                "Verifica che il conto demo sia finanziato (fondi virtuali riscattati).",
+                                cfg.ExchangeName, capital);
+                        }
+                    }
                 }
                 else
                 {

@@ -4,6 +4,7 @@
 @using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Extensions.Options
 @using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Ensemble
 @using ProcioneMGR.Services.Indicators
 @using ProcioneMGR.Services.Trading
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
@@ -137,7 +138,7 @@
         <dt class="col-sm-3">Modalità: Paper</dt>
         <dd class="col-sm-9">Denaro <strong>finto</strong>, nessun ordine reale — perfetta per osservare come si comporterebbe una strategia "dal vivo" senza alcun rischio.</dd>
         <dt class="col-sm-3">Modalità: Testnet</dt>
-        <dd class="col-sm-9">Ordini <strong>reali</strong> ma su un ambiente di prova dell'exchange (Binance Testnet) con soldi finti forniti dall'exchange stesso — serve una credenziale testnet salvata in <a href="settings/exchanges">Credenziali Exchange</a>. Un passo intermedio realistico prima del Live.</dd>
+        <dd class="col-sm-9">Ordini <strong>reali</strong> ma sull'ambiente di prova dell'exchange configurato (@TestnetEnvLabel) con soldi finti forniti dall'exchange stesso — serve una credenziale testnet salvata in <a href="settings/exchanges">Credenziali Exchange</a>. Un passo intermedio realistico prima del Live.</dd>
         <dt class="col-sm-3">Modalità: Live</dt>
         <dd class="col-sm-9">Soldi <strong>veri</strong>. Richiede una conferma esplicita per partire, e ogni singolo ordine automatico resta "in attesa" finché non lo confermi tu manualmente (vedi sotto) — un'ulteriore rete di sicurezza oltre alla configurazione.</dd>
         <dt class="col-sm-3">Start / Stop Trading</dt>
@@ -241,7 +242,7 @@
         }
         @if (_mode == "Testnet")
         {
-            <div class="text-muted small mt-2">ℹ️ Testnet piazza ordini reali su <strong>Binance Testnet</strong> con firma HMAC: serve una credenziale <em>testnet</em> in <a href="settings/exchanges">/settings/exchanges</a>.</div>
+            <div class="text-muted small mt-2">ℹ️ Testnet piazza ordini reali su <strong>@TestnetEnvLabel</strong> con firma HMAC: serve una credenziale <em>testnet</em> in <a href="settings/exchanges">/settings/exchanges</a>.</div>
         }
         @if (_mode == "Live")
         {
@@ -471,6 +472,13 @@
     private const int LaneCount = 3;
     private int _laneId;
 
+    /// <summary>Exchange configurato per la corsia (da Ensemble): usato per i messaggi UI dinamici.</summary>
+    private string _exchangeName = "Binance";
+    private bool IsBitget => string.Equals(_exchangeName, "Bitget", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Etichetta dell'ambiente di prova coerente con l'exchange (Bitget non ha "testnet" ma "Demo Trading").</summary>
+    private string TestnetEnvLabel => IsBitget ? "Bitget Demo Trading" : $"{_exchangeName} Testnet";
+
     /// <summary>Motore della corsia selezionata (keyed DI): risolto ad ogni accesso, mai messo in cache tra un cambio corsia e l'altro.</summary>
     private ITradingEngine Engine => Services.GetRequiredKeyedService<ITradingEngine>(_laneId);
 
@@ -485,6 +493,7 @@
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         ReloadSafety();
+        await LoadExchangeNameAsync();
         await RefreshAsync();
         await RefreshPromotionsAsync();
         _timer = new System.Threading.Timer(async _ => await InvokeAsync(RefreshAsync), null,
@@ -521,7 +530,19 @@
     private async Task OnLaneChangedAsync(ChangeEventArgs e)
     {
         _laneId = int.Parse((string)e.Value!);
+        await LoadExchangeNameAsync();
         await RefreshAsync();
+    }
+
+    /// <summary>Legge l'exchange configurato della corsia dall'Ensemble (autorevole anche prima dell'avvio).</summary>
+    private async Task LoadExchangeNameAsync()
+    {
+        try
+        {
+            var cfg = await Services.GetRequiredKeyedService<IEnsembleManager>(_laneId).GetConfigurationAsync();
+            if (!string.IsNullOrWhiteSpace(cfg.ExchangeName)) _exchangeName = cfg.ExchangeName;
+        }
+        catch { /* mantiene il default se la config non è leggibile */ }
     }
 
     private async Task RefreshAsync()
@@ -558,7 +579,7 @@
             var note = mode switch
             {
                 TradingMode.Paper => "Paper trading avviato. Il worker sta riproducendo le candele reali…",
-                TradingMode.Testnet => "Testnet avviato: gli ordini vengono piazzati su Binance Testnet con le tue credenziali.",
+                TradingMode.Testnet => $"Testnet avviato: gli ordini vengono piazzati su {TestnetEnvLabel} con le tue credenziali.",
                 _ => "Live avviato. ⚠️ In Live ogni ordine richiede conferma manuale (safety): gli ordini automatici vengono rifiutati finché non confermati.",
             };
             SetMsg(note, false);

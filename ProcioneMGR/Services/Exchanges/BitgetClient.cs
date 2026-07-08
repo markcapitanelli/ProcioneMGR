@@ -338,7 +338,27 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
             leverage = leverage.ToString(CultureInfo.InvariantCulture),
         });
         var (ok, resp, _, error) = await SignedAsync(HttpMethod.Post, "/api/v2/mix/account/set-leverage", string.Empty, leverageBody, credentials, ct);
-        return new SetLeverageResult { Success = ok, Leverage = leverage, Error = error };
+        return new SetLeverageResult { Success = ok, Leverage = leverage, Error = DemoSymbolHint(error, symbol, credentials.IsTestnet) };
+    }
+
+    /// <summary>
+    /// La demo futures Bitget ("paptrading") espone solo un sottoinsieme di contratti (pochi
+    /// major come BTC/ETH): impostare leva o piazzare un ordine su un simbolo non simulato
+    /// fallisce con l'errore opaco "code=40034 ... does not exist". Qui lo traduciamo in un
+    /// messaggio chiaro e azionabile invece di propagare il codice grezzo alla UI. Verificato
+    /// empiricamente: SUI/USDT → 40034, ETH/USDT → OK.
+    /// </summary>
+    private static string? DemoSymbolHint(string? error, string symbol, bool testnet)
+    {
+        if (!testnet || string.IsNullOrEmpty(error)) return error;
+        if (error.Contains("40034", StringComparison.Ordinal) ||
+            error.Contains("does not exist", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Simbolo {symbol} non disponibile su Bitget demo futures: l'ambiente simulato " +
+                   "offre solo alcuni contratti major (es. BTC/USDT, ETH/USDT). Scegli un simbolo " +
+                   $"supportato dalla demo. (Errore exchange: {error})";
+        }
+        return error;
     }
 
     public async Task<PlaceOrderResult> PlaceFuturesOrderAsync(PlaceOrderRequest request, bool reduceOnly, CancellationToken ct = default)
@@ -363,7 +383,7 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
         var (ok, resp, uncertain, error) = await SignedAsync(HttpMethod.Post, "/api/v2/mix/order/place-order", string.Empty, body, request.Credentials, ct);
         if (!ok)
         {
-            return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = error };
+            return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = DemoSymbolHint(error, request.Symbol, request.Credentials.IsTestnet) };
         }
         using var doc = JsonDocument.Parse(resp);
         var data = doc.RootElement.TryGetProperty("data", out var d) ? d : default;
@@ -459,8 +479,12 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
         // un vero saldo zero). Si usa invece l'endpoint "lista account" (.../account/accounts),
         // che con il solo productType restituisce l'array di conti per moneta di margine.
         var productType = ProductType(credentials.IsTestnet);
-        var (ok, resp, _, _) = await SignedAsync(HttpMethod.Get, "/api/v2/mix/account/accounts", $"productType={productType}", string.Empty, credentials, ct);
-        if (!ok) return new FuturesBalance();
+        var (ok, resp, _, error) = await SignedAsync(HttpMethod.Get, "/api/v2/mix/account/accounts", $"productType={productType}", string.Empty, credentials, ct);
+        if (!ok)
+        {
+            logger.LogWarning("Bitget GetFuturesBalance ({Product}) fallito: {Error}", productType, error);
+            return new FuturesBalance();
+        }
 
         using var doc = JsonDocument.Parse(resp);
         if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
@@ -475,6 +499,20 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
                 AvailableMargin = acct.TryGetProperty("available", out var av) ? ParseDecimal(av) : 0m,
                 TotalEquity = acct.TryGetProperty("accountEquity", out var eq) ? ParseDecimal(eq) : 0m,
             };
+        }
+
+        // Nessun sotto-conto USDT sul productType interrogato. Su demo (SUSDT-FUTURES) questo è
+        // il caso reale riscontrato: il conto demo esiste ma il margine virtuale non è stato
+        // ancora "riscattato", oppure i fondi demo dell'utente risiedono su un conto di tipo
+        // diverso (es. Unified Trading Account) non raggiunto da questo endpoint mix classico.
+        // Lo distinguiamo da un vero saldo zero con un log azionabile invece di un 0 muto.
+        if (credentials.IsTestnet)
+        {
+            logger.LogWarning(
+                "Bitget demo futures ({Product}): nessun conto margine USDT trovato (saldo demo 0). " +
+                "Verifica di aver riscattato i fondi virtuali sul conto Futures demo; se i tuoi fondi " +
+                "demo sono su un Unified Trading Account, questo endpoint mix classico non li vede.",
+                productType);
         }
         return new FuturesBalance();
     }
