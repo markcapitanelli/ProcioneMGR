@@ -41,6 +41,12 @@
     <dl class="row mb-0">
         <dt class="col-sm-3">Symbol / Timeframe / Da-A</dt>
         <dd class="col-sm-9">Lo stesso significato del Backtest: la coppia, la granularità delle candele e il periodo storico complessivo su cui girare l'intera analisi walk-forward.</dd>
+        <dt class="col-sm-3">Position size %</dt>
+        <dd class="col-sm-9">
+            Quanta parte del capitale investire a ogni operazione, esattamente come nel Backtest
+            (es. 20%). <strong>Tienilo allineato al valore usato nel Backtest</strong>: con size
+            diverse i risultati (return, numero di trade) delle due pagine non sono confrontabili.
+        </dd>
         <dt class="col-sm-3">Strategia</dt>
         <dd class="col-sm-9">
             La regola da ottimizzare. "Modello ML (salvato)" è un caso speciale: invece di una
@@ -125,6 +131,10 @@
             <div class="col-auto">
                 <label class="form-label">Capitale</label>
                 <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_initialCapital" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Position size %</label>
+                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_positionSizePercent" disabled="@_busy" />
             </div>
             <div class="col-auto">
                 <label class="form-label">Commissione %</label>
@@ -363,6 +373,7 @@
     private DateTime _from = new(2024, 6, 1);
     private DateTime _to = new(2026, 6, 1);
     private decimal _initialCapital = 10_000m;
+    private decimal _positionSizePercent = 20m;
     private decimal _commission = 0.1m;
     private int _inSampleMonths = 12;
     private int _oosMonths = 3;
@@ -499,6 +510,7 @@
                 From = _from.Date,
                 To = _to.Date,
                 InitialCapital = _initialCapital,
+                PositionSizePercent = _positionSizePercent,
                 CommissionPercent = _commission,
                 StrategyName = _strategyName,
                 ParameterRanges = ranges,
