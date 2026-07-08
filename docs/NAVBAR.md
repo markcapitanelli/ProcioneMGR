@@ -20,6 +20,13 @@ attiva è sempre visibile. Lo stato aperto/chiuso dei blocchi collassabili è **
 > La lettura di `localStorage` avviene in `OnAfterRenderAsync(firstRender)`, non durante il
 > prerender (dove non è disponibile): questo evita eccezioni e non blocca la UI.
 
+> **Interattività:** il layout (`MainLayout`) è renderizzato in SSR statico, mentre solo le
+> singole pagine sono `InteractiveServer`. Poiché `NavMenu` vive nel layout, per far
+> funzionare il toggle dei blocchi (`@onclick`) e la lettura di `localStorage` il componente
+> dichiara esso stesso `@rendermode InteractiveServer` in cima a `NavMenu.razor`: diventa
+> un'isola interattiva dentro un layout statico. Senza questa direttiva i blocchi restano
+> visibili ma non collassano.
+
 ## Ruoli
 
 Ogni voce dichiara i ruoli abilitati nel campo `Roles` di `NavItem`:
