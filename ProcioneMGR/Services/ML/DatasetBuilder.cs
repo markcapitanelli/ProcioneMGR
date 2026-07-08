@@ -1,5 +1,6 @@
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Alpha;
+using ProcioneMGR.Services.Regime;
 
 namespace ProcioneMGR.Services.ML;
 
@@ -12,12 +13,17 @@ public sealed class DatasetBuilder : IDatasetBuilder
     public DatasetBuilder(Alpha.IFactorCache? factorCache = null)
         => _factorCache = factorCache ?? new Alpha.FactorCache();
 
-    public MlDataset Build(IReadOnlyList<OhlcvData> candles, IReadOnlyList<FactorSpec> factors, int forwardHorizon)
+    public MlDataset Build(IReadOnlyList<OhlcvData> candles, IReadOnlyList<FactorSpec> factors, int forwardHorizon,
+        IReadOnlyList<int>? regimeIds = null, int regimeCount = 0)
     {
         ArgumentNullException.ThrowIfNull(candles);
         ArgumentNullException.ThrowIfNull(factors);
         if (factors.Count == 0) throw new ArgumentException("Serve almeno un fattore.", nameof(factors));
         if (forwardHorizon < 1) throw new ArgumentOutOfRangeException(nameof(forwardHorizon));
+
+        var withRegime = regimeCount > 0 && regimeIds is not null;
+        if (withRegime && regimeIds!.Count != candles.Count)
+            throw new ArgumentException("regimeIds deve essere allineato per indice a candles.", nameof(regimeIds));
 
         var n = candles.Count;
 
@@ -47,14 +53,18 @@ public sealed class DatasetBuilder : IDatasetBuilder
             }
             if (!complete) continue;
 
-            rows.Add(new FeatureRow { Features = vec, Label = (float)forward[i]!.Value });
+            var finalVec = withRegime ? RegimeAugmentation.Append(vec, regimeIds![i], regimeCount) : vec;
+            rows.Add(new FeatureRow { Features = finalVec, Label = (float)forward[i]!.Value });
             timestamps.Add(candles[i].TimestampUtc);
         }
+
+        var featureNames = factors.Select(f => f.FeatureName).ToList();
+        if (withRegime) featureNames.AddRange(RegimeAugmentation.OneHotNames(regimeCount));
 
         return new MlDataset
         {
             Rows = rows,
-            FeatureNames = factors.Select(f => f.FeatureName).ToList(),
+            FeatureNames = featureNames,
             Timestamps = timestamps,
         };
     }

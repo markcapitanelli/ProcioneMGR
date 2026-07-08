@@ -1,6 +1,7 @@
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.ML;
+using ProcioneMGR.Services.Regime;
 
 namespace ProcioneMGR.Services.Backtesting;
 
@@ -36,13 +37,26 @@ public sealed class MlStrategy : IStrategy
     private readonly ISequencePredictor? _sequence;
     private readonly Alpha.IFactorCache? _factorCache;
 
+    // Regime one-hot (opzionale, default OFF): se detector+extractor sono forniti e _regimeCount>0,
+    // InitializeAsync appende K colonne one-hot del regime a ogni riga di _featureMatrix, con lo
+    // STESSO percorso causale usato in costruzione dataset (parità train/serve). Vedi RegimeAugmentation.
+    private readonly IRegimeDetector? _regimeDetector;
+    private readonly IMarketFeatureExtractor? _featureExtractor;
+    private readonly int _regimeCount;
+
     private float[][] _featureMatrix = [];
     private DateTime[] _timestamps = [];   // per la guardia di contiguità dei modelli sequenziali
     private long _stepTicks;
     private decimal _longThreshold = 0.005m;
     private decimal _shortThreshold = 0.005m;
 
-    public MlStrategy(IReturnPredictor predictor, IReadOnlyList<FactorSpec> factors, Alpha.IFactorCache? factorCache = null)
+    public MlStrategy(
+        IReturnPredictor predictor,
+        IReadOnlyList<FactorSpec> factors,
+        Alpha.IFactorCache? factorCache = null,
+        IRegimeDetector? regimeDetector = null,
+        IMarketFeatureExtractor? featureExtractor = null,
+        int regimeCount = 0)
     {
         _predictor = predictor ?? throw new ArgumentNullException(nameof(predictor));
         _factors = factors ?? throw new ArgumentNullException(nameof(factors));
@@ -53,9 +67,16 @@ public sealed class MlStrategy : IStrategy
         // vettori di fattori in una finestra — vedi EvaluateSignal. Additivo: gli altri modelli
         // restano puntuali e non ne risentono.
         _sequence = predictor as ISequencePredictor;
+
+        var wantRegime = regimeCount > 0 && regimeDetector is not null && featureExtractor is not null;
+        if (wantRegime && _sequence is not null)
+            throw new NotSupportedException("Il regime one-hot non è supportato con i predittori sequenziali (la finestra impacchetta i soli fattori).");
+        _regimeDetector = wantRegime ? regimeDetector : null;
+        _featureExtractor = wantRegime ? featureExtractor : null;
+        _regimeCount = wantRegime ? regimeCount : 0;
     }
 
-    public Task InitializeAsync(
+    public async Task InitializeAsync(
         IReadOnlyList<decimal> closes,
         IReadOnlyList<OhlcvData> candles,
         IReadOnlyDictionary<string, decimal> parameters,
@@ -98,6 +119,20 @@ public sealed class MlStrategy : IStrategy
             _featureMatrix[i] = complete ? vec : [];
         }
 
+        // Regime one-hot (opzionale): stesso percorso causale del dataset (ComputeFeatures +
+        // LabelFeaturesAsync), quindi le colonne appese all'inferenza coincidono con quelle viste
+        // in addestramento sulla stessa serie. Le righe in warm-up (vettore vuoto) restano vuote.
+        if (_regimeCount > 0 && _regimeDetector is not null && _featureExtractor is not null && n > 0)
+        {
+            var timeframe = candles[0].Timeframe;
+            var regimeIds = await RegimeAugmentation.LabelByCandleAsync(_featureExtractor, _regimeDetector, candles, timeframe, ct);
+            for (var i = 0; i < n; i++)
+            {
+                if (_featureMatrix[i].Length == 0) continue;   // warm-up: resta Hold
+                _featureMatrix[i] = RegimeAugmentation.Append(_featureMatrix[i], regimeIds[i], _regimeCount);
+            }
+        }
+
         // Per i modelli sequenziali: timestamp + passo, per esigere una finestra CONTIGUA nel tempo
         // (stessa semantica di SequenceWindowing in training — nessuna finestra a cavallo di una lacuna).
         if (_sequence is not null)
@@ -106,7 +141,6 @@ public sealed class MlStrategy : IStrategy
             for (var i = 0; i < n; i++) _timestamps[i] = candles[i].TimestampUtc;
             _stepTicks = SequenceWindowing.InferStepTicks(_timestamps);
         }
-        return Task.CompletedTask;
     }
 
     public Signal EvaluateSignal(int index, decimal currentPrice, DateTime timestamp)
