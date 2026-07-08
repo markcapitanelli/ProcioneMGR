@@ -196,7 +196,7 @@ public sealed class OptimizationEngine(
         }
 
         sw.Stop();
-        return BuildResult(config, agg, wfWindows, combined, tested, sw.Elapsed);
+        return BuildResult(config, agg, wfWindows, combined, windows.Count, tested, sw.Elapsed);
     }
 
     // ---------------------------------------------------------------- validazione
@@ -409,6 +409,7 @@ public sealed class OptimizationEngine(
         ConcurrentDictionary<string, ComboAggregate> agg,
         List<WalkForwardWindow> windows,
         List<EquityPoint> combined,
+        int totalWindows,
         int tested,
         TimeSpan elapsed)
     {
@@ -418,6 +419,18 @@ public sealed class OptimizationEngine(
         {
             var avgOos = a.Count == 0 ? 0m : a.SumOos / a.Count;
             allResults[key] = avgOos;
+
+            // Copertura walk-forward: in quante finestre questa combo è stata valutata. Con GridSearch
+            // è sempre = totalWindows; con Bayesian ogni finestra campiona combo diverse, quindi può
+            // essere anche 1 sola finestra "fortunata" (medie non rappresentative). Lo score robusto
+            // sconta lo Sharpe OOS medio in proporzione alla copertura: a copertura piena resta invariato
+            // (ordine GridSearch identico allo storico), a copertura parziale penalizza — così una combo
+            // vista in 1 finestra non scavalca combo valutate ovunque nella leaderboard e in "Save Best".
+            var coverage = a.Count;
+            var robust = (totalWindows <= 0 || coverage >= totalWindows)
+                ? avgOos
+                : avgOos * coverage / totalWindows;
+
             sets.Add(new ParameterSet
             {
                 Parameters = new Dictionary<string, decimal>(a.Parameters),
@@ -426,10 +439,18 @@ public sealed class OptimizationEngine(
                 TotalReturn = a.Count == 0 ? 0m : a.SumReturn / a.Count,
                 MaxDrawdown = a.Count == 0 ? 0m : a.SumDd / a.Count,
                 TotalTrades = a.Count == 0 ? 0 : (int)(a.SumTrades / a.Count),
+                WindowCoverage = coverage,
+                RobustnessScore = robust,
             });
         }
 
-        var top10 = sets.OrderByDescending(s => s.OutOfSampleSharpe).Take(10).ToList();
+        var top10 = sets
+            .OrderByDescending(s => s.RobustnessScore)
+            .ThenByDescending(s => s.WindowCoverage)
+            .ThenByDescending(s => s.OutOfSampleSharpe)
+            .ThenBy(s => ComboKey(s.Parameters), StringComparer.Ordinal)
+            .Take(10)
+            .ToList();
         var avgWindowOos = windows.Count == 0 ? 0m : windows.Average(x => x.OutOfSampleSharpe);
 
         // Verdetto anti-overfitting (Fase 1): il migliore è scelto tra agg.Count combinazioni distinte;
@@ -450,6 +471,7 @@ public sealed class OptimizationEngine(
             AllResults = allResults,
             ExecutionTime = elapsed,
             TotalCombinationsTested = tested,
+            TotalWindows = totalWindows,
             Validation = validation,
         };
     }

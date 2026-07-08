@@ -282,22 +282,25 @@
     }
     <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <span>Top 10 — Sharpe OOS medio (selezione finestra su in-sample)</span>
+            <span>Top 10 — robustezza (Sharpe OOS medio scontato per copertura; selezione finestra su in-sample)</span>
             <span class="small text-muted">@_result.TotalCombinationsTested valutazioni in @_result.ExecutionTime.TotalSeconds.ToString("F1")s · Sharpe OOS medio finestre: <strong>@_result.WalkForwardAnalysis.AverageOutOfSampleSharpe.ToString("F3")</strong></span>
         </div>
         <div class="table-responsive">
             <table class="table table-sm table-striped mb-0">
-                <thead><tr><th>#</th><th>Parametri</th><th>Sharpe IS</th><th>Sharpe OOS</th><th>Return %</th><th>Max DD %</th><th>Trades</th></tr></thead>
+                <thead><tr><th>#</th><th>Parametri</th><th>Finestre</th><th>Robust</th><th>Sharpe IS</th><th>Sharpe OOS</th><th>Return %</th><th>Max DD %</th><th>Trades</th></tr></thead>
                 <tbody>
                     @{ var rank = 0; }
                     @foreach (var s in _result.BestParameters)
                     {
                         rank++;
+                        var lowCoverage = _result.TotalWindows > 0 && s.WindowCoverage * 2 < _result.TotalWindows;
                         <tr class="@(rank == 1 ? "table-success" : "")">
                             <td>@rank</td>
                             <td>@FormatParams(s.Parameters)</td>
+                            <td class="@(lowCoverage ? "text-warning fw-semibold" : "")" title="@(lowCoverage ? "Copertura bassa: medie poco rappresentative" : "")">@s.WindowCoverage/@_result.TotalWindows@(lowCoverage ? " ⚠" : "")</td>
+                            <td class="fw-semibold">@s.RobustnessScore.ToString("F2")</td>
                             <td>@s.InSampleSharpe.ToString("F2")</td>
-                            <td class="fw-semibold">@s.OutOfSampleSharpe.ToString("F2")</td>
+                            <td>@s.OutOfSampleSharpe.ToString("F2")</td>
                             <td class="@(s.TotalReturn >= 0 ? "text-success" : "text-danger")">@s.TotalReturn.ToString("F2")</td>
                             <td class="text-danger">@s.MaxDrawdown.ToString("F2")</td>
                             <td>@s.TotalTrades</td>

@@ -76,7 +76,12 @@ public class WalkForwardConfiguration
 
 public class OptimizationResult
 {
-    /// <summary>Top 10 combinazioni per Sharpe out-of-sample medio sulle finestre.</summary>
+    /// <summary>
+    /// Top 10 combinazioni ordinate per <see cref="ParameterSet.RobustnessScore"/> (Sharpe OOS medio
+    /// scontato per la copertura walk-forward), non per il semplice Sharpe OOS medio: con la ricerca
+    /// Bayesian una combo valutata in 1 sola finestra "fortunata" avrebbe medie non rappresentative e
+    /// scavalcherebbe combo valutate ovunque. Per GridSearch la copertura è uniforme ⇒ ordine invariato.
+    /// </summary>
     public List<ParameterSet> BestParameters { get; set; } = new();
     public WalkForwardResult WalkForwardAnalysis { get; set; } = new();
 
@@ -84,6 +89,13 @@ public class OptimizationResult
     public Dictionary<string, decimal> AllResults { get; set; } = new();
     public TimeSpan ExecutionTime { get; set; }
     public int TotalCombinationsTested { get; set; }
+
+    /// <summary>
+    /// Numero di finestre walk-forward generate: denominatore della copertura (<see
+    /// cref="ParameterSet.WindowCoverage"/>). Con GridSearch ogni combo è valutata in tutte; con
+    /// Bayesian ogni finestra campiona combo diverse, quindi la copertura può essere &lt; a questo.
+    /// </summary>
+    public int TotalWindows { get; set; }
 
     /// <summary>
     /// Verdetto anti-overfitting sul migliore selezionato: Deflated Sharpe che corregge lo Sharpe
@@ -101,6 +113,21 @@ public class ParameterSet
     public decimal TotalReturn { get; set; }
     public decimal MaxDrawdown { get; set; }
     public int TotalTrades { get; set; }
+
+    /// <summary>
+    /// Numero di finestre walk-forward in cui questa combo è stata effettivamente valutata (le medie
+    /// qui sopra sono su queste finestre). GridSearch → sempre = <see cref="OptimizationResult.TotalWindows"/>;
+    /// Bayesian → può essere anche 1 sola finestra, il che rende le medie poco affidabili.
+    /// </summary>
+    public int WindowCoverage { get; set; }
+
+    /// <summary>
+    /// Sharpe OOS medio scontato per la copertura: <c>OutOfSampleSharpe × WindowCoverage / TotalWindows</c>.
+    /// A copertura piena coincide con <see cref="OutOfSampleSharpe"/> (nessuno sconto ⇒ GridSearch
+    /// invariato); a copertura parziale penalizza le combo viste in poche finestre. È la metrica di
+    /// ordinamento della leaderboard e la base di "Save Best".
+    /// </summary>
+    public decimal RobustnessScore { get; set; }
 }
 
 public class WalkForwardResult
