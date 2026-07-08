@@ -156,7 +156,11 @@ public sealed class OptimizationEngine(
 
             if (bayesian)
             {
-                RunBayesianWindow(config, EvaluateAsync, ct);
+                // La ricerca bayesiana è sequenziale e l'obiettivo blocca (GetAwaiter().GetResult()
+                // dentro un Func sincrono): la eseguo su un thread del pool con Task.Run, così NON
+                // blocca il thread chiamante (in Blazor Server è il circuito → la UI resterebbe
+                // congelata per l'intera ricerca). Simmetrico al grid, che gira su Parallel.ForEachAsync.
+                await Task.Run(() => RunBayesianWindow(config, EvaluateAsync, ct), ct);
             }
             else
             {

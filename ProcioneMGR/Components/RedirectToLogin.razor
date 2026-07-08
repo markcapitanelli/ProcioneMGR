@@ -1,0 +1,10 @@
+@inject NavigationManager NavigationManager
+
+@code {
+    // Reindirizza a Login preservando la pagina richiesta. Vive lato server (app interamente
+    // InteractiveServer): nessun runtime WebAssembly nel browser.
+    protected override void OnInitialized()
+    {
+        NavigationManager.NavigateTo($"Account/Login?returnUrl={Uri.EscapeDataString(NavigationManager.Uri)}", forceLoad: true);
+    }
+}
