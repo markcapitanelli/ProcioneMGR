@@ -1,0 +1,183 @@
+@page "/execution"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Execution
+@using ProcioneMGR.Services.Experiments
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject IExecutionAlgorithmFactory AlgoFactory
+@inject IExecutionSimulator Simulator
+@inject ExecutionParameters ExecParams
+@inject IExperimentTracker Tracker
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Execution Lab</PageTitle>
+
+<h1>Execution Lab</h1>
+
+<GuidaPanel Title="Execution Lab — quanto costa DAVVERO eseguire un ordine">
+    <p>
+        Oggi la piattaforma esegue ogni ordine in un colpo solo. Su size significative, però,
+        distribuire l'ordine nel tempo (<strong>TWAP</strong>, <strong>VWAP</strong>,
+        <strong>Iceberg</strong>) riduce l'impatto di mercato. Qui si <strong>misura</strong> questa
+        differenza sulle candele fini recenti, invece di assumerla (rif. ROADMAP-QLIB §1.2).
+    </p>
+    <p class="mb-0">
+        Il modello di impatto è semplificato (lineare nella quota di volume assorbita) e va calibrato
+        in Paper: i valori assoluti sono indicativi, il <em>confronto relativo</em> fra algoritmi è il
+        punto. Ogni confronto viene registrato negli <a href="experiments">Esperimenti</a>.
+    </p>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label mb-0">Symbol</label>
+                <input class="form-control form-control-sm" @bind="_symbol" style="max-width: 140px;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Timeframe esecuzione</label>
+                <select class="form-select form-select-sm" @bind="_timeframe" style="max-width: 100px;">
+                    <option value="5m">5m</option>
+                    <option value="15m">15m</option>
+                    <option value="1h">1h</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Lato</label>
+                <select class="form-select form-select-sm" @bind="_side" style="max-width: 100px;">
+                    <option value="Buy">Buy</option>
+                    <option value="Sell">Sell</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Quantità</label>
+                <input type="number" step="any" class="form-control form-control-sm" @bind="_quantity" style="max-width: 120px;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Candele finestra</label>
+                <input type="number" class="form-control form-control-sm" @bind="_windowCandles" style="max-width: 110px;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary" @onclick="CompareAsync" disabled="@_busy">
+                    @(_busy ? "Confronto…" : "Confronta algoritmi")
+                </button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_msg))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-info") py-2 mt-3 mb-0">@_msg</div>
+        }
+    </div>
+</div>
+
+@if (_results.Count > 0)
+{
+    <div class="card">
+        <div class="card-header">
+            Confronto su @_symbol · @_timeframe — quantità @_quantity (@_side), arrivo @_arrival.ToString("0.####")
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Algoritmo</th>
+                        <th class="text-end">Ordini figli</th>
+                        <th class="text-end">Prezzo medio</th>
+                        <th class="text-end">Shortfall (bps)</th>
+                        <th class="text-end">vs Immediate</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{
+                        var immediateBps = _results.FirstOrDefault(r => r.Algorithm == "Immediate")?.SlippageBps ?? 0m;
+                        var best = _results.Min(r => r.SlippageBps);
+                    }
+                    @foreach (var r in _results.OrderBy(r => r.SlippageBps))
+                    {
+                        var delta = r.SlippageBps - immediateBps;
+                        <tr class="@(r.SlippageBps == best ? "table-success" : "")">
+                            <td>@r.Algorithm @(r.SlippageBps == best ? "🏆" : "")</td>
+                            <td class="text-end">@r.Fills.Count</td>
+                            <td class="text-end">@r.AverageFillPrice.ToString("0.####")</td>
+                            <td class="text-end">@r.SlippageBps.ToString("F1")</td>
+                            <td class="text-end @(delta < 0 ? "text-success" : delta > 0 ? "text-danger" : "")">
+                                @(r.Algorithm == "Immediate" ? "—" : (delta <= 0 ? "" : "+") + delta.ToString("F1"))
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private string _symbol = "BTCUSDT";
+    private string _timeframe = "5m";
+    private string _side = "Buy";
+    private decimal _quantity = 100m;
+    private int _windowCandles = 48;
+
+    private decimal _arrival;
+    private List<ExecutionResult> _results = new();
+    private bool _busy;
+    private bool _isError;
+    private string? _msg;
+
+    private async Task CompareAsync()
+    {
+        if (_busy) return;
+        _busy = true; _msg = null; _isError = false; _results = new();
+        try
+        {
+            if (_quantity <= 0m) { _msg = "La quantità deve essere positiva."; _isError = true; return; }
+            var window = Math.Clamp(_windowCandles, 2, 2000);
+
+            List<OhlcvData> candles;
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                candles = await db.OhlcvData.AsNoTracking()
+                    .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe)
+                    .OrderByDescending(c => c.TimestampUtc)
+                    .Take(window)
+                    .ToListAsync();
+            }
+            candles.Reverse();
+
+            if (candles.Count < 2)
+            {
+                _msg = $"Candele insufficienti per {_symbol} {_timeframe}: fai prima un Fetch/Sync di questi dati.";
+                _isError = true;
+                return;
+            }
+
+            _arrival = candles[0].Open > 0m ? candles[0].Open : candles[0].Close;
+            var side = _side == "Sell" ? ExecutionSide.Sell : ExecutionSide.Buy;
+            var intent = new ExecutionIntent(_symbol.Trim(), side, _quantity, _arrival);
+
+            foreach (var algo in AlgoFactory.All)
+            {
+                var plan = algo.BuildPlan(intent, candles, ExecParams);
+                _results.Add(Simulator.Simulate(plan, intent, candles, ExecParams));
+            }
+
+            var runId = await Tracker.SafeStartRunAsync(
+                "Execution",
+                $"{_side} {_quantity} {_symbol.Trim()} · {_timeframe}",
+                new { _symbol, _timeframe, _side, _quantity, Window = candles.Count, Arrival = _arrival },
+                _symbol.Trim(), _timeframe);
+            await Tracker.SafeLogMetricsAsync(runId,
+                _results.ToDictionary(r => $"{r.Algorithm}_bps", r => r.SlippageBps));
+            await Tracker.SafeCompleteAsync(runId, "Completed");
+
+            var best = _results.OrderBy(r => r.SlippageBps).First();
+            _msg = $"Confronto su {candles.Count} candele: migliore = {best.Algorithm} ({best.SlippageBps:F1} bps).";
+        }
+        catch (Exception ex) { _msg = $"Errore: {ex.Message}"; _isError = true; }
+        finally { _busy = false; }
+    }
+}

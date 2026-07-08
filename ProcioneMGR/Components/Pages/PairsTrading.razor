@@ -1,0 +1,386 @@
+@page "/pairs-trading"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.PairsTrading
+@using ProcioneMGR.Services.TimeSeries
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IPairsBacktestEngine Engine
+
+<PageTitle>Pairs Trading</PageTitle>
+
+<h1>Pairs Trading <span class="badge bg-secondary">Statistical Arbitrage</span></h1>
+
+<GuidaPanel Title="Pairs Trading — scommettere sulla relazione fra due prezzi, non sulla direzione">
+    <p>
+        Invece di scommettere se un singolo asset salirà o scenderà, il pairs trading scommette
+        sulla <strong>relazione</strong> fra due asset che normalmente si muovono insieme (es. due
+        criptovalute simili). Quando il loro "spread" (la differenza fra i due prezzi, pesata) si
+        allarga più del solito, si compra quello relativamente più economico e si vende allo
+        scoperto quello relativamente più caro — una posizione <strong>dollar-neutral</strong> (stesso
+        importo su entrambe le gambe), che guadagna quando lo spread torna verso la sua media,
+        indipendentemente dal fatto che il mercato nel complesso salga o scenda. Funziona solo se i
+        due asset sono davvero <strong>cointegrati</strong> (la loro relazione è statisticamente
+        stabile nel tempo) — per questo la pagina verifica prima questo, poi esegue il backtest.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Symbol Y / Symbol X</dt>
+        <dd class="col-sm-9">La coppia di asset da analizzare insieme (l'ordine conta per il calcolo dell'hedge ratio, ma il risultato economico è simmetrico).</dd>
+        <dt class="col-sm-3">Cointegrate? / ADF stat</dt>
+        <dd class="col-sm-9">
+            Il test statistico (Augmented Dickey-Fuller) che verifica se la relazione fra i due
+            prezzi è stabile nel tempo. Se la risposta è "No", il pairs trading su questa coppia in
+            questo periodo è probabilmente rischioso: i due prezzi potrebbero divergere per sempre
+            invece di tornare in equilibrio.
+        </dd>
+        <dt class="col-sm-3">Hedge ratio</dt>
+        <dd class="col-sm-9">Quanto di un asset serve per bilanciare una unità dell'altro nello spread (es. 1 BTC ≈ 15 ETH in un certo momento).</dd>
+        <dt class="col-sm-3">Lookback ristima / Ricalibra ogni</dt>
+        <dd class="col-sm-9">L'hedge ratio non è fisso: viene ricalcolato periodicamente usando solo dati passati (mai il futuro), per adattarsi a come cambia la relazione fra i due asset nel tempo.</dd>
+        <dt class="col-sm-3">Z-score lookback</dt>
+        <dd class="col-sm-9">Su quante barre recenti si calcola la media/deviazione standard dello spread, per misurare quanto è "anomalo" il suo valore attuale (lo z-score).</dd>
+        <dt class="col-sm-3">Soglia entrata / uscita (|z|)</dt>
+        <dd class="col-sm-9">Si apre una posizione quando lo z-score supera la soglia di entrata (spread anomalo), si chiude quando rientra sotto la soglia di uscita (spread tornato normale).</dd>
+        <dt class="col-sm-3">Position size % (per gamba)</dt>
+        <dd class="col-sm-9">La percentuale di capitale investita su CIASCUNA delle due gambe della posizione (long e short hanno lo stesso importo).</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Configurazione</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Exchange</label>
+                <select class="form-select" @bind="_exchange" disabled="@_busy">
+                    @foreach (var ex in Enum.GetValues<ExchangeName>())
+                    { <option value="@ex">@ex</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol Y</label>
+                <input class="form-control" list="pt_symbols" @bind="_symbolY" style="width: 10rem;" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol X</label>
+                <input class="form-control" list="pt_symbols" @bind="_symbolX" style="width: 10rem;" disabled="@_busy" />
+                <datalist id="pt_symbols">
+                    @foreach (var s in _knownSymbols) { <option value="@s"></option> }
+                </datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                    @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+            </div>
+        </div>
+
+        <hr />
+
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Lookback ristima (barre)</label>
+                <input type="number" class="form-control" style="width: 9rem;" @bind="_lookbackWindow" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Ricalibra ogni (barre)</label>
+                <input type="number" class="form-control" style="width: 9rem;" @bind="_recalibrationInterval" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Z-score lookback</label>
+                <input type="number" class="form-control" style="width: 9rem;" @bind="_zScoreLookback" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Soglia entrata (|z|)</label>
+                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_entryZScore" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Soglia uscita (|z|)</label>
+                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_exitZScore" disabled="@_busy" />
+            </div>
+        </div>
+
+        <div class="row g-3 align-items-end mt-1">
+            <div class="col-auto">
+                <label class="form-label">Capitale iniziale</label>
+                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_initialCapital" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Position size % (per gamba)</label>
+                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_positionSizePercent" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Fee %</label>
+                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Analizza e Backtest
+                </button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_cointegration is not null)
+{
+    <div class="row g-3 mb-3">
+        <div class="col-auto">@MetricCard("Cointegrate?", _cointegration.IsCointegrated ? "Sì" : "No", _cointegration.IsCointegrated)</div>
+        <div class="col-auto">@MetricCard("ADF stat", _cointegration.AdfStatistic.ToString("F3"))</div>
+        <div class="col-auto">@MetricCard("Hedge ratio (full-sample)", _cointegration.HedgeRatio.ToString("F3"))</div>
+    </div>
+}
+
+@if (_result is not null)
+{
+    <div class="row g-3 mb-3">
+        @{ var positive = _result.TotalReturnPercent >= 0; }
+        <div class="col-auto">@MetricCard("Final Capital", $"{_result.FinalCapital:N2}")</div>
+        <div class="col-auto">@MetricCard("Total Return", $"{_result.TotalReturnPercent:N2}%", positive)</div>
+        <div class="col-auto">@MetricCard("Win Rate", $"{_result.WinRate:N1}%")</div>
+        <div class="col-auto">@MetricCard("Max Drawdown", $"{_result.MaxDrawdownPercent:N2}%", false)</div>
+        <div class="col-auto">@MetricCard("Trades", $"{_result.TotalTrades} ({_result.WinningTrades}W/{_result.LosingTrades}L)")</div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Equity curve</div>
+        <div class="card-body">
+            @if (_equitySeries.Count > 0)
+            {
+                <OhlcvChart ShowCandles="false" Indicators="_equitySeries" Height="300" />
+            }
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Spread z-score (rolling, walk-forward)</div>
+        <div class="card-body">
+            @if (_zScoreSeries.Count > 0)
+            {
+                <OhlcvChart ShowCandles="false" Indicators="_zScoreSeries" Height="240" />
+            }
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Trade list (@_result.Trades.Count)</div>
+        <div class="table-responsive" style="max-height: 460px; overflow:auto;">
+            <table class="table table-sm table-striped mb-0">
+                <thead class="table-light" style="position: sticky; top: 0;">
+                    <tr>
+                        <th>#</th><th>Lato</th><th>Entry</th><th>Exit</th>
+                        <th class="text-end">Y entry/exit</th><th class="text-end">X entry/exit</th>
+                        <th class="text-end">Hedge ratio</th><th class="text-end">PnL</th><th class="text-end">PnL %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ var idx = 0; }
+                    @foreach (var t in _result.Trades.Take(500))
+                    {
+                        idx++;
+                        <tr>
+                            <td>@idx</td>
+                            <td><span class="badge @(t.Side == PairsPositionSide.LongSpread ? "bg-success" : "bg-danger")">@(t.Side == PairsPositionSide.LongSpread ? "Long Y/Short X" : "Short Y/Long X")</span></td>
+                            <td>@t.EntryTime.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td>@(t.ExitTime?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                            <td class="text-end">@t.EntryPriceY.ToString("N2") / @(t.ExitPriceY?.ToString("N2") ?? "—")</td>
+                            <td class="text-end">@t.EntryPriceX.ToString("N2") / @(t.ExitPriceX?.ToString("N2") ?? "—")</td>
+                            <td class="text-end">@t.HedgeRatioAtEntry.ToString("F3")</td>
+                            <td class="text-end @(t.Pnl >= 0 ? "text-success" : "text-danger")">@t.Pnl.ToString("N2")</td>
+                            <td class="text-end @(t.PnlPercent >= 0 ? "text-success" : "text-danger")">@t.PnlPercent.ToString("N2")%</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbolY = "ETH/USDT";
+    private string _symbolX = "BTC/USDT";
+    private string _timeframe = "1h";
+    private DateTime _from = DateTime.UtcNow.Date.AddDays(-180);
+    private DateTime _to = DateTime.UtcNow.Date;
+
+    private int _lookbackWindow = 90;
+    private int _recalibrationInterval = 30;
+    private int _zScoreLookback = 20;
+    private decimal _entryZScore = 2.0m;
+    private decimal _exitZScore = 0.5m;
+
+    private decimal _initialCapital = 10_000m;
+    private decimal _positionSizePercent = 10m;
+    private decimal _feePercent = 0.1m;
+
+    private List<string> _knownSymbols = new();
+    private CointegrationResult? _cointegration;
+    private PairsBacktestResult? _result;
+    private List<IndicatorSeries> _equitySeries = new();
+    private List<IndicatorSeries> _zScoreSeries = new();
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    private async Task RunAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbolY) || string.IsNullOrWhiteSpace(_symbolX) || _symbolY.Trim() == _symbolX.Trim() || _to <= _from)
+        {
+            SetStatus("Controlla i due symbol (devono essere diversi) e l'intervallo date.", error: true);
+            return;
+        }
+
+        _busy = true;
+        _isError = false;
+        _status = null;
+        _cointegration = null;
+        _result = null;
+        _equitySeries = new();
+        _zScoreSeries = new();
+
+        try
+        {
+            var fromUtc = DateTime.SpecifyKind(_from, DateTimeKind.Utc);
+            var toUtc = DateTime.SpecifyKind(_to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
+
+            List<OhlcvData> candlesY, candlesX;
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                candlesY = await db.OhlcvData
+                    .Where(c => c.Symbol == _symbolY.Trim() && c.Timeframe == _timeframe && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+                    .OrderBy(c => c.TimestampUtc).ToListAsync();
+                candlesX = await db.OhlcvData
+                    .Where(c => c.Symbol == _symbolX.Trim() && c.Timeframe == _timeframe && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+                    .OrderBy(c => c.TimestampUtc).ToListAsync();
+            }
+
+            if (candlesY.Count < _lookbackWindow + _zScoreLookback + 10 || candlesX.Count < _lookbackWindow + _zScoreLookback + 10)
+            {
+                SetStatus("Dati insufficienti per uno o entrambi i symbol nel range selezionato.", error: true);
+                return;
+            }
+
+            // Screening di cointegrazione full-sample (informativo: indica se la coppia ha senso nel periodo scelto).
+            var (alignedY, alignedX) = PairsCandleAligner.Align(candlesY, candlesX);
+            if (alignedY.Count < _lookbackWindow + _zScoreLookback + 10)
+            {
+                SetStatus($"Solo {alignedY.Count} candele allineate per timestamp fra i due symbol: intervallo insufficiente.", error: true);
+                return;
+            }
+            _cointegration = new EngleGrangerCointegrationTest().Test(
+                alignedY.Select(c => c.Close).ToList(), alignedX.Select(c => c.Close).ToList());
+
+            var config = new PairsBacktestConfiguration
+            {
+                SymbolY = _symbolY.Trim(),
+                SymbolX = _symbolX.Trim(),
+                InitialCapital = _initialCapital,
+                PositionSizePercent = _positionSizePercent,
+                FeePercent = _feePercent,
+                LookbackWindow = _lookbackWindow,
+                RecalibrationInterval = _recalibrationInterval,
+                ZScoreLookback = _zScoreLookback,
+                EntryZScore = _entryZScore,
+                ExitZScore = _exitZScore,
+            };
+
+            _result = Engine.RunBacktest(candlesY, candlesX, config);
+
+            if (_result.CandlesEvaluated == 0)
+            {
+                SetStatus("Nessuna candela allineata fra i due symbol nel range richiesto.", error: true);
+                return;
+            }
+
+            _equitySeries = new()
+            {
+                new IndicatorSeries
+                {
+                    Title = "Equity",
+                    Color = "#2962FF",
+                    Type = IndicatorSeriesType.Line,
+                    Points = _result.EquityCurve
+                        .Select(p => new IndicatorPoint(new DateTimeOffset(DateTime.SpecifyKind(p.Timestamp, DateTimeKind.Utc)).ToUnixTimeSeconds(), (double)p.Capital))
+                        .ToList(),
+                },
+            };
+
+            // Ricalcola lo z-score (stesso calcolo dell'engine) solo per la visualizzazione.
+            var analysis = new RollingPairsSpreadAnalyzer().Analyze(
+                alignedY.Select(c => c.Close).ToList(), alignedX.Select(c => c.Close).ToList(),
+                _lookbackWindow, _recalibrationInterval, _zScoreLookback);
+            var times = alignedY.Select(c => new DateTimeOffset(DateTime.SpecifyKind(c.TimestampUtc, DateTimeKind.Utc)).ToUnixTimeSeconds()).ToList();
+            _zScoreSeries = new()
+            {
+                new IndicatorSeries
+                {
+                    Title = "Z-score",
+                    Color = "#8E24AA",
+                    Type = IndicatorSeriesType.Line,
+                    Scale = "osc",
+                    Points = times.Zip(analysis.ZScore, (t, z) => (t, z))
+                        .Where(p => p.z.HasValue)
+                        .Select(p => new IndicatorPoint(p.t, p.z!.Value))
+                        .ToList(),
+                },
+            };
+
+            SetStatus($"Backtest completato su {_result.CandlesEvaluated} candele allineate.", error: false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void SetStatus(string text, bool error)
+    {
+        _status = text;
+        _isError = error;
+    }
+
+    private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
+    {
+        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
+        builder.AddMarkupContent(0, $@"
+            <div class='card text-center' style='min-width: 9rem;'>
+                <div class='card-body py-2'>
+                    <div class='text-muted small'>{label}</div>
+                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
+                </div>
+            </div>");
+    };
+}

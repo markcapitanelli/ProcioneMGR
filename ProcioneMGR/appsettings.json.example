@@ -1,0 +1,87 @@
+{
+  "Database": {
+    "_comment_Provider": "SQLite (dev/default) oppure PostgreSQL (prod). Sovrascrivibile via env Database__Provider.",
+    "Provider": "SQLite"
+  },
+  "ConnectionStrings": {
+    "DefaultConnection": "DataSource=Data/app.db;Cache=Shared",
+    "PostgresConnection": "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=__CHANGE_ME__"
+  },
+  "Security": {
+    "_comment_MasterKey": "Chiave AES-256 (base64 di 32 byte). NON committare il valore reale. Dev: User Secrets. Prod: env PROCIONE_MGR_MASTER_KEY / Key Vault. Genera con: [Convert]::ToBase64String((1..32|%{Get-Random -Max 256}))",
+    "MasterKey": "__CHANGE_ME_BASE64_32_BYTES__"
+  },
+  "Llm": {
+    "_comment": "Layer AI di supervisione del ciclo di ricerca. La API key NON va qui: si legge SOLO dalla variabile d'ambiente ANTHROPIC_API_KEY (SDK Anthropic). Enabled=true: il layer parte SOLO se la env ANTHROPIC_API_KEY e' presente (se manca resta inattivo senza errori). Confine di sicurezza: il layer AI e' SOLO advisory, non puo' avviare Live ne' bypassare SafetyChecker.",
+    "Enabled": true,
+    "Model": "claude-opus-4-8",
+    "MaxTokens": 4096,
+    "PollIntervalMinutes": 5
+  },
+  "EnsembleComparator": {
+    "_comment": "Confronto oggettivo 'nuovo ensemble vs corrente' per la ri-applica automatica. MinSharpeImprovementPercent e' l'hysteresis: sotto questa soglia di miglioramento l'ensemble corrente resta (niente cambi per rumore).",
+    "MinSharpeImprovementPercent": 10,
+    "MinRiskFactorImprovementPercent": 15,
+    "MinLegs": 2,
+    "MinDistinctSymbols": 2
+  },
+  "AutoReapply": {
+    "_comment": "Ri-applica automatica dell'ensemble migliore trovato dai run schedulati. Enabled=true: lo scheduler, dopo ogni run schedulato completato, se il nuovo ensemble batte il corrente (comparatore con hysteresis) E il supervisore non pone veto, lo schiera da solo sulle corsie in Paper. Scrive solo configurazione: mai avvia trading, mai Live.",
+    "Enabled": true,
+    "LookbackDays": 7,
+    "MaxPerTick": 3
+  },
+  "PipelineSupervisor": {
+    "_comment": "Supervisore AI del ciclo di ri-applica. Provider 'Claude' usa ILlmClient + ANTHROPIC_API_KEY; se la key manca degrada in automatico ad 'approva' (decidono le metriche), senza errori. Il supervisore puo' solo porre un VETO a una sostituzione, mai forzarla, mai avviare trading. La API key NON va qui: solo env ANTHROPIC_API_KEY.",
+    "Provider": "Claude",
+    "TimeoutSeconds": 30
+  },
+  "PromotionEvaluator": {
+    "_comment": "Auto-promozione Paper->Testnet quando una corsia performa bene abbastanza a lungo. MAI a Live (Testnet->Live resta manuale). AutoDemoteToPaper retrocede una corsia Testnet se l'edge svanisce.",
+    "MinSharpeRealized": 0.8,
+    "MinTradeCount": 30,
+    "MaxDrawdownPercent": 15,
+    "MinObservationWeeks": 3,
+    "MinWinRate": 0.45,
+    "AutoPromoteToTestnet": true,
+    "NotifyOnPromotion": true,
+    "HardMaxDrawdownPercent": 20,
+    "AutoDemoteToPaper": true,
+    "DemoteSharpeThreshold": 0.5,
+    "DemoteMinWeeks": 2,
+    "EvaluationIntervalHours": 6
+  },
+  "MarketData": {
+    "Enabled": true,
+    "SyncIntervalMinutes": 5,
+    "DefaultBackfillDays": 7
+  },
+  "MarketRegime": {
+    "Enabled": true,
+    "RetrainingIntervalDays": 7
+  },
+  "Trading": {
+    "Safety": {
+      "MaxPositionSizePercent": 10.0,
+      "MaxTotalExposurePercent": 50.0,
+      "MaxDailyLossPercent": 5.0,
+      "MaxDrawdownPercent": 20.0,
+      "MaxOpenPositions": 5,
+      "MinOrderIntervalSeconds": 10,
+      "RequireManualConfirmationForLive": true
+    },
+    "LiveExecution": {
+      "Enabled": false,
+      "DefaultWindowMinutes": 5,
+      "WorkerTickSeconds": 15,
+      "AbandonGraceMinutes": 5
+    }
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}

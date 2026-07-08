@@ -1,0 +1,31 @@
+﻿@inherits LayoutComponentBase
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4">
+            <span class="text-muted small">Gestione dati di mercato &amp; backtesting</span>
+            <AuthorizeView>
+                <Authorized>
+                    <a href="Account/Manage"><i class="bi bi-person-circle me-1"></i>@context.User.Identity?.Name</a>
+                </Authorized>
+                <NotAuthorized>
+                    <a href="Account/Login">Login</a>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>

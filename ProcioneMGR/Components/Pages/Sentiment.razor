@@ -1,0 +1,699 @@
+@page "/sentiment"
+@rendermode InteractiveServer
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.AltData
+@using ProcioneMGR.Services.Alpha
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Sentiment
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IAltDataSyncService SyncService
+@inject IFactorEvaluator FactorEvaluator
+@inject INewsImpactAnalyzer ImpactAnalyzer
+@inject IEnumerable<IAltDataSource> AltDataSources
+
+<PageTitle>Sentiment</PageTitle>
+
+<h1>Notizie &amp; Sentiment <span class="badge bg-secondary">Fase D</span></h1>
+
+<GuidaPanel Title="Sentiment — cosa dicono le notizie, e se hanno davvero mosso il prezzo">
+    <p>
+        Oltre ai numeri (prezzi, volumi), i mercati reagiscono anche a <strong>notizie</strong>:
+        una causa legale, un hack, un dato macroeconomico, il posizionamento degli speculatori al
+        dettaglio. Questa pagina scarica notizie da fonti crypto (CoinDesk, Cointelegraph, The
+        Block, Decrypt) e forex/macro (FXStreet, calendario economico, sentiment retail), le
+        classifica per categoria e assegna un punteggio di sentiment positivo/negativo, poi
+        verifica empiricamente — non a intuito — se e quanto quelle notizie hanno davvero spostato
+        il prezzo in passato.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">1. Sincronizza notizie</dt>
+        <dd class="col-sm-9">Scarica le notizie più recenti da tutte le fonti configurate (elencate come etichette) e le salva nel database, classificandole ed assegnando un punteggio di sentiment. Va rifatto periodicamente per accumulare storico.</dd>
+        <dt class="col-sm-3">Categoria</dt>
+        <dd class="col-sm-9">Regulatory (azioni legali/normative), Security (hack/furti), Institutional (flussi istituzionali), CentralBanks (Fed/BCE/tassi), Macro (dati economici), EconomicCalendar (eventi programmati), RetailSentiment (posizionamento long/short dei piccoli investitori), Other (tutto il resto).</dd>
+        <dt class="col-sm-3">Sentiment</dt>
+        <dd class="col-sm-9">Un punteggio da -1 (molto negativo) a +1 (molto positivo) calcolato analizzando le parole del titolo/riassunto — uno strumento semplice ma testabile, in attesa di un futuro sistema più sofisticato basato su intelligenza artificiale.</dd>
+        <dt class="col-sm-3">Sentiment retail (barre)</dt>
+        <dd class="col-sm-9">
+            La percentuale di trader al dettaglio posizionati long vs short su ciascun simbolo. È
+            considerato un indicatore <strong>contrarian</strong>: storicamente, quando la
+            maggioranza dei piccoli investitori è tutta da un lato, il mercato tende a muoversi
+            nella direzione opposta.
+        </dd>
+        <dt class="col-sm-3">2. Valuta il fattore Sentiment</dt>
+        <dd class="col-sm-9">
+            Trasforma le notizie in un "fattore" numerico (media del sentiment recente) e misura
+            statisticamente se è davvero collegato ai movimenti di prezzo futuri (Information
+            Coefficient) — stessa logica di un fattore alpha tradizionale, solo che i suoi dati di
+            partenza sono testuali invece che tecnici.
+        </dd>
+        <dt class="col-sm-3">4. Analisi di impatto storico</dt>
+        <dd class="col-sm-9">
+            Per ogni notizia ingerita, misura quanto si è mosso davvero il prezzo nell'ora, nelle
+            4 ore e nelle 24 ore successive, aggregando i risultati per categoria e per fonte — la
+            risposta concreta a "questa categoria di notizie muove per davvero il mercato, o è solo
+            rumore?".
+        </dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">1. Sincronizza notizie</div>
+    <div class="card-body">
+        <p class="mb-2">
+            Fonti configurate:
+            @foreach (var name in AltDataSources.Select(s => s.Name))
+            {
+                <span class="badge bg-light text-dark border me-1">@name</span>
+            }
+        </p>
+        <button class="btn btn-primary" @onclick="SyncAsync" disabled="@_syncing">
+            @if (_syncing)
+            {
+                <span class="spinner-border spinner-border-sm me-1"></span>
+            }
+            Sincronizza ora
+        </button>
+        <span class="text-muted small ms-2">On-demand: nessuno scheduler in background, per non avviare chiamate di rete periodiche senza un'azione esplicita.</span>
+
+        @if (!string.IsNullOrEmpty(_syncStatus))
+        {
+            <div class="alert @(_syncError ? "alert-danger" : "alert-success") mt-3 mb-0">@_syncStatus</div>
+        }
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">Notizie ingerite (ultime @_news.Count di @_totalNewsCount)</div>
+    <div class="card-body py-2 border-bottom">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label small mb-0">Categoria</label>
+                <select class="form-select form-select-sm" @bind="_categoryFilter">
+                    <option value="">Tutte</option>
+                    @foreach (var c in DistinctCategories())
+                    { <option value="@c">@c</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label small mb-0">Fonte</label>
+                <select class="form-select form-select-sm" @bind="_sourceFilter">
+                    <option value="">Tutte</option>
+                    @foreach (var s in DistinctSources())
+                    { <option value="@s">@s</option> }
+                </select>
+            </div>
+        </div>
+    </div>
+    <div class="table-responsive" style="max-height: 420px; overflow:auto;">
+        <table class="table table-sm table-striped mb-0">
+            <thead class="table-light" style="position: sticky; top: 0;">
+                <tr>
+                    <th>Quando (UTC)</th><th>Fonte</th><th>Categoria</th><th>Simboli</th>
+                    <th class="text-end">Sentiment</th><th>Titolo</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var n in FilteredNews())
+                {
+                    <tr>
+                        <td class="text-nowrap">@n.TimestampUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>@n.Source</td>
+                        <td><span class="badge @CategoryBadgeClass(n.Category)">@n.Category</span></td>
+                        <td>
+                            @foreach (var sym in DeserializeSymbols(n.SymbolsJson))
+                            {
+                                <span class="badge bg-secondary me-1">@sym</span>
+                            }
+                        </td>
+                        <td class="text-end @SentimentClass(n.SentimentScore)">@(n.SentimentScore?.ToString("F2") ?? "—")</td>
+                        <td>
+                            @if (!string.IsNullOrEmpty(n.Url))
+                            {
+                                <a href="@n.Url" target="_blank" rel="noopener noreferrer">@n.Title</a>
+                            }
+                            else
+                            {
+                                @n.Title
+                            }
+                        </td>
+                    </tr>
+                }
+                @if (_news.Count == 0)
+                {
+                    <tr><td colspan="6" class="text-muted text-center py-3">Nessuna notizia ingerita ancora. Premi "Sincronizza ora".</td></tr>
+                }
+                else if (FilteredNews().Count == 0)
+                {
+                    <tr><td colspan="6" class="text-muted text-center py-3">Nessuna notizia corrisponde ai filtri selezionati.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@{
+    var retailSnapshots = LatestRetailSentimentSnapshots();
+}
+@if (retailSnapshots.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-header">Sentiment retail (ultima istantanea per simbolo/fonte)</div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Indicatore <strong>contrarian</strong>: il posizionamento retail è storicamente sul lato
+                sbagliato ai punti di svolta. Barra verde = maggioranza long, rossa = maggioranza short.
+            </p>
+            <div class="row g-3">
+                @foreach (var snap in retailSnapshots)
+                {
+                    var pctLong = (snap.SentimentScore ?? 0m) * 50m + 50m;
+                    <div class="col-md-6 col-lg-4">
+                        <div class="d-flex justify-content-between small mb-1">
+                            <span class="fw-semibold">@snap.Symbol</span>
+                            <span class="text-muted">@snap.Source</span>
+                        </div>
+                        <div class="progress" style="height: 1.25rem;" title="@pctLong.ToString("F1")% long">
+                            <div class="progress-bar bg-success" style="width:@(pctLong)%">@pctLong.ToString("F0")% long</div>
+                            <div class="progress-bar bg-danger" style="width:@(100m - pctLong)%">@((100m - pctLong).ToString("F0"))% short</div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+<div class="card mb-3">
+    <div class="card-header">2. Valuta il fattore Sentiment (Information Coefficient)</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Exchange</label>
+                <select class="form-select" @bind="_exchange" disabled="@_evaluating">
+                    @foreach (var ex in Enum.GetValues<ExchangeName>())
+                    { <option value="@ex">@ex</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" list="sent_symbols" @bind="_symbol" style="width: 11rem;" disabled="@_evaluating" />
+                <datalist id="sent_symbols">
+                    @foreach (var s in _knownSymbols) { <option value="@s"></option> }
+                </datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_evaluating">
+                    @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_evaluating" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_evaluating" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Lookback (ore)</label>
+                <input type="number" step="1" min="1" class="form-control" style="width: 8rem;" @bind="_lookbackHours" disabled="@_evaluating" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Orizzonte forward</label>
+                <input type="number" step="1" min="1" class="form-control" style="width: 8rem;" @bind="_forwardHorizon" disabled="@_evaluating" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-success" @onclick="EvaluateAsync" disabled="@_evaluating">
+                    @if (_evaluating)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1"></span>
+                    }
+                    Valuta fattore
+                </button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_evalStatus))
+        {
+            <div class="alert @(_evalError ? "alert-danger" : "alert-success") mt-3 mb-0">@_evalStatus</div>
+        }
+    </div>
+</div>
+
+@if (_evalResult is not null)
+{
+    <div class="row g-3 mb-3">
+        <div class="col-auto">@MetricCard("Osservazioni", $"{_evalResult.Observations}")</div>
+        <div class="col-auto">@MetricCard("IC (Spearman)", _evalResult.InformationCoefficient.ToString("F4"), _evalResult.InformationCoefficient > 0)</div>
+        <div class="col-auto">@MetricCard("Pearson", _evalResult.PearsonCorrelation.ToString("F4"))</div>
+        <div class="col-auto">@MetricCard("Information Ratio", _evalResult.InformationRatio.ToString("F3"))</div>
+        <div class="col-auto">@MetricCard("IC consistency", _evalResult.IcConsistency.ToString("P0"))</div>
+        <div class="col-auto">@MetricCard("Spread top-bottom", _evalResult.TopMinusBottomSpread.ToString("P3"), _evalResult.TopMinusBottomSpread > 0)</div>
+    </div>
+
+    @if (_evalResult.Observations < 30)
+    {
+        <div class="alert alert-warning">
+            Solo @_evalResult.Observations osservazioni valide (candela + notizia nella finestra di lookback entrambe presenti):
+            con così poca copertura di notizie storiche per questo simbolo, l'IC non è statisticamente affidabile — è un limite
+            reale dei dati (poche sincronizzazioni finora), non della logica del fattore. Sincronizza più spesso e su un range
+            più ampio per accumulare storico.
+        </div>
+    }
+
+    <div class="row g-3">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">Rendimento forward medio per quantile</div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Quantile</th><th class="text-end">N</th><th class="text-end">Rend. forward medio</th></tr></thead>
+                        <tbody>
+                            @foreach (var q in _evalResult.QuantileReturns)
+                            {
+                                <tr>
+                                    <td>@q.Quantile</td>
+                                    <td class="text-end">@q.Count</td>
+                                    <td class="text-end @(q.MeanForwardReturn >= 0 ? "text-success" : "text-danger")">@q.MeanForwardReturn.ToString("P3")</td>
+                                </tr>
+                            }
+                            @if (_evalResult.QuantileReturns.Count == 0)
+                            {
+                                <tr><td colspan="3" class="text-muted text-center py-2">Dati insufficienti per i quantili.</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">Decadimento dell'IC per orizzonte</div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Orizzonte</th><th class="text-end">IC</th></tr></thead>
+                        <tbody>
+                            @foreach (var d in _evalResult.IcDecay)
+                            {
+                                <tr>
+                                    <td>@d.Horizon</td>
+                                    <td class="text-end">@d.InformationCoefficient.ToString("F4")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="card mb-3">
+    <div class="card-header">4. Analisi di impatto storico</div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Per ogni notizia/evento ingerito, misura il movimento del prezzo di
+            <strong>@_symbol</strong> (simbolo/periodo configurati sopra) nelle finestre
+            [t, t+1h], [t, t+4h], [t, t+24h] dal timestamp della notizia, aggregando per categoria
+            e per fonte. Per il sentiment retail confronta anche i casi in cui FXSSI e MyFxBook
+            concordano (entrambi oltre ±70% da un lato) contro i casi in cui divergono.
+        </p>
+        <button class="btn btn-outline-primary" @onclick="AnalyzeImpactAsync" disabled="@_analyzingImpact">
+            @if (_analyzingImpact)
+            {
+                <span class="spinner-border spinner-border-sm me-1"></span>
+            }
+            Analizza impatto storico
+        </button>
+
+        @if (!string.IsNullOrEmpty(_impactStatus))
+        {
+            <div class="alert @(_impactError ? "alert-danger" : "alert-success") mt-3 mb-0">@_impactStatus</div>
+        }
+    </div>
+</div>
+
+@if (_impactReport is not null)
+{
+    <div class="row g-3 mb-3">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">Impatto storico per categoria (rendimento medio di @_impactReport.ReferenceSymbol)</div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Categoria</th><th class="text-end">N</th><th class="text-end">1h</th><th class="text-end">4h</th><th class="text-end">24h</th></tr></thead>
+                        <tbody>
+                            @foreach (var c in _impactReport.ByCategory)
+                            {
+                                <tr>
+                                    <td>@c.Category</td>
+                                    <td class="text-end">@c.Stats.Observations</td>
+                                    <td class="text-end @ReturnClass(c.Stats.AvgReturn1h)">@c.Stats.AvgReturn1h.ToString("P2")</td>
+                                    <td class="text-end @ReturnClass(c.Stats.AvgReturn4h)">@c.Stats.AvgReturn4h.ToString("P2")</td>
+                                    <td class="text-end @ReturnClass(c.Stats.AvgReturn24h)">@c.Stats.AvgReturn24h.ToString("P2")</td>
+                                </tr>
+                            }
+                            @if (_impactReport.ByCategory.Count == 0)
+                            {
+                                <tr><td colspan="5" class="text-muted text-center py-2">Nessun dato nel range analizzato.</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">Impatto storico per fonte</div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Fonte</th><th class="text-end">N</th><th class="text-end">1h</th><th class="text-end">4h</th><th class="text-end">24h</th></tr></thead>
+                        <tbody>
+                            @foreach (var s in _impactReport.BySource)
+                            {
+                                <tr>
+                                    <td>@s.Source</td>
+                                    <td class="text-end">@s.Stats.Observations</td>
+                                    <td class="text-end @ReturnClass(s.Stats.AvgReturn1h)">@s.Stats.AvgReturn1h.ToString("P2")</td>
+                                    <td class="text-end @ReturnClass(s.Stats.AvgReturn4h)">@s.Stats.AvgReturn4h.ToString("P2")</td>
+                                    <td class="text-end @ReturnClass(s.Stats.AvgReturn24h)">@s.Stats.AvgReturn24h.ToString("P2")</td>
+                                </tr>
+                            }
+                            @if (_impactReport.BySource.Count == 0)
+                            {
+                                <tr><td colspan="5" class="text-muted text-center py-2">Nessun dato nel range analizzato.</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Confronto incrociato sentiment retail (FXSSI vs MyFxBook, rendimento medio di @_impactReport.ReferenceSymbol)</div>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Simbolo</th><th class="text-end">Istantanee accoppiate</th><th class="text-end">Concordanza</th>
+                        <th class="text-end">Rend. 24h se concordi long</th><th class="text-end">Rend. 24h se concordi short</th><th class="text-end">Rend. 24h se in disaccordo</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _impactReport.RetailSentimentCrossSource)
+                    {
+                        <tr>
+                            <td>@r.Symbol</td>
+                            <td class="text-end">@r.MatchedSnapshots</td>
+                            <td class="text-end">@r.AgreementCount / @r.MatchedSnapshots</td>
+                            <td class="text-end @ReturnClass(r.WhenBothLong.AvgReturn24h)">@(r.WhenBothLong.Observations > 0 ? r.WhenBothLong.AvgReturn24h.ToString("P2") : "—")</td>
+                            <td class="text-end @ReturnClass(r.WhenBothShort.AvgReturn24h)">@(r.WhenBothShort.Observations > 0 ? r.WhenBothShort.AvgReturn24h.ToString("P2") : "—")</td>
+                            <td class="text-end @ReturnClass(r.WhenDisagree.AvgReturn24h)">@(r.WhenDisagree.Observations > 0 ? r.WhenDisagree.AvgReturn24h.ToString("P2") : "—")</td>
+                        </tr>
+                    }
+                    @if (_impactReport.RetailSentimentCrossSource.Count == 0)
+                    {
+                        <tr><td colspan="6" class="text-muted text-center py-2">Nessuna coppia FXSSI/MyFxBook sullo stesso simbolo nella stessa ora, nel range analizzato.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer text-muted small">
+            Nota: il rendimento misurato è sempre quello di <strong>@_impactReport.ReferenceSymbol</strong> (l'unico con
+            storico prezzi in piattaforma), non della coppia forex a cui si riferisce il sentiment — vedi il commento
+            architetturale in <code>NewsImpactAnalyzer</code> per il perché.
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly JsonSerializerOptions JsonOptions = new();
+
+    private bool _syncing;
+    private bool _syncError;
+    private string? _syncStatus;
+
+    private List<AltDataPoint> _news = new();
+    private int _totalNewsCount;
+
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1h";
+    private DateTime _from = DateTime.UtcNow.Date.AddDays(-30);
+    private DateTime _to = DateTime.UtcNow.Date;
+    private int _lookbackHours = 24;
+    private int _forwardHorizon = 1;
+
+    private List<string> _knownSymbols = new();
+    private bool _evaluating;
+    private bool _evalError;
+    private string? _evalStatus;
+    private FactorEvaluationResult? _evalResult;
+
+    private string _categoryFilter = "";
+    private string _sourceFilter = "";
+
+    private bool _analyzingImpact;
+    private bool _impactError;
+    private string? _impactStatus;
+    private NewsImpactReport? _impactReport;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        await LoadNewsAsync();
+    }
+
+    private async Task LoadNewsAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _totalNewsCount = await db.AltDataPoints.CountAsync();
+        _news = await db.AltDataPoints.OrderByDescending(n => n.TimestampUtc).Take(200).ToListAsync();
+    }
+
+    private List<string> DistinctCategories() => _news.Select(n => n.Category).Distinct().OrderBy(c => c).ToList();
+
+    private List<string> DistinctSources() => _news.Select(n => n.Source).Distinct().OrderBy(s => s).ToList();
+
+    private List<AltDataPoint> FilteredNews() => _news
+        .Where(n => string.IsNullOrEmpty(_categoryFilter) || n.Category == _categoryFilter)
+        .Where(n => string.IsNullOrEmpty(_sourceFilter) || n.Source == _sourceFilter)
+        .ToList();
+
+    /// <summary>Ultima istantanea per (simbolo, fonte) fra le notizie caricate (ultime 200): sufficiente per la gauge, che mostra lo stato attuale non lo storico.</summary>
+    private List<RetailSnapshot> LatestRetailSentimentSnapshots() => _news
+        .Where(n => n.Category == nameof(NewsCategory.RetailSentiment))
+        .GroupBy(n => (Symbol: DeserializeSymbols(n.SymbolsJson).FirstOrDefault() ?? "?", n.Source))
+        .Select(g => g.OrderByDescending(n => n.TimestampUtc).First())
+        .OrderBy(n => DeserializeSymbols(n.SymbolsJson).FirstOrDefault())
+        .ThenBy(n => n.Source)
+        .Select(n => new RetailSnapshot(DeserializeSymbols(n.SymbolsJson).FirstOrDefault() ?? "?", n.Source, n.SentimentScore))
+        .ToList();
+
+    private sealed record RetailSnapshot(string Symbol, string Source, decimal? SentimentScore);
+
+    private async Task SyncAsync()
+    {
+        _syncing = true;
+        _syncError = false;
+        _syncStatus = null;
+        try
+        {
+            var inserted = await SyncService.SyncAllAsync(CancellationToken.None);
+            await LoadNewsAsync();
+            _syncStatus = inserted > 0
+                ? $"Sincronizzazione completata: {inserted} nuove notizie ingerite."
+                : "Sincronizzazione completata: nessuna notizia nuova (già tutte presenti o fonti senza aggiornamenti).";
+        }
+        catch (Exception ex)
+        {
+            _syncError = true;
+            _syncStatus = $"Errore nella sincronizzazione: {ex.Message}";
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    private async Task EvaluateAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbol) || _to <= _from)
+        {
+            SetEvalStatus("Controlla symbol e intervallo date.", error: true);
+            return;
+        }
+
+        _evaluating = true;
+        _evalError = false;
+        _evalStatus = null;
+        _evalResult = null;
+
+        try
+        {
+            var fromUtc = DateTime.SpecifyKind(_from, DateTimeKind.Utc);
+            var toUtc = DateTime.SpecifyKind(_to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
+
+            List<OhlcvData> candles;
+            List<AltDataPoint> allNews;
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                candles = await db.OhlcvData
+                    .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+                    .OrderBy(c => c.TimestampUtc).ToListAsync();
+                allNews = await db.AltDataPoints.ToListAsync();
+            }
+
+            if (candles.Count < 30)
+            {
+                SetEvalStatus("Dati insufficienti nel range selezionato (servono almeno 30 candele).", error: true);
+                return;
+            }
+
+            var baseAsset = _symbol.Split('/')[0].Trim().ToUpperInvariant();
+            var scoredNews = allNews
+                .Select(n => new ScoredNewsItem(
+                    DateTime.SpecifyKind(n.TimestampUtc, DateTimeKind.Utc),
+                    n.SentimentScore ?? 0m,
+                    DeserializeSymbols(n.SymbolsJson)))
+                .ToList();
+
+            var factor = new SentimentAlphaFactor(scoredNews, symbolFilter: baseAsset);
+            var parameters = new Dictionary<string, decimal> { ["LookbackHours"] = _lookbackHours };
+            var config = new FactorEvaluationConfig { ForwardHorizon = Math.Max(1, _forwardHorizon) };
+
+            _evalResult = FactorEvaluator.Evaluate(factor, candles, parameters, config);
+
+            SetEvalStatus($"Fattore valutato su {candles.Count} candele ({baseAsset}) e {scoredNews.Count} notizie totali in archivio.", error: false);
+        }
+        catch (Exception ex)
+        {
+            SetEvalStatus($"Errore nella valutazione: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _evaluating = false;
+        }
+    }
+
+    private async Task AnalyzeImpactAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbol) || _to <= _from)
+        {
+            _impactError = true;
+            _impactStatus = "Controlla symbol e intervallo date (sezione 2 sopra).";
+            return;
+        }
+
+        _analyzingImpact = true;
+        _impactError = false;
+        _impactStatus = null;
+        _impactReport = null;
+
+        try
+        {
+            var fromUtc = DateTime.SpecifyKind(_from, DateTimeKind.Utc);
+            var toUtc = DateTime.SpecifyKind(_to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
+
+            List<OhlcvData> candles;
+            List<AltDataPoint> allNews;
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                candles = await db.OhlcvData
+                    .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+                    .OrderBy(c => c.TimestampUtc).ToListAsync();
+                allNews = await db.AltDataPoints.ToListAsync();
+            }
+
+            if (candles.Count < 10)
+            {
+                _impactError = true;
+                _impactStatus = "Dati insufficienti nel range selezionato (servono almeno 10 candele).";
+                return;
+            }
+            if (allNews.Count == 0)
+            {
+                _impactError = true;
+                _impactStatus = "Nessuna notizia in archivio: sincronizza prima (sezione 1).";
+                return;
+            }
+
+            _impactReport = ImpactAnalyzer.Analyze(_symbol.Trim(), allNews, candles);
+            _impactStatus = $"Impatto analizzato su {allNews.Count} notizie/eventi contro {candles.Count} candele di {_symbol}.";
+        }
+        catch (Exception ex)
+        {
+            _impactError = true;
+            _impactStatus = $"Errore nell'analisi: {ex.Message}";
+        }
+        finally
+        {
+            _analyzingImpact = false;
+        }
+    }
+
+    private static string ReturnClass(double value) => value switch
+    {
+        > 0 => "text-success",
+        < 0 => "text-danger",
+        _ => "",
+    };
+
+    private static List<string> DeserializeSymbols(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(json, JsonOptions) ?? new();
+        }
+        catch (JsonException)
+        {
+            return new();
+        }
+    }
+
+    private static string CategoryBadgeClass(string category) => category switch
+    {
+        "Regulatory" => "bg-danger",
+        "Security" => "bg-warning text-dark",
+        "Institutional" => "bg-primary",
+        "CentralBanks" => "bg-dark",
+        "Macro" => "bg-info text-dark",
+        "EconomicCalendar" => "bg-success",
+        "RetailSentiment" => "bg-primary-subtle text-dark border",
+        _ => "bg-secondary",
+    };
+
+    private static string SentimentClass(decimal? score) => score switch
+    {
+        null => "",
+        > 0 => "text-success",
+        < 0 => "text-danger",
+        _ => "",
+    };
+
+    private void SetEvalStatus(string text, bool error)
+    {
+        _evalStatus = text;
+        _evalError = error;
+    }
+
+    private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
+    {
+        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
+        builder.AddMarkupContent(0, $@"
+            <div class='card text-center' style='min-width: 9rem;'>
+                <div class='card-body py-2'>
+                    <div class='text-muted small'>{label}</div>
+                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
+                </div>
+            </div>");
+    };
+}

@@ -1,0 +1,258 @@
+@page "/market/watchlist"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Ingestion
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IMarketDataSyncService SyncService
+
+<PageTitle>Watchlist</PageTitle>
+
+<h1>Watchlist di mercato</h1>
+
+<GuidaPanel Title="Watchlist — quali dati storici scaricare e tenere aggiornati">
+    <p>
+        Prima di poter fare un backtest, un'ottimizzazione o qualunque analisi, la piattaforma ha
+        bisogno dei <strong>dati storici dei prezzi</strong> (le "candele" OHLCV: apertura,
+        massimo, minimo, chiusura, volume di ogni intervallo di tempo). Questa pagina è il punto
+        dove dici "tieni sotto controllo questa coppia, su questo exchange, con questa
+        granularità" — una volta aggiunta, un servizio in background la scarica e la mantiene
+        aggiornata da sola, senza bisogno di tornare qui ogni volta.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Exchange</dt>
+        <dd class="col-sm-9">La borsa da cui scaricare i dati (es. Binance).</dd>
+        <dt class="col-sm-3">Symbol</dt>
+        <dd class="col-sm-9">La coppia di trading, formato <code>BASE/QUOTE</code> — es. <code>BTC/USDT</code> significa "prezzo di Bitcoin espresso in Tether".</dd>
+        <dt class="col-sm-3">Timeframe</dt>
+        <dd class="col-sm-9">Ogni quanto tempo viene registrata una candela (1h = una ogni ora, 1d = una al giorno). Puoi tracciare lo stesso symbol su più timeframe contemporaneamente.</dd>
+        <dt class="col-sm-3">Stato (Abilitata/Disabilitata)</dt>
+        <dd class="col-sm-9">Solo le serie "Abilitata" vengono aggiornate automaticamente in background; puoi disabilitarne una senza cancellare i dati già scaricati.</dd>
+        <dt class="col-sm-3">Candele</dt>
+        <dd class="col-sm-9">Quante candele sono già presenti nel database per quella serie — un numero basso significa che c'è ancora poco storico su cui lavorare.</dd>
+        <dt class="col-sm-3">Sync now</dt>
+        <dd class="col-sm-9">Forza subito un aggiornamento di quella serie, senza aspettare il prossimo giro automatico in background.</dd>
+        <dt class="col-sm-3">Elimina</dt>
+        <dd class="col-sm-9">Rimuove la serie dalla watchlist (smette di essere aggiornata), ma <strong>non cancella</strong> le candele già scaricate — restano disponibili per backtest/analisi.</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-4" style="max-width: 720px;">
+    <div class="card-header">Aggiungi serie</div>
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Exchange</label>
+                <select class="form-select" @bind="_exchange">
+                    @foreach (var ex in Enum.GetValues<ExchangeName>())
+                    {
+                        <option value="@ex">@ex</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" @bind="_symbol" placeholder="BTC/USDT" style="width: 11rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe">
+                    @foreach (var tf in Timeframes.Supported.Keys)
+                    {
+                        <option value="@tf">@tf</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="AddAsync" disabled="@_busy">Aggiungi</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_status))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-success")" style="max-width: 960px;">@_status</div>
+}
+
+<div class="card" style="max-width: 960px;">
+    <div class="card-header">Serie tracciate</div>
+    @if (_rows is null)
+    {
+        <div class="card-body"><em>Caricamento…</em></div>
+    }
+    else if (_rows.Count == 0)
+    {
+        <div class="card-body text-muted">Nessuna serie ancora. Aggiungine una sopra.</div>
+    }
+    else
+    {
+        <table class="table table-striped mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th>Exchange</th><th>Symbol</th><th>TF</th><th>Stato</th>
+                    <th>Candele</th><th>Ultima sync</th><th class="text-end">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _rows)
+                {
+                    <tr>
+                        <td><span class="badge bg-dark">@r.Series.Exchange</span></td>
+                        <td>@r.Series.Symbol</td>
+                        <td>@r.Series.Timeframe</td>
+                        <td>
+                            @if (r.Series.Enabled)
+                            {
+                                <span class="badge bg-success">Abilitata</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-secondary">Disabilitata</span>
+                            }
+                            <div class="small text-muted">@r.Series.LastSyncStatus</div>
+                        </td>
+                        <td>@r.CandleCount</td>
+                        <td>@(r.Series.LastSyncUtc?.ToString("u") ?? "—")</td>
+                        <td class="text-end" style="white-space: nowrap;">
+                            <button class="btn btn-sm btn-outline-primary"
+                                    @onclick="() => SyncNowAsync(r.Series.Id)" disabled="@_busy">
+                                Sync now
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    @onclick="() => ToggleAsync(r.Series.Id)" disabled="@_busy">
+                                @(r.Series.Enabled ? "Disabilita" : "Abilita")
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger"
+                                    @onclick="() => DeleteAsync(r.Series.Id)" disabled="@_busy">
+                                Elimina
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1h";
+
+    private List<Row>? _rows;
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    private sealed record Row(TrackedSeries Series, int CandleCount);
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var series = await db.TrackedSeries
+            .OrderBy(s => s.Exchange).ThenBy(s => s.Symbol).ThenBy(s => s.Timeframe)
+            .ToListAsync();
+
+        // Conteggio candele per (Symbol, Timeframe) in UNA sola query aggregata invece di una
+        // CountAsync per serie: con molte serie e timeframe intraday (5m ~150k candele l'una) il
+        // pattern N+1 diventava un collo di bottiglia a ogni caricamento pagina.
+        var counts = await db.OhlcvData
+            .GroupBy(c => new { c.Symbol, c.Timeframe })
+            .Select(g => new { g.Key.Symbol, g.Key.Timeframe, Count = g.Count() })
+            .ToDictionaryAsync(x => (x.Symbol, x.Timeframe), x => x.Count);
+
+        _rows = series
+            .Select(s => new Row(s, counts.GetValueOrDefault((s.Symbol, s.Timeframe))))
+            .ToList();
+    }
+
+    private async Task AddAsync()
+    {
+        var symbol = _symbol?.Trim().ToUpperInvariant() ?? "";
+        if (string.IsNullOrWhiteSpace(symbol))
+        {
+            SetStatus("Inserisci un symbol (es. BTC/USDT).", error: true);
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var exists = await db.TrackedSeries.AnyAsync(s =>
+                s.Exchange == _exchange && s.Symbol == symbol && s.Timeframe == _timeframe);
+            if (exists)
+            {
+                SetStatus("Questa serie è già tracciata.", error: true);
+                return;
+            }
+
+            db.TrackedSeries.Add(new TrackedSeries
+            {
+                Exchange = _exchange,
+                Symbol = symbol,
+                Timeframe = _timeframe,
+                Enabled = true,
+            });
+            await db.SaveChangesAsync();
+            SetStatus($"Aggiunta {_exchange} {symbol} {_timeframe}.", error: false);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SyncNowAsync(int id)
+    {
+        _busy = true;
+        try
+        {
+            var n = await SyncService.SyncSeriesAsync(id);
+            SetStatus($"Sync completata: {n} candele processate.", error: false);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore sync: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleAsync(int id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var s = await db.TrackedSeries.FirstOrDefaultAsync(x => x.Id == id);
+        if (s is not null)
+        {
+            s.Enabled = !s.Enabled;
+            await db.SaveChangesAsync();
+            await LoadAsync();
+        }
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.TrackedSeries.Where(x => x.Id == id).ExecuteDeleteAsync();
+        SetStatus("Serie rimossa dalla watchlist (i dati OHLCV restano nel DB).", error: false);
+        await LoadAsync();
+    }
+
+    private void SetStatus(string text, bool error)
+    {
+        _status = text;
+        _isError = error;
+    }
+}

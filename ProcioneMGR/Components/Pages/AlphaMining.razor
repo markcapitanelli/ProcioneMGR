@@ -1,0 +1,319 @@
+@page "/alpha-mining"
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.AlphaMining
+@using ProcioneMGR.Services.Experiments
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject GeneticAlphaMiner Miner
+@inject IExperimentTracker Tracker
+@inject AuthenticationStateProvider AuthProvider
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Alpha Mining</PageTitle>
+
+<h1>Alpha Mining</h1>
+
+<GuidaPanel Title="Alpha Mining — cercare NUOVE formule, non combinare quelle esistenti">
+    <p>
+        Invece di scegliere fra fattori già scritti, qui un algoritmo <strong>genetico</strong> evolve
+        <em>formule matematiche</em> nuove (alberi di espressione su prezzo/volume) massimizzando
+        l'<strong>Information Coefficient</strong> sul periodo di selezione, con una penalità di
+        complessità contro l'overfitting (rif. ROADMAP-QLIB §1.7).
+    </p>
+    <p class="mb-0">
+        Disciplina non negoziabile: le formule si scelgono SOLO sulla selezione, ma il
+        <strong>verdetto è sull'holdout mai visto</strong>. Una formula con IC alto in selezione ma
+        nullo/opposto sull'holdout è overfit: non va fidata. Salva solo le sopravvissute.
+    </p>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label mb-0">Symbol</label>
+                <input class="form-control form-control-sm" @bind="_symbol" style="max-width: 130px;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Timeframe</label>
+                <select class="form-select form-select-sm" @bind="_timeframe" style="max-width: 90px;">
+                    <option value="5m">5m</option>
+                    <option value="15m">15m</option>
+                    <option value="1h">1h</option>
+                    <option value="4h">4h</option>
+                    <option value="1d">1d</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Selezione: da</label>
+                <input type="date" class="form-control form-control-sm" @bind="_selFrom" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">a</label>
+                <input type="date" class="form-control form-control-sm" @bind="_selTo" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Holdout: da</label>
+                <input type="date" class="form-control form-control-sm" @bind="_holdFrom" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">a</label>
+                <input type="date" class="form-control form-control-sm" @bind="_holdTo" />
+            </div>
+        </div>
+        <div class="row g-2 align-items-end mt-1">
+            <div class="col-auto">
+                <label class="form-label mb-0">Orizzonte</label>
+                <input type="number" class="form-control form-control-sm" @bind="_horizon" style="max-width: 90px;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Popolazione</label>
+                <input type="number" class="form-control form-control-sm" @bind="_population" style="max-width: 100px;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Generazioni</label>
+                <input type="number" class="form-control form-control-sm" @bind="_generations" style="max-width: 100px;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Prof. max</label>
+                <input type="number" class="form-control form-control-sm" @bind="_maxDepth" style="max-width: 90px;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Seed</label>
+                <input type="number" class="form-control form-control-sm" @bind="_seed" style="max-width: 90px;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary" @onclick="RunAsync" disabled="@_busy">
+                    @(_busy ? "Mining…" : "Cerca alpha")
+                </button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_msg))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-info") py-2 mt-3 mb-0">@_msg</div>
+        }
+    </div>
+</div>
+
+@if (_mined.Count > 0)
+{
+    @if (_pbo is { } pbo)
+    {
+        <div class="alert @(pbo.ProbabilityOfBacktestOverfitting < 0.5 ? "alert-success" : "alert-warning") py-2">
+            <strong>PBO (Probability of Backtest Overfitting): @pbo.PboPercent.ToString("F0")%</strong>
+            @(pbo.ProbabilityOfBacktestOverfitting < 0.5
+                ? " — la scelta della formula migliore regge fuori campione"
+                : " — la selezione è dominata dall'overfitting: fidati solo delle formule che sopravvivono anche sull'holdout")
+            <span class="small text-muted ms-2">via CSCV su @pbo.Strategies formule, @pbo.Combinations combinazioni</span>
+        </div>
+    }
+    <div class="card">
+        <div class="card-header">Formule trovate — verdetto su selezione vs holdout</div>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Espressione</th>
+                        <th class="text-end">IC selezione</th>
+                        <th class="text-end">IC holdout</th>
+                        <th class="text-end">Nodi</th>
+                        <th>Esito</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var m in _mined)
+                    {
+                        var survived = Survived(m);
+                        <tr class="@(survived ? "table-success" : "")">
+                            <td><code class="small">@m.Expression</code></td>
+                            <td class="text-end">@m.SelectionIc.ToString("F3")</td>
+                            <td class="text-end">@(m.HoldoutIc?.ToString("F3") ?? "—")</td>
+                            <td class="text-end">@m.Size</td>
+                            <td>
+                                @if (survived)
+                                {
+                                    <span class="badge text-bg-success">Sopravvissuto</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-secondary">Overfit / debole</span>
+                                }
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" @onclick="() => SaveAsync(m)" disabled="@_busy">Salva</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_saved.Count > 0)
+{
+    <div class="card mt-3">
+        <div class="card-header">Fattori salvati (@_saved.Count)</div>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead class="table-light"><tr><th>Nome</th><th>Espressione</th><th>Symbol</th><th class="text-end">IC sel.</th><th class="text-end">IC hold.</th></tr></thead>
+                <tbody>
+                    @foreach (var s in _saved)
+                    {
+                        <tr>
+                            <td>@s.Name</td>
+                            <td><code class="small">@s.Expression</code></td>
+                            <td>@s.Symbol @s.Timeframe</td>
+                            <td class="text-end">@s.SelectionIc.ToString("F3")</td>
+                            <td class="text-end">@(s.HoldoutIc?.ToString("F3") ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private string _symbol = "BTCUSDT";
+    private string _timeframe = "1h";
+    private DateTime _selFrom = DateTime.UtcNow.Date.AddMonths(-9);
+    private DateTime _selTo = DateTime.UtcNow.Date.AddMonths(-3);
+    private DateTime _holdFrom = DateTime.UtcNow.Date.AddMonths(-3);
+    private DateTime _holdTo = DateTime.UtcNow.Date;
+    private int _horizon = 1;
+    private int _population = 150;
+    private int _generations = 12;
+    private int _maxDepth = 5;
+    private int _seed = 42;
+
+    private List<MinedFactor> _mined = new();
+    private ProcioneMGR.Services.Validation.PboResult? _pbo;
+    private List<SavedFactor> _saved = new();
+    private bool _busy;
+    private bool _isError;
+    private string? _msg;
+    private string? _userId;
+
+    private const double HoldoutSurvivalIc = 0.02;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        await LoadSavedAsync();
+    }
+
+    private bool Survived(MinedFactor m)
+        => m.HoldoutIc is double h && Math.Abs(h) > HoldoutSurvivalIc && Math.Sign(h) == Math.Sign(m.SelectionIc);
+
+    private async Task<List<OhlcvData>> LoadCandlesAsync(DateTime from, DateTime to)
+    {
+        var fromUtc = DateTime.SpecifyKind(from, DateTimeKind.Utc);
+        var toUtc = DateTime.SpecifyKind(to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        return await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe
+                        && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+            .OrderBy(c => c.TimestampUtc)
+            .ToListAsync();
+    }
+
+    private async Task RunAsync()
+    {
+        if (_busy) return;
+        _busy = true; _msg = null; _isError = false; _mined = new(); _pbo = null;
+        try
+        {
+            var selection = await LoadCandlesAsync(_selFrom, _selTo);
+            var holdout = await LoadCandlesAsync(_holdFrom, _holdTo);
+            if (selection.Count < 120)
+            {
+                _msg = $"Candele di selezione insufficienti ({selection.Count}): allarga il periodo o fai un Fetch/Sync.";
+                _isError = true; return;
+            }
+
+            var config = new MiningConfig
+            {
+                PopulationSize = Math.Clamp(_population, 20, 1000),
+                Generations = Math.Clamp(_generations, 1, 100),
+                MaxDepth = Math.Clamp(_maxDepth, 2, 8),
+                ForwardHorizon = Math.Max(1, _horizon),
+                Seed = _seed,
+                TopN = 20,
+            };
+
+            var mined = await Task.Run(() => Miner.Mine(selection, config)); // fuori dal thread UI
+            foreach (var m in mined)
+            {
+                if (holdout.Count >= 60)
+                {
+                    var node = AlphaExpressionParser.Parse(m.Expression);
+                    m.HoldoutIc = Miner.EvaluateIc(node, holdout, config.ForwardHorizon, minObs: 30, out _);
+                }
+            }
+            _mined = mined.ToList();
+
+            // PBO (Fase 1): quanto la SCELTA della migliore formula è guidata dall'overfitting,
+            // misurata sul pannello di formule sulle stesse candele di selezione.
+            _pbo = Miner.ComputeSelectionPbo(selection, _mined.Select(m => m.Expression).ToList(), config.ForwardHorizon);
+
+            var survivors = _mined.Count(Survived);
+            _msg = $"{_mined.Count} formule trovate su {selection.Count} candele di selezione; {survivors} sopravvivono sull'holdout ({holdout.Count} candele).";
+
+            var runId = await Tracker.SafeStartRunAsync(
+                "AlphaMining",
+                $"{_symbol.Trim()} · {_timeframe} · pop {config.PopulationSize}×{config.Generations} gen",
+                new { _symbol, _timeframe, config.ForwardHorizon, config.PopulationSize, config.Generations, config.MaxDepth, config.Seed, SelectionCandles = selection.Count, HoldoutCandles = holdout.Count },
+                _symbol.Trim(), _timeframe, _userId);
+            await Tracker.SafeLogMetricsAsync(runId, new Dictionary<string, decimal>
+            {
+                ["Formulas"] = _mined.Count,
+                ["Survivors"] = survivors,
+                ["BestSelectionIc"] = _mined.Count > 0 ? (decimal)_mined.Max(m => Math.Abs(m.SelectionIc)) : 0m,
+                ["Pbo"] = _pbo is not null ? (decimal)_pbo.ProbabilityOfBacktestOverfitting : -1m,
+            });
+            await Tracker.SafeCompleteAsync(runId, "Completed");
+        }
+        catch (Exception ex) { _msg = $"Errore mining: {ex.Message}"; _isError = true; }
+        finally { _busy = false; }
+    }
+
+    private async Task SaveAsync(MinedFactor m)
+    {
+        if (_userId is null) return;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.SavedFactors.Add(new SavedFactor
+            {
+                UserId = _userId,
+                Name = $"mined_{DateTime.UtcNow:yyyyMMdd_HHmmss}",
+                Expression = m.Expression,
+                Symbol = _symbol.Trim(),
+                Timeframe = _timeframe,
+                ForwardHorizon = Math.Max(1, _horizon),
+                SelectionIc = m.SelectionIc,
+                HoldoutIc = m.HoldoutIc,
+                Observations = m.Observations,
+                Size = m.Size,
+            });
+            await db.SaveChangesAsync();
+            await LoadSavedAsync();
+            _msg = "Fattore salvato.";
+            _isError = false;
+        }
+        catch (Exception ex) { _msg = $"Errore salvataggio: {ex.Message}"; _isError = true; }
+    }
+
+    private async Task LoadSavedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _saved = await db.SavedFactors.Where(s => s.UserId == _userId).OrderByDescending(s => s.CreatedAtUtc).Take(50).ToListAsync();
+    }
+}

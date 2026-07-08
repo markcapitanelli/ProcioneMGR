@@ -1,0 +1,140 @@
+@page "/admin/users"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using ProcioneMGR.Data
+@attribute [Authorize(Roles = AppRoles.Admin)]
+
+@inject UserManager<ApplicationUser> UserManager
+
+<PageTitle>Gestione Utenti</PageTitle>
+
+<h1>Gestione Utenti</h1>
+
+<GuidaPanel Title="Gestione Utenti — chi può vedere e fare cosa">
+    <p>
+        La piattaforma ha tre ruoli con permessi crescenti: <strong>User</strong> (accesso base:
+        Dashboard, Backtest, le proprie strategie e credenziali), <strong>Manager</strong> (in più:
+        Watchlist, Optimization, Discovery, Ensemble, ML Lab e tutte le altre pagine di analisi
+        avanzata/amministrazione dati), <strong>Admin</strong> (in più: questa pagina e le
+        impostazioni di sicurezza del trading live). Il primo utente mai registrato sulla
+        piattaforma diventa Admin automaticamente; tutti gli altri partono come User.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Ruolo attuale</dt>
+        <dd class="col-sm-9">I permessi che l'utente ha in questo momento.</dd>
+        <dt class="col-sm-3">Promuovi a Manager / Riporta a User</dt>
+        <dd class="col-sm-9">
+            Cambia il ruolo dell'utente selezionato. Gli account <strong>Admin</strong> non sono
+            modificabili da questa pagina (per sicurezza, non si può rimuovere/degradare un Admin
+            da qui).
+        </dd>
+    </dl>
+</GuidaPanel>
+
+@if (rows is null)
+{
+    <p><em>Caricamento…</em></p>
+}
+else
+{
+    <table class="table table-striped align-middle" style="max-width: 820px;">
+        <thead>
+            <tr>
+                <th>Email</th>
+                <th>Ruolo attuale</th>
+                <th class="text-end">Azioni</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var row in rows)
+            {
+                <tr>
+                    <td>@row.Email</td>
+                    <td>
+                        @foreach (var r in row.Roles)
+                        {
+                            <span class="badge bg-secondary me-1">@r</span>
+                        }
+                    </td>
+                    <td class="text-end">
+                        @if (row.Roles.Contains(AppRoles.Admin))
+                        {
+                            <span class="text-muted">— (account Admin)</span>
+                        }
+                        else if (row.Roles.Contains(AppRoles.Manager))
+                        {
+                            <button class="btn btn-sm btn-outline-warning"
+                                    @onclick="() => ChangeRoleAsync(row, AppRoles.User)">
+                                Riporta a User
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="btn btn-sm btn-outline-success"
+                                    @onclick="() => ChangeRoleAsync(row, AppRoles.Manager)">
+                                Promuovi a Manager
+                            </button>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@if (!string.IsNullOrEmpty(message))
+{
+    <div class="alert alert-info">@message</div>
+}
+
+@code {
+    private List<UserRow>? rows;
+    private string? message;
+
+    private sealed class UserRow
+    {
+        public required string Id { get; init; }
+        public required string Email { get; init; }
+        public List<string> Roles { get; set; } = [];
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var users = UserManager.Users.OrderBy(u => u.Email).ToList();
+        var list = new List<UserRow>(users.Count);
+        foreach (var u in users)
+        {
+            var roles = await UserManager.GetRolesAsync(u);
+            list.Add(new UserRow { Id = u.Id, Email = u.Email ?? u.UserName ?? u.Id, Roles = roles.ToList() });
+        }
+        rows = list;
+    }
+
+    private async Task ChangeRoleAsync(UserRow row, string newRole)
+    {
+        var user = await UserManager.FindByIdAsync(row.Id);
+        if (user is null)
+        {
+            message = "Utente non trovato.";
+            return;
+        }
+
+        // Non tocchiamo gli account Admin da questa UI di Fase 1.
+        var current = await UserManager.GetRolesAsync(user);
+        if (current.Contains(AppRoles.Admin))
+        {
+            message = "Gli account Admin non sono modificabili da qui.";
+            return;
+        }
+
+        // Sostituisci i ruoli non-Admin con il nuovo ruolo singolo.
+        await UserManager.RemoveFromRolesAsync(user, current.Where(r => r != AppRoles.Admin));
+        await UserManager.AddToRoleAsync(user, newRole);
+
+        message = $"{user.Email} ora ha il ruolo '{newRole}'.";
+        await LoadAsync();
+    }
+}

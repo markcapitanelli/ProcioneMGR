@@ -1,0 +1,66 @@
+<!--
+Frammento ridotto della pagina reale https://www.forexfactory.com/calendar (verificato dal vivo
+in Fase D.2), con la struttura autentica di calendar__row / data-event-id / data-day-dateline /
+icone di impatto. Le celle Actual/Forecast/Previous sono lasciate vuote come nella pagina reale
+(popolate via JS lato client, non nell'HTML statico — vedi commento in ForexFactoryIngestor.cs).
+-->
+<table>
+<thead></thead>
+<tr class="calendar__borderfix borderfix"><td></td></tr>
+<tr class="calendar__row calendar__row--day-breaker "> <td colspan="10" class="calendar__cell">Sun <span>Jun 28</span></td> </tr>
+<tr data-event-id="153335" data-day-dateline="1782597600" class="calendar__row calendar__row--new-day   calendar__row--grey  ">
+  <td class="calendar__cell calendar__date" rowspan="2"><span class="date">Sun <span>Jun 28</span></span></td>
+  <td class="calendar__cell calendar__time">2:15pm</td>
+  <td class="calendar__cell calendar__currency">AUD</td>
+  <td class="calendar__cell calendar__impact"><span class="icon icon--ff-impact-ora"></span></td>
+  <td class="calendar__cell calendar__event">
+    <div class="calendar__event-wrapper">
+      <span class="calendar__event-title-wrapper fadeout-end"> <span class="calendar__event-title">RBA Gov Bullock Speaks</span> </span>
+    </div>
+  </td>
+  <td class="calendar__cell calendar__actual"></td>
+  <td class="calendar__cell calendar__forecast"></td>
+  <td class="calendar__cell calendar__previous"> <span></span> </td>
+</tr>
+<tr data-event-id="153336" class="calendar__row    calendar__row--grey  ">
+  <td class="calendar__cell calendar__time">6:35pm</td>
+  <td class="calendar__cell calendar__currency">USD</td>
+  <td class="calendar__cell calendar__impact"><span class="icon icon--ff-impact-yel"></span></td>
+  <td class="calendar__cell calendar__event">
+    <div class="calendar__event-wrapper">
+      <span class="calendar__event-title-wrapper fadeout-end"> <span class="calendar__event-title">FOMC Member Barkin Speaks</span> </span>
+    </div>
+  </td>
+  <td class="calendar__cell calendar__actual"></td>
+  <td class="calendar__cell calendar__forecast"></td>
+  <td class="calendar__cell calendar__previous"> <span></span> </td>
+</tr>
+<tr class="calendar__row calendar__row--day-breaker calendar__row--alt"> <td colspan="10" class="calendar__cell">Mon <span>Jun 29</span></td> </tr>
+<tr data-event-id="153401" data-day-dateline="1782684000" class="calendar__row calendar__row--new-day">
+  <td class="calendar__cell calendar__date" rowspan="1"><span class="date">Mon <span>Jun 29</span></span></td>
+  <td class="calendar__cell calendar__time">8:30am</td>
+  <td class="calendar__cell calendar__currency">USD</td>
+  <td class="calendar__cell calendar__impact"><span class="icon icon--ff-impact-red"></span></td>
+  <td class="calendar__cell calendar__event">
+    <div class="calendar__event-wrapper">
+      <span class="calendar__event-title-wrapper fadeout-end"> <span class="calendar__event-title">Non-Farm Employment Change</span> </span>
+    </div>
+  </td>
+  <td class="calendar__cell calendar__actual"></td>
+  <td class="calendar__cell calendar__forecast"></td>
+  <td class="calendar__cell calendar__previous"> <span></span> </td>
+</tr>
+<tr data-event-id="153402" class="calendar__row">
+  <td class="calendar__cell calendar__time">All Day</td>
+  <td class="calendar__cell calendar__currency">JPY</td>
+  <td class="calendar__cell calendar__impact"><span class="icon icon--ff-impact-gra"></span></td>
+  <td class="calendar__cell calendar__event">
+    <div class="calendar__event-wrapper">
+      <span class="calendar__event-title-wrapper fadeout-end"> <span class="calendar__event-title">Bank Holiday</span> </span>
+    </div>
+  </td>
+  <td class="calendar__cell calendar__actual"></td>
+  <td class="calendar__cell calendar__forecast"></td>
+  <td class="calendar__cell calendar__previous"> <span></span> </td>
+</tr>
+</table>

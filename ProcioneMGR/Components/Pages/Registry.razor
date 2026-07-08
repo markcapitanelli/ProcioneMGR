@@ -1,0 +1,163 @@
+@page "/registry"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Registry
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IModelRegistry Reg
+
+<PageTitle>Registry modelli</PageTitle>
+
+<h1>Registry modelli</h1>
+
+<GuidaPanel Title="Ciclo di vita dei modelli ML — chi è il Champion, e perché">
+    <p>
+        Ogni modello vive uno <strong>stadio</strong>: <em>Staging → Challenger → Champion</em>, con
+        uscita a <em>Retired</em>. C'è <strong>un solo Champion per (coppia, timeframe)</strong>.
+    </p>
+    <p class="mb-0">
+        La promozione a Champion passa dal <strong>gate del Deflated Sharpe</strong> (Fase 1): un
+        modello con DSR inferiore non sostituisce mai quello in carica. Il monitor di drift, se un
+        Champion degrada, lo <strong>ritira e accoda un retrain</strong> — mai un'azione sul trading Live.
+        Torna a <a href="experiments">Esperimenti</a>.
+    </p>
+</GuidaPanel>
+
+@if (_message is not null)
+{
+    <div class="alert @(_messageOk ? "alert-success" : "alert-warning") py-2">@_message</div>
+}
+
+@if (_groups.Count == 0)
+{
+    <div class="alert alert-info">Nessun modello salvato. Addestra un modello in <a href="ml">/ml</a>.</div>
+}
+
+@foreach (var g in _groups)
+{
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span><strong>@g.Key.Symbol</strong> · @g.Key.Timeframe</span>
+            @{ var champ = g.Value.FirstOrDefault(m => m.Stage == ModelStage.Champion); }
+            <span class="small">
+                @if (champ is not null)
+                {
+                    <span class="badge bg-success">Champion: @champ.Name (DSR @Fmt(champ.DeflatedSharpe))</span>
+                }
+                else
+                {
+                    <span class="badge bg-secondary">Nessun Champion attivo</span>
+                }
+            </span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead><tr><th>Modello</th><th>Tipo</th><th>Stadio</th><th class="text-end">DSR</th><th class="text-end">Ver</th><th>Note</th><th class="text-end">Azioni</th></tr></thead>
+                <tbody>
+                    @foreach (var m in g.Value)
+                    {
+                        <tr class="@(m.Stage == ModelStage.Champion ? "table-success" : m.Stage == ModelStage.Retired ? "text-muted" : "")">
+                            <td>@m.Name</td>
+                            <td>@m.ModelType</td>
+                            <td><span class="badge @StageClass(m.Stage)">@m.Stage</span></td>
+                            <td class="text-end">@Fmt(m.DeflatedSharpe)</td>
+                            <td class="text-end">@m.Version</td>
+                            <td class="small">
+                                @if (m.RetiredReason is not null) { <span>@m.RetiredReason</span> }
+                                @if (m.RetrainRequestedAtUtc is not null) { <span class="badge bg-warning text-dark ms-1">retrain accodato</span> }
+                            </td>
+                            <td class="text-end">
+                                @if (m.Stage == ModelStage.Staging)
+                                {
+                                    <button class="btn btn-sm btn-outline-primary" @onclick="() => ToChallenger(m.Id)" disabled="@_busy">→ Challenger</button>
+                                }
+                                @if (m.Stage is ModelStage.Staging or ModelStage.Challenger)
+                                {
+                                    <button class="btn btn-sm btn-outline-success" @onclick="() => ToChampion(m.Id)" disabled="@_busy">→ Champion</button>
+                                }
+                                @if (m.Stage != ModelStage.Retired)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => Retire(m.Id)" disabled="@_busy">Ritira</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly List<KeyValuePair<(string Symbol, string Timeframe), List<SavedMlModel>>> _groups = new();
+    private bool _busy;
+    private string? _message;
+    private bool _messageOk;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _groups.Clear();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var models = await db.SavedMlModels.AsNoTracking()
+            .OrderBy(m => m.Symbol).ThenBy(m => m.Timeframe)
+            .ToListAsync();
+
+        foreach (var grp in models.GroupBy(m => (m.Symbol, m.Timeframe)))
+        {
+            var ordered = grp
+                .OrderByDescending(m => m.Stage == ModelStage.Champion)
+                .ThenBy(m => m.Stage == ModelStage.Retired)
+                .ThenByDescending(m => m.DeflatedSharpe)
+                .ToList();
+            _groups.Add(new(grp.Key, ordered));
+        }
+    }
+
+    private async Task ToChallenger(int id)
+    {
+        _busy = true;
+        try { await Reg.PromoteToChallengerAsync(id); SetMsg("Promosso a Challenger.", true); }
+        catch (Exception ex) { SetMsg(ex.Message, false); }
+        await LoadAsync();
+        _busy = false;
+    }
+
+    private async Task ToChampion(int id)
+    {
+        _busy = true;
+        try
+        {
+            var outcome = await Reg.TryPromoteToChampionAsync(id);
+            SetMsg(outcome.Reason, outcome.Promoted);
+        }
+        catch (Exception ex) { SetMsg(ex.Message, false); }
+        await LoadAsync();
+        _busy = false;
+    }
+
+    private async Task Retire(int id)
+    {
+        _busy = true;
+        try { await Reg.RetireAsync(id, "Ritirato manualmente dalla UI.", requestRetrain: false); SetMsg("Modello ritirato.", true); }
+        catch (Exception ex) { SetMsg(ex.Message, false); }
+        await LoadAsync();
+        _busy = false;
+    }
+
+    private void SetMsg(string msg, bool ok) { _message = msg; _messageOk = ok; }
+
+    private static string Fmt(double? dsr) => dsr is { } v ? (v * 100).ToString("F1") + "%" : "—";
+
+    private static string StageClass(ModelStage s) => s switch
+    {
+        ModelStage.Champion => "bg-success",
+        ModelStage.Challenger => "bg-primary",
+        ModelStage.Staging => "bg-secondary",
+        _ => "bg-light text-dark",
+    };
+}

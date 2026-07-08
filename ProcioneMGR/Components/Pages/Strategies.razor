@@ -1,0 +1,125 @@
+@page "/strategies"
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@attribute [Authorize]
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+
+<PageTitle>Le mie strategie</PageTitle>
+
+<h1>Le mie strategie</h1>
+
+<GuidaPanel Title="Le mie strategie — l'archivio delle tue configurazioni">
+    <p>
+        Ogni volta che in <a href="backtest">Backtest</a> premi "Salva come strategia", oppure in
+        <a href="discovery">Discovery</a> salvi un risultato promettente, la combinazione
+        strategia+parametri finisce qui. È il tuo archivio personale: da qui puoi
+        <strong>ricaricarla</strong> nel Backtest per rilanciarla, oppure aggiungerla come
+        strategia in un <a href="ensemble">Ensemble</a> multi-strategia.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Tipo</dt>
+        <dd class="col-sm-9">La regola di trading di base (es. EMA Cross, RSI) su cui è costruita questa configurazione.</dd>
+        <dt class="col-sm-3">Parametri</dt>
+        <dd class="col-sm-9">I valori numerici specifici salvati per questa strategia (es. periodi delle medie mobili).</dd>
+        <dt class="col-sm-3">Carica</dt>
+        <dd class="col-sm-9">Riapre la pagina Backtest con questa strategia e questi parametri già impostati, pronta per essere rilanciata o modificata.</dd>
+        <dt class="col-sm-3">Elimina</dt>
+        <dd class="col-sm-9">Rimuove definitivamente la configurazione salvata (non influisce su backtest già eseguiti in passato).</dd>
+    </dl>
+</GuidaPanel>
+
+@if (!string.IsNullOrEmpty(_status))
+{
+    <div class="alert alert-success" style="max-width: 900px;">@_status</div>
+}
+
+<div class="card" style="max-width: 900px;">
+    <div class="card-header">Strategie salvate</div>
+    @if (_items is null)
+    {
+        <div class="card-body"><em>Caricamento…</em></div>
+    }
+    else if (_items.Count == 0)
+    {
+        <div class="card-body text-muted">Nessuna strategia salvata. Creane una da /backtest con "Salva come strategia".</div>
+    }
+    else
+    {
+        <table class="table table-striped mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th>Nome</th><th>Tipo</th><th>Parametri</th><th>Creata</th><th class="text-end">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in _items)
+                {
+                    <tr>
+                        <td>@s.Name</td>
+                        <td><span class="badge bg-dark">@s.StrategyName</span></td>
+                        <td><code class="small">@FormatParams(s.ParametersJson)</code></td>
+                        <td>@s.CreatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td class="text-end" style="white-space: nowrap;">
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => Load(s.Id)">Carica</button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(s.Id)">Elimina</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    private List<SavedStrategy>? _items;
+    private string? _userId;
+    private string? _status;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_userId is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _items = await db.SavedStrategies
+            .Where(s => s.UserId == _userId)
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync();
+    }
+
+    private void Load(int id) => Nav.NavigateTo($"backtest?load={id}");
+
+    private async Task DeleteAsync(int id)
+    {
+        if (_userId is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.SavedStrategies.Where(s => s.Id == id && s.UserId == _userId).ExecuteDeleteAsync();
+        _status = "Strategia eliminata.";
+        await LoadAsync();
+    }
+
+    private static string FormatParams(string json)
+    {
+        try
+        {
+            var dict = JsonSerializer.Deserialize<Dictionary<string, decimal>>(json) ?? new();
+            return string.Join(", ", dict.Select(kv => $"{kv.Key}={kv.Value}"));
+        }
+        catch
+        {
+            return json;
+        }
+    }
+}

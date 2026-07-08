@@ -1,0 +1,23 @@
+<div class="card mb-3 guida-panel">
+    <div class="card-header d-flex justify-content-between align-items-center guida-panel-header" role="button" @onclick="Toggle">
+        <span><i class="bi bi-info-circle-fill me-2 text-info"></i><strong>Guida:</strong> @Title</span>
+        <i class="bi @(_expanded ? "bi-chevron-up" : "bi-chevron-down") text-muted"></i>
+    </div>
+    @if (_expanded)
+    {
+        <div class="card-body guida-panel-body">
+            @ChildContent
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>Nome della pagina o della sezione a cui si riferisce la guida (es. "Backtest").</summary>
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool _expanded;
+
+    private void Toggle() => _expanded = !_expanded;
+}

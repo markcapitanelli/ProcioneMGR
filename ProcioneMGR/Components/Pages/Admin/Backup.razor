@@ -1,0 +1,214 @@
+@page "/admin/backup"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Admin
+@attribute [Authorize(Roles = AppRoles.Admin)]
+
+@inject DatabaseBackupService BackupService
+
+<PageTitle>Backup Database</PageTitle>
+
+<h1>Backup Database</h1>
+
+<GuidaPanel Title="Backup Database — mettere al sicuro app.db prima di ogni operazione rischiosa">
+    <p>
+        Il database SQLite (<code>app.db</code>) contiene tutto lo stato della piattaforma: strategie
+        salvate, modelli ML, posizioni di trading, run della pipeline, credenziali cifrate. Questa
+        pagina crea una <strong>copia verificata</strong> del database in un momento sicuro.
+    </p>
+    <p>
+        Il passo critico è il <strong>WAL checkpoint</strong>: SQLite tiene le scritture recenti in un
+        file di log separato (<code>app.db-wal</code>). Copiare <code>app.db</code> mentre il trading
+        engine sta scrivendo potrebbe catturare un file "a metà" e quindi corrotto. Prima di copiare,
+        il sistema forza tutte le scritture dentro il file principale e svuota il log, così la copia è
+        auto-consistente. Subito dopo la copia viene eseguito <code>PRAGMA integrity_check</code>: se
+        il backup non risulta integro, viene <strong>eliminato</strong> e segnalato l'errore — non
+        viene mai conservato un backup corrotto.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Crea backup ora</dt>
+        <dd class="col-sm-9">Esegue checkpoint + copia + verifica integrità. Il file finisce in <code>backup/</code>.</dd>
+        <dt class="col-sm-3">Verifica</dt>
+        <dd class="col-sm-9">Riesegue <code>integrity_check</code> su un backup esistente.</dd>
+        <dt class="col-sm-3">Ripristina</dt>
+        <dd class="col-sm-9">
+            <strong>Sovrascrive il database attivo</strong> con il backup scelto. Prima di farlo viene
+            salvata una copia di sicurezza <code>.pre-restore</code> del DB corrente. Operazione da usare
+            solo dopo aver fermato l'app / il trading, altrimenti i dati appena scritti andrebbero persi.
+        </dd>
+    </dl>
+</GuidaPanel>
+
+@if (!BackupService.IsSqlite)
+{
+    <div class="alert alert-warning">
+        Il provider database attivo <strong>non è SQLite</strong>. Il backup a caldo di questa pagina
+        vale solo per SQLite. Per PostgreSQL usa <code>pg_dump</code>/<code>pg_restore</code>
+        (vedi <code>docs/POSTGRES_MIGRATION.md</code>).
+    </div>
+}
+else
+{
+    <div class="mb-3">
+        <button class="btn btn-primary" @onclick="CreateBackupAsync" disabled="@_busy">
+            @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Crea backup ora
+        </button>
+        <button class="btn btn-outline-secondary ms-2" @onclick="Refresh" disabled="@_busy">Aggiorna elenco</button>
+        <span class="text-muted ms-3">DB attivo: <code>@BackupService.DatabasePath</code></span>
+    </div>
+
+    @if (_message is not null)
+    {
+        <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+    }
+
+    @if (_backups is null)
+    {
+        <p><em>Caricamento…</em></p>
+    }
+    else if (_backups.Count == 0)
+    {
+        <p><em>Nessun backup presente in <code>@BackupService.BackupDirectory</code>.</em></p>
+    }
+    else
+    {
+        <table class="table table-striped align-middle" style="max-width: 920px;">
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Creato</th>
+                    <th class="text-end">Dimensione</th>
+                    <th class="text-end">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var b in _backups)
+                {
+                    <tr>
+                        <td><code>@b.FileName</code></td>
+                        <td>@b.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                        <td class="text-end">@FormatSize(b.SizeBytes)</td>
+                        <td class="text-end">
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => VerifyAsync(b)" disabled="@_busy">Verifica</button>
+                            @if (_confirmRestore == b.FullPath)
+                            {
+                                <button class="btn btn-sm btn-danger ms-1" @onclick="() => RestoreAsync(b)" disabled="@_busy">Conferma ripristino</button>
+                                <button class="btn btn-sm btn-link ms-1" @onclick="() => _confirmRestore = null" disabled="@_busy">Annulla</button>
+                            }
+                            else
+                            {
+                                <button class="btn btn-sm btn-outline-danger ms-1" @onclick="() => _confirmRestore = b.FullPath" disabled="@_busy">Ripristina</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private IReadOnlyList<BackupInfo>? _backups;
+    private string? _message;
+    private bool _isError;
+    private bool _busy;
+    private string? _confirmRestore;
+
+    protected override void OnInitialized() => Refresh();
+
+    private void Refresh()
+    {
+        if (BackupService.IsSqlite)
+        {
+            _backups = BackupService.ListBackups();
+        }
+    }
+
+    private async Task CreateBackupAsync()
+    {
+        _busy = true;
+        _message = null;
+        _confirmRestore = null;
+        try
+        {
+            // Il checkpoint + copia + integrity_check è I/O-bound e su un DB grande può richiedere
+            // qualche secondo: fuori dal thread di render per non bloccare il circuito.
+            var result = await Task.Run(() => BackupService.CreateBackup());
+            if (result.Success)
+            {
+                _isError = false;
+                var partial = result.Checkpoint.FullyCheckpointed
+                    ? ""
+                    : $" ATTENZIONE: checkpoint non completo (busy={result.Checkpoint.Busy}) — chiudi eventuali connessioni attive e riprova.";
+                _message = $"Backup creato: {Path.GetFileName(result.BackupPath)} ({FormatSize(result.SizeBytes)}, integrità OK).{partial}";
+            }
+            else
+            {
+                _isError = true;
+                _message = $"Backup fallito: {result.Error ?? result.Integrity.Message}";
+            }
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"Errore durante il backup: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            Refresh();
+        }
+    }
+
+    private async Task VerifyAsync(BackupInfo b)
+    {
+        _busy = true;
+        _message = null;
+        try
+        {
+            var integrity = await Task.Run(() => BackupService.VerifyBackup(b.FullPath));
+            _isError = !integrity.Ok;
+            _message = integrity.Ok
+                ? $"{b.FileName}: integrità OK."
+                : $"{b.FileName}: NON integro — {integrity.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RestoreAsync(BackupInfo b)
+    {
+        _busy = true;
+        _message = null;
+        _confirmRestore = null;
+        try
+        {
+            await Task.Run(() => BackupService.Restore(b.FullPath));
+            _isError = false;
+            _message = $"Ripristino completato da {b.FileName}. Una copia di sicurezza del DB precedente è stata salvata come .pre-restore. Riavvia l'app per usare il DB ripristinato.";
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"Ripristino fallito: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            Refresh();
+        }
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        double size = bytes;
+        var u = 0;
+        while (size >= 1024 && u < units.Length - 1) { size /= 1024; u++; }
+        return $"{size:0.#} {units[u]}";
+    }
+}

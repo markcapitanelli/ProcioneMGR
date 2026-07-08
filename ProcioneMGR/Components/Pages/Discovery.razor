@@ -1,0 +1,367 @@
+@page "/discovery"
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Discovery
+@using ProcioneMGR.Services.Optimization
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject IStrategyDiscovery DiscoverySvc
+@inject IStrategyComposer Composer
+@inject IStrategyFactory StrategyFactory
+@using ProcioneMGR.Services.Experiments
+@inject ProcioneMGR.Services.Experiments.IExperimentTracker Tracker
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Strategy Discovery</PageTitle>
+<h1>Strategy Discovery <span class="badge bg-secondary">walk-forward</span></h1>
+
+<GuidaPanel Title="Discovery — non so quale strategia usare, trovamela tu">
+    <p>
+        Mentre <a href="optimization">Optimization</a> ottimizza UNA strategia su UNA coppia,
+        Discovery fa una ricerca molto più ampia: prova <strong>ogni combinazione</strong> di
+        strategia × coppia × timeframe che selezioni, ciascuna con la stessa disciplina
+        walk-forward (allenamento su una finestra, verifica sulla finestra successiva mai vista),
+        e alla fine ti presenta una classifica delle combinazioni più promettenti e robuste. Utile
+        quando non sai da dove partire: rispondi alla domanda "tra tutto quello che potrei provare,
+        cosa ha davvero funzionato nel passato recente?".
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Coppie / Timeframe / Strategie</dt>
+        <dd class="col-sm-9">Le caselle di spunta definiscono l'"universo di ricerca": ogni combinazione selezionata diventa un job testato separatamente. Più ne selezioni, più a lungo dura la ricerca (il numero di job è mostrato sul bottone).</dd>
+        <dt class="col-sm-3">Da / A, In-Sample / OOS / Step</dt>
+        <dd class="col-sm-9">Stesso significato della pagina Optimization: periodo storico complessivo e ampiezza delle finestre walk-forward di allenamento/verifica.</dd>
+        <dt class="col-sm-3">OOS Sharpe</dt>
+        <dd class="col-sm-9">
+            Lo <strong>Sharpe out-of-sample</strong> è la colonna che conta davvero: misura il
+            rapporto rendimento/rischio ottenuto SOLO sui dati mai visti durante l'allenamento —
+            più alto è, meglio la strategia si è comportata su un test onesto. Le celle sono
+            colorate dal rosso (negativo) al verde (positivo).
+        </dd>
+        <dt class="col-sm-3">💾 Salva</dt>
+        <dd class="col-sm-9">Salva quella combinazione specifica in <a href="strategies">Le mie strategie</a>, da lì riusabile nel Backtest o in un Ensemble.</dd>
+        <dt class="col-sm-3">Modalità creativa</dt>
+        <dd class="col-sm-9">
+            Oltre allo sweep delle strategie note, il sistema <strong>genera strategie mai
+            codificate prima</strong>: combinazioni di segnali elementari (es. "RSI basso E volume
+            alto E trend a favore"), trigger su eventi discreti (picchi di volatilità, shock di
+            prezzo, con uscita a tempo) e meta-strategie che cambiano comportamento col regime.
+            Ogni spec generata passa dagli stessi filtri onesti delle altre: screening sul
+            periodo, poi conferma walk-forward a parametri fissi. Le confermate compaiono in
+            classifica insieme alle classiche e sono salvabili/usabili ovunque.
+        </dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Universo di ricerca</div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-4 mb-2">
+                <label class="form-label fw-semibold">Coppie</label>
+                @foreach (var s in _symbols)
+                {
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="sym_@s" checked="@_selSymbols.Contains(s)"
+                               @onchange="e => Toggle(_selSymbols, s, (bool)e.Value!)" disabled="@_busy" />
+                        <label class="form-check-label" for="sym_@s">@s</label>
+                    </div>
+                }
+            </div>
+            <div class="col-md-3 mb-2">
+                <label class="form-label fw-semibold">Timeframe</label>
+                @foreach (var tf in _timeframes)
+                {
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="tf_@tf" checked="@_selTfs.Contains(tf)"
+                               @onchange="e => Toggle(_selTfs, tf, (bool)e.Value!)" disabled="@_busy" />
+                        <label class="form-check-label" for="tf_@tf">@tf</label>
+                    </div>
+                }
+            </div>
+            <div class="col-md-5 mb-2">
+                <label class="form-label fw-semibold">Strategie</label>
+                @foreach (var p in StrategyFactory.Prototypes)
+                {
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="st_@p.Name" checked="@_selStrats.Contains(p.Name)"
+                               @onchange="e => Toggle(_selStrats, p.Name, (bool)e.Value!)" disabled="@_busy" />
+                        <label class="form-check-label" for="st_@p.Name">@p.DisplayName</label>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="row g-3 align-items-end mt-1">
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">In-Sample (mesi)</label>
+                <input type="number" class="form-control" style="width:6rem" @bind="_inSample" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">OOS (mesi)</label>
+                <input type="number" class="form-control" style="width:6rem" @bind="_oos" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Step (mesi)</label>
+                <input type="number" class="form-control" style="width:6rem" @bind="_step" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <div class="form-check mb-1">
+                    <input type="checkbox" class="form-check-input" id="creative" @bind="_creative" disabled="@_busy" />
+                    <label class="form-check-label" for="creative" title="Genera e valida anche strategie composite/event/regime mai codificate">Modalità creativa</label>
+                </div>
+                @if (_creative)
+                {
+                    <input type="number" class="form-control form-control-sm" style="width:9rem" min="10" max="2000"
+                           title="Spec da generare" @bind="_creativeMax" disabled="@_busy" />
+                }
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Run Discovery (@(JobCount()) job@(_creative ? " + creative" : ""))
+                </button>
+            </div>
+            @if (_busy)
+            {
+                <div class="col-auto"><button class="btn btn-outline-danger" @onclick="Stop">Stop</button></div>
+            }
+        </div>
+
+        @if (_busy)
+        {
+            <div class="progress mt-3" style="height:22px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width:@Pct%">
+                    @_progress.Completed/@_progress.Total — @_progress.Message (best OOS @_progress.BestSharpeSoFar.ToString("F2"))
+                </div>
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_result is not null)
+{
+    <div class="card">
+        <div class="card-header d-flex justify-content-between">
+            <span>Strategie scoperte (top @_result.Candidates.Count)</span>
+            <span class="small text-muted">@_result.JobsRun job · @_result.CombinationsTested combinazioni · @_result.ExecutionTime.TotalSeconds.ToString("F1")s</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0 align-middle">
+                <thead><tr><th>#</th><th>Strategia</th><th>Coppia</th><th>TF</th><th class="text-end">OOS Sharpe</th><th class="text-end" title="Deflated Sharpe: probabilità che l'edge sia reale dopo la correzione per il numero di combinazioni provate. >95% = difendibile.">DSR</th><th class="text-end">IS Sharpe</th><th class="text-end">Return %</th><th class="text-end">Max DD %</th><th class="text-end">Trade</th><th>Parametri</th><th></th></tr></thead>
+                <tbody>
+                    @{ var rank = 0; }
+                    @foreach (var c in _result.Candidates)
+                    {
+                        rank++;
+                        <tr class="@(rank == 1 ? "table-success" : "")">
+                            <td>@rank</td>
+                            <td>@c.StrategyName</td>
+                            <td>@c.Symbol</td>
+                            <td>@c.Timeframe</td>
+                            <td class="text-end fw-semibold" style="background:@SharpeColor(c.OutOfSampleSharpe)">@c.OutOfSampleSharpe.ToString("F2")</td>
+                            <td class="text-end">
+                                @if (c.Validation is { } v)
+                                {
+                                    <span class="badge @(v.IsSignificant ? "bg-success" : "bg-warning text-dark")" title="soglia SR* @v.ExpectedMaxSharpePerPeriod.ToString("F4")/periodo su @v.Trials combinazioni">@((v.DeflatedSharpe * 100).ToString("F0"))%</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                            </td>
+                            <td class="text-end">@c.InSampleSharpe.ToString("F2")</td>
+                            <td class="text-end @(c.TotalReturn >= 0 ? "text-success" : "text-danger")">@c.TotalReturn.ToString("F1")</td>
+                            <td class="text-end text-danger">@c.MaxDrawdown.ToString("F1")</td>
+                            <td class="text-end">@c.TotalTrades</td>
+                            <td><code class="small">@FormatParams(c.Parameters)</code></td>
+                            <td><button class="btn btn-sm btn-outline-success" @onclick="() => SaveAsync(c)">💾 Salva</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer text-muted small">Le strategie salvate compaiono in <a href="strategies">/strategie</a> e sono selezionabili nell'<a href="ensemble">ensemble</a>.</div>
+    </div>
+}
+
+@code {
+    private List<string> _symbols = new();
+    private List<string> _timeframes = new();
+    private readonly HashSet<string> _selSymbols = new();
+    private readonly HashSet<string> _selTfs = new();
+    private readonly HashSet<string> _selStrats = new();
+
+    private DateTime _from = new(2024, 6, 1);
+    private DateTime _to = new(2026, 6, 1);
+    private int _inSample = 12, _oos = 3, _step = 3;
+    private bool _creative;
+    private int _creativeMax = 200;
+
+    private StrategyDiscoveryResult? _result;
+    private DiscoveryProgress _progress = new();
+    private CancellationTokenSource? _cts;
+    private bool _busy, _isError;
+    private string? _status, _userId;
+
+    private int Pct => _progress.Total == 0 ? 0 : _progress.Completed * 100 / _progress.Total;
+    private int JobCount() => _selSymbols.Count * _selTfs.Count * Math.Max(1, _selStrats.Count);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var pairs = await db.OhlcvData.Select(c => new { c.Symbol, c.Timeframe }).Distinct().ToListAsync();
+        _symbols = pairs.Select(p => p.Symbol).Distinct().OrderBy(s => s).ToList();
+        _timeframes = pairs.Select(p => p.Timeframe).Distinct().OrderBy(t => t).ToList();
+
+        // Default: tutte le coppie con dati, 1h, tutte le strategie.
+        foreach (var s in _symbols) _selSymbols.Add(s);
+        if (_timeframes.Contains("1h")) _selTfs.Add("1h"); else if (_timeframes.Count > 0) _selTfs.Add(_timeframes[0]);
+        foreach (var p in StrategyFactory.Prototypes) _selStrats.Add(p.Name);
+    }
+
+    private void Toggle(HashSet<string> set, string val, bool on)
+    {
+        if (on) set.Add(val); else set.Remove(val);
+    }
+
+    private async Task RunAsync()
+    {
+        if (_selSymbols.Count == 0 || _selTfs.Count == 0 || _selStrats.Count == 0)
+        {
+            SetStatus("Seleziona almeno una coppia, un timeframe e una strategia.", true);
+            return;
+        }
+        _busy = true; _isError = false; _status = null; _result = null; _progress = new();
+        _cts = new CancellationTokenSource();
+        try
+        {
+            var cfg = new StrategyDiscoveryConfiguration
+            {
+                Symbols = _selSymbols.ToList(),
+                Timeframes = _selTfs.ToList(),
+                Strategies = _selStrats.ToList(),
+                From = _from.Date,
+                To = _to.Date,
+                WalkForward = new WalkForwardConfiguration { InSampleMonths = _inSample, OutOfSampleMonths = _oos, StepMonths = _step },
+                TopN = 20,
+            };
+            var progress = new Progress<DiscoveryProgress>(p => { _progress = p; InvokeAsync(StateHasChanged); });
+            _result = await DiscoverySvc.DiscoverAsync(cfg, progress, _cts.Token);
+
+            // Modalità creativa: genera spec composite/event/regime e le valida con lo stesso
+            // rigore (screening + walk-forward a parametri fissi), poi le fonde in classifica.
+            var creativeCount = 0;
+            if (_creative)
+            {
+                var composerCfg = new ComposerConfiguration { MaxCandidates = Math.Clamp(_creativeMax, 10, 2000), Seed = 42 };
+                var textProgress = new Progress<string>(m =>
+                {
+                    _progress = new DiscoveryProgress { Completed = _progress.Completed, Total = _progress.Total, Message = $"[creativa] {m}", BestSharpeSoFar = _progress.BestSharpeSoFar };
+                    InvokeAsync(StateHasChanged);
+                });
+                foreach (var symbol in _selSymbols)
+                {
+                    foreach (var tf in _selTfs)
+                    {
+                        _cts.Token.ThrowIfCancellationRequested();
+                        var confirmed = await Composer.ComposeAndScreenAsync(composerCfg, new ComposerScreeningConfiguration
+                        {
+                            Symbol = symbol,
+                            Timeframe = tf,
+                            From = _from.Date,
+                            To = _to.Date,
+                        }, textProgress, _cts.Token);
+                        _result.Candidates.AddRange(confirmed);
+                        creativeCount += confirmed.Count;
+                    }
+                }
+                _result.Candidates = _result.Candidates.OrderByDescending(c => c.OutOfSampleSharpe).ToList();
+            }
+            // Experiment tracking (best-effort): un run per campagna di discovery.
+            var bestOos = _result.Candidates.Count > 0 ? _result.Candidates.Max(c => c.OutOfSampleSharpe) : 0m;
+            var discRunId = await Tracker.SafeStartRunAsync(
+                "Discovery",
+                $"{_selSymbols.Count} coppie × {_selTfs.Count} TF × {_selStrats.Count} strategie" + (_creative ? " (creativa)" : ""),
+                new
+                {
+                    Symbols = cfg.Symbols,
+                    Timeframes = cfg.Timeframes,
+                    Strategies = cfg.Strategies,
+                    cfg.From,
+                    cfg.To,
+                    cfg.WalkForward.InSampleMonths,
+                    cfg.WalkForward.OutOfSampleMonths,
+                    cfg.WalkForward.StepMonths,
+                    Creative = _creative,
+                },
+                createdBy: _userId);
+            await Tracker.SafeLogMetricsAsync(discRunId, new Dictionary<string, decimal>
+            {
+                ["Candidates"] = _result.Candidates.Count,
+                ["JobsRun"] = _result.JobsRun,
+                ["CreativeCandidates"] = creativeCount,
+                ["BestOosSharpe"] = bestOos,
+            });
+            await Tracker.SafeCompleteAsync(discRunId, "Completed");
+
+            SetStatus($"Discovery completata: {_result.Candidates.Count} candidate da {_result.JobsRun} job"
+                    + (_creative ? $" ({creativeCount} dalla modalità creativa)" : "") + ".", false);
+        }
+        catch (OperationCanceledException) { SetStatus("Discovery annullata.", true); }
+        catch (Exception ex) { SetStatus($"Errore: {ex.Message}", true); }
+        finally { _busy = false; _cts?.Dispose(); _cts = null; }
+    }
+
+    private void Stop() => _cts?.Cancel();
+
+    private async Task SaveAsync(DiscoveryCandidate c)
+    {
+        if (_userId is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.SavedStrategies.Add(new SavedStrategy
+        {
+            UserId = _userId,
+            Name = $"{c.StrategyName} {c.Symbol} {c.Timeframe}",
+            StrategyName = c.StrategyName,
+            ParametersJson = JsonSerializer.Serialize(c.Parameters),
+            IsOptimized = true,
+            OptimizationDate = DateTime.UtcNow,
+            OptimizationSharpe = c.OutOfSampleSharpe,
+        });
+        await db.SaveChangesAsync();
+        SetStatus($"Salvata '{c.StrategyName} {c.Symbol} {c.Timeframe}' (OOS Sharpe {c.OutOfSampleSharpe:F2}).", false);
+    }
+
+    private static string FormatParams(Dictionary<string, decimal> p) => string.Join(", ", p.Select(kv => $"{kv.Key}={kv.Value}"));
+
+    private static string SharpeColor(decimal sharpe)
+    {
+        var s = Math.Clamp((double)sharpe, -2, 2);
+        var r = s < 0 ? 230 : (int)(230 - s / 2 * 130);
+        var g = s > 0 ? 200 : (int)(120 + (s + 2) / 2 * 80);
+        return $"rgba({r},{g},120,0.5)";
+    }
+
+    private void SetStatus(string text, bool error) { _status = text; _isError = error; }
+}

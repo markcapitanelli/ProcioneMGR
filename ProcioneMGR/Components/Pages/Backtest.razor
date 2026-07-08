@@ -1,0 +1,747 @@
+@page "/backtest"
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.Optimization
+@using ProcioneMGR.Services.Risk
+@attribute [Authorize]
+
+@inject IBacktestEngine Engine
+@inject IStrategyFactory StrategyFactory
+@using ProcioneMGR.Services.Experiments
+@inject ProcioneMGR.Services.Experiments.IExperimentTracker Tracker
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AuthenticationStateProvider AuthProvider
+@inject MonteCarloAnalyzer MonteCarlo
+@inject PerformanceControlService PerfControl
+@inject KellyCalculator Kelly
+@inject LeverageAdvisor LevAdvisor
+@inject ProcioneMGR.Services.Analysis.ExcursionAnalyzer Excursion
+
+<PageTitle>Backtest</PageTitle>
+
+<h1>Backtest</h1>
+
+<GuidaPanel Title="Backtest — simula una strategia sui dati storici">
+    <p>
+        Un <strong>backtest</strong> risponde alla domanda "se avessi usato questa strategia di
+        trading nel passato, con questi parametri, quanto avrei guadagnato o perso?". La
+        piattaforma rilegge le candele storiche di un simbolo (es. Bitcoin) una a una, come se il
+        tempo scorresse davvero, applica le regole della strategia scelta e simula compravendite
+        con un capitale di partenza — nessun soldo reale è coinvolto, è solo una simulazione su
+        dati già accaduti.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Exchange / Symbol / Timeframe</dt>
+        <dd class="col-sm-9">
+            L'exchange (es. Binance) e la coppia da testare (es. <code>BTC/USDT</code> = quanti
+            Tether servono per comprare un Bitcoin). Il <strong>timeframe</strong> è la durata di
+            ogni candela (1h = una candela ogni ora): più è corto, più segnali e rumore; più è
+            lungo, meno operazioni ma tendenze più pulite. Servono dati già scaricati per quel
+            simbolo/timeframe — se il backtest dice "nessuna candela nel range", vai prima in
+            <a href="dashboard">Dashboard</a> o <a href="market/watchlist">Watchlist</a> a scaricarli.
+        </dd>
+        <dt class="col-sm-3">Da / A</dt>
+        <dd class="col-sm-9">Il periodo storico su cui eseguire la simulazione.</dd>
+        <dt class="col-sm-3">Strategia</dt>
+        <dd class="col-sm-9">
+            La regola che decide quando comprare (Long), vendere allo scoperto (Short) o restare
+            fuori dal mercato. Ognuna ha parametri numerici propri (es. "periodo veloce/lento" per
+            una media mobile) che appaiono automaticamente quando la selezioni.
+        </dd>
+        <dt class="col-sm-3">Capitale iniziale</dt>
+        <dd class="col-sm-9">I soldi (virtuali) con cui parte la simulazione, es. 10.000.</dd>
+        <dt class="col-sm-3">Position size %</dt>
+        <dd class="col-sm-9">
+            Quanta parte del capitale investire a ogni operazione (es. 20% = si rischia un quinto
+            del capitale per trade, non tutto in una volta).
+        </dd>
+        <dt class="col-sm-3">Fee %</dt>
+        <dd class="col-sm-9">La commissione dell'exchange su ogni operazione (tipicamente 0.05–0.1%), sottratta dal risultato per non essere ottimisti rispetto alla realtà.</dd>
+        <dt class="col-sm-3">Run Backtest / Stop</dt>
+        <dd class="col-sm-9">Avvia o interrompe la simulazione (può richiedere qualche secondo su range lunghi).</dd>
+        <dt class="col-sm-3">Salva come strategia</dt>
+        <dd class="col-sm-9">Salva questa combinazione strategia+parametri con un nome, per ritrovarla in <a href="strategies">Le mie strategie</a> e riusarla altrove (es. nell'Ensemble).</dd>
+        <dt class="col-sm-3">Final Capital / Total Return</dt>
+        <dd class="col-sm-9">Il capitale alla fine della simulazione e la variazione percentuale rispetto al capitale iniziale.</dd>
+        <dt class="col-sm-3">Win Rate</dt>
+        <dd class="col-sm-9">Percentuale di operazioni chiuse in guadagno (non basta da sola: poche vincite grandi possono battere molte vincite piccole).</dd>
+        <dt class="col-sm-3">Max Drawdown</dt>
+        <dd class="col-sm-9">La peggior perdita percentuale mai subita dal punto più alto raggiunto dal capitale — indica quanto "dolore" avresti sopportato, non solo il risultato finale.</dd>
+        <dt class="col-sm-3">Equity curve</dt>
+        <dd class="col-sm-9">Il grafico del capitale nel tempo: sale quando si guadagna, scende quando si perde. Una linea che sale in modo regolare è preferibile a una che sale a scatti con grandi cadute.</dd>
+        <dt class="col-sm-3">Trade list</dt>
+        <dd class="col-sm-9">L'elenco di ogni operazione simulata: direzione (Long/Short), prezzi e orari di entrata/uscita, quantità e guadagno/perdita (PnL) in valuta e percentuale.</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Configurazione</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Exchange</label>
+                <select class="form-select" @bind="_exchange" disabled="@_busy">
+                    @foreach (var ex in Enum.GetValues<ExchangeName>())
+                    {
+                        <option value="@ex">@ex</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" list="bt_symbols" @bind="_symbol" style="width: 11rem;" disabled="@_busy" />
+                <datalist id="bt_symbols">
+                    @foreach (var s in _knownSymbols)
+                    {
+                        <option value="@s"></option>
+                    }
+                </datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                    @foreach (var tf in Timeframes.Supported.Keys)
+                    {
+                        <option value="@tf">@tf</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+            </div>
+        </div>
+
+        <hr />
+
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Strategia</label>
+                <select class="form-select" value="@_strategyName" @onchange="OnStrategyChanged" disabled="@_busy">
+                    @foreach (var p in StrategyFactory.Prototypes)
+                    {
+                        <option value="@p.Name">@p.DisplayName</option>
+                    }
+                </select>
+            </div>
+            @foreach (var param in _paramInputs)
+            {
+                <div class="col-auto">
+                    <label class="form-label">@param.Label</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;"
+                           @bind="param.Value" disabled="@_busy" />
+                </div>
+            }
+            <div class="col-auto">
+                <label class="form-label">Capitale iniziale</label>
+                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_initialCapital" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Position size %</label>
+                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_positionSizePercent" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Fee %</label>
+                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Stop loss % (0=off)</label>
+                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_stopLossPercent" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Take profit % (0=off)</label>
+                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_takeProfitPercent" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Trailing stop % (0=off)</label>
+                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_trailingStopPercent" disabled="@_busy" />
+            </div>
+            <div class="col-auto align-self-end">
+                <button type="button" class="btn btn-outline-secondary" @onclick="SuggestBracketAsync" disabled="@_busy"
+                        title="Calcola SL e TP dai dati (percentili 95° di escursione avversa/favorevole) per la coppia/timeframe selezionata">
+                    Suggerisci SL/TP
+                </button>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Leva (1=spot)</label>
+                <input type="number" step="1" min="1" max="125" class="form-control" style="width: 7rem;" @bind="_leverage" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Slippage %</label>
+                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_slippagePercent" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Funding %/8h</label>
+                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_fundingPercent" disabled="@_busy" />
+            </div>
+        </div>
+
+        <div class="mt-3 d-flex gap-2 align-items-center">
+            <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                @if (_busy)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Run Backtest
+            </button>
+            @if (_busy)
+            {
+                <button class="btn btn-outline-danger" @onclick="Stop">Stop</button>
+            }
+            <button class="btn btn-outline-secondary" @onclick="SaveAsync" disabled="@_busy">Salva come strategia</button>
+            <input class="form-control" style="max-width: 16rem;" placeholder="nome strategia da salvare" @bind="_saveName" disabled="@_busy" />
+            <a class="btn btn-link" href="strategies">Le mie strategie →</a>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_result is not null)
+{
+    <div class="row g-3 mb-3">
+        @{
+            var positive = _result.TotalReturnPercent >= 0;
+        }
+        <div class="col-auto">@MetricCard("Final Capital", $"{_result.FinalCapital:N2}")</div>
+        <div class="col-auto">@MetricCard("Total Return", $"{_result.TotalReturnPercent:N2}%", positive)</div>
+        <div class="col-auto">@MetricCard("Win Rate", $"{_result.WinRate:N1}%")</div>
+        <div class="col-auto">@MetricCard("Max Drawdown", $"{_result.MaxDrawdownPercent:N2}%", false)</div>
+        <div class="col-auto">@MetricCard("Trades", $"{_result.TotalTrades} ({_result.WinningTrades}W/{_result.LosingTrades}L)")</div>
+        @if (_result.LiquidationCount > 0)
+        {
+            <div class="col-auto">@MetricCard("⚠ LIQUIDAZIONI", $"{_result.LiquidationCount}", false)</div>
+        }
+    </div>
+
+    @if (_tradeReport is not null && _tradeReport.OperationCount > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Performance report (metriche sui trade)</div>
+            <div class="card-body">
+                <div class="row g-3 mb-2">
+                    <div class="col-auto">@MetricCard("Net Profit", $"{_tradeReport.NetProfit:N2}", _tradeReport.NetProfit >= 0)</div>
+                    <div class="col-auto">@MetricCard("Profit Factor", $"{_tradeReport.ProfitFactor:N2}", _tradeReport.ProfitFactor >= 1.5m)</div>
+                    <div class="col-auto">@MetricCard("Average Trade", $"{_tradeReport.AverageTrade:N2}", _tradeReport.AverageTrade >= 0)</div>
+                    <div class="col-auto">@MetricCard("% Win", $"{_tradeReport.PercentWin:N1}%")</div>
+                    <div class="col-auto">@MetricCard("Reward/Risk", $"{_tradeReport.RewardRiskRatio:N2}")</div>
+                    <div class="col-auto">@MetricCard("Kestner Ratio", $"{_tradeReport.KestnerRatio:N2}")</div>
+                </div>
+                <div class="row g-3">
+                    <div class="col-auto">@MetricCard("Max DD (money)", $"{_tradeReport.MaxDrawdownMoney:N2}", false)</div>
+                    <div class="col-auto">@MetricCard("Avg DD (money)", $"{_tradeReport.AverageDrawdownMoney:N2}", false)</div>
+                    <div class="col-auto">@MetricCard("Avg/Max DD", $"{_tradeReport.DrawdownRatio:N2}")</div>
+                    <div class="col-auto">@MetricCard("Max delay picchi", $"{_tradeReport.MaxDelayBetweenPeaks}")</div>
+                    <div class="col-auto">@MetricCard("Avg delay picchi", $"{_tradeReport.AvgDelayBetweenPeaks:N1}")</div>
+                    <div class="col-auto">@MetricCard("Max Loss", $"{_tradeReport.MaxLoss:N2}", false)</div>
+                    <div class="col-auto">@MetricCard("Max Win", $"{_tradeReport.MaxWin:N2}", true)</div>
+                </div>
+                @if (_kelly is not null && _kelly.DecidedTrades >= 10)
+                {
+                    <hr />
+                    <p class="mb-0 small">
+                        <strong>Kelly criterion</strong> (dai @_kelly.DecidedTrades trade: p=@_kelly.WinProbability.ToString("P1"),
+                        payoff=@_kelly.PayoffRatio.ToString("N2")): frazione ottima
+                        <strong>@_kelly.KellyFraction.ToString("P1")</strong> del capitale per trade —
+                        consigliato l'half-Kelly <strong>@_kelly.HalfKelly.ToString("P1")</strong>
+                        (le stime non sono mai esatte; eccedere costa più che difettare).
+                    </p>
+                }
+                @if (_tradeReport.AnnualProfits.Count > 0)
+                {
+                    <hr />
+                    <div class="d-flex flex-wrap gap-2">
+                        @foreach (var (year, profit) in _tradeReport.AnnualProfits)
+                        {
+                            <span class="badge @(profit >= 0 ? "bg-success" : "bg-danger")">@year: @profit.ToString("N0")</span>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header">Analisi del rischio (Montecarlo evoluta &amp; Performance Control)</div>
+            <div class="card-body">
+                <div class="row g-3 align-items-end mb-2">
+                    <div class="col-auto">
+                        <label class="form-label">Ricombinazioni</label>
+                        <input type="number" class="form-control" style="width: 8rem;" @bind="_mcShuffles" />
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label">Rumore %</label>
+                        <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_mcNoise" />
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-outline-primary" @onclick="RunMonteCarlo">Montecarlo</button>
+                    </div>
+                    <div class="col-auto ms-4">
+                        <label class="form-label">Finestra PC (trade)</label>
+                        <input type="number" class="form-control" style="width: 8rem;" @bind="_pcWindow" />
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label">Soglia PC</label>
+                        <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_pcThreshold" />
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-outline-primary" @onclick="RunPerformanceControl">Performance Control</button>
+                    </div>
+                </div>
+
+                @if (_mcResult is not null)
+                {
+                    <div class="row g-3 mb-2">
+                        <div class="col-auto">@MetricCard("DD storico", $"{_mcResult.OriginalMaxDrawdown:N2}", false)</div>
+                        <div class="col-auto">@MetricCard("DD 95° pct", $"{_mcResult.MaxDrawdown95:N2}", false)</div>
+                        <div class="col-auto">@MetricCard("DD peggiore", $"{_mcResult.WorstMaxDrawdown:N2}", false)</div>
+                        <div class="col-auto">@MetricCard("Risk Factor 95", $"{_mcResult.RiskFactor95:N2}x")</div>
+                    </div>
+                    <p class="text-muted small mb-2">
+                        Livello di guardia consigliato: spegnere il sistema se un futuro draw down supera il
+                        DD al 95° percentile (@_mcResult.MaxDrawdown95.ToString("N2")), tipicamente 1.5–2.5 volte quello storico.
+                    </p>
+                }
+
+                @if (_leverageAdvice is not null)
+                {
+                    <hr />
+                    <h6>Consulente leva (bootstrap sui trade di questo backtest, margine = position size)</h6>
+                    @if (_leverageAdvice.Warning is not null)
+                    {
+                        <div class="alert alert-warning py-1">@_leverageAdvice.Warning</div>
+                    }
+                    else
+                    {
+                        <table class="table table-sm table-striped mb-2" style="max-width: 52rem;">
+                            <thead class="table-light">
+                                <tr><th>Leva</th><th class="text-end">Crescita mediana</th><th class="text-end">5° pct</th><th class="text-end">P(-50%)</th><th class="text-end">P(rovina)</th><th class="text-end">Liquidazioni</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var s in _leverageAdvice.Scenarios)
+                                {
+                                    <tr class="@(s.Leverage == _leverageAdvice.RecommendedLeverage ? "table-success" : "")">
+                                        <td>@s.Leverage.ToString("N0")x</td>
+                                        <td class="text-end">@s.MedianGrowth.ToString("N2")x</td>
+                                        <td class="text-end">@s.Percentile5Growth.ToString("N2")x</td>
+                                        <td class="text-end">@s.HalvingProbability.ToString("P0")</td>
+                                        <td class="text-end">@s.RuinProbability.ToString("P0")</td>
+                                        <td class="text-end">@s.LiquidationRate.ToString("P1")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <p class="text-muted small mb-0">
+                            Leva massima sostenibile stimata: <strong>@_leverageAdvice.RecommendedLeverage.ToString("N0")x</strong>
+                            (P(-50% dal picco) ≤ 10% su @_leverageAdvice.Scenarios[0].TradesPerPath trade simulati).
+                            Oltre il picco di Kelly più leva significa più rischio E meno crescita mediana.
+                        </p>
+                    }
+                }
+
+                @if (_pcResult is not null)
+                {
+                    <div class="row g-3">
+                        <div class="col-auto">@MetricCard("Trade orig. → contr.", $"{_pcResult.OriginalTradeCount} → {_pcResult.ControlledTradeCount}")</div>
+                        <div class="col-auto">@MetricCard("Profitto orig. → contr.", $"{_pcResult.OriginalProfit:N0} → {_pcResult.ControlledProfit:N0}", _pcResult.ControlledProfit >= _pcResult.OriginalProfit)</div>
+                        @if (_pcResult.OriginalProfit > 0m)
+                        {
+                            <div class="col-auto">@MetricCard("Profitto conservato", $"{_pcResult.ProfitRetention:P0}", _pcResult.ProfitRetention >= 0.8m)</div>
+                        }
+                        <div class="col-auto">@MetricCard("Max DD orig.", $"{_pcResult.OriginalMaxDrawdown:N2}", false)</div>
+                        <div class="col-auto">@MetricCard("Max DD contr.", $"{_pcResult.ControlledMaxDrawdown:N2}", _pcResult.MaxDrawdownRatio < 1m)</div>
+                        <div class="col-auto">@MetricCard("PF orig. → contr.", $"{_pcResult.OriginalReport.ProfitFactor:N2} → {_pcResult.ControlledReport.ProfitFactor:N2}")</div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="card mb-3">
+        <div class="card-header">Equity curve</div>
+        <div class="card-body">
+            @if (_equitySeries.Count > 0)
+            {
+                <OhlcvChart ShowCandles="false" Indicators="_equitySeries" Height="320" />
+            }
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Trade list (@_result.Trades.Count)</div>
+        <div class="table-responsive" style="max-height: 460px; overflow:auto;">
+            <table class="table table-sm table-striped mb-0">
+                <thead class="table-light" style="position: sticky; top: 0;">
+                    <tr>
+                        <th>#</th><th>Dir</th><th>Entry</th><th>Exit</th>
+                        <th class="text-end">Entry px</th><th class="text-end">Exit px</th>
+                        <th class="text-end">Qty</th><th class="text-end">PnL</th><th class="text-end">PnL %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{
+                        var idx = 0;
+                    }
+                    @foreach (var t in _result.Trades.Take(500))
+                    {
+                        idx++;
+                        <tr>
+                            <td>@idx</td>
+                            <td><span class="badge @(t.Direction == "Long" ? "bg-success" : "bg-danger")">@t.Direction</span></td>
+                            <td>@t.EntryTime.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td>@(t.ExitTime?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                            <td class="text-end">@t.EntryPrice.ToString("N2")</td>
+                            <td class="text-end">@(t.ExitPrice?.ToString("N2") ?? "—")</td>
+                            <td class="text-end">@t.Quantity.ToString("N6")</td>
+                            <td class="text-end @(t.Pnl >= 0 ? "text-success" : "text-danger")">@t.Pnl.ToString("N2")</td>
+                            <td class="text-end @(t.PnlPercent >= 0 ? "text-success" : "text-danger")">@t.PnlPercent.ToString("N2")%</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (_result.Trades.Count > 500)
+        {
+            <div class="card-footer text-muted">Mostrati i primi 500 di @_result.Trades.Count trade.</div>
+        }
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery] private int? Load { get; set; }
+
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1h";
+    private DateTime _from = DateTime.UtcNow.Date.AddDays(-30);
+    private DateTime _to = DateTime.UtcNow.Date;
+    private decimal _initialCapital = 10_000m;
+    private decimal _positionSizePercent = 20m;
+    private decimal _feePercent = 0.1m;
+    private decimal _stopLossPercent;
+    private decimal _takeProfitPercent;
+    private decimal _trailingStopPercent;
+    private decimal _leverage = 1m;
+    private decimal _slippagePercent;
+    private decimal _fundingPercent;
+    private LeverageAdvice? _leverageAdvice;
+
+    private string _strategyName = "EmaCross";
+    private List<ParamInput> _paramInputs = new();
+    private List<string> _knownSymbols = new();
+
+    private BacktestResult? _result;
+    private TradeReport? _tradeReport;
+    private KellySuggestion? _kelly;
+    private MonteCarloResult? _mcResult;
+    private EquityControlResult? _pcResult;
+    private int _mcShuffles = 500;
+    private decimal _mcNoise;
+    private int _pcWindow = 10;
+    private decimal _pcThreshold;
+    private List<IndicatorSeries> _equitySeries = new();
+    private string _saveName = "";
+    private string? _userId;
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+    private CancellationTokenSource? _cts;
+
+    /// <summary>
+    /// Calcola SL e TP dai dati della coppia/timeframe nella finestra selezionata (media dei
+    /// percentili 95° di escursione avversa/favorevole tra long e short) e riempie i campi.
+    /// Livelli ampi che scattano solo sugli outlier: proteggono senza tagliare le operazioni normali.
+    /// </summary>
+    private async Task SuggestBracketAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbol) || _to <= _from)
+        {
+            SetStatus("Controlla symbol e intervallo date.", error: true);
+            return;
+        }
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var from = _from.Date;
+            var to = _to.Date.AddDays(1).AddSeconds(-1);
+            var candles = await db.OhlcvData
+                .Where(c => c.Symbol == _symbol && c.Timeframe == _timeframe && c.TimestampUtc >= from && c.TimestampUtc <= to)
+                .OrderBy(c => c.TimestampUtc)
+                .ToListAsync();
+            if (candles.Count < 100)
+            {
+                SetStatus($"Dati insufficienti ({candles.Count} candele) per suggerire SL/TP.", error: true);
+                return;
+            }
+            var sl = Excursion.SuggestStopLoss(candles);
+            var tp = Excursion.SuggestTakeProfit(candles);
+            static decimal Avg(decimal a, decimal b)
+            {
+                var v = new[] { a, b }.Where(x => x > 0m).ToList();
+                return v.Count > 0 ? Math.Round(v.Average(), 2) : 0m;
+            }
+            _stopLossPercent = Avg(sl.LongStopPercentile95, sl.ShortStopPercentile95);
+            _takeProfitPercent = Avg(tp.LongTakeProfitPercentile95, tp.ShortTakeProfitPercentile95);
+            SetStatus($"SL/TP suggeriti dai dati (percentile 95° di escursione su {candles.Count} candele): "
+                    + $"stop {_stopLossPercent:0.##}%, target {_takeProfitPercent:0.##}%. Modificabili prima di lanciare.", error: false);
+        }
+        catch (Exception ex) { SetStatus($"Suggerimento SL/TP fallito: {ex.Message}", error: true); }
+    }
+
+    private sealed class ParamInput
+    {
+        public required string Key { get; init; }
+        public required string Label { get; init; }
+        public decimal Value { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        BuildParamInputs(); // default per la strategia iniziale
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+
+        if (Load is int id)
+        {
+            await LoadStrategyAsync(id);
+        }
+    }
+
+    private void OnStrategyChanged(ChangeEventArgs e)
+    {
+        _strategyName = e.Value?.ToString() ?? "EmaCross";
+        BuildParamInputs();
+    }
+
+    private void BuildParamInputs()
+    {
+        var proto = StrategyFactory.Prototypes.FirstOrDefault(p => p.Name == _strategyName)
+                    ?? StrategyFactory.Prototypes[0];
+        _paramInputs = proto.ParameterDefinitions
+            .Select(d => new ParamInput { Key = d.Key, Label = d.Label, Value = d.Default })
+            .ToList();
+    }
+
+    private async Task RunAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbol) || _to <= _from)
+        {
+            SetStatus("Controlla symbol e intervallo date.", error: true);
+            return;
+        }
+
+        _busy = true;
+        _isError = false;
+        _status = null;
+        _result = null;
+        _tradeReport = null;
+        _kelly = null;
+        _leverageAdvice = null;
+        _mcResult = null;
+        _pcResult = null;
+        _equitySeries = new();
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var config = new BacktestConfiguration
+            {
+                ExchangeName = _exchange.ToString(),
+                Symbol = _symbol.Trim(),
+                Timeframe = _timeframe,
+                From = _from.Date,
+                To = _to.Date.AddDays(1).AddSeconds(-1),
+                InitialCapital = _initialCapital,
+                PositionSizePercent = _positionSizePercent,
+                FeePercent = _feePercent,
+                StrategyName = _strategyName,
+                StrategyParameters = _paramInputs.ToDictionary(p => p.Key, p => p.Value),
+                StopLossPercent = Math.Max(0m, _stopLossPercent),
+                TakeProfitPercent = Math.Max(0m, _takeProfitPercent),
+                TrailingStopPercent = Math.Max(0m, _trailingStopPercent),
+                Leverage = Math.Clamp(_leverage, 1m, 125m),
+                SlippagePercent = Math.Max(0m, _slippagePercent),
+                FundingRatePercentPer8h = Math.Max(0m, _fundingPercent),
+            };
+
+            _result = await Engine.RunBacktestAsync(config, _cts.Token);
+
+            if (_result.CandlesEvaluated == 0)
+            {
+                SetStatus("Nessuna candela nel range: fai prima un Fetch/Sync di questi dati.", error: true);
+            }
+            else
+            {
+                _equitySeries = new()
+                {
+                    new IndicatorSeries
+                    {
+                        Title = "Equity",
+                        Color = "#2962FF",
+                        Type = IndicatorSeriesType.Line,
+                        Points = _result.EquityCurve
+                            .Select(p => new IndicatorPoint(
+                                new DateTimeOffset(DateTime.SpecifyKind(p.Timestamp, DateTimeKind.Utc)).ToUnixTimeSeconds(),
+                                (double)p.Capital))
+                            .ToList(),
+                    },
+                };
+                _tradeReport = TradeStatistics.ComputeTradeReport(_result.Trades, _result.EquityCurve);
+                _kelly = Kelly.FromTradeHistory(_result.Trades);
+                _leverageAdvice = _result.Trades.Count >= 20
+                    ? LevAdvisor.Advise(_result.Trades, marginFraction: Math.Clamp(_positionSizePercent / 100m, 0.01m, 1m))
+                    : null;
+
+                // Experiment tracking (best-effort): un run per backtest, confrontabile con gli altri.
+                var initialCap = _result.EquityCurve.Count > 0 ? _result.EquityCurve[0].Capital : _initialCapital;
+                var finalCap = _result.EquityCurve.Count > 0 ? _result.EquityCurve[^1].Capital : _initialCapital;
+                var btRunId = await Tracker.SafeStartRunAsync(
+                    "Backtest",
+                    $"{_strategyName} · {_symbol.Trim()} · {_timeframe}",
+                    new
+                    {
+                        config.StrategyName,
+                        config.Symbol,
+                        config.Timeframe,
+                        config.From,
+                        config.To,
+                        config.InitialCapital,
+                        config.PositionSizePercent,
+                        config.FeePercent,
+                        config.Leverage,
+                        config.StopLossPercent,
+                        config.TakeProfitPercent,
+                        config.TrailingStopPercent,
+                        Parameters = config.StrategyParameters,
+                    },
+                    config.Symbol, config.Timeframe);
+                await Tracker.SafeLogMetricsAsync(btRunId, new Dictionary<string, decimal>
+                {
+                    ["CandlesEvaluated"] = _result.CandlesEvaluated,
+                    ["Trades"] = _result.Trades.Count,
+                    ["FinalCapital"] = finalCap,
+                    ["TotalReturnPct"] = initialCap > 0m ? (finalCap / initialCap - 1m) * 100m : 0m,
+                });
+                await Tracker.SafeCompleteAsync(btRunId, "Completed");
+
+                SetStatus($"Backtest completato su {_result.CandlesEvaluated} candele.", error: false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("Backtest annullato.", error: true);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+            _cts?.Dispose();
+            _cts = null;
+        }
+    }
+
+    private void Stop() => _cts?.Cancel();
+
+    private void RunMonteCarlo()
+    {
+        if (_result is null || _result.Trades.Count == 0) return;
+        var pnls = _result.Trades.Select(t => t.Pnl).ToList();
+        _mcResult = MonteCarlo.Run(pnls, new MonteCarloConfig
+        {
+            NumberOfShuffles = Math.Clamp(_mcShuffles, 1, 10_000),
+            NoisePercent = Math.Max(0m, _mcNoise),
+            Seed = 42, // riproducibile tra un click e l'altro
+        });
+    }
+
+    private void RunPerformanceControl()
+    {
+        if (_result is null || _result.Trades.Count == 0) return;
+        _pcResult = PerfControl.ApplyWindowProfitControl(
+            _result.Trades, Math.Max(1, _pcWindow), _pcThreshold);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_userId is null) return;
+        if (string.IsNullOrWhiteSpace(_saveName))
+        {
+            SetStatus("Inserisci un nome per salvare la strategia.", error: true);
+            return;
+        }
+
+        var json = JsonSerializer.Serialize(_paramInputs.ToDictionary(p => p.Key, p => p.Value));
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.SavedStrategies.Add(new SavedStrategy
+        {
+            UserId = _userId,
+            Name = _saveName.Trim(),
+            StrategyName = _strategyName,
+            ParametersJson = json,
+        });
+        await db.SaveChangesAsync();
+        SetStatus($"Strategia '{_saveName}' salvata.", error: false);
+        _saveName = "";
+    }
+
+    private async Task LoadStrategyAsync(int id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var saved = await db.SavedStrategies.FirstOrDefaultAsync(s => s.Id == id && s.UserId == _userId);
+        if (saved is null)
+        {
+            return;
+        }
+
+        _strategyName = saved.StrategyName;
+        BuildParamInputs();
+        var parameters = JsonSerializer.Deserialize<Dictionary<string, decimal>>(saved.ParametersJson) ?? new();
+        foreach (var pi in _paramInputs)
+        {
+            if (parameters.TryGetValue(pi.Key, out var v))
+            {
+                pi.Value = v;
+            }
+        }
+        SetStatus($"Caricata strategia salvata '{saved.Name}'.", error: false);
+    }
+
+    private void SetStatus(string text, bool error)
+    {
+        _status = text;
+        _isError = error;
+    }
+
+    private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
+    {
+        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
+        builder.AddMarkupContent(0, $@"
+            <div class='card text-center' style='min-width: 9rem;'>
+                <div class='card-body py-2'>
+                    <div class='text-muted small'>{label}</div>
+                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
+                </div>
+            </div>");
+    };
+}

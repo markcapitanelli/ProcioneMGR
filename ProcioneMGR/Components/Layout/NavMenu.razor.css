@@ -1,0 +1,119 @@
+.navbar-toggler {
+    appearance: none;
+    cursor: pointer;
+    width: 3.5rem;
+    height: 2.5rem;
+    color: white;
+    position: absolute;
+    top: 0.5rem;
+    right: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba%28255, 255, 255, 0.55%29' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e") no-repeat center/1.75rem rgba(255, 255, 255, 0.1);
+}
+
+.navbar-toggler:checked {
+    background-color: rgba(255, 255, 255, 0.5);
+}
+
+.top-row {
+    min-height: 3.5rem;
+    background-color: rgba(0, 0, 0, 0.25);
+}
+
+.navbar-brand {
+    font-size: 1.15rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+
+.brand-logo {
+    font-size: 1.4rem;
+}
+
+/* Intestazioni di sezione nella sidebar */
+.nav-section {
+    color: rgba(255, 255, 255, 0.45);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    padding: 0.65rem 1.5rem 0.3rem;
+}
+
+.bi {
+    width: 1.25rem;
+    margin-right: 0.65rem;
+    text-align: center;
+    display: inline-block;
+}
+
+.nav-item {
+    font-size: 0.87rem;
+}
+
+/* Con ~16 voci di menu, un'altezza generosa per link non ci sta più su molti schermi laptop
+   (es. 768-800px) senza scorrimento: righe più compatte riducono l'altezza totale del menu. */
+.nav-item ::deep .nav-link {
+    color: #cfd6e4;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    height: 2.2rem;
+    display: flex;
+    align-items: center;
+    line-height: 2.2rem;
+    width: 100%;
+    padding-left: 1rem;
+}
+
+.nav-item ::deep a.active {
+    background-color: rgba(45, 212, 191, 0.18);
+    color: #fff;
+    box-shadow: inset 3px 0 0 #2dd4bf;
+}
+
+.nav-item ::deep .nav-link:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: white;
+}
+
+.nav-scrollable {
+    display: none;
+}
+
+.navbar-toggler:checked ~ .nav-scrollable {
+    display: block;
+}
+
+@media (min-width: 641px) {
+    .navbar-toggler {
+        display: none;
+    }
+
+    .nav-scrollable {
+        display: block;
+        height: calc(100vh - 3.5rem);
+        overflow-y: auto;
+        scrollbar-width: thin; /* Firefox: barra sottile invece di quella di sistema */
+        scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+    }
+
+    /* Chrome/Edge/Safari: stessa barra sottile, coerente col tema scuro della sidebar
+       invece della barra di sistema chiara/pesante di default. */
+    .nav-scrollable::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .nav-scrollable::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .nav-scrollable::-webkit-scrollbar-thumb {
+        background-color: rgba(255, 255, 255, 0.25);
+        border-radius: 3px;
+    }
+
+    .nav-scrollable::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(255, 255, 255, 0.4);
+    }
+}

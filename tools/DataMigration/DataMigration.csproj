@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Riferimento a ProcioneMGR: serve SOLO per i metadati del modello EF (nomi tabelle/colonne,
+         tipi CLR, ordine delle dipendenze via foreign key). I dati NON passano dall'ORM: la copia è
+         ADO-to-ADO raw, così i valori cifrati e i blob sono trasferiti byte-per-byte senza mai
+         decifrarli (nessuna master key richiesta) e gli ID vengono preservati esplicitamente. -->
+    <ProjectReference Include="..\..\ProcioneMGR\ProcioneMGR.csproj" />
+  </ItemGroup>
+
+</Project>

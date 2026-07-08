@@ -1,0 +1,191 @@
+@page "/"
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Ensemble
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AuthenticationStateProvider AuthProvider
+@inject IEnsembleManager EnsembleMgr
+
+<PageTitle>ProcioneMGR</PageTitle>
+
+<AuthorizeView>
+    <Authorized>
+        <div class="hero-compact mb-4">
+            <span class="hero-logo-sm">🦝</span>
+            <div>
+                <h1 class="mb-0">Bentornato@(_displayName is null ? "" : $", {_displayName}")</h1>
+                <p class="text-muted mb-0">Ecco a che punto sei e dove conviene andare adesso.</p>
+            </div>
+        </div>
+
+        @if (_stats is not null)
+        {
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-md-3">@StatCard("Serie tracciate", _stats.TrackedSeries.ToString(), "bi-eye-fill")</div>
+                <div class="col-6 col-md-3">@StatCard("Candele in archivio", _stats.TotalCandles.ToString("N0"), "bi-bar-chart-line-fill")</div>
+                <div class="col-6 col-md-3">@StatCard("Le tue strategie salvate", _stats.MyStrategies.ToString(), "bi-collection-fill")</div>
+                <div class="col-6 col-md-3">@StatCard("Trading", _stats.TradingModeLabel, "bi-currency-exchange", _stats.TradingRunning)</div>
+            </div>
+
+            @if (_stats.TrackedSeries == 0)
+            {
+                <div class="alert alert-info d-flex align-items-center gap-2">
+                    <i class="bi bi-info-circle-fill fs-5"></i>
+                    <span>Non hai ancora dati di mercato scaricati. Il primo passo è il punto 1 qui sotto: aggiungi una serie in <a href="market/watchlist" class="alert-link">Watchlist</a> o scaricane una da <a href="dashboard" class="alert-link">Dashboard</a>.</span>
+                </div>
+            }
+
+            @if (_decayAlerts.Count > 0)
+            {
+                <div class="alert alert-danger">
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+                        <strong>@_decayAlerts.Count gamb@(_decayAlerts.Count == 1 ? "a" : "e") dell'ensemble in alert di decadimento</strong>
+                    </div>
+                    <ul class="mb-2 small">
+                        @foreach (var a in _decayAlerts)
+                        {
+                            <li>@a.DisplayName — Sharpe realizzato @(a.RealizedSharpe?.ToString("F2")) vs atteso @(a.ExpectedSharpe?.ToString("F2")) (@(a.SharpeRatio?.ToString("P0")))</li>
+                        }
+                    </ul>
+                    <a href="ensemble#decay-monitor" class="alert-link">Vedi il dettaglio in Ensemble →</a>
+                </div>
+            }
+        }
+
+        <h5 class="mb-3">Il percorso della piattaforma</h5>
+        <p class="text-muted small mb-3">Non serve seguirlo alla lettera, ma è l'ordine più naturale per chi inizia: prima i dati, poi si testa un'idea, poi la si affina, poi (facoltativo) la si automatizza.</p>
+        <div class="row g-3 mb-4 workflow-row">
+            @WorkflowStep(1, "bi-download", "Dati", "Scarica e tieni aggiornato lo storico dei prezzi.", "market/watchlist", "Watchlist")
+            @WorkflowStep(2, "bi-graph-up-arrow", "Backtest", "Simula una strategia sui dati storici, senza rischiare nulla.", "backtest", "Backtest")
+            @WorkflowStep(3, "bi-sliders", "Ottimizza", "Trova i parametri migliori, verificati fuori campione.", "optimization", "Optimization")
+            @WorkflowStep(4, "bi-diagram-3-fill", "Combina", "Metti insieme più strategie in un unico portafoglio.", "ensemble", "Ensemble")
+            @WorkflowStep(5, "bi-currency-exchange", "Vai live", "Prima in Paper (soldi finti), poi Testnet, poi Live.", "trading", "Trading")
+        </div>
+
+        <h5 class="mb-3">Strumenti di analisi avanzata</h5>
+        <div class="row g-3">
+            @ToolCard("bi-search", "Discovery", "Non sai da dove partire? Cerca automaticamente le combinazioni più promettenti.", "discovery")
+            @ToolCard("bi-grid-3x3-gap-fill", "Regimi di mercato", "Scopri se il mercato è in tendenza o laterale, e quale strategia rende meglio in ciascun caso.", "regimes")
+            @ToolCard("bi-cpu-fill", "ML Lab", "Addestra un modello di machine learning invece di regole fisse.", "ml")
+            @ToolCard("bi-arrow-left-right", "Pairs Trading", "Scommetti sulla relazione fra due asset, non sulla direzione del mercato.", "pairs-trading")
+            @ToolCard("bi-activity", "Volatilità", "Stima quanto sarà nervoso il mercato nei prossimi giorni.", "volatility")
+            @ToolCard("bi-newspaper", "Sentiment", "Notizie e sentiment di mercato, con verifica dell'impatto reale sul prezzo.", "sentiment")
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <div class="hero text-center">
+            <div class="hero-logo">🦝</div>
+            <h1 class="display-5 fw-bold mb-2">ProcioneMGR</h1>
+            <p class="lead text-muted mb-4">
+                Dati di mercato, backtesting e trading automatico — dalla prima simulazione fino
+                all'operatività reale, un passo alla volta.
+            </p>
+            <a class="btn btn-primary btn-lg me-2" href="Account/Login"><i class="bi bi-box-arrow-in-right me-1"></i> Login</a>
+            <a class="btn btn-outline-secondary btn-lg" href="Account/Register">Registrati</a>
+        </div>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private string? _displayName;
+    private HomeStats? _stats;
+    private List<ProcioneMGR.Services.Monitoring.DecayReport> _decayAlerts = new();
+
+    private sealed record HomeStats(int TrackedSeries, long TotalCandles, int MyStrategies, string TradingModeLabel, bool TradingRunning);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        if (state.User.Identity?.IsAuthenticated != true)
+        {
+            return;
+        }
+
+        var userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        _displayName = state.User.Identity?.Name;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var trackedSeries = await db.TrackedSeries.CountAsync(s => s.Enabled);
+        var totalCandles = await db.OhlcvData.LongCountAsync();
+        var myStrategies = userId is null ? 0 : await db.SavedStrategies.CountAsync(s => s.UserId == userId);
+        var tradingState = await db.TradingEngineStates.FirstOrDefaultAsync();
+
+        var tradingLabel = tradingState is null ? "Mai avviato" : tradingState.IsRunning ? $"{tradingState.Mode} attivo" : "Fermo";
+        _stats = new HomeStats(trackedSeries, totalCandles, myStrategies, tradingLabel, tradingState?.IsRunning ?? false);
+
+        try
+        {
+            _decayAlerts = (await EnsembleMgr.GetDecayReportsAsync()).Where(r => r.IsAlert).ToList();
+        }
+        catch { /* widget non bloccante: se il monitor fallisce, la home resta comunque utilizzabile */ }
+    }
+
+    private RenderFragment StatCard(string label, string value, string icon, bool? highlight = null) => builder =>
+    {
+        var cls = highlight switch { true => "text-success", false => "text-muted", null => "" };
+        builder.AddMarkupContent(0, $@"
+            <div class='card text-center h-100'>
+                <div class='card-body py-3'>
+                    <div class='text-muted small'><i class='bi {icon} me-1'></i>{label}</div>
+                    <div class='fs-4 fw-semibold {cls}'>{value}</div>
+                </div>
+            </div>");
+    };
+
+    private RenderFragment WorkflowStep(int step, string icon, string title, string description, string href, string linkLabel) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "col-md-4 col-lg");
+        builder.OpenElement(2, "a");
+        builder.AddAttribute(3, "href", href);
+        builder.AddAttribute(4, "class", "workflow-step h-100 d-block");
+        builder.OpenElement(5, "div");
+        builder.AddAttribute(6, "class", "workflow-step-number");
+        builder.AddContent(7, step);
+        builder.CloseElement();
+        builder.OpenElement(8, "div");
+        builder.AddAttribute(9, "class", $"feature-icon");
+        builder.OpenElement(10, "i");
+        builder.AddAttribute(11, "class", $"bi {icon}");
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.OpenElement(12, "h6");
+        builder.AddAttribute(13, "class", "mb-1");
+        builder.AddContent(14, title);
+        builder.CloseElement();
+        builder.OpenElement(15, "p");
+        builder.AddAttribute(16, "class", "text-muted small mb-0");
+        builder.AddContent(17, description);
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment ToolCard(string icon, string title, string description, string href) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "col-md-6 col-lg-4");
+        builder.OpenElement(2, "a");
+        builder.AddAttribute(3, "href", href);
+        builder.AddAttribute(4, "class", "feature-card h-100 d-block text-decoration-none text-body");
+        builder.OpenElement(5, "div");
+        builder.AddAttribute(6, "class", "feature-icon text-info");
+        builder.OpenElement(7, "i");
+        builder.AddAttribute(8, "class", $"bi {icon}");
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.OpenElement(9, "h6");
+        builder.AddContent(10, title);
+        builder.CloseElement();
+        builder.OpenElement(11, "p");
+        builder.AddAttribute(12, "class", "text-muted small mb-0");
+        builder.AddContent(13, description);
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+}

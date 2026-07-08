@@ -1,0 +1,905 @@
+@page "/pipeline"
+@rendermode InteractiveServer
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Ensemble
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Pipeline
+@using ProcioneMGR.Services.Pipeline.Stages
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IDisposable
+
+@inject IPipelineEngine Engine
+@inject IPipelineStageCatalog Catalog
+@inject IPipelineRulesProvider RulesProvider
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IEnsembleManager EnsembleMgr
+@inject AuthenticationStateProvider AuthProvider
+@inject IPipelineApplier Applier
+
+<PageTitle>Pipeline autonomo</PageTitle>
+<h1>Pipeline autonomo
+    @if (_live is not null)
+    {
+        <span class="badge bg-success">RUNNING</span>
+    }
+</h1>
+
+<GuidaPanel Title="Pipeline — la ricerca di strategie, automatizzata dall'inizio alla fine">
+    <p>
+        Il pipeline orchestra in un unico flusso tutti gli strumenti della piattaforma: scarica i
+        dati, valuta i fattori predittivi, identifica il regime di mercato, cerca strategie in
+        walk-forward, le valida su un periodo <strong>holdout mai visto</strong>, ne misura la
+        robustezza (Monte Carlo), le combina in un ensemble pesato e produce una raccomandazione
+        operativa con limiti di rischio. Principio guida: <em>le regole propongono, i backtest
+        dispongono</em> — ogni conclusione è supportata da numeri verificabili, nessuna scelta "a
+        sentimento".
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Configurazioni salvate</dt>
+        <dd class="col-sm-9">Le "ricette" riusabili: universo (simboli + timeframe), date di selezione/holdout, e l'elenco ordinato delle fasi con i loro parametri. Ogni fase può essere disattivata o riordinata (le dipendenze vengono verificate prima di partire).</dd>
+        <dt class="col-sm-3">Selection vs Holdout</dt>
+        <dd class="col-sm-9">Tutte le decisioni (parametri, fattori, stop) usano SOLO il periodo di selezione; l'holdout serve esclusivamente da verdetto finale. È la difesa principale contro l'overfitting: una strategia che funziona solo dove è stata scelta non sopravvive all'holdout.</dd>
+        <dt class="col-sm-3">Run in corso</dt>
+        <dd class="col-sm-9">Avanzamento fase per fase con log in tempo reale. Puoi mettere in pausa (si ferma al prossimo checkpoint) o annullare; un run interrotto riprende dalla fase successiva all'ultima completata.</dd>
+        <dt class="col-sm-3">Storico e raccomandazioni</dt>
+        <dd class="col-sm-9">Ogni run archivia l'output di ogni fase e la conclusione finale (regime, sopravvissuti, ensemble proposto, limiti di rischio, alert). "Applica al Trading" precompila l'ensemble in /ensemble — sei sempre tu a confermare e avviare, il pipeline non opera mai da solo.</dd>
+        <dt class="col-sm-3">Regole deterministiche</dt>
+        <dd class="col-sm-9">Le soglie decisionali (Sharpe minimo, riduzione sizing in alta volatilità, bias di regime…) sono in <code>Config/pipeline_rules.json</code>, modificabile senza toccare il codice. Nessun LLM: stesso input, stessa conclusione.</dd>
+        <dt class="col-sm-3">Schedulazione automatica</dt>
+        <dd class="col-sm-9">
+            Con "Schedulazione automatica" attiva e un'espressione cron valida (formato standard a
+            5 campi, UTC — es. <code>0 3 * * *</code> = ogni giorno alle 03:00), un worker in
+            background lancia da solo il run quando è dovuto, senza bisogno di premere "Esegui".
+            Un solo run alla volta gira davvero (motore a slot singolo): se è già in corso un altro
+            run, quello schedulato riparte al giro successivo (max 5 minuti) invece di saltare.
+            <strong>Limite non negoziabile</strong>: un run schedulato non esegue MAI in modalità
+            Live — se la config è in Live viene saltato con un avviso, non declassato di nascosto.
+        </dd>
+        <dt class="col-sm-3">Scoperta creativa</dt>
+        <dd class="col-sm-9">
+            La fase opzionale "Scoperta creativa" va oltre lo sweep delle strategie note:
+            <strong>genera</strong> strategie mai codificate — combinazioni di segnali elementari
+            normalizzati (RSI, stocastico, %B, direzione Supertrend, percentili di volume/VWAP/
+            momentum…), trigger su eventi discreti (picchi di volatilità, shock di prezzo, con
+            uscita a tempo) e meta-strategie condizionate dal regime. La generazione è
+            deterministica (stesso seed → stesse spec) e ogni candidata passa gli stessi filtri
+            delle altre: screening sul periodo di selezione, conferma walk-forward a parametri
+            fissi, poi l'holdout. I parametri della fase (quante spec, quali generatori, quali
+            segnali) si configurano con l'ingranaggio.
+        </dd>
+    </dl>
+</GuidaPanel>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+}
+
+@* ============================== RUN IN CORSO ============================== *@
+@if (_live is not null)
+{
+    <div class="card mb-3 border-success">
+        <div class="card-header bg-success-subtle d-flex justify-content-between align-items-center">
+            <span>▶ Run in corso — <strong>@_live.ConfigurationName</strong> (avviato @_live.StartedUtc.ToString("HH:mm:ss") UTC)</span>
+            <span>
+                <button class="btn btn-sm btn-outline-warning me-1" @onclick="PauseRunAsync" disabled="@_live.PauseRequested">⏸ Pausa</button>
+                <button class="btn btn-sm btn-outline-danger" @onclick="CancelRunAsync">✕ Annulla</button>
+            </span>
+        </div>
+        <div class="card-body">
+            @if (_live.PauseRequested)
+            {
+                <div class="alert alert-warning py-1 small">Pausa richiesta: il run si fermerà al prossimo checkpoint di fase.</div>
+            }
+            <div class="d-flex flex-wrap gap-1 mb-3">
+                @foreach (var s in _live.Stages)
+                {
+                    <span class="badge @StageBadge(s.Status)" title="@s.Text">@s.DisplayName</span>
+                }
+            </div>
+            @if (_live.RecentLog.Count > 0)
+            {
+                <pre class="small bg-dark text-light p-2 rounded" style="max-height: 220px; overflow:auto;">@string.Join("\n", _live.RecentLog)</pre>
+            }
+        </div>
+    </div>
+}
+
+@* ============================== CONFIGURAZIONI ============================== *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Configurazioni salvate (@_configs.Count)</span>
+        <button class="btn btn-sm btn-primary" @onclick="NewConfig">+ Nuova</button>
+    </div>
+    @if (_configs.Count == 0)
+    {
+        <div class="card-body text-muted">Nessuna configurazione: creane una per iniziare.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm mb-0 align-middle">
+                <thead><tr><th>Nome</th><th>Universo</th><th>Modalità</th><th>Schedulazione</th><th>Aggiornata</th><th class="text-end">Azioni</th></tr></thead>
+                <tbody>
+                    @foreach (var c in _configs)
+                    {
+                        <tr>
+                            <td>@c.Name</td>
+                            <td class="small text-muted">@UniverseSummary(c)</td>
+                            <td><span class="badge @(c.ExecutionMode == "Live" ? "bg-danger" : c.ExecutionMode == "Paper" ? "bg-info text-dark" : "bg-secondary")">@c.ExecutionMode</span></td>
+                            <td>
+                                <span class="badge @ScheduleBadgeClass(c)" title="@ScheduleTooltip(c)">@ScheduleBadgeText(c)</span>
+                            </td>
+                            <td class="small">@c.UpdatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td class="text-end text-nowrap">
+                                <button class="btn btn-sm btn-success me-1" @onclick="() => RunConfigAsync(c.Id)" disabled="@(_live is not null)">▶ Esegui</button>
+                                <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditConfig(c)">Modifica</button>
+                                <button class="btn btn-sm btn-outline-secondary me-1" @onclick="() => CloneConfigAsync(c)">Clona</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteConfigAsync(c.Id)">Elimina</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@* ============================== EDITOR CONFIG ============================== *@
+@if (_editing is not null)
+{
+    <div class="card mb-3 border-primary">
+        <div class="card-header bg-primary-subtle">@(_editing.Id == 0 ? "Nuova configurazione" : $"Modifica: {_editing.Name}")</div>
+        <div class="card-body">
+            <div class="row g-3 mb-2">
+                <div class="col-md-4">
+                    <label class="form-label small">Nome</label>
+                    <input class="form-control form-control-sm" @bind="_editing.Name" />
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label small">Descrizione</label>
+                    <input class="form-control form-control-sm" @bind="_editing.Description" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Exchange</label>
+                    <select class="form-select form-select-sm" @bind="_editing.ExchangeName">
+                        @foreach (var ex in Enum.GetValues<ExchangeName>()) { <option value="@ex">@ex</option> }
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Capitale iniziale</label>
+                    <input type="number" step="any" class="form-control form-control-sm" @bind="_editing.InitialCapital" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Seed</label>
+                    <input type="number" class="form-control form-control-sm" @bind="_editing.Seed" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Modalità esecuzione</label>
+                    <select class="form-select form-select-sm" @bind="_editing.ExecutionMode">
+                        <option value="Paper">Paper (consigliata)</option>
+                        <option value="Live">Live (solo piano, mai auto-eseguito)</option>
+                        <option value="Disabled">Disabled (solo analisi)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-2 align-items-end">
+                <div class="col-auto">
+                    <div class="form-check form-switch">
+                        <input type="checkbox" class="form-check-input" id="scheduleEnabled" @bind="_editing.ScheduleEnabled" />
+                        <label class="form-check-label small" for="scheduleEnabled">Schedulazione automatica</label>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Espressione cron (UTC)</label>
+                    <input class="form-control form-control-sm" placeholder="0 3 * * *" @bind="_editing.Schedule" @bind:event="oninput" />
+                </div>
+                <div class="col-md-5">
+                    <span class="small text-muted">@SchedulePreviewText()</span>
+                </div>
+            </div>
+            @if (_editing.ScheduleEnabled && _editing.ExecutionMode == "Live")
+            {
+                <div class="alert alert-warning py-2 small mb-2">
+                    ⚠️ I run schedulati vengono <strong>saltati</strong> quando la modalità è Live (mai eseguiti automaticamente per sicurezza) —
+                    passa a Paper o Disabled per far funzionare davvero la schedulazione, oppure lancia manualmente da qui quando vuoi il piano in Live.
+                </div>
+            }
+
+            <div class="row g-3 mb-2">
+                <div class="col-md-3">
+                    <label class="form-label small">Selezione da</label>
+                    <input type="date" class="form-control form-control-sm" @bind="_editRanges.SelectionFrom" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Selezione a</label>
+                    <input type="date" class="form-control form-control-sm" @bind="_editRanges.SelectionTo" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Holdout da</label>
+                    <input type="date" class="form-control form-control-sm" @bind="_editRanges.HoldoutFrom" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small">Holdout a</label>
+                    <input type="date" class="form-control form-control-sm" @bind="_editRanges.HoldoutTo" />
+                </div>
+            </div>
+
+            <label class="form-label fw-semibold mt-2">Universo</label>
+            <table class="table table-sm align-middle" style="max-width: 480px;">
+                <tbody>
+                    @for (var i = 0; i < _editUniverse.Count; i++)
+                    {
+                        var idx = i;
+                        <tr>
+                            <td><input class="form-control form-control-sm" placeholder="BTC/USDT" @bind="_editUniverse[idx].Symbol" /></td>
+                            <td style="width:7rem;">
+                                <select class="form-select form-select-sm" @bind="_editUniverse[idx].Timeframe">
+                                    @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                                </select>
+                            </td>
+                            <td style="width:3rem;"><button class="btn btn-sm btn-outline-danger" @onclick="() => _editUniverse.RemoveAt(idx)">×</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <button class="btn btn-sm btn-outline-secondary mb-3" @onclick='() => _editUniverse.Add(new SeriesSpec { Symbol = "", Timeframe = "1h" })'>+ Serie</button>
+
+            <label class="form-label fw-semibold d-block">Fasi (ordina con ↑↓, ingranaggio per i parametri)</label>
+            <table class="table table-sm align-middle">
+                <thead><tr><th style="width:4rem;">Ordine</th><th>Fase</th><th style="width:5rem;">Attiva</th><th style="width:9rem;"></th></tr></thead>
+                <tbody>
+                    @for (var i = 0; i < _editStages.Count; i++)
+                    {
+                        var idx = i;
+                        var stage = _editStages[idx];
+                        var proto = Catalog.Prototypes.FirstOrDefault(p => p.Name == stage.Type);
+                        <tr>
+                            <td>@stage.Order</td>
+                            <td>
+                                <span title="@proto?.Description">@(proto?.DisplayName ?? stage.Type)</span>
+                                @if (proto is not null && proto.Dependencies.Count > 0)
+                                {
+                                    <span class="text-muted small ms-1">(richiede: @string.Join(" | ", proto.Dependencies.Select(d => string.Join("/", d.AnyOf))))</span>
+                                }
+                            </td>
+                            <td><input type="checkbox" class="form-check-input" @bind="stage.Enabled" /></td>
+                            <td class="text-nowrap">
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => MoveStage(idx, -1)" disabled="@(idx == 0)">↑</button>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => MoveStage(idx, +1)" disabled="@(idx == _editStages.Count - 1)">↓</button>
+                                <button class="btn btn-sm btn-outline-primary" @onclick="() => _expandedStage = _expandedStage == stage.Type ? null : stage.Type">⚙</button>
+                            </td>
+                        </tr>
+                        @if (_expandedStage == stage.Type && proto is not null)
+                        {
+                            <tr>
+                                <td></td>
+                                <td colspan="3">
+                                    @if (proto.ParameterDefinitions.Count == 0)
+                                    {
+                                        <span class="text-muted small">Nessun parametro.</span>
+                                    }
+                                    <div class="row g-2">
+                                        @foreach (var def in proto.ParameterDefinitions)
+                                        {
+                                            <div class="col-md-4">
+                                                <label class="form-label small" title="@def.Hint">@def.Label</label>
+                                                <input class="form-control form-control-sm"
+                                                       value="@(stage.Parameters.TryGetValue(def.Key, out var v) ? v : def.DefaultValue)"
+                                                       @onchange="e => stage.Parameters[def.Key] = e.Value?.ToString() ?? def.DefaultValue" />
+                                            </div>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+
+            @if (_editProblems.Count > 0)
+            {
+                <div class="alert alert-warning py-2 small">
+                    <strong>Problemi di configurazione:</strong>
+                    <ul class="mb-0">@foreach (var p in _editProblems) { <li>@p</li> }</ul>
+                </div>
+            }
+
+            <button class="btn btn-primary btn-sm" @onclick="SaveConfigAsync">💾 Salva</button>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="() => _editing = null">Annulla</button>
+            <span class="text-muted small ms-2">Regole decisionali in <code>@RulesProvider.RulesFilePath</code></span>
+        </div>
+    </div>
+}
+
+@* ============================== ULTIMA RACCOMANDAZIONE ============================== *@
+@if (_lastRecommendation is not null)
+{
+    <div class="card mb-3 border-info">
+        <div class="card-header bg-info-subtle d-flex justify-content-between align-items-center">
+            <span>💡 Ultima raccomandazione (run @_lastRecommendationRun?.StartedAt.ToString("yyyy-MM-dd HH:mm"))</span>
+            <span>
+                <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ApplyRecommendationAsync(_lastRecommendation)" disabled="@(_lastRecommendation.EnsembleLegs.Count == 0)">Applica al Trading</button>
+                <a class="btn btn-sm btn-outline-secondary" href="@ExportHref(_lastRecommendationRun)" download="pipeline-report.md">Esporta report</a>
+            </span>
+        </div>
+        <div class="card-body">
+            <div class="row g-2 mb-2">
+                <div class="col-auto"><span class="badge bg-secondary">Regime: @_lastRecommendation.RegimeLabel</span></div>
+                <div class="col-auto"><span class="badge @(_lastRecommendation.VolatilityLabel == "Alta" ? "bg-danger" : "bg-secondary")">Volatilità: @_lastRecommendation.VolatilityLabel</span></div>
+                <div class="col-auto"><span class="badge bg-secondary">Sentiment: @_lastRecommendation.SentimentLabel</span></div>
+                <div class="col-auto"><span class="badge @(_lastRecommendation.Survivors > 0 ? "bg-success" : "bg-warning text-dark")">@_lastRecommendation.Survivors/@_lastRecommendation.CandidatesEvaluated sopravvissuti</span></div>
+            </div>
+            <pre class="small bg-light p-2 rounded" style="white-space: pre-wrap;">@_lastRecommendation.FullText</pre>
+        </div>
+    </div>
+}
+
+@* ============================== STORICO RUN ============================== *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Storico run (@FilteredRuns.Count)</span>
+        <select class="form-select form-select-sm" style="width:auto;" @bind="_runTriggerFilter">
+            <option value="">Tutti i trigger</option>
+            <option value="Manual">Solo manuali</option>
+            <option value="Scheduled">Solo schedulati</option>
+        </select>
+    </div>
+    @if (FilteredRuns.Count == 0)
+    {
+        <div class="card-body text-muted">Nessun run eseguito.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm mb-0 align-middle">
+                <thead><tr><th>Avviato</th><th>Config</th><th>Trigger</th><th>Durata</th><th>Stato</th><th class="text-end">Azioni</th></tr></thead>
+                <tbody>
+                    @foreach (var r in FilteredRuns)
+                    {
+                        <tr class="@(_selectedRun?.Id == r.Id ? "table-active" : "")">
+                            <td class="small">@r.StartedAt.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                            <td class="small">@(_configs.FirstOrDefault(c => c.Id == r.ConfigurationId)?.Name ?? $"#{r.ConfigurationId}")</td>
+                            <td class="small" title="@r.Trigger">@(r.Trigger == "Scheduled" ? "🕒" : r.Trigger == "Event" ? "⚡" : "✋")</td>
+                            <td class="small">@(r.CompletedAt is DateTime done ? (done - r.StartedAt).ToString(@"hh\:mm\:ss") : "—")</td>
+                            <td><span class="badge @RunBadge(r.Status)">@r.Status</span></td>
+                            <td class="text-end text-nowrap">
+                                <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => SelectRun(r)">Dettaglio</button>@* async: carica anche la decisione di ri-applica *@
+                                @if (r.Status is "Paused" or "Failed" or "Cancelled")
+                                {
+                                    <button class="btn btn-sm btn-outline-success" @onclick="() => ResumeRunAsync(r.Id)" disabled="@(_live is not null)">↻ Riprendi</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@* ============================== DETTAGLIO RUN ============================== *@
+@if (_selectedRun is not null)
+{
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Dettaglio run @_selectedRun.StartedAt.ToString("yyyy-MM-dd HH:mm") — <span class="badge @RunBadge(_selectedRun.Status)">@_selectedRun.Status</span></span>
+            <span>
+                @if (_selectedRecommendation is { EnsembleLegs.Count: > 0 })
+                {
+                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ApplyRecommendationAsync(_selectedRecommendation)">Applica al Trading</button>
+                }
+                <a class="btn btn-sm btn-outline-secondary me-1" href="@ExportHref(_selectedRun)" download="pipeline-report.md">Esporta report</a>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => _selectedRun = null">Chiudi</button>
+            </span>
+        </div>
+        <div class="card-body">
+            @if (!string.IsNullOrEmpty(_selectedRun.Conclusion))
+            {
+                <h6>Riepilogo esecutivo</h6>
+                <pre class="small bg-light p-2 rounded" style="white-space: pre-wrap;">@_selectedRun.Conclusion</pre>
+            }
+            @if (!string.IsNullOrEmpty(_selectedRun.ErrorLog))
+            {
+                <div class="alert alert-danger small"><strong>Errore:</strong> @_selectedRun.ErrorLog.Split('\n')[0]</div>
+            }
+
+            @if (_selectedDecision is not null)
+            {
+                var d = _selectedDecision;
+                var j = d.Judgment;
+                <div class="card mb-3 border-info">
+                    <div class="card-header py-2">
+                        Giudizio del supervisore &amp; ri-applica automatica
+                        @if (d.Applied) { <span class="badge bg-success ms-1">Ensemble sostituito</span> }
+                        else { <span class="badge bg-secondary ms-1">Ensemble corrente mantenuto</span> }
+                        @if (j is not null) { <span class="badge bg-light text-dark border ms-1">Supervisore: @(string.IsNullOrEmpty(j.Provider) ? "—" : j.Provider)</span> }
+                    </div>
+                    <div class="card-body py-2">
+                        <p class="mb-2 small">@d.Message</p>
+                        @if (j is not null)
+                        {
+                            @if (string.Equals(j.Provider, "Logging", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <div class="alert alert-secondary py-1 px-2 small mb-2">
+                                    Supervisore AI non attivo (provider <code>Logging</code>). Imposta <code>PipelineSupervisor:Provider=Claude</code>
+                                    e la env <code>ANTHROPIC_API_KEY</code> per un giudizio qualitativo. La decisione resta comunque basata su metriche oggettive.
+                                </div>
+                            }
+                            <div class="mb-1"><strong>Verdetto supervisore:</strong>
+                                @if (j.ApproveReplacement) { <span class="badge bg-success">Nessuna obiezione</span> }
+                                else { <span class="badge bg-danger">Veto alla sostituzione</span> }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(j.Summary)) { <p class="small mb-2">@j.Summary</p> }
+                            @if (j.Suggestions.Count > 0)
+                            {
+                                <div class="small"><strong>Suggerimenti:</strong>
+                                    <ul class="mb-1">@foreach (var s in j.Suggestions) { <li>@s</li> }</ul>
+                                </div>
+                            }
+                            @if (j.Concerns.Count > 0)
+                            {
+                                <div class="small text-danger"><strong>Preoccupazioni:</strong>
+                                    <ul class="mb-1">@foreach (var c in j.Concerns) { <li>@c</li> }</ul>
+                                </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(j.Reasoning))
+                            {
+                                <details class="small"><summary>Ragionamento</summary><pre class="bg-light p-2 rounded mt-1" style="white-space: pre-wrap;">@j.Reasoning</pre></details>
+                            }
+                        }
+                    </div>
+                </div>
+            }
+
+            <h6>Timeline delle fasi</h6>
+            <table class="table table-sm align-middle">
+                <thead><tr><th>Fase</th><th>Stato</th><th>Durata</th><th>Output</th></tr></thead>
+                <tbody>
+                    @foreach (var s in _selectedSummaries.OrderBy(s => s.Order))
+                    {
+                        <tr>
+                            <td>@s.DisplayName</td>
+                            <td><span class="badge @StageBadge(s.Status)">@s.Status</span></td>
+                            <td class="small">@s.Duration.ToString(@"mm\:ss")</td>
+                            <td class="small">@s.Text</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            @if (_previousRunSummaries.Count > 0)
+            {
+                <h6>Confronto col run precedente</h6>
+                <table class="table table-sm align-middle" style="max-width: 640px;">
+                    <thead><tr><th>Metrica</th><th>Precedente</th><th>Questo run</th><th>Δ</th></tr></thead>
+                    <tbody>
+                        @foreach (var (label, prev, curr) in CompareRuns())
+                        {
+                            <tr>
+                                <td>@label</td>
+                                <td>@prev.ToString("N2")</td>
+                                <td>@curr.ToString("N2")</td>
+                                <td class="@(curr >= prev ? "text-success" : "text-danger")">@((curr - prev).ToString("+0.##;-0.##"))</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private List<ProcioneMGR.Services.Pipeline.PipelineConfiguration> _configs = new();
+    private List<PipelineRun> _runs = new();
+    private string _runTriggerFilter = "";
+    private List<PipelineRun> FilteredRuns =>
+        string.IsNullOrEmpty(_runTriggerFilter) ? _runs : _runs.Where(r => r.Trigger == _runTriggerFilter).ToList();
+    private PipelineLiveStatus? _live;
+    private PipelineRun? _selectedRun;
+    private List<StageSummary> _selectedSummaries = new();
+    private List<StageSummary> _previousRunSummaries = new();
+    private PipelineRecommendation? _lastRecommendation;
+    private PipelineRun? _lastRecommendationRun;
+    private PipelineRecommendation? _selectedRecommendation;
+    private AutoReapplyDecisionArtifact? _selectedDecision;
+
+    private ProcioneMGR.Services.Pipeline.PipelineConfiguration? _editing;
+    private List<SeriesSpec> _editUniverse = new();
+    private PipelineDateRanges _editRanges = new();
+    private List<StageConfig> _editStages = new();
+    private string? _expandedStage;
+    private List<string> _editProblems = new();
+
+    private string? _userId;
+    private string? _message;
+    private bool _isError;
+    private System.Threading.Timer? _timer;
+    private bool _wasRunning;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        await ReloadAsync();
+        _timer = new System.Threading.Timer(async _ => await InvokeAsync(TickAsync), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
+
+    private async Task TickAsync()
+    {
+        var live = Engine.GetLiveStatus();
+        var justFinished = _wasRunning && live is null;
+        _live = live;
+        _wasRunning = live is not null;
+        if (justFinished) await ReloadAsync();
+        StateHasChanged();
+    }
+
+    private async Task ReloadAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _configs = await db.PipelineConfigurations.AsNoTracking().OrderByDescending(c => c.UpdatedAt).ToListAsync();
+            _runs = await db.PipelineRuns.AsNoTracking().OrderByDescending(r => r.StartedAt).Take(25).ToListAsync();
+            _live = Engine.GetLiveStatus();
+            _wasRunning = _live is not null;
+
+            var lastCompleted = _runs.FirstOrDefault(r => r.Status == "Completed" && !string.IsNullOrEmpty(r.RecommendationJson) && r.RecommendationJson != "{}");
+            _lastRecommendationRun = lastCompleted;
+            _lastRecommendation = lastCompleted is null
+                ? null
+                : JsonSerializer.Deserialize<PipelineRecommendation>(lastCompleted.RecommendationJson);
+        }
+        catch { /* refresh resiliente */ }
+    }
+
+    // -------------------------------------------------------------- config CRUD
+
+    private void NewConfig()
+    {
+        _editing = new ProcioneMGR.Services.Pipeline.PipelineConfiguration
+        {
+            Name = "Nuovo pipeline",
+            ExchangeName = "Binance",
+            InitialCapital = 10_000m,
+            ExecutionMode = "Paper",
+        };
+        _editUniverse = [new SeriesSpec { Symbol = "BTC/USDT", Timeframe = "1h" }];
+        var now = DateTime.UtcNow.Date;
+        _editRanges = new PipelineDateRanges
+        {
+            SelectionFrom = now.AddMonths(-24),
+            SelectionTo = now.AddMonths(-4),
+            HoldoutFrom = now.AddMonths(-4),
+            HoldoutTo = now,
+        };
+        _editStages = Catalog.DefaultStages();
+        _editProblems.Clear();
+        _expandedStage = null;
+    }
+
+    private void EditConfig(ProcioneMGR.Services.Pipeline.PipelineConfiguration config)
+    {
+        _editing = new ProcioneMGR.Services.Pipeline.PipelineConfiguration
+        {
+            Id = config.Id,
+            Name = config.Name,
+            Description = config.Description,
+            CreatedBy = config.CreatedBy,
+            CreatedAt = config.CreatedAt,
+            ExchangeName = config.ExchangeName,
+            InitialCapital = config.InitialCapital,
+            Seed = config.Seed,
+            ExecutionMode = config.ExecutionMode,
+            Schedule = config.Schedule,
+            ScheduleEnabled = config.ScheduleEnabled,
+            NextRunAt = config.NextRunAt,
+        };
+        _editUniverse = JsonSerializer.Deserialize<List<SeriesSpec>>(config.UniverseJson) ?? [];
+        _editRanges = JsonSerializer.Deserialize<PipelineDateRanges>(config.DateRangesJson) ?? new PipelineDateRanges();
+        _editStages = JsonSerializer.Deserialize<List<StageConfig>>(config.StagesJson) ?? Catalog.DefaultStages();
+
+        // Fasi aggiunte alla piattaforma DOPO il salvataggio di questa configurazione: le
+        // proponiamo nell'editor (disabilitate, nessun cambio di comportamento) così le config
+        // esistenti possono adottarle senza doverle ricreare da zero.
+        foreach (var proto in Catalog.Prototypes)
+        {
+            if (!_editStages.Any(s => s.Type.Equals(proto.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                _editStages.Add(new StageConfig
+                {
+                    Type = proto.Name,
+                    Order = proto.DefaultOrder,
+                    Enabled = false,
+                    Parameters = proto.ParameterDefinitions.ToDictionary(d => d.Key, d => d.DefaultValue),
+                });
+            }
+        }
+        _editStages = _editStages.OrderBy(s => s.Order).ToList();
+
+        _editProblems.Clear();
+        _expandedStage = null;
+    }
+
+    private void MoveStage(int index, int delta)
+    {
+        var other = index + delta;
+        if (other < 0 || other >= _editStages.Count) return;
+        (_editStages[index], _editStages[other]) = (_editStages[other], _editStages[index]);
+        for (var i = 0; i < _editStages.Count; i++) _editStages[i].Order = i + 1;
+    }
+
+    private async Task SaveConfigAsync()
+    {
+        if (_editing is null) return;
+        if (string.IsNullOrWhiteSpace(_editing.Name)) { SetMsg("Il nome è obbligatorio.", true); return; }
+        _editUniverse.RemoveAll(u => string.IsNullOrWhiteSpace(u.Symbol));
+        if (_editUniverse.Count == 0) { SetMsg("L'universo deve avere almeno una serie.", true); return; }
+        if (_editRanges.SelectionTo <= _editRanges.SelectionFrom || _editRanges.HoldoutTo <= _editRanges.HoldoutFrom)
+        { SetMsg("Range di date non validi.", true); return; }
+        if (_editRanges.HoldoutFrom < _editRanges.SelectionTo)
+        { SetMsg("L'holdout deve iniziare DOPO la fine della selezione (mai sovrapposti).", true); return; }
+
+        _editProblems = Engine.ValidateConfiguration(_editStages);
+        if (_editProblems.Count > 0) { SetMsg("Correggere i problemi delle fasi prima di salvare.", true); return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        ProcioneMGR.Services.Pipeline.PipelineConfiguration row;
+        if (_editing.Id == 0)
+        {
+            row = new ProcioneMGR.Services.Pipeline.PipelineConfiguration { CreatedBy = _userId ?? "", CreatedAt = DateTime.UtcNow };
+            db.PipelineConfigurations.Add(row);
+        }
+        else
+        {
+            row = await db.PipelineConfigurations.FirstAsync(c => c.Id == _editing.Id);
+        }
+        // Se cron o l'abilitazione cambiano, NextRunAt precedente non ha più senso: azzerarlo fa
+        // sì che lo scheduler lo ricalcoli da zero (da "ora") al prossimo tick invece di tenere
+        // un'occorrenza calcolata per l'espressione VECCHIA.
+        var scheduleChanged = row.Schedule != _editing.Schedule || row.ScheduleEnabled != _editing.ScheduleEnabled;
+
+        row.Name = _editing.Name;
+        row.Description = _editing.Description;
+        row.ExchangeName = _editing.ExchangeName;
+        row.InitialCapital = _editing.InitialCapital;
+        row.Seed = _editing.Seed;
+        row.ExecutionMode = _editing.ExecutionMode;
+        row.Schedule = _editing.Schedule;
+        row.ScheduleEnabled = _editing.ScheduleEnabled;
+        if (scheduleChanged) row.NextRunAt = null;
+        row.UniverseJson = JsonSerializer.Serialize(_editUniverse);
+        row.DateRangesJson = JsonSerializer.Serialize(_editRanges);
+        row.StagesJson = JsonSerializer.Serialize(_editStages);
+        row.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+
+        _editing = null;
+        SetMsg("Configurazione salvata.", false);
+        await ReloadAsync();
+    }
+
+    private async Task CloneConfigAsync(ProcioneMGR.Services.Pipeline.PipelineConfiguration config)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.PipelineConfigurations.Add(new ProcioneMGR.Services.Pipeline.PipelineConfiguration
+        {
+            Name = config.Name + " (copia)",
+            Description = config.Description,
+            CreatedBy = _userId ?? "",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            ExchangeName = config.ExchangeName,
+            UniverseJson = config.UniverseJson,
+            DateRangesJson = config.DateRangesJson,
+            StagesJson = config.StagesJson,
+            InitialCapital = config.InitialCapital,
+            Seed = config.Seed,
+            ExecutionMode = config.ExecutionMode,
+            Schedule = config.Schedule,
+        });
+        await db.SaveChangesAsync();
+        SetMsg("Configurazione clonata.", false);
+        await ReloadAsync();
+    }
+
+    private async Task DeleteConfigAsync(int id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await db.PipelineConfigurations.FirstOrDefaultAsync(c => c.Id == id);
+        if (row is not null)
+        {
+            db.PipelineConfigurations.Remove(row);
+            await db.SaveChangesAsync();
+        }
+        SetMsg("Configurazione eliminata.", false);
+        await ReloadAsync();
+    }
+
+    // -------------------------------------------------------------- run control
+
+    private async Task RunConfigAsync(int configId)
+    {
+        try
+        {
+            await Engine.StartRunAsync(configId, "Manual", _userId);
+            SetMsg("Run avviato.", false);
+            _live = Engine.GetLiveStatus();
+            _wasRunning = true;
+        }
+        catch (Exception ex) { SetMsg($"Avvio fallito: {ex.Message}", true); }
+    }
+
+    private async Task ResumeRunAsync(Guid runId)
+    {
+        try
+        {
+            await Engine.ResumeRunAsync(runId, _userId);
+            SetMsg("Run ripreso dal checkpoint.", false);
+            _live = Engine.GetLiveStatus();
+            _wasRunning = true;
+        }
+        catch (Exception ex) { SetMsg($"Ripresa fallita: {ex.Message}", true); }
+    }
+
+    private Task PauseRunAsync()
+    {
+        if (_live is not null) Engine.RequestPause(_live.RunId);
+        return Task.CompletedTask;
+    }
+
+    private Task CancelRunAsync()
+    {
+        if (_live is not null) Engine.Cancel(_live.RunId);
+        return Task.CompletedTask;
+    }
+
+    // -------------------------------------------------------------- run detail
+
+    private async Task SelectRun(PipelineRun run)
+    {
+        _selectedRun = run;
+        _selectedSummaries = JsonSerializer.Deserialize<List<StageSummary>>(run.StageSummariesJson) ?? [];
+        _selectedRecommendation = string.IsNullOrEmpty(run.RecommendationJson) || run.RecommendationJson == "{}"
+            ? null
+            : JsonSerializer.Deserialize<PipelineRecommendation>(run.RecommendationJson);
+
+        var previous = _runs
+            .Where(r => r.ConfigurationId == run.ConfigurationId && r.StartedAt < run.StartedAt && r.Status == "Completed")
+            .OrderByDescending(r => r.StartedAt)
+            .FirstOrDefault();
+        _previousRunSummaries = previous is null
+            ? []
+            : JsonSerializer.Deserialize<List<StageSummary>>(previous.StageSummariesJson) ?? [];
+
+        // Decisione della ri-applica automatica (contiene anche il giudizio del supervisore AI), se presente.
+        _selectedDecision = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var art = await db.PipelineArtifacts.AsNoTracking()
+                .Where(a => a.RunId == run.Id && a.Kind == AutoReapplyArtifactKinds.Decision)
+                .OrderByDescending(a => a.CreatedAt)
+                .FirstOrDefaultAsync();
+            if (art is not null)
+            {
+                _selectedDecision = JsonSerializer.Deserialize<AutoReapplyDecisionArtifact>(art.PayloadJson);
+            }
+        }
+        catch { /* la UI resta valida anche senza la decisione */ }
+    }
+
+    private IEnumerable<(string Label, decimal Prev, decimal Curr)> CompareRuns()
+    {
+        // Common metrics across the two runs' summaries, keyed "Stage.Metric".
+        var prev = _previousRunSummaries.SelectMany(s => s.Metrics.Select(m => ($"{s.DisplayName}: {m.Key}", m.Value))).ToDictionary(x => x.Item1, x => x.Value);
+        foreach (var s in _selectedSummaries)
+        {
+            foreach (var m in s.Metrics)
+            {
+                var key = $"{s.DisplayName}: {m.Key}";
+                if (prev.TryGetValue(key, out var p)) yield return (key, p, m.Value);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------- apply & export
+
+    /// <summary>
+    /// Distribuisce l'ensemble sulle corsie isolate delegando a <see cref="IPipelineApplier"/> — la
+    /// STESSA logica usata dalla ri-applica automatica dello scheduler (una sola implementazione,
+    /// nessuna divergenza). Scrive solo la configurazione: nessun trading viene avviato qui.
+    /// </summary>
+    private async Task ApplyRecommendationAsync(PipelineRecommendation? recommendation)
+    {
+        if (recommendation is null || recommendation.EnsembleLegs.Count == 0) return;
+        try
+        {
+            var result = await Applier.ApplyRecommendationAsync(recommendation);
+            SetMsg(result.Message, false);
+        }
+        catch (Exception ex) { SetMsg($"Applicazione fallita: {ex.Message}", true); }
+    }
+
+    private static string ExportHref(PipelineRun? run)
+    {
+        if (run is null) return "#";
+        var md = $"# Pipeline run {run.Id}\n\n- Avviato: {run.StartedAt:yyyy-MM-dd HH:mm:ss} UTC\n- Stato: {run.Status}\n\n## Conclusione\n\n```\n{run.Conclusion}\n```\n\n## Fasi\n\n";
+        var summaries = JsonSerializer.Deserialize<List<StageSummary>>(run.StageSummariesJson) ?? [];
+        foreach (var s in summaries.OrderBy(s => s.Order))
+        {
+            md += $"### {s.DisplayName} — {s.Status} ({s.Duration:mm\\:ss})\n\n{s.Text}\n\n";
+        }
+        return "data:text/markdown;charset=utf-8," + Uri.EscapeDataString(md);
+    }
+
+    // -------------------------------------------------------------- helpers
+
+    private static string UniverseSummary(ProcioneMGR.Services.Pipeline.PipelineConfiguration config)
+    {
+        var universe = JsonSerializer.Deserialize<List<SeriesSpec>>(config.UniverseJson) ?? [];
+        return universe.Count == 0 ? "—" : string.Join(", ", universe.Take(4).Select(u => $"{u.Symbol} {u.Timeframe}")) + (universe.Count > 4 ? $" +{universe.Count - 4}" : "");
+    }
+
+    private static string ScheduleBadgeClass(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
+    {
+        if (string.IsNullOrWhiteSpace(c.Schedule)) return "bg-light text-dark border";
+        return c.ScheduleEnabled ? "bg-success" : "bg-secondary";
+    }
+
+    private static string ScheduleBadgeText(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
+    {
+        if (string.IsNullOrWhiteSpace(c.Schedule)) return "Non configurata";
+        if (!c.ScheduleEnabled) return "Disabilitata";
+        return c.NextRunAt is DateTime dt ? $"Prossima: {dt:MM-dd HH:mm} UTC" : "Attiva";
+    }
+
+    /// <summary>Ultimo run noto per questa config (dallo storico già caricato, niente campi duplicati sulla config — vedi commento su PipelineConfiguration.NextRunAt).</summary>
+    private string ScheduleTooltip(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
+    {
+        if (string.IsNullOrWhiteSpace(c.Schedule)) return "Nessuna espressione cron impostata.";
+        var last = _runs.Where(r => r.ConfigurationId == c.Id).OrderByDescending(r => r.StartedAt).FirstOrDefault();
+        var lastText = last is null ? "mai eseguito" : $"ultimo: {last.StartedAt:yyyy-MM-dd HH:mm} ({last.Status})";
+        return $"Cron: {c.Schedule} — {lastText}";
+    }
+
+    /// <summary>Anteprima leggibile della prossima esecuzione per l'espressione cron nell'editor, ricalcolata a ogni render.</summary>
+    private string SchedulePreviewText()
+    {
+        if (string.IsNullOrWhiteSpace(_editing?.Schedule)) return "Nessuna espressione impostata.";
+        if (!_editing.ScheduleEnabled) return "Schedulazione disabilitata (l'espressione resta salvata).";
+
+        var next = ProcioneMGR.Services.Pipeline.PipelineSchedulerWorker.ComputeNextRun(_editing.Schedule, DateTime.UtcNow);
+        return next is DateTime dt
+            ? $"Prossima esecuzione: {dt:yyyy-MM-dd HH:mm} UTC"
+            : "Espressione cron non valida (formato standard a 5 campi, es. \"0 3 * * *\").";
+    }
+
+    private static string StageBadge(StageStatus status) => status switch
+    {
+        StageStatus.Completed => "bg-success",
+        StageStatus.Running => "bg-warning text-dark",
+        StageStatus.Failed => "bg-danger",
+        StageStatus.Skipped => "bg-secondary",
+        _ => "bg-light text-dark border",
+    };
+
+    private static string RunBadge(string status) => status switch
+    {
+        "Completed" => "bg-success",
+        "Running" => "bg-warning text-dark",
+        "Failed" => "bg-danger",
+        "Paused" => "bg-info text-dark",
+        _ => "bg-secondary",
+    };
+
+    private void SetMsg(string text, bool error) { _message = text; _isError = error; }
+
+    public void Dispose() => _timer?.Dispose();
+}

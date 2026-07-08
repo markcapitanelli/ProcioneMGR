@@ -1,0 +1,248 @@
+@page "/volatility"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.TimeSeries
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IGarchModel Garch
+
+<PageTitle>Volatilità (GARCH)</PageTitle>
+
+<h1>Previsione di volatilità <span class="badge bg-secondary">GARCH(1,1)</span></h1>
+
+<GuidaPanel Title="Volatilità — quanto è nervoso il mercato, e lo sarà anche domani?">
+    <p>
+        La <strong>volatilità</strong> è quanto oscilla il prezzo: alta volatilità = movimenti
+        ampi e rapidi (rischioso ma con opportunità), bassa volatilità = mercato calmo. Un fatto
+        empirico consolidato è che la volatilità è essa stessa "a grappoli": i periodi turbolenti
+        tendono a essere seguiti da altra turbolenza, e i periodi calmi da altra calma — non è
+        casuale. Il modello GARCH sfrutta proprio questo per stimare quanto sarà probabilmente
+        volatile il mercato nelle prossime ore/giorni, utile per decidere quanto "rischiare" per
+        operazione (position sizing) o dove piazzare gli stop.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">ω (omega) / α (alpha) / β (beta)</dt>
+        <dd class="col-sm-9">
+            I tre numeri che il modello stima dai dati: ω è il livello base di volatilità, α misura
+            quanto uno shock recente (una grande variazione di prezzo) alza subito la volatilità
+            attesa, β misura quanto la volatilità "recente" persiste nel tempo. Non servono per
+            l'uso pratico della pagina, ma sono lì per trasparenza su cosa c'è dietro il numero.
+        </dd>
+        <dt class="col-sm-3">Persistenza (α+β)</dt>
+        <dd class="col-sm-9">Quanto a lungo dura un episodio di alta/bassa volatilità prima di tornare alla norma. Valori vicini a 1 (tipici delle crypto) indicano che gli shock di volatilità si esauriscono lentamente.</dd>
+        <dt class="col-sm-3">Vol. annualizzata lungo periodo / corrente</dt>
+        <dd class="col-sm-9">La volatilità "di equilibrio" verso cui il mercato tende a tornare, e quella stimata proprio ora — se la seconda è molto sopra la prima, il modello si aspetta che si calmi nel tempo (e viceversa).</dd>
+        <dt class="col-sm-3">Volatilità condizionale (grafico)</dt>
+        <dd class="col-sm-9">Come è cambiata la volatilità stimata periodo per periodo nello storico — i "grappoli" di cui sopra si vedono come zone del grafico più alte raggruppate insieme.</dd>
+        <dt class="col-sm-3">Previsione della volatilità</dt>
+        <dd class="col-sm-9">Quanto ci si aspetta che sarà volatile il mercato a diversi orizzonti futuri (1, 5, 10... barre) — tipicamente converge verso la volatilità di lungo periodo più l'orizzonte si allunga (mean-reversion).</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Configurazione</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Exchange</label>
+                <select class="form-select" @bind="_exchange" disabled="@_busy">
+                    @foreach (var ex in Enum.GetValues<ExchangeName>())
+                    { <option value="@ex">@ex</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" list="vol_symbols" @bind="_symbol" style="width: 11rem;" disabled="@_busy" />
+                <datalist id="vol_symbols">
+                    @foreach (var s in _knownSymbols) { <option value="@s"></option> }
+                </datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                    @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Da</label>
+                <input type="date" class="form-control" @bind="_from" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">A</label>
+                <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Stima GARCH
+                </button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_fit is not null)
+{
+    <div class="row g-3 mb-3">
+        <div class="col-auto">@MetricCard("ω (omega)", _fit.Omega.ToString("E3"))</div>
+        <div class="col-auto">@MetricCard("α (alpha)", _fit.Alpha.ToString("F4"))</div>
+        <div class="col-auto">@MetricCard("β (beta)", _fit.Beta.ToString("F4"))</div>
+        <div class="col-auto">@MetricCard("Persistenza (α+β)", _fit.Persistence.ToString("F4"), _fit.Persistence < 0.98)</div>
+        <div class="col-auto">@MetricCard("Vol. annualizzata lungo periodo", $"{AnnualizedVol(_fit.LongRunVariance):P1}")</div>
+        <div class="col-auto">@MetricCard("Vol. annualizzata corrente", $"{AnnualizedVol(_fit.ConditionalVariances[^1]):P1}")</div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Volatilità condizionale (in-sample) — deviazione standard per periodo</div>
+        <div class="card-body">
+            @if (_volSeries.Count > 0)
+            {
+                <OhlcvChart ShowCandles="false" Indicators="_volSeries" Height="280" />
+            }
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Previsione della volatilità (mean-reversion verso il lungo periodo)</div>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead><tr><th>Orizzonte (barre)</th><th class="text-end">Varianza prevista</th><th class="text-end">Volatilità (per periodo)</th><th class="text-end">Volatilità annualizzata</th></tr></thead>
+                <tbody>
+                    @foreach (var h in _forecastHorizons)
+                    {
+                        var v = _fit.ForecastVariance(h);
+                        <tr>
+                            <td>@h</td>
+                            <td class="text-end">@v.ToString("E3")</td>
+                            <td class="text-end">@Math.Sqrt(v).ToString("P3")</td>
+                            <td class="text-end">@AnnualizedVol(v).ToString("P1")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private ExchangeName _exchange = ExchangeName.Binance;
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "1h";
+    private DateTime _from = DateTime.UtcNow.Date.AddDays(-180);
+    private DateTime _to = DateTime.UtcNow.Date;
+
+    private List<string> _knownSymbols = new();
+    private GarchFit? _fit;
+    private List<IndicatorSeries> _volSeries = new();
+    private int _periodsPerYear;
+    private readonly int[] _forecastHorizons = [1, 5, 10, 20, 50, 100];
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    private double AnnualizedVol(double variance) => Math.Sqrt(variance * _periodsPerYear);
+
+    private async Task RunAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbol) || _to <= _from)
+        {
+            SetStatus("Controlla symbol e intervallo date.", error: true);
+            return;
+        }
+
+        _busy = true;
+        _isError = false;
+        _status = null;
+        _fit = null;
+        _volSeries = new();
+
+        try
+        {
+            var fromUtc = DateTime.SpecifyKind(_from, DateTimeKind.Utc);
+            var toUtc = DateTime.SpecifyKind(_to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
+
+            List<OhlcvData> candles;
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                candles = await db.OhlcvData
+                    .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
+                    .OrderBy(c => c.TimestampUtc).ToListAsync();
+            }
+
+            if (candles.Count < 40)
+            {
+                SetStatus("Dati insufficienti nel range selezionato (servono almeno 40 candele).", error: true);
+                return;
+            }
+
+            _periodsPerYear = ProcioneMGR.Services.Optimization.Statistics.PeriodsPerYear(_timeframe);
+
+            var returns = new List<decimal>(candles.Count - 1);
+            for (var i = 1; i < candles.Count; i++)
+            {
+                var prev = candles[i - 1].Close;
+                if (prev > 0m) returns.Add((candles[i].Close - prev) / prev);
+            }
+
+            _fit = Garch.Fit(returns);
+
+            var times = candles.Skip(1).Select(c => new DateTimeOffset(DateTime.SpecifyKind(c.TimestampUtc, DateTimeKind.Utc)).ToUnixTimeSeconds()).ToList();
+            _volSeries = new()
+            {
+                new IndicatorSeries
+                {
+                    Title = "Volatilità condizionale",
+                    Color = "#E53935",
+                    Type = IndicatorSeriesType.Line,
+                    Scale = "osc",
+                    Points = times.Zip(_fit.ConditionalVariances, (t, v) => new IndicatorPoint(t, Math.Sqrt(v))).ToList(),
+                },
+            };
+
+            SetStatus($"GARCH(1,1) stimato su {returns.Count} rendimenti.", error: false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void SetStatus(string text, bool error)
+    {
+        _status = text;
+        _isError = error;
+    }
+
+    private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
+    {
+        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
+        builder.AddMarkupContent(0, $@"
+            <div class='card text-center' style='min-width: 10rem;'>
+                <div class='card-body py-2'>
+                    <div class='text-muted small'>{label}</div>
+                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
+                </div>
+            </div>");
+    };
+}
