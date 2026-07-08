@@ -156,8 +156,46 @@
             </div>
         }
 
+        <hr />
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Metodo di ricerca</label>
+                <select class="form-select" @bind="_searchStrategy" disabled="@_busy">
+                    <option value="@SearchStrategy.GridSearch">Grid Search (esaustivo)</option>
+                    <option value="@SearchStrategy.Bayesian">Bayesian (guidato)</option>
+                </select>
+            </div>
+            @if (_searchStrategy == SearchStrategy.Bayesian)
+            {
+                <div class="col-auto">
+                    <label class="form-label">Iterazioni guidate</label>
+                    <input type="number" class="form-control" style="width:8rem" @bind="_bayesIterations" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Punti iniziali</label>
+                    <input type="number" class="form-control" style="width:8rem" @bind="_bayesInitialRandom" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Seme</label>
+                    <input type="number" class="form-control" style="width:7rem" @bind="_bayesSeed" disabled="@_busy" />
+                </div>
+                <div class="col-auto align-self-center">
+                    <span class="badge bg-info text-dark">Budget/finestra: @(_bayesInitialRandom + _bayesIterations) valutazioni</span>
+                </div>
+            }
+        </div>
+        @if (_searchStrategy == SearchStrategy.Bayesian)
+        {
+            <div class="form-text mt-1">
+                La ricerca guidata (Gaussian Process + Expected Improvement) propone i punti da provare
+                invece del prodotto cartesiano: i range sotto definiscono solo i confini e la granularità
+                (step/intero) dello spazio. Lo Sharpe guida la ricerca; il Deflated Sharpe resta il verdetto
+                finale su tutti i punti visitati. Deterministico a parità di seme.
+            </div>
+        }
+
         <div class="mt-3">
-            <label class="form-label fw-semibold">Range parametri (Grid Search)</label>
+            <label class="form-label fw-semibold">Range parametri@(_searchStrategy == SearchStrategy.Bayesian ? " (confini dello spazio)" : " (Grid Search)")</label>
             <table class="table table-sm" style="max-width: 720px;">
                 <thead><tr><th>Parametro</th><th>Min</th><th>Max</th><th>Step</th><th>Intero</th></tr></thead>
                 <tbody>
@@ -173,7 +211,16 @@
                     }
                 </tbody>
             </table>
-            <div class="text-muted small">Combinazioni totali: <strong>@TotalCombos()</strong></div>
+            <div class="text-muted small">
+                @if (_searchStrategy == SearchStrategy.Bayesian)
+                {
+                    <span>Valutazioni per finestra (budget): <strong>@(_bayesInitialRandom + _bayesIterations)</strong> — la ricerca guidata NON prova tutte le @TotalCombos() combinazioni.</span>
+                }
+                else
+                {
+                    <span>Combinazioni totali: <strong>@TotalCombos()</strong></span>
+                }
+            </div>
         </div>
 
         <hr />
@@ -321,6 +368,11 @@
     private int _oosMonths = 3;
     private int _stepMonths = 3;
 
+    private SearchStrategy _searchStrategy = SearchStrategy.GridSearch;
+    private int _bayesIterations = 40;
+    private int _bayesInitialRandom = 8;
+    private int _bayesSeed = 42;
+
     private const string MlStrategyName = "Ml";
 
     private string _strategyName = "EmaCross";
@@ -454,6 +506,10 @@
                 {
                     InSampleMonths = _inSampleMonths, OutOfSampleMonths = _oosMonths, StepMonths = _stepMonths,
                 },
+                SearchStrategy = _searchStrategy,
+                BayesianIterations = _bayesIterations,
+                BayesianInitialRandom = _bayesInitialRandom,
+                BayesianSeed = _bayesSeed,
             };
 
             var progress = new Progress<OptimizationProgress>(p => { _progress = p; InvokeAsync(StateHasChanged); });
@@ -484,6 +540,7 @@
                     config.Timeframe,
                     config.From,
                     config.To,
+                    SearchStrategy = config.SearchStrategy.ToString(),
                     Ranges = config.ParameterRanges.Select(r => new { r.Name, r.Min, r.Max, r.Step }).ToList(),
                     config.WalkForward.InSampleMonths,
                     config.WalkForward.OutOfSampleMonths,
