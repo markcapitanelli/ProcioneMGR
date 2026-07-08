@@ -124,35 +124,12 @@ public sealed class BacktestEngine(
             throw new InvalidOperationException($"Modello ML salvato con Id={id} non trovato.");
         }
 
-        IReturnPredictor predictor = saved.ModelType switch
-        {
-            "RandomForest" => new RandomForestReturnPredictor(),
-            "GradientBoosting" => new GradientBoostingReturnPredictor(),
-            "Mlp" => new MlpReturnPredictor(),
-            _ => new LinearReturnPredictor(),
-        };
-
         // Nota di performance: ogni chiamata deserializza di nuovo il modello dal blob salvato
         // (nessuna cache per SavedModelId). Accettabile per lo scope attuale (poche soglie da
         // sweepare in Optimization, poche strategie in Ensemble); da rivedere se in futuro
-        // servissero sweep massivi su molti modelli ML.
-        var tempPath = Path.Combine(Path.GetTempPath(), $"mlmodel_bt_{Guid.NewGuid():N}.zip");
-        try
-        {
-            await File.WriteAllBytesAsync(tempPath, saved.ModelBytes, ct);
-            predictor.Load(new MLContext(), tempPath);
-        }
-        finally
-        {
-            if (File.Exists(tempPath)) File.Delete(tempPath);
-        }
-
-        var factorsDto = JsonSerializer.Deserialize<List<SavedFactorSpecDto>>(saved.FactorsJson) ?? [];
-        var factors = factorsDto
-            .Select(dto => new FactorSpec(dto.FeatureName, alphaFactorFactory.Create(dto.FactorName), dto.Parameters))
-            .ToList();
-
-        return (new MlStrategy(predictor, factors, factorCache), predictor);
+        // servissero sweep massivi su molti modelli ML. Caricamento condiviso col TradingEngine
+        // (Champion) via MlModelLoader → parità batch/stream garantita.
+        return await MlModelLoader.LoadAsync(saved, alphaFactorFactory, factorCache, ct);
     }
 
     /// <summary>

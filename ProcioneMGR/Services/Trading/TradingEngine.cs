@@ -6,8 +6,11 @@ using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Ensemble;
 using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Execution;
+using ProcioneMGR.Services.Alpha;
 using ProcioneMGR.Services.Indicators;
+using ProcioneMGR.Services.ML;
 using ProcioneMGR.Services.Optimization;
+using ProcioneMGR.Services.Registry;
 using ProcioneMGR.Services.Risk;
 
 namespace ProcioneMGR.Services.Trading;
@@ -42,9 +45,27 @@ public sealed class TradingEngine(
     IOptionsMonitor<LiveExecutionOptions> liveExecution,
     IExecutionAlgorithmFactory executionAlgorithms,
     ILogger<TradingEngine> logger,
-    ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null) : ITradingEngine
+    ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null,
+    IModelRegistry? modelRegistry = null,
+    IAlphaFactorFactory? alphaFactorFactory = null,
+    IFactorCache? factorCache = null) : ITradingEngine
 {
     public int LaneId => laneId;
+
+    /// <summary>
+    /// Nome sentinella di strategia (non nello switch di <see cref="IStrategyFactory"/>): risolve il
+    /// Champion del registry via <see cref="IModelRegistry"/> e lo esegue come <see cref="MlStrategy"/>
+    /// su questa lane. CONSENTITO SOLO Paper/Testnet — mai Live (vedi <see cref="ResolveChampionStrategyAsync"/>).
+    /// </summary>
+    public const string ChampionStrategyName = "MlChampion";
+
+    /// <summary>
+    /// Cache per-lane del Champion materializzato. Il payload pesante (deserializzazione del modello
+    /// dal blob) si ricarica SOLO quando cambia il modello (<see cref="SavedMlModel.Id"/> o
+    /// <see cref="SavedMlModel.Version"/>): un controllo leggero a ogni candela, ricostruzione solo al cambio.
+    /// </summary>
+    private sealed record ChampionCacheEntry(int ModelId, int Version, MlStrategy Strategy, IReturnPredictor Predictor);
+    private ChampionCacheEntry? _championCache;
 
     private const decimal PositionSizePercent = 8m;   // sotto MaxPositionSizePercent (10%)
     private const decimal FeePercent = 0.1m;
@@ -348,7 +369,9 @@ public sealed class TradingEngine(
                 foreach (var strat in _active)
                 {
                     if (_state.IsEmergencyStopped) break;
-                    var s = strategyFactory.Create(strat.StrategyName);
+                    var s = strat.StrategyName == ChampionStrategyName
+                        ? await ResolveChampionStrategyAsync(ct)
+                        : strategyFactory.Create(strat.StrategyName);
                     await s.InitializeAsync(closes, _buffer, strat.Parameters, indicators, ct);
                     var sig = s.EvaluateSignal(closes.Count - 1, price, ts);
 
@@ -384,6 +407,48 @@ public sealed class TradingEngine(
             }
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Risolve il Champion del registry come <see cref="MlStrategy"/> per questa lane.
+    ///
+    /// CONFINE DI SICUREZZA NON NEGOZIABILE: se la lane è in <see cref="TradingMode.Live"/> il
+    /// caricamento è RIFIUTATO con throw esplicito — mai un fallback silenzioso. Il Champion può
+    /// alimentare SOLO Paper/Testnet (stesso stile dei confini in <c>LanePromoter</c>/
+    /// <c>PromotionEvaluator</c>): il codice, non una convenzione, impedisce che un modello del
+    /// registry apra posizioni con soldi veri.
+    ///
+    /// La cache per-lane evita di rideserializzare il modello a ogni candela: si ricostruisce solo
+    /// quando il Champion cambia (Id/Version), come richiesto perché <see cref="MlStrategy"/> senza
+    /// cache ricaricherebbe l'intero payload a ogni tick.
+    /// </summary>
+    private async Task<IStrategy> ResolveChampionStrategyAsync(CancellationToken ct)
+    {
+        if (_state.Mode == TradingMode.Live)
+        {
+            throw new InvalidOperationException(
+                "CONFINE DI SICUREZZA: il Champion del registry non può MAI alimentare una lane Live. Consentito solo Paper/Testnet.");
+        }
+        if (modelRegistry is null || alphaFactorFactory is null)
+        {
+            throw new InvalidOperationException(
+                $"La strategia '{ChampionStrategyName}' richiede IModelRegistry e IAlphaFactorFactory: dipendenze non iniettate in questo TradingEngine.");
+        }
+
+        var champion = await modelRegistry.GetChampionAsync(_state.Symbol, _state.Timeframe, ct)
+            ?? throw new InvalidOperationException(
+                $"Nessun Champion nel registry per {_state.Symbol} {_state.Timeframe}: impossibile risolvere '{ChampionStrategyName}'.");
+
+        // Controllo leggero a ogni candela; payload pesante ricaricato solo al cambio di modello.
+        if (_championCache is null || _championCache.ModelId != champion.Id || _championCache.Version != champion.Version)
+        {
+            _championCache?.Predictor.Dispose();
+            var (strategy, predictor) = await MlModelLoader.LoadAsync(champion, alphaFactorFactory, factorCache, ct);
+            _championCache = new ChampionCacheEntry(champion.Id, champion.Version, strategy, predictor);
+            logger.LogInformation("Lane {Lane}: Champion caricato — modello {Id} v{Ver} ({Type}) per {Sym} {Tf}.",
+                laneId, champion.Id, champion.Version, champion.ModelType, _state.Symbol, _state.Timeframe);
+        }
+        return _championCache.Strategy;
     }
 
     // ---------------------------------------------------------------- open / close
