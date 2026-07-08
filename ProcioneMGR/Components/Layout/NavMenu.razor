@@ -1,6 +1,8 @@
 @implements IDisposable
-
+@using System.Security.Claims
+@using System.Text.Json
 @inject NavigationManager NavigationManager
+@inject IJSRuntime JS
 
 <div class="top-row ps-3 navbar navbar-dark">
     <div class="container-fluid">
@@ -15,148 +17,52 @@
 
 <div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
     <nav class="nav flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <i class="bi bi-house-door-fill"></i> Home
-            </NavLink>
-        </div>
-
         <AuthorizeView>
             <Authorized>
-                <div class="nav-section">Trading</div>
-                <div class="nav-item px-3">
-                    <NavLink class="nav-link" href="dashboard">
-                        <i class="bi bi-bar-chart-line-fill"></i> Dashboard
-                    </NavLink>
-                </div>
-                <div class="nav-item px-3">
-                    <NavLink class="nav-link" href="backtest">
-                        <i class="bi bi-graph-up-arrow"></i> Backtest
-                    </NavLink>
-                </div>
-                <div class="nav-item px-3">
-                    <NavLink class="nav-link" href="market-analysis">
-                        <i class="bi bi-clipboard-data"></i> Analisi serie
-                    </NavLink>
-                </div>
-                <div class="nav-item px-3">
-                    <NavLink class="nav-link" href="strategies">
-                        <i class="bi bi-collection-fill"></i> Le mie strategie
-                    </NavLink>
-                </div>
-                <div class="nav-item px-3">
-                    <NavLink class="nav-link" href="settings/exchanges">
-                        <i class="bi bi-key-fill"></i> Credenziali Exchange
-                    </NavLink>
-                </div>
+                @foreach (var section in NavModel.Sections)
+                {
+                    var items = section.Items.Where(i => IsVisible(i, context.User)).ToList();
+                    if (items.Count == 0)
+                    {
+                        continue; // Nessuna voce visibile per il ruolo corrente: salta il blocco.
+                    }
 
-                <AuthorizeView Roles="@($"{AppRoles.Admin},{AppRoles.Manager}")" Context="mgrCtx">
-                    <div class="nav-section">Amministrazione</div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="market/watchlist">
-                            <i class="bi bi-eye-fill"></i> Watchlist
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="optimization">
-                            <i class="bi bi-sliders"></i> Optimization
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="discovery">
-                            <i class="bi bi-search"></i> Discovery
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="pipeline">
-                            <i class="bi bi-robot"></i> Pipeline
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="execution">
-                            <i class="bi bi-stack"></i> Execution Lab
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="experiments">
-                            <i class="bi bi-journals"></i> Esperimenti
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="registry">
-                            <i class="bi bi-award"></i> Registry modelli
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="ensemble">
-                            <i class="bi bi-diagram-3-fill"></i> Ensemble
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="regimes">
-                            <i class="bi bi-grid-3x3-gap-fill"></i> Regimes
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="ml">
-                            <i class="bi bi-cpu-fill"></i> ML Lab
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="feature-selection">
-                            <i class="bi bi-funnel"></i> Selezione feature (IC)
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="alpha-mining">
-                            <i class="bi bi-diagram-2"></i> Alpha Mining
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="pairs-trading">
-                            <i class="bi bi-arrow-left-right"></i> Pairs Trading
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="volatility">
-                            <i class="bi bi-activity"></i> Volatilità
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="sentiment">
-                            <i class="bi bi-newspaper"></i> Sentiment
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="trading">
-                            <i class="bi bi-currency-exchange"></i> Trading
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="admin/ai-supervisor">
-                            <i class="bi bi-robot"></i> Supervisione AI
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="metrics">
-                            <i class="bi bi-speedometer2"></i> Metriche
-                        </NavLink>
-                    </div>
-                </AuthorizeView>
-                <AuthorizeView Roles="@AppRoles.Admin" Context="adminCtx">
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="admin/users">
-                            <i class="bi bi-people-fill"></i> Gestione Utenti
-                        </NavLink>
-                    </div>
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="admin/backup">
-                            <i class="bi bi-database-fill-down"></i> Backup Database
-                        </NavLink>
-                    </div>
-                </AuthorizeView>
+                    if (section.Collapsible)
+                    {
+                        var open = IsOpen(section.Key);
+                        <button type="button"
+                                class="nav-section-header collapsible"
+                                aria-expanded="@open.ToString().ToLowerInvariant()"
+                                @onclick="() => Toggle(section.Key)"
+                                @onclick:stopPropagation="true">
+                            <span class="section-dot" style="background-color:@section.Accent"></span>
+                            <span class="section-title">@section.Title</span>
+                            <i class="bi bi-chevron-down section-caret @(open ? "open" : "")"></i>
+                        </button>
+                        <div class="nav-section-body @(open ? "open" : "collapsed")">
+                            @foreach (var item in items)
+                            {
+                                @RenderItem(item)
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="nav-section-header static">
+                            <span class="section-dot" style="background-color:@section.Accent"></span>
+                            <span class="section-title">@section.Title</span>
+                        </div>
+                        @foreach (var item in items)
+                        {
+                            @RenderItem(item)
+                        }
+                    }
+                }
 
-                <div class="nav-section">Account</div>
+                <div class="nav-section-header static">
+                    <span class="section-dot" style="background-color:#94a3b8"></span>
+                    <span class="section-title">Account</span>
+                </div>
                 <div class="nav-item px-3">
                     <NavLink class="nav-link" href="Account/Manage">
                         <i class="bi bi-person-fill"></i> @context.User.Identity?.Name
@@ -189,17 +95,132 @@
 </div>
 
 @code {
+    private const string StorageKey = "procione.nav.sections";
+
     private string? currentUrl;
+    private bool _stateLoaded;
+
+    // Stato aperto/chiuso dei soli blocchi collassabili. Default: chiusi.
+    private readonly Dictionary<string, bool> _open = new();
 
     protected override void OnInitialized()
     {
         currentUrl = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+
+        foreach (var key in NavModel.CollapsibleKeys)
+        {
+            _open[key] = false;
+        }
+
+        // Apre di default il blocco che contiene la pagina corrente (voce attiva sempre visibile).
+        EnsureCurrentSectionOpen();
+
         NavigationManager.LocationChanged += OnLocationChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        // localStorage non è disponibile durante il prerender: si legge solo qui, dopo
+        // il primo render interattivo, così da non bloccare la UI e non causare eccezioni.
+        try
+        {
+            var raw = await JS.InvokeAsync<string?>("localStorage.getItem", StorageKey);
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                var saved = JsonSerializer.Deserialize<Dictionary<string, bool>>(raw);
+                if (saved is not null)
+                {
+                    foreach (var (key, value) in saved)
+                    {
+                        if (_open.ContainsKey(key))
+                        {
+                            _open[key] = value;
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // localStorage assente/negato (es. privacy mode): si prosegue con i default.
+        }
+
+        // La sezione della pagina corrente resta comunque aperta, anche se in storage era chiusa.
+        EnsureCurrentSectionOpen();
+        _stateLoaded = true;
+        StateHasChanged();
+    }
+
+    private bool IsOpen(string key) => _open.TryGetValue(key, out var v) && v;
+
+    private async Task Toggle(string key)
+    {
+        if (!_open.ContainsKey(key))
+        {
+            return;
+        }
+
+        _open[key] = !_open[key];
+        await PersistAsync();
+    }
+
+    private async Task PersistAsync()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(_open);
+            await JS.InvokeVoidAsync("localStorage.setItem", StorageKey, json);
+        }
+        catch
+        {
+            // Persistenza best-effort: un fallimento non deve rompere la navigazione.
+        }
+    }
+
+    private void EnsureCurrentSectionOpen()
+    {
+        var key = NavModel.SectionKeyOf(currentUrl ?? string.Empty);
+        if (key is not null && _open.ContainsKey(key))
+        {
+            _open[key] = true;
+        }
+    }
+
+    private static bool IsVisible(NavItem item, ClaimsPrincipal user)
+    {
+        // Roles null = qualsiasi utente autenticato (equivale al vecchio AuthorizeView senza Roles).
+        if (item.Roles is null)
+        {
+            return true;
+        }
+
+        foreach (var role in item.Roles)
+        {
+            if (user.IsInRole(role))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         currentUrl = NavigationManager.ToBaseRelativePath(e.Location);
+
+        // Navigando in una voce di un blocco collassato, lo apre così la voce attiva è visibile.
+        var key = NavModel.SectionKeyOf(currentUrl);
+        if (_stateLoaded && key is not null && _open.TryGetValue(key, out var open) && !open)
+        {
+            _open[key] = true;
+            _ = PersistAsync();
+        }
+
         StateHasChanged();
     }
 
@@ -207,4 +228,15 @@
     {
         NavigationManager.LocationChanged -= OnLocationChanged;
     }
+
+    // Frammento riusabile per una singola voce di menu (attivo evidenziato via NavLink).
+    private RenderFragment RenderItem(NavItem item) => __builder =>
+    {
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="@item.Href"
+                     Match="@(item.Match ? NavLinkMatch.All : NavLinkMatch.Prefix)">
+                <i class="bi @item.Icon"></i> @item.Label
+            </NavLink>
+        </div>
+    };
 }

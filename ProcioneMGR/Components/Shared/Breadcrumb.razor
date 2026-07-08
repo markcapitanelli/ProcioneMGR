@@ -1,0 +1,41 @@
+@implements IDisposable
+@using ProcioneMGR.Components.Layout
+@inject NavigationManager NavigationManager
+
+@if (_crumb is not null)
+{
+    <nav class="app-breadcrumb" aria-label="breadcrumb">
+        <ol class="breadcrumb mb-0">
+            <li class="breadcrumb-item"><a href="">Home</a></li>
+            <li class="breadcrumb-item">@_crumb.Value.Section</li>
+            <li class="breadcrumb-item active" aria-current="page">@_crumb.Value.Page</li>
+        </ol>
+    </nav>
+}
+
+@code {
+    private (string Section, string Page)? _crumb;
+
+    protected override void OnInitialized()
+    {
+        Update(NavigationManager.Uri);
+        NavigationManager.LocationChanged += OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        Update(e.Location);
+        StateHasChanged();
+    }
+
+    private void Update(string uri)
+    {
+        var relative = NavigationManager.ToBaseRelativePath(uri);
+        _crumb = NavModel.Resolve(relative);
+    }
+
+    public void Dispose()
+    {
+        NavigationManager.LocationChanged -= OnLocationChanged;
+    }
+}
