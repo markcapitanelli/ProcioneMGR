@@ -7,6 +7,8 @@ using ProcioneMGR.Services.Ensemble;
 using ProcioneMGR.Services.Pipeline;
 using ProcioneMGR.Services.Security;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -64,14 +66,17 @@ public class PipelineSchedulerWorkerStaticTests
 }
 
 /// <summary>
-/// Test di integrazione di <see cref="PipelineSchedulerWorker.TickAsync"/> con un DB SQLite reale
-/// (file temp) e un <see cref="IPipelineEngine"/> scriptato, per controllare esattamente quando
+/// Test di integrazione di <see cref="PipelineSchedulerWorker.TickAsync"/> con un DB Postgres reale
+/// (Testcontainers) e un <see cref="IPipelineEngine"/> scriptato, per controllare esattamente quando
 /// il motore viene invocato senza dipendere da un run pipeline reale (lento, non deterministico).
 /// </summary>
+[Collection("Postgres")]
 public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"scheduler_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public PipelineSchedulerWorkerIntegrationTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -128,7 +133,7 @@ public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
 
@@ -431,6 +436,5 @@ public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 }

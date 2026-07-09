@@ -6,6 +6,8 @@ using ProcioneMGR.Services.Alpha;
 using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Indicators;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -13,8 +15,13 @@ namespace ProcioneMGR.Tests;
 /// (McAllen cap. 17: "lo stop loss E' parte del trade"). Candele sintetiche + strategia
 /// script che entra long alla prima barra e non emette altro.
 /// </summary>
+[Collection("Postgres")]
 public class BacktestStopLossTests
 {
+    private readonly PostgresFixture _pg;
+
+    public BacktestStopLossTests(PostgresFixture pg) => _pg = pg;
+
     /// <summary>Strategia script: emette i segnali indicati agli indici indicati, Hold altrove.</summary>
     private sealed class ScriptedStrategy(Dictionary<int, Signal> script) : IStrategy
     {
@@ -46,13 +53,13 @@ public class BacktestStopLossTests
         }).ToList();
     }
 
-    private static async Task<BacktestResult> RunAsync(
+    private async Task<BacktestResult> RunAsync(
         List<OhlcvData> candles, Dictionary<int, Signal> script,
         decimal stopLoss = 0m, decimal takeProfit = 0m, decimal trailing = 0m)
     {
         var services = new ServiceCollection();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite("DataSource=:memory:"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_pg.CreateDatabase()));
         services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
         services.AddSingleton<IStrategyFactory, StrategyFactory>();
         services.AddSingleton<IAlphaFactorFactory, AlphaFactorFactory>();

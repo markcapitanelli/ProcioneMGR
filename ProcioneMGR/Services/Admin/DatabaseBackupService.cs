@@ -1,62 +1,52 @@
-using Microsoft.Data.Sqlite;
+using Npgsql;
 
 namespace ProcioneMGR.Services.Admin;
 
 /// <summary>
 /// Wrapper iniettabile attorno a <see cref="DatabaseBackupHelper"/> per l'uso dalla UI (pagina
-/// <c>/admin/backup</c>). Risolve il path del file <c>app.db</c> dalla connection string SQLite e la
-/// cartella <c>backup/</c> relativa alla content root, così il chiamante non deve conoscere i path.
+/// <c>/admin/backup</c>). Risolve i parametri di connessione PostgreSQL dalla connection string
+/// <c>PostgresConnection</c> e la cartella <c>backup/</c> relativa alla content root, così il
+/// chiamante non deve conoscerli.
 ///
-/// Il servizio è significativo solo quando il provider attivo è SQLite: PostgreSQL ha un proprio
-/// meccanismo di backup (pg_dump/pg_restore, vedi docs/POSTGRES_MIGRATION.md). Con provider diverso
-/// da SQLite <see cref="IsSqlite"/> è false e le operazioni lanciano <see cref="InvalidOperationException"/>.
+/// Il backup usa gli strumenti nativi <c>pg_dump</c>/<c>pg_restore</c> (devono essere nel PATH):
+/// vedi <see cref="DatabaseBackupHelper"/> e docs/POSTGRES_MIGRATION.md.
 /// </summary>
 public sealed class DatabaseBackupService
 {
-    private readonly string? _dbPath;
+    private readonly PgConnectionInfo _conn;
     private readonly string _backupDir;
 
     public DatabaseBackupService(IConfiguration configuration, IHostEnvironment env)
     {
-        var provider = (configuration.GetValue<string>("Database:Provider") ?? "SQLite").Trim();
-        var isSqlite = provider.Equals("SQLite", StringComparison.OrdinalIgnoreCase);
+        var connString = configuration.GetConnectionString("PostgresConnection")
+            ?? throw new InvalidOperationException("Connection string 'PostgresConnection' non trovata.");
 
-        if (isSqlite)
-        {
-            var conn = configuration.GetConnectionString("DefaultConnection")
-                       ?? configuration.GetConnectionString("SqliteConnection")
-                       ?? "DataSource=Data/app.db";
-            // "DataSource=Data/app.db;Cache=Shared" -> "Data/app.db"
-            var dataSource = new SqliteConnectionStringBuilder(conn).DataSource;
-            _dbPath = Path.IsPathRooted(dataSource)
-                ? dataSource
-                : Path.Combine(env.ContentRootPath, dataSource);
-        }
+        var b = new NpgsqlConnectionStringBuilder(connString);
+        _conn = new PgConnectionInfo(
+            Host: string.IsNullOrWhiteSpace(b.Host) ? "localhost" : b.Host,
+            Port: b.Port == 0 ? 5432 : b.Port,
+            Database: b.Database ?? throw new InvalidOperationException("PostgresConnection senza 'Database'."),
+            Username: b.Username ?? throw new InvalidOperationException("PostgresConnection senza 'Username'."),
+            Password: b.Password);
 
         _backupDir = Path.Combine(env.ContentRootPath, "backup");
     }
 
-    /// <summary>True solo se il provider attivo è SQLite: le operazioni di backup hanno senso solo lì.</summary>
-    public bool IsSqlite => _dbPath is not null;
-
-    /// <summary>Path assoluto del file DB SQLite attivo (null se il provider non è SQLite).</summary>
-    public string? DatabasePath => _dbPath;
+    /// <summary>Nome del database di destinazione (per la UI).</summary>
+    public string TargetDatabase => _conn.Database;
 
     /// <summary>Cartella dove vivono i backup.</summary>
     public string BackupDirectory => _backupDir;
 
-    private string RequireDbPath() => _dbPath
-        ?? throw new InvalidOperationException("Backup disponibile solo con provider SQLite. Per PostgreSQL usare pg_dump/pg_restore.");
-
     /// <summary>Crea un backup verificato del DB attivo. Vedi <see cref="DatabaseBackupHelper.Backup"/>.</summary>
-    public BackupResult CreateBackup() => DatabaseBackupHelper.Backup(RequireDbPath(), _backupDir);
+    public BackupResult CreateBackup() => DatabaseBackupHelper.Backup(_conn, _backupDir);
 
     /// <summary>Elenca i backup esistenti, più recenti prima.</summary>
     public IReadOnlyList<BackupInfo> ListBackups() => DatabaseBackupHelper.ListBackups(_backupDir);
 
-    /// <summary>Verifica l'integrità di un file di backup (<c>PRAGMA integrity_check</c>).</summary>
+    /// <summary>Verifica la leggibilità di un file di backup (<c>pg_restore --list</c>).</summary>
     public IntegrityResult VerifyBackup(string backupPath) => DatabaseBackupHelper.IntegrityCheck(backupPath);
 
-    /// <summary>Ripristina un backup sul DB attivo (salva prima una copia <c>.pre-restore</c> di sicurezza).</summary>
-    public void Restore(string backupPath) => DatabaseBackupHelper.Restore(backupPath, RequireDbPath());
+    /// <summary>Ripristina un backup nel DB attivo (<c>pg_restore --clean --if-exists</c>).</summary>
+    public void Restore(string backupPath) => DatabaseBackupHelper.Restore(_conn, backupPath);
 }

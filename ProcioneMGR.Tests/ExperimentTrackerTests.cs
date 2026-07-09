@@ -4,6 +4,8 @@ using ProcioneMGR.Data;
 using ProcioneMGR.Services.Experiments;
 using ProcioneMGR.Services.Security;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -11,10 +13,13 @@ namespace ProcioneMGR.Tests;
 /// (Running → metriche → Completed), merge delle metriche, hash "git-like" dei parametri
 /// (config identiche ⇒ hash identico), e robustezza best-effort degli helper Safe* (non lanciano).
 /// </summary>
+[Collection("Postgres")]
 public sealed class ExperimentTrackerTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"experiment_tracker_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public ExperimentTrackerTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -26,7 +31,7 @@ public sealed class ExperimentTrackerTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
 
@@ -113,6 +118,5 @@ public sealed class ExperimentTrackerTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { /* best-effort cleanup */ }
     }
 }

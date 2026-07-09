@@ -19,10 +19,10 @@ using ProcioneMGR.Services.Trading;
 
 // Npgsql "legacy timestamp behavior": permette a 'timestamp without time zone' di accettare
 // DateTime di qualunque Kind (Utc/Unspecified), memorizzandone il valore grezzo. Serve perché il
-// codice (scritto per SQLite) usa DateTime.UtcNow (Kind=Utc) nelle query, e senza questo switch
-// Npgsql rifiuterebbe di scrivere un Kind=Utc su 'timestamp without time zone'. Coerente con la
-// semantica "naive UTC" di SQLite: nessun cambiamento di logica di business (i valori sono gli
-// stessi tick). Va impostato PRIMA di costruire qualunque data source Npgsql. Innocuo su SQLite.
+// codice usa DateTime.UtcNow (Kind=Utc) nelle query, e senza questo switch Npgsql rifiuterebbe di
+// scrivere un Kind=Utc su 'timestamp without time zone'. Semantica "naive UTC": nessun cambiamento
+// di logica di business (i valori sono gli stessi tick). Va impostato PRIMA di costruire qualunque
+// data source Npgsql.
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
 var builder = WebApplication.CreateBuilder(args);
@@ -47,32 +47,17 @@ builder.Services.AddAuthentication(options =>
 // l'EncryptedStringConverter ne dipende.
 builder.Services.AddSingleton<IEncryptionService, AesGcmEncryptionService>();
 
-// --- Selezione provider database (SQLite dev / PostgreSQL prod) ---
-// Il provider si sceglie da configurazione "Database:Provider" (default SQLite = comportamento
-// storico invariato). Le migrazioni sono provider-specifiche: quelle SQLite vivono nell'assembly
-// ProcioneMGR (default), quelle PostgreSQL in ProcioneMGR.Migrations.Postgres. Nessuna
-// IDesignTimeDbContextFactory: EF usa l'host dell'app (vedi nota) per costruire il context a
-// design-time, così Identity applica correttamente SchemaVersion=Version3 (una factory custom la
-// bypasserebbe, causando il drop spurio di AspNetUserPasskeys).
-var dbProvider = builder.Configuration.GetValue<string>("Database:Provider") ?? "SQLite";
+// --- Database: PostgreSQL (unico provider) ---
+// Le migrazioni vivono nell'assembly ProcioneMGR.Migrations.Postgres e si applicano come passo
+// separato (`dotnet ef database update`), non a runtime: l'app NON referenzia quell'assembly per
+// evitare un ciclo di progetti. Nessuna IDesignTimeDbContextFactory: EF usa l'host dell'app per
+// costruire il context a design-time, così Identity applica correttamente SchemaVersion=Version3
+// (una factory custom la bypasserebbe, causando il drop spurio di AspNetUserPasskeys).
 void ConfigureDatabase(DbContextOptionsBuilder options)
 {
-    switch (dbProvider.Trim().ToUpperInvariant())
-    {
-        case "POSTGRESQL":
-        case "POSTGRES":
-        case "NPGSQL":
-            var pg = builder.Configuration.GetConnectionString("PostgresConnection")
-                     ?? throw new InvalidOperationException("Database:Provider=PostgreSQL richiede ConnectionStrings:PostgresConnection.");
-            options.UseNpgsql(pg, npgsql => npgsql.MigrationsAssembly("ProcioneMGR.Migrations.Postgres"));
-            break;
-        default:
-            var sqlite = builder.Configuration.GetConnectionString("DefaultConnection")
-                         ?? builder.Configuration.GetConnectionString("SqliteConnection")
-                         ?? throw new InvalidOperationException("Connection string 'DefaultConnection' non trovata.");
-            options.UseSqlite(sqlite);
-            break;
-    }
+    var pg = builder.Configuration.GetConnectionString("PostgresConnection")
+             ?? throw new InvalidOperationException("Connection string 'PostgresConnection' non trovata.");
+    options.UseNpgsql(pg, npgsql => npgsql.MigrationsAssembly("ProcioneMGR.Migrations.Postgres"));
 }
 
 // DbContextFactory (per servizi a lunga durata e componenti Blazor interattivi) +
@@ -276,7 +261,7 @@ var registryOptions = builder.Configuration.GetSection("Registry").Get<ProcioneM
 builder.Services.AddSingleton(registryOptions);
 builder.Services.AddSingleton<ProcioneMGR.Services.Registry.IModelRegistry, ProcioneMGR.Services.Registry.ModelRegistry>();
 
-// --- Backup DB (pagina /admin/backup): risolve path app.db + cartella backup/ dalla config ---
+// --- Backup DB (pagina /admin/backup): pg_dump/pg_restore del database Postgres + cartella backup/ ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Admin.DatabaseBackupService>();
 
 // --- Multi-strategy ensemble + trading: corsie isolate (LaneId 0..LaneCount-1) ---

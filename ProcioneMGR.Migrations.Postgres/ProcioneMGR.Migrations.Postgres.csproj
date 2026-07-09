@@ -4,12 +4,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!-- Assembly che ospita SOLO le migrazioni PostgreSQL (snapshot separato dal set SQLite,
-         che resta nell'assembly ProcioneMGR). Referenzia ProcioneMGR perché i file .Designer/
-         snapshot generati puntano al tipo ApplicationDbContext. ProcioneMGR NON referenzia questo
-         progetto (nessun ciclo): a runtime l'app su Postgres NON auto-migra (le migrazioni si
-         applicano con `dotnet ef database update` usando questo progetto come startup, tramite la
-         DesignTimeDbContextFactory qui inclusa). Auto-migrate resta attivo solo su SQLite (dev). -->
+    <!-- Assembly che ospita le migrazioni PostgreSQL (unico provider). Referenzia ProcioneMGR perché
+         i file .Designer/snapshot generati puntano al tipo ApplicationDbContext. ProcioneMGR NON
+         referenzia questo progetto (nessun ciclo): a runtime l'app NON auto-migra (migrate-on-deploy),
+         le migrazioni si applicano con `dotnet ef database update` usando questo progetto come
+         startup, tramite la DesignTimeDbContextFactory qui inclusa. -->
   </PropertyGroup>
 
   <ItemGroup>

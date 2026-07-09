@@ -6,6 +6,8 @@ using ProcioneMGR.Services.ML;
 using ProcioneMGR.Services.Monitoring.Drift;
 using ProcioneMGR.Services.Security;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -14,10 +16,13 @@ namespace ProcioneMGR.Tests;
 /// volatilità (current), il fattore di volatilità realizzata deve risultare in drift. Verifica
 /// l'integrazione reale (ricostruzione fattori dal FactorsJson + detector).
 /// </summary>
+[Collection("Postgres")]
 public sealed class FeatureDriftMonitorTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"drift_monitor_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public FeatureDriftMonitorTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -29,7 +34,7 @@ public sealed class FeatureDriftMonitorTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
         var dbFactory = provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
@@ -112,6 +117,5 @@ public sealed class FeatureDriftMonitorTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { /* best-effort */ }
     }
 }

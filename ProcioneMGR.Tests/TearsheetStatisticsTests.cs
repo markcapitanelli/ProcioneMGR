@@ -247,4 +247,43 @@ public class TearsheetStatisticsTests
         Assert.Equal(Statistics.ExposurePercent(trades, eq), sheet.ExposurePercent);
         Assert.Equal(Statistics.HitRate(trades), sheet.HitRatePercent);
     }
+
+    // --- Deflated Sharpe (single track, per il gate Champion del ModelRegistry) ---------------
+
+    [Fact]
+    public void DeflatedSharpeSingleTrack_TooShortOrNullCurve_IsNull()
+    {
+        Assert.Null(Statistics.DeflatedSharpeSingleTrack(MakeCurve([100m, 110m]), 8760));
+        Assert.Null(Statistics.DeflatedSharpeSingleTrack(null, 8760));
+    }
+
+    [Fact]
+    public void DeflatedSharpeSingleTrack_StrongSteadyTrack_IsSignificant()
+    {
+        // Drift positivo costante con varianza minima su un track lungo ⇒ PSR (= DSR a 1 trial) ≈ 1.
+        var caps = new List<decimal> { 100m };
+        for (var i = 0; i < 400; i++)
+        {
+            var d = 0.003m + (i % 2 == 0 ? 0.0005m : -0.0005m);
+            caps.Add(caps[^1] * (1 + d));
+        }
+        var dsr = Statistics.DeflatedSharpeSingleTrack(MakeCurve(caps), periodsPerYear: 365);
+        Assert.NotNull(dsr);
+        Assert.True(dsr > 0.95, $"atteso significativo (>0.95), ottenuto {dsr}");
+    }
+
+    [Fact]
+    public void DeflatedSharpeSingleTrack_ZeroDriftNoise_IsNotSignificant()
+    {
+        // Rendimenti alternati ±2% (media ~0) ⇒ Sharpe per-periodo ~0 ⇒ PSR ≈ 0.5 < soglia 0.95.
+        var caps = new List<decimal> { 100m };
+        for (var i = 0; i < 400; i++)
+        {
+            var d = i % 2 == 0 ? 0.02m : -0.02m;
+            caps.Add(caps[^1] * (1 + d));
+        }
+        var dsr = Statistics.DeflatedSharpeSingleTrack(MakeCurve(caps), periodsPerYear: 365);
+        Assert.NotNull(dsr);
+        Assert.True(dsr < 0.95, $"atteso non significativo (<0.95), ottenuto {dsr}");
+    }
 }

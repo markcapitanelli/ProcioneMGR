@@ -18,6 +18,8 @@ using ProcioneMGR.Services.Risk;
 using ProcioneMGR.Services.Security;
 using ProcioneMGR.Services.Trading;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -30,10 +32,13 @@ namespace ProcioneMGR.Tests;
 /// La non-regressione delle lane a sole regole (d) è coperta dalla suite esistente (il ramo
 /// Champion scatta SOLO per StrategyName=="MlChampion").
 /// </summary>
+[Collection("Postgres")]
 public sealed class TradingEngineChampionTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"champion_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public TradingEngineChampionTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private const string Symbol = "ML/USDT";
     private const string Tf = "1h";
@@ -142,7 +147,7 @@ public sealed class TradingEngineChampionTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         _provider = services.BuildServiceProvider();
 
         var factory = _provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
@@ -302,6 +307,5 @@ public sealed class TradingEngineChampionTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { /* best-effort */ }
     }
 }
