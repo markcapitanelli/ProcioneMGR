@@ -8,6 +8,8 @@ using ProcioneMGR.Services.Observability;
 using ProcioneMGR.Services.Registry;
 using ProcioneMGR.Services.Security;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -15,8 +17,13 @@ namespace ProcioneMGR.Tests;
 /// misure attese, e i worker di autonomia le producono sugli eventi chiave. Verificato col
 /// <see cref="MeterListener"/> del BCL — nessuna dipendenza da OpenTelemetry (che è solo l'export).
 /// </summary>
+[Collection("Postgres")]
 public class ObservabilityTests
 {
+    private readonly PostgresFixture _pg;
+
+    public ObservabilityTests(PostgresFixture pg) => _pg = pg;
+
     /// <summary>Raccoglie le misure long emesse dal meter "ProcioneMGR" per la durata dello scope.</summary>
     private static (MeterListener listener, List<(string Name, long Value)> longs, List<(string Name, double Value)> doubles) Listen()
     {
@@ -63,10 +70,9 @@ public class ObservabilityTests
     [Fact]
     public async Task DriftWorker_EmitsDriftAndRetirementMetrics_ForChampion()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"obs_test_{Guid.NewGuid():N}.db");
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_pg.CreateDatabase()));
         await using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
         await using (var db = await factory.CreateDbContextAsync()) await db.Database.EnsureCreatedAsync();
@@ -100,8 +106,6 @@ public class ObservabilityTests
 
         Assert.Contains(("procione.drift.alerts", 1L), longs);   // AlertMonitor emette 1 feature in alert
         Assert.Contains(("procione.models.retired", 1L), longs); // Champion ritirato dal ciclo chiuso
-
-        try { File.Delete(dbPath); } catch { /* best effort */ }
     }
 
     private sealed class PassthroughEncryption : IEncryptionService

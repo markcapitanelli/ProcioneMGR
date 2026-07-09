@@ -9,6 +9,7 @@ using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Security;
 using ProcioneMGR.Services.Trading;
+using ProcioneMGR.Tests.Infrastructure;
 
 namespace ProcioneMGR.Tests;
 
@@ -18,10 +19,13 @@ namespace ProcioneMGR.Tests;
 /// comportamento causale del trailing (livello calcolato sul best-since-entry PRIMA della
 /// candela corrente, come nel motore di backtest — vedi BacktestEngineTests/BacktestStopLossTests).
 /// </summary>
+[Collection("Postgres")]
 public class TradingEngineStopTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"trading_stop_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public TradingEngineStopTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     /// <summary>Segnale scriptato per indice di candela: deterministico, nessun bisogno di tarare un indicatore reale.</summary>
     private sealed class ScriptedStrategy(Func<int, Signal> script) : IStrategy
@@ -86,7 +90,7 @@ public class TradingEngineStopTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
 
@@ -120,14 +124,16 @@ public class TradingEngineStopTests : IAsyncDisposable
         return (engine, dbFactory);
     }
 
-    private static OhlcvData Candle(int i, decimal close) => new()
+    private static OhlcvData Candle(int i, decimal close) => Candle(i, close, close, close, close);
+
+    private static OhlcvData Candle(int i, decimal open, decimal high, decimal low, decimal close) => new()
     {
         Symbol = "BTC/USDT",
         Timeframe = "1h",
         TimestampUtc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddHours(i),
-        Open = close,
-        High = close,
-        Low = close,
+        Open = open,
+        High = high,
+        Low = low,
         Close = close,
         Volume = 100m,
     };
@@ -154,6 +160,25 @@ public class TradingEngineStopTests : IAsyncDisposable
         Assert.Equal(95m, positions[0].StopLoss); // 100 * (1 - 5%), applicato SENZA alcuna chiamata manuale
 
         await engine.ProcessCandleAsync(Candle(5, 94m)); // sotto lo stop -> chiusura automatica
+        Assert.Empty(await engine.GetOpenPositionsAsync());
+    }
+
+    [Fact]
+    public async Task StopLoss_TriggersIntrabar_WhenWickPiercesButCloseIsAbove()
+    {
+        // P0-5: lo stop live è controllato su High/Low della candela chiusa (come il backtest), non solo
+        // sulla Close. Un wick che buca lo stop chiude la posizione anche se la candela chiude più in alto.
+        var strat = new EnsembleStrategy { StrategyId = "s1", StrategyName = "Scripted", DisplayName = "Scripted", IsActive = true, StopLossPercent = 5m };
+        var (engine, _) = await BuildAsync(strat, i => i == 4 ? Signal.Long : Signal.Hold);
+        await engine.StartAsync(TradingMode.Paper);
+
+        await WarmUpAsync(engine);
+        await engine.ProcessCandleAsync(Candle(4, 100m)); // Long a 100 -> stop 95
+        Assert.Equal(95m, (await engine.GetOpenPositionsAsync()).Single().StopLoss);
+
+        // Close 97 (sopra lo stop) ma Low 94 (il wick buca lo stop 95): col vecchio controllo solo-Close
+        // sarebbe rimasta aperta; ora scatta intrabar.
+        await engine.ProcessCandleAsync(Candle(5, open: 97m, high: 98m, low: 94m, close: 97m));
         Assert.Empty(await engine.GetOpenPositionsAsync());
     }
 
@@ -236,6 +261,5 @@ public class TradingEngineStopTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 }

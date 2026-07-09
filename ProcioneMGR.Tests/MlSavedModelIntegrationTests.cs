@@ -9,6 +9,8 @@ using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.ML;
 using ProcioneMGR.Services.Security;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -18,10 +20,13 @@ namespace ProcioneMGR.Tests;
 /// esattamente come già fa per nome con le strategie a regole — nessun cambiamento richiesto a
 /// Optimization/Ensemble, che passano solo <c>BacktestConfiguration</c>.
 /// </summary>
+[Collection("Postgres")]
 public class MlSavedModelIntegrationTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"ml_saved_model_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public MlSavedModelIntegrationTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -72,7 +77,7 @@ public class MlSavedModelIntegrationTests : IAsyncDisposable
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
         services.AddSingleton<IAlphaFactorFactory, AlphaFactorFactory>();
         services.AddScoped<IBacktestEngine>(sp => new BacktestEngine(
@@ -226,10 +231,5 @@ public class MlSavedModelIntegrationTests : IAsyncDisposable
         {
             await _provider.DisposeAsync();
         }
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
-        var wal = _dbPath + "-wal";
-        var shm = _dbPath + "-shm";
-        if (File.Exists(wal)) File.Delete(wal);
-        if (File.Exists(shm)) File.Delete(shm);
     }
 }

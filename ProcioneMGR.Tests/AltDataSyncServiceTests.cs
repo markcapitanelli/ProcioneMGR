@@ -7,6 +7,8 @@ using ProcioneMGR.Services.AltData;
 using ProcioneMGR.Services.Security;
 using ProcioneMGR.Services.Sentiment;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -14,10 +16,13 @@ namespace ProcioneMGR.Tests;
 /// deduplica fra sync successive, e resilienza a una fonte che lancia un'eccezione (non deve far
 /// fallire l'intera sync — stesso principio di <c>MarketDataSyncService</c>).
 /// </summary>
+[Collection("Postgres")]
 public class AltDataSyncServiceTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"altdata_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public AltDataSyncServiceTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -36,7 +41,7 @@ public class AltDataSyncServiceTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
 
@@ -114,11 +119,5 @@ public class AltDataSyncServiceTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
-        foreach (var suffix in new[] { "-wal", "-shm" })
-        {
-            var f = _dbPath + suffix;
-            if (File.Exists(f)) File.Delete(f);
-        }
     }
 }

@@ -21,12 +21,6 @@
     <PackageReference Include="System.ServiceModel.Syndication" Version="10.0.9" />
     <PackageReference Include="Microsoft.AspNetCore.Diagnostics.EntityFrameworkCore" Version="10.0.8" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.8" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.8" />
-    <!-- Pin esplicito del provider nativo SQLite alla serie 3.0.x (SourceGear.sqlite3, SQLite >= 3.50.4.5):
-         sostituisce la transitiva vulnerabile SQLitePCLRaw.lib.e_sqlite3 2.1.11 (NU1903 / CVE-2025-6965,
-         GHSA-2m69-gcr7-jv3q). Compatibile con Microsoft.Data.Sqlite 10 (richiede solo >= 2.1.11). Si
-         propaga a test e tool via ProjectReference. -->
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.8" PrivateAssets="all" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.8" />
   </ItemGroup>

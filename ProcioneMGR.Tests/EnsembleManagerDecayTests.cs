@@ -8,17 +8,22 @@ using ProcioneMGR.Services.Regime;
 using ProcioneMGR.Services.Security;
 using ProcioneMGR.Services.Trading;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
 /// Test di integrazione di <see cref="EnsembleManager.GetDecayReportsAsync"/>: carica la
-/// configurazione reale (JSON su SQLite) e i TradeRecords reali dal DB, verificando che il
+/// configurazione reale (JSON su Postgres) e i TradeRecords reali dal DB, verificando che il
 /// monitor riceva esattamente i dati giusti per ciascuna gamba.
 /// </summary>
+[Collection("Postgres")]
 public class EnsembleManagerDecayTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"ensemble_decay_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public EnsembleManagerDecayTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -45,7 +50,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
 
@@ -134,6 +139,5 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 }

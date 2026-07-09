@@ -17,7 +17,8 @@ using ProcioneMGR.Services.Ingestion;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Risk;
 
-const string DbPath = @"C:\Users\proci\Desktop\ProgettoP\ProcioneMGR\Data\app.db";
+var pgConn = Environment.GetEnvironmentVariable("ConnectionStrings__PostgresConnection")
+    ?? "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure";
 
 // --- Universo di espansione ---
 // 18 coppie storiche (gia' presenti) + 12 nuove liquide su Binance.
@@ -42,7 +43,7 @@ var intradayFrom = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);    // 5m
 var services = new ServiceCollection();
 services.AddLogging(b => b.AddSimpleConsole(o => o.SingleLine = true).SetMinimumLevel(LogLevel.Warning));
 services.AddSingleton<ProcioneMGR.Services.Security.IEncryptionService, PassthroughEncryption>();
-services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"DataSource={DbPath}"));
+services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(pgConn));
 services.AddHttpClient<BinanceClient>(c =>
 {
     c.BaseAddress = new Uri("https://api.binance.com");
