@@ -1,4 +1,5 @@
 using ProcioneMGR.Data;
+using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Discovery;
 using ProcioneMGR.Services.Regime;
 
@@ -72,6 +73,44 @@ public static class StageConfigExtensions
 
 /// <summary>Definition of a stage parameter, for the generic gear-icon editor in the UI.</summary>
 public sealed record StageParameterDefinition(string Key, string Label, string DefaultValue, string Hint);
+
+/// <summary>
+/// Costi di trading applicati ai backtest della pipeline, letti una volta dallo <see cref="StageConfig"/>
+/// e replicati su OGNI <see cref="BacktestConfiguration"/> di valutazione dei candidati. I default
+/// rispecchiano il venue reale (Bitget): fee taker (conservativa) + slippage realistico + funding dei
+/// perpetual. Il <b>funding</b> in particolare era assente (default 0 in BacktestConfiguration): senza,
+/// una strategia che tiene posizioni attraverso le finestre di funding appare più redditizia di quanto
+/// sarà live. La validazione gira a leva 1, ma il rapporto funding/PnL è leva-invariante: valida quindi
+/// correttamente l'edge al netto del funding.
+/// </summary>
+public readonly record struct PipelineCosts(decimal SlippagePercent, decimal FeePercent, decimal FundingRatePercentPer8h)
+{
+    public const decimal DefaultSlippagePercent = 0.05m;
+    public const decimal DefaultFeePercent = 0.1m;                 // Bitget taker ~0.06%; 0.1 tenuto conservativo
+    public const decimal DefaultFundingRatePercentPer8h = 0.01m;  // funding "neutro" storico dei perpetual
+
+    public static PipelineCosts FromConfig(StageConfig config) => new(
+        config.GetDecimal("slippagePercent", DefaultSlippagePercent),
+        config.GetDecimal("feePercent", DefaultFeePercent),
+        config.GetDecimal("fundingRatePercentPer8h", DefaultFundingRatePercentPer8h));
+
+    /// <summary>Applica i costi a una configurazione di backtest (in-place) e la restituisce, per l'uso fluido.</summary>
+    public BacktestConfiguration ApplyTo(BacktestConfiguration cfg)
+    {
+        cfg.SlippagePercent = SlippagePercent;
+        cfg.FeePercent = FeePercent;
+        cfg.FundingRatePercentPer8h = FundingRatePercentPer8h;
+        return cfg;
+    }
+
+    /// <summary>Parametri UI condivisi dei costi, da innestare nelle ParameterDefinitions di ogni stage.</summary>
+    public static IReadOnlyList<StageParameterDefinition> ParameterDefinitions =>
+    [
+        new("slippagePercent", "Slippage per fill (%)", "0.05", "attrito realistico su ogni eseguito"),
+        new("feePercent", "Commissione per lato (%)", "0.1", "taker Bitget ~0.06%; 0.1 conservativo"),
+        new("fundingRatePercentPer8h", "Funding perpetual (%/8h)", "0.01", "costo di mantenimento dei perp; 0.01 neutro storico"),
+    ];
+}
 
 /// <summary>
 /// A dependency group: the stage requires AT LEAST ONE of the listed stages to be enabled
@@ -290,6 +329,12 @@ public sealed class ValidatedCandidate
 
     public bool Survived { get; set; }
     public string? RejectReason { get; set; }
+
+    // Gate anti-overfitting (López de Prado), calcolato in HoldoutValidationStage sull'intero batch.
+    /// <summary>Deflated Sharpe del candidato (probabilità che l'edge holdout sia reale dopo N tentativi). null = non calcolabile.</summary>
+    public double? DeflatedSharpe { get; set; }
+    /// <summary>Probability of Backtest Overfitting del PANNELLO di candidati (comune a tutti). null = non calcolabile.</summary>
+    public double? PanelPbo { get; set; }
 
     // Robustness (filled by RobustnessProbeStage on survivors)
     public decimal MonteCarloRiskFactor95 { get; set; }
