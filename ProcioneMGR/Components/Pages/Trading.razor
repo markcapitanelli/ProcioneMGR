@@ -135,6 +135,16 @@
         prima di rischiare soldi veri.
     </p>
     <dl class="row mb-0">
+        <dt class="col-sm-3">Corsia (lane)</dt>
+        <dd class="col-sm-9">
+            Il selettore <strong>Corsia</strong> in alto sceglie quale dei 3 motori indipendenti
+            stai guardando. Ogni corsia ha la <em>sua</em> configurazione (exchange, symbol, Spot/
+            Futures, leva) definita in <a href="ensemble">Ensemble</a> per quella stessa corsia, e
+            un suo stato isolato. <strong>Attenzione</strong>: exchange e modalità mostrati qui sono
+            quelli della corsia selezionata — se operi su Bitget Futures ma stai guardando la Corsia
+            0 (di default Binance), vedrai le informazioni di Binance. Seleziona la corsia giusta
+            per vedere i dati corretti.
+        </dd>
         <dt class="col-sm-3">Modalità: Paper</dt>
         <dd class="col-sm-9">Denaro <strong>finto</strong>, nessun ordine reale — perfetta per osservare come si comporterebbe una strategia "dal vivo" senza alcun rischio.</dd>
         <dt class="col-sm-3">Modalità: Testnet</dt>
@@ -152,7 +162,11 @@
             La modalità (Spot o Futures a leva) e la leva usata si impostano in
             <a href="ensemble">Ensemble</a>, non qui — questa pagina mostra e opera con la
             configurazione già salvata lì. In Futures il badge in alto mostra "FUTURES Nx" e le
-            metriche "Margine usato"/"Leva" sostituiscono quelle Spot.
+            metriche "Margine usato"/"Leva" sostituiscono quelle Spot. In <strong>Testnet Futures
+            su Bitget</strong> il sizing usa il <strong>saldo demo reale</strong> del conto (non il
+            capitale di config, che resta solo un default se il saldo demo è 0); e la demo Bitget
+            espone solo alcuni contratti major (BTC/ETH…): un simbolo non simulato viene rifiutato
+            in avvio con un messaggio chiaro invece di un errore opaco.
         </dd>
         <dt class="col-sm-3">Posizioni aperte</dt>
         <dd class="col-sm-9">
@@ -472,12 +486,20 @@
     private const int LaneCount = 3;
     private int _laneId;
 
-    /// <summary>Exchange configurato per la corsia (da Ensemble): usato per i messaggi UI dinamici.</summary>
+    /// <summary>Exchange configurato per la corsia (da Ensemble): fallback quando il motore non è ancora avviato.</summary>
     private string _exchangeName = "Binance";
-    private bool IsBitget => string.Equals(_exchangeName, "Bitget", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Exchange effettivo per i messaggi UI: se il motore è avviato usa quello con cui sta davvero
+    /// operando (<c>_status.ExchangeName</c>, il target reale degli ordini), altrimenti la config
+    /// della corsia caricata dall'Ensemble. Evita di mostrare un exchange diverso da quello in uso.
+    /// </summary>
+    private string ActiveExchangeName =>
+        !string.IsNullOrWhiteSpace(_status?.ExchangeName) ? _status!.ExchangeName : _exchangeName;
+    private bool IsBitget => string.Equals(ActiveExchangeName, "Bitget", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Etichetta dell'ambiente di prova coerente con l'exchange (Bitget non ha "testnet" ma "Demo Trading").</summary>
-    private string TestnetEnvLabel => IsBitget ? "Bitget Demo Trading" : $"{_exchangeName} Testnet";
+    private string TestnetEnvLabel => IsBitget ? "Bitget Demo Trading" : $"{ActiveExchangeName} Testnet";
 
     /// <summary>Motore della corsia selezionata (keyed DI): risolto ad ogni accesso, mai messo in cache tra un cambio corsia e l'altro.</summary>
     private ITradingEngine Engine => Services.GetRequiredKeyedService<ITradingEngine>(_laneId);

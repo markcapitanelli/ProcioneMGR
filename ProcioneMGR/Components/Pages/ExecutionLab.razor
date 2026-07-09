@@ -19,12 +19,24 @@
 
 <GuidaPanel Title="Execution Lab — quanto costa DAVVERO eseguire un ordine">
     <p>
-        Oggi la piattaforma esegue ogni ordine in un colpo solo. Su size significative, però,
-        distribuire l'ordine nel tempo (<strong>TWAP</strong>, <strong>VWAP</strong>,
-        <strong>Iceberg</strong>) riduce l'impatto di mercato. Qui si <strong>misura</strong> questa
-        differenza sulle candele fini recenti, invece di assumerla (rif. ROADMAP-QLIB §1.2).
+        Un ordine grande, eseguito tutto in una volta, "muove" il mercato contro di sé: più mangi
+        il book, peggiore è il prezzo medio che ottieni (<em>impatto di mercato</em>). Distribuire
+        l'ordine nel tempo lo riduce. La piattaforma sa farlo davvero — in <a href="trading">Trading</a>
+        (solo Testnet/Live) ogni gamba dell'<a href="ensemble">Ensemble</a> può scegliere un
+        algoritmo di esecuzione a fette; qui invece lo si <strong>misura a freddo</strong> sulle
+        candele fini recenti, per capire quale conviene <em>prima</em> di attivarlo (rif. ROADMAP-QLIB §1.2).
     </p>
-    <p class="mb-0">
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Immediate</dt>
+        <dd class="col-sm-9">Un solo ordine, subito: il comportamento predefinito, ottimo per size piccole dove l'impatto è trascurabile.</dd>
+        <dt class="col-sm-3">TWAP / VWAP</dt>
+        <dd class="col-sm-9">Fette a intervalli regolari (TWAP) o pesate sul profilo di volume atteso (VWAP), per sciogliere l'ordine in una finestra temporale.</dd>
+        <dt class="col-sm-3">Iceberg</dt>
+        <dd class="col-sm-9">Mostra solo una piccola parte per volta, ricaricando man mano: nasconde la size reale a chi osserva il book.</dd>
+        <dt class="col-sm-3">Adaptive</dt>
+        <dd class="col-sm-9">Cadenza in forma chiusa stile Almgren-Chriss: bilancia impatto di mercato e rischio di prezzo (la RL è stata deliberatamente scartata per il rischio di overfitting sim-to-real).</dd>
+    </dl>
+    <p class="mb-0 mt-2">
         Il modello di impatto è semplificato (lineare nella quota di volume assorbita) e va calibrato
         in Paper: i valori assoluti sono indicativi, il <em>confronto relativo</em> fra algoritmi è il
         punto. Ogni confronto viene registrato negli <a href="experiments">Esperimenti</a>.

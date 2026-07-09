@@ -46,6 +46,19 @@
         </dd>
         <dt class="col-sm-3">Testnet</dt>
         <dd class="col-sm-9">Spunta questa casella se la coppia di chiavi è generata sull'ambiente di test dell'exchange (consigliato prima di rischiare soldi veri).</dd>
+        <dt class="col-sm-3">Bitget: chiave Demo ≠ chiave normale</dt>
+        <dd class="col-sm-9">
+            Bitget non ha un dominio testnet separato: il suo <strong>Demo Trading</strong> (o
+            "Simulated Trading") gira sullo stesso host, ma richiede una chiave generata
+            <strong>dentro la sezione Demo Trading</strong> dell'account — non dalla normale "API
+            Management". Una chiave del conto reale usata come testnet fallisce con l'errore
+            <code>40099 "exchange environment is incorrect"</code> al primo ordine/leva (le sole
+            letture possono ingannare, restituendo 0 senza errore). Ricorda inoltre che i fondi
+            demo <strong>Futures</strong> sono un portafoglio separato da quello Spot: vanno
+            riscattati lì, altrimenti il saldo demo resta 0 e il sizing ricade sul capitale di
+            config. Sulla demo Futures sono disponibili solo alcuni major (BTC/ETH…): un simbolo
+            non simulato viene rifiutato con un avviso chiaro.
+        </dd>
         <dt class="col-sm-3">Test</dt>
         <dd class="col-sm-9">Verifica subito che le chiavi funzionino davvero, chiedendo all'exchange il saldo dell'account — senza piazzare ordini.</dd>
         <dt class="col-sm-3">Elimina</dt>

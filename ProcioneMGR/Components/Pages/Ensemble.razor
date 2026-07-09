@@ -58,8 +58,24 @@
         quando cambiano le condizioni di mercato.
     </p>
     <dl class="row mb-0">
+        <dt class="col-sm-3">Corsia (lane)</dt>
+        <dd class="col-sm-9">
+            La piattaforma ha <strong>3 corsie indipendenti</strong> (Corsia 0/1/2): ognuna ha la
+            <em>sua</em> configurazione di ensemble e il suo motore di <a href="trading">Trading</a>,
+            completamente isolati. Puoi così tenere, ad esempio, Binance Spot su una corsia e Bitget
+            Futures su un'altra senza che si influenzino. Il selettore in alto sceglie quale corsia
+            stai configurando qui — è la <em>stessa</em> corsia che poi selezioni in Trading.
+        </dd>
+        <dt class="col-sm-3">Exchange</dt>
+        <dd class="col-sm-9">
+            L'exchange su cui questa corsia opera (Binance o Bitget). Determina dove vengono
+            piazzati gli ordini in Testnet/Live e quali credenziali (da <a href="settings/exchanges">Credenziali
+            Exchange</a>) vengono usate. Per i <strong>Futures a leva</strong> scegli
+            <strong>Bitget</strong>: Binance Futures non è utilizzabile dall'Italia/UE dal 1° luglio
+            2026 (regolamento MiCA) — un avviso te lo ricorda se selezioni Binance + Futures.
+        </dd>
         <dt class="col-sm-3">Capitale / Symbol / Timeframe</dt>
-        <dd class="col-sm-9">Il capitale totale gestito dall'ensemble e la coppia/timeframe su cui operano tutte le strategie al suo interno.</dd>
+        <dd class="col-sm-9">Il capitale totale gestito dall'ensemble e la coppia/timeframe su cui operano tutte le strategie al suo interno. In Testnet Futures su Bitget, il capitale di config è solo un default: il sizing usa il saldo demo reale quando disponibile.</dd>
         <dt class="col-sm-3">Futures (leva)</dt>
         <dd class="col-sm-9">
             Se attivo, il trading (in <a href="trading">Trading</a>) opera su Futures perpetui a

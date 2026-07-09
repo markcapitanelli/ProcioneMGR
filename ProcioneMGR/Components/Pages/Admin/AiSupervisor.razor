@@ -15,10 +15,11 @@
 
 <GuidaPanel Title="Supervisione AI — un consulente sulle cacce, non un esecutore">
     <p>
-        A ogni run del pipeline concluso, un agente AR (Claude) legge la <code>PipelineRecommendation</code>
-        prodotta dal motore e scrive un <strong>parere leggibile</strong>: un riepilogo, eventuali
-        aggiustamenti proposti ai parametri di caccia, e le decisioni che richiedono la tua
-        <strong>conferma esplicita</strong>.
+        A ogni run del pipeline concluso, un agente AI (Claude, modello <code>claude-opus-4-8</code>)
+        legge la <code>PipelineRecommendation</code> prodotta dal motore e scrive un
+        <strong>parere leggibile</strong>: un riepilogo, eventuali aggiustamenti proposti ai
+        parametri di ricerca, e le decisioni che richiedono la tua <strong>conferma esplicita</strong>.
+        Il parere è archiviato come artefatto del run, così resta consultabile anche dopo.
     </p>
     <p class="mb-0">
         <strong>Confine di sicurezza (non negoziabile):</strong> l'AI è <em>solo advisory</em>. Non può
