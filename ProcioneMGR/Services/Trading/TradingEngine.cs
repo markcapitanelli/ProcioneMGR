@@ -326,11 +326,16 @@ public sealed class TradingEngine(
                     }
                 }
 
-                // Trailing stop: livello calcolato sul best-since-entry PRIMA di considerare il
-                // prezzo di QUESTA candela (evita di usare l'estremo di oggi per definire lo stop
-                // di oggi) — stesso principio causale del motore di backtest. Se sia uno stop
-                // statico che il trailing sono attivi, vince quello più protettivo (esito peggiore
-                // per la posizione), come le varianti combinate SL+TRAIL del backtest.
+                // Stop/target INTRABAR su High/Low della candela chiusa (come la liquidazione sopra e
+                // come il motore di backtest), NON solo sulla Close: un wick può bucare lo stop anche
+                // se la candela chiude al di là — prima questa asimmetria rendeva il live più ottimista
+                // del backtest. Esecuzione al LIVELLO dello stop/target (o all'open se la candela apre
+                // già oltre, per un gap), esito peggiore per la posizione.
+                var high = candle.High;
+                var low = candle.Low;
+
+                // Trailing: livello calcolato sul best-since-entry delle candele PRECEDENTI (causale,
+                // come il backtest); il best si aggiorna con QUESTA candela solo dopo il controllo.
                 var effectiveStop = pos.StopLoss;
                 if (pos.TrailingStopPercent is decimal trailPct && trailPct > 0m)
                 {
@@ -346,19 +351,24 @@ public sealed class TradingEngine(
                     }
                 }
 
-                if (effectiveStop is decimal sl && ((pos.Side == OrderSide.Buy && price <= sl) || (pos.Side == OrderSide.Sell && price >= sl)))
+                // Stop PRIMA del target: se entrambi cadono nella stessa candela si assume lo stop.
+                if (effectiveStop is decimal sl
+                    && ((pos.Side == OrderSide.Buy && low <= sl) || (pos.Side == OrderSide.Sell && high >= sl)))
                 {
-                    await ClosePositionAsync(pos, price, "StopLoss", ts, ct);
+                    var fill = pos.Side == OrderSide.Buy ? Math.Min(sl, candle.Open) : Math.Max(sl, candle.Open);
+                    await ClosePositionAsync(pos, fill, "StopLoss", ts, ct);
                 }
-                else if (pos.TakeProfit is decimal tp && ((pos.Side == OrderSide.Buy && price >= tp) || (pos.Side == OrderSide.Sell && price <= tp)))
+                else if (pos.TakeProfit is decimal tp
+                    && ((pos.Side == OrderSide.Buy && high >= tp) || (pos.Side == OrderSide.Sell && low <= tp)))
                 {
-                    await ClosePositionAsync(pos, price, "TakeProfit", ts, ct);
+                    var fill = pos.Side == OrderSide.Buy ? Math.Max(tp, candle.Open) : Math.Min(tp, candle.Open);
+                    await ClosePositionAsync(pos, fill, "TakeProfit", ts, ct);
                 }
                 else if (pos.TrailingStopPercent is > 0m)
                 {
                     pos.BestPriceSinceEntry = pos.Side == OrderSide.Buy
-                        ? Math.Max(pos.BestPriceSinceEntry ?? pos.EntryPrice, price)
-                        : Math.Min(pos.BestPriceSinceEntry ?? pos.EntryPrice, price);
+                        ? Math.Max(pos.BestPriceSinceEntry ?? pos.EntryPrice, high)
+                        : Math.Min(pos.BestPriceSinceEntry ?? pos.EntryPrice, low);
                 }
             }
 

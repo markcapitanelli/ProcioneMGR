@@ -13,7 +13,16 @@ public sealed class CointegrationResult
     /// <summary>Statistica t del test ADF (Augmented Dickey-Fuller) sullo spread.</summary>
     public required double AdfStatistic { get; init; }
 
-    /// <summary>True se l'ADF rifiuta l'ipotesi di radice unitaria al 5%: lo spread è stazionario -> le serie sono cointegrate.</summary>
+    /// <summary>Valore critico MacKinnon usato per il giudizio (dipende dal livello e dalla lunghezza). Più negativo = più severo.</summary>
+    public double CriticalValue { get; init; }
+
+    /// <summary>Livello di significatività (%) del valore critico usato (default 5%).</summary>
+    public double SignificanceLevelPercent { get; init; }
+
+    /// <summary>Numero di lag dell'ADF scelto per AIC.</summary>
+    public int AdfLags { get; init; }
+
+    /// <summary>True se l'ADF rifiuta l'ipotesi di radice unitaria al livello scelto (statistica &lt; valore critico MacKinnon): spread stazionario -> serie cointegrate.</summary>
     public required bool IsCointegrated { get; init; }
 }
 
