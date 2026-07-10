@@ -13,6 +13,17 @@ namespace ProcioneMGR.Services.Regime;
 /// Rilevamento dei regimi di mercato via K-means (Microsoft.ML). Singleton: il modello
 /// attivo è in cache e letto in modo thread-safe; l'addestramento è serializzato con un
 /// <see cref="SemaphoreSlim"/>. I servizi scoped (BacktestEngine) sono risolti per-uso.
+///
+/// DOPPIA NOZIONE DI REGIME (chiarimento — non è un bug):
+///  • QUESTO rilevatore (K-means multi-feature persistito) è la nozione "ricca": guida la
+///    pesatura regime-aware dell'ensemble e la profilatura strategia↔regime.
+///  • <see cref="Backtesting.RegimeConditionalStrategy"/> usa invece un proxy causale DB-free
+///    (slope della SMA) perché le strategie devono restare senza dipendenze per girare negli
+///    sweep dell'OptimizationEngine e nel motore live. Le due possono discordare: è voluto.
+///    Chi governa cosa: il K-means qui → allocazione/analisi; il proxy SMA → segnale intra-strategia.
+///
+/// K può essere FISSO (<see cref="TrainingConfiguration.NumberOfRegimes"/>) o AUTO-SELEZIONATO
+/// per Silhouette (<see cref="TrainingConfiguration.AutoSelectK"/> → <see cref="SelectBestK"/>).
 /// </summary>
 public sealed class RegimeDetector(
     IMarketFeatureExtractor extractor,
@@ -35,42 +46,52 @@ public sealed class RegimeDetector(
     {
         var features = await extractor.ExtractFeaturesAsync(
             config.ExchangeName, config.Symbol, config.Timeframe, config.From, config.To, ct);
-        if (features.Count < Math.Max(config.NumberOfRegimes * 30, 200))
+
+        // Con auto-K la sufficienza dati va misurata sul K massimo che potremmo scegliere.
+        var maxK = config.AutoSelectK ? Math.Max(config.MinRegimes, config.MaxRegimes) : config.NumberOfRegimes;
+        if (features.Count < Math.Max(maxK * 30, 200))
         {
             throw new InvalidOperationException($"Dati insufficienti per il training ({features.Count} feature). Servono più candele.");
         }
 
         var (matrix, scaling) = FeatureNormalizer.NormalizeFeatures(features);
 
-        // --- K-means (Microsoft.ML) ---
-        var rows = matrix.Select(m => new FeatureRow { Features = m }).ToList();
-        var dv = _ml.Data.LoadFromEnumerable(rows);
-        var options = new KMeansTrainer.Options
+        // --- K-means (Microsoft.ML): K fisso, oppure auto-selezione per Silhouette ---
+        int chosenK;
+        float[][] centroids;
+        double silhouette;
+        if (config.AutoSelectK)
         {
-            NumberOfClusters = config.NumberOfRegimes,
-            MaximumNumberOfIterations = config.MaxIterations,
-            FeatureColumnName = nameof(FeatureRow.Features),
-        };
-        var model = _ml.Clustering.Trainers.KMeans(options).Fit(dv);
+            var (bestK, bestCentroids, bestSil, scores) =
+                SelectBestK(_ml, matrix, Math.Max(2, config.MinRegimes), Math.Max(Math.Max(2, config.MinRegimes), config.MaxRegimes), config.MaxIterations, ct);
+            chosenK = bestK;
+            centroids = bestCentroids;
+            silhouette = bestSil;
+            logger.LogInformation("Auto-K per {Symbol} {Tf}: scelto K={K} (silhouette {Sil:F3}). Punteggi: {Scores}",
+                config.Symbol, config.Timeframe, chosenK, silhouette,
+                string.Join(", ", scores.Select(s => $"K{s.K}={s.Silhouette:F3}")));
+            config.NumberOfRegimes = chosenK; // il K scelto diventa il K effettivo (visibile al chiamante)
+        }
+        else
+        {
+            chosenK = config.NumberOfRegimes;
+            (centroids, silhouette) = FitKMeans(_ml, matrix, chosenK, config.MaxIterations);
+        }
 
-        VBuffer<float>[] centroidBuffers = default!;
-        model.Model.GetClusterCentroids(ref centroidBuffers, out _);
-        var centroids = centroidBuffers.Select(v => v.DenseValues().ToArray()).ToArray();
-
-        // Assegnazione (nearest-centroid, coerente con l'inference) + silhouette + smoothing.
-        var rawLabels = RegimeAssignment.AssignRaw(matrix, centroids);
-        var silhouette = RegimeAssignment.Silhouette(matrix, rawLabels, config.NumberOfRegimes, sampleSize: 2000, seed: 1);
         if (silhouette < 0.3)
         {
             logger.LogWarning("Silhouette Score basso ({Score:F3}): clustering di qualità modesta.", silhouette);
         }
-        var smoothed = RegimeAssignment.SmoothRolling(rawLabels, SmoothWindow(config.Timeframe), confirmFrames: 3, config.NumberOfRegimes);
+
+        // Assegnazione (nearest-centroid, coerente con l'inference) + smoothing.
+        var rawLabels = RegimeAssignment.AssignRaw(matrix, centroids);
+        var smoothed = RegimeAssignment.SmoothRolling(rawLabels, SmoothWindow(config.Timeframe), confirmFrames: 3, chosenK);
 
         // Profili (mean feature per regime, su assegnazione smoothed).
-        var profiles = BuildProfiles(features, smoothed, config.NumberOfRegimes);
+        var profiles = BuildProfiles(features, smoothed, chosenK);
 
         // Profilatura strategie per regime.
-        await ProfileStrategiesAsync(config, features, smoothed, profiles, ct);
+        await ProfileStrategiesAsync(config, features, smoothed, profiles, chosenK, ct);
 
         var regimeModel = new RegimeModel
         {
@@ -80,7 +101,7 @@ public sealed class RegimeDetector(
             TrainedAtUtc = DateTime.UtcNow,
             TrainingDataFrom = config.From,
             TrainingDataTo = config.To,
-            NumberOfRegimes = config.NumberOfRegimes,
+            NumberOfRegimes = chosenK,
             CentroidsJson = JsonSerializer.Serialize(centroids, Json),
             FeatureScalingJson = JsonSerializer.Serialize(scaling, Json),
             RegimeProfilesJson = JsonSerializer.Serialize(profiles, Json),
@@ -95,7 +116,7 @@ public sealed class RegimeDetector(
         }
 
         logger.LogInformation("Modello regime addestrato per {Symbol} {Tf}: K={K}, Silhouette={Sil:F3} (attivato={Act}).",
-            config.Symbol, config.Timeframe, config.NumberOfRegimes, silhouette, activate);
+            config.Symbol, config.Timeframe, chosenK, silhouette, activate);
         return regimeModel;
     }
 
@@ -151,6 +172,64 @@ public sealed class RegimeDetector(
             .FirstOrDefaultAsync(ct);
     }
 
+    // ---------------------------------------------------------------- K-means + auto-selezione di K
+
+    /// <summary>
+    /// Addestra un K-means (Microsoft.ML) su <paramref name="matrix"/> normalizzata e restituisce
+    /// i centroidi nello spazio normalizzato più il Silhouette Score dell'assegnazione nearest-centroid.
+    /// Puro rispetto a DB e stato d'istanza (usa solo l'<see cref="MLContext"/> passato) → testabile.
+    /// </summary>
+    internal static (float[][] Centroids, double Silhouette) FitKMeans(MLContext ml, float[][] matrix, int k, int maxIterations)
+    {
+        var rows = matrix.Select(m => new FeatureRow { Features = m }).ToList();
+        var dv = ml.Data.LoadFromEnumerable(rows);
+        var options = new KMeansTrainer.Options
+        {
+            NumberOfClusters = k,
+            MaximumNumberOfIterations = maxIterations,
+            FeatureColumnName = nameof(FeatureRow.Features),
+        };
+        var model = ml.Clustering.Trainers.KMeans(options).Fit(dv);
+
+        VBuffer<float>[] centroidBuffers = default!;
+        model.Model.GetClusterCentroids(ref centroidBuffers, out _);
+        var centroids = centroidBuffers.Select(v => v.DenseValues().ToArray()).ToArray();
+
+        var labels = RegimeAssignment.AssignRaw(matrix, centroids);
+        var silhouette = RegimeAssignment.Silhouette(matrix, labels, k, sampleSize: 2000, seed: 1);
+        return (centroids, silhouette);
+    }
+
+    /// <summary>
+    /// Auto-selezione di K: addestra un K-means per ogni K in [<paramref name="minK"/>..<paramref name="maxK"/>]
+    /// e sceglie quello col Silhouette Score massimo. Il gap-statistic sarebbe l'alternativa; la silhouette
+    /// è più economica e sufficiente qui. Restituisce anche l'elenco dei punteggi (per log/diagnostica).
+    /// A parità di silhouette preferisce il K più piccolo (modello più parsimonioso).
+    /// </summary>
+    internal static (int BestK, float[][] Centroids, double Silhouette, List<(int K, double Silhouette)> Scores)
+        SelectBestK(MLContext ml, float[][] matrix, int minK, int maxK, int maxIterations, CancellationToken ct = default)
+    {
+        var scores = new List<(int K, double Silhouette)>();
+        int bestK = minK;
+        float[][] bestCentroids = default!;
+        var bestSil = double.NegativeInfinity;
+
+        for (var k = minK; k <= maxK; k++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var (centroids, silhouette) = FitKMeans(ml, matrix, k, maxIterations);
+            scores.Add((k, silhouette));
+            if (silhouette > bestSil) // > (non >=): a parità tiene il K più piccolo già trovato
+            {
+                bestSil = silhouette;
+                bestK = k;
+                bestCentroids = centroids;
+            }
+        }
+
+        return (bestK, bestCentroids, bestSil, scores);
+    }
+
     // ---------------------------------------------------------------- profili
 
     private static List<RegimeProfile> BuildProfiles(List<MarketFeatures> features, int[] labels, int k)
@@ -204,7 +283,7 @@ public sealed class RegimeDetector(
     // ---------------------------------------------------------------- profilatura strategie
 
     private async Task ProfileStrategiesAsync(
-        TrainingConfiguration config, List<MarketFeatures> features, int[] labels, List<RegimeProfile> profiles, CancellationToken ct)
+        TrainingConfiguration config, List<MarketFeatures> features, int[] labels, List<RegimeProfile> profiles, int k, CancellationToken ct)
     {
         // Candele allineate alle feature (stesso insieme e stesso ordine).
         using var scope = scopeFactory.CreateScope();
@@ -235,7 +314,6 @@ public sealed class RegimeDetector(
         }
 
         var ppy = Statistics.PeriodsPerYear(config.Timeframe);
-        var k = config.NumberOfRegimes;
 
         foreach (var proto in strategyFactory.Prototypes)
         {
