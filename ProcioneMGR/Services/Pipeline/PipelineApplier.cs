@@ -188,6 +188,11 @@ public sealed class PipelineApplier(
             .ToList();
 
         var totalWeight = legs.Sum(l => l.WeightPercent);
+        // Effective sample size behind the weighted Sharpe = the weakest leg's holdout trade count
+        // (conservative: the swap must be significant even for the thinnest-sampled leg).
+        var observations = recommendation.EnsembleLegs.Count > 0
+            ? recommendation.EnsembleLegs.Min(l => l.HoldoutTrades)
+            : 0;
         return new EnsembleSummary
         {
             WeightedAverageSharpe = totalWeight > 0m
@@ -196,6 +201,7 @@ public sealed class PipelineApplier(
             WeightedAverageRiskFactor95 = recommendation.RiskLimits.RiskFactor95,
             SurvivingLegs = legs.Count,
             DistinctSymbols = legs.Select(l => l.Symbol).Distinct().Count(),
+            Observations = observations,
             Legs = legs,
         };
     }

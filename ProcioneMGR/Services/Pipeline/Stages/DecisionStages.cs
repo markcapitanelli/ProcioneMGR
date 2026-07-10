@@ -144,6 +144,7 @@ public sealed class EnsembleAssemblyStage(
                 HoldoutSharpe = leg.HoldoutSharpe,
                 HoldoutProfitFactor = leg.HoldoutProfitFactor,
                 HoldoutMaxDrawdown = leg.HoldoutMaxDrawdown,
+                HoldoutTrades = leg.HoldoutTrades,
             });
         }
         ctx.Ensemble = proposal;

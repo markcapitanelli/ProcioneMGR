@@ -425,6 +425,13 @@ public sealed class ProposedLeg
     public decimal HoldoutProfitFactor { get; set; }
     public decimal HoldoutMaxDrawdown { get; set; }
 
+    /// <summary>
+    /// Holdout trade count of the originating candidate — carried as the effective sample size behind
+    /// the leg's Sharpe so the auto-reapply comparator can test a swap's statistical significance
+    /// (<see cref="Ensemble.EnsembleSummary.Observations"/>). Verdict-only, never a selection input.
+    /// </summary>
+    public int HoldoutTrades { get; set; }
+
     /// <summary>Same identity key as the originating <see cref="ValidatedCandidate"/> — use this for lookups, never rebuild it inline.</summary>
     public string Key => PipelineCandidateKey.Build(StrategyName, Symbol, Timeframe, Parameters);
 }

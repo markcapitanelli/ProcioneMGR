@@ -12,6 +12,21 @@ public class EnsembleConfiguration
     public int SharpeRollingDays { get; set; } = 30;
     public decimal MinAllocationPercent { get; set; } = 5m;
     public decimal MaxAllocationPercent { get; set; } = 40m;
+
+    /// <summary>
+    /// Intensità dello shrinkage degli Sharpe verso l'equipeso prima dell'allocazione (0..1).
+    /// Le stime di Sharpe sono rumorose: 0 = puro Sharpe-weighting (comportamento storico Fase 6),
+    /// 1 = equipeso puro. Default 0.5 (metà fiducia agli scarti dalla media): su dati OOS l'equipeso
+    /// batte spesso il Sharpe-weighting, quindi lo shrinkage riduce l'overfitting dell'allocazione.
+    /// Vedi <see cref="EnsembleAllocator.ShrinkSharpes"/>.
+    /// </summary>
+    public decimal SharpeShrinkage { get; set; } = 0.5m;
+
+    /// <summary>
+    /// Numero minimo di osservazioni (punti di equity) perché lo Sharpe di una gamba sia ritenuto
+    /// affidabile; sotto la soglia la gamba è portata all'equipeso. 0 = disattivo.
+    /// </summary>
+    public int MinSharpeObservations { get; set; } = 20;
     public List<EnsembleStrategy> Strategies { get; set; } = new();
     public bool IsEnabled { get; set; }
 
