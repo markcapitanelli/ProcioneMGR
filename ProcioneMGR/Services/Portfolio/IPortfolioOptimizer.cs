@@ -9,6 +9,24 @@ public enum MeanVarianceObjective
     MinVariance,
 }
 
+/// <summary>Stimatore della matrice di covarianza usato dagli allocatori.</summary>
+public enum CovarianceEstimator
+{
+    /// <summary>Covarianza campionaria (con ridge minimo per stabilizzare l'inversa).</summary>
+    Sample,
+    /// <summary>Shrinkage di Ledoit-Wolf verso μI — ben condizionata anche con pochi dati o asset correlati.</summary>
+    LedoitWolf,
+}
+
+/// <summary>Metodo di Risk Parity.</summary>
+public enum RiskParityMethod
+{
+    /// <summary>Inverse-volatility w_i ∝ 1/σ_i (ERC esatto solo a correlazioni uniformi).</summary>
+    InverseVolatility,
+    /// <summary>Equal Risk Contribution ESATTO (tiene conto delle correlazioni).</summary>
+    EqualRiskContribution,
+}
+
 public sealed class PortfolioOptimizationConfig
 {
     public decimal RiskFreeRateAnnual { get; set; } = 0.02m;
@@ -21,6 +39,12 @@ public sealed class PortfolioOptimizationConfig
     public decimal MaxWeight { get; set; } = 1m;
 
     public MeanVarianceObjective Objective { get; set; } = MeanVarianceObjective.MaxSharpe;
+
+    /// <summary>Stimatore di covarianza per Mean-Variance (default Ledoit-Wolf, meglio condizionato).</summary>
+    public CovarianceEstimator CovarianceEstimator { get; set; } = CovarianceEstimator.LedoitWolf;
+
+    /// <summary>Metodo di Risk Parity (default ERC esatto).</summary>
+    public RiskParityMethod RiskParityMethod { get; set; } = RiskParityMethod.EqualRiskContribution;
 }
 
 public sealed class PortfolioAllocation
