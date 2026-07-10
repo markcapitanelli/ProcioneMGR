@@ -825,7 +825,77 @@ public sealed class TradingEngine(
                 liquidationPrice = pos.LiquidationPrice, merged = mergeInto is not null,
                 autoStopLoss = pos.StopLoss, autoTakeProfit = pos.TakeProfit, autoTrailingStopPercent = pos.TrailingStopPercent,
             }, ts, ct);
+
+        // [P0-5 follow-up] Protezione "resting" sull'exchange: solo se abilitata (default OFF), su nuova
+        // posizione Testnet/Live. Non blocca mai l'apertura — con i client trigger ancora stub registra
+        // un warning e restano gli stop software (fonte di verità). Vedi SafetyConfiguration.UseExchangeRestingStops.
+        if (mergeInto is null && _state.Mode != TradingMode.Paper
+            && safety.CurrentValue.UseExchangeRestingStops && _creds is TradingCredentials restingCreds)
+        {
+            await TryPlaceRestingBracketAsync(pos, restingCreds, ts, ct);
+        }
         return true;
+    }
+
+    /// <summary>
+    /// [P0-5] Piazza sull'exchange gli ordini TRIGGER reduce-only (stop-market e take-profit-market) che
+    /// replicano <see cref="OpenPosition.StopLoss"/>/<see cref="OpenPosition.TakeProfit"/>. Invocato solo se
+    /// <see cref="SafetyConfiguration.UseExchangeRestingStops"/> è attivo (default OFF). Mai bloccante: ogni
+    /// fallimento è solo loggato e gli stop software restano la fonte di verità.
+    /// </summary>
+    private async Task TryPlaceRestingBracketAsync(OpenPosition pos, TradingCredentials creds, DateTime ts, CancellationToken ct)
+    {
+        var closeSide = pos.Side == OrderSide.Buy ? "SELL" : "BUY"; // ordine di protezione = lato opposto
+        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
+
+        async Task PlaceAsync(decimal trigger, bool isStopLoss, Action<string> onPlaced)
+        {
+            var clientId = Guid.NewGuid().ToString("N");
+            var res = await futuresClient.PlaceFuturesTriggerOrderAsync(new PlaceOrderRequest
+            {
+                Symbol = pos.Symbol,
+                Side = closeSide,
+                Type = isStopLoss ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
+                Quantity = pos.Quantity,
+                TriggerPrice = trigger,
+                ClientOrderId = clientId,
+                Credentials = creds,
+            }, isStopLoss, ct);
+
+            if (res.Success)
+            {
+                onPlaced(clientId);
+                await AuditAsync("RestingStopPlaced", new { pos.PositionId, kind = isStopLoss ? "stop" : "target", trigger, clientId }, ts, ct);
+            }
+            else
+            {
+                logger.LogWarning("Ordine resting {Kind} non piazzato per {Pid}: {Err}. Resta lo stop software.",
+                    isStopLoss ? "stop" : "target", pos.PositionId, res.Error);
+            }
+        }
+
+        if (pos.StopLoss is decimal sl && sl > 0m) await PlaceAsync(sl, isStopLoss: true, id => pos.StopOrderId = id);
+        if (pos.TakeProfit is decimal tp && tp > 0m) await PlaceAsync(tp, isStopLoss: false, id => pos.TakeProfitOrderId = id);
+    }
+
+    /// <summary>
+    /// [P0-5 follow-up — SCAFFOLDING] Cancella gli ordini TRIGGER resting prima di chiudere a mercato,
+    /// così non restano ordini orfani sull'exchange. INERTE finché non ci sono id (feature off/stub).
+    /// </summary>
+    private async Task TryCancelRestingBracketAsync(OpenPosition pos, TradingCredentials creds, CancellationToken ct)
+    {
+        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
+        foreach (var clientId in new[] { pos.StopOrderId, pos.TakeProfitOrderId })
+        {
+            if (string.IsNullOrEmpty(clientId)) continue;
+            var res = await futuresClient.CancelFuturesOrderAsync(pos.Symbol, clientId, creds, ct);
+            if (!res.Success)
+            {
+                logger.LogWarning("Cancellazione ordine resting {Cid} per {Pid} fallita: {Err}.", clientId, pos.PositionId, res.Error);
+            }
+        }
+        pos.StopOrderId = null;
+        pos.TakeProfitOrderId = null;
     }
 
     // ---------------------------------------------------------------- esecuzione a fette (TWAP/VWAP/Iceberg)
@@ -1278,6 +1348,14 @@ public sealed class TradingEngine(
         if (!alreadyClosedOnExchange && _state.Mode != TradingMode.Paper && _creds is TradingCredentials creds)
         {
             var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
+
+            // [P0-5 follow-up] Cancella eventuali ordini TRIGGER resting prima del market close, per non
+            // lasciarli orfani sull'exchange. Inerte se non ce ne sono (feature off/stub → id sempre null).
+            if (pos.StopOrderId is not null || pos.TakeProfitOrderId is not null)
+            {
+                await TryCancelRestingBracketAsync(pos, creds, ct);
+            }
+
             var res = await futuresClient.PlaceFuturesOrderAsync(new PlaceOrderRequest
             {
                 Symbol = pos.Symbol,
