@@ -9,6 +9,19 @@ public class TrainingConfiguration
     public DateTime To { get; set; }
     public int NumberOfRegimes { get; set; } = 4;
     public int MaxIterations { get; set; } = 100;
+
+    /// <summary>
+    /// Se true, K non è fisso: si addestra il K-means per ogni K in [<see cref="MinRegimes"/>..<see cref="MaxRegimes"/>]
+    /// e si sceglie quello col Silhouette Score migliore (auto-selezione di K). <see cref="NumberOfRegimes"/>
+    /// viene aggiornato al K scelto. Se false si usa <see cref="NumberOfRegimes"/> così com'è (comportamento storico).
+    /// </summary>
+    public bool AutoSelectK { get; set; }
+
+    /// <summary>Estremo inferiore del range di K per l'auto-selezione (min 2). Usato solo se <see cref="AutoSelectK"/>.</summary>
+    public int MinRegimes { get; set; } = 2;
+
+    /// <summary>Estremo superiore del range di K per l'auto-selezione. Usato solo se <see cref="AutoSelectK"/>.</summary>
+    public int MaxRegimes { get; set; } = 6;
 }
 
 /// <summary>

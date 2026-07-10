@@ -46,6 +46,12 @@ public sealed class ComposerScreeningConfiguration
     public decimal InitialCapital { get; set; } = 10_000m;
     public decimal SlippagePercent { get; set; } = 0.05m;
 
+    /// <summary>Commissione per lato (%) — allineata ai default di PipelineCosts (Bitget, conservativa).</summary>
+    public decimal FeePercent { get; set; } = 0.1m;
+
+    /// <summary>Funding dei perpetual (%/8h) — allineato ai default di PipelineCosts; era assente (0).</summary>
+    public decimal FundingRatePercentPer8h { get; set; } = 0.01m;
+
     /// <summary>Selection-range gates before the walk-forward confirmation.</summary>
     public decimal MinScreenSharpe { get; set; } = 0.3m;
     public int MinTrades { get; set; } = 12;
@@ -509,6 +515,8 @@ public sealed class StrategyComposer(
             StrategyName = spec.StrategyName,
             StrategyParameters = new(spec.Parameters),
             SlippagePercent = screening.SlippagePercent,
+            FeePercent = screening.FeePercent,
+            FundingRatePercentPer8h = screening.FundingRatePercentPer8h,
         };
 
     /// <summary>Rolling, non-overlapping OOS windows covering [from, to]. Public for direct testability.</summary>

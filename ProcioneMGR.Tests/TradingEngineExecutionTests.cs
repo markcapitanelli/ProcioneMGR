@@ -13,6 +13,8 @@ using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Security;
 using ProcioneMGR.Services.Trading;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -25,10 +27,13 @@ namespace ProcioneMGR.Tests;
 /// Il tempo è controllato backdatando i job in cache (riflessione, SOLO nel test) così tutte le
 /// fette diventano "dovute" senza attese reali; il throttle MinOrderIntervalSeconds è messo a 0.
 /// </summary>
+[Collection("Postgres")]
 public sealed class TradingEngineExecutionTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"trading_exec_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public TradingEngineExecutionTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     // --- Fakes -------------------------------------------------------------------------------
 
@@ -115,7 +120,7 @@ public sealed class TradingEngineExecutionTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
 
@@ -301,6 +306,5 @@ public sealed class TradingEngineExecutionTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { /* best-effort */ }
     }
 }

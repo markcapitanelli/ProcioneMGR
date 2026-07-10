@@ -28,6 +28,16 @@ public sealed class EnsembleComparatorOptions
 
     /// <summary>A candidate covering fewer distinct symbols than this is rejected outright (not diversified enough).</summary>
     public int MinDistinctSymbols { get; set; } = 2;
+
+    /// <summary>
+    /// Minimo z-score di significatività statistica del vantaggio di Sharpe del candidato sull'incumbent,
+    /// oltre alla soglia percentuale di isteresi. Un miglioramento percentuale grande su un campione piccolo
+    /// è rumore: pretendere che sia anche significativo evita di scambiare l'ensemble su differenze non
+    /// distinguibili dal caso. z = (SR_cand − SR_incumbent) / SE(SR_cand), con SE di Lo (2002).
+    /// Si attiva solo quando il candidato riporta <see cref="EnsembleSummary.Observations"/> &gt; 0
+    /// (altrimenti si ricade sulla sola isteresi percentuale). Default 1.0 (≈1σ, modesto ma non nullo).
+    /// </summary>
+    public decimal MinSharpeSignificanceZ { get; set; } = 1.0m;
 }
 
 /// <summary>Compact, comparable snapshot of an ensemble (deployed or proposed). All metrics are weighted by allocation.</summary>
@@ -44,6 +54,13 @@ public sealed class EnsembleSummary
 
     /// <summary>Number of distinct symbols the legs span (diversification proxy).</summary>
     public int DistinctSymbols { get; set; }
+
+    /// <summary>
+    /// Effective sample size behind <see cref="WeightedAverageSharpe"/> (e.g. the weakest leg's holdout
+    /// trade count) used to test the statistical significance of a swap. 0 = unknown → the significance
+    /// gate is skipped and only the percentage hysteresis applies.
+    /// </summary>
+    public int Observations { get; set; }
 
     /// <summary>Per-leg breakdown (for logging/UI/debug).</summary>
     public IReadOnlyList<LegSummary> Legs { get; set; } = new List<LegSummary>();
@@ -79,6 +96,12 @@ public sealed class EnsembleComparison
 
     /// <summary>Sharpe improvement as a percentage of the incumbent (for the hysteresis check).</summary>
     public decimal SharpeImprovementPercent { get; set; }
+
+    /// <summary>
+    /// z-score of the candidate's Sharpe advantage over the incumbent, given the candidate's sample size
+    /// (0 when it could not be computed — unknown Observations or non-positive base). Recorded for audit.
+    /// </summary>
+    public decimal SignificanceZ { get; set; }
 }
 
 /// <inheritdoc cref="IEnsembleComparator"/>
@@ -151,11 +174,27 @@ public sealed class EnsembleComparator(EnsembleComparatorOptions options) : IEns
             return result;
         }
 
-        // 4. Primary path: a meaningful Sharpe improvement above the hysteresis band.
+        // Significatività statistica del vantaggio di Sharpe (test a un campione: l'incumbent è il
+        // benchmark nullo). Attiva solo se il candidato riporta una dimensione campionaria; altrimenti
+        // z=0 e il gate è neutro (si ricade sulla sola isteresi percentuale).
+        var significanceZ = SharpeAdvantageZ(candidate.WeightedAverageSharpe, current.WeightedAverageSharpe, candidate.Observations);
+        result.SignificanceZ = Math.Round(significanceZ, 2);
+        var significanceKnown = candidate.Observations > 0 && options.MinSharpeSignificanceZ > 0m;
+        var significant = !significanceKnown || significanceZ >= options.MinSharpeSignificanceZ;
+
+        // 4. Primary path: a meaningful Sharpe improvement above the hysteresis band AND, when the
+        // sample size is known, one that is statistically distinguishable from noise.
         if (sharpeImprovementPct >= options.MinSharpeImprovementPercent)
         {
+            if (!significant)
+            {
+                result.ShouldReplace = false;
+                result.Reason = $"Ensemble corrente mantenuto: +{result.SharpeImprovementPercent:F1}% di Sharpe ma non significativo (z {result.SignificanceZ:F2} < {options.MinSharpeSignificanceZ:F2}, {candidate.Observations} osservazioni).";
+                return result;
+            }
             result.ShouldReplace = true;
-            result.Reason = $"Ensemble sostituito: Sharpe medio {candidate.WeightedAverageSharpe:F2} vs {current.WeightedAverageSharpe:F2} (+{result.SharpeImprovementPercent:F1}%, sopra la soglia {options.MinSharpeImprovementPercent:F0}%).";
+            var zNote = significanceKnown ? $", z {result.SignificanceZ:F2} ≥ {options.MinSharpeSignificanceZ:F2}" : "";
+            result.Reason = $"Ensemble sostituito: Sharpe medio {candidate.WeightedAverageSharpe:F2} vs {current.WeightedAverageSharpe:F2} (+{result.SharpeImprovementPercent:F1}%, sopra la soglia {options.MinSharpeImprovementPercent:F0}%{zNote}).";
             return result;
         }
 
@@ -177,5 +216,26 @@ public sealed class EnsembleComparator(EnsembleComparatorOptions options) : IEns
         result.ShouldReplace = false;
         result.Reason = $"Ensemble corrente mantenuto: miglioramento marginale (Sharpe {candidate.WeightedAverageSharpe:F2} vs {current.WeightedAverageSharpe:F2}, +{result.SharpeImprovementPercent:F1}% sotto la soglia {options.MinSharpeImprovementPercent:F0}%).";
         return result;
+    }
+
+    /// <summary>
+    /// z-score del vantaggio di Sharpe del candidato sull'incumbent (test a un campione), usando
+    /// l'errore standard asintotico dello Sharpe di Lo (2002): SE(SR) ≈ √((1 + ½·SR²) / T).
+    /// Restituisce 0 se la dimensione campionaria è ignota/non positiva. Un campione più piccolo
+    /// gonfia SE → z più basso → più difficile giustificare uno swap (esattamente l'intento anti-churn).
+    /// </summary>
+    internal static decimal SharpeAdvantageZ(decimal candidateSharpe, decimal incumbentSharpe, int observations)
+    {
+        if (observations <= 1)
+        {
+            return 0m;
+        }
+        var sr = (double)candidateSharpe;
+        var se = Math.Sqrt((1.0 + 0.5 * sr * sr) / observations);
+        if (se <= 0.0)
+        {
+            return 0m;
+        }
+        return (decimal)(((double)(candidateSharpe - incumbentSharpe)) / se);
     }
 }

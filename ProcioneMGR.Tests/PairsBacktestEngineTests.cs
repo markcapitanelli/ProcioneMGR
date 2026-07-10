@@ -161,4 +161,82 @@ public class PairsBacktestEngineTests
             Assert.NotNull(t.ExitTime);
         }
     }
+
+    // --- P0-2: stop di divergenza, stop temporale, slippage --------------------------------------
+
+    private static (List<OhlcvData> Y, List<OhlcvData> X) MakePair(int n, double beta, double amplitude, int seed)
+    {
+        var (y, x) = MakeOscillatingPair(n, beta, amplitude, seed);
+        var t0 = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        return (MakeCandles(y, "Y/USDT", t0), MakeCandles(x, "X/USDT", t0));
+    }
+
+    [Fact]
+    public void RunBacktest_Slippage_ReducesFinalCapital()
+    {
+        var (cy, cx) = MakePair(800, beta: 1.8, amplitude: 8.0, seed: 1);
+        PairsBacktestConfiguration Cfg(decimal slip) => new()
+        {
+            LookbackWindow = 60, RecalibrationInterval = 30, ZScoreLookback = 20,
+            EntryZScore = 1.5m, ExitZScore = 0.3m, PositionSizePercent = 10m, SlippagePercent = slip,
+        };
+
+        var noSlip = _engine.RunBacktest(cy, cx, Cfg(0m));
+        var withSlip = _engine.RunBacktest(cy, cx, Cfg(0.2m));
+
+        Assert.True(noSlip.TotalTrades > 0);
+        Assert.True(withSlip.FinalCapital < noSlip.FinalCapital,
+            $"con slippage={withSlip.FinalCapital:F2} deve essere < senza={noSlip.FinalCapital:F2}");
+    }
+
+    [Fact]
+    public void RunBacktest_MaxHoldBars_CapsHoldingAndTagsExit()
+    {
+        var (cy, cx) = MakePair(800, beta: 1.8, amplitude: 8.0, seed: 1);
+        var cfg = new PairsBacktestConfiguration
+        {
+            LookbackWindow = 60, RecalibrationInterval = 30, ZScoreLookback = 20,
+            EntryZScore = 1.5m, ExitZScore = 0.1m, StopZScore = 0m, MaxHoldBars = 5,
+        };
+
+        var result = _engine.RunBacktest(cy, cx, cfg);
+
+        Assert.True(result.TotalTrades > 0);
+        // Nessun trade tenuto oltre lo stop temporale (candele orarie: 1 barra = 1 ora).
+        Assert.All(result.Trades, t =>
+            Assert.True((t.ExitTime!.Value - t.EntryTime).TotalHours <= 5.0 + 1e-6,
+                $"holding {(t.ExitTime!.Value - t.EntryTime).TotalHours}h oltre MaxHoldBars=5"));
+        Assert.Contains(result.Trades, t => t.ExitReason == "MaxHold");
+    }
+
+    [Fact]
+    public void RunBacktest_TightDivergenceStop_ProducesStopZScoreExits()
+    {
+        var (cy, cx) = MakePair(800, beta: 1.8, amplitude: 8.0, seed: 1);
+        var cfg = new PairsBacktestConfiguration
+        {
+            LookbackWindow = 60, RecalibrationInterval = 30, ZScoreLookback = 20,
+            EntryZScore = 1.5m, ExitZScore = 0.3m, StopZScore = 1.6m, // stop appena sopra l'entrata
+        };
+
+        var result = _engine.RunBacktest(cy, cx, cfg);
+
+        Assert.True(result.TotalTrades > 0);
+        Assert.Contains(result.Trades, t => t.ExitReason == "StopZScore");
+    }
+
+    [Fact]
+    public void RunBacktest_AllClosedTrades_HaveKnownExitReason()
+    {
+        var (cy, cx) = MakePair(500, beta: 2.0, amplitude: 6.0, seed: 2);
+        var result = _engine.RunBacktest(cy, cx, new PairsBacktestConfiguration
+        {
+            LookbackWindow = 50, RecalibrationInterval = 25, ZScoreLookback = 15,
+            EntryZScore = 1.5m, ExitZScore = 0.3m,
+        });
+
+        Assert.True(result.TotalTrades > 0);
+        string[] allowed = ["MeanReversion", "StopZScore", "MaxHold", "EndOfData"];
+        Assert.All(result.Trades, t => Assert.Contains(t.ExitReason, allowed));
+    }
 }

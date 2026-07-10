@@ -3,7 +3,8 @@
     Avvia ProcioneMGR su PostgreSQL in ambiente Production.
 
 .DESCRIPTION
-    - Imposta ASPNETCORE_ENVIRONMENT=Production (appsettings.Production.json → Database:Provider=PostgreSQL).
+    - Imposta ASPNETCORE_ENVIRONMENT=Production (carica appsettings.Production.json). PostgreSQL è
+      l'unico provider: la connection string PostgresConnection vale in ogni ambiente.
     - NON contiene segreti: la connection string PostgreSQL vive in appsettings.json (chiave
       ConnectionStrings:PostgresConnection) e la API key di Anthropic si legge dalla variabile
       d'ambiente ANTHROPIC_API_KEY (mai committata).
@@ -25,7 +26,7 @@ $env:ASPNETCORE_ENVIRONMENT = "Production"
 # Porta HTTP di default; sovrascrivibile esportando ASPNETCORE_URLS prima di lanciare lo script.
 if (-not $env:ASPNETCORE_URLS) { $env:ASPNETCORE_URLS = "http://localhost:5199" }
 
-Write-Host "Ambiente : $env:ASPNETCORE_ENVIRONMENT (Database:Provider=PostgreSQL)" -ForegroundColor Cyan
+Write-Host "Ambiente : $env:ASPNETCORE_ENVIRONMENT (provider: PostgreSQL)" -ForegroundColor Cyan
 Write-Host "URL      : $env:ASPNETCORE_URLS" -ForegroundColor Cyan
 if ($env:ANTHROPIC_API_KEY) {
     Write-Host "Layer AI : ANTHROPIC_API_KEY rilevata (supervisione AI abilitabile via Llm:Enabled)." -ForegroundColor Green

@@ -78,8 +78,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 
             entity.HasKey(e => e.Id);
 
-            // Precisione esplicita per i prezzi (provider-agnostica: PostgreSQL/SQL Server
-            // la onorano come numeric(18,8); SQLite la ignora ma il modello resta portabile).
+            // Precisione esplicita per i prezzi: PostgreSQL la onora come numeric(18,8).
             entity.Property(e => e.Open).HasPrecision(18, 8);
             entity.Property(e => e.High).HasPrecision(18, 8);
             entity.Property(e => e.Low).HasPrecision(18, 8);
@@ -361,15 +360,14 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => x.RunId);
         });
 
-        // --- Adattamenti specifici PostgreSQL (nessun effetto su SQLite) ---
+        // --- Adattamenti specifici PostgreSQL ---
         if (Database.IsNpgsql())
         {
-            // Tutte le date della piattaforma sono UTC "naive" (nessun offset memorizzato),
-            // esattamente come le memorizza SQLite. Il default di Npgsql (`timestamp with time
-            // zone`) rifiuterebbe una DateTime con Kind=Unspecified (quella che si ottiene
-            // rileggendo da SQLite o da un date-picker), spezzando sia la migrazione dati sia
-            // scritture runtime. Mappando a `timestamp without time zone` la semantica resta
-            // identica al provider SQLite e si elimina un'intera classe di errori di Kind.
+            // Tutte le date della piattaforma sono UTC "naive" (nessun offset memorizzato). Il default
+            // di Npgsql (`timestamp with time zone`) rifiuterebbe una DateTime con Kind=Unspecified
+            // (quella che si ottiene da un date-picker o da una lettura senza Kind), spezzando le
+            // scritture runtime. Mappando a `timestamp without time zone` si elimina un'intera classe
+            // di errori di Kind e si conserva la semantica "naive UTC" del DB già deployato.
             //
             // I DateTimeOffset (es. IdentityUser.LockoutEnd) sono gestiti dallo switch legacy di
             // Npgsql (vedi NpgsqlCompatibility): con quello attivo mappano a `timestamp without time

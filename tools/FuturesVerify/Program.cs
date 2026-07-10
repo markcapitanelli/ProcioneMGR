@@ -12,7 +12,6 @@ using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Security;
 
 var appDir = @"C:\Users\proci\Desktop\ProgettoP\ProcioneMGR";
-var dbPath = Path.Combine(appDir, "Data", "app.db");
 
 var configuration = new ConfigurationBuilder()
     .SetBasePath(appDir)
@@ -25,7 +24,9 @@ var services = new ServiceCollection();
 services.AddSingleton<IConfiguration>(configuration);
 services.AddLogging(b => b.AddSimpleConsole().SetMinimumLevel(LogLevel.Warning));
 services.AddSingleton<IEncryptionService, AesGcmEncryptionService>();
-services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"DataSource={dbPath}"));
+services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(
+    configuration.GetConnectionString("PostgresConnection")
+    ?? throw new InvalidOperationException("PostgresConnection non configurata in appsettings.json.")));
 services.AddHttpClient<BinanceClient>(c =>
 {
     c.BaseAddress = new Uri("https://api.binance.com");

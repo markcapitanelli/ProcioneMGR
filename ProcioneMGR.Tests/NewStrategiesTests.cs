@@ -6,6 +6,7 @@ using ProcioneMGR.Services.Alpha;
 using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Security;
+using ProcioneMGR.Tests.Infrastructure;
 using Xunit.Abstractions;
 
 namespace ProcioneMGR.Tests;
@@ -28,14 +29,13 @@ public class NewStrategiesTests(ITestOutputHelper output)
     [InlineData("VwapReversion")]
     public async Task Strategy_OnRealData_GeneratesTrades(string strategyName)
     {
-        var dbPath = FindAppDb();
-        if (dbPath is null)
+        if (!RealMarketDb.IsAvailable())
         {
-            output.WriteLine("app.db non trovato: test saltato.");
+            output.WriteLine("DB procionemgr non disponibile: test saltato.");
             return;
         }
 
-        await using var provider = BuildProvider(dbPath);
+        await using var provider = BuildProvider();
         var factory = provider.GetRequiredService<IStrategyFactory>();
         var engine = provider.GetRequiredService<IBacktestEngine>();
 
@@ -73,29 +73,17 @@ public class NewStrategiesTests(ITestOutputHelper output)
         Assert.True(result.FinalCapital > 0m);
     }
 
-    private static ServiceProvider BuildProvider(string dbPath)
+    private static ServiceProvider BuildProvider()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"DataSource={dbPath};Mode=ReadOnly;Cache=Shared"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(RealMarketDb.ConnectionString));
         services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
         services.AddSingleton<IStrategyFactory, StrategyFactory>();
         services.AddSingleton<IAlphaFactorFactory, AlphaFactorFactory>();
         services.AddScoped<IBacktestEngine, BacktestEngine>();
         return services.BuildServiceProvider();
-    }
-
-    private static string? FindAppDb()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            var candidate = Path.Combine(dir.FullName, "ProcioneMGR", "Data", "app.db");
-            if (File.Exists(candidate)) return candidate;
-            dir = dir.Parent;
-        }
-        return null;
     }
 
     private sealed class PassthroughEncryption : IEncryptionService

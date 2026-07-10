@@ -326,11 +326,16 @@ public sealed class TradingEngine(
                     }
                 }
 
-                // Trailing stop: livello calcolato sul best-since-entry PRIMA di considerare il
-                // prezzo di QUESTA candela (evita di usare l'estremo di oggi per definire lo stop
-                // di oggi) — stesso principio causale del motore di backtest. Se sia uno stop
-                // statico che il trailing sono attivi, vince quello più protettivo (esito peggiore
-                // per la posizione), come le varianti combinate SL+TRAIL del backtest.
+                // Stop/target INTRABAR su High/Low della candela chiusa (come la liquidazione sopra e
+                // come il motore di backtest), NON solo sulla Close: un wick può bucare lo stop anche
+                // se la candela chiude al di là — prima questa asimmetria rendeva il live più ottimista
+                // del backtest. Esecuzione al LIVELLO dello stop/target (o all'open se la candela apre
+                // già oltre, per un gap), esito peggiore per la posizione.
+                var high = candle.High;
+                var low = candle.Low;
+
+                // Trailing: livello calcolato sul best-since-entry delle candele PRECEDENTI (causale,
+                // come il backtest); il best si aggiorna con QUESTA candela solo dopo il controllo.
                 var effectiveStop = pos.StopLoss;
                 if (pos.TrailingStopPercent is decimal trailPct && trailPct > 0m)
                 {
@@ -346,19 +351,24 @@ public sealed class TradingEngine(
                     }
                 }
 
-                if (effectiveStop is decimal sl && ((pos.Side == OrderSide.Buy && price <= sl) || (pos.Side == OrderSide.Sell && price >= sl)))
+                // Stop PRIMA del target: se entrambi cadono nella stessa candela si assume lo stop.
+                if (effectiveStop is decimal sl
+                    && ((pos.Side == OrderSide.Buy && low <= sl) || (pos.Side == OrderSide.Sell && high >= sl)))
                 {
-                    await ClosePositionAsync(pos, price, "StopLoss", ts, ct);
+                    var fill = pos.Side == OrderSide.Buy ? Math.Min(sl, candle.Open) : Math.Max(sl, candle.Open);
+                    await ClosePositionAsync(pos, fill, "StopLoss", ts, ct);
                 }
-                else if (pos.TakeProfit is decimal tp && ((pos.Side == OrderSide.Buy && price >= tp) || (pos.Side == OrderSide.Sell && price <= tp)))
+                else if (pos.TakeProfit is decimal tp
+                    && ((pos.Side == OrderSide.Buy && high >= tp) || (pos.Side == OrderSide.Sell && low <= tp)))
                 {
-                    await ClosePositionAsync(pos, price, "TakeProfit", ts, ct);
+                    var fill = pos.Side == OrderSide.Buy ? Math.Max(tp, candle.Open) : Math.Min(tp, candle.Open);
+                    await ClosePositionAsync(pos, fill, "TakeProfit", ts, ct);
                 }
                 else if (pos.TrailingStopPercent is > 0m)
                 {
                     pos.BestPriceSinceEntry = pos.Side == OrderSide.Buy
-                        ? Math.Max(pos.BestPriceSinceEntry ?? pos.EntryPrice, price)
-                        : Math.Min(pos.BestPriceSinceEntry ?? pos.EntryPrice, price);
+                        ? Math.Max(pos.BestPriceSinceEntry ?? pos.EntryPrice, high)
+                        : Math.Min(pos.BestPriceSinceEntry ?? pos.EntryPrice, low);
                 }
             }
 
@@ -815,7 +825,77 @@ public sealed class TradingEngine(
                 liquidationPrice = pos.LiquidationPrice, merged = mergeInto is not null,
                 autoStopLoss = pos.StopLoss, autoTakeProfit = pos.TakeProfit, autoTrailingStopPercent = pos.TrailingStopPercent,
             }, ts, ct);
+
+        // [P0-5 follow-up] Protezione "resting" sull'exchange: solo se abilitata (default OFF), su nuova
+        // posizione Testnet/Live. Non blocca mai l'apertura — con i client trigger ancora stub registra
+        // un warning e restano gli stop software (fonte di verità). Vedi SafetyConfiguration.UseExchangeRestingStops.
+        if (mergeInto is null && _state.Mode != TradingMode.Paper
+            && safety.CurrentValue.UseExchangeRestingStops && _creds is TradingCredentials restingCreds)
+        {
+            await TryPlaceRestingBracketAsync(pos, restingCreds, ts, ct);
+        }
         return true;
+    }
+
+    /// <summary>
+    /// [P0-5] Piazza sull'exchange gli ordini TRIGGER reduce-only (stop-market e take-profit-market) che
+    /// replicano <see cref="OpenPosition.StopLoss"/>/<see cref="OpenPosition.TakeProfit"/>. Invocato solo se
+    /// <see cref="SafetyConfiguration.UseExchangeRestingStops"/> è attivo (default OFF). Mai bloccante: ogni
+    /// fallimento è solo loggato e gli stop software restano la fonte di verità.
+    /// </summary>
+    private async Task TryPlaceRestingBracketAsync(OpenPosition pos, TradingCredentials creds, DateTime ts, CancellationToken ct)
+    {
+        var closeSide = pos.Side == OrderSide.Buy ? "SELL" : "BUY"; // ordine di protezione = lato opposto
+        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
+
+        async Task PlaceAsync(decimal trigger, bool isStopLoss, Action<string> onPlaced)
+        {
+            var clientId = Guid.NewGuid().ToString("N");
+            var res = await futuresClient.PlaceFuturesTriggerOrderAsync(new PlaceOrderRequest
+            {
+                Symbol = pos.Symbol,
+                Side = closeSide,
+                Type = isStopLoss ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
+                Quantity = pos.Quantity,
+                TriggerPrice = trigger,
+                ClientOrderId = clientId,
+                Credentials = creds,
+            }, isStopLoss, ct);
+
+            if (res.Success)
+            {
+                onPlaced(clientId);
+                await AuditAsync("RestingStopPlaced", new { pos.PositionId, kind = isStopLoss ? "stop" : "target", trigger, clientId }, ts, ct);
+            }
+            else
+            {
+                logger.LogWarning("Ordine resting {Kind} non piazzato per {Pid}: {Err}. Resta lo stop software.",
+                    isStopLoss ? "stop" : "target", pos.PositionId, res.Error);
+            }
+        }
+
+        if (pos.StopLoss is decimal sl && sl > 0m) await PlaceAsync(sl, isStopLoss: true, id => pos.StopOrderId = id);
+        if (pos.TakeProfit is decimal tp && tp > 0m) await PlaceAsync(tp, isStopLoss: false, id => pos.TakeProfitOrderId = id);
+    }
+
+    /// <summary>
+    /// [P0-5 follow-up — SCAFFOLDING] Cancella gli ordini TRIGGER resting prima di chiudere a mercato,
+    /// così non restano ordini orfani sull'exchange. INERTE finché non ci sono id (feature off/stub).
+    /// </summary>
+    private async Task TryCancelRestingBracketAsync(OpenPosition pos, TradingCredentials creds, CancellationToken ct)
+    {
+        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
+        foreach (var clientId in new[] { pos.StopOrderId, pos.TakeProfitOrderId })
+        {
+            if (string.IsNullOrEmpty(clientId)) continue;
+            var res = await futuresClient.CancelFuturesOrderAsync(pos.Symbol, clientId, creds, ct);
+            if (!res.Success)
+            {
+                logger.LogWarning("Cancellazione ordine resting {Cid} per {Pid} fallita: {Err}.", clientId, pos.PositionId, res.Error);
+            }
+        }
+        pos.StopOrderId = null;
+        pos.TakeProfitOrderId = null;
     }
 
     // ---------------------------------------------------------------- esecuzione a fette (TWAP/VWAP/Iceberg)
@@ -1268,6 +1348,14 @@ public sealed class TradingEngine(
         if (!alreadyClosedOnExchange && _state.Mode != TradingMode.Paper && _creds is TradingCredentials creds)
         {
             var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
+
+            // [P0-5 follow-up] Cancella eventuali ordini TRIGGER resting prima del market close, per non
+            // lasciarli orfani sull'exchange. Inerte se non ce ne sono (feature off/stub → id sempre null).
+            if (pos.StopOrderId is not null || pos.TakeProfitOrderId is not null)
+            {
+                await TryCancelRestingBracketAsync(pos, creds, ct);
+            }
+
             var res = await futuresClient.PlaceFuturesOrderAsync(new PlaceOrderRequest
             {
                 Symbol = pos.Symbol,

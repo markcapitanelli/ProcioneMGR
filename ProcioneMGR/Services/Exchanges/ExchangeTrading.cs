@@ -14,6 +14,12 @@ public class PlaceOrderRequest
     public decimal Quantity { get; set; }
     public decimal? Price { get; set; }                  // per i LIMIT
 
+    /// <summary>
+    /// [P0-5] Prezzo di attivazione per gli ordini TRIGGER (stop-market / take-profit-market) piazzati
+    /// via <see cref="IFuturesExchangeClient.PlaceFuturesTriggerOrderAsync"/>. Null per MARKET/LIMIT.
+    /// </summary>
+    public decimal? TriggerPrice { get; set; }
+
     /// <summary>Id idempotente lato client (newClientOrderId / clientOid).</summary>
     public string ClientOrderId { get; set; } = string.Empty;
 

@@ -5,6 +5,8 @@ using ProcioneMGR.Data;
 using ProcioneMGR.Services.Pipeline;
 using ProcioneMGR.Services.Security;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -22,10 +24,13 @@ namespace ProcioneMGR.Tests;
 /// finta che resta bloccata finché il test non la libera esplicitamente, tenendo lo slot globale
 /// occupato per tutta la durata del secondo tentativo.
 /// </summary>
+[Collection("Postgres")]
 public class PipelineEngineConcurrencyTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"engine_concurrency_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public PipelineEngineConcurrencyTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -58,7 +63,7 @@ public class PipelineEngineConcurrencyTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
 
@@ -117,6 +122,5 @@ public class PipelineEngineConcurrencyTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 }

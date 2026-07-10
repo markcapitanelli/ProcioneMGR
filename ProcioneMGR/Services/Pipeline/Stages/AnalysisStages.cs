@@ -25,6 +25,7 @@ public sealed class FeatureEngineeringStage(
         new("factors", "Fattori da valutare (csv)", "", "vuoto = tutti quelli disponibili"),
         new("topK", "Top-K fattori selezionati", "4", "quante feature tenere per il modello ML"),
         new("minAbsIc", "Soglia |IC| minima", "0.01", "sotto questa soglia il fattore non viene selezionato"),
+        new("minIcTStat", "Soglia |t-stat| IC (Newey-West)", "0", "0 = disattivo; es. 2 = tiene solo fattori con IC statisticamente significativo"),
         new("forwardHorizon", "Orizzonte forward (candele)", "1", "target dell'IC"),
     ];
 
@@ -37,6 +38,7 @@ public sealed class FeatureEngineeringStage(
         var horizon = config.GetInt("forwardHorizon", 1);
         var topK = config.GetInt("topK", 4);
         var minAbsIc = (double)config.GetDecimal("minAbsIc", 0.01m);
+        var minIcTStat = (double)config.GetDecimal("minIcTStat", 0m); // 0 = gate di significatività disattivo
         var requested = config.GetList("factors");
 
         // ANTI-LOOK-AHEAD: only the selection range feeds any choice.
@@ -65,12 +67,14 @@ public sealed class FeatureEngineeringStage(
                 RollingIcMean = eval.RollingIcMean,
                 InformationRatio = eval.RollingIcStd > 0 ? eval.RollingIcMean / eval.RollingIcStd : 0,
                 Observations = eval.Observations,
+                IcTStatistic = eval.IcTStatistic,
             });
-            ctx.LogLine($"[{Name}] {proto.Name}: IC {eval.InformationCoefficient:F4} ({eval.Observations} oss.)");
+            ctx.LogLine($"[{Name}] {proto.Name}: IC {eval.InformationCoefficient:F4} (t {eval.IcTStatistic:F2}, {eval.Observations} oss.)");
         }
 
+        // Selezione per |IC| ≥ soglia e (opzionale) significatività Newey-West |t| ≥ soglia.
         var selected = results
-            .Where(r => Math.Abs(r.InformationCoefficient) >= minAbsIc)
+            .Where(r => Math.Abs(r.InformationCoefficient) >= minAbsIc && (minIcTStat <= 0d || Math.Abs(r.IcTStatistic) >= minIcTStat))
             .OrderByDescending(r => Math.Abs(r.InformationCoefficient))
             .Take(topK)
             .ToList();
@@ -238,7 +242,7 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
                   : ratio <= (double)config.GetDecimal("lowRatio", 0.8m) ? "Bassa"
                   : "Media";
 
-        ctx.Volatility = new VolatilityOutput
+        var vol = new VolatilityOutput
         {
             Symbol = primary.Symbol,
             Omega = fit.Omega,
@@ -250,7 +254,24 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
             ForecastVolatility24 = forecastVol,
             Level = level,
         };
-        ctx.LogLine($"[{Name}] {primary.Symbol}: persistenza {fit.Persistence:F4}, vol {currentVol:P3} → forecast {forecastVol:P3} ({level}).");
+
+        // Fit Student-t AGGIUNTIVO solo per le metriche di coda (non tocca la classificazione del
+        // regime, che resta gaussiana): espone ν e la mossa avversa all'1% consapevole delle code
+        // grasse, come distanza di stop prudente. Non deve mai far fallire lo stage. Audit 2026-07 §4.
+        try
+        {
+            var tailFit = garch.Fit(returns, GarchInnovation.StudentT);
+            vol.TailDegreesOfFreedom = tailFit.DegreesOfFreedom;
+            vol.ForecastTailMove99 = Math.Abs(tailFit.TailQuantile(0.01, horizon));
+        }
+        catch (Exception ex)
+        {
+            ctx.LogLine($"[{Name}] fit Student-t di coda non riuscito ({ex.GetType().Name}): metriche di coda omesse.");
+        }
+
+        ctx.Volatility = vol;
+        ctx.LogLine($"[{Name}] {primary.Symbol}: persistenza {fit.Persistence:F4}, vol {currentVol:P3} → forecast {forecastVol:P3} ({level})"
+                  + (vol.TailDegreesOfFreedom is double dof ? $"; ν={dof:F1}, VaR1% {vol.ForecastTailMove99:P2}." : "."));
     }
 
     public StageSummary Summarize(PipelineContext ctx)
@@ -260,12 +281,14 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
         {
             StageName = Name,
             DisplayName = DisplayName,
-            Text = $"{o.Symbol}: volatilità {o.Level} (attuale {o.CurrentVolatility:P3}, forecast {o.ForecastVolatility24:P3}, persistenza {o.Persistence:F3}).",
+            Text = $"{o.Symbol}: volatilità {o.Level} (attuale {o.CurrentVolatility:P3}, forecast {o.ForecastVolatility24:P3}, persistenza {o.Persistence:F3})"
+                 + (o.TailDegreesOfFreedom is double dof ? $"; code grasse ν={dof:F1}, VaR1% {o.ForecastTailMove99:P2}." : "."),
             Metrics = new()
             {
                 ["Persistenza"] = (decimal)o.Persistence,
                 ["VolAttuale"] = (decimal)o.CurrentVolatility,
                 ["VolForecast"] = (decimal)o.ForecastVolatility24,
+                ["VaR1%coda"] = (decimal)o.ForecastTailMove99,
             },
         };
     }

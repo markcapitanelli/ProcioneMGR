@@ -1,4 +1,5 @@
 using ProcioneMGR.Data;
+using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Discovery;
 using ProcioneMGR.Services.Regime;
 
@@ -72,6 +73,44 @@ public static class StageConfigExtensions
 
 /// <summary>Definition of a stage parameter, for the generic gear-icon editor in the UI.</summary>
 public sealed record StageParameterDefinition(string Key, string Label, string DefaultValue, string Hint);
+
+/// <summary>
+/// Costi di trading applicati ai backtest della pipeline, letti una volta dallo <see cref="StageConfig"/>
+/// e replicati su OGNI <see cref="BacktestConfiguration"/> di valutazione dei candidati. I default
+/// rispecchiano il venue reale (Bitget): fee taker (conservativa) + slippage realistico + funding dei
+/// perpetual. Il <b>funding</b> in particolare era assente (default 0 in BacktestConfiguration): senza,
+/// una strategia che tiene posizioni attraverso le finestre di funding appare più redditizia di quanto
+/// sarà live. La validazione gira a leva 1, ma il rapporto funding/PnL è leva-invariante: valida quindi
+/// correttamente l'edge al netto del funding.
+/// </summary>
+public readonly record struct PipelineCosts(decimal SlippagePercent, decimal FeePercent, decimal FundingRatePercentPer8h)
+{
+    public const decimal DefaultSlippagePercent = 0.05m;
+    public const decimal DefaultFeePercent = 0.1m;                 // Bitget taker ~0.06%; 0.1 tenuto conservativo
+    public const decimal DefaultFundingRatePercentPer8h = 0.01m;  // funding "neutro" storico dei perpetual
+
+    public static PipelineCosts FromConfig(StageConfig config) => new(
+        config.GetDecimal("slippagePercent", DefaultSlippagePercent),
+        config.GetDecimal("feePercent", DefaultFeePercent),
+        config.GetDecimal("fundingRatePercentPer8h", DefaultFundingRatePercentPer8h));
+
+    /// <summary>Applica i costi a una configurazione di backtest (in-place) e la restituisce, per l'uso fluido.</summary>
+    public BacktestConfiguration ApplyTo(BacktestConfiguration cfg)
+    {
+        cfg.SlippagePercent = SlippagePercent;
+        cfg.FeePercent = FeePercent;
+        cfg.FundingRatePercentPer8h = FundingRatePercentPer8h;
+        return cfg;
+    }
+
+    /// <summary>Parametri UI condivisi dei costi, da innestare nelle ParameterDefinitions di ogni stage.</summary>
+    public static IReadOnlyList<StageParameterDefinition> ParameterDefinitions =>
+    [
+        new("slippagePercent", "Slippage per fill (%)", "0.05", "attrito realistico su ogni eseguito"),
+        new("feePercent", "Commissione per lato (%)", "0.1", "taker Bitget ~0.06%; 0.1 conservativo"),
+        new("fundingRatePercentPer8h", "Funding perpetual (%/8h)", "0.01", "costo di mantenimento dei perp; 0.01 neutro storico"),
+    ];
+}
 
 /// <summary>
 /// A dependency group: the stage requires AT LEAST ONE of the listed stages to be enabled
@@ -186,6 +225,10 @@ public sealed class FactorIcSummary
     public double RollingIcMean { get; set; }
     public double InformationRatio { get; set; }
     public int Observations { get; set; }
+
+    /// <summary>t-statistic dell'IC con SE Newey-West (robusta all'overlap dei forward-return). |t| ≳ 2 ≈ significativo.</summary>
+    public double IcTStatistic { get; set; }
+
     public bool Selected { get; set; }
 }
 
@@ -228,6 +271,19 @@ public sealed class VolatilityOutput
 
     /// <summary>"Bassa" / "Media" / "Alta" vs the long-run level (thresholds from pipeline rules).</summary>
     public string Level { get; set; } = "Media";
+
+    /// <summary>
+    /// Gradi di libertà ν stimati con innovazioni Student-t (null se il fit di coda non è disponibile).
+    /// ν basso = code grasse. Rif. audit 2026-07 §4.
+    /// </summary>
+    public double? TailDegreesOfFreedom { get; set; }
+
+    /// <summary>
+    /// Mossa avversa all'1% (VaR di coda) prevista a orizzonte, consapevole delle code grasse
+    /// (quantile Student-t su σ previsto). Come frazione di prezzo, sempre ≥ del corrispettivo gaussiano.
+    /// Serve da distanza di stop prudente per l'operatore.
+    /// </summary>
+    public double ForecastTailMove99 { get; set; }
 }
 
 public sealed class PairScreenResult
@@ -291,10 +347,24 @@ public sealed class ValidatedCandidate
     public bool Survived { get; set; }
     public string? RejectReason { get; set; }
 
+    // Gate anti-overfitting (López de Prado), calcolato in HoldoutValidationStage sull'intero batch.
+    /// <summary>Deflated Sharpe del candidato (probabilità che l'edge holdout sia reale dopo N tentativi). null = non calcolabile.</summary>
+    public double? DeflatedSharpe { get; set; }
+    /// <summary>Probability of Backtest Overfitting del PANNELLO di candidati (comune a tutti). null = non calcolabile.</summary>
+    public double? PanelPbo { get; set; }
+
     // Robustness (filled by RobustnessProbeStage on survivors)
     public decimal MonteCarloRiskFactor95 { get; set; }
     public decimal MonteCarloDrawdown95 { get; set; }
     public decimal KellyFraction { get; set; }
+
+    /// <summary>
+    /// Kelly EMPIRICO sui rendimenti dei trade (distribuzione osservata, senza ipotesi di normalità):
+    /// cattura le code grasse e di norma è ≤ del Kelly binario. Vedi <see cref="Risk.KellyCalculator.EmpiricalKelly"/>.
+    /// </summary>
+    public decimal EmpiricalKelly { get; set; }
+
+    /// <summary>Metà del MINIMO tra Kelly binario ed empirico: sizing prudente e robusto alle code grasse.</summary>
     public decimal HalfKelly { get; set; }
     public string BestStopVariant { get; set; } = "base";
 
@@ -358,6 +428,13 @@ public sealed class ProposedLeg
     public decimal HoldoutSharpe { get; set; }
     public decimal HoldoutProfitFactor { get; set; }
     public decimal HoldoutMaxDrawdown { get; set; }
+
+    /// <summary>
+    /// Holdout trade count of the originating candidate — carried as the effective sample size behind
+    /// the leg's Sharpe so the auto-reapply comparator can test a swap's statistical significance
+    /// (<see cref="Ensemble.EnsembleSummary.Observations"/>). Verdict-only, never a selection input.
+    /// </summary>
+    public int HoldoutTrades { get; set; }
 
     /// <summary>Same identity key as the originating <see cref="ValidatedCandidate"/> — use this for lookups, never rebuild it inline.</summary>
     public string Key => PipelineCandidateKey.Build(StrategyName, Symbol, Timeframe, Parameters);

@@ -377,6 +377,62 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
         };
     }
 
+    /// <summary>
+    /// [P0-5] Ordine TRIGGER reduce-only "resting" via /fapi/v1/order: STOP_MARKET (stop) o
+    /// TAKE_PROFIT_MARKET (target), attivato sul MARK price (workingType=MARK_PRICE), che chiude la
+    /// posizione anche se il processo va giù. Verificabile sul Testnet Binance Futures
+    /// (testnet.binancefuture.com) prima di abilitare <c>UseExchangeRestingStops</c> in Live.
+    /// </summary>
+    public async Task<PlaceOrderResult> PlaceFuturesTriggerOrderAsync(PlaceOrderRequest request, bool isStopLoss, CancellationToken ct = default)
+    {
+        if (request.TriggerPrice is not decimal trigger || trigger <= 0m)
+        {
+            return new PlaceOrderResult { Success = false, Error = "TriggerPrice mancante o non valido per l'ordine trigger Binance." };
+        }
+
+        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var query = BuildTriggerQuery(ToExchangeSymbol(request.Symbol), request.Side, isStopLoss, request.Quantity, trigger, request.ClientOrderId, ts);
+
+        var (ok, body, uncertain, error) = await SignedAsync(HttpMethod.Post, "/fapi/v1/order", query, request.Credentials, ct, FuturesProdBase, FuturesTestnetBase);
+        if (!ok)
+        {
+            return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = error };
+        }
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        return new PlaceOrderResult
+        {
+            Success = true,
+            ExchangeOrderId = root.TryGetProperty("orderId", out var oid) ? oid.GetRawText() : null,
+            Status = root.TryGetProperty("status", out var st) ? st.GetString() ?? "" : "plan-submitted",
+        };
+    }
+
+    /// <summary>
+    /// Query firmabile per un ordine trigger reduce-only market (funzione pura, testabile). STOP_MARKET
+    /// per lo stop-loss, TAKE_PROFIT_MARKET per il take-profit; stopPrice = prezzo di attivazione.
+    /// </summary>
+    internal static string BuildTriggerQuery(string market, string side, bool isStopLoss, decimal quantity, decimal stopPrice, string clientOrderId, long timestampMs)
+    {
+        var parts = new List<string>
+        {
+            $"symbol={market}",
+            $"side={side}",
+            $"type={(isStopLoss ? "STOP_MARKET" : "TAKE_PROFIT_MARKET")}",
+            $"quantity={Inv(quantity)}",
+            $"stopPrice={Inv(stopPrice)}",
+            "reduceOnly=true",
+            "workingType=MARK_PRICE",
+        };
+        if (!string.IsNullOrEmpty(clientOrderId))
+        {
+            parts.Add($"newClientOrderId={clientOrderId}");
+        }
+        parts.Add("recvWindow=5000");
+        parts.Add($"timestamp={timestampMs}");
+        return string.Join("&", parts);
+    }
+
     public async Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);

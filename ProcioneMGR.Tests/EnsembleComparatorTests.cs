@@ -90,4 +90,40 @@ public class EnsembleComparatorTests
         var c = Make().Compare(Summary(-0.2m, 2, 2), Summary(0.4m, 2, 2));
         Assert.True(c.ShouldReplace);
     }
+
+    // ------------------------------------------------------------------ significatività dello swap
+
+    private static EnsembleSummary SummaryObs(decimal sharpe, int legs, int symbols, int observations)
+    {
+        var s = Summary(sharpe, legs, symbols);
+        s.Observations = observations;
+        return s;
+    }
+
+    [Fact]
+    public void LargeImprovement_TinySample_NotSignificant_Keeps()
+    {
+        // +50% di Sharpe ma solo 4 osservazioni → z sotto 1.0 → non si scambia (rumore).
+        var c = Make().Compare(Summary(1.0m, 2, 2), SummaryObs(1.5m, 2, 2, observations: 4));
+        Assert.False(c.ShouldReplace);
+        Assert.Contains("non significativo", c.Reason);
+        Assert.True(c.SignificanceZ < 1.0m, $"z={c.SignificanceZ}");
+    }
+
+    [Fact]
+    public void SameImprovement_LargeSample_Significant_Replaces()
+    {
+        // Stesso +50% ma con 30 osservazioni → z sopra 1.0 → scambio giustificato.
+        var c = Make().Compare(Summary(1.0m, 2, 2), SummaryObs(1.5m, 2, 2, observations: 30));
+        Assert.True(c.ShouldReplace);
+        Assert.True(c.SignificanceZ >= 1.0m, $"z={c.SignificanceZ}");
+    }
+
+    [Fact]
+    public void UnknownSample_FallsBackToHysteresisOnly()
+    {
+        // Observations=0 → gate di significatività inattivo → decide la sola isteresi percentuale.
+        var c = Make().Compare(Summary(1.0m, 2, 2), SummaryObs(1.5m, 2, 2, observations: 0));
+        Assert.True(c.ShouldReplace);
+    }
 }

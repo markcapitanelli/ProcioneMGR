@@ -1,3 +1,4 @@
+using MathNet.Numerics.Distributions;
 using ProcioneMGR.Services.TimeSeries;
 
 namespace ProcioneMGR.Tests;
@@ -126,5 +127,67 @@ public class GarchModelTests
         var returns = SimulateGarch(500, 1e-6, 0.05, 0.9, seed: 7);
         var fit = _model.Fit(returns);
         Assert.Throws<ArgumentOutOfRangeException>(() => fit.ForecastVariance(0));
+    }
+
+    [Fact]
+    public void Fit_Gaussian_LeavesDegreesOfFreedomNull()
+    {
+        var returns = SimulateGarch(500, 1e-6, 0.05, 0.9, seed: 8);
+        var fit = _model.Fit(returns); // default = gaussiano
+        Assert.Null(fit.DegreesOfFreedom);
+    }
+
+    [Fact]
+    public void TailQuantile_Gaussian_MatchesNormalQuantile()
+    {
+        var returns = SimulateGarch(500, 1e-6, 0.05, 0.9, seed: 9);
+        var fit = _model.Fit(returns);
+        var sigma = Math.Sqrt(fit.ForecastVariance(1));
+
+        // Fit gaussiano: il quantile 2.5% deve essere z(0.025)·σ ≈ -1.96·σ.
+        var q = fit.TailQuantile(0.025, 1);
+        Assert.Equal(Normal.InvCDF(0, 1, 0.025) * sigma, q, 10);
+    }
+
+    /// <summary>Serie i.i.d. a code grasse: campioni Student-t standard con ν noto, scalati.</summary>
+    private static List<decimal> SimulateFatTailed(int n, double nu, double scale, int seed)
+    {
+        var rnd = new Random(seed);
+        var list = new List<decimal>(n);
+        for (var i = 0; i < n; i++)
+        {
+            var u = Math.Clamp(rnd.NextDouble(), 1e-6, 1 - 1e-6);
+            list.Add((decimal)(scale * StudentT.InvCDF(0, 1, nu, u)));
+        }
+        return list;
+    }
+
+    [Fact]
+    public void Fit_StudentT_EstimatesFiniteFatTailDegreesOfFreedom()
+    {
+        // Dati generati da una t con ν=3 (code molto grasse): la MLE deve stimare ν finito e basso.
+        var returns = SimulateFatTailed(3000, nu: 3.0, scale: 0.01, seed: 11);
+        var fit = _model.Fit(returns, GarchInnovation.StudentT);
+
+        Assert.NotNull(fit.DegreesOfFreedom);
+        Assert.InRange(fit.DegreesOfFreedom!.Value, 2.0, 15.0);
+        Assert.All(fit.ConditionalVariances, v => Assert.True(v > 0));
+    }
+
+    [Fact]
+    public void TailQuantile_StudentT_IsWiderThanGaussian_OnFatTailedData()
+    {
+        // Sugli stessi dati a code grasse, il VaR all'1% con innovazioni Student-t deve essere
+        // PIÙ ESTREMO che con innovazioni gaussiane (a parità di σ, le code grasse allargano i quantili).
+        var returns = SimulateFatTailed(3000, nu: 3.0, scale: 0.01, seed: 12);
+
+        var tFit = _model.Fit(returns, GarchInnovation.StudentT);
+        var gFit = _model.Fit(returns, GarchInnovation.Gaussian);
+
+        var tTail = Math.Abs(tFit.TailQuantile(0.01, 1));
+        var gTail = Math.Abs(gFit.TailQuantile(0.01, 1));
+
+        Assert.True(tTail > gTail * 1.05,
+            $"VaR1% Student-t={tTail:E3} deve superare quello gaussiano={gTail:E3} (ν={tFit.DegreesOfFreedom:F2})");
     }
 }

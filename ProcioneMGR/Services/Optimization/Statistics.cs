@@ -75,6 +75,31 @@ public static class Statistics
         return sharpePerPeriod * Sqrt(periodsPerYear);
     }
 
+    /// <summary>
+    /// Deflated Sharpe di un SINGOLO track dai suoi <see cref="EquityPoint"/>: con un solo trial il
+    /// DSR collassa sul Probabilistic Sharpe (SR* = 0), cioè la probabilità che il vero Sharpe superi
+    /// 0 dato T e i momenti (asimmetria/curtosi) dei rendimenti periodici. È ciò che il
+    /// <c>ModelRegistry</c> richiede per la promozione a Champion. Ritorna null se la curva è troppo
+    /// corta (&lt; 3 punti / &lt; 2 rendimenti). Riusa <see cref="Validation.SelectionValidator"/>,
+    /// lo stesso calcolo di Optimization/Discovery.
+    /// </summary>
+    public static double? DeflatedSharpeSingleTrack(IReadOnlyList<EquityPoint>? equityCurve, int periodsPerYear)
+    {
+        if (equityCurve is null || equityCurve.Count < 3) return null;
+
+        var returns = new List<double>(equityCurve.Count - 1);
+        for (var i = 1; i < equityCurve.Count; i++)
+        {
+            var prev = equityCurve[i - 1].Capital;
+            if (prev > 0m) returns.Add((double)((equityCurve[i].Capital - prev) / prev));
+        }
+        if (returns.Count < 2) return null;
+
+        var sharpe = SharpeRatio(equityCurve, periodsPerYear);
+        var validation = Validation.SelectionValidator.Validate([sharpe], returns, periodsPerYear);
+        return double.IsNaN(validation.DeflatedSharpe) ? null : validation.DeflatedSharpe;
+    }
+
     /// <summary>Radice quadrata in decimal (Newton-Raphson), come negli indicatori.</summary>
     internal static decimal Sqrt(decimal value)
     {

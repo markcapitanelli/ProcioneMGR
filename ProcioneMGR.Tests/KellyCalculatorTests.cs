@@ -65,6 +65,34 @@ public class KellyCalculatorTests
     }
 
     [Fact]
+    public void EmpiricalKelly_FatLeftTail_BetsLessThanNormalApproximation()
+    {
+        // Sistema con edge positivo ma coda sinistra grassa: 95 piccoli guadagni + 5 crash grossi.
+        // Il Kelly empirico "vede" i crash reali; quello normale (stessa media/varianza) li sottostima.
+        var returns = new List<double>();
+        for (var i = 0; i < 95; i++) returns.Add(0.02);
+        for (var i = 0; i < 5; i++) returns.Add(-0.30);
+
+        var mean = returns.Average();
+        var std = Math.Sqrt(returns.Sum(r => (r - mean) * (r - mean)) / returns.Count);
+
+        var empirical = KellyCalculator.EmpiricalKelly(returns);
+        var normal = KellyCalculator.ContinuousKellyNumeric(mean, std);
+
+        Assert.True(empirical > 0, $"atteso edge positivo, empirical={empirical}");
+        Assert.True(empirical < normal,
+            $"il Kelly empirico ({empirical:F3}) deve essere più prudente del normale ({normal:F3}) sulle code grasse");
+    }
+
+    [Fact]
+    public void EmpiricalKelly_NoEdge_ReturnsZero()
+    {
+        // Media non positiva -> non scommettere.
+        Assert.Equal(0.0, KellyCalculator.EmpiricalKelly([-0.01, 0.005, -0.02, 0.01]));
+        Assert.Equal(0.0, KellyCalculator.EmpiricalKelly([]));
+    }
+
+    [Fact]
     public void MultiAssetKelly_PrefersHigherSharpeAsset()
     {
         // Due asset indipendenti: A con media alta e varianza bassa, B con media bassa e
