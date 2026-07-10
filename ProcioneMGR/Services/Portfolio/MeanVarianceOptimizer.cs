@@ -26,7 +26,10 @@ public sealed class MeanVarianceOptimizer : IPortfolioOptimizer
     {
         config ??= new PortfolioOptimizationConfig();
         var (symbols, returns) = PortfolioMath.BuildMatrix(returnsBySymbol);
-        var covariance = PortfolioMath.Regularize(PortfolioMath.Covariance(returns));
+        var rawCov = config.CovarianceEstimator == CovarianceEstimator.LedoitWolf
+            ? PortfolioMath.LedoitWolf(returns).Covariance
+            : PortfolioMath.Covariance(returns);
+        var covariance = PortfolioMath.Regularize(rawCov);
 
         Vector<double> raw;
         if (config.Objective == MeanVarianceObjective.MinVariance)
