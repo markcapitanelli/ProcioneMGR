@@ -225,6 +225,10 @@ public sealed class FactorIcSummary
     public double RollingIcMean { get; set; }
     public double InformationRatio { get; set; }
     public int Observations { get; set; }
+
+    /// <summary>t-statistic dell'IC con SE Newey-West (robusta all'overlap dei forward-return). |t| ≳ 2 ≈ significativo.</summary>
+    public double IcTStatistic { get; set; }
+
     public bool Selected { get; set; }
 }
 
