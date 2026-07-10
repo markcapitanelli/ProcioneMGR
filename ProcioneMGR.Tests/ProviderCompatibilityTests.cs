@@ -1,56 +1,32 @@
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Pipeline;
 using ProcioneMGR.Services.Security;
 using ProcioneMGR.Services.Trading;
+using ProcioneMGR.Tests.Infrastructure;
 
 namespace ProcioneMGR.Tests;
 
 /// <summary>
 /// Verifica che i tipi "sensibili al provider" sopravvivano a un round-trip persistenza→reload
 /// SENZA perdita di informazione: blob binari (modelli ML), decimal ad alta precisione (prezzi
-/// crypto) e stringhe JSON. I test girano SEMPRE su SQLite in-memory; girano ANCHE su PostgreSQL
-/// se la variabile d'ambiente <c>RUN_POSTGRES_TESTS=true</c> è impostata (con
-/// <c>POSTGRES_TEST_CONNECTION</c> opzionale, altrimenti un default locale). Sul provider
-/// PostgreSQL il database di test viene ricreato da zero (EnsureDeleted/EnsureCreated), quindi va
-/// puntato SOLO a un DB usa-e-getta.
+/// crypto) e stringhe JSON. Gira su un database PostgreSQL effimero (Testcontainers), l'unico
+/// provider supportato.
 /// </summary>
+[Collection("Postgres")]
 public class ProviderCompatibilityTests
 {
-    private sealed class PassthroughEncryption : IEncryptionService
-    {
-        public string Encrypt(string plaintext) => plaintext;
-        public string Decrypt(string ciphertext) => ciphertext;
-    }
+    private readonly PostgresFixture _pg;
 
-    /// <summary>Contesto SQLite in-memory: la connessione resta aperta per la durata del test.</summary>
-    private static (SqliteConnection conn, Func<ApplicationDbContext> factory) MakeSqlite()
-    {
-        var conn = new SqliteConnection("DataSource=:memory:");
-        conn.Open();
-        ApplicationDbContext Factory() => new(
-            new DbContextOptionsBuilder<ApplicationDbContext>().UseSqlite(conn).Options,
-            new PassthroughEncryption());
-        using (var db = Factory()) db.Database.EnsureCreated();
-        return (conn, Factory);
-    }
+    public ProviderCompatibilityTests(PostgresFixture pg) => _pg = pg;
 
-    private static bool PostgresEnabled =>
-        string.Equals(Environment.GetEnvironmentVariable("RUN_POSTGRES_TESTS"), "true", StringComparison.OrdinalIgnoreCase);
-
-    private static Func<ApplicationDbContext> MakePostgres()
+    private Func<ApplicationDbContext> MakeFactory()
     {
-        var conn = Environment.GetEnvironmentVariable("POSTGRES_TEST_CONNECTION")
-                   ?? "Host=localhost;Port=5432;Database=procionemgr_test;Username=procione;Password=Procione2026Pg_secure";
+        var conn = _pg.CreateDatabase();
         ApplicationDbContext Factory() => new(
             new DbContextOptionsBuilder<ApplicationDbContext>().UseNpgsql(conn).Options,
             new PassthroughEncryption());
-        using (var db = Factory())
-        {
-            db.Database.EnsureDeleted();
-            db.Database.EnsureCreated();
-        }
+        using (var db = Factory()) db.Database.EnsureCreated();
         return Factory;
     }
 
@@ -138,25 +114,8 @@ public class ProviderCompatibilityTests
     }
 
     [Fact]
-    public async Task Sqlite_PreservesBlobDecimalAndJson()
-    {
-        var (conn, factory) = MakeSqlite();
-        try
-        {
-            await RoundTripAsync(factory);
-        }
-        finally
-        {
-            conn.Dispose();
-        }
-    }
-
-    [Fact]
     public async Task Postgres_PreservesBlobDecimalAndJson()
     {
-        // Opt-in: senza RUN_POSTGRES_TESTS=true il test è un no-op (nessuna dipendenza da un pacchetto
-        // "skippable"). Per eseguirlo davvero servono un'istanza PostgreSQL e un DB usa-e-getta.
-        if (!PostgresEnabled) return;
-        await RoundTripAsync(MakePostgres());
+        await RoundTripAsync(MakeFactory());
     }
 }

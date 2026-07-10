@@ -12,6 +12,8 @@ using ProcioneMGR.Services.Regime;
 using ProcioneMGR.Services.Security;
 using ProcioneMGR.Services.Trading;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -20,10 +22,13 @@ namespace ProcioneMGR.Tests;
 /// docs/REPORT-MULTI-LANE.md): operazioni su una corsia non devono mai leggere, scrivere o
 /// cancellare i dati di un'altra corsia.
 /// </summary>
+[Collection("Postgres")]
 public class MultiLaneIsolationTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"multilane_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public MultiLaneIsolationTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -101,7 +106,7 @@ public class MultiLaneIsolationTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
 
@@ -254,6 +259,5 @@ public class MultiLaneIsolationTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 }

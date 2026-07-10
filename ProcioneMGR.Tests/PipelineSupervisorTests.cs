@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -7,6 +6,7 @@ using ProcioneMGR.Data;
 using ProcioneMGR.Services.Llm;
 using ProcioneMGR.Services.Pipeline;
 using ProcioneMGR.Services.Security;
+using ProcioneMGR.Tests.Infrastructure;
 
 namespace ProcioneMGR.Tests;
 
@@ -15,8 +15,13 @@ namespace ProcioneMGR.Tests;
 /// test tocca la rete. Copre parsing, persistenza come PipelineArtifact, idempotenza per-run, e il
 /// percorso d'errore (che deve comunque persistere un advisory di errore, un tentativo per run).
 /// </summary>
+[Collection("Postgres")]
 public class PipelineSupervisorTests
 {
+    private readonly PostgresFixture _pg;
+
+    public PipelineSupervisorTests(PostgresFixture pg) => _pg = pg;
+
     private sealed class PassthroughEncryption : IEncryptionService
     {
         public string Encrypt(string plaintext) => plaintext;
@@ -31,17 +36,15 @@ public class PipelineSupervisorTests
             => Task.FromResult(respond());
     }
 
-    private static (SqliteConnection conn, IDbContextFactory<ApplicationDbContext> factory, ServiceProvider sp) MakeDb()
+    private (IDbContextFactory<ApplicationDbContext> factory, ServiceProvider sp) MakeDb()
     {
-        var conn = new SqliteConnection("DataSource=:memory:");
-        conn.Open();
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite(conn));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_pg.CreateDatabase()));
         var sp = services.BuildServiceProvider();
         var factory = sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
         using (var db = factory.CreateDbContext()) db.Database.EnsureCreated();
-        return (conn, factory, sp);
+        return (factory, sp);
     }
 
     private static async Task<Guid> SeedCompletedRunAsync(IDbContextFactory<ApplicationDbContext> factory)
@@ -69,7 +72,7 @@ public class PipelineSupervisorTests
     [Fact]
     public async Task SuperviseRunAsync_ParsesJson_AndPersistsAdvisoryArtifact()
     {
-        var (conn, factory, sp) = MakeDb();
+        var (factory, sp) = MakeDb();
         try
         {
             var runId = await SeedCompletedRunAsync(factory);
@@ -97,13 +100,13 @@ public class PipelineSupervisorTests
             Assert.Single(advisory.DecisionsForUser);
             Assert.Contains("trend", advisory.Summary);
         }
-        finally { conn.Dispose(); sp.Dispose(); }
+        finally { sp.Dispose(); }
     }
 
     [Fact]
     public async Task SuperviseRunAsync_IsIdempotentPerRun()
     {
-        var (conn, factory, sp) = MakeDb();
+        var (factory, sp) = MakeDb();
         try
         {
             var runId = await SeedCompletedRunAsync(factory);
@@ -118,13 +121,13 @@ public class PipelineSupervisorTests
             Assert.Equal(1, await db.PipelineArtifacts.CountAsync(a => a.RunId == runId && a.Kind == LlmArtifactKinds.Advisory));
             Assert.Equal(1, calls); // l'LLM è stato chiamato una sola volta
         }
-        finally { conn.Dispose(); sp.Dispose(); }
+        finally { sp.Dispose(); }
     }
 
     [Fact]
     public async Task SuperviseRunAsync_OnLlmFailure_PersistsErrorAdvisory()
     {
-        var (conn, factory, sp) = MakeDb();
+        var (factory, sp) = MakeDb();
         try
         {
             var runId = await SeedCompletedRunAsync(factory);
@@ -139,7 +142,7 @@ public class PipelineSupervisorTests
             Assert.True(advisory.IsError);
             Assert.Contains("boom", advisory.Summary);
         }
-        finally { conn.Dispose(); sp.Dispose(); }
+        finally { sp.Dispose(); }
     }
 
     [Fact]

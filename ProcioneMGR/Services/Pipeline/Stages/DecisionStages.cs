@@ -28,7 +28,7 @@ public sealed class EnsembleAssemblyStage(
     public IReadOnlyList<StageParameterDefinition> ParameterDefinitions =>
     [
         new("maxLegs", "Gambe massime", "3", ""),
-        new("slippagePercent", "Slippage per fill (%)", "0.05", ""),
+        .. PipelineCosts.ParameterDefinitions,
         new("positionSizePercent", "Size posizione (%)", "10", ""),
     ];
 
@@ -39,6 +39,7 @@ public sealed class EnsembleAssemblyStage(
     {
         var rules = rulesProvider.GetRules();
         var maxLegs = config.GetInt("maxLegs", rules.MaxLegs);
+        var costs = PipelineCosts.FromConfig(config);
 
         // Ordered by SELECTION-phase walk-forward Sharpe (the holdout stays verdict-only).
         var legs = ctx.Validated
@@ -57,7 +58,7 @@ public sealed class EnsembleAssemblyStage(
             foreach (var leg in legs)
             {
                 ct.ThrowIfCancellationRequested();
-                var cfg = new BacktestConfiguration
+                var cfg = costs.ApplyTo(new BacktestConfiguration
                 {
                     ExchangeName = ctx.ExchangeName,
                     Symbol = leg.Symbol,
@@ -68,8 +69,7 @@ public sealed class EnsembleAssemblyStage(
                     PositionSizePercent = config.GetDecimal("positionSizePercent", 10m),
                     StrategyName = leg.StrategyName,
                     StrategyParameters = new(leg.Parameters),
-                    SlippagePercent = config.GetDecimal("slippagePercent", 0.05m),
-                };
+                });
                 Stages.RobustnessProbeStage.ApplyVariant(cfg, leg.BestStopVariant);
                 var result = await backtest.RunBacktestAsync(cfg, ct);
                 returnsByLeg[leg.Key] = DailyReturns(result.EquityCurve);
@@ -144,6 +144,7 @@ public sealed class EnsembleAssemblyStage(
                 HoldoutSharpe = leg.HoldoutSharpe,
                 HoldoutProfitFactor = leg.HoldoutProfitFactor,
                 HoldoutMaxDrawdown = leg.HoldoutMaxDrawdown,
+                HoldoutTrades = leg.HoldoutTrades,
             });
         }
         ctx.Ensemble = proposal;

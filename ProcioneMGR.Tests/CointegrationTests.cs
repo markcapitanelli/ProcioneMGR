@@ -35,8 +35,26 @@ public class CointegrationTests
 
         var result = _test.Test(y, x);
 
-        Assert.True(result.IsCointegrated, $"ADF={result.AdfStatistic:F3} (atteso < -2.86)");
+        Assert.True(result.IsCointegrated, $"ADF={result.AdfStatistic:F3} (atteso < CV MacKinnon {result.CriticalValue:F3})");
         Assert.True(Math.Abs(result.HedgeRatio - trueBeta) < 0.1, $"hedgeRatio={result.HedgeRatio:F3}, atteso ~{trueBeta}");
+    }
+
+    [Fact]
+    public void MacKinnonCriticalValue_IsStricterThanPlainAdf_AndReportsLags()
+    {
+        // P0-1: il valore critico di cointegrazione al 5% (~-3.34) è più severo del vecchio ADF -2.86.
+        var x = RandomWalk(1000, stepScale: 1.0, seed: 1);
+        var rnd = new Random(2);
+        var y = x.Select(xi => (decimal)(5.0 + 2.0 * (double)xi + (rnd.NextDouble() - 0.5) * 0.5)).ToList();
+
+        var result = _test.Test(y, x);
+
+        Assert.True(result.CriticalValue < -2.86, $"CV={result.CriticalValue:F3} atteso più severo di -2.86");
+        Assert.InRange(result.CriticalValue, -3.5, -3.2); // ~-3.34 per T grande
+        Assert.Equal(5.0, result.SignificanceLevelPercent);
+        Assert.InRange(result.AdfLags, 0, 20);
+        // Il giudizio usa la statistica contro il valore critico MacKinnon riportato.
+        Assert.Equal(result.AdfStatistic < result.CriticalValue, result.IsCointegrated);
     }
 
     [Fact]
@@ -47,7 +65,7 @@ public class CointegrationTests
 
         var result = _test.Test(y, x);
 
-        Assert.False(result.IsCointegrated, $"ADF={result.AdfStatistic:F3} (atteso >= -2.86, spread non stazionario)");
+        Assert.False(result.IsCointegrated, $"ADF={result.AdfStatistic:F3} (atteso >= CV MacKinnon {result.CriticalValue:F3}, spread non stazionario)");
     }
 
     [Fact]

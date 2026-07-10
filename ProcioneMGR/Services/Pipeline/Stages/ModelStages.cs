@@ -6,6 +6,7 @@ using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Discovery;
 using ProcioneMGR.Services.ML;
 using ProcioneMGR.Services.Risk;
+using ProcioneMGR.Services.Validation;
 using MathCorrelation = MathNet.Numerics.Statistics.Correlation;
 using Statistics = ProcioneMGR.Services.Optimization.Statistics;
 using WalkForwardConfiguration = ProcioneMGR.Services.Optimization.WalkForwardConfiguration;
@@ -289,7 +290,7 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
 /// Stage 9 — the verdict: every candidate is backtested on the HOLDOUT range (never seen by
 /// any prior decision), with slippage. Survivors must clear the Sharpe/trade-count gates.
 /// </summary>
-public sealed class HoldoutValidationStage(IBacktestEngine backtest) : IPipelineStage
+public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextFactory<ApplicationDbContext> dbFactory) : IPipelineStage
 {
     public string Name => "HoldoutValidation";
     public string DisplayName => "Validazione holdout";
@@ -301,8 +302,11 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest) : IPipeline
     [
         new("minHoldoutSharpe", "Sharpe holdout minimo", "0.5", ""),
         new("minHoldoutTrades", "Trade holdout minimi", "10", ""),
-        new("slippagePercent", "Slippage per fill (%)", "0.05", "attrito realistico su ogni eseguito"),
+        .. PipelineCosts.ParameterDefinitions,
         new("positionSizePercent", "Size posizione (%)", "10", ""),
+        new("minDeflatedSharpe", "Deflated Sharpe minimo", "0.95", "gate anti-overfitting (Bailey-López de Prado): sotto questa soglia il candidato è scartato"),
+        new("maxPbo", "PBO massimo di pannello", "0.5", "se la Probability of Backtest Overfitting del batch supera questa soglia l'intero ensemble è bloccato"),
+        new("trialCorrelationThreshold", "Soglia ρ cluster tentativi", "0.5", "DSR con N effettivo: candidati con correlazione dei rendimenti holdout ≥ questa soglia contano come un solo test (1 = disattivo, usa N nominale)"),
     ];
 
     public string? ValidateInput(PipelineContext ctx)
@@ -312,10 +316,17 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest) : IPipeline
     {
         var minSharpe = config.GetDecimal("minHoldoutSharpe", 0.5m);
         var minTrades = config.GetInt("minHoldoutTrades", 10);
-        var slippage = config.GetDecimal("slippagePercent", 0.05m);
+        var minDeflatedSharpe = (double)config.GetDecimal("minDeflatedSharpe", 0.95m);
+        var maxPbo = (double)config.GetDecimal("maxPbo", 0.5m);
+        var trialCorrThreshold = (double)config.GetDecimal("trialCorrelationThreshold", 0.5m);
+        var costs = PipelineCosts.FromConfig(config);
         var sizePercent = config.GetDecimal("positionSizePercent", 10m);
 
         ctx.Validated.Clear();
+        // Rendimenti periodici holdout per candidato, allineati per indice a ctx.Validated: alimentano
+        // il gate anti-overfitting (DSR per-candidato + PBO di pannello) applicato DOPO il ciclo.
+        var holdoutReturns = new List<double[]>(ctx.Candidates.Count);
+
         foreach (var candidate in ctx.Candidates)
         {
             ct.ThrowIfCancellationRequested();
@@ -327,18 +338,20 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest) : IPipeline
                 Parameters = new(candidate.Parameters),
                 WalkForwardOosSharpe = candidate.OutOfSampleSharpe,
             };
+            var holdoutRets = Array.Empty<double>();
 
             try
             {
                 var ppy = Statistics.PeriodsPerYear(candidate.Timeframe);
 
-                var selection = await RunAsync(ctx, candidate, ctx.Ranges.SelectionFrom, ctx.Ranges.SelectionTo, slippage, sizePercent, ct);
+                var selection = await RunAsync(ctx, candidate, ctx.Ranges.SelectionFrom, ctx.Ranges.SelectionTo, costs, sizePercent, ct);
                 validated.SelectionSharpe = Statistics.SharpeRatio(selection.EquityCurve, ppy);
                 validated.SelectionReturn = selection.TotalReturnPercent;
                 validated.SelectionMaxDrawdown = selection.MaxDrawdownPercent;
                 validated.SelectionTrades = selection.TotalTrades;
 
-                var holdout = await RunAsync(ctx, candidate, ctx.Ranges.HoldoutFrom, ctx.Ranges.HoldoutTo, slippage, sizePercent, ct);
+                var holdout = await RunAsync(ctx, candidate, ctx.Ranges.HoldoutFrom, ctx.Ranges.HoldoutTo, costs, sizePercent, ct);
+                holdoutRets = PeriodicReturns(holdout.EquityCurve);
                 validated.HoldoutSharpe = Statistics.SharpeRatio(holdout.EquityCurve, ppy);
                 validated.HoldoutReturn = holdout.TotalReturnPercent;
                 validated.HoldoutMaxDrawdown = holdout.MaxDrawdownPercent;
@@ -363,12 +376,74 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest) : IPipeline
             }
 
             ctx.Validated.Add(validated);
-            ctx.LogLine($"[{Name}] {validated.Key}: holdout Sharpe {validated.HoldoutSharpe:F2}, {validated.HoldoutTrades} trade → {(validated.Survived ? "SOPRAVVISSUTO" : validated.RejectReason)}");
+            holdoutReturns.Add(holdoutRets);
+            ctx.LogLine($"[{Name}] {validated.Key}: holdout Sharpe {validated.HoldoutSharpe:F2}, {validated.HoldoutTrades} trade → {(validated.Survived ? "SOPRAVVISSUTO (pre-gate)" : validated.RejectReason)}");
         }
+
+        ApplyOverfittingGate(ctx, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrThreshold);
+        await PersistMlDeflatedSharpeAsync(ctx, ct);
     }
 
-    private Task<BacktestResult> RunAsync(PipelineContext ctx, DiscoveryCandidate candidate, DateTime from, DateTime to, decimal slippage, decimal sizePercent, CancellationToken ct)
-        => backtest.RunBacktestAsync(new BacktestConfiguration
+    /// <summary>
+    /// Scrive il Deflated Sharpe calcolato dal gate sui <c>SavedMlModel</c> dei candidati "Ml" (quelli
+    /// con un <c>SavedModelId</c>), così anche i modelli addestrati DALLA PIPELINE hanno il DSR che il
+    /// <c>ModelRegistry</c> richiede per la promozione a Champion — completa P0-6 sul percorso pipeline.
+    /// Il DSR viene persistito anche per i candidati scartati dal gate: è una proprietà del modello, e
+    /// se è sotto soglia il registry non lo promuoverà comunque.
+    /// </summary>
+    private async Task PersistMlDeflatedSharpeAsync(PipelineContext ctx, CancellationToken ct)
+    {
+        var byModelId = new Dictionary<int, double>();
+        foreach (var v in ctx.Validated)
+        {
+            if (v.StrategyName != "Ml" || v.DeflatedSharpe is not double dsr) continue;
+            if (v.Parameters.TryGetValue("SavedModelId", out var idDec)) byModelId[(int)idDec] = dsr;
+        }
+        if (byModelId.Count == 0) return;
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        foreach (var (id, dsr) in byModelId)
+        {
+            var model = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == id, ct);
+            if (model is not null) model.DeflatedSharpe = dsr;
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Gate anti-overfitting (López de Prado) sull'INTERO batch, dopo l'holdout — riusa
+    /// <see cref="SelectionValidator"/>/<see cref="BacktestOverfitting"/> (stesso rigore di
+    /// OptimizationEngine e ModelRegistry):
+    ///  - <b>Deflated Sharpe</b> per candidato: probabilità che l'edge holdout sia reale DOPO la
+    ///    correzione per il numero di tentativi (tutti i candidati) e la non-normalità dei rendimenti;
+    ///    sotto <paramref name="minDeflatedSharpe"/> il candidato è scartato (non entra nell'ensemble).
+    ///  - <b>PBO di pannello</b> (CSCV) sui rendimenti holdout: se il PROCESSO di selezione è
+    ///    complessivamente overfit (PBO ≥ <paramref name="maxPbo"/>), l'intero batch è bloccato.
+    /// I candidati già scartati da Sharpe/trade non vengono ri-valutati.
+    /// </summary>
+    private void ApplyOverfittingGate(PipelineContext ctx, List<double[]> holdoutReturns, double minDeflatedSharpe, double maxPbo, double trialCorrelationThreshold)
+    {
+        var result = OverfittingGate.Apply(ctx.Validated, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrelationThreshold, m => ctx.LogLine($"[{Name}] {m}"));
+        ctx.LogLine($"[{Name}] Gate DSR/PBO: {result.Survivors}/{ctx.Validated.Count} sopravvissuti"
+                  + (result.PanelPbo is double pp ? $"; PBO pannello {pp:P0}" : "; PBO n/d")
+                  + $" (soglie DSR>{minDeflatedSharpe:F2}, PBO<{maxPbo:P0}).");
+    }
+
+    /// <summary>Rendimenti periodici (frazione/periodo) di una equity curve, come double, saltando i capitali ≤ 0.</summary>
+    private static double[] PeriodicReturns(IReadOnlyList<EquityPoint> equity)
+    {
+        if (equity is null || equity.Count < 2) return [];
+        var returns = new List<double>(equity.Count - 1);
+        for (var i = 1; i < equity.Count; i++)
+        {
+            var prev = equity[i - 1].Capital;
+            if (prev > 0m) returns.Add((double)((equity[i].Capital - prev) / prev));
+        }
+        return returns.ToArray();
+    }
+
+    private Task<BacktestResult> RunAsync(PipelineContext ctx, DiscoveryCandidate candidate, DateTime from, DateTime to, PipelineCosts costs, decimal sizePercent, CancellationToken ct)
+        => backtest.RunBacktestAsync(costs.ApplyTo(new BacktestConfiguration
         {
             ExchangeName = ctx.ExchangeName,
             Symbol = candidate.Symbol,
@@ -379,8 +454,7 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest) : IPipeline
             PositionSizePercent = sizePercent,
             StrategyName = candidate.StrategyName,
             StrategyParameters = new(candidate.Parameters),
-            SlippagePercent = slippage,
-        }, ct);
+        }), ct);
 
     /// <summary>Pubblico per testabilità diretta (stesso trattamento di OptimizationEngine.ComboKey).</summary>
     public static decimal ProfitFactor(IReadOnlyList<BacktestTrade> trades)
@@ -430,7 +504,7 @@ public sealed class RobustnessProbeStage(
         new("mcNoisePercent", "Rumore MC (%)", "10", ""),
         new("maxRiskFactor95", "RiskFactor95 massimo", "2.5", "oltre questo il candidato viene scartato"),
         new("stopVariants", "Varianti stop/target (csv)", "base,SL3,SL5,TRAIL5,TP4,TP6,SL3_TP6,SL2_TP5", "base | SLx (stop) | TRAILx (trailing) | TPx (take profit) | combinabili con '_' (es. SL2_TP4). Il take profit viene comunque aggiunto in automatico se assente."),
-        new("slippagePercent", "Slippage per fill (%)", "0.05", ""),
+        .. PipelineCosts.ParameterDefinitions,
         new("positionSizePercent", "Size posizione (%)", "10", ""),
     ];
 
@@ -444,7 +518,7 @@ public sealed class RobustnessProbeStage(
         // Valuta sempre anche take profit e combinazioni SL+TP (autonomia: vale anche per config
         // salvate prima di questa feature). Il miglior variant è scelto sui dati di SELEZIONE.
         variants = RobustnessProbeStage.EnsureTakeProfitVariants(variants);
-        var slippage = config.GetDecimal("slippagePercent", 0.05m);
+        var costs = PipelineCosts.FromConfig(config);
         var sizePercent = config.GetDecimal("positionSizePercent", 10m);
         var maxRiskFactor = config.GetDecimal("maxRiskFactor95", 2.5m);
 
@@ -458,7 +532,7 @@ public sealed class RobustnessProbeStage(
             var bestSharpe = decimal.MinValue;
             foreach (var variant in variants)
             {
-                var cfg = BuildConfig(ctx, survivor, ctx.Ranges.SelectionFrom, ctx.Ranges.SelectionTo, slippage, sizePercent);
+                var cfg = BuildConfig(ctx, survivor, ctx.Ranges.SelectionFrom, ctx.Ranges.SelectionTo, costs, sizePercent);
                 ApplyVariant(cfg, variant);
                 var result = await backtest.RunBacktestAsync(cfg, ct);
                 var sharpe = Statistics.SharpeRatio(result.EquityCurve, ppy);
@@ -491,19 +565,32 @@ public sealed class RobustnessProbeStage(
 
             var kellySuggestion = kelly.FromTradeHistory(bestResult.Trades);
             survivor.KellyFraction = kellySuggestion.KellyFraction;
-            survivor.HalfKelly = kellySuggestion.HalfKelly;
+
+            // Kelly EMPIRICO sui rendimenti reali dei trade: cattura le code grasse (crash) che il
+            // Kelly binario/gaussiano ignora. Il sizing usa la METÀ del MINIMO tra i due — la scelta
+            // più prudente vince, così non si sovra-scommette sulle code (audit 2026-07 §4). Con pochi
+            // trade il campione empirico non è affidabile → si ripiega sul solo Kelly binario.
+            var tradeReturns = bestResult.Trades
+                .Where(t => t.PnlPercent != 0m)
+                .Select(t => (double)(t.PnlPercent / 100m))
+                .ToList();
+            var empiricalKelly = tradeReturns.Count >= 20
+                ? (decimal)KellyCalculator.EmpiricalKelly(tradeReturns)
+                : kellySuggestion.KellyFraction;
+            survivor.EmpiricalKelly = empiricalKelly;
+            survivor.HalfKelly = Math.Min(kellySuggestion.KellyFraction, empiricalKelly) / 2m;
 
             if (mc.RiskFactor95 > maxRiskFactor)
             {
                 survivor.Survived = false;
                 survivor.RejectReason = $"MC RiskFactor95 {mc.RiskFactor95:F2}× > {maxRiskFactor}×";
             }
-            ctx.LogLine($"[{Name}] {survivor.Key} [{survivor.BestStopVariant}]: RF95 {mc.RiskFactor95:F2}×, Kelly {kellySuggestion.KellyFraction:P1} → {(survivor.Survived ? "OK" : survivor.RejectReason)}");
+            ctx.LogLine($"[{Name}] {survivor.Key} [{survivor.BestStopVariant}]: RF95 {mc.RiskFactor95:F2}×, Kelly bin {kellySuggestion.KellyFraction:P1}/emp {empiricalKelly:P1} → half {survivor.HalfKelly:P1} → {(survivor.Survived ? "OK" : survivor.RejectReason)}");
         }
     }
 
-    private static BacktestConfiguration BuildConfig(PipelineContext ctx, ValidatedCandidate candidate, DateTime from, DateTime to, decimal slippage, decimal sizePercent)
-        => new()
+    private static BacktestConfiguration BuildConfig(PipelineContext ctx, ValidatedCandidate candidate, DateTime from, DateTime to, PipelineCosts costs, decimal sizePercent)
+        => costs.ApplyTo(new()
         {
             ExchangeName = ctx.ExchangeName,
             Symbol = candidate.Symbol,
@@ -514,8 +601,7 @@ public sealed class RobustnessProbeStage(
             PositionSizePercent = sizePercent,
             StrategyName = candidate.StrategyName,
             StrategyParameters = new(candidate.Parameters),
-            SlippagePercent = slippage,
-        };
+        });
 
     /// <summary>
     /// Applica un variant a una configurazione di backtest. Un variant può COMBINARE più componenti
@@ -574,5 +660,96 @@ public sealed class RobustnessProbeStage(
                 ["RF95Medio"] = survivors.Count > 0 ? Math.Round(survivors.Average(s => s.MonteCarloRiskFactor95), 2) : 0m,
             },
         };
+    }
+}
+
+/// <summary>
+/// Gate anti-overfitting universale (P0-3) applicato dall'<see cref="HoldoutValidationStage"/> sull'intero
+/// batch di candidati dopo l'holdout. Puro e testabile in isolamento (nessun DB/backtest): muta i flag
+/// <see cref="ValidatedCandidate.Survived"/>/<see cref="ValidatedCandidate.DeflatedSharpe"/>/
+/// <see cref="ValidatedCandidate.PanelPbo"/> dei candidati passati. Riusa la libreria di rigore
+/// (<see cref="SelectionValidator"/>, <see cref="BacktestOverfitting"/>) — stesso pattern di
+/// OptimizationEngine e ModelRegistry.
+/// </summary>
+public static class OverfittingGate
+{
+    public readonly record struct Result(int Survivors, double? PanelPbo);
+
+    /// <param name="validated">Candidati validati (con SelectionSharpe/Survived già impostati).</param>
+    /// <param name="holdoutReturns">Rendimenti periodici holdout, allineati per indice a <paramref name="validated"/>.</param>
+    /// <param name="minDeflatedSharpe">Sotto (o pari a) questa soglia il candidato è scartato (default 0.95).</param>
+    /// <param name="maxPbo">Se il PBO di pannello ≥ questa soglia l'intero batch è bloccato (default 0.5).</param>
+    /// <param name="trialCorrelationThreshold">Soglia ρ per il conteggio EFFETTIVO dei tentativi nel DSR:
+    /// candidati con correlazione dei rendimenti holdout ≥ soglia contano come un solo test (R1.4). 1 =
+    /// disattivo (usa N nominale). Default 0.5.</param>
+    /// <param name="log">Callback opzionale di logging (una riga per evento).</param>
+    public static Result Apply(
+        IReadOnlyList<ValidatedCandidate> validated,
+        IReadOnlyList<double[]> holdoutReturns,
+        double minDeflatedSharpe,
+        double maxPbo,
+        double trialCorrelationThreshold = 0.5,
+        Action<string>? log = null)
+    {
+        ArgumentNullException.ThrowIfNull(validated);
+        ArgumentNullException.ThrowIfNull(holdoutReturns);
+
+        // Sharpe OOS di selezione annualizzati di TUTTI i candidati = distribuzione dei tentativi.
+        var trialSharpes = validated.Select(v => v.SelectionSharpe).ToList();
+
+        // N EFFETTIVO (R1.4): la soglia SR* del DSR assume tentativi INDIPENDENTI. Se i candidati sono
+        // varianti correlate (griglia fitta, simboli gemelli), collassa i correlati per non sovracontare
+        // il test multiplo (≤ N nominale). Riusa il clustering gerarchico sui rendimenti holdout.
+        var nominalTrials = validated.Count;
+        var trials = Math.Min(
+            EffectiveTrials.Count(holdoutReturns.Select(r => (IReadOnlyList<double>)r).ToList(), trialCorrelationThreshold),
+            nominalTrials);
+        if (trials < nominalTrials)
+        {
+            log?.Invoke($"N tentativi DSR: {nominalTrials} nominali → {trials} effettivi (cluster ρ≥{trialCorrelationThreshold:F2}).");
+        }
+
+        // PBO di pannello sui rendimenti holdout (serie ≥ 10 punti per il CSCV a 10 partizioni).
+        double? panelPbo = null;
+        var panel = holdoutReturns.Where(r => r.Length >= 10).Select(r => (IReadOnlyList<double>)r).ToList();
+        if (panel.Count >= 2)
+        {
+            try { panelPbo = BacktestOverfitting.ProbabilityOfOverfitting(panel, partitions: 10).ProbabilityOfBacktestOverfitting; }
+            catch (ArgumentException) { panelPbo = null; } // serie troppo corte per le partizioni
+        }
+
+        for (var i = 0; i < validated.Count; i++)
+        {
+            var v = validated[i];
+            v.PanelPbo = panelPbo;
+            if (!v.Survived) continue;
+
+            var rets = i < holdoutReturns.Count ? holdoutReturns[i] : [];
+            if (rets.Length < 2 || trials < 1) continue;
+
+            var ppy = Statistics.PeriodsPerYear(v.Timeframe);
+            var validation = SelectionValidator.Validate(trialSharpes, rets, ppy, trials);
+            v.DeflatedSharpe = double.IsNaN(validation.DeflatedSharpe) ? null : validation.DeflatedSharpe;
+
+            if (v.DeflatedSharpe is double dsr && dsr <= minDeflatedSharpe)
+            {
+                v.Survived = false;
+                v.RejectReason = $"DSR {dsr:F3} ≤ {minDeflatedSharpe:F2} (probabile overfitting da selezione)";
+                log?.Invoke($"{v.Key}: scartato dal gate — {v.RejectReason}.");
+            }
+        }
+
+        // Processo di selezione complessivamente overfit ⇒ blocca l'ensemble.
+        if (panelPbo is double pbo && pbo >= maxPbo)
+        {
+            foreach (var v in validated.Where(v => v.Survived))
+            {
+                v.Survived = false;
+                v.RejectReason = $"PBO di pannello {pbo:P0} ≥ {maxPbo:P0}: selezione inaffidabile";
+            }
+            log?.Invoke($"PBO di pannello {pbo:P0} ≥ soglia {maxPbo:P0}: ENSEMBLE BLOCCATO (nessun sopravvissuto).");
+        }
+
+        return new Result(validated.Count(v => v.Survived), panelPbo);
     }
 }

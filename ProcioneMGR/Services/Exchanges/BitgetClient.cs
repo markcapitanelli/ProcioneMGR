@@ -375,6 +375,66 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
         };
     }
 
+    /// <summary>
+    /// [P0-5] Ordine TRIGGER reduce-only "resting" via place-plan-order (Mix v2): stop-market o
+    /// take-profit-market attivato sul MARK PRICE, che chiude la posizione anche se il processo va giù.
+    /// ⚠️ Costruzione payload conforme alla doc pubblica Bitget v2 Mix ma — come gli altri endpoint
+    /// futures Bitget di questo client — NON ancora verificata con una chiamata reale: va provata contro
+    /// il Demo Trading (paptrading) prima di abilitare <c>UseExchangeRestingStops</c> in Live.
+    /// </summary>
+    public async Task<PlaceOrderResult> PlaceFuturesTriggerOrderAsync(PlaceOrderRequest request, bool isStopLoss, CancellationToken ct = default)
+    {
+        if (request.TriggerPrice is not decimal trigger || trigger <= 0m)
+        {
+            return new PlaceOrderResult { Success = false, Error = "TriggerPrice mancante o non valido per l'ordine trigger Bitget." };
+        }
+
+        var body = BuildTriggerPlanBody(
+            market: ToExchangeSymbol(request.Symbol),
+            productType: ProductType(request.Credentials.IsTestnet),
+            side: request.Side.ToLowerInvariant(),
+            triggerPrice: trigger,
+            size: request.Quantity,
+            clientOid: request.ClientOrderId);
+
+        var (ok, resp, uncertain, error) = await SignedAsync(HttpMethod.Post, "/api/v2/mix/order/place-plan-order", string.Empty, body, request.Credentials, ct);
+        if (!ok)
+        {
+            return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = error };
+        }
+        using var doc = JsonDocument.Parse(resp);
+        var data = doc.RootElement.TryGetProperty("data", out var d) ? d : default;
+        string? planId = null;
+        if (data.ValueKind == JsonValueKind.Object)
+        {
+            planId = data.TryGetProperty("orderId", out var oid) ? oid.GetString()
+                   : data.TryGetProperty("planOrderId", out var pid) ? pid.GetString()
+                   : null;
+        }
+        return new PlaceOrderResult { Success = true, ExchangeOrderId = planId, Status = "plan-submitted" };
+    }
+
+    /// <summary>
+    /// Corpo JSON di un ordine plan reduce-only market su mark price (funzione pura, testabile). Il verso
+    /// (stop vs take-profit) è implicito nel <paramref name="triggerPrice"/> rispetto al mark corrente.
+    /// </summary>
+    internal static string BuildTriggerPlanBody(string market, string productType, string side, decimal triggerPrice, decimal size, string clientOid)
+        => JsonSerializer.Serialize(new
+        {
+            symbol = market,
+            productType,
+            marginMode = "isolated",
+            marginCoin = "USDT",
+            planType = "normal_plan",
+            triggerType = "mark_price",
+            triggerPrice = triggerPrice.ToString(CultureInfo.InvariantCulture),
+            side,                                   // buy/sell = lato di CHIUSURA (opposto alla posizione)
+            orderType = "market",
+            size = size.ToString(CultureInfo.InvariantCulture),
+            reduceOnly = "YES",
+            clientOid,
+        });
+
     public async Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);

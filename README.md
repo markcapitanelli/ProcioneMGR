@@ -27,7 +27,7 @@ Piattaforma di **ricerca e trading algoritmico** per criptovalute, costruita in 
 | Area | Tecnologia |
 |------|-----------|
 | Runtime / UI | .NET 10, Blazor Server (InteractiveServer) |
-| Database | PostgreSQL (prod) o SQLite (dev) via EF Core 10 — dual-provider |
+| Database | PostgreSQL via EF Core 10 (Npgsql) — unico provider |
 | ML | Microsoft.ML 5.0 + LightGBM, MathNet.Numerics |
 | AI supervisor | Anthropic SDK (`claude-opus-4-8`), advisory-only |
 | Scheduling | Cronos |
@@ -49,7 +49,8 @@ docs/                           Report e roadmap (ML4T, Qlib, autonomia, pipelin
 ## Requisiti
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
-- (Opzionale, per prod) **PostgreSQL** — in dev è sufficiente SQLite
+- **PostgreSQL** (unico provider supportato) + i client `pg_dump`/`pg_restore` nel PATH per la pagina `/admin/backup`
+- **Docker** — richiesto solo per eseguire i test (usano Testcontainers per un PostgreSQL effimero)
 - (Opzionale) `ANTHROPIC_API_KEY` per il layer AI di supervisione
 
 ## Setup
@@ -63,24 +64,27 @@ docs/                           Report e roadmap (ML4T, Qlib, autonomia, pipelin
      ```powershell
      [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Max 256 }))
      ```
-   - `ConnectionStrings:PostgresConnection` — password del DB (solo se usi PostgreSQL)
-   - `Database:Provider` — `SQLite` (default dev) o `PostgreSQL`
+   - `ConnectionStrings:PostgresConnection` — host/db/utente/password del PostgreSQL (unico provider supportato)
 
    > 🔐 `appsettings.json` è **gitignorato** e non deve mai essere committato: contiene MasterKey e password. La API key di Anthropic **non** va nel file — si legge solo dalla env `ANTHROPIC_API_KEY`.
 
-2. **Avvio (SQLite, dev):**
-   ```bash
-   dotnet run --project ProcioneMGR
+2. **Schema DB** — applica le migrazioni PostgreSQL (una tantum / dopo ogni pull con nuove migrazioni):
+   ```powershell
+   dotnet ef database update --project ProcioneMGR.Migrations.Postgres --startup-project ProcioneMGR
    ```
 
-3. **Avvio (PostgreSQL, persistente):**
+3. **Avvio:**
    ```powershell
-   ./scripts/run-postgres.ps1
+   ./scripts/run-postgres.ps1   # oppure: dotnet run --project ProcioneMGR
    ```
 
 L'app crea/applica automaticamente le migrazioni al primo avvio.
 
 ## Test
+
+Richiedono **Docker in esecuzione**: la suite avvia un PostgreSQL effimero via Testcontainers (i
+test di dominio creano uno schema usa-e-getta per test). I pochi test su dati storici reali usano il
+DB `procionemgr` locale se raggiungibile — altrimenti si saltano da soli (override: env `PROCIONE_TEST_DB`).
 
 ```bash
 dotnet test

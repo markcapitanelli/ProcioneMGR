@@ -6,14 +6,21 @@ using ProcioneMGR.Services.Alpha;
 using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Indicators;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
 /// Test della contabilita' a margine del motore: leva, liquidazione intrabar, funding e
 /// slippage. Con leva 1 e tutto a 0 il comportamento deve restare IDENTICO allo spot.
 /// </summary>
+[Collection("Postgres")]
 public class BacktestLeverageTests
 {
+    private readonly PostgresFixture _pg;
+
+    public BacktestLeverageTests(PostgresFixture pg) => _pg = pg;
+
     private sealed class ScriptedStrategy(Dictionary<int, Signal> script) : IStrategy
     {
         public string Name => "Scripted";
@@ -42,14 +49,14 @@ public class BacktestLeverageTests
         }).ToList();
     }
 
-    private static async Task<BacktestResult> RunAsync(
+    private async Task<BacktestResult> RunAsync(
         List<OhlcvData> candles, Dictionary<int, Signal> script,
         decimal leverage = 1m, decimal fee = 0m, decimal slippage = 0m, decimal funding = 0m,
         decimal positionSize = 100m, decimal maintenance = 0.5m)
     {
         var services = new ServiceCollection();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite("DataSource=:memory:"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_pg.CreateDatabase()));
         services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
         services.AddSingleton<IStrategyFactory, StrategyFactory>();
         services.AddSingleton<IAlphaFactorFactory, AlphaFactorFactory>();
@@ -146,7 +153,7 @@ public class BacktestLeverageTests
 
         var services = new ServiceCollection();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite("DataSource=:memory:"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_pg.CreateDatabase()));
         services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
         services.AddSingleton<IStrategyFactory, StrategyFactory>();
         services.AddSingleton<IAlphaFactorFactory, AlphaFactorFactory>();

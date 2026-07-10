@@ -1,124 +1,97 @@
-using Microsoft.Data.Sqlite;
+using System.Diagnostics;
 
 namespace ProcioneMGR.Services.Admin;
 
-/// <summary>Esito di un checkpoint WAL. <see cref="FullyCheckpointed"/> è true solo se nessun'altra
-/// connessione tratteneva il WAL (busy == 0): condizione necessaria per un backup sicuro.</summary>
-public sealed record CheckpointResult(bool FullyCheckpointed, int Busy, int WalFrames, int Checkpointed);
+/// <summary>Parametri di connessione a un database PostgreSQL, estratti dalla connection string.</summary>
+public sealed record PgConnectionInfo(string Host, int Port, string Database, string Username, string? Password);
 
-/// <summary>Esito di <c>PRAGMA integrity_check</c>: Ok true se il DB è integro ("ok").</summary>
+/// <summary>Esito di una verifica del backup (archivio leggibile ⇒ integro). <see cref="Ok"/> true se
+/// <c>pg_restore --list</c> ha letto correttamente l'archivio.</summary>
 public sealed record IntegrityResult(bool Ok, string Message);
 
 /// <summary>Esito di un backup completo.</summary>
-public sealed record BackupResult(bool Success, string BackupPath, long SizeBytes, IntegrityResult Integrity, CheckpointResult Checkpoint, string? Error = null);
+public sealed record BackupResult(bool Success, string BackupPath, long SizeBytes, IntegrityResult Integrity, string? Error = null);
 
 /// <summary>Metadati di un file di backup già presente.</summary>
 public sealed record BackupInfo(string FileName, string FullPath, DateTime CreatedUtc, long SizeBytes);
 
 /// <summary>
-/// Helper (puro, basato su path) per il backup sicuro del database SQLite.
+/// Helper (puro, senza stato) per il backup/ripristino di un database PostgreSQL tramite gli
+/// strumenti nativi <c>pg_dump</c>/<c>pg_restore</c>, che devono essere nel PATH.
 ///
-/// Il passo critico è il <b>WAL checkpoint TRUNCATE</b>: forza la scrittura di tutte le pagine dal
-/// write-ahead log nel file principale e svuota il WAL, così una successiva copia del file cattura un
-/// database auto-consistente invece di uno stato "strappato". Senza checkpoint, copiare <c>app.db</c>
-/// mentre il trading engine scrive può produrre un file corrotto.
+/// Il formato è il <b>custom archive</b> (<c>-Fc</c>): compresso, ripristinabile selettivamente e
+/// verificabile con <c>pg_restore --list</c> senza toccare il database. La password non viene mai
+/// passata sulla command line: è iniettata nell'ambiente del processo figlio via <c>PGPASSWORD</c>.
 ///
-/// Statico e senza stato (solo path) per essere testabile in isolamento contro un file SQLite
-/// temporaneo. Le connessioni usano <c>Pooling=False</c>: su Windows una connessione in pool
-/// tratterrebbe l'handle del file impedendo la copia (sharing violation).
+/// A differenza del vecchio backup SQLite (copia di file + WAL checkpoint), qui il dump è già uno
+/// snapshot transazionalmente consistente prodotto dal server: nessun bisogno di fermare l'app.
 /// </summary>
 public static class DatabaseBackupHelper
 {
-    private static string ConnString(string dbPath) => new SqliteConnectionStringBuilder
-    {
-        DataSource = dbPath,
-        Mode = SqliteOpenMode.ReadWrite,
-        Pooling = false,
-    }.ToString();
-
-    /// <summary>Esegue <c>PRAGMA wal_checkpoint(TRUNCATE)</c>. Restituisce (busy, log, checkpointed).
-    /// busy != 0 ⇒ altre connessioni attive: il backup NON è sicuro finché non vengono chiuse.</summary>
-    public static CheckpointResult Checkpoint(string dbPath)
-    {
-        using var conn = new SqliteConnection(ConnString(dbPath));
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
-        using var reader = cmd.ExecuteReader();
-        int busy = 0, log = 0, ckpt = 0;
-        if (reader.Read())
-        {
-            busy = reader.GetInt32(0);
-            log = reader.GetInt32(1);
-            ckpt = reader.GetInt32(2);
-        }
-        return new CheckpointResult(busy == 0, busy, log, ckpt);
-    }
-
-    /// <summary>Esegue <c>PRAGMA integrity_check</c> su un file SQLite qualsiasi.</summary>
-    public static IntegrityResult IntegrityCheck(string dbPath)
-    {
-        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadOnly,
-            Pooling = false,
-        }.ToString());
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA integrity_check;";
-        var lines = new List<string>();
-        using (var reader = cmd.ExecuteReader())
-        {
-            while (reader.Read()) lines.Add(reader.GetString(0));
-        }
-        var ok = lines.Count == 1 && string.Equals(lines[0], "ok", StringComparison.OrdinalIgnoreCase);
-        return new IntegrityResult(ok, string.Join("; ", lines));
-    }
+    /// <summary>Nome del file di backup per un dato timestamp. Prefisso = nome del database.</summary>
+    private static string BackupFileName(string database, DateTime stampLocal) =>
+        $"{database}-{stampLocal:yyyyMMdd-HHmmss}.dump";
 
     /// <summary>
-    /// Backup completo e verificato: (1) checkpoint TRUNCATE, (2) copia del file (+ -wal/-shm se ancora
-    /// presenti) in <paramref name="backupDir"/> con timestamp, (3) <c>integrity_check</c> sulla copia.
-    /// Se l'integrità fallisce, la copia viene eliminata e il risultato è <c>Success=false</c>.
+    /// Backup completo e verificato: (1) <c>pg_dump -Fc</c> in <paramref name="backupDir"/> con
+    /// timestamp, (2) <c>pg_restore --list</c> sulla copia per confermarne la leggibilità. Se la
+    /// verifica fallisce, il file viene eliminato e il risultato è <c>Success=false</c>.
     /// </summary>
-    public static BackupResult Backup(string dbPath, string backupDir)
+    public static BackupResult Backup(PgConnectionInfo conn, string backupDir)
     {
-        if (!File.Exists(dbPath))
-            return new BackupResult(false, string.Empty, 0, new IntegrityResult(false, "db assente"), new CheckpointResult(false, 0, 0, 0), $"File non trovato: {dbPath}");
-
         Directory.CreateDirectory(backupDir);
-        var checkpoint = Checkpoint(dbPath);
-        // Le connessioni con Pooling=False sono chiuse: gli handle sono rilasciati, la copia è sicura.
+        var backupPath = Path.Combine(backupDir, BackupFileName(conn.Database, DateTime.Now));
 
-        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        var baseName = Path.GetFileName(dbPath);
-        var backupPath = Path.Combine(backupDir, $"{baseName}.{stamp}.bak");
-
-        File.Copy(dbPath, backupPath, overwrite: false);
-        // -wal/-shm: dopo un TRUNCATE pulito il WAL è vuoto, ma copiali se esistono ancora per completezza.
-        foreach (var suffix in new[] { "-wal", "-shm" })
+        var (exit, _, stderr) = RunTool("pg_dump", new[]
         {
-            var side = dbPath + suffix;
-            if (File.Exists(side)) File.Copy(side, backupPath + suffix, overwrite: false);
+            "--format=custom",
+            "--host", conn.Host,
+            "--port", conn.Port.ToString(),
+            "--username", conn.Username,
+            "--dbname", conn.Database,
+            "--file", backupPath,
+        }, conn.Password);
+
+        if (exit != 0)
+        {
+            TryDelete(backupPath);
+            return new BackupResult(false, backupPath, 0,
+                new IntegrityResult(false, "dump non prodotto"), $"pg_dump exit {exit}: {Truncate(stderr)}");
         }
 
         var integrity = IntegrityCheck(backupPath);
         if (!integrity.Ok)
         {
             TryDelete(backupPath);
-            foreach (var suffix in new[] { "-wal", "-shm" }) TryDelete(backupPath + suffix);
-            return new BackupResult(false, backupPath, 0, integrity, checkpoint, "integrity_check fallito sulla copia; backup eliminato");
+            return new BackupResult(false, backupPath, 0, integrity, "verifica del backup fallita; file eliminato");
         }
 
         var size = new FileInfo(backupPath).Length;
-        return new BackupResult(true, backupPath, size, integrity, checkpoint);
+        return new BackupResult(true, backupPath, size, integrity);
     }
 
-    /// <summary>Elenca i backup (*.bak) in <paramref name="backupDir"/>, più recenti prima.</summary>
+    /// <summary>Verifica che un archivio di backup sia leggibile via <c>pg_restore --list</c>.</summary>
+    public static IntegrityResult IntegrityCheck(string backupPath)
+    {
+        if (!File.Exists(backupPath))
+            return new IntegrityResult(false, $"File non trovato: {backupPath}");
+
+        var (exit, stdout, stderr) = RunTool("pg_restore", new[] { "--list", backupPath }, password: null);
+        if (exit != 0)
+            return new IntegrityResult(false, $"pg_restore --list exit {exit}: {Truncate(stderr)}");
+
+        // Un archivio valido produce almeno una voce nel TOC.
+        var hasEntries = stdout.Split('\n').Any(l => l.TrimStart().Length > 0 && !l.TrimStart().StartsWith(';'));
+        return hasEntries
+            ? new IntegrityResult(true, "archivio leggibile")
+            : new IntegrityResult(false, "archivio vuoto o TOC illeggibile");
+    }
+
+    /// <summary>Elenca i backup (*.dump) in <paramref name="backupDir"/>, più recenti prima.</summary>
     public static IReadOnlyList<BackupInfo> ListBackups(string backupDir)
     {
         if (!Directory.Exists(backupDir)) return [];
-        return Directory.EnumerateFiles(backupDir, "*.bak")
+        return Directory.EnumerateFiles(backupDir, "*.dump")
             .Select(p => new FileInfo(p))
             .OrderByDescending(f => f.CreationTimeUtc)
             .Select(f => new BackupInfo(f.Name, f.FullName, f.CreationTimeUtc, f.Length))
@@ -126,24 +99,67 @@ public static class DatabaseBackupHelper
     }
 
     /// <summary>
-    /// Ripristina un backup sul path del DB attivo. Verifica prima l'integrità del backup; salva il DB
-    /// corrente in un file <c>.pre-restore</c> di sicurezza; rimuove eventuali -wal/-shm orfani.
+    /// Ripristina un backup nel database di destinazione con <c>pg_restore --clean --if-exists</c>
+    /// (droppa gli oggetti esistenti prima di ricrearli). Verifica prima la leggibilità dell'archivio.
+    /// Operazione distruttiva: sovrascrive lo schema/dati correnti — da usare a trading fermo.
     /// </summary>
-    public static void Restore(string backupPath, string dbPath)
+    public static void Restore(PgConnectionInfo conn, string backupPath)
     {
         var integrity = IntegrityCheck(backupPath);
         if (!integrity.Ok)
-            throw new InvalidOperationException($"Backup non integro, ripristino annullato: {integrity.Message}");
+            throw new InvalidOperationException($"Backup non leggibile, ripristino annullato: {integrity.Message}");
 
-        if (File.Exists(dbPath))
+        var (exit, _, stderr) = RunTool("pg_restore", new[]
         {
-            var safety = dbPath + $".pre-restore-{DateTime.Now:yyyyMMdd-HHmmss}";
-            File.Copy(dbPath, safety, overwrite: false);
-        }
-        // Rimuovi WAL/SHM del DB attivo: il file ripristinato è auto-consistente e non deve ereditarli.
-        foreach (var suffix in new[] { "-wal", "-shm" }) TryDelete(dbPath + suffix);
-        File.Copy(backupPath, dbPath, overwrite: true);
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-acl",
+            "--host", conn.Host,
+            "--port", conn.Port.ToString(),
+            "--username", conn.Username,
+            "--dbname", conn.Database,
+            backupPath,
+        }, conn.Password);
+
+        if (exit != 0)
+            throw new InvalidOperationException($"pg_restore fallito (exit {exit}): {Truncate(stderr)}");
     }
+
+    /// <summary>Esegue uno strumento CLI di PostgreSQL catturandone exit code, stdout e stderr. La
+    /// password, se presente, è passata via env <c>PGPASSWORD</c> (mai sulla command line).</summary>
+    private static (int Exit, string Stdout, string Stderr) RunTool(string exe, IEnumerable<string> args, string? password)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = exe,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        if (!string.IsNullOrEmpty(password)) psi.Environment["PGPASSWORD"] = password;
+
+        try
+        {
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException($"Impossibile avviare '{exe}'.");
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+            return (proc.ExitCode, stdout, stderr);
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // Eseguibile assente nel PATH: messaggio esplicito invece di un errore criptico.
+            throw new InvalidOperationException(
+                $"'{exe}' non trovato nel PATH. Installa i client PostgreSQL (pg_dump/pg_restore) o aggiungili al PATH.", ex);
+        }
+    }
+
+    private static string Truncate(string s, int max = 500) =>
+        string.IsNullOrEmpty(s) ? "" : (s.Length <= max ? s.Trim() : s[..max].Trim() + "…");
 
     private static void TryDelete(string path)
     {

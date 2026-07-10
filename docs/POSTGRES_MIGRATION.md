@@ -1,14 +1,12 @@
 # Migrazione a PostgreSQL
 
-Guida operativa per far girare ProcioneMGR su **PostgreSQL** (produzione) mantenendo **SQLite**
-per sviluppo e test. La migrazione è **infrastrutturale**: nessun cambiamento alla logica di
-business. Il codice è **dual-provider** — si sceglie il database da configurazione, senza fork.
+> ⚠️ **DOCUMENTO STORICO (2026-07-09).** La migrazione a PostgreSQL è **completata** e **SQLite è
+> stato rimosso del tutto**: PostgreSQL è l'unico provider. Il tool `tools/DataMigration` (SQLite→PG)
+> e il file `app.db` non esistono più; i test girano su Testcontainers (vedi README). Le sezioni sotto
+> descrivono la procedura di migrazione *com'è stata eseguita* e restano solo come cronistoria.
 
-> **Sequenza di sicurezza (leggere prima di tutto):**
-> 1. **Backup verificato di `app.db`** con il tool `DbBackup` (o dalla pagina `/admin/backup`).
-> 2. **Verifica integrità** del backup (`DbBackup verify`).
-> 3. Solo **dopo** aver verificato il backup, procedere con la migrazione.
-> 4. Se qualcosa va storto, il backup permette di ripristinare.
+Guida operativa (storica) per la migrazione di ProcioneMGR da SQLite a **PostgreSQL**. La migrazione
+è stata **infrastrutturale**: nessun cambiamento alla logica di business.
 
 ---
 
@@ -82,26 +80,25 @@ Da riga di comando Windows (servizio locale):
 
 ---
 
-## 3. Configurazione dual-provider
+## 3. Configurazione (solo PostgreSQL)
 
-Il provider si sceglie da `appsettings.json` con la chiave `Database:Provider`
-(`SQLite` — default — oppure `PostgreSQL`). Le connection string vivono in `ConnectionStrings`:
+> **Nota storica:** il progetto nasceva dual-provider (SQLite dev / PostgreSQL prod). SQLite è stato
+> **rimosso del tutto**: PostgreSQL è ora l'unico provider. La chiave `Database:Provider` e la
+> connection string SQLite `DefaultConnection` non esistono più.
+
+L'unica connection string è `PostgresConnection` in `appsettings.json`:
 
 ```jsonc
 {
-  "Database": { "Provider": "SQLite" },           // default: comportamento storico invariato
   "ConnectionStrings": {
-    "DefaultConnection": "DataSource=Data/app.db;Cache=Shared",
     "PostgresConnection": "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure"
   }
 }
 ```
 
-`appsettings.Production.json` imposta già `Database:Provider = PostgreSQL`. Puoi anche sovrascrivere
-da ambiente senza toccare i file:
+Puoi sovrascriverla da ambiente senza toccare i file:
 
 ```powershell
-$env:Database__Provider = "PostgreSQL"
 $env:ConnectionStrings__PostgresConnection = "Host=...;Database=procionemgr;Username=procione;Password=***"
 ```
 

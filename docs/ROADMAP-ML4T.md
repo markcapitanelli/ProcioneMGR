@@ -12,7 +12,7 @@
 ## 0. Executive summary
 
 ProcioneMGR è già una piattaforma di trading algoritmico matura e ben progettata: .NET 10 /
-Blazor, EF Core + SQLite, ingestion OHLCV multi-exchange (Binance, Bitget), motore di
+Blazor, EF Core + PostgreSQL, ingestion OHLCV multi-exchange (Binance, Bitget), motore di
 backtesting event-driven, ottimizzazione walk-forward, discovery, ensemble regime-aware,
 trading engine live/paper/testnet con safety checker, e già **ML.NET** in uso per il
 rilevamento dei regimi via K-means. La base è solida e i pattern (Strategy, Factory,

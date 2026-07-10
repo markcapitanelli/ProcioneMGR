@@ -6,6 +6,8 @@ using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Security;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
@@ -15,10 +17,13 @@ namespace ProcioneMGR.Tests;
 /// di seme; (c) Validation (Deflated Sharpe) popolato anche nel ramo Bayesian; (d) a parità di
 /// budget il ramo Bayesian non valuta più del grid equivalente.
 /// </summary>
+[Collection("Postgres")]
 public sealed class OptimizationSearchStrategyTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"opt_search_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public OptimizationSearchStrategyTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -67,7 +72,7 @@ public sealed class OptimizationSearchStrategyTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         _provider = services.BuildServiceProvider();
 
         var factory = _provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
@@ -154,6 +159,5 @@ public sealed class OptimizationSearchStrategyTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { /* best-effort */ }
     }
 }

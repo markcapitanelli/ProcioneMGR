@@ -1,10 +1,6 @@
 {
-  "Database": {
-    "_comment_Provider": "SQLite (dev/default) oppure PostgreSQL (prod). Sovrascrivibile via env Database__Provider.",
-    "Provider": "SQLite"
-  },
   "ConnectionStrings": {
-    "DefaultConnection": "DataSource=Data/app.db;Cache=Shared",
+    "_comment_PostgresConnection": "Unico provider supportato: PostgreSQL. Lo schema si applica con `dotnet ef database update --project ProcioneMGR.Migrations.Postgres` (vedi docs/POSTGRES_MIGRATION.md).",
     "PostgresConnection": "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=__CHANGE_ME__"
   },
   "Security": {
@@ -50,6 +46,10 @@
     "DemoteSharpeThreshold": 0.5,
     "DemoteMinWeeks": 2,
     "EvaluationIntervalHours": 6
+  },
+  "Registry": {
+    "_comment": "Ciclo di vita dei modelli ML. MinChampionDeflatedSharpe: soglia assoluta di Deflated Sharpe (Bailey-Lopez de Prado) perche' un modello possa diventare Champion, non solo battere l'incumbent. 0.95 = significativita' difendibile. Il DSR viene calcolato e salvato sul modello al salvataggio (/ml) e in HoldoutValidation (pipeline).",
+    "MinChampionDeflatedSharpe": 0.95
   },
   "MarketData": {
     "Enabled": true,

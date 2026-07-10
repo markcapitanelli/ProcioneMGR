@@ -28,6 +28,19 @@ public class PairsBacktestConfiguration
 
     /// <summary>|z| sotto questa soglia chiude la posizione (spread rientrato).</summary>
     public decimal ExitZScore { get; set; } = 0.5m;
+
+    /// <summary>
+    /// STOP DI DIVERGENZA: |z| AVVERSO oltre questa soglia forza l'uscita in perdita (il classico
+    /// blow-up del pairs — lo spread può divergere all'infinito). Deve essere &gt; <see cref="EntryZScore"/>.
+    /// 0 = disattivo (sconsigliato con denaro vero). Default 3.5.
+    /// </summary>
+    public decimal StopZScore { get; set; } = 3.5m;
+
+    /// <summary>Stop temporale: chiude la posizione dopo questo numero di barre se non è ancora rientrata (0 = disattivo).</summary>
+    public int MaxHoldBars { get; set; }
+
+    /// <summary>Slippage sfavorevole (%) applicato al fill di OGNI gamba, in entrata e in uscita (0 = fill teorici).</summary>
+    public decimal SlippagePercent { get; set; }
 }
 
 /// <summary>LongSpread = Long Y / Short X. ShortSpread = Short Y / Long X.</summary>
@@ -50,6 +63,9 @@ public class PairsTrade
     public decimal HedgeRatioAtEntry { get; set; }
     public decimal Pnl { get; set; }
     public decimal PnlPercent { get; set; }
+
+    /// <summary>Motivo dell'uscita: "MeanReversion" (rientro), "StopZScore" (divergenza), "MaxHold" (tempo), "EndOfData".</summary>
+    public string ExitReason { get; set; } = string.Empty;
 }
 
 public class PairsBacktestResult

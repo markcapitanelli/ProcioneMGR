@@ -6,17 +6,22 @@ using ProcioneMGR.Services.Monitoring.Drift;
 using ProcioneMGR.Services.Registry;
 using ProcioneMGR.Services.Security;
 
+using ProcioneMGR.Tests.Infrastructure;
+
 namespace ProcioneMGR.Tests;
 
 /// <summary>
 /// Test del Model Registry (Fase 2): gate del Deflated Sharpe sulla promozione a Champion, invariante
 /// "un solo Champion per (Symbol, Timeframe)", e ciclo chiuso col drift (Champion in Alert → Retired +
-/// retrain accodato, mai Live). DB SQLite effimero via EnsureCreated (come gli altri test di dominio).
+/// retrain accodato, mai Live). DB Postgres effimero (Testcontainers) via EnsureCreated.
 /// </summary>
+[Collection("Postgres")]
 public class ModelRegistryTests : IAsyncDisposable
 {
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"registry_test_{Guid.NewGuid():N}.db");
+    private readonly string _connString;
     private ServiceProvider? _provider;
+
+    public ModelRegistryTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
     private sealed class PassthroughEncryption : IEncryptionService
     {
@@ -28,7 +33,7 @@ public class ModelRegistryTests : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
-        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseSqlite($"Data Source={_dbPath}"));
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(_connString));
         var provider = services.BuildServiceProvider();
         _provider = provider;
 
@@ -236,7 +241,6 @@ public class ModelRegistryTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
-        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { /* best effort */ }
         GC.SuppressFinalize(this);
     }
 }

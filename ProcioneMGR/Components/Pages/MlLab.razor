@@ -751,6 +751,12 @@
                 .Select(f => new SavedFactorSpecDto(f.FeatureName, f.Factor.Name, new Dictionary<string, decimal>(f.Parameters)))
                 .ToList();
 
+            // Deflated Sharpe del modello dal backtest sul range di test (se disponibile): è ciò che
+            // il ModelRegistry richiede per la promozione a Champion. Singolo track ⇒ un solo trial:
+            // il DSR collassa sul Probabilistic Sharpe (significatività vs Sharpe 0), corretto per
+            // lunghezza del track e non-normalità dei rendimenti.
+            var deflatedSharpe = Statistics.DeflatedSharpeSingleTrack(_result?.EquityCurve, Statistics.PeriodsPerYear(_timeframe));
+
             await using var db = await DbFactory.CreateDbContextAsync();
             db.SavedMlModels.Add(new SavedMlModel
             {
@@ -766,6 +772,7 @@
                 ModelBytes = bytes,
                 TrainRowCount = _trainRowCount,
                 TrainCorrelation = _trainCorrelation,
+                DeflatedSharpe = deflatedSharpe,
             });
             await db.SaveChangesAsync();
 

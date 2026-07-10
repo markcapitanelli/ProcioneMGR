@@ -13,7 +13,7 @@
       "runtimeArgs": [
         "-NoProfile",
         "-Command",
-        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:Database__Provider='PostgreSQL'; $env:ConnectionStrings__PostgresConnection='Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure'; $env:MarketData__DefaultBackfillDays='2200'; $env:ASPNETCORE_URLS='http://localhost:5256'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-build --no-launch-profile"
+        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ConnectionStrings__PostgresConnection='Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure'; $env:MarketData__DefaultBackfillDays='2200'; $env:ASPNETCORE_URLS='http://localhost:5256'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-build --no-launch-profile"
       ],
       "port": 5256
     }

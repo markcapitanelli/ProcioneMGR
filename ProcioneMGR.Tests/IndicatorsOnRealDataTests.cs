@@ -2,13 +2,14 @@ using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Security;
+using ProcioneMGR.Tests.Infrastructure;
 using Xunit.Abstractions;
 
 namespace ProcioneMGR.Tests;
 
 /// <summary>
 /// Test richiesto dallo spec: calcola gli indicatori su dati reali BTC/USDT 1h
-/// presenti nel DB dell'app (app.db) e verifica invarianti strutturali.
+/// presenti nel DB Postgres reale (procionemgr) e verifica invarianti strutturali.
 /// Se il DB o i dati non sono disponibili, il test viene saltato (non fallisce).
 /// </summary>
 public class IndicatorsOnRealDataTests(ITestOutputHelper output)
@@ -18,15 +19,14 @@ public class IndicatorsOnRealDataTests(ITestOutputHelper output)
     [Fact]
     public async Task Indicators_On_Real_BtcUsdt_RespectInvariants()
     {
-        var dbPath = FindAppDb();
-        if (dbPath is null)
+        if (!RealMarketDb.IsAvailable())
         {
-            output.WriteLine("app.db non trovato: test saltato.");
+            output.WriteLine("DB procionemgr non disponibile: test saltato.");
             return;
         }
 
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-            .UseSqlite($"DataSource={dbPath};Mode=ReadOnly;Cache=Shared")
+            .UseNpgsql(RealMarketDb.ConnectionString)
             .Options;
 
         await using var db = new ApplicationDbContext(options, new PassthroughEncryption());
@@ -84,22 +84,6 @@ public class IndicatorsOnRealDataTests(ITestOutputHelper output)
             }
         }
         output.WriteLine($"MACD[last]={macd[^1]:F2} Signal[last]={signal[^1]:F2} Hist[last]={hist[^1]:F2}");
-    }
-
-    /// <summary>Risale le cartelle dalla bin/ del test fino a trovare ProcioneMGR/Data/app.db.</summary>
-    private static string? FindAppDb()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            var candidate = Path.Combine(dir.FullName, "ProcioneMGR", "Data", "app.db");
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-            dir = dir.Parent;
-        }
-        return null;
     }
 
     private sealed class PassthroughEncryption : IEncryptionService

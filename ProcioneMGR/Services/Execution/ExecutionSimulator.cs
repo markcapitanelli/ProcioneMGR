@@ -55,9 +55,13 @@ public sealed class ExecutionSimulator : IExecutionSimulator
                 volume = Math.Max(0m, c.Volume);
             }
 
-            // Impatto lineare nella partecipazione (quota del volume di candela), con tetto.
+            // Impatto in funzione della partecipazione (quota del volume di candela), con tetto.
+            // Default √partecipazione (legge empirica di Almgren, concava); lineare come alternativa.
             var participation = volume > 0m ? s.Quantity / volume : 1m;
-            var impact = Math.Min(parameters.ImpactCoefficient * participation, parameters.MaxImpactPct);
+            var shape = parameters.ImpactModel == MarketImpactModel.SquareRoot
+                ? (decimal)Math.Sqrt((double)participation)
+                : participation;
+            var impact = Math.Min(parameters.ImpactCoefficient * shape, parameters.MaxImpactPct);
             var costPct = impact + parameters.HalfSpreadPct;
 
             // Il buy paga di più, il sell incassa di meno: il costo va SEMPRE contro l'ordine.

@@ -115,6 +115,162 @@ public sealed class ExcursionAnalyzer
                 use99thPercentile ? tp.ShortTakeProfitPercentile99 : tp.ShortTakeProfitPercentile95);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    // R1.5 — MAE/MFE sull'ORIZZONTE DI DETENZIONE, condizionato per regime di volatilità.
+    //
+    // Le escursioni a barra singola (open→low/high di UNA candela) sottostimano il rischio di uno
+    // stop: un trade vive più barre e la sua massima escursione avversa (MAE) / favorevole (MFE) si
+    // accumula sull'intero periodo di detenzione. Qui ogni barra è un ingresso ipotetico tenuto per
+    // <c>horizon</c> barre; si misura MAE/MFE rispetto al prezzo d'ingresso e — stessa filosofia dei
+    // percentili sui SOLI vincitori del metodo a barra singola — si prendono i percentili sui trade
+    // che chiudono in profitto all'orizzonte. Inoltre si condiziona per regime di volatilità
+    // (terziali dell'ATR% causale all'ingresso): lo stop giusto in mercato calmo è troppo stretto in
+    // mercato agitato. Strumento di CALIBRAZIONE storica (l'escursione guarda avanti per costruire la
+    // distribuzione), non un segnale live.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Bracket SL+TP da MAE/MFE su <paramref name="horizon"/> barre, disaggregato per regime di
+    /// volatilità (Low/Normal/High via terziali dell'ATR% all'ingresso) più il complessivo. SL =
+    /// <paramref name="percentile"/>° percentile della MAE dei trade vincenti; TP = stesso percentile
+    /// della MFE. Distanze in % dal prezzo d'ingresso (close di barra). <see cref="RegimeConditionedBracket.CurrentRegime"/>
+    /// è il regime dell'ultima candela, per l'uso adattivo.
+    /// </summary>
+    public RegimeConditionedBracket SuggestHorizonBracket(
+        IReadOnlyList<OhlcvData> candles, OrderSide side, int horizon = 10, decimal percentile = 0.95m, int atrPeriod = 14)
+    {
+        ArgumentNullException.ThrowIfNull(candles);
+        if (horizon < 1) throw new ArgumentOutOfRangeException(nameof(horizon));
+        if (atrPeriod < 1) throw new ArgumentOutOfRangeException(nameof(atrPeriod));
+
+        var atrPct = CausalAtrPercent(candles, atrPeriod);
+        var samples = CollectHorizonSamples(candles, side, horizon, atrPeriod, atrPct);
+        var (lo, hi) = VolTerciles(samples.Select(s => s.EntryAtrPercent));
+
+        var byRegime = new Dictionary<VolatilityRegime, HorizonExcursion>();
+        foreach (var reg in (ReadOnlySpan<VolatilityRegime>)[VolatilityRegime.Low, VolatilityRegime.Normal, VolatilityRegime.High])
+        {
+            byRegime[reg] = Aggregate(samples.Where(s => Classify(s.EntryAtrPercent, lo, hi) == reg), horizon, percentile);
+        }
+
+        var current = candles.Count > atrPeriod && atrPct[^1] > 0m ? Classify(atrPct[^1], lo, hi) : VolatilityRegime.Normal;
+        return new RegimeConditionedBracket(side, horizon, percentile, byRegime, Aggregate(samples, horizon, percentile), current);
+    }
+
+    /// <summary>
+    /// Auto SL/TP ADATTIVO: il bracket MAE/MFE del regime di volatilità CORRENTE (ultima candela). Se
+    /// quel regime ha meno di <paramref name="minRegimeSamples"/> trade vincenti (stima instabile),
+    /// ripiega sul complessivo. È il "calcolo automatico" data-driven consapevole del regime.
+    /// </summary>
+    public RiskBracket SuggestAdaptiveBracket(
+        IReadOnlyList<OhlcvData> candles, OrderSide side, int horizon = 10, decimal percentile = 0.95m,
+        int atrPeriod = 14, int minRegimeSamples = 30)
+    {
+        var b = SuggestHorizonBracket(candles, side, horizon, percentile, atrPeriod);
+        var chosen = b.ByRegime.TryGetValue(b.CurrentRegime, out var r) && r.Samples >= minRegimeSamples ? r : b.Overall;
+        if (chosen.Samples == 0) chosen = b.Overall;
+        return new RiskBracket(chosen.StopPercentile, chosen.TakeProfitPercentile);
+    }
+
+    /// <summary>MAE/MFE (in % dall'ingresso) ed esito di ogni ingresso ipotetico tenuto per horizon barre.</summary>
+    private readonly record struct HorizonSample(decimal Adverse, decimal Favorable, decimal EntryAtrPercent, bool FavorableOutcome);
+
+    private static List<HorizonSample> CollectHorizonSamples(
+        IReadOnlyList<OhlcvData> candles, OrderSide side, int horizon, int atrPeriod, decimal[] atrPct)
+    {
+        var samples = new List<HorizonSample>();
+        // Ingresso al close della barra i (dopo il warm-up ATR); detenzione su (i, i+horizon].
+        for (var i = atrPeriod; i + horizon < candles.Count; i++)
+        {
+            var entry = candles[i].Close;
+            if (entry <= 0m) continue;
+
+            decimal maxHigh = decimal.MinValue, minLow = decimal.MaxValue;
+            for (var j = i + 1; j <= i + horizon; j++)
+            {
+                if (candles[j].High > maxHigh) maxHigh = candles[j].High;
+                if (candles[j].Low < minLow) minLow = candles[j].Low;
+            }
+            var exit = candles[i + horizon].Close;
+
+            decimal adverse, favorable;
+            bool favorableOutcome;
+            if (side == OrderSide.Buy)
+            {
+                adverse = (entry - minLow) / entry * 100m;    // massimo drawdown del long
+                favorable = (maxHigh - entry) / entry * 100m; // massimo runup del long
+                favorableOutcome = exit > entry;
+            }
+            else
+            {
+                adverse = (maxHigh - entry) / entry * 100m;    // per lo short il rischio è verso l'alto
+                favorable = (entry - minLow) / entry * 100m;
+                favorableOutcome = exit < entry;
+            }
+
+            samples.Add(new HorizonSample(Math.Max(0m, adverse), Math.Max(0m, favorable), atrPct[i], favorableOutcome));
+        }
+        return samples;
+    }
+
+    /// <summary>Percentili di MAE (→SL) e MFE (→TP) sui SOLI trade vincenti del sottoinsieme.</summary>
+    private static HorizonExcursion Aggregate(IEnumerable<HorizonSample> samples, int horizon, decimal percentile)
+    {
+        var mae = new List<decimal>();
+        var mfe = new List<decimal>();
+        foreach (var s in samples)
+        {
+            if (!s.FavorableOutcome) continue;
+            mae.Add(s.Adverse);
+            mfe.Add(s.Favorable);
+        }
+        mae.Sort();
+        mfe.Sort();
+        return new HorizonExcursion(
+            horizon, mae.Count,
+            Optimization.TradeStatistics.Percentile(mae, percentile),
+            Optimization.TradeStatistics.Percentile(mfe, percentile),
+            percentile);
+    }
+
+    /// <summary>ATR% causale (SMA del true range su period barre, / close · 100). 0 durante il warm-up.</summary>
+    private static decimal[] CausalAtrPercent(IReadOnlyList<OhlcvData> candles, int period)
+    {
+        var n = candles.Count;
+        var atrPct = new decimal[n];
+        if (n == 0) return atrPct;
+
+        var tr = new decimal[n];
+        tr[0] = candles[0].High - candles[0].Low;
+        for (var i = 1; i < n; i++)
+        {
+            var h = candles[i].High;
+            var l = candles[i].Low;
+            var pc = candles[i - 1].Close;
+            tr[i] = Math.Max(h - l, Math.Max(Math.Abs(h - pc), Math.Abs(l - pc)));
+        }
+        for (var i = period; i < n; i++)
+        {
+            decimal sum = 0m;
+            for (var k = i - period + 1; k <= i; k++) sum += tr[k];
+            var c = candles[i].Close;
+            atrPct[i] = c > 0m ? sum / period / c * 100m : 0m;
+        }
+        return atrPct;
+    }
+
+    /// <summary>Soglie di terziale (33°/67° percentile) dell'ATR% d'ingresso, per i regimi di volatilità.</summary>
+    private static (decimal Lo, decimal Hi) VolTerciles(IEnumerable<decimal> atrPercents)
+    {
+        var sorted = atrPercents.Where(v => v > 0m).OrderBy(v => v).ToList();
+        if (sorted.Count < 3) return (0m, decimal.MaxValue); // dati insufficienti ⇒ tutto "Normal"
+        return (Optimization.TradeStatistics.Percentile(sorted, 0.3333m),
+                Optimization.TradeStatistics.Percentile(sorted, 0.6667m));
+    }
+
+    private static VolatilityRegime Classify(decimal atrPct, decimal lo, decimal hi)
+        => atrPct <= lo ? VolatilityRegime.Low : atrPct >= hi ? VolatilityRegime.High : VolatilityRegime.Normal;
+
     /// <summary>
     /// Anatomia della singola barra (i "mattoni elementari" del cap. 4). Liste allineate
     /// per indice alle candele. Percentuali in [0,100]; ClosePerc = dove chiude la barra
@@ -254,6 +410,28 @@ public sealed record TakeProfitSuggestion
 
 /// <summary>Bracket protettivo pronto da applicare: distanze % dall'entry per stop loss e take profit (0 = non disponibile).</summary>
 public sealed record RiskBracket(decimal StopLossPercent, decimal TakeProfitPercent);
+
+/// <summary>Regime di volatilità all'ingresso, per terziali dell'ATR% causale (R1.5).</summary>
+public enum VolatilityRegime { Low, Normal, High }
+
+/// <summary>
+/// Escursioni MAE/MFE su un orizzonte di detenzione (R1.5): SL/TP come percentile della massima
+/// escursione avversa/favorevole dei trade vincenti. Distanze in % dal prezzo d'ingresso.
+/// </summary>
+public sealed record HorizonExcursion(int Horizon, int Samples, decimal StopPercentile, decimal TakeProfitPercentile, decimal Percentile);
+
+/// <summary>
+/// Bracket MAE/MFE disaggregato per regime di volatilità più il complessivo, con il regime corrente
+/// (ultima candela) per l'uso adattivo. <see cref="ByRegime"/> contiene sempre le tre chiavi
+/// Low/Normal/High (Samples=0 dove non ci sono abbastanza trade).
+/// </summary>
+public sealed record RegimeConditionedBracket(
+    OrderSide Side,
+    int Horizon,
+    decimal Percentile,
+    IReadOnlyDictionary<VolatilityRegime, HorizonExcursion> ByRegime,
+    HorizonExcursion Overall,
+    VolatilityRegime CurrentRegime);
 
 /// <summary>Attributi elementari di una barra (cap. 4 del libro).</summary>
 public sealed record BarAnatomy(
