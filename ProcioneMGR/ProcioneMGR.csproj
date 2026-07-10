@@ -9,6 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Espone i metodi internal (helper puri e testabili) al progetto di test. -->
+    <InternalsVisibleTo Include="ProcioneMGR.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Anthropic" Version="12.35.1" />
     <PackageReference Include="Cronos" Version="0.13.0" />
     <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
