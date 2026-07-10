@@ -267,6 +267,19 @@ public sealed class VolatilityOutput
 
     /// <summary>"Bassa" / "Media" / "Alta" vs the long-run level (thresholds from pipeline rules).</summary>
     public string Level { get; set; } = "Media";
+
+    /// <summary>
+    /// Gradi di libertà ν stimati con innovazioni Student-t (null se il fit di coda non è disponibile).
+    /// ν basso = code grasse. Rif. audit 2026-07 §4.
+    /// </summary>
+    public double? TailDegreesOfFreedom { get; set; }
+
+    /// <summary>
+    /// Mossa avversa all'1% (VaR di coda) prevista a orizzonte, consapevole delle code grasse
+    /// (quantile Student-t su σ previsto). Come frazione di prezzo, sempre ≥ del corrispettivo gaussiano.
+    /// Serve da distanza di stop prudente per l'operatore.
+    /// </summary>
+    public double ForecastTailMove99 { get; set; }
 }
 
 public sealed class PairScreenResult
@@ -340,6 +353,14 @@ public sealed class ValidatedCandidate
     public decimal MonteCarloRiskFactor95 { get; set; }
     public decimal MonteCarloDrawdown95 { get; set; }
     public decimal KellyFraction { get; set; }
+
+    /// <summary>
+    /// Kelly EMPIRICO sui rendimenti dei trade (distribuzione osservata, senza ipotesi di normalità):
+    /// cattura le code grasse e di norma è ≤ del Kelly binario. Vedi <see cref="Risk.KellyCalculator.EmpiricalKelly"/>.
+    /// </summary>
+    public decimal EmpiricalKelly { get; set; }
+
+    /// <summary>Metà del MINIMO tra Kelly binario ed empirico: sizing prudente e robusto alle code grasse.</summary>
     public decimal HalfKelly { get; set; }
     public string BestStopVariant { get; set; } = "base";
 

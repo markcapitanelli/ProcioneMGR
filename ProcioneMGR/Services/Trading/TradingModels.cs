@@ -118,6 +118,19 @@ public class OpenPosition
     public decimal UnrealizedPnlPercent { get; set; }
     public string? ExchangeOrderId { get; set; }
 
+    /// <summary>
+    /// [P0-5 follow-up — SCAFFOLDING] Id degli ordini TRIGGER reduce-only piazzati sull'exchange come
+    /// protezione "resting" (stop-market / take-profit-market), quando
+    /// <see cref="SafetyConfiguration.UseExchangeRestingStops"/> è attivo. Null finché la feature non è
+    /// attiva (default) o i client trigger sono ancora stub: in quel caso valgono gli stop software.
+    /// </summary>
+    [NotMapped]
+    public string? StopOrderId { get; set; }
+
+    /// <summary>[P0-5 follow-up — SCAFFOLDING] Vedi <see cref="StopOrderId"/>.</summary>
+    [NotMapped]
+    public string? TakeProfitOrderId { get; set; }
+
     /// <summary>Leva della posizione (1 per Spot).</summary>
     public int Leverage { get; set; } = 1;
 

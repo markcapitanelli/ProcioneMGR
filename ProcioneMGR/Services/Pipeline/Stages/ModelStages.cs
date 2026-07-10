@@ -563,14 +563,27 @@ public sealed class RobustnessProbeStage(
 
             var kellySuggestion = kelly.FromTradeHistory(bestResult.Trades);
             survivor.KellyFraction = kellySuggestion.KellyFraction;
-            survivor.HalfKelly = kellySuggestion.HalfKelly;
+
+            // Kelly EMPIRICO sui rendimenti reali dei trade: cattura le code grasse (crash) che il
+            // Kelly binario/gaussiano ignora. Il sizing usa la METÀ del MINIMO tra i due — la scelta
+            // più prudente vince, così non si sovra-scommette sulle code (audit 2026-07 §4). Con pochi
+            // trade il campione empirico non è affidabile → si ripiega sul solo Kelly binario.
+            var tradeReturns = bestResult.Trades
+                .Where(t => t.PnlPercent != 0m)
+                .Select(t => (double)(t.PnlPercent / 100m))
+                .ToList();
+            var empiricalKelly = tradeReturns.Count >= 20
+                ? (decimal)KellyCalculator.EmpiricalKelly(tradeReturns)
+                : kellySuggestion.KellyFraction;
+            survivor.EmpiricalKelly = empiricalKelly;
+            survivor.HalfKelly = Math.Min(kellySuggestion.KellyFraction, empiricalKelly) / 2m;
 
             if (mc.RiskFactor95 > maxRiskFactor)
             {
                 survivor.Survived = false;
                 survivor.RejectReason = $"MC RiskFactor95 {mc.RiskFactor95:F2}× > {maxRiskFactor}×";
             }
-            ctx.LogLine($"[{Name}] {survivor.Key} [{survivor.BestStopVariant}]: RF95 {mc.RiskFactor95:F2}×, Kelly {kellySuggestion.KellyFraction:P1} → {(survivor.Survived ? "OK" : survivor.RejectReason)}");
+            ctx.LogLine($"[{Name}] {survivor.Key} [{survivor.BestStopVariant}]: RF95 {mc.RiskFactor95:F2}×, Kelly bin {kellySuggestion.KellyFraction:P1}/emp {empiricalKelly:P1} → half {survivor.HalfKelly:P1} → {(survivor.Survived ? "OK" : survivor.RejectReason)}");
         }
     }
 

@@ -73,6 +73,18 @@ public interface IFuturesExchangeClient
     /// </param>
     Task<PlaceOrderResult> PlaceFuturesOrderAsync(PlaceOrderRequest request, bool reduceOnly, CancellationToken ct = default);
 
+    /// <summary>
+    /// [P0-5] Piazza un ordine TRIGGER reduce-only che vive sull'exchange come protezione "resting": uno
+    /// stop-market (<paramref name="isStopLoss"/> = true) o un take-profit-market (false), attivato quando
+    /// il mark price tocca <see cref="PlaceOrderRequest.TriggerPrice"/>. A differenza degli stop
+    /// software-monitored su candela chiusa, resta valido anche se il processo va giù e protegge dai gap-through.
+    ///
+    /// Implementato su entrambi i client (plan-order Bitget / STOP_MARKET Binance) ma da VERIFICARE su
+    /// Demo/Testnet prima di abilitare <c>UseExchangeRestingStops</c> in Live. Il chiamante deve comunque
+    /// trattare un fallimento come NON bloccante e mantenere attivi gli stop software.
+    /// </summary>
+    Task<PlaceOrderResult> PlaceFuturesTriggerOrderAsync(PlaceOrderRequest request, bool isStopLoss, CancellationToken ct = default);
+
     /// <summary>Posizione aperta corrente per il simbolo (null se flat). Fonte di verità per la liquidazione.</summary>
     Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default);
 

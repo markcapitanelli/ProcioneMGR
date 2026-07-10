@@ -238,7 +238,7 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
                   : ratio <= (double)config.GetDecimal("lowRatio", 0.8m) ? "Bassa"
                   : "Media";
 
-        ctx.Volatility = new VolatilityOutput
+        var vol = new VolatilityOutput
         {
             Symbol = primary.Symbol,
             Omega = fit.Omega,
@@ -250,7 +250,24 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
             ForecastVolatility24 = forecastVol,
             Level = level,
         };
-        ctx.LogLine($"[{Name}] {primary.Symbol}: persistenza {fit.Persistence:F4}, vol {currentVol:P3} → forecast {forecastVol:P3} ({level}).");
+
+        // Fit Student-t AGGIUNTIVO solo per le metriche di coda (non tocca la classificazione del
+        // regime, che resta gaussiana): espone ν e la mossa avversa all'1% consapevole delle code
+        // grasse, come distanza di stop prudente. Non deve mai far fallire lo stage. Audit 2026-07 §4.
+        try
+        {
+            var tailFit = garch.Fit(returns, GarchInnovation.StudentT);
+            vol.TailDegreesOfFreedom = tailFit.DegreesOfFreedom;
+            vol.ForecastTailMove99 = Math.Abs(tailFit.TailQuantile(0.01, horizon));
+        }
+        catch (Exception ex)
+        {
+            ctx.LogLine($"[{Name}] fit Student-t di coda non riuscito ({ex.GetType().Name}): metriche di coda omesse.");
+        }
+
+        ctx.Volatility = vol;
+        ctx.LogLine($"[{Name}] {primary.Symbol}: persistenza {fit.Persistence:F4}, vol {currentVol:P3} → forecast {forecastVol:P3} ({level})"
+                  + (vol.TailDegreesOfFreedom is double dof ? $"; ν={dof:F1}, VaR1% {vol.ForecastTailMove99:P2}." : "."));
     }
 
     public StageSummary Summarize(PipelineContext ctx)
@@ -260,12 +277,14 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
         {
             StageName = Name,
             DisplayName = DisplayName,
-            Text = $"{o.Symbol}: volatilità {o.Level} (attuale {o.CurrentVolatility:P3}, forecast {o.ForecastVolatility24:P3}, persistenza {o.Persistence:F3}).",
+            Text = $"{o.Symbol}: volatilità {o.Level} (attuale {o.CurrentVolatility:P3}, forecast {o.ForecastVolatility24:P3}, persistenza {o.Persistence:F3})"
+                 + (o.TailDegreesOfFreedom is double dof ? $"; code grasse ν={dof:F1}, VaR1% {o.ForecastTailMove99:P2}." : "."),
             Metrics = new()
             {
                 ["Persistenza"] = (decimal)o.Persistence,
                 ["VolAttuale"] = (decimal)o.CurrentVolatility,
                 ["VolForecast"] = (decimal)o.ForecastVolatility24,
+                ["VaR1%coda"] = (decimal)o.ForecastTailMove99,
             },
         };
     }

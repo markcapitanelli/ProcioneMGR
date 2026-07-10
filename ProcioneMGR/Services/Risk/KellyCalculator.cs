@@ -72,14 +72,39 @@ public sealed class KellyCalculator
     public static double ContinuousKellyNumeric(double mean, double std, double maxFraction = 2.0)
     {
         if (std <= 0 || maxFraction <= 0) return 0;
+        return MaximizeGrowth(f => GrowthRate(f, mean, std), maxFraction);
+    }
 
-        // Golden-section search del massimo di G(f) su [0, maxFraction].
+    /// <summary>
+    /// Kelly EMPIRICO (robusto alle code grasse): massimizza la crescita logaritmica attesa
+    /// G(f) = media su i di log(1 + f·rᵢ) usando la distribuzione EMPIRICA dei rendimenti osservati,
+    /// senza assumere normalità. Quando i dati contengono crash reali (code grasse tipiche delle
+    /// cripto), il Kelly empirico è SISTEMATICAMENTE più prudente della versione normale: i pochi
+    /// rendimenti molto negativi entrano direttamente nella media e abbassano f*. Rif. audit 2026-07 §4.
+    /// </summary>
+    /// <param name="returns">Rendimenti storici (per-trade o per-periodo), es. PnL% / 100.</param>
+    /// <param name="maxFraction">Limite superiore alla frazione cercata (default 2 = leva 2 sul segnale).</param>
+    public static double EmpiricalKelly(IReadOnlyList<double> returns, double maxFraction = 2.0)
+    {
+        ArgumentNullException.ThrowIfNull(returns);
+        if (returns.Count == 0 || maxFraction <= 0) return 0;
+        // Nessun edge (media non positiva) -> non scommettere.
+        if (returns.Average() <= 0) return 0;
+        return MaximizeGrowth(f => EmpiricalGrowthRate(f, returns), maxFraction);
+    }
+
+    /// <summary>
+    /// Golden-section search del massimo di una crescita logaritmica concava G(f) su [0, maxFraction].
+    /// Ritorna 0 se nemmeno il miglior f batte f=0 (edge non sfruttabile).
+    /// </summary>
+    private static double MaximizeGrowth(Func<double, double> growth, double maxFraction)
+    {
         const double invPhi = 0.6180339887498949;
         double a = 0, b = maxFraction;
         var c = b - invPhi * (b - a);
         var d = a + invPhi * (b - a);
-        var fc = GrowthRate(c, mean, std);
-        var fd = GrowthRate(d, mean, std);
+        var fc = growth(c);
+        var fd = growth(d);
 
         for (var i = 0; i < 80 && b - a > 1e-7; i++)
         {
@@ -89,7 +114,7 @@ public sealed class KellyCalculator
                 d = c;
                 fd = fc;
                 c = b - invPhi * (b - a);
-                fc = GrowthRate(c, mean, std);
+                fc = growth(c);
             }
             else
             {
@@ -97,13 +122,24 @@ public sealed class KellyCalculator
                 c = d;
                 fc = fd;
                 d = a + invPhi * (b - a);
-                fd = GrowthRate(d, mean, std);
+                fd = growth(d);
             }
         }
 
         var best = (a + b) / 2;
-        // Se anche il miglior f non batte f=0 (edge negativo), il Kelly e' zero.
-        return GrowthRate(best, mean, std) > 0 ? best : 0;
+        return growth(best) > 0 ? best : 0;
+    }
+
+    /// <summary>(1/N)·Σ log(1+f·rᵢ) sui rendimenti osservati; forte penalità se una posizione porterebbe a rovina (1+f·r ≤ 0).</summary>
+    private static double EmpiricalGrowthRate(double fraction, IReadOnlyList<double> returns)
+    {
+        var sum = 0.0;
+        foreach (var r in returns)
+        {
+            var arg = 1 + fraction * r;
+            sum += arg <= 1e-12 ? -30 : Math.Log(arg); // log(0-) -> bancarotta: penalità forte
+        }
+        return sum / returns.Count;
     }
 
     /// <summary>E[log(1+f*r)] sotto r ~ Normal(mean, std), integrata con Simpson su +/-3 sigma.</summary>
