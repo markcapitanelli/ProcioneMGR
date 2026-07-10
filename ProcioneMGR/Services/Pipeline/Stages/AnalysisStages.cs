@@ -25,6 +25,7 @@ public sealed class FeatureEngineeringStage(
         new("factors", "Fattori da valutare (csv)", "", "vuoto = tutti quelli disponibili"),
         new("topK", "Top-K fattori selezionati", "4", "quante feature tenere per il modello ML"),
         new("minAbsIc", "Soglia |IC| minima", "0.01", "sotto questa soglia il fattore non viene selezionato"),
+        new("minIcTStat", "Soglia |t-stat| IC (Newey-West)", "0", "0 = disattivo; es. 2 = tiene solo fattori con IC statisticamente significativo"),
         new("forwardHorizon", "Orizzonte forward (candele)", "1", "target dell'IC"),
     ];
 
@@ -37,6 +38,7 @@ public sealed class FeatureEngineeringStage(
         var horizon = config.GetInt("forwardHorizon", 1);
         var topK = config.GetInt("topK", 4);
         var minAbsIc = (double)config.GetDecimal("minAbsIc", 0.01m);
+        var minIcTStat = (double)config.GetDecimal("minIcTStat", 0m); // 0 = gate di significatività disattivo
         var requested = config.GetList("factors");
 
         // ANTI-LOOK-AHEAD: only the selection range feeds any choice.
@@ -65,12 +67,14 @@ public sealed class FeatureEngineeringStage(
                 RollingIcMean = eval.RollingIcMean,
                 InformationRatio = eval.RollingIcStd > 0 ? eval.RollingIcMean / eval.RollingIcStd : 0,
                 Observations = eval.Observations,
+                IcTStatistic = eval.IcTStatistic,
             });
-            ctx.LogLine($"[{Name}] {proto.Name}: IC {eval.InformationCoefficient:F4} ({eval.Observations} oss.)");
+            ctx.LogLine($"[{Name}] {proto.Name}: IC {eval.InformationCoefficient:F4} (t {eval.IcTStatistic:F2}, {eval.Observations} oss.)");
         }
 
+        // Selezione per |IC| ≥ soglia e (opzionale) significatività Newey-West |t| ≥ soglia.
         var selected = results
-            .Where(r => Math.Abs(r.InformationCoefficient) >= minAbsIc)
+            .Where(r => Math.Abs(r.InformationCoefficient) >= minAbsIc && (minIcTStat <= 0d || Math.Abs(r.IcTStatistic) >= minIcTStat))
             .OrderByDescending(r => Math.Abs(r.InformationCoefficient))
             .Take(topK)
             .ToList();

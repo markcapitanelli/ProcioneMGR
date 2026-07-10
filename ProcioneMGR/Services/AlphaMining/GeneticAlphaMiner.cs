@@ -17,6 +17,23 @@ public sealed class MiningConfig
     /// <summary>Penalità di fitness per nodo: scoraggia formule complesse (anti-overfitting).</summary>
     public double ComplexityPenalty { get; set; } = 0.002;
 
+    /// <summary>
+    /// Numero di fold temporali per la fitness CROSS-VALIDATA: l'IC viene misurato su sotto-periodi
+    /// contigui e la fitness premia consistenza (|IC medio| − penalità·dev.std), non un |IC| di
+    /// finestra unica gonfiabile dall'overfitting. 1 = disattivo (fitness = |IC| sull'intera finestra).
+    /// </summary>
+    public int CvFolds { get; set; } = 4;
+
+    /// <summary>Penalità sulla dev.std dell'IC fra i fold: scoraggia i fattori instabili nel tempo.</summary>
+    public double CvStabilityPenalty { get; set; } = 0.5;
+
+    /// <summary>
+    /// Gate PBO BLOCCANTE: se la Probability of Backtest Overfitting del pannello delle formule minate
+    /// ≥ questa soglia, il batch è considerato inaffidabile e <see cref="GeneticAlphaMiner.Mine"/>
+    /// restituisce vuoto. 1.0 = disattivo (nessun blocco).
+    /// </summary>
+    public double MaxSelectionPbo { get; set; } = 1.0;
+
     /// <summary>Finestre ammesse per gli operatori temporali.</summary>
     public int[] Windows { get; set; } = [2, 5, 10, 20, 30, 60];
 
@@ -129,6 +146,13 @@ public sealed class GeneticAlphaMiner
             });
             if (result.Count >= config.TopN) break;
         }
+
+        // Gate PBO bloccante (opt-in): se la SELEZIONE nel suo insieme è overfit, non emettere nulla.
+        if (config.MaxSelectionPbo < 1.0 && result.Count >= 2)
+        {
+            var pbo = ComputeSelectionPbo(candles, result.Select(r => r.Expression).ToList(), config.ForwardHorizon);
+            if (pbo is not null && pbo.ProbabilityOfBacktestOverfitting >= config.MaxSelectionPbo) return [];
+        }
         return result;
     }
 
@@ -195,7 +219,12 @@ public sealed class GeneticAlphaMiner
         var result = new List<Scored>(population.Count);
         foreach (var tree in population)
         {
-            var ic = IcOf(tree, candles, forward, config.MinObservations, out var obs);
+            // Valuta l'albero UNA volta (gli operatori temporali usano l'intera storia, niente warm-up
+            // spezzato); da qui l'IC di finestra intera (per il report) e l'IC cross-validato (per la fitness).
+            var values = tree.Evaluate(candles);
+            var span = Math.Min(values.Length, forward.Length);
+            var ic = SpearmanOverRange(values, forward, 0, span, config.MinObservations, out var obs);
+
             double fitness;
             if (obs < config.MinObservations || double.IsNaN(ic))
             {
@@ -203,11 +232,64 @@ public sealed class GeneticAlphaMiner
             }
             else
             {
-                fitness = Math.Abs(ic) - config.ComplexityPenalty * tree.Size();
+                // Fitness = |IC medio fra i fold| − penalità·dev.std (consistenza temporale) − complessità;
+                // fallback al |IC| di finestra intera se i dati sono troppo pochi per i fold.
+                var (cvMean, cvStd, foldsUsed) = CrossValidatedIc(values, forward, config, span);
+                var signal = foldsUsed >= 2 ? Math.Abs(cvMean) - config.CvStabilityPenalty * cvStd : Math.Abs(ic);
+                fitness = signal - config.ComplexityPenalty * tree.Size();
             }
             result.Add(new Scored { Tree = tree, Ic = ic, Fitness = fitness, Observations = obs });
         }
         return result;
+    }
+
+    /// <summary>
+    /// IC (Spearman) medio e dev.std su <see cref="MiningConfig.CvFolds"/> fold temporali contigui,
+    /// riusando i valori già calcolati del fattore. Un fattore che predice solo in un sotto-periodo ha
+    /// dev.std alta ⇒ fitness più bassa. Ritorna FoldsUsed &lt; 2 quando la serie è troppo corta per la
+    /// CV (il chiamante ripiega sull'IC di finestra intera).
+    /// </summary>
+    internal static (double Mean, double Std, int FoldsUsed) CrossValidatedIc(decimal?[] values, decimal?[] forward, MiningConfig config, int span)
+    {
+        var folds = Math.Max(1, config.CvFolds);
+        if (folds < 2) return (0d, 0d, 1);
+
+        var minPerFold = Math.Max(3, config.MinObservations / folds);
+        var foldSize = span / folds;
+        if (foldSize < minPerFold) return (0d, 0d, 1);
+
+        var ics = new List<double>(folds);
+        for (var k = 0; k < folds; k++)
+        {
+            var lo = k * foldSize;
+            var hi = k == folds - 1 ? span : lo + foldSize;
+            var ic = SpearmanOverRange(values, forward, lo, hi, minPerFold, out _);
+            if (!double.IsNaN(ic)) ics.Add(ic);
+        }
+        if (ics.Count < 2) return (0d, 0d, ics.Count);
+
+        var mean = ics.Average();
+        var std = Math.Sqrt(ics.Sum(v => (v - mean) * (v - mean)) / ics.Count);
+        return (mean, std, ics.Count);
+    }
+
+    /// <summary>Spearman su [lo,hi) delle coppie (valore, forward) valide; NaN se meno di max(3,minObs) coppie, 0 se il fattore è costante.</summary>
+    private static double SpearmanOverRange(decimal?[] values, decimal?[] forward, int lo, int hi, int minObs, out int obs)
+    {
+        var fx = new List<double>();
+        var fy = new List<double>();
+        for (var i = lo; i < hi; i++)
+        {
+            if (values[i].HasValue && forward[i].HasValue)
+            {
+                fx.Add((double)values[i]!.Value);
+                fy.Add((double)forward[i]!.Value);
+            }
+        }
+        obs = fx.Count;
+        if (obs < Math.Max(3, minObs)) return double.NaN;
+        if (fx.Distinct().Count() < 2) return 0d; // fattore costante: Spearman non definito → 0
+        return Correlation.Spearman(fx, fy);
     }
 
     private static double IcOf(AlphaNode node, IReadOnlyList<OhlcvData> candles, decimal?[] forward, int minObs, out int obs)

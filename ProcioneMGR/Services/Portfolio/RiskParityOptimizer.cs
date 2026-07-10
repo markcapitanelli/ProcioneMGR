@@ -1,14 +1,14 @@
 namespace ProcioneMGR.Services.Portfolio;
 
 /// <summary>
-/// Risk Parity (cap. 5) — implementazione <b>naive</b> a volatilità inversa: w_i ∝ 1/σ_i.
+/// Risk Parity (cap. 5). Due modalità (<see cref="PortfolioOptimizationConfig.RiskParityMethod"/>):
 ///
-/// DEVIAZIONE FLAGGATA: la vera "equal risk contribution" (ERC) — dove ogni asset contribuisce
-/// IDENTICAMENTE alla varianza totale del portafoglio, tenendo conto delle correlazioni — non ha
-/// soluzione analitica e richiede un solutore non lineare iterativo. L'inverse-volatility è
-/// l'approssimazione standard ampiamente usata in pratica (equivale all'ERC esatto quando le
-/// correlazioni fra asset sono uniformi); qui si è scelta la versione robusta e verificabile
-/// piuttosto che un solutore numerico "fatto a mano" e potenzialmente instabile.
+///  - <b>EqualRiskContribution</b> (default): ERC ESATTO — ogni asset contribuisce IDENTICAMENTE alla
+///    varianza del portafoglio, tenendo conto delle correlazioni. Risolto con l'algoritmo di coordinate
+///    cyclical (Griveau-Billion et al. 2013) in <see cref="PortfolioMath.EqualRiskContribution"/>, che è
+///    robusto e convergente; la covarianza è stimata con Ledoit-Wolf per correlazioni affidabili.
+///  - <b>InverseVolatility</b>: w_i ∝ 1/σ_i, l'approssimazione classica (= ERC esatto solo quando le
+///    correlazioni fra asset sono uniformi). Mantenuta per confronto/retro-compatibilità.
 /// </summary>
 public sealed class RiskParityOptimizer : IPortfolioOptimizer
 {
@@ -18,9 +18,19 @@ public sealed class RiskParityOptimizer : IPortfolioOptimizer
     {
         config ??= new PortfolioOptimizationConfig();
         var (symbols, returns) = PortfolioMath.BuildMatrix(returnsBySymbol);
-        var stdDev = PortfolioMath.StdDev(returns);
 
-        var scores = stdDev.Select(sigma => sigma > 1e-12 ? 1.0 / sigma : 0.0).ToList();
+        List<double> scores;
+        if (config.RiskParityMethod == RiskParityMethod.EqualRiskContribution)
+        {
+            var cov = PortfolioMath.LedoitWolf(returns).Covariance;
+            scores = PortfolioMath.EqualRiskContribution(cov).ToList();
+        }
+        else
+        {
+            var stdDev = PortfolioMath.StdDev(returns);
+            scores = stdDev.Select(sigma => sigma > 1e-12 ? 1.0 / sigma : 0.0).ToList();
+        }
+
         var weights = PortfolioMath.ToConstrainedWeights(symbols, scores, config.MinWeight, config.MaxWeight);
         return new PortfolioAllocation { Weights = weights };
     }

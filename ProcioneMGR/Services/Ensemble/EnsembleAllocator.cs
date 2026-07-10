@@ -19,6 +19,49 @@ public static class EnsembleAllocator
     private const decimal Eps = 0.0000001m;
 
     /// <summary>
+    /// Riduce il rumore delle stime di Sharpe tirandole verso la media trasversale (equipeso)
+    /// PRIMA dell'allocazione. Le stime di Sharpe hanno varianza alta; su dati OOS l'equipeso
+    /// batte spesso il puro Sharpe-weighting, quindi conviene "credere solo in parte" agli scarti
+    /// dalla media. Da usare a monte di <see cref="ComputeWeights"/>.
+    ///
+    ///  shrinkage = 0  → nessuna modifica (puro Sharpe-weighting, comportamento storico).
+    ///  shrinkage = 1  → tutti gli Sharpe uguali alla media → allocazione equipesata.
+    ///  intermedi      → interpolazione lineare: s' = mean + (1 − shrinkage)·(s − mean).
+    ///
+    /// Se <paramref name="observationCounts"/> è fornito, una gamba con meno di
+    /// <paramref name="minObservations"/> osservazioni ha uno Sharpe "non affidabile" e viene
+    /// portata interamente alla media (equipeso), a prescindere da <paramref name="shrinkage"/>.
+    /// </summary>
+    public static decimal[] ShrinkSharpes(
+        IReadOnlyList<decimal> sharpes,
+        decimal shrinkage,
+        IReadOnlyList<int>? observationCounts = null,
+        int minObservations = 0)
+    {
+        var n = sharpes.Count;
+        var result = new decimal[n];
+        if (n == 0)
+        {
+            return result;
+        }
+
+        shrinkage = Math.Clamp(shrinkage, 0m, 1m);
+        var keep = 1m - shrinkage;
+        var mean = sharpes.Average();
+
+        for (var i = 0; i < n; i++)
+        {
+            var untrusted = observationCounts is not null
+                && i < observationCounts.Count
+                && observationCounts[i] < minObservations;
+            result[i] = untrusted
+                ? mean                                   // troppo pochi dati: non fidarsi, equipeso
+                : mean + keep * (sharpes[i] - mean);     // shrinkage verso la media
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Restituisce i pesi (frazioni, somma 1) allineati per indice agli Sharpe in input.
     /// </summary>
     public static decimal[] ComputeWeights(IReadOnlyList<decimal> sharpes, decimal minFraction, decimal maxFraction)

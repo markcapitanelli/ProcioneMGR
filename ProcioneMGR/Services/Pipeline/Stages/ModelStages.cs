@@ -306,6 +306,7 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         new("positionSizePercent", "Size posizione (%)", "10", ""),
         new("minDeflatedSharpe", "Deflated Sharpe minimo", "0.95", "gate anti-overfitting (Bailey-López de Prado): sotto questa soglia il candidato è scartato"),
         new("maxPbo", "PBO massimo di pannello", "0.5", "se la Probability of Backtest Overfitting del batch supera questa soglia l'intero ensemble è bloccato"),
+        new("trialCorrelationThreshold", "Soglia ρ cluster tentativi", "0.5", "DSR con N effettivo: candidati con correlazione dei rendimenti holdout ≥ questa soglia contano come un solo test (1 = disattivo, usa N nominale)"),
     ];
 
     public string? ValidateInput(PipelineContext ctx)
@@ -317,6 +318,7 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         var minTrades = config.GetInt("minHoldoutTrades", 10);
         var minDeflatedSharpe = (double)config.GetDecimal("minDeflatedSharpe", 0.95m);
         var maxPbo = (double)config.GetDecimal("maxPbo", 0.5m);
+        var trialCorrThreshold = (double)config.GetDecimal("trialCorrelationThreshold", 0.5m);
         var costs = PipelineCosts.FromConfig(config);
         var sizePercent = config.GetDecimal("positionSizePercent", 10m);
 
@@ -378,7 +380,7 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
             ctx.LogLine($"[{Name}] {validated.Key}: holdout Sharpe {validated.HoldoutSharpe:F2}, {validated.HoldoutTrades} trade → {(validated.Survived ? "SOPRAVVISSUTO (pre-gate)" : validated.RejectReason)}");
         }
 
-        ApplyOverfittingGate(ctx, holdoutReturns, minDeflatedSharpe, maxPbo);
+        ApplyOverfittingGate(ctx, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrThreshold);
         await PersistMlDeflatedSharpeAsync(ctx, ct);
     }
 
@@ -419,9 +421,9 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     ///    complessivamente overfit (PBO ≥ <paramref name="maxPbo"/>), l'intero batch è bloccato.
     /// I candidati già scartati da Sharpe/trade non vengono ri-valutati.
     /// </summary>
-    private void ApplyOverfittingGate(PipelineContext ctx, List<double[]> holdoutReturns, double minDeflatedSharpe, double maxPbo)
+    private void ApplyOverfittingGate(PipelineContext ctx, List<double[]> holdoutReturns, double minDeflatedSharpe, double maxPbo, double trialCorrelationThreshold)
     {
-        var result = OverfittingGate.Apply(ctx.Validated, holdoutReturns, minDeflatedSharpe, maxPbo, m => ctx.LogLine($"[{Name}] {m}"));
+        var result = OverfittingGate.Apply(ctx.Validated, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrelationThreshold, m => ctx.LogLine($"[{Name}] {m}"));
         ctx.LogLine($"[{Name}] Gate DSR/PBO: {result.Survivors}/{ctx.Validated.Count} sopravvissuti"
                   + (result.PanelPbo is double pp ? $"; PBO pannello {pp:P0}" : "; PBO n/d")
                   + $" (soglie DSR>{minDeflatedSharpe:F2}, PBO<{maxPbo:P0}).");
@@ -677,12 +679,16 @@ public static class OverfittingGate
     /// <param name="holdoutReturns">Rendimenti periodici holdout, allineati per indice a <paramref name="validated"/>.</param>
     /// <param name="minDeflatedSharpe">Sotto (o pari a) questa soglia il candidato è scartato (default 0.95).</param>
     /// <param name="maxPbo">Se il PBO di pannello ≥ questa soglia l'intero batch è bloccato (default 0.5).</param>
+    /// <param name="trialCorrelationThreshold">Soglia ρ per il conteggio EFFETTIVO dei tentativi nel DSR:
+    /// candidati con correlazione dei rendimenti holdout ≥ soglia contano come un solo test (R1.4). 1 =
+    /// disattivo (usa N nominale). Default 0.5.</param>
     /// <param name="log">Callback opzionale di logging (una riga per evento).</param>
     public static Result Apply(
         IReadOnlyList<ValidatedCandidate> validated,
         IReadOnlyList<double[]> holdoutReturns,
         double minDeflatedSharpe,
         double maxPbo,
+        double trialCorrelationThreshold = 0.5,
         Action<string>? log = null)
     {
         ArgumentNullException.ThrowIfNull(validated);
@@ -690,7 +696,18 @@ public static class OverfittingGate
 
         // Sharpe OOS di selezione annualizzati di TUTTI i candidati = distribuzione dei tentativi.
         var trialSharpes = validated.Select(v => v.SelectionSharpe).ToList();
-        var trials = validated.Count;
+
+        // N EFFETTIVO (R1.4): la soglia SR* del DSR assume tentativi INDIPENDENTI. Se i candidati sono
+        // varianti correlate (griglia fitta, simboli gemelli), collassa i correlati per non sovracontare
+        // il test multiplo (≤ N nominale). Riusa il clustering gerarchico sui rendimenti holdout.
+        var nominalTrials = validated.Count;
+        var trials = Math.Min(
+            EffectiveTrials.Count(holdoutReturns.Select(r => (IReadOnlyList<double>)r).ToList(), trialCorrelationThreshold),
+            nominalTrials);
+        if (trials < nominalTrials)
+        {
+            log?.Invoke($"N tentativi DSR: {nominalTrials} nominali → {trials} effettivi (cluster ρ≥{trialCorrelationThreshold:F2}).");
+        }
 
         // PBO di pannello sui rendimenti holdout (serie ≥ 10 punti per il CSCV a 10 partizioni).
         double? panelPbo = null;

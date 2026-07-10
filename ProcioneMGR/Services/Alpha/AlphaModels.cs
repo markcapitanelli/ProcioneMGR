@@ -65,6 +65,22 @@ public sealed class FactorEvaluationResult
     public decimal TopMinusBottomSpread { get; set; }
 
     public List<IcByHorizon> IcDecay { get; set; } = new();
+
+    /// <summary>
+    /// t-statistic dell'IC con errore standard <b>Newey-West (HAC)</b>: robusto all'autocorrelazione
+    /// indotta dai forward-return sovrapposti quando l'orizzonte &gt; 1. È la significatività DIFENDIBILE
+    /// dell'IC (|t| ≳ 2 ≈ significativo). Vedi <see cref="NeweyWestLags"/>.
+    /// </summary>
+    public double IcTStatistic { get; set; }
+
+    /// <summary>
+    /// t-statistic "ingenua" dell'IC (t = IC·√((N−2)/(1−IC²)), assume osservazioni indipendenti).
+    /// Con horizon&gt;1 sovrastima la significatività: è qui solo per confronto con <see cref="IcTStatistic"/>.
+    /// </summary>
+    public double IcTStatisticNaive { get; set; }
+
+    /// <summary>Numero di lag usati per la correzione Newey-West (= horizon−1, la lunghezza dell'overlap).</summary>
+    public int NeweyWestLags { get; set; }
 }
 
 /// <summary>Statistica di correlazione di rango/lineare (helper condiviso).</summary>
@@ -99,6 +115,73 @@ public static class Correlation
         var rx = Ranks(x, n);
         var ry = Ranks(y, n);
         return Pearson(rx, ry);
+    }
+
+    /// <summary>
+    /// t-statistic dell'IC (Spearman) con errore standard <b>Newey-West (HAC)</b>, robusto
+    /// all'autocorrelazione dei forward-return sovrapposti (horizon &gt; 1).
+    ///
+    /// Metodo: l'IC di Spearman è la media del prodotto dei ranghi standardizzati a[i]=zx[i]·zy[i]
+    /// (media(a) = corr(ranghi)). La varianza HAC della media usa il kernel di Bartlett con
+    /// <paramref name="lags"/> ritardi: S = γ0 + 2·Σ_l (1 − l/(L+1))·γl ; SE = √(S/n) ; t = media(a)/SE.
+    /// Con overlap positivo γl &gt; 0 → SE più grande → |t| più piccolo (e più onesto) della versione ingenua.
+    /// </summary>
+    public static double SpearmanTStatNeweyWest(IReadOnlyList<double> x, IReadOnlyList<double> y, int lags)
+    {
+        var n = Math.Min(x.Count, y.Count);
+        if (n < 3) return 0d;
+
+        var zx = Standardize(Ranks(x, n), n);
+        var zy = Standardize(Ranks(y, n), n);
+        if (zx is null || zy is null) return 0d; // serie degenere (varianza nulla)
+
+        var a = new double[n];
+        double meanA = 0d;
+        for (var i = 0; i < n; i++) { a[i] = zx[i] * zy[i]; meanA += a[i]; }
+        meanA /= n;
+
+        var l = Math.Max(0, Math.Min(lags, n - 1));
+        double g0 = 0d;
+        for (var i = 0; i < n; i++) { var d = a[i] - meanA; g0 += d * d; }
+        g0 /= n;
+
+        var s = g0;
+        for (var lag = 1; lag <= l; lag++)
+        {
+            double gl = 0d;
+            for (var i = lag; i < n; i++) gl += (a[i] - meanA) * (a[i - lag] - meanA);
+            gl /= n;
+            var w = 1.0 - (double)lag / (l + 1);
+            s += 2.0 * w * gl;
+        }
+
+        if (s <= 0d) return 0d;
+        var seMean = Math.Sqrt(s / n);
+        return seMean > 0d ? meanA / seMean : 0d;
+    }
+
+    /// <summary>t-statistic "ingenua" dell'IC assumendo osservazioni indipendenti: t = IC·√((n−2)/(1−IC²)).</summary>
+    public static double TStatIndependent(double ic, int n)
+    {
+        if (n < 3) return 0d;
+        var denom = 1.0 - ic * ic;
+        if (denom <= 1e-12) return 0d;
+        return ic * Math.Sqrt((n - 2) / denom);
+    }
+
+    /// <summary>Standardizza (media 0, dev.std di popolazione 1). Restituisce null se la varianza è nulla.</summary>
+    private static double[]? Standardize(double[] v, int n)
+    {
+        double mean = 0d;
+        for (var i = 0; i < n; i++) mean += v[i];
+        mean /= n;
+        double sumSq = 0d;
+        for (var i = 0; i < n; i++) { var d = v[i] - mean; sumSq += d * d; }
+        var std = Math.Sqrt(sumSq / n);
+        if (std <= 1e-12) return null;
+        var z = new double[n];
+        for (var i = 0; i < n; i++) z[i] = (v[i] - mean) / std;
+        return z;
     }
 
     /// <summary>Ranghi 1..n con rango medio per i valori a pari merito (fractional ranking).</summary>

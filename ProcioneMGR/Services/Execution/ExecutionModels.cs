@@ -22,6 +22,17 @@ public sealed record ExecutionIntent(
 /// <summary>Un ordine figlio: quantità da eseguire nella candela fine di indice <paramref name="CandleIndex"/>.</summary>
 public sealed record ExecutionSlice(int CandleIndex, decimal Quantity);
 
+/// <summary>Forma del modello di impatto di mercato in funzione della partecipazione al volume.</summary>
+public enum MarketImpactModel
+{
+    /// <summary>Impatto ∝ partecipazione. Semplice ma sovrastima le grandi partecipazioni.</summary>
+    Linear,
+
+    /// <summary>Impatto ∝ √(partecipazione), la legge "square-root" empirica (Almgren et al.): concava,
+    /// il costo per unità cresce col volume ma decrescentemente. È l'evidenza empirica standard.</summary>
+    SquareRoot,
+}
+
 /// <summary>Piano di esecuzione: la sequenza di ordini figli prodotta da un algoritmo.</summary>
 public sealed class ExecutionPlan
 {
@@ -35,8 +46,9 @@ public sealed class ExecutionPlan
 /// <summary>
 /// Parametri di esecuzione (algoritmi + modello di fill del simulatore). I valori di default sono
 /// illustrativi: l'impatto di mercato reale va calibrato/validato in Paper (rif. ROADMAP-QLIB §1.2),
-/// non assunto. Il modello di impatto è lineare nella "partecipazione" (quota del volume di candela
-/// assorbita dall'ordine figlio), premiando la distribuzione dell'ordine nel tempo.
+/// non assunto. Il modello di impatto (default √partecipazione, cfr. <see cref="MarketImpactModel"/>)
+/// dipende dalla "partecipazione" (quota del volume di candela assorbita dall'ordine figlio),
+/// premiando la distribuzione dell'ordine nel tempo.
 /// </summary>
 public sealed class ExecutionParameters
 {
@@ -48,6 +60,9 @@ public sealed class ExecutionParameters
 
     /// <summary>Impatto di mercato per unità di partecipazione (quota del volume di candela).</summary>
     public decimal ImpactCoefficient { get; set; } = 0.1m;
+
+    /// <summary>Forma del modello di impatto (default √partecipazione, la legge empirica di Almgren).</summary>
+    public MarketImpactModel ImpactModel { get; set; } = MarketImpactModel.SquareRoot;
 
     /// <summary>Tetto all'impatto di una singola fetta (evita valori assurdi su candele a volume nullo).</summary>
     public decimal MaxImpactPct { get; set; } = 0.10m;

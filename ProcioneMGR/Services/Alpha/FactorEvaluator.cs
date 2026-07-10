@@ -73,6 +73,12 @@ public sealed class FactorEvaluator : IFactorEvaluator
         result.InformationCoefficient = Correlation.Spearman(fx, fy);
         result.PearsonCorrelation = Correlation.Pearson(fx, fy);
 
+        // Significatività dell'IC: t-stat Newey-West con lag = overlap dei forward-return (horizon-1).
+        // Con horizon>1 le osservazioni sono autocorrelate → la t-stat ingenua gonfia la significatività.
+        result.NeweyWestLags = Math.Max(0, config.ForwardHorizon - 1);
+        result.IcTStatistic = Correlation.SpearmanTStatNeweyWest(fx, fy, result.NeweyWestLags);
+        result.IcTStatisticNaive = Correlation.TStatIndependent(result.InformationCoefficient, fx.Count);
+
         ComputeRollingIc(fx, fy, config.RollingIcWindow, result);
         result.QuantileReturns = ComputeQuantileReturns(fx, fy, config.Quantiles);
         if (result.QuantileReturns.Count >= 2)

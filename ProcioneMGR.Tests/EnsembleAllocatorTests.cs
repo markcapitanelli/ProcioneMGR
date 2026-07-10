@@ -56,4 +56,46 @@ public class EnsembleAllocatorTests
         Assert.Equal(1.0, (double)w.Sum(), precision: 6);
         Assert.True(w[2] >= 0.10m - 0.0001m, $"w2={w[2]}");
     }
+
+    // ------------------------------------------------------------------ shrinkage verso l'equipeso
+
+    [Fact]
+    public void Shrinkage_Zero_LeavesSharpesUnchanged()
+    {
+        var s = EnsembleAllocator.ShrinkSharpes([2.0m, 1.0m, 0.5m], shrinkage: 0m);
+        Assert.Equal(new[] { 2.0m, 1.0m, 0.5m }, s);
+    }
+
+    [Fact]
+    public void Shrinkage_One_CollapsesToMean_GivesEqualWeights()
+    {
+        var s = EnsembleAllocator.ShrinkSharpes([2.0m, 1.0m, 0.5m], shrinkage: 1m);
+        Assert.All(s, x => Assert.Equal((double)(3.5m / 3m), (double)x, precision: 6));
+
+        var w = EnsembleAllocator.ComputeWeights(s, 0.01m, 0.99m);
+        Assert.All(w, x => Assert.Equal(1.0 / 3, (double)x, precision: 4));
+    }
+
+    [Fact]
+    public void Shrinkage_MovesWeightsTowardEqual()
+    {
+        // Con shrinkage la gamba migliore prende MENO capitale rispetto al puro Sharpe-weighting.
+        var raw = EnsembleAllocator.ComputeWeights([2.0m, 1.0m, 0.5m], 0.01m, 0.99m);
+        var shrunk = EnsembleAllocator.ComputeWeights(
+            EnsembleAllocator.ShrinkSharpes([2.0m, 1.0m, 0.5m], shrinkage: 0.5m), 0.01m, 0.99m);
+
+        Assert.True(shrunk[0] < raw[0], $"shrunk top {shrunk[0]} should be < raw top {raw[0]}");
+        Assert.True(shrunk[0] > shrunk[1] && shrunk[1] > shrunk[2]); // ordine preservato
+    }
+
+    [Fact]
+    public void Shrinkage_MinObservations_EqualizesUndertrustedLeg()
+    {
+        // La seconda gamba ha troppi pochi dati → portata alla media (1.5); la prima, affidabile e
+        // con shrinkage 0, resta al suo Sharpe (2.0).
+        var s = EnsembleAllocator.ShrinkSharpes(
+            [2.0m, 1.0m], shrinkage: 0m, observationCounts: [100, 5], minObservations: 20);
+        Assert.Equal((double)2.0m, (double)s[0], precision: 6);
+        Assert.Equal((double)1.5m, (double)s[1], precision: 6);
+    }
 }
