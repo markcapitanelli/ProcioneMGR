@@ -45,6 +45,13 @@ public sealed class PortfolioOptimizationConfig
 
     /// <summary>Metodo di Risk Parity (default ERC esatto).</summary>
     public RiskParityMethod RiskParityMethod { get; set; } = RiskParityMethod.EqualRiskContribution;
+
+    /// <summary>
+    /// Linkage per il dendrogramma dell'HRP. Default <see cref="ML.LinkageMethod.Average"/> (UPGMA):
+    /// evita il "chaining" del single-linkage dell'articolo originale (cluster allungati che uniscono
+    /// asset dissimili via un ponte di vicini), più stabile su una metrica di distanza di correlazione.
+    /// </summary>
+    public ML.LinkageMethod HrpLinkage { get; set; } = ML.LinkageMethod.Average;
 }
 
 public sealed class PortfolioAllocation

@@ -11,9 +11,10 @@ namespace ProcioneMGR.Services.Portfolio;
 /// correlazione, riusando <see cref="IHierarchicalClustering"/> del cap. 13), poi alloca il
 /// peso ricorsivamente per bisezione, dando più peso ai (sotto-)cluster meno rischiosi.
 ///
-/// Pipeline: correlazione -> distanza di Mantegna -> dendrogramma (linkage singolo, come
-/// nell'articolo originale) -> ordine quasi-diagonale (l'ordine delle foglie nel dendrogramma,
-/// che riflette naturalmente la struttura di correlazione) -> bisezione ricorsiva.
+/// Pipeline: correlazione -> distanza di Mantegna -> dendrogramma (linkage configurabile, default
+/// Average/UPGMA per evitare il chaining del single-linkage) -> ordine quasi-diagonale (l'ordine
+/// delle foglie nel dendrogramma, che riflette naturalmente la struttura di correlazione) ->
+/// bisezione ricorsiva.
 /// </summary>
 public sealed class HierarchicalRiskParityOptimizer(IHierarchicalClustering clustering) : IPortfolioOptimizer
 {
@@ -27,7 +28,7 @@ public sealed class HierarchicalRiskParityOptimizer(IHierarchicalClustering clus
         var correlation = PortfolioMath.CorrelationFromCovariance(covariance);
 
         var distance = CorrelationDistance.FromCorrelationMatrix(correlation);
-        var root = clustering.BuildDendrogram(distance, symbols, LinkageMethod.Single);
+        var root = clustering.BuildDendrogram(distance, symbols, config.HrpLinkage);
 
         // L'ordine delle foglie nel dendrogramma (quasi-diagonale): asset simili sono vicini.
         var sortedIndices = root.LeafIndices.ToList();
