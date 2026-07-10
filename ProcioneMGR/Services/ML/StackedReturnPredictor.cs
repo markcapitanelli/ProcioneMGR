@@ -15,7 +15,7 @@ public enum StackingMode
     /// <summary>Pesi ∝ 1/RMSE su un holdout temporale (i modelli migliori pesano di più).</summary>
     InverseRmse,
 
-    /// <summary>Meta-learner ridge su predizioni OUT-OF-FOLD (purged CV): lo stacking "corretto".</summary>
+    /// <summary>Meta-learner ridge NON-NEGATIVO (λ scelto per CV) su predizioni OUT-OF-FOLD (purged CV): lo stacking "corretto".</summary>
     StackedRidge,
 }
 
@@ -174,72 +174,123 @@ public sealed class StackedReturnPredictor : IReturnPredictor
             }
         }
 
-        // Ridge (normali equazioni con L2 sui pesi, intercetta non regolarizzata) su righe coperte.
+        // Meta-learner su righe coperte: pesi NON-NEGATIVI + λ scelto per cross-validation.
         var used = Enumerable.Range(0, n).Where(i => covered[i]).ToList();
         if (used.Count <= k)
         {
             for (var i = 0; i < _weights.Length; i++) _weights[i] = 1d / _weights.Length;
             return;
         }
-        SolveRidge(oof, rows, used, k);
+
+        // Matrice delle predizioni base OOF + target sulle righe coperte.
+        var basePreds = new double[used.Count][];
+        var targets = new double[used.Count];
+        for (var p = 0; p < used.Count; p++)
+        {
+            var idx = used[p];
+            basePreds[p] = new double[k];
+            for (var b = 0; b < k; b++) basePreds[p][b] = oof[idx, b];
+            targets[p] = rows[idx].Label;
+        }
+
+        // λ per CV interna sul livello meta (le OOF sono già out-of-fold rispetto ai modelli base):
+        // evita di fissare arbitrariamente la regolarizzazione (con λ fisso ≈ peso poco robusto).
+        var lambda = SelectLambdaByCv(basePreds, targets, k, _ridgeLambda);
+        (_weights, _intercept) = FitNonNegativeRidge(basePreds, targets, lambda);
     }
 
-    /// <summary>Risolve (XᵀX + λR)β = Xᵀy con X = [1 | predizioni base], R azzera la riga dell'intercetta.</summary>
-    private void SolveRidge(double[,] oof, List<FeatureRow> rows, List<int> used, int k)
+    /// <summary>
+    /// Ridge NON-NEGATIVO (pesi dei base ≥ 0, intercetta libera) via coordinate descent sulle normali
+    /// equazioni: minimizza ||y − Xβ||² + λ·Σ_{j≥1} β_j² con X = [1 | predizioni base]. I pesi negativi
+    /// nello stacking estrapolano male fuori campione; vincolarli a ≥0 (combinazione conica dei base) è
+    /// la scelta robusta standard. Puro e deterministico (esposto per test).
+    /// </summary>
+    /// <param name="basePredictions">Per ogni riga, il vettore delle k predizioni dei modelli base.</param>
+    /// <param name="targets">Target allineati per indice.</param>
+    public static (double[] Weights, double Intercept) FitNonNegativeRidge(double[][] basePredictions, double[] targets, double lambda)
     {
-        var m = k + 1; // +1 per l'intercetta (colonna di 1)
+        ArgumentNullException.ThrowIfNull(basePredictions);
+        ArgumentNullException.ThrowIfNull(targets);
+        var k = basePredictions.Length > 0 ? basePredictions[0].Length : 0;
+        var m = k + 1;
+
         var ata = new double[m, m];
         var aty = new double[m];
-
-        foreach (var idx in used)
+        for (var i = 0; i < targets.Length; i++)
         {
             var x = new double[m];
             x[0] = 1d;
-            for (var b = 0; b < k; b++) x[b + 1] = oof[idx, b];
-            var y = rows[idx].Label;
-
+            for (var b = 0; b < k; b++) x[b + 1] = basePredictions[i][b];
+            var y = targets[i];
             for (var r = 0; r < m; r++)
             {
                 aty[r] += x[r] * y;
                 for (var c = 0; c < m; c++) ata[r, c] += x[r] * x[c];
             }
         }
-        for (var d = 1; d < m; d++) ata[d, d] += _ridgeLambda; // regolarizza solo i pesi, non l'intercetta
 
-        var beta = GaussSolve(ata, aty);
-        _intercept = beta[0];
-        for (var b = 0; b < k; b++) _weights[b] = beta[b + 1];
+        var beta = new double[m];
+        for (var iter = 0; iter < 500; iter++)
+        {
+            var maxDelta = 0d;
+            for (var j = 0; j < m; j++)
+            {
+                var num = aty[j];
+                for (var c = 0; c < m; c++) if (c != j) num -= ata[j, c] * beta[c];
+                var denom = ata[j, j] + (j >= 1 ? lambda : 0d); // λ solo sui pesi, non sull'intercetta
+                if (denom < 1e-15) continue;
+                var bj = num / denom;
+                if (j >= 1 && bj < 0d) bj = 0d; // proiezione di non-negatività
+                maxDelta = Math.Max(maxDelta, Math.Abs(bj - beta[j]));
+                beta[j] = bj;
+            }
+            if (maxDelta < 1e-10) break;
+        }
+
+        var w = new double[k];
+        for (var b = 0; b < k; b++) w[b] = beta[b + 1];
+        return (w, beta[0]);
     }
 
-    /// <summary>Eliminazione di Gauss con pivot parziale su un sistema piccolo ((K+1)×(K+1)).</summary>
-    private static double[] GaussSolve(double[,] a, double[] b)
+    /// <summary>K-fold sul livello meta per scegliere λ dalla griglia che minimizza l'MSE di validazione.</summary>
+    internal static double SelectLambdaByCv(double[][] basePredictions, double[] targets, int k, double fallbackLambda)
     {
-        var n = b.Length;
-        var m = new double[n, n + 1];
-        for (var i = 0; i < n; i++)
-        {
-            for (var j = 0; j < n; j++) m[i, j] = a[i, j];
-            m[i, n] = b[i];
-        }
-        for (var col = 0; col < n; col++)
-        {
-            var pivot = col;
-            for (var r = col + 1; r < n; r++) if (Math.Abs(m[r, col]) > Math.Abs(m[pivot, col])) pivot = r;
-            if (Math.Abs(m[pivot, col]) < 1e-15) continue; // colonna degenere: lascia 0
-            if (pivot != col) for (var j = 0; j <= n; j++) (m[col, j], m[pivot, j]) = (m[pivot, j], m[col, j]);
+        double[] lambdas = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0];
+        const int folds = 5;
 
-            var d = m[col, col];
-            for (var j = col; j <= n; j++) m[col, j] /= d;
-            for (var r = 0; r < n; r++)
+        var bestLambda = fallbackLambda;
+        var bestErr = double.PositiveInfinity;
+        foreach (var lam in lambdas)
+        {
+            double err = 0d;
+            var count = 0;
+            for (var f = 0; f < folds; f++)
             {
-                if (r == col) continue;
-                var f = m[r, col];
-                for (var j = col; j <= n; j++) m[r, j] -= f * m[col, j];
+                var trainX = new List<double[]>();
+                var trainY = new List<double>();
+                var valIdx = new List<int>();
+                for (var p = 0; p < targets.Length; p++)
+                {
+                    if (p % folds == f) valIdx.Add(p);
+                    else { trainX.Add(basePredictions[p]); trainY.Add(targets[p]); }
+                }
+                if (trainY.Count <= k + 1 || valIdx.Count == 0) continue;
+
+                var (w, b0) = FitNonNegativeRidge([.. trainX], [.. trainY], lam);
+                foreach (var p in valIdx)
+                {
+                    var pred = b0;
+                    for (var b = 0; b < k; b++) pred += w[b] * basePredictions[p][b];
+                    var e = pred - targets[p];
+                    err += e * e;
+                    count++;
+                }
             }
+            if (count == 0) continue;
+            var mse = err / count;
+            if (mse < bestErr) { bestErr = mse; bestLambda = lam; }
         }
-        var x = new double[n];
-        for (var i = 0; i < n; i++) x[i] = m[i, n];
-        return x;
+        return bestLambda;
     }
 
     // --- Persistenza (container ZIP: meta + un blob per modello base) -------------------------
