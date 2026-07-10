@@ -5,6 +5,7 @@ using ProcioneMGR.Services.Analysis;
 using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Ensemble;
 using ProcioneMGR.Services.Pipeline.Stages;
+using ProcioneMGR.Services.Trading;
 
 namespace ProcioneMGR.Services.Pipeline;
 
@@ -188,6 +189,11 @@ public sealed class PipelineApplier(
             .ToList();
 
         var totalWeight = legs.Sum(l => l.WeightPercent);
+        // Effective sample size behind the weighted Sharpe = the weakest leg's holdout trade count
+        // (conservative: the swap must be significant even for the thinnest-sampled leg).
+        var observations = recommendation.EnsembleLegs.Count > 0
+            ? recommendation.EnsembleLegs.Min(l => l.HoldoutTrades)
+            : 0;
         return new EnsembleSummary
         {
             WeightedAverageSharpe = totalWeight > 0m
@@ -196,6 +202,7 @@ public sealed class PipelineApplier(
             WeightedAverageRiskFactor95 = recommendation.RiskLimits.RiskFactor95,
             SurvivingLegs = legs.Count,
             DistinctSymbols = legs.Select(l => l.Symbol).Distinct().Count(),
+            Observations = observations,
             Legs = legs,
         };
     }
@@ -234,9 +241,10 @@ public sealed class PipelineApplier(
 
     /// <summary>
     /// Protective SL+TP bracket (% from entry) from the pair/timeframe's recent candles via
-    /// <see cref="ExcursionAnalyzer"/>: mean of the 95th-percentile adverse (SL) and favorable (TP)
-    /// excursions across long and short, for a symmetric level usable on both sides. (0,0) if data
-    /// is insufficient.
+    /// <see cref="ExcursionAnalyzer"/>. Primary (R1.5): MAE/MFE over a holding horizon, conditioned on
+    /// the CURRENT volatility regime (<see cref="ExcursionAnalyzer.SuggestAdaptiveBracket"/>); mean of
+    /// the long/short brackets for a symmetric level. Falls back to the single-bar 95th-percentile
+    /// excursions when the horizon sampling is too sparse. (0,0) if data is insufficient.
     /// </summary>
     private async Task<(decimal sl, decimal tp)> ComputeAutoBracketAsync(string symbol, string timeframe, CancellationToken ct)
     {
@@ -251,15 +259,24 @@ public sealed class PipelineApplier(
             if (candles.Count < 100) return (0m, 0m);
             candles.Reverse(); // chronological for the analysis
 
-            var sl = excursion.SuggestStopLoss(candles);
-            var tp = excursion.SuggestTakeProfit(candles);
             static decimal Avg(decimal a, decimal b)
             {
                 var v = new[] { a, b }.Where(x => x > 0m).ToList();
                 return v.Count > 0 ? Math.Round(v.Average(), 2) : 0m;
             }
-            return (Avg(sl.LongStopPercentile95, sl.ShortStopPercentile95),
-                    Avg(tp.LongTakeProfitPercentile95, tp.ShortTakeProfitPercentile95));
+
+            // R1.5: MAE/MFE sull'orizzonte di detenzione, consapevole del regime di volatilità corrente.
+            var longB = excursion.SuggestAdaptiveBracket(candles, OrderSide.Buy);
+            var shortB = excursion.SuggestAdaptiveBracket(candles, OrderSide.Sell);
+            var sl = Avg(longB.StopLossPercent, shortB.StopLossPercent);
+            var tp = Avg(longB.TakeProfitPercent, shortB.TakeProfitPercent);
+            if (sl > 0m || tp > 0m) return (sl, tp);
+
+            // Fallback: escursioni a barra singola (campioni orizzonte insufficienti).
+            var slBar = excursion.SuggestStopLoss(candles);
+            var tpBar = excursion.SuggestTakeProfit(candles);
+            return (Avg(slBar.LongStopPercentile95, slBar.ShortStopPercentile95),
+                    Avg(tpBar.LongTakeProfitPercentile95, tpBar.ShortTakeProfitPercentile95));
         }
         catch { return (0m, 0m); }
     }

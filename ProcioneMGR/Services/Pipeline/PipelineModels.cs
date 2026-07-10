@@ -225,6 +225,10 @@ public sealed class FactorIcSummary
     public double RollingIcMean { get; set; }
     public double InformationRatio { get; set; }
     public int Observations { get; set; }
+
+    /// <summary>t-statistic dell'IC con SE Newey-West (robusta all'overlap dei forward-return). |t| ≳ 2 ≈ significativo.</summary>
+    public double IcTStatistic { get; set; }
+
     public bool Selected { get; set; }
 }
 
@@ -424,6 +428,13 @@ public sealed class ProposedLeg
     public decimal HoldoutSharpe { get; set; }
     public decimal HoldoutProfitFactor { get; set; }
     public decimal HoldoutMaxDrawdown { get; set; }
+
+    /// <summary>
+    /// Holdout trade count of the originating candidate — carried as the effective sample size behind
+    /// the leg's Sharpe so the auto-reapply comparator can test a swap's statistical significance
+    /// (<see cref="Ensemble.EnsembleSummary.Observations"/>). Verdict-only, never a selection input.
+    /// </summary>
+    public int HoldoutTrades { get; set; }
 
     /// <summary>Same identity key as the originating <see cref="ValidatedCandidate"/> — use this for lookups, never rebuild it inline.</summary>
     public string Key => PipelineCandidateKey.Build(StrategyName, Symbol, Timeframe, Parameters);

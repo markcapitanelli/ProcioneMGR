@@ -172,6 +172,7 @@ public sealed class EnsembleManager(
 
             var allocations = new List<RebalanceAllocation>();
             var sharpes = new List<decimal>();
+            var obsCounts = new List<int>();
             var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
             var ppy = Statistics.PeriodsPerYear(cfg.Timeframe);
 
@@ -181,6 +182,7 @@ public sealed class EnsembleManager(
                     ? new List<EquityPoint>()
                     : (await engine.RunBacktestAsync(BuildBtConfig(cfg, strat), candles, ct)).EquityCurve;
                 sharpes.Add(Statistics.SharpeRatio(eq, ppy));
+                obsCounts.Add(eq.Count);
             }
 
             // Pesatura composita regime-aware se attiva.
@@ -196,6 +198,9 @@ public sealed class EnsembleManager(
                     logger.LogInformation("Rebalancing in regime '{Label}' (ID {Id}).", reg.Label, reg.RegimeId);
                 }
             }
+
+            // Shrinkage degli Sharpe verso l'equipeso (riduce il rumore delle stime prima di allocare).
+            scores = EnsembleAllocator.ShrinkSharpes(scores, cfg.SharpeShrinkage, obsCounts, cfg.MinSharpeObservations);
 
             var weights = EnsembleAllocator.ComputeWeights(scores, cfg.MinAllocationPercent / 100m, cfg.MaxAllocationPercent / 100m);
 
@@ -336,6 +341,9 @@ public sealed class EnsembleManager(
                     var regimePerf = active.Select(a => regimeCtx.RegimeSharpe(reg.RegimeId, a.StrategyName)).ToArray();
                     scores = CompositeScores(sharpes, regimePerf);
                 }
+
+                // Stesso shrinkage del percorso live, per parità simulazione↔operatività.
+                scores = EnsembleAllocator.ShrinkSharpes(scores, cfg.SharpeShrinkage);
 
                 var weights = EnsembleAllocator.ComputeWeights(scores, cfg.MinAllocationPercent / 100m, cfg.MaxAllocationPercent / 100m);
                 var prevAlloc = capital.Select(c => total > 0m ? c / total * 100m : 0m).ToArray();
