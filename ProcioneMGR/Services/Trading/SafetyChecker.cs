@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Options;
-
 namespace ProcioneMGR.Services.Trading;
 
 public class SafetyCheckResult
@@ -14,17 +12,11 @@ public class SafetyCheckResult
 /// <summary>
 /// Valida ogni ordine contro i limiti di sicurezza PRIMA di piazzarlo.
 /// Principio: meglio rifiutare un ordine valido che accettarne uno pericoloso.
+/// Solo il metodo statico puro: l'interfaccia istanza (ISafetyChecker/ValidateOrderAsync)
+/// era registrata in DI ma mai risolta da nessuno — rimossa come codice morto.
 /// </summary>
-public interface ISafetyChecker
+public static class SafetyChecker
 {
-    Task<SafetyCheckResult> ValidateOrderAsync(Order order, TradingEngineStatus status, CancellationToken ct = default);
-}
-
-public sealed class SafetyChecker(IOptionsMonitor<SafetyConfiguration> options) : ISafetyChecker
-{
-    public Task<SafetyCheckResult> ValidateOrderAsync(Order order, TradingEngineStatus status, CancellationToken ct = default)
-        => Task.FromResult(Evaluate(order, status, options.CurrentValue, DateTime.UtcNow));
-
     /// <summary>
     /// Valutazione PURA (senza I/O) di tutti i safety check. Raccoglie TUTTE le violazioni
     /// (non si ferma alla prima) così l'operatore vede l'intero quadro. Testabile direttamente.

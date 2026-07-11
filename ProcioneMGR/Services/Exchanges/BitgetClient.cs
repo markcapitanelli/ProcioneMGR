@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using ProcioneMGR.Data;
 
 namespace ProcioneMGR.Services.Exchanges;
@@ -9,7 +10,7 @@ namespace ProcioneMGR.Services.Exchanges;
 /// Client Bitget Spot via REST pubblica v2 (dati di mercato non firmati).
 /// Endpoint candele: GET /api/v2/spot/market/candles.
 /// </summary>
-public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) : IExchangeClient, IFuturesExchangeClient
+public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, IConfiguration? configuration = null) : IExchangeClient, IFuturesExchangeClient
 {
     public ExchangeName Exchange => ExchangeName.Bitget;
 
@@ -145,6 +146,24 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
 
     public async Task<PlaceOrderResult> PlaceOrderAsync(PlaceOrderRequest request, CancellationToken ct = default)
     {
+        // GUARD (audit 2026-07, probabile bug serio): per i MARKET-BUY spot la v2 di Bitget
+        // documenta "size" come CONTROVALORE QUOTE (USDT), non quantità base — questo codice
+        // manda la quantità BASE, che su un buy reale produrrebbe un ordine di taglia
+        // completamente sbagliata (es. size=0.05 BTC interpretato come 0.05 USDT, o viceversa
+        // un fill enorme). Finché la semantica non è VERIFICATA dal vivo (tools/SpotVerify,
+        // vedi docs/REPORT-HARDENING-P1-2026-07.md) i market-buy spot Bitget sono RIFIUTATI:
+        // fallire forte batte un ordine di taglia sbagliata. Sblocco esplicito e consapevole
+        // via Trading:Bitget:SpotMarketBuyVerified=true dopo la verifica.
+        if (request.Type == "MARKET" && request.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase)
+            && configuration?.GetValue<bool>("Trading:Bitget:SpotMarketBuyVerified") != true)
+        {
+            const string reason = "MARKET-BUY spot Bitget bloccato: la semantica del campo 'size' (quote vs base) " +
+                "non è ancora stata verificata dal vivo. Esegui tools/SpotVerify e poi imposta " +
+                "Trading:Bitget:SpotMarketBuyVerified=true per sbloccare consapevolmente.";
+            logger.LogError("{Reason} (symbol {Symbol}, qty {Qty})", reason, request.Symbol, request.Quantity);
+            return new PlaceOrderResult { Success = false, Error = reason };
+        }
+
         var market = ToExchangeSymbol(request.Symbol);
         var body = JsonSerializer.Serialize(new
         {

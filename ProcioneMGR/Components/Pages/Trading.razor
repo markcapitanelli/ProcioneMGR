@@ -245,7 +245,7 @@
         }
         @if (_mode == "Live")
         {
-            <div class="text-muted small mt-2">ℹ️ In Live ogni ordine richiede <strong>conferma manuale</strong> (safety): gli ordini automatici del worker vengono rifiutati finché non c'è una UI di conferma per-ordine (step finale).</div>
+            <div class="text-muted small mt-2">ℹ️ In Live ogni apertura richiede <strong>conferma manuale</strong> (safety): gli ordini del worker restano in coda nella sezione "⏳ Conferme in attesa (Live)" qui sotto finché non li approvi o rifiuti uno per uno. Disattivabile solo da RequireManualConfirmationForLive nel pannello sicurezza.</div>
         }
     </div>
 </div>
@@ -472,8 +472,8 @@
     private System.Threading.Timer? _timer;
     private bool _running => _status?.IsRunning == true;
 
-    /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): stesso numero registrato in Program.cs.</summary>
-    private const int LaneCount = 3;
+    /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): fonte unica TradingLanes.Count.</summary>
+    private const int LaneCount = TradingLanes.Count;
     private int _laneId;
 
     /// <summary>Motore della corsia selezionata (keyed DI): risolto ad ogni accesso, mai messo in cache tra un cambio corsia e l'altro.</summary>

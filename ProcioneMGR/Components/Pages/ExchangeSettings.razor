@@ -170,8 +170,12 @@
     private string? message;
     private bool isError;
 
+    // Niente initializer sulla property [SupplyParameterFromForm] (BL0008: nei POST il binder
+    // può sovrascriverla con null): il backing nullable + coalescenza nel getter dà lo stesso
+    // comportamento senza il rischio.
     [SupplyParameterFromForm]
-    private CredentialInput Input { get; set; } = new();
+    private CredentialInput? InputFromForm { get; set; }
+    private CredentialInput Input { get => InputFromForm ??= new(); set => InputFromForm = value; }
 
     protected override async Task OnInitializedAsync()
     {

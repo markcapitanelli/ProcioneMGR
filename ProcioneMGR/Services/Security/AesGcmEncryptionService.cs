@@ -22,14 +22,27 @@ namespace ProcioneMGR.Services.Security;
 /// (PROCIONE_MGR_MASTER_KEY) in produzione, idealmente con rotazione via il byte
 /// di versione gia' previsto nel formato.
 /// </summary>
-public sealed class AesGcmEncryptionService : IEncryptionService
+public sealed class AesGcmEncryptionService : IEncryptionService, IMasterKeyStatus
 {
     private const byte SchemeVersion = 1;
     private const int NonceSize = 12;   // 96 bit, raccomandato per GCM
     private const int TagSize = 16;     // 128 bit
     private const int KeySize = 32;     // 256 bit
 
+    /// <summary>
+    /// SHA-256 (hex) del placeholder "__CHANGE_ME_BASE64_32_BYTES__" committato in
+    /// appsettings.json.example: si confronta l'HASH e non il plaintext, così questo file non
+    /// contiene una seconda copia letterale della stringa da cercare/sostituire. Se la chiave
+    /// configurata è ancora il placeholder, i segreti "cifrati" sono decifrabili da chiunque
+    /// legga il repository: Production e Live devono rifiutarsi di partire (fail-fast).
+    /// </summary>
+    private const string DevPlaceholderKeySha256Hex =
+        "8FDD03E694F0A2690B962293A4DAA9F46276D8BC0DC58830C706BF92A2B7E686";
+
     private readonly byte[] _key;
+
+    /// <inheritdoc />
+    public bool IsDefaultDevKey { get; }
 
     public AesGcmEncryptionService(IConfiguration configuration)
     {
@@ -46,6 +59,8 @@ public sealed class AesGcmEncryptionService : IEncryptionService
                 "(dev) o nella variabile d'ambiente PROCIONE_MGR_MASTER_KEY.");
         }
 
+        IsDefaultDevKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(configured)))
+            .Equals(DevPlaceholderKeySha256Hex, StringComparison.OrdinalIgnoreCase);
         _key = DeriveKey(configured);
     }
 

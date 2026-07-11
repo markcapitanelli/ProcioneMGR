@@ -48,7 +48,8 @@ public sealed class TradingEngine(
     ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null,
     IModelRegistry? modelRegistry = null,
     IAlphaFactorFactory? alphaFactorFactory = null,
-    IFactorCache? factorCache = null) : ITradingEngine
+    IFactorCache? factorCache = null,
+    ProcioneMGR.Services.Security.IMasterKeyStatus? masterKeyStatus = null) : ITradingEngine
 {
     public int LaneId => laneId;
 
@@ -136,6 +137,16 @@ public sealed class TradingEngine(
         await _gate.WaitAsync(ct);
         try
         {
+            // Con la master key placeholder del template (pubblica su git) le credenziali
+            // exchange "cifrate" sono in chiaro di fatto: soldi veri MAI su quella base.
+            // Paper/Testnet restano permessi (comodi in sviluppo).
+            if (mode == TradingMode.Live && masterKeyStatus?.IsDefaultDevKey == true)
+            {
+                throw new InvalidOperationException(
+                    "Trading LIVE bloccato: Security:MasterKey è ancora il placeholder di sviluppo del template. " +
+                    "Genera una chiave reale (base64 di 32 byte, env PROCIONE_MGR_MASTER_KEY) e ricifra le credenziali.");
+            }
+
             var cfg = await ensemble.GetConfigurationAsync(ct);
             var capital = cfg.TotalCapital > 0 ? cfg.TotalCapital : 10_000m;
             var marketType = cfg.IsFutures ? MarketType.Futures : MarketType.Spot;
@@ -537,6 +548,18 @@ public sealed class TradingEngine(
     private async Task TryOpenAsync(EnsembleStrategy strat, OrderSide side, decimal price, DateTime ts, CancellationToken ct)
     {
         if (price <= 0m) return;
+
+        // Guard: sullo SPOT reale non esiste la vendita allo scoperto — un SELL di apertura
+        // su Testnet/Live fallirebbe sull'exchange (saldo insufficiente) o, peggio, venderebbe
+        // asset del conto NON tracciati da questa corsia. In Paper lo short simulato resta
+        // permesso (utile per valutare strategie long/short prima di passarle ai Futures).
+        if (_state.MarketType == MarketType.Spot && side == OrderSide.Sell && _state.Mode != TradingMode.Paper)
+        {
+            logger.LogWarning("Segnale SHORT su SPOT {Mode} ignorato per {Strategy}: vendita allo scoperto non supportata (usa i Futures).",
+                _state.Mode, strat.StrategyName);
+            await AuditAsync("ShortOnSpotBlocked", new { strat.StrategyId, strat.StrategyName, price }, ts, ct);
+            return;
+        }
 
         // Spot: PositionSizePercent è il nozionale investito (leva implicita 1x).
         // Futures: PositionSizePercent è il MARGINE isolato; il nozionale (e quindi

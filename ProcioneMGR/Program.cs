@@ -46,6 +46,9 @@ builder.Services.AddAuthentication(options =>
 // master viene derivata una sola volta. Va registrato PRIMA del DbContext perche'
 // l'EncryptedStringConverter ne dipende.
 builder.Services.AddSingleton<IEncryptionService, AesGcmEncryptionService>();
+// Stato della master key (placeholder di sviluppo?): stessa istanza del servizio di cifratura,
+// esposta come vista ristretta per i guard fail-fast (startup Production, gate Live del motore).
+builder.Services.AddSingleton<IMasterKeyStatus>(sp => (AesGcmEncryptionService)sp.GetRequiredService<IEncryptionService>());
 
 // --- Database: PostgreSQL (unico provider) ---
 // Le migrazioni vivono nell'assembly ProcioneMGR.Migrations.Postgres e si applicano come passo
@@ -98,8 +101,9 @@ builder.Services.AddSingleton<IRegimeDetector, RegimeDetector>();
 builder.Services.AddHostedService<RegimeRetrainingWorker>();
 
 // --- Trading (Fase 8): safety + paper engine ---
+// NB: la safety si usa SOLO via SafetyChecker.Evaluate (statico, puro) dentro il TradingEngine:
+// nessuna registrazione DI — l'interfaccia istanza era codice morto mai risolto da nessuno.
 builder.Services.Configure<SafetyConfiguration>(builder.Configuration.GetSection("Trading:Safety"));
-builder.Services.AddSingleton<ISafetyChecker, SafetyChecker>();
 builder.Services.AddSingleton<ISafetyConfigWriter, SafetyConfigWriter>();
 
 // --- Esecuzione live "a fette" (TWAP/VWAP/Iceberg su Testnet/Live). Master switch default-off
@@ -270,8 +274,7 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Admin.DatabaseBackupService>(
 // e l'isolamento dati e' garantito dalla colonna discriminante LaneId (TradingEntities/
 // EnsembleState) invece che da DbContext separati. Ogni corsia ha la propria istanza keyed
 // di IEnsembleManager/ITradingEngine + il proprio TradingWorker/EnsembleRebalanceWorker.
-const int LaneCount = 3;
-for (var lane = 0; lane < LaneCount; lane++)
+for (var lane = 0; lane < TradingLanes.Count; lane++)
 {
     var laneId = lane;
 
@@ -297,7 +300,8 @@ for (var lane = 0; lane < LaneCount; lane++)
         sp.GetRequiredService<ProcioneMGR.Services.Observability.ProcioneMetrics>(),
         sp.GetRequiredService<ProcioneMGR.Services.Registry.IModelRegistry>(),
         sp.GetRequiredService<ProcioneMGR.Services.Alpha.IAlphaFactorFactory>(),
-        sp.GetRequiredService<ProcioneMGR.Services.Alpha.IFactorCache>()));
+        sp.GetRequiredService<ProcioneMGR.Services.Alpha.IFactorCache>(),
+        sp.GetRequiredService<IMasterKeyStatus>()));
 
     builder.Services.AddSingleton<IHostedService>(sp => new TradingWorker(
         sp.GetRequiredKeyedService<ITradingEngine>(laneId),
@@ -398,6 +402,19 @@ builder.Services.AddIdentityCore<ApplicationUser>(options =>
 builder.Services.AddSingleton<IEmailSender<ApplicationUser>, IdentityNoOpEmailSender>();
 
 var app = builder.Build();
+
+// Fail-fast: in Production non si parte MAI con la master key placeholder del template — con
+// quella chiave (pubblica su git) le credenziali exchange "cifrate" sono in chiaro di fatto.
+// In Development resta permessa (comodo per il primo avvio); il trading LIVE è comunque
+// bloccato dal gate equivalente in TradingEngine.StartAsync qualunque sia l'ambiente.
+if (app.Environment.IsProduction()
+    && app.Services.GetRequiredService<IMasterKeyStatus>().IsDefaultDevKey)
+{
+    throw new InvalidOperationException(
+        "Security:MasterKey è ancora il placeholder di sviluppo del template: genera una chiave " +
+        "reale (base64 di 32 byte) e impostala via variabile d'ambiente PROCIONE_MGR_MASTER_KEY " +
+        "o User Secrets prima di avviare in produzione.");
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

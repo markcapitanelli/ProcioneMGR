@@ -92,7 +92,7 @@ public sealed class PromotionEvaluator(
     PromotionEvaluatorOptions options) : IPromotionEvaluator
 {
     /// <summary>Numero di corsie isolate (allineato a Program.cs LaneCount).</summary>
-    public const int LaneCount = 3;
+    public const int LaneCount = TradingLanes.Count;
 
     public async Task<IReadOnlyList<PromotionDecision>> EvaluateAllLanesAsync(CancellationToken ct = default)
     {

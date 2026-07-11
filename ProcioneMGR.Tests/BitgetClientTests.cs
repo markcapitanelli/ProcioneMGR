@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcioneMGR.Services.Exchanges;
 
@@ -242,9 +243,10 @@ public class BitgetClientTests
                 """));
         var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
 
+        // SELL: la semantica base-qty è quella giusta per i market-sell (il BUY è dietro guard).
         var res = await client.PlaceOrderAsync(new PlaceOrderRequest
         {
-            Symbol = "BTC/USDT", Side = "BUY", Type = "MARKET", Quantity = 2m,
+            Symbol = "BTC/USDT", Side = "SELL", Type = "MARKET", Quantity = 2m,
             ClientOrderId = "cid-9", Credentials = Creds,
         });
 
@@ -264,7 +266,7 @@ public class BitgetClientTests
 
         var res = await client.PlaceOrderAsync(new PlaceOrderRequest
         {
-            Symbol = "BTC/USDT", Side = "BUY", Type = "MARKET", Quantity = 2m,
+            Symbol = "BTC/USDT", Side = "SELL", Type = "MARKET", Quantity = 2m,
             ClientOrderId = "cid-9", Credentials = Creds,
         });
 
@@ -272,6 +274,66 @@ public class BitgetClientTests
         Assert.True(res.Success);
         Assert.Null(res.FilledPrice);
         Assert.Null(res.FilledQuantity);
+    }
+
+    // --- Guard MARKET-BUY spot (semantica size quote-vs-base non ancora verificata) --------------
+
+    [Fact]
+    public async Task PlaceOrderAsync_SpotMarketBuy_NotVerified_RejectedWithoutNetworkCall()
+    {
+        var handler = new SequenceHandler();   // nessuna risposta prevista: la rete non va toccata
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "BTC/USDT", Side = "BUY", Type = "MARKET", Quantity = 0.05m,
+            ClientOrderId = "cid-buy", Credentials = Creds,
+        });
+
+        Assert.False(res.Success);
+        Assert.False(res.NetworkUncertain);   // rifiuto CERTO: nessuna riconciliazione da fare
+        Assert.Contains("SpotMarketBuyVerified", res.Error);
+        Assert.Empty(handler.RequestedUrls);
+    }
+
+    [Fact]
+    public async Task PlaceOrderAsync_SpotMarketBuy_VerifiedByConfig_GoesThrough()
+    {
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Trading:Bitget:SpotMarketBuyVerified"] = "true" })
+            .Build();
+        var handler = new SequenceHandler(
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","data":{"orderId":"btg-buy"}}"""),
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","requestTime":1,"data":[]}"""));   // lookup: not found → fill null
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance, config);
+
+        var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "BTC/USDT", Side = "BUY", Type = "MARKET", Quantity = 0.05m,
+            ClientOrderId = "cid-buy", Credentials = Creds,
+        });
+
+        Assert.True(res.Success);
+        Assert.Contains(handler.RequestedUrls, u => u.Contains("/api/v2/spot/trade/place-order"));
+    }
+
+    [Fact]
+    public async Task PlaceOrderAsync_SpotLimitBuy_NotAffectedByGuard()
+    {
+        // Il guard riguarda SOLO i MARKET-BUY (unico caso con size quote-vs-base ambigua):
+        // i LIMIT esprimono size in base qty senza ambiguità.
+        var handler = new SequenceHandler(
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","data":{"orderId":"btg-lim"}}"""),
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","requestTime":1,"data":[]}"""));
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "BTC/USDT", Side = "BUY", Type = "LIMIT", Quantity = 0.05m, Price = 90m,
+            ClientOrderId = "cid-lim", Credentials = Creds,
+        });
+
+        Assert.True(res.Success);
     }
 
     [Fact]
