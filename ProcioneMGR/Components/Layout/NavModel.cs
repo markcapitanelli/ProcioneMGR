@@ -83,6 +83,7 @@ public static class NavModel
             new NavItem("execution", "Execution Lab", "bi-stack", ManagerAndAdmin),
             new NavItem("alpha-mining", "Alpha Mining", "bi-diagram-2", ManagerAndAdmin),
             new NavItem("pairs-trading", "Pairs Trading", "bi-arrow-left-right", ManagerAndAdmin),
+            new NavItem("market/bars", "Barre informative", "bi-bar-chart-steps", ManagerAndAdmin),
             new NavItem("volatility", "Volatilità", "bi-activity", ManagerAndAdmin),
             new NavItem("sentiment", "Sentiment", "bi-newspaper", ManagerAndAdmin),
             new NavItem("admin/ai-supervisor", "Supervisione AI", "bi-robot", ManagerAndAdmin),

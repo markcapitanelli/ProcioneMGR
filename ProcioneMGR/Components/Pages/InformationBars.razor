@@ -1,0 +1,322 @@
+@page "/market/bars"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Ingestion
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IAsyncDisposable
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>Barre informative</PageTitle>
+
+<h1>Barre informative <span class="badge bg-secondary">Volume / Dollar bars</span></h1>
+
+<GuidaPanel Title="Barre informative — campionare il mercato per attività, non per orologio">
+    <p>
+        Le candele a tempo fisso (1h, 4h…) campionano il mercato in modo disomogeneo: di notte
+        succede poco e ogni candela contiene poca informazione, nei momenti concitati succede
+        tantissimo e una sola candela ne contiene troppa. Le <strong>barre informative</strong>
+        chiudono una barra quando è passato un ammontare costante di <em>attività</em> —
+        <strong>volume</strong> scambiato (volume bars) o <strong>controvalore</strong> in USDT
+        (dollar bars) — invece che un tempo fisso. Il risultato (ML4T, cap. 2) è una serie di
+        rendimenti più vicina alla normalità: meno code grasse, varianza più stabile, input
+        migliori per i modelli ML.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Serie di base</dt>
+        <dd class="col-sm-9">L'aggregazione parte dalle candele temporali già in piattaforma (non dai tick): usa il timeframe più fine disponibile (es. 5m) per la granularità migliore.</dd>
+        <dt class="col-sm-3">Soglia + Suggerisci</dt>
+        <dd class="col-sm-9">Quanto volume (o controvalore) chiude una barra. "Suggerisci" la calcola per ottenere circa il numero di barre scelto sull'intervallo caricato (volume totale ÷ barre desiderate).</dd>
+        <dt class="col-sm-3">Curtosi in eccesso</dt>
+        <dd class="col-sm-9">Misura le code grasse dei rendimenti (0 = come una gaussiana). Se sulle barre informative scende rispetto alle candele temporali, il campionamento per attività sta facendo il suo lavoro.</dd>
+        <dt class="col-sm-3">Coda scartata</dt>
+        <dd class="col-sm-9">L'ultima barra non ancora "piena" viene scartata: includerla creerebbe una barra non confrontabile con le altre.</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Configurazione</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Symbol</label>
+                <input class="form-control" list="ib_symbols" @bind="_symbol" style="width: 11rem;" disabled="@_busy" />
+                <datalist id="ib_symbols">
+                    @foreach (var s in _knownSymbols) { <option value="@s"></option> }
+                </datalist>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe base</label>
+                <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                    @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Lookback (candele)</label>
+                <input type="number" class="form-control" @bind="_lookback" min="100" max="100000" style="width: 9rem;" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Tipo barra</label>
+                <select class="form-select" @bind="_barType" disabled="@_busy">
+                    <option value="Volume">Volume</option>
+                    <option value="Dollar">Dollar (controvalore)</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Soglia per barra</label>
+                <input type="number" class="form-control" @bind="_threshold" min="0" style="width: 11rem;" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Barre target</label>
+                <div class="input-group" style="width: 13rem;">
+                    <input type="number" class="form-control" @bind="_targetBars" min="10" max="10000" disabled="@_busy" />
+                    <button class="btn btn-outline-secondary" @onclick="SuggestAsync" disabled="@_busy">Suggerisci</button>
+                </div>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Costruisci barre
+                </button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_bars is not null)
+{
+    <div class="row g-3 mb-3">
+        <div class="col-auto">@MetricCard("Barre costruite", _bars.Count.ToString())</div>
+        <div class="col-auto">@MetricCard("Candele sorgente", _sourceCount.ToString())</div>
+        <div class="col-auto">@MetricCard("Candele per barra (media)", _bars.Count > 0 ? (_sourceCount / (double)_bars.Count).ToString("F1") : "—")</div>
+        <div class="col-auto">@MetricCard("Periodo", $"{_from:yyyy-MM-dd} → {_to:yyyy-MM-dd}")</div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Statistiche dei rendimenti: barre informative vs candele temporali</div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead>
+                    <tr>
+                        <th>Serie</th>
+                        <th class="text-end">N. rendimenti</th>
+                        <th class="text-end">Std dev</th>
+                        <th class="text-end">Curtosi in eccesso</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Barre informative (@_barType, soglia @_threshold.ToString("G6"))</td>
+                        <td class="text-end">@_barStats.Count</td>
+                        <td class="text-end">@_barStats.Std.ToString("E3")</td>
+                        <td class="text-end">@_barStats.ExcessKurtosis.ToString("F2")</td>
+                    </tr>
+                    <tr>
+                        <td>Candele temporali (@_timeframe)</td>
+                        <td class="text-end">@_timeStats.Count</td>
+                        <td class="text-end">@_timeStats.Std.ToString("E3")</td>
+                        <td class="text-end">@_timeStats.ExcessKurtosis.ToString("F2")</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer text-muted small">
+            La curtosi in eccesso più BASSA sulle barre informative indica code meno grasse (più
+            vicine alla gaussiana): è il beneficio atteso dal campionamento per attività. Le std
+            non sono confrontabili in valore assoluto (orizzonti diversi per barra), conta la forma.
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Close delle barre informative (spaziatura temporale variabile)</div>
+        <div class="card-body"><div id="ib_ts"></div></div>
+    </div>
+}
+
+@code {
+    private string _symbol = "BTC/USDT";
+    private string _timeframe = "5m";
+    private int _lookback = 5000;
+    private string _barType = "Volume";
+    private decimal _threshold;
+    private int _targetBars = 200;
+
+    private List<string> _knownSymbols = new();
+
+    private IReadOnlyList<AggregatedBar>? _bars;
+    private int _sourceCount;
+    private DateTime _from, _to;
+    private (int Count, double Std, double ExcessKurtosis) _barStats;
+    private (int Count, double Std, double ExcessKurtosis) _timeStats;
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    private IJSObjectReference? _chartModule;
+    private bool _chartPending;
+
+    private readonly BarBuilder _builder = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    private async Task<List<OhlcvData>> LoadCandlesAsync()
+    {
+        var lookback = Math.Clamp(_lookback, 100, 100_000);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var candles = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe)
+            .OrderByDescending(c => c.TimestampUtc)
+            .Take(lookback)
+            .ToListAsync();
+        candles.Reverse();
+        return candles;
+    }
+
+    private async Task SuggestAsync()
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            var candles = await LoadCandlesAsync();
+            if (candles.Count < 100)
+            {
+                SetStatus($"Solo {candles.Count} candele {_timeframe} per {_symbol}: servono più dati (ingerisci in /market-analysis).", true);
+                return;
+            }
+            var target = Math.Clamp(_targetBars, 10, 10_000);
+            _threshold = Math.Round(_barType == "Dollar"
+                ? _builder.SuggestDollarThreshold(candles, target)
+                : _builder.SuggestVolumeThreshold(candles, target), 4);
+            SetStatus($"Soglia suggerita per ~{target} barre su {candles.Count} candele: {_threshold:G6}.", false);
+        }
+        catch (Exception ex) { SetStatus(ex.Message, true); }
+        finally { _busy = false; }
+    }
+
+    private async Task RunAsync()
+    {
+        _busy = true; _isError = false; _status = null; _bars = null;
+        try
+        {
+            var candles = await LoadCandlesAsync();
+            if (candles.Count < 100)
+            {
+                SetStatus($"Solo {candles.Count} candele {_timeframe} per {_symbol}: servono più dati (ingerisci in /market-analysis).", true);
+                return;
+            }
+            if (_threshold <= 0m)
+            {
+                SetStatus("Imposta una soglia positiva (o usa \"Suggerisci\").", true);
+                return;
+            }
+
+            var threshold = _threshold;
+            var barType = _barType;
+            var (bars, barStats, timeStats) = await Task.Run(() =>
+            {
+                var built = barType == "Dollar"
+                    ? _builder.BuildDollarBars(candles, threshold)
+                    : _builder.BuildVolumeBars(candles, threshold);
+                var bStats = ReturnStats(built.Select(b => b.Close).ToList());
+                var tStats = ReturnStats(candles.Select(c => c.Close).ToList());
+                return (built, bStats, tStats);
+            });
+
+            if (bars.Count < 10)
+            {
+                SetStatus($"Solo {bars.Count} barre con soglia {threshold:G6}: abbassala (o usa \"Suggerisci\") per una statistica sensata.", true);
+                return;
+            }
+
+            _bars = bars;
+            _sourceCount = candles.Count;
+            _from = candles[0].TimestampUtc;
+            _to = candles[^1].TimestampUtc;
+            _barStats = barStats;
+            _timeStats = timeStats;
+            _chartPending = true;
+            SetStatus($"{bars.Count} barre {barType} costruite da {candles.Count} candele {_timeframe}.", false);
+        }
+        catch (Exception ex) { SetStatus(ex.Message, true); }
+        finally { _busy = false; }
+    }
+
+    /// <summary>Std e curtosi in eccesso dei log-return della serie di close (momenti campionari semplici).</summary>
+    internal static (int Count, double Std, double ExcessKurtosis) ReturnStats(IReadOnlyList<decimal> closes)
+    {
+        var returns = new List<double>(Math.Max(0, closes.Count - 1));
+        for (var i = 1; i < closes.Count; i++)
+        {
+            if (closes[i - 1] > 0m && closes[i] > 0m)
+            {
+                returns.Add(Math.Log((double)closes[i] / (double)closes[i - 1]));
+            }
+        }
+        if (returns.Count < 4) return (returns.Count, 0.0, 0.0);
+
+        var mean = returns.Average();
+        var m2 = returns.Sum(r => (r - mean) * (r - mean)) / returns.Count;
+        var m4 = returns.Sum(r => Math.Pow(r - mean, 4)) / returns.Count;
+        var std = Math.Sqrt(m2);
+        var exKurt = m2 > 1e-24 ? m4 / (m2 * m2) - 3.0 : 0.0;
+        return (returns.Count, std, exKurt);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_chartPending && _bars is not null)
+        {
+            _chartPending = false;
+            _chartModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/charts.js");
+            var trace = new
+            {
+                name = $"Close ({_barType} bars)",
+                x = _bars.Select(b => (long)(b.EndUtc - DateTime.UnixEpoch).TotalSeconds).ToArray(),
+                y = _bars.Select(b => (double)b.Close).ToArray(),
+                color = "#2962FF",
+            };
+            await _chartModule.InvokeVoidAsync("timeseries", "ib_ts", new object[] { trace }, "Close");
+        }
+    }
+
+    private void SetStatus(string text, bool error) { _status = text; _isError = error; }
+
+    // Stesso pattern di Volatility.razor: card metrica compatta (valori interni, non input utente).
+    private static RenderFragment MetricCard(string label, string value) => builder =>
+    {
+        builder.AddMarkupContent(0, $@"
+            <div class='card text-center' style='min-width: 10rem;'>
+                <div class='card-body py-2'>
+                    <div class='text-muted small'>{label}</div>
+                    <div class='fs-5 fw-semibold'>{value}</div>
+                </div>
+            </div>");
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_chartModule is not null)
+            {
+                await _chartModule.InvokeVoidAsync("dispose", "ib_ts");
+                await _chartModule.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException) { }
+    }
+}
