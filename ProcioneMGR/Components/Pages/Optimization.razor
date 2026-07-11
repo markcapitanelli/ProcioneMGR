@@ -299,7 +299,7 @@
         </div>
         <div class="table-responsive">
             <table class="table table-sm table-striped mb-0">
-                <thead><tr><th>#</th><th>Parametri</th><th>Sharpe IS</th><th>Sharpe OOS</th><th>Return %</th><th>Max DD %</th><th>Trades</th><th></th></tr></thead>
+                <thead><tr><th>#</th><th>Parametri</th><th class="text-end">Sharpe IS</th><th class="text-end">Sharpe OOS</th><th class="text-end">Return %</th><th class="text-end">Max DD %</th><th class="text-end">Trades</th><th></th></tr></thead>
                 <tbody>
                     @{ var rank = 0; }
                     @foreach (var s in _result.BestParameters)
@@ -308,11 +308,11 @@
                         <tr class="@(rank == 1 ? "table-success" : "")">
                             <td>@rank</td>
                             <td>@FormatParams(s.Parameters)</td>
-                            <td>@s.InSampleSharpe.ToString("F2")</td>
-                            <td class="fw-semibold">@s.OutOfSampleSharpe.ToString("F2")</td>
-                            <td class="@(s.TotalReturn >= 0 ? "text-success" : "text-danger")">@s.TotalReturn.ToString("F2")</td>
-                            <td class="text-danger">@s.MaxDrawdown.ToString("F2")</td>
-                            <td>@s.TotalTrades</td>
+                            <td class="text-end">@s.InSampleSharpe.ToString("F2")</td>
+                            <td class="text-end fw-semibold">@s.OutOfSampleSharpe.ToString("F2")</td>
+                            <td class="text-end @(s.TotalReturn >= 0 ? "text-success" : "text-danger")">@s.TotalReturn.ToString("F2")</td>
+                            <td class="text-end text-danger">@s.MaxDrawdown.ToString("F2")</td>
+                            <td class="text-end">@s.TotalTrades</td>
                             <td class="text-end">
                                 @if (_resultConfig is not null && _resultConfig.StrategyName != MlStrategyName)
                                 {
@@ -360,7 +360,7 @@
         <div class="card-header">Finestre Walk-Forward</div>
         <div class="table-responsive">
             <table class="table table-sm table-striped mb-0">
-                <thead><tr><th>#</th><th>In-Sample</th><th>Out-of-Sample</th><th>Best params</th><th>Sharpe IS</th><th>Sharpe OOS</th><th>OOS Return %</th></tr></thead>
+                <thead><tr><th>#</th><th>In-Sample</th><th>Out-of-Sample</th><th>Best params</th><th class="text-end">Sharpe IS</th><th class="text-end">Sharpe OOS</th><th class="text-end">OOS Return %</th></tr></thead>
                 <tbody>
                     @foreach (var win in _result.WalkForwardAnalysis.Windows)
                     {
@@ -369,9 +369,9 @@
                             <td>@win.InSampleStart.ToString("yyyy-MM") → @win.InSampleEnd.ToString("yyyy-MM")</td>
                             <td>@win.OutOfSampleStart.ToString("yyyy-MM") → @win.OutOfSampleEnd.ToString("yyyy-MM")</td>
                             <td>@FormatParams(win.BestParameters)</td>
-                            <td>@win.InSampleSharpe.ToString("F2")</td>
-                            <td>@win.OutOfSampleSharpe.ToString("F2")</td>
-                            <td class="@(win.OutOfSampleReturn >= 0 ? "text-success" : "text-danger")">@win.OutOfSampleReturn.ToString("F2")</td>
+                            <td class="text-end">@win.InSampleSharpe.ToString("F2")</td>
+                            <td class="text-end">@win.OutOfSampleSharpe.ToString("F2")</td>
+                            <td class="text-end @(win.OutOfSampleReturn >= 0 ? "text-success" : "text-danger")">@win.OutOfSampleReturn.ToString("F2")</td>
                         </tr>
                     }
                 </tbody>

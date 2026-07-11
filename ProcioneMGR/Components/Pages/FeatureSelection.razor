@@ -145,7 +145,7 @@
         <div class="card-header">Classifica fattori</div>
         <div class="table-responsive">
             <table class="table table-sm table-striped mb-0">
-                <thead><tr><th>#</th><th>Fattore</th><th>IC</th><th>|IC|</th><th>Info Ratio</th><th>Consistenza</th><th>Oss.</th><th>Tenuto</th></tr></thead>
+                <thead><tr><th>#</th><th>Fattore</th><th class="text-end">IC</th><th class="text-end">|IC|</th><th class="text-end">Info Ratio</th><th class="text-end">Consistenza</th><th class="text-end">Oss.</th><th class="text-center">Tenuto</th></tr></thead>
                 <tbody>
                     @{ var rank = 0; }
                     @foreach (var s in _ranked)
@@ -155,12 +155,12 @@
                         <tr class="@(kept ? "table-success" : "")">
                             <td>@rank</td>
                             <td>@s.Spec.FeatureName</td>
-                            <td class="@(s.Evaluation.InformationCoefficient >= 0 ? "text-success" : "text-danger")">@s.Evaluation.InformationCoefficient.ToString("F4")</td>
-                            <td class="fw-semibold">@s.AbsIc.ToString("F4")</td>
-                            <td>@s.Evaluation.InformationRatio.ToString("F3")</td>
-                            <td>@s.Evaluation.IcConsistency.ToString("P0")</td>
-                            <td>@s.Evaluation.Observations</td>
-                            <td>@(kept ? "✅" : "—")</td>
+                            <td class="text-end @(s.Evaluation.InformationCoefficient >= 0 ? "text-success" : "text-danger")">@s.Evaluation.InformationCoefficient.ToString("F4")</td>
+                            <td class="text-end fw-semibold">@s.AbsIc.ToString("F4")</td>
+                            <td class="text-end">@s.Evaluation.InformationRatio.ToString("F3")</td>
+                            <td class="text-end">@s.Evaluation.IcConsistency.ToString("P0")</td>
+                            <td class="text-end">@s.Evaluation.Observations</td>
+                            <td class="text-center">@(kept ? "✅" : "—")</td>
                         </tr>
                     }
                 </tbody>
