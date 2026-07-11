@@ -615,8 +615,8 @@ else
 
     private static readonly string[] Palette = ["#2962FF", "#E53935", "#43A047", "#FB8C00", "#8E24AA", "#00897B"];
 
-    /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): stesso numero registrato in Program.cs.</summary>
-    private const int LaneCount = 3;
+    /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): fonte unica TradingLanes.Count.</summary>
+    private const int LaneCount = TradingLanes.Count;
     private int _laneId;
 
     /// <summary>Ensemble della corsia selezionata (keyed DI): risolto ad ogni accesso, mai messo in cache tra un cambio corsia e l'altro.</summary>

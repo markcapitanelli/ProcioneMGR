@@ -113,7 +113,9 @@ public sealed class EnsembleManager(
                 .OrderByDescending(t => t.ClosedAtUtc)
                 .Take(options.WindowTradeCount)
                 .ToListAsync(ct);
-            var report = decayMonitor.Analyze(s, recentTrades, options);
+            // [M5] Il timeframe della corsia porta il realizzato sulla stessa base per-candela
+            // dell'atteso (vedi StrategyDecayMonitor.BuildPeriodReturns).
+            var report = decayMonitor.Analyze(s, recentTrades, cfg.Timeframe, options);
             reports.Add(report);
 
             if (report.IsAlert)

@@ -20,11 +20,12 @@ public sealed class LlmOptions
 /// </summary>
 public sealed class AnthropicLlmClient : ILlmClient
 {
-    private readonly LlmOptions _options;
+    // IOptionsMonitor (non POCO): modello/token modificabili a caldo da /admin/autonomy.
+    private readonly Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> _options;
     private readonly string? _apiKey;
     private readonly ILogger<AnthropicLlmClient> _logger;
 
-    public AnthropicLlmClient(LlmOptions options, ILogger<AnthropicLlmClient> logger)
+    public AnthropicLlmClient(Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> options, ILogger<AnthropicLlmClient> logger)
     {
         _options = options;
         _logger = logger;
@@ -33,7 +34,7 @@ public sealed class AnthropicLlmClient : ILlmClient
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey);
 
-    public string Model => _options.Model;
+    public string Model => _options.CurrentValue.Model;
 
     public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct)
     {
@@ -42,10 +43,11 @@ public sealed class AnthropicLlmClient : ILlmClient
 
         var client = new AnthropicClient { ApiKey = _apiKey };
 
+        var options = _options.CurrentValue;
         var response = await client.Messages.Create(new MessageCreateParams
         {
-            Model = _options.Model,
-            MaxTokens = _options.MaxTokens,
+            Model = options.Model,
+            MaxTokens = options.MaxTokens,
             System = systemPrompt,
             Thinking = new ThinkingConfigAdaptive(),
             Messages = [new() { Role = Role.User, Content = userPrompt }],

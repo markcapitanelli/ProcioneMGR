@@ -356,6 +356,10 @@ public sealed class OptimizationEngine(
         {
             ct.ThrowIfCancellationRequested();
             var combo = ToCombo(space, vector);
+            // Sync-over-async DELIBERATO (audit 2026-07: keep): BayesianSearch richiede un
+            // obiettivo sincrono double[]→double, e qui girano su thread di lavoro senza
+            // SynchronizationContext (niente rischio deadlock) — rendere async l'intera
+            // catena Maximize per questo solo punto non ripaga.
             var cr = evaluateAsync(combo, ct).GetAwaiter().GetResult();
             if (cr is null) return double.MinValue;   // combinazione invalida: regione da evitare
             return (double)(selectOos ? cr.OosSharpe : cr.IsSharpe);

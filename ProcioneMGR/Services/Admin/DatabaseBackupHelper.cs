@@ -28,9 +28,9 @@ public sealed record BackupInfo(string FileName, string FullPath, DateTime Creat
 /// </summary>
 public static class DatabaseBackupHelper
 {
-    /// <summary>Nome del file di backup per un dato timestamp. Prefisso = nome del database.</summary>
-    private static string BackupFileName(string database, DateTime stampLocal) =>
-        $"{database}-{stampLocal:yyyyMMdd-HHmmss}.dump";
+    /// <summary>Nome del file di backup per un dato timestamp UTC. Prefisso = nome del database.</summary>
+    private static string BackupFileName(string database, DateTime stampUtc) =>
+        $"{database}-{stampUtc:yyyyMMdd-HHmmss}.dump";
 
     /// <summary>
     /// Backup completo e verificato: (1) <c>pg_dump -Fc</c> in <paramref name="backupDir"/> con
@@ -40,7 +40,9 @@ public static class DatabaseBackupHelper
     public static BackupResult Backup(PgConnectionInfo conn, string backupDir)
     {
         Directory.CreateDirectory(backupDir);
-        var backupPath = Path.Combine(backupDir, BackupFileName(conn.Database, DateTime.Now));
+        // UTC come tutto il resto della piattaforma: con l'ora locale un cambio DST può produrre
+        // nomi fuori ordine (o in collisione) attorno alle 2-3 di notte.
+        var backupPath = Path.Combine(backupDir, BackupFileName(conn.Database, DateTime.UtcNow));
 
         var (exit, _, stderr) = RunTool("pg_dump", new[]
         {

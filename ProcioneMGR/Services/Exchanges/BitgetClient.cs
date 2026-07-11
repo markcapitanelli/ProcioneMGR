@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using ProcioneMGR.Data;
 
 namespace ProcioneMGR.Services.Exchanges;
@@ -9,7 +10,7 @@ namespace ProcioneMGR.Services.Exchanges;
 /// Client Bitget Spot via REST pubblica v2 (dati di mercato non firmati).
 /// Endpoint candele: GET /api/v2/spot/market/candles.
 /// </summary>
-public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) : IExchangeClient, IFuturesExchangeClient
+public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, IConfiguration? configuration = null) : IExchangeClient, IFuturesExchangeClient
 {
     public ExchangeName Exchange => ExchangeName.Bitget;
 
@@ -145,6 +146,24 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
 
     public async Task<PlaceOrderResult> PlaceOrderAsync(PlaceOrderRequest request, CancellationToken ct = default)
     {
+        // GUARD (audit 2026-07, probabile bug serio): per i MARKET-BUY spot la v2 di Bitget
+        // documenta "size" come CONTROVALORE QUOTE (USDT), non quantità base — questo codice
+        // manda la quantità BASE, che su un buy reale produrrebbe un ordine di taglia
+        // completamente sbagliata (es. size=0.05 BTC interpretato come 0.05 USDT, o viceversa
+        // un fill enorme). Finché la semantica non è VERIFICATA dal vivo (tools/SpotVerify,
+        // vedi docs/REPORT-HARDENING-P1-2026-07.md) i market-buy spot Bitget sono RIFIUTATI:
+        // fallire forte batte un ordine di taglia sbagliata. Sblocco esplicito e consapevole
+        // via Trading:Bitget:SpotMarketBuyVerified=true dopo la verifica.
+        if (request.Type == "MARKET" && request.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase)
+            && configuration?.GetValue<bool>("Trading:Bitget:SpotMarketBuyVerified") != true)
+        {
+            const string reason = "MARKET-BUY spot Bitget bloccato: la semantica del campo 'size' (quote vs base) " +
+                "non è ancora stata verificata dal vivo. Esegui tools/SpotVerify e poi imposta " +
+                "Trading:Bitget:SpotMarketBuyVerified=true per sbloccare consapevolmente.";
+            logger.LogError("{Reason} (symbol {Symbol}, qty {Qty})", reason, request.Symbol, request.Quantity);
+            return new PlaceOrderResult { Success = false, Error = reason };
+        }
+
         var market = ToExchangeSymbol(request.Symbol);
         var body = JsonSerializer.Serialize(new
         {
@@ -162,15 +181,19 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
         {
             return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = error };
         }
-        using var doc = JsonDocument.Parse(resp);
-        var root = doc.RootElement;
-        var data = root.TryGetProperty("data", out var d) ? d : default;
-        return new PlaceOrderResult
+        PlaceOrderResult result;
+        using (var doc = JsonDocument.Parse(resp))
         {
-            Success = true,
-            ExchangeOrderId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
-            Status = "submitted",
-        };
+            var data = doc.RootElement.TryGetProperty("data", out var d) ? d : default;
+            result = new PlaceOrderResult
+            {
+                Success = true,
+                ExchangeOrderId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
+                Status = "submitted",
+            };
+        }
+        return await EnrichWithFillAsync(result,
+            () => GetOrderStatusAsync(request.Symbol, request.ClientOrderId, request.Credentials, ct), ct);
     }
 
     public async Task<CancelOrderResult> CancelOrderAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default)
@@ -202,6 +225,78 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
             }
         }
         return list;
+    }
+
+    public async Task<OrderStatusResult> GetOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default)
+    {
+        // L'endpoint accetta orderId O clientOid; il simbolo non è richiesto.
+        var (ok, resp, uncertain, error) = await SignedAsync(HttpMethod.Get, "/api/v2/spot/trade/orderInfo", $"clientOid={clientOrderId}", string.Empty, creds, ct);
+        if (!ok)
+        {
+            return BuildStatusLookupFailure(resp, uncertain, error);
+        }
+
+        using var doc = JsonDocument.Parse(resp);
+        if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0)
+        {
+            return new OrderStatusResult { Found = false, Error = "orderInfo: nessun ordine per questo clientOid." };
+        }
+
+        var o = data[0];
+        var filled = o.TryGetProperty("baseVolume", out var bv) ? ParseDecimalOrZero(bv) : 0m;
+        var avg = o.TryGetProperty("priceAvg", out var pa) ? ParseDecimalOrZero(pa) : 0m;
+        return new OrderStatusResult
+        {
+            Found = true,
+            Status = NormalizeBitgetOrderStatus(o.TryGetProperty("status", out var st) ? st.GetString() ?? "" : ""),
+            FilledPrice = avg > 0m ? avg : null,
+            FilledQuantity = filled > 0m ? filled : null,
+            ExchangeOrderId = o.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
+        };
+    }
+
+    /// <summary>
+    /// Mappa un fallimento del lookup di stato: 43001 ("The order does not exist") = NON TROVATO
+    /// certo; QUALUNQUE altro errore = stato IGNOTO (NetworkUncertain), mai "non trovato" —
+    /// scambiare un errore generico per un not-found riaprirebbe la finestra dell'ordine duplicato.
+    /// </summary>
+    private static OrderStatusResult BuildStatusLookupFailure(string body, bool uncertain, string? error)
+    {
+        if (!uncertain && !string.IsNullOrEmpty(body))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                var code = doc.RootElement.TryGetProperty("code", out var c) ? c.GetString() : null;
+                var msg = doc.RootElement.TryGetProperty("msg", out var m) ? m.GetString() ?? "" : "";
+                if (code == "43001" || msg.Contains("not exist", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new OrderStatusResult { Found = false, Error = error };
+                }
+            }
+            catch (JsonException) { /* body non-JSON: stato resta ignoto */ }
+        }
+        return new OrderStatusResult { Found = false, NetworkUncertain = true, Error = error };
+    }
+
+    /// <summary>Normalizza lo stato ordine Bitget (spot "status" / mix "state") nello schema comune.</summary>
+    internal static string NormalizeBitgetOrderStatus(string status) => status.ToLowerInvariant() switch
+    {
+        "live" or "new" or "init" or "not_trigger" => "Open",
+        "partially_filled" or "partial-fill" => "PartiallyFilled",
+        "filled" or "full-fill" => "Filled",
+        "cancelled" or "canceled" or "cancel" => "Cancelled",
+        "rejected" or "reject" => "Rejected",
+        "expired" => "Expired",
+        // Stato sconosciuto: trattato come vivo, così il riconciliatore cancella e ricontrolla.
+        _ => "Open",
+    };
+
+    /// <summary>Come <see cref="ParseDecimal"/> ma tollera campi vuoti (Bitget usa "" per i non valorizzati).</summary>
+    private static decimal ParseDecimalOrZero(JsonElement element)
+    {
+        var raw = element.GetString();
+        return string.IsNullOrEmpty(raw) ? 0m : decimal.Parse(raw, CultureInfo.InvariantCulture);
     }
 
     public async Task<AccountBalance> GetBalanceAsync(TradingCredentials creds, CancellationToken ct = default)
@@ -365,14 +460,56 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
         {
             return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = error };
         }
-        using var doc = JsonDocument.Parse(resp);
-        var data = doc.RootElement.TryGetProperty("data", out var d) ? d : default;
-        return new PlaceOrderResult
+        PlaceOrderResult result;
+        using (var doc = JsonDocument.Parse(resp))
         {
-            Success = true,
-            ExchangeOrderId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
-            Status = "submitted",
-        };
+            var data = doc.RootElement.TryGetProperty("data", out var d) ? d : default;
+            result = new PlaceOrderResult
+            {
+                Success = true,
+                ExchangeOrderId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
+                Status = "submitted",
+            };
+        }
+        return await EnrichWithFillAsync(result,
+            () => GetFuturesOrderStatusAsync(request.Symbol, request.ClientOrderId, request.Credentials, ct), ct);
+    }
+
+    /// <summary>
+    /// [M4] Bitget non restituisce i fill nella risposta di piazzamento (a differenza del POST
+    /// Binance con <c>fills[]</c>): senza un lookup l'engine ripiegava SEMPRE su currentPrice
+    /// come prezzo d'ingresso e lo slippage reale restava invisibile a PnL/stop. Poll breve e
+    /// best-effort del lookup C2: subito + 1 retry dopo 500ms se l'ordine è ancora vivo; ogni
+    /// altro esito lascia i fill null (l'engine degrada come prima). MAI un errore qui può
+    /// far fallire un piazzamento riuscito.
+    /// </summary>
+    private static async Task<PlaceOrderResult> EnrichWithFillAsync(
+        PlaceOrderResult placed, Func<Task<OrderStatusResult>> lookup, CancellationToken ct)
+    {
+        try
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var status = await lookup();
+                if (status.Found && status.Status is "Filled" or "PartiallyFilled" && status.FilledQuantity is > 0m)
+                {
+                    placed.FilledPrice = status.FilledPrice;
+                    placed.FilledQuantity = status.FilledQuantity;
+                    placed.Status = status.Status;
+                    return placed;
+                }
+                if (status.NetworkUncertain || !status.Found || status.IsTerminalUnfilled)
+                {
+                    return placed;   // niente di meglio da fare: fill null, degradazione odierna
+                }
+                if (attempt == 0) await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // best-effort per definizione: il place è riuscito, l'arricchimento no — pazienza.
+        }
+        return placed;
     }
 
     /// <summary>
@@ -506,6 +643,35 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
             });
         }
         return list;
+    }
+
+    public async Task<OrderStatusResult> GetFuturesOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)
+    {
+        var market = ToExchangeSymbol(symbol);
+        var productType = ProductType(credentials.IsTestnet);
+        var query = $"symbol={market}&productType={productType}&clientOid={clientOrderId}";
+        var (ok, resp, uncertain, error) = await SignedAsync(HttpMethod.Get, "/api/v2/mix/order/detail", query, string.Empty, credentials, ct);
+        if (!ok)
+        {
+            return BuildStatusLookupFailure(resp, uncertain, error);
+        }
+
+        using var doc = JsonDocument.Parse(resp);
+        if (!doc.RootElement.TryGetProperty("data", out var o) || o.ValueKind != JsonValueKind.Object)
+        {
+            return new OrderStatusResult { Found = false, Error = "order detail: nessun ordine per questo clientOid." };
+        }
+
+        var filled = o.TryGetProperty("baseVolume", out var bv) ? ParseDecimalOrZero(bv) : 0m;
+        var avg = o.TryGetProperty("priceAvg", out var pa) ? ParseDecimalOrZero(pa) : 0m;
+        return new OrderStatusResult
+        {
+            Found = true,
+            Status = NormalizeBitgetOrderStatus(o.TryGetProperty("state", out var st) ? st.GetString() ?? "" : ""),
+            FilledPrice = avg > 0m ? avg : null,
+            FilledQuantity = filled > 0m ? filled : null,
+            ExchangeOrderId = o.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
+        };
     }
 
     public async Task<FuturesBalance> GetFuturesBalanceAsync(TradingCredentials credentials, CancellationToken ct = default)

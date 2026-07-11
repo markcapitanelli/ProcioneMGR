@@ -61,3 +61,48 @@ public sealed class FactorDriftReport
 
     public DriftSeverity Overall => Results.Count == 0 ? DriftSeverity.None : Results.Max(r => r.Severity);
 }
+
+/// <summary>
+/// ENTITÀ EF (tabella <c>DriftCheckResults</c>): esito PERSISTITO di un check di drift su un
+/// modello, una riga per modello per tick del <see cref="FeatureDriftWorker"/> — anche quando è
+/// tutto pulito, così l'assenza di righe si distingue da "il worker non sta girando". Prima di
+/// questa tabella gli esiti vivevano solo nei log: la UI (/admin/autonomy) non poteva mostrare
+/// né l'ultimo esito né lo storico. Prune automatico oltre i 90 giorni nel worker.
+/// </summary>
+public class DriftCheckResult
+{
+    public int Id { get; set; }
+
+    /// <summary>Quando è stato eseguito il check (UTC).</summary>
+    public DateTime CheckedAtUtc { get; set; }
+
+    /// <summary>Id del <c>SavedMlModel</c> valutato. NON è FK: la riga sopravvive alla cancellazione del modello.</summary>
+    public int ModelId { get; set; }
+
+    /// <summary>Nome del modello, denormalizzato per leggibilità storica.</summary>
+    public string ModelName { get; set; } = string.Empty;
+
+    public string Symbol { get; set; } = string.Empty;
+    public string Timeframe { get; set; } = string.Empty;
+
+    /// <summary>Feature totali valutate; 0 = check saltato (es. candele recenti insufficienti).</summary>
+    public int TotalFeatures { get; set; }
+
+    /// <summary>Feature con drift (Warning o Alert).</summary>
+    public int DriftingFeatures { get; set; }
+
+    /// <summary>Feature in Alert (sottoinsieme di <see cref="DriftingFeatures"/>).</summary>
+    public int AlertFeatures { get; set; }
+
+    /// <summary>Gravità complessiva del check (max tra le feature).</summary>
+    public DriftSeverity Overall { get; set; }
+
+    /// <summary>
+    /// Top-5 feature in drift, JSON <c>[{"name","severity","detector","score"}]</c> — abbastanza
+    /// per la tabella in UI senza persistire l'intero report per-feature.
+    /// </summary>
+    public string? TopFeaturesJson { get; set; }
+
+    /// <summary>True se QUESTO check ha fatto ritirare un Champion (ciclo chiuso del registry).</summary>
+    public bool ChampionRetired { get; set; }
+}

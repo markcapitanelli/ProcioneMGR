@@ -68,6 +68,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<ProcioneMGR.Services.Experiments.ExperimentRun> ExperimentRuns => Set<ProcioneMGR.Services.Experiments.ExperimentRun>();
     public DbSet<ProcioneMGR.Services.Experiments.ExperimentArtifact> ExperimentArtifacts => Set<ProcioneMGR.Services.Experiments.ExperimentArtifact>();
 
+    /// <summary>Esiti dei check di drift feature (uno per modello per tick del FeatureDriftWorker).</summary>
+    public DbSet<ProcioneMGR.Services.Monitoring.Drift.DriftCheckResult> DriftCheckResults => Set<ProcioneMGR.Services.Monitoring.Drift.DriftCheckResult>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         // IMPORTANTISSIMO: lasciare che Identity configuri le sue tabelle
@@ -115,7 +118,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // SEGRETI CIFRATI A RIPOSO (AES-256-GCM via converter).
             entity.Property(e => e.ApiKey).HasConversion(encryptedConverter).IsRequired();
             entity.Property(e => e.ApiSecret).HasConversion(encryptedConverter).IsRequired();
-            entity.Property(e => e.Passphrase).HasConversion(encryptedConverter); // nullable: il converter non viene invocato sui null
+            // Nullable: EF non invoca mai il converter sui null; il cast alla base non generica
+            // evita il falso positivo CS8620 (varianza dei nullable negli argomenti generici).
+            entity.Property(e => e.Passphrase)
+                  .HasConversion((Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter)encryptedConverter);
 
             // Relazione 1-a-molti con l'utente; cancellando l'utente si cancellano le credenziali.
             entity.HasOne(e => e.User)
@@ -379,6 +385,20 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasKey(x => x.Id);
             e.Property(x => x.KindTag).HasMaxLength(32);
             e.HasIndex(x => x.RunId);
+        });
+
+        builder.Entity<ProcioneMGR.Services.Monitoring.Drift.DriftCheckResult>(e =>
+        {
+            e.ToTable("DriftCheckResults");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.ModelName).HasMaxLength(128);
+            e.Property(x => x.Symbol).HasMaxLength(32);
+            e.Property(x => x.Timeframe).HasMaxLength(8);
+            // Enum come stringa leggibile ("None"/"Warning"/"Alert"), coerente con le altre entità.
+            e.Property(x => x.Overall).HasConversion<string>().HasMaxLength(8);
+            // La UI legge "gli ultimi N" globali o per modello; il prune cancella per data.
+            e.HasIndex(x => x.CheckedAtUtc);
+            e.HasIndex(x => new { x.ModelId, x.CheckedAtUtc });
         });
 
         // --- Adattamenti specifici PostgreSQL ---
