@@ -17,7 +17,8 @@
 
 .top-row {
     min-height: 3.5rem;
-    background-color: rgba(0, 0, 0, 0.25);
+    background-color: #161b22;
+    border-bottom: 1px solid #21262d;
 }
 
 .navbar-brand {
@@ -132,9 +133,9 @@
 }
 
 .nav-item ::deep a.active {
-    background-color: rgba(45, 212, 191, 0.18);
+    background-color: rgba(88, 166, 255, 0.15);
     color: #fff;
-    box-shadow: inset 3px 0 0 #2dd4bf;
+    box-shadow: inset 3px 0 0 #58a6ff;
 }
 
 .nav-item ::deep .nav-link:hover {

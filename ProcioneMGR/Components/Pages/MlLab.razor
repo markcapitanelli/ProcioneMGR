@@ -107,14 +107,6 @@
                 <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
             </div>
             <div class="col-auto">
-                <label class="form-label">% Train</label>
-                <input type="number" step="1" min="10" max="90" class="form-control" style="width: 7rem;" @bind="_trainSplitPercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Orizzonte forward</label>
-                <input type="number" step="1" min="1" class="form-control" style="width: 8rem;" @bind="_forwardHorizon" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
                 <label class="form-label">Modello</label>
                 <select class="form-select" @bind="_modelType" disabled="@_busy">
                     <option value="Linear">Lineare (SDCA)</option>
@@ -126,6 +118,10 @@
                 </select>
             </div>
         </div>
+
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
 
         @if (_modelType == "Stacked")
         {
@@ -210,8 +206,23 @@
             </div>
         }
 
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">% Train</label>
+                    <input type="number" step="1" min="10" max="90" class="form-control" style="width: 7rem;" @bind="_trainSplitPercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Orizzonte forward</label>
+                    <input type="number" step="1" min="1" class="form-control" style="width: 8rem;" @bind="_forwardHorizon" disabled="@_busy" />
+                </div>
+            </div>
+        </AdvancedPanel>
+
         <div class="mt-3">
-            <button class="btn btn-primary" @onclick="TrainAsync" disabled="@(_busy || (_selectedFactors.Count == 0 && _selectedSavedFactorIds.Count == 0))">
+            <button class="btn btn-primary" @onclick="TrainAsync"
+                    disabled="@(_busy || !_hasData || (_selectedFactors.Count == 0 && _selectedSavedFactorIds.Count == 0))"
+                    title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                 @if (_busy && _stage == Stage.Training)
                 {
                     <span class="spinner-border spinner-border-sm me-1"></span>
@@ -454,6 +465,13 @@
 
     private Stage _stage = Stage.Idle;
     private bool _busy;
+
+    // Aggiornato dal componente DataAvailability (gating dell'addestramento).
+    private bool _hasData = true;
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Train {_trainSplitPercent}% · Orizzonte forward {_forwardHorizon} candel{(_forwardHorizon == 1 ? "a" : "e")}";
     private bool _isError;
     private string? _status;
 

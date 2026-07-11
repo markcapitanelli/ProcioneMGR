@@ -229,7 +229,8 @@
                 <input type="number" step="1" min="1" class="form-control" style="width: 8rem;" @bind="_forwardHorizon" disabled="@_evaluating" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-success" @onclick="EvaluateAsync" disabled="@_evaluating">
+                <button class="btn btn-success" @onclick="EvaluateAsync" disabled="@(_evaluating || !_hasData)"
+                        title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                     @if (_evaluating)
                     {
                         <span class="spinner-border spinner-border-sm me-1"></span>
@@ -238,6 +239,10 @@
                 </button>
             </div>
         </div>
+
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_evaluating"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
 
         @if (!string.IsNullOrEmpty(_evalStatus))
         {
@@ -453,6 +458,9 @@
 
     private List<string> _knownSymbols = new();
     private bool _evaluating;
+
+    // Aggiornato dal componente DataAvailability (gating della valutazione).
+    private bool _hasData = true;
     private bool _evalError;
     private string? _evalStatus;
     private FactorEvaluationResult? _evalResult;

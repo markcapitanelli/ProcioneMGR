@@ -70,44 +70,52 @@
                 <label class="form-label">A</label>
                 <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
             </div>
-        </div>
-
-        <hr />
-        <div class="row g-3 align-items-end">
-            <div class="col-auto">
-                <label class="form-label">Orizzonte forward</label>
-                <input type="number" class="form-control" style="width:7rem" @bind="_forwardHorizon" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Top N</label>
-                <input type="number" class="form-control" style="width:6rem" @bind="_topN" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">|IC| minimo</label>
-                <input type="number" step="any" class="form-control" style="width:7rem" @bind="_minAbsIc" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">IR minimo</label>
-                <input type="number" step="any" class="form-control" style="width:7rem" @bind="_minIr" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="fs_sign" @bind="_requireConsistentSign" disabled="@_busy" />
-                    <label class="form-check-label" for="fs_sign">Solo segno consistente</label>
-                </div>
-            </div>
             <div class="col-auto">
                 <div class="form-check">
                     <input type="checkbox" class="form-check-input" id="fs_a158" @bind="_includeAlpha158" disabled="@_busy" />
                     <label class="form-check-label" for="fs_a158">Includi catalogo Alpha158 (@_alpha158Count fattori, più lento)</label>
                 </div>
             </div>
-            <div class="col-auto">
-                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
-                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                    Valuta fattori
-                </button>
+        </div>
+
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
+
+        @* Orizzonte e filtri di selezione hanno default sensati: pannello avanzate. *@
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Orizzonte forward</label>
+                    <input type="number" class="form-control" style="width:7rem" @bind="_forwardHorizon" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Top N</label>
+                    <input type="number" class="form-control" style="width:6rem" @bind="_topN" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">|IC| minimo</label>
+                    <input type="number" step="any" class="form-control" style="width:7rem" @bind="_minAbsIc" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">IR minimo</label>
+                    <input type="number" step="any" class="form-control" style="width:7rem" @bind="_minIr" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="fs_sign" @bind="_requireConsistentSign" disabled="@_busy" />
+                        <label class="form-check-label" for="fs_sign">Solo segno consistente</label>
+                    </div>
+                </div>
             </div>
+        </AdvancedPanel>
+
+        <div class="mt-3">
+            <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_busy || !_hasData)"
+                    title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
+                @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Valuta fattori
+            </button>
         </div>
         <div class="text-muted small mt-2">Candidati da valutare: <strong>@CandidateCount()</strong></div>
         @if (!string.IsNullOrEmpty(_status))
@@ -166,6 +174,14 @@
     private double _minAbsIc = 0.02;
     private double _minIr;
     private bool _requireConsistentSign;
+
+    // Aggiornato dal componente DataAvailability (gating della valutazione).
+    private bool _hasData = true;
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Orizzonte {_forwardHorizon} · Top {_topN} · |IC| ≥ {_minAbsIc:0.###} · IR ≥ {_minIr:0.###}"
+        + (_requireConsistentSign ? " · solo segno consistente" : "");
     private bool _includeAlpha158;
 
     private List<string> _knownSymbols = new();

@@ -1,5 +1,5 @@
 html, body {
-    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
     /* Guardia contro scrollbar orizzontali indesiderate in fondo alla pagina. IMPORTANTE:
        "overflow-x: hidden" DEVE essere evitato qui — il browser deriva implicitamente
        "overflow-y: auto", creando un nuovo scroll container sul body che rompe il
@@ -12,18 +12,178 @@ html, body {
     overflow-x: clip;
 }
 
+/* ============================================================================
+   Tema scuro GitHub-style (#0d1117 sfondo, #161b22 superfici, #30363d bordi).
+   Le pagine usano componenti Bootstrap standard: qui si ricalibrano le variabili
+   del tema dark di Bootstrap 5.3 sulla palette GitHub, così TUTTE le pagine
+   (card, tabelle, form, alert, modali) si adattano senza modifiche puntuali.
+   ========================================================================== */
+[data-bs-theme="dark"] {
+    --bs-body-bg: #0d1117;
+    --bs-body-color: #e6edf3;
+    --bs-emphasis-color: #ffffff;
+    --bs-secondary-color: #8b949e;
+    --bs-secondary-bg: #161b22;
+    --bs-tertiary-bg: #21262d;
+    --bs-tertiary-color: #8b949e;
+    --bs-border-color: #30363d;
+    --bs-border-color-translucent: rgba(240, 246, 252, 0.1);
+    --bs-link-color: #58a6ff;
+    --bs-link-hover-color: #79c0ff;
+    --bs-card-bg: #161b22;
+}
+
+[data-bs-theme="dark"] .card {
+    --bs-card-bg: #161b22;
+    --bs-card-border-color: #30363d;
+    --bs-card-cap-bg: #1c2129;
+}
+
+[data-bs-theme="dark"] .modal-content {
+    background-color: #161b22;
+    border-color: #30363d;
+}
+
+[data-bs-theme="dark"] .form-control,
+[data-bs-theme="dark"] .form-select {
+    background-color: #0d1117;
+    border-color: #30363d;
+    color: #e6edf3;
+}
+
+[data-bs-theme="dark"] .form-control:focus,
+[data-bs-theme="dark"] .form-select:focus {
+    background-color: #0d1117;
+    border-color: #58a6ff;
+    box-shadow: 0 0 0 0.2rem rgba(88, 166, 255, 0.25);
+    color: #e6edf3;
+}
+
+[data-bs-theme="dark"] .table {
+    --bs-table-bg: transparent;
+    --bs-table-border-color: #30363d;
+}
+
+/* Le pagine usano bg-light/table-light come "superficie chiara": nel tema scuro
+   diventano la superficie rialzata (#21262d) invece di restare bianche. */
+[data-bs-theme="dark"] .bg-light {
+    background-color: #21262d !important;
+    color: #e6edf3;
+}
+
+[data-bs-theme="dark"] .table-light {
+    --bs-table-bg: #21262d;
+    --bs-table-color: #e6edf3;
+    --bs-table-border-color: #30363d;
+}
+
+[data-bs-theme="dark"] .text-muted {
+    color: #8b949e !important;
+}
+
+[data-bs-theme="dark"] .btn-outline-secondary {
+    --bs-btn-color: #c9d1d9;
+    --bs-btn-border-color: #30363d;
+    --bs-btn-hover-bg: #21262d;
+    --bs-btn-hover-border-color: #8b949e;
+    --bs-btn-hover-color: #e6edf3;
+}
+
+/* ============================================================================
+   Scala tipografica e densità (stile GitHub: UI compatta, gerarchia contenuta).
+   I default Bootstrap sono pensati per siti di contenuto (h1 2.5rem, bottoni
+   grandi): per una web-app densa i titoli di pagina erano fuori scala rispetto
+   a form e tabelle. Qui si definisce un'unica scala coerente:
+   testo base 14.4px → controlli 0.85rem → titoli di pagina 1.6rem (~26px).
+   ========================================================================== */
+body {
+    font-size: 0.9rem; /* 14.4px: testo base della web-app */
+}
+
+h1 { font-size: 1.6rem;  font-weight: 600; margin-bottom: 0.9rem; }
+h2 { font-size: 1.35rem; font-weight: 600; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+h4 { font-size: 1.05rem; font-weight: 600; }
+h5 { font-size: 0.95rem; font-weight: 600; }
+h6 { font-size: 0.9rem;  font-weight: 600; }
+
+.lead {
+    font-size: 1.05rem;
+}
+
+/* Solo la landing page (non autenticata) mantiene un titolo "hero" più grande. */
+.display-5 {
+    font-size: 2.3rem;
+}
+
+.btn {
+    font-size: 0.85rem;
+    padding: 0.4rem 0.85rem;
+}
+
+.btn-sm {
+    font-size: 0.78rem;
+    padding: 0.25rem 0.6rem;
+}
+
+.btn-lg {
+    font-size: 0.95rem;
+    padding: 0.55rem 1.15rem;
+}
+
+.form-control, .form-select, .input-group-text {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.6rem;
+}
+
+/* Le label sopra i campi fanno da didascalia, non da testo: più piccole e grigie. */
+.form-label {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: #8b949e;
+    margin-bottom: 0.25rem;
+}
+
+.form-check-label {
+    font-size: 0.85rem;
+}
+
+.table {
+    font-size: 0.85rem;
+}
+
+.card-header {
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.55rem 1rem;
+}
+
+.alert {
+    font-size: 0.88rem;
+    padding: 0.7rem 0.9rem;
+}
+
+.modal-title {
+    font-size: 1.05rem;
+}
+
 a, .btn-link {
-    color: #006bb7;
+    color: #58a6ff;
 }
 
 .btn-primary {
-    color: #fff;
-    background-color: #1b6ec2;
-    border-color: #1861ac;
+    --bs-btn-bg: #238636;
+    --bs-btn-border-color: #2ea043;
+    --bs-btn-hover-bg: #2ea043;
+    --bs-btn-hover-border-color: #3fb950;
+    --bs-btn-active-bg: #238636;
+    --bs-btn-active-border-color: #2ea043;
+    --bs-btn-color: #ffffff;
+    --bs-btn-hover-color: #ffffff;
 }
 
 .btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+    box-shadow: 0 0 0 0.2rem rgba(88, 166, 255, 0.35);
 }
 
 .content {
@@ -41,16 +201,17 @@ a, .btn-link {
 }
 
 .feature-card {
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
     padding: 1.25rem;
-    transition: box-shadow 0.15s ease, transform 0.15s ease;
+    transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
 }
 
 .feature-card:hover {
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 8px 24px rgba(1, 4, 9, 0.55);
     transform: translateY(-2px);
+    border-color: #8b949e;
 }
 
 .feature-icon {
@@ -70,11 +231,43 @@ a, .btn-link {
     line-height: 1;
 }
 
+/* --- Quick Actions (Home) --- */
+.quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.quick-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.9rem;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #e6edf3;
+    font-size: 0.87rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.quick-action:hover {
+    background: #30363d;
+    border-color: #8b949e;
+    color: #ffffff;
+}
+
+.quick-action .bi {
+    color: #58a6ff;
+}
+
 .workflow-step {
     position: relative;
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
     padding: 1.25rem 1.1rem;
     color: inherit;
     text-decoration: none;
@@ -82,7 +275,7 @@ a, .btn-link {
 }
 
 .workflow-step:hover {
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 8px 24px rgba(1, 4, 9, 0.55);
     transform: translateY(-2px);
     border-color: #2dd4bf;
     color: inherit;
@@ -95,7 +288,7 @@ a, .btn-link {
     width: 1.8rem;
     height: 1.8rem;
     border-radius: 50%;
-    background: #134e4a;
+    background: #238636;
     color: #fff;
     font-weight: 700;
     font-size: 0.85rem;
@@ -113,7 +306,7 @@ a, .btn-link {
         right: -1.35rem;
         top: 50%;
         transform: translateY(-50%);
-        color: #cbd5e1;
+        color: #484f58;
         font-size: 1rem;
     }
 }
@@ -123,15 +316,15 @@ h1:focus {
 }
 
 .valid.modified:not([type=checkbox]) {
-    outline: 1px solid #26b050;
+    outline: 1px solid #3fb950;
 }
 
 .invalid {
-    outline: 1px solid #e50000;
+    outline: 1px solid #f85149;
 }
 
 .validation-message {
-    color: #e50000;
+    color: #f85149;
 }
 
 .blazor-error-boundary {
@@ -145,7 +338,7 @@ h1:focus {
     }
 
 .darker-border-checkbox.form-check-input {
-    border-color: #929292;
+    border-color: #484f58;
 }
 
 .form-floating > .form-control-plaintext::placeholder, .form-floating > .form-control::placeholder {
@@ -169,11 +362,11 @@ h1:focus {
 
 .app-breadcrumb .breadcrumb-item + .breadcrumb-item::before {
     content: '›';
-    color: #94a3b8;
+    color: #484f58;
 }
 
 .app-breadcrumb .breadcrumb-item a {
-    color: #0f766e;
+    color: #58a6ff;
     text-decoration: none;
 }
 
@@ -182,18 +375,72 @@ h1:focus {
 }
 
 .app-breadcrumb .breadcrumb-item.active {
-    color: #475569;
+    color: #e6edf3;
     font-weight: 600;
+}
+
+.app-breadcrumb .breadcrumb-item {
+    color: #8b949e;
+}
+
+/* --- Pannello impostazioni avanzate (disclosure nei form di configurazione) --- */
+.advanced-panel {
+    margin-top: 1rem;
+    border-top: 1px dashed #30363d;
+    padding-top: 0.6rem;
+}
+
+.advanced-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0.2rem 0;
+    color: #8b949e;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+}
+
+.advanced-toggle:hover {
+    color: #e6edf3;
+}
+
+.advanced-caret {
+    transition: transform 0.15s ease;
+    font-size: 0.75rem;
+    flex: 0 0 auto;
+}
+
+.advanced-caret.open {
+    transform: rotate(90deg);
+}
+
+.advanced-summary {
+    font-weight: 400;
+    color: #8b949e;
+    font-size: 0.78rem;
+    margin-left: 0.35rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.advanced-body {
+    margin-top: 0.6rem;
 }
 
 /* --- Pannello Guida (spiegazione pagina, espandibile) --- */
 .guida-panel-header {
-    background-color: #eef6fc;
+    background-color: #1c2129;
     user-select: none;
 }
 
 .guida-panel-header:hover {
-    background-color: #e1f0fa;
+    background-color: #21262d;
 }
 
 .guida-panel-body {
@@ -206,4 +453,125 @@ h1:focus {
 
 .guida-panel-body dd {
     margin-bottom: 0.65rem;
+}
+
+/* --- Command palette (ricerca globale Ctrl+K) --- */
+.cmdk-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(1, 4, 9, 0.6);
+    z-index: 1080;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding-top: 12vh;
+}
+
+.cmdk-panel {
+    width: min(620px, 92vw);
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    box-shadow: 0 16px 48px rgba(1, 4, 9, 0.85);
+    overflow: hidden;
+}
+
+.cmdk-input-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.8rem 1rem;
+    border-bottom: 1px solid #30363d;
+    color: #8b949e;
+}
+
+.cmdk-input-row input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #e6edf3;
+    font-size: 1rem;
+}
+
+.cmdk-hint {
+    font-size: 0.7rem;
+    color: #8b949e;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 0.1rem 0.35rem;
+}
+
+.cmdk-results {
+    max-height: 50vh;
+    overflow-y: auto;
+    padding: 0.4rem;
+}
+
+.cmdk-item {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.55rem 0.7rem;
+    border-radius: 6px;
+    cursor: pointer;
+    color: #e6edf3;
+}
+
+.cmdk-item.selected,
+.cmdk-item:hover {
+    background: rgba(88, 166, 255, 0.15);
+}
+
+.cmdk-item .bi {
+    color: #58a6ff;
+    width: 1.2rem;
+    text-align: center;
+}
+
+.cmdk-item-label {
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.cmdk-item-desc {
+    font-size: 0.75rem;
+    color: #8b949e;
+}
+
+.cmdk-item-section {
+    margin-left: auto;
+    font-size: 0.7rem;
+    color: #8b949e;
+    border: 1px solid #30363d;
+    border-radius: 999px;
+    padding: 0.05rem 0.5rem;
+    white-space: nowrap;
+}
+
+.cmdk-empty {
+    padding: 1.2rem;
+    text-align: center;
+    color: #8b949e;
+    font-size: 0.9rem;
+}
+
+/* Trigger nella top-row: finto campo di ricerca stile GitHub. */
+.cmdk-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #8b949e;
+    font-size: 0.82rem;
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+}
+
+.cmdk-trigger:hover {
+    border-color: #8b949e;
+    color: #e6edf3;
 }

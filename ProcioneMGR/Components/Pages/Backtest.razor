@@ -123,6 +123,11 @@
             </div>
         </div>
 
+        @* Validazione preventiva: la pagina sa quali dati esistono PRIMA del Run. *@
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
+
         <hr />
 
         <div class="row g-3 align-items-end">
@@ -151,44 +156,52 @@
                 <label class="form-label">Position size %</label>
                 <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_positionSizePercent" disabled="@_busy" />
             </div>
-            <div class="col-auto">
-                <label class="form-label">Fee %</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Stop loss % (0=off)</label>
-                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_stopLossPercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Take profit % (0=off)</label>
-                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_takeProfitPercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Trailing stop % (0=off)</label>
-                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_trailingStopPercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto align-self-end">
-                <button type="button" class="btn btn-outline-secondary" @onclick="SuggestBracketAsync" disabled="@_busy"
-                        title="Calcola SL e TP dai dati (percentili 95° di escursione avversa/favorevole) per la coppia/timeframe selezionata">
-                    Suggerisci SL/TP
-                </button>
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Leva (1=spot)</label>
-                <input type="number" step="1" min="1" max="125" class="form-control" style="width: 7rem;" @bind="_leverage" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Slippage %</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_slippagePercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Funding %/8h</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_fundingPercent" disabled="@_busy" />
-            </div>
         </div>
 
+        @* Fee, protezioni e attriti di mercato hanno default sensati: fuori dalla vista
+           finché non servono, ma con riassunto sempre leggibile. *@
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Fee %</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Stop loss % (0=off)</label>
+                    <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_stopLossPercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Take profit % (0=off)</label>
+                    <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_takeProfitPercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Trailing stop % (0=off)</label>
+                    <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_trailingStopPercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto align-self-end">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="SuggestBracketAsync" disabled="@_busy"
+                            title="Calcola SL e TP dai dati (percentili 95° di escursione avversa/favorevole) per la coppia/timeframe selezionata">
+                        Suggerisci SL/TP
+                    </button>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Leva (1=spot)</label>
+                    <input type="number" step="1" min="1" max="125" class="form-control" style="width: 7rem;" @bind="_leverage" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Slippage %</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_slippagePercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Funding %/8h</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_fundingPercent" disabled="@_busy" />
+                </div>
+            </div>
+        </AdvancedPanel>
+
         <div class="mt-3 d-flex gap-2 align-items-center">
-            <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+            <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_busy || NoData)"
+                    title="@(NoData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                 @if (_busy)
                 {
                     <span class="spinner-border spinner-border-sm me-1"></span>
@@ -227,6 +240,17 @@
             <div class="col-auto">@MetricCard("⚠ LIQUIDAZIONI", $"{_result.LiquidationCount}", false)</div>
         }
     </div>
+
+    @* Passaggio di contesto al passo successivo del workflow: Optimization si apre
+       già precompilata con simbolo, periodo, strategia e parametri di questo run. *@
+    <AuthorizeView Roles="@($"{AppRoles.Manager},{AppRoles.Admin}")">
+        <div class="mb-3 d-flex align-items-center gap-2 flex-wrap">
+            <a class="btn btn-outline-primary btn-sm" href="@OptimizationHandoffUrl">
+                <i class="bi bi-sliders2 me-1"></i>Ottimizza questa strategia →
+            </a>
+            <span class="form-text">Apre Optimization precompilata con questi simbolo, periodo e parametri.</span>
+        </div>
+    </AuthorizeView>
 
     @if (_tradeReport is not null && _tradeReport.OperationCount > 0)
     {
@@ -461,6 +485,36 @@
     private string? _status;
     private CancellationTokenSource? _cts;
 
+    // Aggiornato dal componente DataAvailability: false = nessuna candela per
+    // symbol+timeframe correnti, quindi il Run è disabilitato con motivo visibile.
+    private bool _hasData = true;
+
+    private bool NoData => !_hasData;
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Fee {_feePercent:0.##}% · SL {PctOrOff(_stopLossPercent)} · TP {PctOrOff(_takeProfitPercent)}"
+        + $" · Trailing {PctOrOff(_trailingStopPercent)} · Leva {_leverage:0}×"
+        + $" · Slippage {_slippagePercent:0.##}% · Funding {_fundingPercent:0.##}%";
+
+    private static string PctOrOff(decimal v) => v > 0m ? $"{v:0.##}%" : "off";
+
+    /// <summary>Link a Optimization precompilata col contesto di questo backtest.</summary>
+    private string OptimizationHandoffUrl
+    {
+        get
+        {
+            var parameters = JsonSerializer.Serialize(_paramInputs.ToDictionary(p => p.Key, p => p.Value));
+            return "optimization"
+                 + $"?exchange={Uri.EscapeDataString(_exchange.ToString())}"
+                 + $"&symbol={Uri.EscapeDataString(_symbol.Trim())}"
+                 + $"&timeframe={Uri.EscapeDataString(_timeframe)}"
+                 + $"&strategy={Uri.EscapeDataString(_strategyName)}"
+                 + $"&from={_from:yyyy-MM-dd}&to={_to:yyyy-MM-dd}"
+                 + $"&parameters={Uri.EscapeDataString(parameters)}";
+        }
+    }
+
     /// <summary>
     /// Calcola SL e TP dai dati della coppia/timeframe nella finestra selezionata (media dei
     /// percentili 95° di escursione avversa/favorevole tra long e short) e riempie i campi.
@@ -516,8 +570,10 @@
 
         BuildParamInputs(); // default per la strategia iniziale
 
-        await using var db = await DbFactory.CreateDbContextAsync();
-        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        await using (var db = await DbFactory.CreateDbContextAsync())
+        {
+            _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        }
 
         if (Load is int id)
         {
