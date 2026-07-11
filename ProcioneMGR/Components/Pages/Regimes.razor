@@ -1,7 +1,9 @@
 @page "/regimes"
 @rendermode InteractiveServer
+@using System.Security.Claims
 @using System.Text.Json
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Backtesting
@@ -15,6 +17,7 @@
 @inject IEnsembleManager EnsembleMgr
 @inject IStrategyFactory StrategyFactory
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Market Regimes</PageTitle>
 <h1>Market Regime Detection <span class="badge bg-secondary">K-means</span></h1>
@@ -59,6 +62,8 @@
 <div class="card mb-3">
     <div class="card-header">Training</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="regimes" UserId="@_userId" Disabled="_busy"
+                       ShowUi="false" Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -268,8 +273,33 @@
 
     private IEnumerable<string> StrategyNames() => StrategyFactory.Prototypes.Select(p => p.Name);
 
+    private string? _userId;
+    private ConfigPresets? _presets;
+
+    /// <summary>Memoria dell'ultima configurazione usata (modalità silenziosa: form minimo).</summary>
+    private sealed record PageConfig(string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To, int K);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to, _k));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; }
+        if (cfg is null) return;
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _k = Math.Clamp(cfg.K, 2, 8);
+    }
+
     protected override async Task OnInitializedAsync()
     {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         await using (var db = await DbFactory.CreateDbContextAsync())
         {
             _symbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
@@ -289,6 +319,9 @@
 
     private async Task TrainAsync()
     {
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
+
         _busy = true; _isError = false; _status = null; _timeline = new();
         try
         {

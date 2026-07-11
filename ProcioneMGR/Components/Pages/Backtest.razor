@@ -84,6 +84,9 @@
 <div class="card mb-3">
     <div class="card-header">Configurazione</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="backtest" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson"
+                       AutoRestoreLast="@(Load is null && string.IsNullOrEmpty(QuerySymbol))" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -447,6 +450,16 @@
 @code {
     [SupplyParameterFromQuery] private int? Load { get; set; }
 
+    // Contesto opzionale passato dall'Optimization ("Backtest →" sulle righe della Top 10):
+    // precompila exchange/simbolo/periodo/strategia e i valori dei parametri.
+    [SupplyParameterFromQuery(Name = "exchange")] private string? QueryExchange { get; set; }
+    [SupplyParameterFromQuery(Name = "symbol")] private string? QuerySymbol { get; set; }
+    [SupplyParameterFromQuery(Name = "timeframe")] private string? QueryTimeframe { get; set; }
+    [SupplyParameterFromQuery(Name = "strategy")] private string? QueryStrategy { get; set; }
+    [SupplyParameterFromQuery(Name = "from")] private string? QueryFrom { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] private string? QueryTo { get; set; }
+    [SupplyParameterFromQuery(Name = "parameters")] private string? QueryParameters { get; set; }
+
     private ExchangeName _exchange = ExchangeName.Binance;
     private string _symbol = "BTC/USDT";
     private string _timeframe = "1h";
@@ -488,6 +501,53 @@
     // Aggiornato dal componente DataAvailability: false = nessuna candela per
     // symbol+timeframe correnti, quindi il Run è disabilitato con motivo visibile.
     private bool _hasData = true;
+
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
+        decimal InitialCapital, decimal PositionSizePercent, decimal FeePercent,
+        decimal StopLossPercent, decimal TakeProfitPercent, decimal TrailingStopPercent,
+        decimal Leverage, decimal SlippagePercent, decimal FundingPercent,
+        string StrategyName, Dictionary<string, decimal> Parameters);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to,
+        _initialCapital, _positionSizePercent, _feePercent,
+        _stopLossPercent, _takeProfitPercent, _trailingStopPercent,
+        _leverage, _slippagePercent, _fundingPercent,
+        _strategyName, _paramInputs.ToDictionary(p => p.Key, p => p.Value)));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _initialCapital = cfg.InitialCapital;
+        _positionSizePercent = cfg.PositionSizePercent;
+        _feePercent = cfg.FeePercent;
+        _stopLossPercent = cfg.StopLossPercent;
+        _takeProfitPercent = cfg.TakeProfitPercent;
+        _trailingStopPercent = cfg.TrailingStopPercent;
+        _leverage = cfg.Leverage;
+        _slippagePercent = cfg.SlippagePercent;
+        _fundingPercent = cfg.FundingPercent;
+
+        if (StrategyFactory.Prototypes.Any(p => p.Name == cfg.StrategyName)) _strategyName = cfg.StrategyName;
+        BuildParamInputs();
+        foreach (var pi in _paramInputs)
+        {
+            if (cfg.Parameters.TryGetValue(pi.Key, out var v)) pi.Value = v;
+        }
+    }
 
     private bool NoData => !_hasData;
 
@@ -568,7 +628,9 @@
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        BuildParamInputs(); // default per la strategia iniziale
+        ApplyHandoffContext();  // eventuale contesto dall'Optimization, prima dei default
+        BuildParamInputs();     // default per la strategia (iniziale o importata)
+        ApplyHandoffParameters();
 
         await using (var db = await DbFactory.CreateDbContextAsync())
         {
@@ -579,6 +641,44 @@
         {
             await LoadStrategyAsync(id);
         }
+    }
+
+    // Applica il contesto arrivato via query string (dall'Optimization). Valori assenti
+    // o malformati lasciano i default: il link è una comodità, mai un requisito.
+    private void ApplyHandoffContext()
+    {
+        if (!string.IsNullOrWhiteSpace(QuerySymbol)) _symbol = QuerySymbol.Trim();
+        if (!string.IsNullOrWhiteSpace(QueryTimeframe) && Timeframes.Supported.ContainsKey(QueryTimeframe)) _timeframe = QueryTimeframe;
+        if (Enum.TryParse<ExchangeName>(QueryExchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (DateTime.TryParse(QueryFrom, out var from)) _from = from.Date;
+        if (DateTime.TryParse(QueryTo, out var to)) _to = to.Date;
+
+        if (!string.IsNullOrWhiteSpace(QueryStrategy) && StrategyFactory.Prototypes.Any(p => p.Name == QueryStrategy))
+        {
+            _strategyName = QueryStrategy;
+        }
+
+        if (!string.IsNullOrWhiteSpace(QuerySymbol))
+        {
+            SetStatus($"Configurazione importata dall'Optimization: {_symbol} {_timeframe}, strategia {_strategyName}.", error: false);
+        }
+    }
+
+    // Applica i valori dei parametri passati via query string, dopo che BuildParamInputs
+    // ha creato gli input coi default: le chiavi sconosciute vengono ignorate.
+    private void ApplyHandoffParameters()
+    {
+        if (string.IsNullOrWhiteSpace(QueryParameters)) return;
+        try
+        {
+            var values = JsonSerializer.Deserialize<Dictionary<string, decimal>>(QueryParameters);
+            if (values is null) return;
+            foreach (var pi in _paramInputs)
+            {
+                if (values.TryGetValue(pi.Key, out var v)) pi.Value = v;
+            }
+        }
+        catch (JsonException) { /* parametri malformati: restano i default */ }
     }
 
     private void OnStrategyChanged(ChangeEventArgs e)
@@ -603,6 +703,9 @@
             SetStatus("Controlla symbol e intervallo date.", error: true);
             return;
         }
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
 
         _busy = true;
         _isError = false;

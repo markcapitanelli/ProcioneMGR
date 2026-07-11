@@ -46,6 +46,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>Dati alternativi (notizie RSS con categoria/sentiment).</summary>
     public DbSet<AltDataPoint> AltDataPoints => Set<AltDataPoint>();
 
+    /// <summary>Configurazioni di pagina per-utente: preset con nome + ultima configurazione usata.</summary>
+    public DbSet<UserPageConfig> UserPageConfigs => Set<UserPageConfig>();
+
     // --- Trading (Fase 8) ---
     public DbSet<ProcioneMGR.Services.Trading.Order> Orders => Set<ProcioneMGR.Services.Trading.Order>();
     public DbSet<ProcioneMGR.Services.Trading.OpenPosition> OpenPositions => Set<ProcioneMGR.Services.Trading.OpenPosition>();
@@ -200,6 +203,24 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                   .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasIndex(e => e.UserId);
+        });
+
+        builder.Entity<UserPageConfig>(entity =>
+        {
+            entity.ToTable("UserPageConfigs");
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.PageKey).HasMaxLength(32).IsRequired();
+            entity.Property(e => e.Name).HasMaxLength(64).IsRequired(); // "" = ultima configurazione usata
+            entity.Property(e => e.ConfigJson).IsRequired();
+
+            entity.HasOne(e => e.User)
+                  .WithMany()
+                  .HasForeignKey(e => e.UserId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            // Una sola riga per (utente, pagina, nome): l'upsert del PageConfigStore si appoggia qui.
+            entity.HasIndex(e => new { e.UserId, e.PageKey, e.Name }).IsUnique();
         });
 
         builder.Entity<AltDataPoint>(entity =>
