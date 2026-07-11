@@ -9,6 +9,16 @@ public class SafetyConfiguration
     /// <summary>Max % del capitale totale per una singola posizione.</summary>
     public decimal MaxPositionSizePercent { get; set; } = 10m;
 
+    /// <summary>
+    /// % del capitale impiegata per ogni apertura: NOZIONALE investito per lo Spot (leva
+    /// implicita 1x), MARGINE isolato per i Futures — il nozionale reale è margine × leva,
+    /// stessa semantica del motore di backtest. Coerenza richiesta (validata a StartAsync):
+    /// PositionSizePercent × leva ≤ <see cref="MaxPositionSizePercent"/> ≤
+    /// <see cref="MaxTotalExposurePercent"/>, altrimenti il SafetyChecker rifiuterebbe OGNI
+    /// ordine e la corsia non farebbe mai trading.
+    /// </summary>
+    public decimal PositionSizePercent { get; set; } = 8m;
+
     /// <summary>Max % del capitale totale impegnata complessivamente in posizioni aperte.</summary>
     public decimal MaxTotalExposurePercent { get; set; } = 50m;
 
