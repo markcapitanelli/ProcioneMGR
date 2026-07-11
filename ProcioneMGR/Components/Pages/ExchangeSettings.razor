@@ -47,7 +47,7 @@
         <dt class="col-sm-3">Testnet</dt>
         <dd class="col-sm-9">Spunta questa casella se la coppia di chiavi è generata sull'ambiente di test dell'exchange (consigliato prima di rischiare soldi veri).</dd>
         <dt class="col-sm-3">Test</dt>
-        <dd class="col-sm-9">Verifica subito che le chiavi funzionino davvero, chiedendo all'exchange il saldo dell'account — senza piazzare ordini.</dd>
+        <dd class="col-sm-9">Verifica subito che le chiavi funzionino davvero, chiedendo all'exchange il saldo dell'account (Spot e Futures, con esito separato per lato) — senza piazzare ordini. Su Binance testnet Spot e Futures sono ambienti con chiavi diverse: è normale che una coppia valga per un lato solo.</dd>
         <dt class="col-sm-3">Elimina</dt>
         <dd class="col-sm-9">Rimuove definitivamente la credenziale salvata (non revoca la chiave lato exchange: fallo anche lì se non ti serve più).</dd>
     </dl>
@@ -151,9 +151,12 @@
                                 <td>@(c.IsTestnet ? "Sì" : "No")</td>
                                 <td class="text-end">
                                     <button class="btn btn-sm btn-outline-secondary"
-                                            @onclick="() => TestAsync(c)">Test</button>
+                                            @onclick="() => TestAsync(c)" disabled="@testing">
+                                        @if (testing) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                                        Test
+                                    </button>
                                     <button class="btn btn-sm btn-outline-danger"
-                                            @onclick="() => DeleteAsync(c.Id)">Elimina</button>
+                                            @onclick="() => DeleteAsync(c.Id)" disabled="@testing">Elimina</button>
                                 </td>
                             </tr>
                         }
@@ -169,6 +172,7 @@
     private string? userId;
     private string? message;
     private bool isError;
+    private bool testing;
 
     // Niente initializer sulla property [SupplyParameterFromForm] (BL0008: nei POST il binder
     // può sovrascriverla con null): il backing nullable + coalescenza nel getter dà lo stesso
@@ -241,10 +245,59 @@
 
     private async Task TestAsync(ExchangeCredential c)
     {
-        // Test pubblico di raggiungibilita' dell'exchange (non usa ancora le chiavi private).
-        var client = ExchangeFactory.Create(c.ExchangeName);
-        var ok = await client.TestConnectionAsync();
-        SetMessage(ok ? $"{c.ExchangeName}: connessione OK." : $"{c.ExchangeName}: non raggiungibile.", error: !ok);
+        // [U3] Test REALE delle chiavi (come promette la Guida): ping pubblico + saldo firmato su
+        // Spot E Futures, con esiti SEPARATI per lato. Su Binance testnet spot e futures sono
+        // domini con chiavi diverse: una coppia valida per un solo lato è normale, non un errore
+        // totale — il messaggio dice esattamente cosa funziona e cosa no. Nessun ordine piazzato.
+        testing = true;
+        try
+        {
+            var parts = new List<string>();
+
+            var client = ExchangeFactory.Create(c.ExchangeName);
+            bool pingOk;
+            try
+            {
+                pingOk = await client.TestConnectionAsync();
+                parts.Add(pingOk ? "ping OK" : "ping FALLITO (exchange non raggiungibile)");
+            }
+            catch (Exception ex) { pingOk = false; parts.Add($"ping FALLITO ({Short(ex)})"); }
+
+            var creds = new TradingCredentials(c.ApiKey, c.ApiSecret, c.Passphrase, c.IsTestnet);
+
+            bool spotOk;
+            try
+            {
+                var balance = await client.GetBalanceAsync(creds);
+                var assets = balance.Free.Count(kv => kv.Value > 0m);
+                spotOk = true;
+                parts.Add($"Spot: chiavi OK ({assets} asset con saldo)");
+            }
+            catch (Exception ex) { spotOk = false; parts.Add($"Spot: FALLITO ({Short(ex)})"); }
+
+            bool futuresOk;
+            try
+            {
+                var futures = ExchangeFactory.CreateFutures(c.ExchangeName);
+                var balance = await futures.GetFuturesBalanceAsync(creds);
+                futuresOk = true;
+                parts.Add($"Futures: chiavi OK (equity {balance.TotalEquity:N2} USDT)");
+            }
+            catch (Exception ex) { futuresOk = false; parts.Add($"Futures: FALLITO ({Short(ex)})"); }
+
+            // Errore "vero" solo se la credenziale è inutilizzabile (nessun lato firmato funziona)
+            // o l'exchange è irraggiungibile: un solo lato KO è informativo, non bloccante.
+            var unusable = !pingOk || (!spotOk && !futuresOk);
+            SetMessage($"{c.ExchangeName}{(c.IsTestnet ? " (testnet)" : "")} '{c.Label}': {string.Join(" · ", parts)}", error: unusable);
+        }
+        finally { testing = false; }
+    }
+
+    /// <summary>Prima riga del messaggio d'errore, troncata: negli alert serve il motivo, non lo stack.</summary>
+    private static string Short(Exception ex)
+    {
+        var line = (ex.Message ?? ex.GetType().Name).Split('\n')[0].Trim();
+        return line.Length > 140 ? line[..140] + "…" : line;
     }
 
     private void SetMessage(string text, bool error)
