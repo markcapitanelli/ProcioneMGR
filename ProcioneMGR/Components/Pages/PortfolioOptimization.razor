@@ -1,0 +1,432 @@
+@page "/portfolio"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using MathNet.Numerics.LinearAlgebra
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.ML
+@using ProcioneMGR.Services.Portfolio
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IAsyncDisposable
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject MeanVarianceOptimizer MeanVariance
+@inject RiskParityOptimizer RiskParity
+@inject HierarchicalRiskParityOptimizer Hrp
+@inject IRiskFactorPca Pca
+@inject IJSRuntime JS
+
+<PageTitle>Portafoglio</PageTitle>
+
+<h1>Ottimizzazione di portafoglio <span class="badge bg-secondary">MV / ERC / HRP</span></h1>
+
+<GuidaPanel Title="Portafoglio — come dividere il capitale tra più asset?">
+    <p>
+        Comprare più asset non basta a diversificare: se sono molto correlati (tipico delle crypto,
+        che si muovono spesso insieme a BTC) il rischio resta concentrato. Questa pagina prende i
+        rendimenti storici dei simboli scelti, li <strong>allinea per timestamp</strong> (si usano
+        solo i periodi presenti per tutti) e calcola <strong>quattro allocazioni</strong> a
+        confronto, ognuna con una filosofia diversa. Nessuna viene applicata automaticamente al
+        trading: è uno strumento di analisi.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">MV — Max Sharpe</dt>
+        <dd class="col-sm-9">Markowitz classico: la combinazione che storicamente ha reso di più per unità di rischio. È la più "aggressiva" e la più sensibile agli errori di stima dei rendimenti attesi — da leggere con scetticismo su storici brevi.</dd>
+        <dt class="col-sm-3">MV — Min Varianza</dt>
+        <dd class="col-sm-9">Il portafoglio meno volatile possibile dato il paniere. Non usa i rendimenti attesi (solo le covarianze), quindi è più robusto: spesso è il punto di partenza più sensato.</dd>
+        <dt class="col-sm-3">ERC — Equal Risk Contribution</dt>
+        <dd class="col-sm-9">Ogni asset contribuisce in ugual misura al rischio TOTALE (tenendo conto delle correlazioni). Un asset molto volatile riceve meno capitale; il grafico dei contributi di rischio mostra la verifica.</dd>
+        <dt class="col-sm-3">HRP — Hierarchical Risk Parity</dt>
+        <dd class="col-sm-9">Raggruppa prima gli asset per somiglianza (clustering gerarchico sulla correlazione) e ripartisce il rischio tra i gruppi, poi dentro i gruppi. Non inverte la matrice di covarianza: regge bene panieri numerosi o storici corti.</dd>
+        <dt class="col-sm-3">Peso min/max</dt>
+        <dd class="col-sm-9">Vincoli per-asset (es. max 40%: nessun asset oltre il 40% del capitale). Il minimo forza una presenza; lasciare 0 per permettere l'esclusione di un asset.</dd>
+        <dt class="col-sm-3">Fattori di rischio (PCA)</dt>
+        <dd class="col-sm-9">Quanta parte del movimento comune del paniere è spiegata da pochi "fattori" statistici: se la prima componente spiega l'80%, il paniere si muove di fatto come UN solo asset — la diversificazione apparente è illusoria.</dd>
+    </dl>
+</GuidaPanel>
+
+<div class="card mb-3">
+    <div class="card-header">Configurazione</div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-auto">
+                <label class="form-label">Simboli (Ctrl+click per selezione multipla)</label>
+                <select multiple size="10" class="form-select" @bind="_selectedSymbols" disabled="@_busy" style="min-width: 13rem;">
+                    @foreach (var s in _knownSymbols)
+                    { <option value="@s">@s</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <div class="mb-2">
+                    <label class="form-label">Timeframe</label>
+                    <select class="form-select" @bind="_timeframe" disabled="@_busy">
+                        @foreach (var tf in Timeframes.Supported.Keys) { <option value="@tf">@tf</option> }
+                    </select>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Lookback (candele)</label>
+                    <input type="number" class="form-control" @bind="_lookback" min="50" max="20000" disabled="@_busy" style="width: 9rem;" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Componenti PCA</label>
+                    <input type="number" class="form-control" @bind="_pcaComponents" min="1" max="10" disabled="@_busy" style="width: 9rem;" />
+                </div>
+            </div>
+            <div class="col-auto">
+                <div class="mb-2">
+                    <label class="form-label">Peso minimo %</label>
+                    <input type="number" class="form-control" @bind="_minWeightPct" min="0" max="50" step="1" disabled="@_busy" style="width: 9rem;" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Peso massimo %</label>
+                    <input type="number" class="form-control" @bind="_maxWeightPct" min="5" max="100" step="5" disabled="@_busy" style="width: 9rem;" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Risk-free annuo %</label>
+                    <input type="number" class="form-control" @bind="_riskFreePct" min="0" max="20" step="0.5" disabled="@_busy" style="width: 9rem;" />
+                </div>
+            </div>
+            <div class="col-auto align-self-end">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Calcola allocazioni
+                </button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@if (_methods is not null)
+{
+    <div class="row g-3 mb-3">
+        <div class="col-auto">@MetricCard("Simboli", _resultSymbols.Count.ToString())</div>
+        <div class="col-auto">@MetricCard("Barre allineate", _alignedBars.ToString())</div>
+        <div class="col-auto">@MetricCard("Periodo", $"{_from:yyyy-MM-dd} → {_to:yyyy-MM-dd}")</div>
+        <div class="col-auto">@MetricCard("Shrinkage Ledoit-Wolf δ", _lwShrinkage.ToString("F3"))</div>
+        <div class="col-auto">@MetricCard("Varianza spiegata (PCA)", $"{_pcaTotalExplained:P0}")</div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Confronto pesi (%) — quattro filosofie a confronto</div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead>
+                    <tr>
+                        <th>Simbolo</th>
+                        @foreach (var m in _methods) { <th class="text-end">@m.Label</th> }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in _resultSymbols)
+                    {
+                        <tr>
+                            <td>@s</td>
+                            @foreach (var m in _methods)
+                            { <td class="text-end">@((m.Weights.TryGetValue(s, out var w) ? w : 0m).ToString("P1"))</td> }
+                        </tr>
+                    }
+                </tbody>
+                <tfoot class="table-group-divider">
+                    <tr>
+                        <td class="fw-bold">Vol. annualizzata</td>
+                        @foreach (var m in _methods) { <td class="text-end">@m.AnnVol.ToString("P1")</td> }
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Rend. annualizzato (storico)</td>
+                        @foreach (var m in _methods) { <td class="text-end">@m.AnnRet.ToString("P1")</td> }
+                    </tr>
+                    <tr>
+                        <td class="fw-bold">Sharpe (storico)</td>
+                        @foreach (var m in _methods) { <td class="text-end">@m.Sharpe.ToString("F2")</td> }
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <div class="card-footer text-muted small">
+            Vol/rendimento/Sharpe sono IN-SAMPLE (calcolati sugli stessi dati usati per ottimizzare):
+            utili per confrontare i metodi tra loro, non come promessa out-of-sample — il Max Sharpe
+            in particolare è per costruzione il più "bello" sul passato.
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        @for (var i = 0; i < _methods.Count; i++)
+        {
+            var m = _methods[i];
+            <div class="col-12 col-md-6 col-xl-3">
+                <div class="card h-100">
+                    <div class="card-header">@m.Label</div>
+                    <div class="card-body"><div id="@($"pf_donut_{i}")"></div></div>
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-12 col-xl-6">
+            <div class="card h-100">
+                <div class="card-header">Contributi di rischio dell'ERC (verifica: devono essere ~uguali)</div>
+                <div class="card-body">
+                    <div id="pf_erc_rc"></div>
+                    <div class="text-muted small mt-2">
+                        Quota della varianza di portafoglio attribuibile a ciascun asset con i pesi ERC.
+                        Se non sono quasi identici, i vincoli min/max stanno forzando la soluzione.
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-xl-6">
+            <div class="card h-100">
+                <div class="card-header">Varianza spiegata per componente (PCA sulla correlazione)</div>
+                <div class="card-body">
+                    <div id="pf_pca"></div>
+                    <div class="text-muted small mt-2">
+                        PC1 alta (&gt;70-80%) = il paniere si muove come un blocco unico: la
+                        diversificazione tra questi simboli è più apparente che reale.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string[] _selectedSymbols = [];
+    private string _timeframe = "1h";
+    private int _lookback = 720;
+    private int _pcaComponents = 3;
+    private decimal _minWeightPct;
+    private decimal _maxWeightPct = 40m;
+    private decimal _riskFreePct = 2m;
+
+    private List<string> _knownSymbols = new();
+
+    private sealed record MethodResult(string Label, IReadOnlyDictionary<string, decimal> Weights, double AnnVol, double AnnRet, double Sharpe);
+
+    private IReadOnlyList<MethodResult>? _methods;
+    private List<string> _resultSymbols = new();
+    private int _alignedBars;
+    private DateTime _from, _to;
+    private double _lwShrinkage;
+    private double[] _ercRiskContributions = [];
+    private RiskFactorPcaResult? _pca;
+    private double _pcaTotalExplained;
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    private IJSObjectReference? _chartModule;
+    private bool _chartPending;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    private async Task RunAsync()
+    {
+        _busy = true; _isError = false; _status = null; _methods = null;
+        try
+        {
+            var symbols = _selectedSymbols.Select(s => s.Trim()).Where(s => s.Length > 0).Distinct().ToList();
+            if (symbols.Count < 2)
+            {
+                SetStatus("Seleziona almeno 2 simboli (Ctrl+click nella lista).", true);
+                return;
+            }
+            if (_maxWeightPct * symbols.Count < 100m)
+            {
+                SetStatus($"Peso massimo {_maxWeightPct}% × {symbols.Count} simboli < 100%: vincoli insoddisfacibili, alza il massimo o aggiungi simboli.", true);
+                return;
+            }
+
+            // Carica le ultime N candele per simbolo (stesso timeframe), poi allinea per timestamp.
+            var lookback = Math.Clamp(_lookback, 50, 20_000);
+            var candlesBySymbol = new Dictionary<string, IReadOnlyList<OhlcvData>>();
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                foreach (var s in symbols)
+                {
+                    var candles = await db.OhlcvData.AsNoTracking()
+                        .Where(c => c.Symbol == s && c.Timeframe == _timeframe)
+                        .OrderByDescending(c => c.TimestampUtc)
+                        .Take(lookback)
+                        .ToListAsync();
+                    candlesBySymbol[s] = candles;
+                }
+            }
+
+            var missing = candlesBySymbol.Where(kv => kv.Value.Count < 2).Select(kv => kv.Key).ToList();
+            if (missing.Count > 0)
+            {
+                SetStatus($"Nessun dato {_timeframe} per: {string.Join(", ", missing)}. Ingerisci lo storico in /market-analysis o togli i simboli.", true);
+                return;
+            }
+
+            var minW = Math.Clamp(_minWeightPct, 0m, 100m) / 100m;
+            var maxW = Math.Clamp(_maxWeightPct, 1m, 100m) / 100m;
+            var ppy = (int)Math.Round(TimeSpan.FromDays(365.25) / Timeframes.Supported[_timeframe]);
+            var config = new PortfolioOptimizationConfig
+            {
+                MinWeight = minW,
+                MaxWeight = maxW,
+                RiskFreeRateAnnual = _riskFreePct / 100m,
+                PeriodsPerYear = ppy,
+            };
+
+            // CPU-bound (covarianze, ottimizzazioni, PCA): fuori dal thread del circuito.
+            var computed = await Task.Run(() =>
+            {
+                var aligned = ReturnMatrixBuilder.BuildAlignedReturns(candlesBySymbol);
+                if (aligned.ReturnCount < 30)
+                {
+                    throw new InvalidOperationException(
+                        $"Solo {aligned.ReturnCount} barre in comune tra i {symbols.Count} simboli sul {_timeframe}: " +
+                        "servono almeno 30 periodi condivisi (controlla che gli storici si sovrappongano).");
+                }
+
+                var returns = aligned.ReturnsBySymbol;
+                var methods = new List<MethodResult>
+                {
+                    Build("MV — Max Sharpe", MeanVariance.Optimize(returns, With(config, MeanVarianceObjective.MaxSharpe)), aligned, config, ppy),
+                    Build("MV — Min Varianza", MeanVariance.Optimize(returns, With(config, MeanVarianceObjective.MinVariance)), aligned, config, ppy),
+                    Build("ERC", RiskParity.Optimize(returns, config), aligned, config, ppy),
+                    Build("HRP", Hrp.Optimize(returns, config), aligned, config, ppy),
+                };
+
+                // Contributi di rischio dell'ERC sulla covarianza Ledoit-Wolf (stessa dei metodi).
+                var (orderedSymbols, matrix) = PortfolioMath.BuildMatrix(returns);
+                var (lwCov, delta) = PortfolioMath.LedoitWolf(matrix);
+                var ercWeights = orderedSymbols.Select(s => (double)methods[2].Weights.GetValueOrDefault(s)).ToList();
+                var rc = PortfolioMath.RiskContributions(lwCov, ercWeights);
+
+                var pcaCount = Math.Clamp(_pcaComponents, 1, orderedSymbols.Count);
+                var pca = Pca.Compute(returns, pcaCount);
+
+                return (aligned, methods, orderedSymbols, delta, rc, pca);
+            });
+
+            _resultSymbols = computed.orderedSymbols;
+            _methods = computed.methods;
+            _alignedBars = computed.aligned.ReturnCount;
+            _from = computed.aligned.Timestamps[0];
+            _to = computed.aligned.Timestamps[^1];
+            _lwShrinkage = computed.delta;
+            _ercRiskContributions = computed.rc;
+            _pca = computed.pca;
+            _pcaTotalExplained = computed.pca.TotalExplainedVarianceRatio;
+            _chartPending = true;
+            SetStatus($"Allocazioni calcolate su {_alignedBars} barre comuni ({_timeframe}).", false);
+        }
+        catch (Exception ex) { SetStatus(ex.Message, true); }
+        finally { _busy = false; }
+    }
+
+    private static PortfolioOptimizationConfig With(PortfolioOptimizationConfig baseConfig, MeanVarianceObjective objective) => new()
+    {
+        MinWeight = baseConfig.MinWeight,
+        MaxWeight = baseConfig.MaxWeight,
+        RiskFreeRateAnnual = baseConfig.RiskFreeRateAnnual,
+        PeriodsPerYear = baseConfig.PeriodsPerYear,
+        Objective = objective,
+        CovarianceEstimator = baseConfig.CovarianceEstimator,
+        RiskParityMethod = baseConfig.RiskParityMethod,
+        HrpLinkage = baseConfig.HrpLinkage,
+    };
+
+    /// <summary>Statistiche IN-SAMPLE del portafoglio pesato: rendimento per periodo, poi annualizzazione.</summary>
+    private static MethodResult Build(string label, PortfolioAllocation allocation, AlignedReturnMatrix aligned, PortfolioOptimizationConfig config, int ppy)
+    {
+        var n = aligned.ReturnCount;
+        var portfolio = new double[n];
+        foreach (var (symbol, w) in allocation.Weights)
+        {
+            if (w == 0m) continue;
+            var series = aligned.ReturnsBySymbol[symbol];
+            var weight = (double)w;
+            for (var i = 0; i < n; i++) portfolio[i] += weight * (double)series[i];
+        }
+
+        var mean = portfolio.Average();
+        var variance = n > 1 ? portfolio.Sum(r => (r - mean) * (r - mean)) / (n - 1) : 0.0;
+        var vol = Math.Sqrt(Math.Max(0.0, variance));
+        var annVol = vol * Math.Sqrt(ppy);
+        var annRet = mean * ppy;
+        var rf = (double)config.RiskFreeRateAnnual;
+        var sharpe = annVol > 1e-12 ? (annRet - rf) / annVol : 0.0;
+        return new MethodResult(label, allocation.Weights, annVol, annRet, sharpe);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_chartPending && _methods is not null)
+        {
+            _chartPending = false;
+            await RenderChartsAsync();
+        }
+    }
+
+    private async Task RenderChartsAsync()
+    {
+        if (_methods is null) return;
+        _chartModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/charts.js");
+
+        for (var i = 0; i < _methods.Count; i++)
+        {
+            var weights = _methods[i].Weights.Where(kv => kv.Value > 0m).OrderByDescending(kv => kv.Value).ToList();
+            await _chartModule.InvokeVoidAsync("donut", $"pf_donut_{i}",
+                weights.Select(kv => kv.Key).ToArray(),
+                weights.Select(kv => Math.Round(kv.Value * 100m, 1)).ToArray());
+        }
+
+        await _chartModule.InvokeVoidAsync("barh", "pf_erc_rc",
+            _resultSymbols.ToArray(),
+            _ercRiskContributions.Select(rc => Math.Round(rc * 100.0, 2)).ToArray(),
+            "Contributo al rischio (%)", null);
+
+        if (_pca is not null)
+        {
+            await _chartModule.InvokeVoidAsync("bar", "pf_pca",
+                _pca.Components.Select(c => $"PC{c.Index}").ToArray(),
+                _pca.Components.Select(c => Math.Round(c.ExplainedVarianceRatio * 100.0, 1)).ToArray(),
+                "Varianza spiegata (%)", null);
+        }
+    }
+
+    private void SetStatus(string text, bool error) { _status = text; _isError = error; }
+
+    // Stesso pattern di Volatility.razor: card metrica compatta (valori interni, non input utente).
+    private static RenderFragment MetricCard(string label, string value) => builder =>
+    {
+        builder.AddMarkupContent(0, $@"
+            <div class='card text-center' style='min-width: 10rem;'>
+                <div class='card-body py-2'>
+                    <div class='text-muted small'>{label}</div>
+                    <div class='fs-5 fw-semibold'>{value}</div>
+                </div>
+            </div>");
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_chartModule is not null)
+            {
+                for (var i = 0; i < 4; i++) { await _chartModule.InvokeVoidAsync("dispose", $"pf_donut_{i}"); }
+                await _chartModule.InvokeVoidAsync("dispose", "pf_erc_rc");
+                await _chartModule.InvokeVoidAsync("dispose", "pf_pca");
+                await _chartModule.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException) { }
+    }
+}
