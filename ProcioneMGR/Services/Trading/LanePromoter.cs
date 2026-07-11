@@ -39,6 +39,13 @@ public sealed class LanePromoter(
         var engine = serviceProvider.GetRequiredKeyedService<ITradingEngine>(laneId);
         var before = await engine.GetStatusAsync(ct);
 
+        // [M2] Flatten PRIMA del cambio modalità, in entrambe le direzioni:
+        // - Paper→Testnet: le posizioni simulate non devono "sembrare" reali nella nuova sessione;
+        // - Testnet→Paper: le posizioni REALI vanno chiuse reduce-only sull'exchange ORA — dopo
+        //   StartAsync(Paper) le righe verrebbero cancellate e l'esposizione resterebbe orfana.
+        // Niente emergency stop: la promozione non è un'emergenza (il flag bloccherebbe la corsia).
+        await engine.CloseAllPositionsAsync($"LaneModeChange:{before.Mode}->{newMode}", ct);
+
         await engine.StopAsync(ct);
         // StartAsync(Testnet) carica le credenziali Testnet; se mancano lancia un errore chiaro e la
         // corsia resta ferma (nessun cambio silenzioso). Lo propaghiamo al chiamante (il worker lo logga).

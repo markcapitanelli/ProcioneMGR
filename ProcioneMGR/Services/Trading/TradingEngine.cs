@@ -99,8 +99,27 @@ public sealed class TradingEngine(
         var row = await db.TradingEngineStates.Where(s => s.LaneId == laneId).OrderBy(s => s.Id).FirstOrDefaultAsync(ct);
         if (row is not null) _state = row;
         var positions = await db.OpenPositions.AsNoTracking().Where(p => p.LaneId == laneId).ToListAsync(ct);
+
+        // [M2] Discriminatore anti-mescolamento: si ricaricano SOLO le posizioni aperte nella
+        // modalità corrente della corsia. Righe di un'altra modalità (residuo di una promozione/
+        // retrocessione interrotta a metà) vengono PURGATE con audit: una posizione simulata
+        // Paper non deve mai sembrare esposizione reale Testnet, né viceversa.
+        var stale = positions.Where(p => p.OpenedInMode != _state.Mode).ToList();
+        if (stale.Count > 0)
+        {
+            var ids = stale.Select(p => p.Id).ToList();
+            await db.OpenPositions.Where(p => ids.Contains(p.Id)).ExecuteDeleteAsync(ct);
+            logger.LogWarning("Purgate {N} posizioni di una modalità diversa ({Modes}) dalla corsia in {Mode}.",
+                stale.Count, string.Join(",", stale.Select(p => p.OpenedInMode).Distinct()), _state.Mode);
+            await AuditAsync("StalePositionsPurged", new
+            {
+                mode = _state.Mode.ToString(),
+                purged = stale.Select(p => new { p.PositionId, p.Symbol, openedInMode = p.OpenedInMode.ToString(), p.Quantity }),
+            }, DateTime.UtcNow, ct);
+        }
+
         _positions.Clear();
-        _positions.AddRange(positions);
+        _positions.AddRange(positions.Where(p => p.OpenedInMode == _state.Mode));
         // Solo i job Running (i chiusi sono storia, mai riletti a runtime): cache piccola per sempre.
         var jobs = await db.ExecutionJobs.AsNoTracking().Where(j => j.LaneId == laneId && j.Status == "Running").ToListAsync(ct);
         _executionJobs.Clear();
@@ -266,6 +285,44 @@ public sealed class TradingEngine(
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// [M2] Chiude tutte le posizioni della corsia al miglior prezzo noto SENZA toccare i flag di
+    /// emergenza: è il "flatten" usato dalla promozione/retrocessione di corsia (LanePromoter),
+    /// dove fermare la corsia non è un'emergenza. EmergencyStop condivide lo stesso loop di
+    /// chiusura via <see cref="CloseAllInternalAsync"/>.
+    /// </summary>
+    public async Task CloseAllPositionsAsync(string reason, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await EnsureLoadedAsync(ct);
+            var ts = DateTime.UtcNow;
+            var count = _positions.Count;
+            await CloseAllInternalAsync(reason, ts, ct);
+            await SaveStateAsync(ct);
+            if (count > 0)
+            {
+                await AuditAsync("CloseAllPositions", new { reason, requested = count, remaining = _positions.Count }, ts, ct);
+            }
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Loop di chiusura condiviso tra EmergencyStop e flatten: chiusura market al miglior prezzo
+    /// noto. Una chiusura può NON riuscire (rete incerta / rifiuto exchange): la posizione resta
+    /// in <see cref="_positions"/> e il chiamante decide come procedere (retry, log, ecc.).
+    /// </summary>
+    private async Task CloseAllInternalAsync(string reason, DateTime ts, CancellationToken ct)
+    {
+        foreach (var pos in _positions.ToList())
+        {
+            var exit = pos.CurrentPrice > 0m ? pos.CurrentPrice : pos.EntryPrice;
+            await ClosePositionAsync(pos, exit, reason, ts, ct);
+        }
+    }
+
     private async Task EmergencyInternalAsync(string reason, DateTime ts, CancellationToken ct)
     {
         _state.IsEmergencyStopped = true;
@@ -274,11 +331,7 @@ public sealed class TradingEngine(
 
         // Chiudi TUTTE le posizioni al prezzo corrente (market). ClosePositionAsync annulla anche
         // il piano di esecuzione eventualmente associato a ciascuna posizione (vedi §1 del design).
-        foreach (var pos in _positions.ToList())
-        {
-            var exit = pos.CurrentPrice > 0m ? pos.CurrentPrice : pos.EntryPrice;
-            await ClosePositionAsync(pos, exit, "EmergencyStop", ts, ct);
-        }
+        await CloseAllInternalAsync("EmergencyStop", ts, ct);
 
         // Difesa: qualunque piano ancora Running (posizione non trovata, caso limite) va comunque annullato.
         foreach (var job in _executionJobs.ToList())
@@ -422,8 +475,10 @@ public sealed class TradingEngine(
             // Equity + drawdown.
             var equity = ComputeEquity(price);
             _equity.Add(new EquityPoint { Timestamp = ts, Capital = equity });
+            TrimEquity(_equity);   // M1: la curva in-memory non cresce senza limite (candela ∞)
             if (equity > _state.PeakEquity) _state.PeakEquity = equity;
             var dd = _state.PeakEquity > 0m ? (_state.PeakEquity - equity) / _state.PeakEquity * 100m : 0m;
+            if (dd > _state.MaxDrawdownPercent) _state.MaxDrawdownPercent = dd;   // persistito: sopravvive al riavvio
 
             await SaveStateAsync(ct);
 
@@ -784,6 +839,7 @@ public sealed class TradingEngine(
                 OpenedAtUtc = ts,
                 CurrentPrice = fillPrice,
                 ExchangeOrderId = exchangeOrderId,
+                OpenedInMode = _state.Mode,
                 Leverage = 1,
                 MarginBalance = realNotional,
             };
@@ -943,6 +999,7 @@ public sealed class TradingEngine(
                 OpenedAtUtc = ts,
                 CurrentPrice = fillPrice,
                 ExchangeOrderId = exchangeOrderId,
+                OpenedInMode = _state.Mode,
                 Leverage = leverage,
                 LiquidationPrice = liquidationPrice,
                 MarginBalance = margin,
@@ -1026,11 +1083,18 @@ public sealed class TradingEngine(
 
         if (pos.StopLoss is decimal sl && sl > 0m) await PlaceAsync(sl, isStopLoss: true, id => pos.StopOrderId = id);
         if (pos.TakeProfit is decimal tp && tp > 0m) await PlaceAsync(tp, isStopLoss: false, id => pos.TakeProfitOrderId = id);
+
+        // [M3] Persistenza immediata degli id: senza, un riavvio perdeva i clientOrderId dei
+        // trigger REALI ancora armati sull'exchange e la chiusura non poteva più cancellarli.
+        if (pos.StopOrderId is not null || pos.TakeProfitOrderId is not null)
+        {
+            await UpdatePositionRowAsync(pos, ct);
+        }
     }
 
     /// <summary>
-    /// [P0-5 follow-up — SCAFFOLDING] Cancella gli ordini TRIGGER resting prima di chiudere a mercato,
-    /// così non restano ordini orfani sull'exchange. INERTE finché non ci sono id (feature off/stub).
+    /// [P0-5] Cancella gli ordini TRIGGER resting prima di chiudere a mercato, così non restano
+    /// ordini orfani sull'exchange. INERTE se non ci sono id (feature off, default).
     /// </summary>
     private async Task TryCancelRestingBracketAsync(OpenPosition pos, TradingCredentials creds, CancellationToken ct)
     {
@@ -1046,6 +1110,7 @@ public sealed class TradingEngine(
         }
         pos.StopOrderId = null;
         pos.TakeProfitOrderId = null;
+        await UpdatePositionRowAsync(pos, ct);   // [M3] azzeramento persistito come il piazzamento
     }
 
     // ---------------------------------------------------------------- esecuzione a fette (TWAP/VWAP/Iceberg)
@@ -1834,8 +1899,12 @@ public sealed class TradingEngine(
         {
             EquityCurve = _equity.ToList(),
             TotalReturn = _state.TotalCapital > 0m ? _state.RealizedPnl / _state.TotalCapital * 100m : 0m,
+            // Sharpe calcolato sulla FINESTRA ritenuta della curva (bounded, vedi TrimEquity):
+            // per una metrica di promozione la storia recente è quella che conta. Il MaxDrawdown
+            // invece è il PEGGIORE tra ricalcolo locale e valore di sessione persistito — un
+            // riavvio (curva vuota) o il trim non possono più "amnesiare" un drawdown già subito.
             SharpeRatio = Statistics.SharpeRatio(_equity, ppy),
-            MaxDrawdown = MaxDrawdown(_equity),
+            MaxDrawdown = Math.Max(_state.MaxDrawdownPercent, MaxDrawdown(_equity)),
             TotalTrades = trades.Count,
             WinRate = trades.Count > 0 ? (decimal)wins.Count / trades.Count * 100m : 0m,
             AverageWin = wins.Count > 0 ? wins.Average(t => t.Pnl) : 0m,
@@ -1917,6 +1986,22 @@ public sealed class TradingEngine(
         return maxDd;
     }
 
+    /// <summary>
+    /// [M1] Ritenzione bounded della curva equity in-memory: oltre <paramref name="maxPoints"/>
+    /// punti si scarta il BLOCCO più vecchio (una RemoveRange ogni <paramref name="trimBlock"/>
+    /// candele, non una RemoveAt per candela). A 5m sono ~34 giorni di storia: abbastanza per
+    /// Sharpe/drawdown recenti; il MaxDrawdown di sessione resta comunque esatto perché è
+    /// tracciato incrementalmente in <see cref="TradingEngineState.MaxDrawdownPercent"/>.
+    /// </summary>
+    internal static void TrimEquity(List<EquityPoint> curve, int maxPoints = 10_000, int trimBlock = 2_000)
+    {
+        ArgumentNullException.ThrowIfNull(curve);
+        if (curve.Count > maxPoints)
+        {
+            curve.RemoveRange(0, Math.Min(trimBlock, curve.Count - 1));
+        }
+    }
+
     // ---------------------------------------------------------------- persistenza
 
     private async Task SaveStateAsync(CancellationToken ct)
@@ -1965,6 +2050,8 @@ public sealed class TradingEngine(
         row.CurrentPrice = pos.CurrentPrice;
         row.LiquidationPrice = pos.LiquidationPrice;
         row.ExchangeOrderId = pos.ExchangeOrderId;
+        row.StopOrderId = pos.StopOrderId;               // [M3] i trigger resting sopravvivono al riavvio
+        row.TakeProfitOrderId = pos.TakeProfitOrderId;
         await db.SaveChangesAsync(ct);
     }
 

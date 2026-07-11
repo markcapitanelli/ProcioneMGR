@@ -119,16 +119,23 @@ public class OpenPosition
     public string? ExchangeOrderId { get; set; }
 
     /// <summary>
-    /// [P0-5 follow-up — SCAFFOLDING] Id degli ordini TRIGGER reduce-only piazzati sull'exchange come
-    /// protezione "resting" (stop-market / take-profit-market), quando
-    /// <see cref="SafetyConfiguration.UseExchangeRestingStops"/> è attivo. Null finché la feature non è
-    /// attiva (default) o i client trigger sono ancora stub: in quel caso valgono gli stop software.
+    /// Modalità in cui la posizione è stata APERTA. Discriminatore anti-mescolamento (M2): al
+    /// cambio di modalità della corsia (promozione/retrocessione), EnsureLoadedAsync carica solo
+    /// le righe della modalità corrente e PURGA le altre — una posizione simulata Paper non deve
+    /// mai sembrare un'esposizione reale Testnet (né viceversa) dopo un riavvio.
     /// </summary>
-    [NotMapped]
+    public TradingMode OpenedInMode { get; set; }
+
+    /// <summary>
+    /// [P0-5] Id (clientOrderId) degli ordini TRIGGER reduce-only piazzati sull'exchange come
+    /// protezione "resting" (stop-market / take-profit-market), quando
+    /// <see cref="SafetyConfiguration.UseExchangeRestingStops"/> è attivo (default OFF). PERSISTITI
+    /// (M3): dopo un riavvio la chiusura deve poter cancellare i trigger REALI ancora vivi
+    /// sull'exchange — id solo in-memory sarebbero andati persi, lasciando ordini orfani armati.
+    /// </summary>
     public string? StopOrderId { get; set; }
 
-    /// <summary>[P0-5 follow-up — SCAFFOLDING] Vedi <see cref="StopOrderId"/>.</summary>
-    [NotMapped]
+    /// <summary>[P0-5] Vedi <see cref="StopOrderId"/>.</summary>
     public string? TakeProfitOrderId { get; set; }
 
     /// <summary>Leva della posizione (1 per Spot).</summary>
