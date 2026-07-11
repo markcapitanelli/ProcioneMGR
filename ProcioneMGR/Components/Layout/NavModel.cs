@@ -68,6 +68,7 @@ public static class NavModel
             new NavItem("ensemble", "Ensemble", "bi-diagram-3-fill", ManagerAndAdmin),
             new NavItem("ml", "ML Lab", "bi-cpu-fill", ManagerAndAdmin),
             new NavItem("feature-selection", "Selezione feature (IC)", "bi-funnel", ManagerAndAdmin),
+            new NavItem("portfolio", "Portafoglio", "bi-pie-chart-fill", ManagerAndAdmin),
             new NavItem("registry", "Registry modelli", "bi-award", ManagerAndAdmin),
             new NavItem("experiments", "Esperimenti", "bi-journals", ManagerAndAdmin),
             new NavItem("regimes", "Regimes", "bi-grid-3x3-gap-fill", ManagerAndAdmin),
