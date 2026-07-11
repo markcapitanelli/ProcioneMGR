@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using ProcioneMGR.Services.Config;
 using ProcioneMGR.Services.Trading;
 
 namespace ProcioneMGR.Tests;
@@ -33,7 +34,8 @@ public sealed class SafetyConfigWriterTests : IDisposable
         public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 
-    private SafetyConfigWriter Writer() => new(new FakeEnv(_dir), NullLogger<SafetyConfigWriter>.Instance);
+    // Dal refactor U2 il SafetyConfigWriter delega ad AppConfigWriter: il test copre la catena intera.
+    private SafetyConfigWriter Writer() => new(new AppConfigWriter(new FakeEnv(_dir), NullLogger<AppConfigWriter>.Instance));
 
     private string SettingsPath => Path.Combine(_dir, "appsettings.json");
 

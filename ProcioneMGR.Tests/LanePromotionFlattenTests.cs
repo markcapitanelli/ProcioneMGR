@@ -233,7 +233,7 @@ public sealed class LanePromotionFlattenTests : IAsyncDisposable
         var engine = new RecordingEngine();
         var provider = BuildProvider(s => s.AddKeyedSingleton<ITradingEngine>(0, engine));
         var dbFactory = provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
-        var promoter = new LanePromoter(provider, dbFactory, new PromotionEvaluatorOptions(), NullLogger<LanePromoter>.Instance);
+        var promoter = new LanePromoter(provider, dbFactory, new PromotionEvaluatorOptions().AsMonitor(), NullLogger<LanePromoter>.Instance);
         return (promoter, engine, dbFactory);
     }
 

@@ -36,20 +36,18 @@ public sealed class FeatureDriftWorker(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IFeatureDriftMonitor monitor,
     ProcioneMGR.Services.Registry.IModelRegistry registry,
-    DriftMonitorOptions options,
+    Microsoft.Extensions.Options.IOptionsMonitor<DriftMonitorOptions> options,
     ILogger<FeatureDriftWorker> logger,
     ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Enabled)
-        {
-            logger.LogInformation("FeatureDriftWorker disattivato (Drift:Enabled=false): drift valutabile solo on-demand dalla UI.");
-            return;
-        }
-
-        var interval = TimeSpan.FromHours(Math.Max(1, options.IntervalHours));
-        logger.LogInformation("FeatureDriftWorker avviato (check ogni {Interval}).", interval);
+        // Enabled è valutato a OGNI tick (modello ExecutionWorker), non all'avvio: il toggle da
+        // /admin/autonomy prende effetto a caldo. L'intervallo invece è fisso al primo avvio
+        // (PeriodicTimer): cambiarlo richiede riavvio — un timer spento costa nulla.
+        var interval = TimeSpan.FromHours(Math.Max(1, options.CurrentValue.IntervalHours));
+        logger.LogInformation("FeatureDriftWorker avviato (check ogni {Interval}, Enabled={Enabled}).",
+            interval, options.CurrentValue.Enabled);
 
         try { await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken); }
         catch (OperationCanceledException) { return; }
@@ -57,7 +55,13 @@ public sealed class FeatureDriftWorker(
         using var timer = new PeriodicTimer(interval);
         do
         {
-            try { await TickAsync(stoppingToken); }
+            try
+            {
+                if (options.CurrentValue.Enabled)
+                {
+                    await TickAsync(stoppingToken);
+                }
+            }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { logger.LogError(ex, "Ciclo FeatureDriftWorker fallito; ritento al prossimo tick."); }
         }
@@ -66,9 +70,10 @@ public sealed class FeatureDriftWorker(
         logger.LogInformation("FeatureDriftWorker fermato.");
     }
 
-    /// <summary>Un tick: valuta il drift di ogni modello salvato e logga gli scostamenti. Pubblico per test.</summary>
+    /// <summary>Un tick: valuta il drift di ogni modello salvato e logga gli scostamenti. Pubblico per test e per "Esegui ora" da /admin/autonomy.</summary>
     public async Task TickAsync(CancellationToken ct)
     {
+        var opt = options.CurrentValue; // snapshot coerente per l'intero tick
         List<SavedMlModel> models;
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
@@ -85,7 +90,7 @@ public sealed class FeatureDriftWorker(
                 recent = await db.OhlcvData.AsNoTracking()
                     .Where(c => c.Symbol == model.Symbol && c.Timeframe == model.Timeframe)
                     .OrderByDescending(c => c.TimestampUtc)
-                    .Take(Math.Max(20, options.RecentCandles))
+                    .Take(Math.Max(20, opt.RecentCandles))
                     .ToListAsync(ct);
             }
             recent.Reverse(); // rimetti in ordine cronologico
@@ -103,9 +108,9 @@ public sealed class FeatureDriftWorker(
 
             // Ciclo chiuso (Fase 2): un Champion in drift Alert va ritirato e il retrain accodato.
             // Solo governance dei record: nessun retrain automatico, nessun impatto sul Live.
-            if (options.RetireChampionOnAlert
+            if (opt.RetireChampionOnAlert
                 && model.Stage == ModelStage.Champion
-                && alerts >= Math.Max(1, options.MinAlertsToRetire))
+                && alerts >= Math.Max(1, opt.MinAlertsToRetire))
             {
                 var reason = $"drift: {alerts} feature in alert ({string.Join(", ", drifting.Where(r => r.Overall == DriftSeverity.Alert).Take(5).Select(r => r.FeatureName))})";
                 await registry.RetireAsync(model.Id, reason, requestRetrain: true, ct);

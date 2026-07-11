@@ -104,6 +104,9 @@ builder.Services.AddHostedService<RegimeRetrainingWorker>();
 // NB: la safety si usa SOLO via SafetyChecker.Evaluate (statico, puro) dentro il TradingEngine:
 // nessuna registrazione DI — l'interfaccia istanza era codice morto mai risolto da nessuno.
 builder.Services.Configure<SafetyConfiguration>(builder.Configuration.GetSection("Trading:Safety"));
+// Writer generalizzato di sezioni appsettings (pannelli /trading e /admin/autonomy):
+// read-modify-write con lock sul file; reloadOnChange fa il resto (hot-reload ~1s).
+builder.Services.AddSingleton<ProcioneMGR.Services.Config.IAppConfigWriter, ProcioneMGR.Services.Config.AppConfigWriter>();
 builder.Services.AddSingleton<ISafetyConfigWriter, SafetyConfigWriter>();
 
 // --- Esecuzione live "a fette" (TWAP/VWAP/Iceberg su Testnet/Live). Master switch default-off
@@ -231,10 +234,12 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.IFeatureDrif
 builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.IFeatureDriftDetector, ProcioneMGR.Services.Monitoring.Drift.PageHinkleyDetector>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.IFeatureDriftMonitor, ProcioneMGR.Services.Monitoring.Drift.FeatureDriftMonitor>();
 
-var driftOptions = builder.Configuration.GetSection("Drift").Get<ProcioneMGR.Services.Monitoring.Drift.DriftMonitorOptions>()
-                   ?? new ProcioneMGR.Services.Monitoring.Drift.DriftMonitorOptions();
-builder.Services.AddSingleton(driftOptions);
-builder.Services.AddHostedService<ProcioneMGR.Services.Monitoring.Drift.FeatureDriftWorker>();
+// Opzioni via Configure<T> (non POCO singleton): /admin/autonomy le modifica a caldo. Il worker
+// è registrato ANCHE come singleton risolvibile, così la UI può chiamare TickAsync ("Esegui ora")
+// sulla stessa istanza del hosted service (pattern MetricsCollector più sotto).
+builder.Services.Configure<ProcioneMGR.Services.Monitoring.Drift.DriftMonitorOptions>(builder.Configuration.GetSection("Drift"));
+builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.FeatureDriftWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Monitoring.Drift.FeatureDriftWorker>());
 
 // --- Observability (Fase 5): meter unico degli eventi di autonomia; export OTLP opzionale sotto. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Observability.ProcioneMetrics>();
@@ -342,12 +347,13 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Experiments.IExperimentTracke
 // Confine di sicurezza: questi servizi leggono i run e scrivono un advisory; NON avviano trading,
 // NON passano in Live, NON toccano SafetyChecker (nessun servizio di esecuzione iniettato). Inattivo
 // per default: il worker si spegne subito se Llm:Enabled=false o se manca la env ANTHROPIC_API_KEY.
-var llmOptions = builder.Configuration.GetSection("Llm").Get<ProcioneMGR.Services.Llm.LlmOptions>()
-                 ?? new ProcioneMGR.Services.Llm.LlmOptions();
-builder.Services.AddSingleton(llmOptions);
+// Opzioni via Configure<T> (hot-reload da /admin/autonomy); worker anche singleton risolvibile
+// per il bottone "Esegui supervisione ora" (stessa istanza del hosted service).
+builder.Services.Configure<ProcioneMGR.Services.Llm.LlmOptions>(builder.Configuration.GetSection("Llm"));
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmClient, ProcioneMGR.Services.Llm.AnthropicLlmClient>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.IPipelineSupervisor, ProcioneMGR.Services.Llm.PipelineSupervisor>();
-builder.Services.AddHostedService<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>());
 
 // --- Autonomia: ri-applica automatica dell'ensemble + supervisore AI del ciclo di ri-applica ---
 // Il PipelineApplier estrae la logica di "Applica al Trading" (una sola implementazione, usata sia
@@ -361,9 +367,7 @@ var comparatorOptions = builder.Configuration.GetSection("EnsembleComparator").G
 builder.Services.AddSingleton(comparatorOptions);
 builder.Services.AddSingleton<IEnsembleComparator, EnsembleComparator>();
 
-var autoReapplyOptions = builder.Configuration.GetSection("AutoReapply").Get<ProcioneMGR.Services.Pipeline.AutoReapplyOptions>()
-                         ?? new ProcioneMGR.Services.Pipeline.AutoReapplyOptions();
-builder.Services.AddSingleton(autoReapplyOptions);
+builder.Services.Configure<ProcioneMGR.Services.Pipeline.AutoReapplyOptions>(builder.Configuration.GetSection("AutoReapply"));
 
 var supervisorAgentOptions = builder.Configuration.GetSection("PipelineSupervisor").Get<ProcioneMGR.Services.Agents.SupervisorAgentOptions>()
                              ?? new ProcioneMGR.Services.Agents.SupervisorAgentOptions();
@@ -380,9 +384,7 @@ else
 // --- Autonomia: auto-promozione Paper→Testnet (MAI a Live) ---
 // L'evaluator decide (logica pura, testabile), il promoter agisce (stop→restart della corsia),
 // il worker rivaluta ogni N ore. Confine non negoziabile: nessuna promozione automatica a Live.
-var promotionOptions = builder.Configuration.GetSection("PromotionEvaluator").Get<PromotionEvaluatorOptions>()
-                       ?? new PromotionEvaluatorOptions();
-builder.Services.AddSingleton(promotionOptions);
+builder.Services.Configure<PromotionEvaluatorOptions>(builder.Configuration.GetSection("PromotionEvaluator"));
 builder.Services.AddSingleton<IPromotionEvaluator, PromotionEvaluator>();
 builder.Services.AddSingleton<ILanePromoter, LanePromoter>();
 builder.Services.AddHostedService<PromotionWorker>();

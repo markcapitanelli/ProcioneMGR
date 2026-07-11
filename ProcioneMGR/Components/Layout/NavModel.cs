@@ -86,6 +86,7 @@ public static class NavModel
             new NavItem("volatility", "Volatilità", "bi-activity", ManagerAndAdmin),
             new NavItem("sentiment", "Sentiment", "bi-newspaper", ManagerAndAdmin),
             new NavItem("admin/ai-supervisor", "Supervisione AI", "bi-robot", ManagerAndAdmin),
+            new NavItem("admin/autonomy", "Autonomia", "bi-toggles", AdminOnly),
             new NavItem("admin/users", "Gestione Utenti", "bi-people-fill", AdminOnly),
             new NavItem("admin/backup", "Backup Database", "bi-database-fill-down", AdminOnly),
         ]),

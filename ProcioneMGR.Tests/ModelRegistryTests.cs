@@ -205,7 +205,7 @@ public class ModelRegistryTests : IAsyncDisposable
 
         var worker = new FeatureDriftWorker(
             f, new AlertMonitor(), registry,
-            new DriftMonitorOptions { Enabled = true, RetireChampionOnAlert = true, MinAlertsToRetire = 1 },
+            new DriftMonitorOptions { Enabled = true, RetireChampionOnAlert = true, MinAlertsToRetire = 1 }.AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance);
 
         await worker.TickAsync(CancellationToken.None);
@@ -228,7 +228,7 @@ public class ModelRegistryTests : IAsyncDisposable
         var registry = NewRegistry(f);
 
         var worker = new FeatureDriftWorker(
-            f, new AlertMonitor(), registry, new DriftMonitorOptions { RetireChampionOnAlert = true },
+            f, new AlertMonitor(), registry, new DriftMonitorOptions { RetireChampionOnAlert = true }.AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance);
         await worker.TickAsync(CancellationToken.None);
 
