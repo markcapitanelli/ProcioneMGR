@@ -11,31 +11,29 @@ namespace ProcioneMGR.Services.Pipeline;
 /// il layer AI, e questo worker non conosce trading/esecuzione: legge run e scrive artifact advisory,
 /// nient'altro (confine di sicurezza research→esecuzione, come per <see cref="PipelineSchedulerWorker"/>).
 ///
-/// Inattivo per default: parte solo se <c>Llm:Enabled=true</c> E la env <c>ANTHROPIC_API_KEY</c> è
-/// presente; altrimenti si spegne subito (l'app funziona normalmente senza layer AI).
+/// Inattivo per default: l'exit immediato resta SOLO per la env <c>ANTHROPIC_API_KEY</c> assente
+/// (senza chiave non c'è niente da fare fino al riavvio); <c>Llm:Enabled</c> invece è valutato a
+/// OGNI tick (modello ExecutionWorker), così il toggle da /admin/autonomy prende effetto a caldo.
 /// </summary>
 public sealed class LlmSupervisorWorker(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     ILlmClient llm,
-    LlmOptions options,
+    Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> options,
     IPipelineSupervisor supervisor,
     ILogger<LlmSupervisorWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Enabled)
-        {
-            logger.LogInformation("LlmSupervisorWorker: layer AI disabilitato (Llm:Enabled=false). Non parte.");
-            return;
-        }
         if (!llm.IsConfigured)
         {
-            logger.LogWarning("LlmSupervisorWorker: ANTHROPIC_API_KEY non impostata. Layer AI inattivo.");
+            logger.LogWarning("LlmSupervisorWorker: ANTHROPIC_API_KEY non impostata. Layer AI inattivo (riavviare dopo averla impostata).");
             return;
         }
 
-        var interval = TimeSpan.FromMinutes(Math.Max(1, options.PollIntervalMinutes));
-        logger.LogInformation("LlmSupervisorWorker avviato (modello {Model}, check ogni {Interval}).", llm.Model, interval);
+        // L'intervallo si legge una volta sola (cambiarlo richiede riavvio); Enabled è per-tick.
+        var interval = TimeSpan.FromMinutes(Math.Max(1, options.CurrentValue.PollIntervalMinutes));
+        logger.LogInformation("LlmSupervisorWorker avviato (modello {Model}, check ogni {Interval}, Enabled={Enabled}).",
+            llm.Model, interval, options.CurrentValue.Enabled);
 
         try { await Task.Delay(TimeSpan.FromSeconds(45), stoppingToken); }
         catch (OperationCanceledException) { return; }
@@ -43,7 +41,13 @@ public sealed class LlmSupervisorWorker(
         using var timer = new PeriodicTimer(interval);
         do
         {
-            try { await TickAsync(stoppingToken); }
+            try
+            {
+                if (options.CurrentValue.Enabled)
+                {
+                    await TickAsync(stoppingToken);
+                }
+            }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { logger.LogError(ex, "Ciclo LlmSupervisorWorker fallito; ritento al prossimo tick."); }
         }

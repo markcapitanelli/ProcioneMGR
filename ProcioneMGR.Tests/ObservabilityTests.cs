@@ -98,7 +98,7 @@ public class ObservabilityTests
         var registry = new ModelRegistry(factory, new ModelRegistryOptions(), NullLogger<ModelRegistry>.Instance);
         var worker = new FeatureDriftWorker(
             factory, new AlertMonitor(), registry,
-            new DriftMonitorOptions { RetireChampionOnAlert = true, MinAlertsToRetire = 1 },
+            new DriftMonitorOptions { RetireChampionOnAlert = true, MinAlertsToRetire = 1 }.AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance, metrics);
 
         var (listener, longs, _) = Listen();

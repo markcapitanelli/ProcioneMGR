@@ -24,7 +24,7 @@ public interface ILanePromoter
 public sealed class LanePromoter(
     IServiceProvider serviceProvider,
     IDbContextFactory<ApplicationDbContext> dbFactory,
-    PromotionEvaluatorOptions options,
+    Microsoft.Extensions.Options.IOptionsMonitor<PromotionEvaluatorOptions> options,
     ILogger<LanePromoter> logger) : ILanePromoter
 {
     public async Task PromoteLaneAsync(int laneId, TradingMode newMode, string reason, CancellationToken ct = default)
@@ -55,7 +55,7 @@ public sealed class LanePromoter(
         logger.LogWarning("Corsia {Lane} ({Symbol}) {Action}: {Before} → {After}. {Reason}",
             laneId, before.Symbol, action, before.Mode, newMode, reason);
 
-        if (options.NotifyOnPromotion)
+        if (options.CurrentValue.NotifyOnPromotion)
         {
             await using var db = await dbFactory.CreateDbContextAsync(ct);
             db.TradingAuditLogs.Add(new TradingAuditLog
