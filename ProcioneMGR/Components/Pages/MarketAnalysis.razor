@@ -1,12 +1,16 @@
 @page "/market-analysis"
 @rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Analysis
 @using ProcioneMGR.Services.Exchanges
 @attribute [Authorize]
 
+@inject AuthenticationStateProvider AuthProvider
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject GapLapAnalyzer GapLap
 @inject ExcursionAnalyzer Excursion
@@ -85,6 +89,8 @@
 <div class="card mb-3">
     <div class="card-header">Serie da analizzare</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="market-analysis" UserId="@_userId" Disabled="_busy"
+                       ShowUi="false" Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Symbol</label>
@@ -114,7 +120,8 @@
                 <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_busy || !_hasData)"
+                        title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                     @if (_busy)
                     {
                         <span class="spinner-border spinner-border-sm me-1"></span>
@@ -123,6 +130,11 @@
                 </button>
             </div>
         </div>
+
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
+
         @if (!string.IsNullOrEmpty(_status))
         {
             <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
@@ -449,6 +461,9 @@
 
     private List<string> _knownSymbols = new();
     private bool _busy;
+
+    // Aggiornato dal componente DataAvailability (gating dell'analisi).
+    private bool _hasData = true;
     private bool _isError;
     private string? _status;
 
@@ -466,8 +481,31 @@
     private VolumeConfirmation? _volumeConfirmation;
     private int _candleCount;
 
+    private string? _userId;
+    private ConfigPresets? _presets;
+
+    /// <summary>Memoria dell'ultima configurazione usata (modalità silenziosa: form minimo).</summary>
+    private sealed record PageConfig(string Symbol, string Timeframe, DateTime From, DateTime To);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _symbol.Trim(), _timeframe, _from, _to));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; }
+        if (cfg is null) return;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+    }
+
     protected override async Task OnInitializedAsync()
     {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
     }
@@ -480,6 +518,9 @@
             _isError = true;
             return;
         }
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
 
         _busy = true;
         _isError = false;

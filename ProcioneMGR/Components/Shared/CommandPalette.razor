@@ -1,0 +1,190 @@
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Security.Claims
+@using ProcioneMGR.Components.Layout
+@inject NavigationManager NavigationManager
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+
+@* Trigger stile GitHub nella top-row: apre la palette anche senza tastiera. *@
+<button type="button" class="cmdk-trigger" @onclick="Open" title="Ricerca globale">
+    <i class="bi bi-search"></i>
+    <span>Cerca…</span>
+    <span class="cmdk-hint">Ctrl K</span>
+</button>
+
+@if (_isOpen)
+{
+    <div class="cmdk-backdrop" @onclick="Close">
+        <div class="cmdk-panel" @onclick:stopPropagation="true">
+            <div class="cmdk-input-row">
+                <i class="bi bi-search"></i>
+                <input @ref="_input"
+                       value="@_query"
+                       @oninput="OnInput"
+                       @onkeydown="OnKeyDown"
+                       placeholder="Vai a una pagina… (frecce per navigare, Invio per aprire)"
+                       autocomplete="off" />
+                <span class="cmdk-hint">Esc</span>
+            </div>
+            <div class="cmdk-results">
+                @if (_results.Count == 0)
+                {
+                    <div class="cmdk-empty">Nessuna pagina trovata per "@_query"</div>
+                }
+                else
+                {
+                    @for (var i = 0; i < _results.Count; i++)
+                    {
+                        var idx = i;
+                        var (section, item) = _results[i];
+                        <div class="cmdk-item @(idx == _selected ? "selected" : "")"
+                             @onclick="() => Go(item.Href)"
+                             @onmouseover="() => _selected = idx">
+                            <i class="bi @item.Icon"></i>
+                            <div>
+                                <div class="cmdk-item-label">@item.Label</div>
+                                <div class="cmdk-item-desc">@item.Description</div>
+                            </div>
+                            <span class="cmdk-item-section">@section</span>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _isOpen;
+    private string _query = string.Empty;
+    private int _selected;
+    private ElementReference _input;
+    private bool _focusPending;
+
+    private List<(string Section, NavItem Item)> _all = new();
+    private List<(string Section, NavItem Item)> _results = new();
+
+    private DotNetObjectReference<CommandPalette>? _selfRef;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Solo le pagine visibili al ruolo corrente entrano nell'indice di ricerca.
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        var user = state.User;
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            return;
+        }
+
+        foreach (var section in NavModel.Sections)
+        {
+            foreach (var item in section.Items)
+            {
+                if (NavModel.IsVisible(item, user))
+                {
+                    _all.Add((section.Title, item));
+                }
+            }
+        }
+        _results = _all;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("commandPalette.init", _selfRef);
+        }
+
+        if (_focusPending)
+        {
+            _focusPending = false;
+            await JS.InvokeVoidAsync("commandPalette.focus", _input);
+        }
+    }
+
+    [JSInvokable]
+    public Task OpenFromHotkey()
+    {
+        Open();
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private void Open()
+    {
+        if (_all.Count == 0)
+        {
+            return; // Utente non autenticato: niente palette.
+        }
+        _isOpen = true;
+        _query = string.Empty;
+        _results = _all;
+        _selected = 0;
+        _focusPending = true;
+    }
+
+    private void Close() => _isOpen = false;
+
+    private void OnInput(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? string.Empty;
+        Filter();
+    }
+
+    private void Filter()
+    {
+        var q = _query.Trim();
+        _results = q.Length == 0
+            ? _all
+            : _all.Where(r =>
+                    r.Item.Label.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    r.Item.Description.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    r.Item.Href.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    r.Section.Contains(q, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        _selected = 0;
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Escape":
+                Close();
+                break;
+            case "ArrowDown":
+                if (_results.Count > 0) _selected = (_selected + 1) % _results.Count;
+                break;
+            case "ArrowUp":
+                if (_results.Count > 0) _selected = (_selected - 1 + _results.Count) % _results.Count;
+                break;
+            case "Enter":
+                if (_selected >= 0 && _selected < _results.Count) Go(_results[_selected].Item.Href);
+                break;
+        }
+    }
+
+    private void Go(string href)
+    {
+        Close();
+        NavigationManager.NavigateTo(href);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_selfRef is not null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("commandPalette.dispose");
+            }
+            catch
+            {
+                // Circuito già chiuso: il cleanup JS non è più raggiungibile, va bene così.
+            }
+            _selfRef.Dispose();
+        }
+    }
+}

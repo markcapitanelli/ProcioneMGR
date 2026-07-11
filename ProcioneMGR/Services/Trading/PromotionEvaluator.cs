@@ -89,10 +89,10 @@ public interface IPromotionEvaluator
 /// </summary>
 public sealed class PromotionEvaluator(
     IServiceProvider serviceProvider,
-    PromotionEvaluatorOptions options) : IPromotionEvaluator
+    Microsoft.Extensions.Options.IOptionsMonitor<PromotionEvaluatorOptions> options) : IPromotionEvaluator
 {
     /// <summary>Numero di corsie isolate (allineato a Program.cs LaneCount).</summary>
-    public const int LaneCount = 3;
+    public const int LaneCount = TradingLanes.Count;
 
     public async Task<IReadOnlyList<PromotionDecision>> EvaluateAllLanesAsync(CancellationToken ct = default)
     {
@@ -121,7 +121,8 @@ public sealed class PromotionEvaluator(
             ObservationPeriod = observation,
         };
 
-        var decision = Decide(metrics, status.Mode, status.IsRunning, options);
+        // CurrentValue a ogni valutazione: le soglie modificate da /admin/autonomy valgono dal tick dopo.
+        var decision = Decide(metrics, status.Mode, status.IsRunning, options.CurrentValue);
         decision.LaneId = laneId;
         decision.Symbol = status.Symbol;
         decision.IsRunning = status.IsRunning;

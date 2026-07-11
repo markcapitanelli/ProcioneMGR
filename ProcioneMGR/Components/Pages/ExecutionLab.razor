@@ -1,6 +1,9 @@
 @page "/execution"
 @rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Execution
@@ -12,6 +15,7 @@
 @inject ExecutionParameters ExecParams
 @inject IExperimentTracker Tracker
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Execution Lab</PageTitle>
 
@@ -33,6 +37,8 @@
 
 <div class="card mb-3">
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="execution" UserId="@_userId" Disabled="_busy"
+                       ShowUi="false" Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-2 align-items-end">
             <div class="col-auto">
                 <label class="form-label mb-0">Symbol</label>
@@ -116,7 +122,7 @@
 }
 
 @code {
-    private string _symbol = "BTCUSDT";
+    private string _symbol = "BTC/USDT"; // Convenzione piattaforma: con slash, come Backtest/ML Lab.
     private string _timeframe = "5m";
     private string _side = "Buy";
     private decimal _quantity = 100m;
@@ -128,9 +134,41 @@
     private bool _isError;
     private string? _msg;
 
+    private string? _userId;
+    private ConfigPresets? _presets;
+
+    /// <summary>Memoria dell'ultima configurazione usata (modalità silenziosa: form minimo).</summary>
+    private sealed record PageConfig(string Symbol, string Timeframe, string Side, decimal Quantity, int WindowCandles);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _symbol.Trim(), _timeframe, _side, _quantity, _windowCandles));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; }
+        if (cfg is null) return;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (cfg.Timeframe is "5m" or "15m" or "1h") _timeframe = cfg.Timeframe;
+        if (cfg.Side is "Buy" or "Sell") _side = cfg.Side;
+        if (cfg.Quantity > 0m) _quantity = cfg.Quantity;
+        _windowCandles = Math.Clamp(cfg.WindowCandles, 2, 2000);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+
     private async Task CompareAsync()
     {
         if (_busy) return;
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
+
         _busy = true; _msg = null; _isError = false; _results = new();
         try
         {

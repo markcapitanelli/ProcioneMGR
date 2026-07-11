@@ -212,6 +212,79 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
         return list;
     }
 
+    public async Task<OrderStatusResult> GetOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default)
+    {
+        var market = ToExchangeSymbol(symbol);
+        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var query = $"symbol={market}&origClientOrderId={clientOrderId}&recvWindow=5000&timestamp={ts}";
+        var (ok, body, uncertain, error) = await SignedAsync(HttpMethod.Get, "/api/v3/order", query, creds, ct);
+        if (!ok)
+        {
+            return BuildStatusLookupFailure(body, uncertain, error);
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        var executed = root.TryGetProperty("executedQty", out var eq) ? ParseDecimal(eq) : 0m;
+
+        // L'endpoint di query non restituisce fills[] (a differenza del place):
+        // prezzo medio = controvalore quote eseguito / quantità base eseguita.
+        decimal? avg = null;
+        if (executed > 0m && root.TryGetProperty("cummulativeQuoteQty", out var cq))
+        {
+            var quote = ParseDecimal(cq);
+            if (quote > 0m) avg = quote / executed;
+        }
+
+        return new OrderStatusResult
+        {
+            Found = true,
+            Status = NormalizeBinanceOrderStatus(root.TryGetProperty("status", out var st) ? st.GetString() ?? "" : ""),
+            FilledPrice = avg,
+            FilledQuantity = executed > 0m ? executed : null,
+            ExchangeOrderId = root.TryGetProperty("orderId", out var oid) ? oid.GetRawText() : null,
+        };
+    }
+
+    /// <summary>
+    /// Mappa un fallimento del lookup di stato: -2013 ("Order does not exist") = NON TROVATO
+    /// certo; QUALUNQUE altro errore = stato IGNOTO (NetworkUncertain), mai "non trovato" —
+    /// scambiare un errore generico per un not-found riaprirebbe la finestra dell'ordine duplicato.
+    /// </summary>
+    private static OrderStatusResult BuildStatusLookupFailure(string body, bool uncertain, string? error)
+    {
+        if (!uncertain && !string.IsNullOrEmpty(body))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty("code", out var code)
+                    && code.ValueKind == JsonValueKind.Number
+                    && code.TryGetInt32(out var c) && c == -2013)
+                {
+                    return new OrderStatusResult { Found = false, Error = error };
+                }
+            }
+            catch (JsonException) { /* body non-JSON: stato resta ignoto */ }
+        }
+        return new OrderStatusResult { Found = false, NetworkUncertain = true, Error = error };
+    }
+
+    /// <summary>Normalizza lo stato ordine Binance nello schema comune di <see cref="OrderStatusResult"/>.</summary>
+    internal static string NormalizeBinanceOrderStatus(string status) => status.ToUpperInvariant() switch
+    {
+        "NEW" or "PENDING_NEW" or "PENDING_CANCEL" => "Open",
+        "PARTIALLY_FILLED" => "PartiallyFilled",
+        "FILLED" => "Filled",
+        "CANCELED" => "Cancelled",
+        "REJECTED" => "Rejected",
+        "EXPIRED" or "EXPIRED_IN_MATCH" => "Expired",
+        // Stato sconosciuto: trattato come vivo, così il riconciliatore cancella e ricontrolla
+        // invece di dichiararlo erroneamente concluso.
+        _ => "Open",
+    };
+
     public async Task<AccountBalance> GetBalanceAsync(TradingCredentials creds, CancellationToken ct = default)
     {
         var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
@@ -498,6 +571,33 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
             });
         }
         return list;
+    }
+
+    public async Task<OrderStatusResult> GetFuturesOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)
+    {
+        var market = ToExchangeSymbol(symbol);
+        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var query = $"symbol={market}&origClientOrderId={clientOrderId}&recvWindow=5000&timestamp={ts}";
+        var (ok, body, uncertain, error) = await SignedAsync(HttpMethod.Get, "/fapi/v1/order", query, credentials, ct, FuturesProdBase, FuturesTestnetBase);
+        if (!ok)
+        {
+            return BuildStatusLookupFailure(body, uncertain, error);
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        var executed = root.TryGetProperty("executedQty", out var eq) ? ParseDecimal(eq) : 0m;
+        // I futures riportano avgPrice direttamente ("0" finché non eseguito).
+        var avg = root.TryGetProperty("avgPrice", out var ap) ? ParseDecimalOrNull(ap) : null;
+
+        return new OrderStatusResult
+        {
+            Found = true,
+            Status = NormalizeBinanceOrderStatus(root.TryGetProperty("status", out var st) ? st.GetString() ?? "" : ""),
+            FilledPrice = avg is > 0m ? avg : null,
+            FilledQuantity = executed > 0m ? executed : null,
+            ExchangeOrderId = root.TryGetProperty("orderId", out var oid) ? oid.GetRawText() : null,
+        };
     }
 
     public async Task<FuturesBalance> GetFuturesBalanceAsync(TradingCredentials credentials, CancellationToken ct = default)

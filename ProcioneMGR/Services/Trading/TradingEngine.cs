@@ -48,7 +48,8 @@ public sealed class TradingEngine(
     ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null,
     IModelRegistry? modelRegistry = null,
     IAlphaFactorFactory? alphaFactorFactory = null,
-    IFactorCache? factorCache = null) : ITradingEngine
+    IFactorCache? factorCache = null,
+    ProcioneMGR.Services.Security.IMasterKeyStatus? masterKeyStatus = null) : ITradingEngine
 {
     public int LaneId => laneId;
 
@@ -67,7 +68,6 @@ public sealed class TradingEngine(
     private sealed record ChampionCacheEntry(int ModelId, int Version, MlStrategy Strategy, IReturnPredictor Predictor);
     private ChampionCacheEntry? _championCache;
 
-    private const decimal PositionSizePercent = 8m;   // sotto MaxPositionSizePercent (10%)
     private const decimal FeePercent = 0.1m;
     private const int BufferSize = 400;
 
@@ -85,6 +85,7 @@ public sealed class TradingEngine(
     private bool _loaded;
     private TradingCredentials? _creds;   // valorizzate in Testnet/Live
     private SymbolFilters? _filters;      // LOT_SIZE/PRICE_FILTER del simbolo (Testnet/Live)
+    private bool _untrackedRemoteAlerted; // dedup dell'allerta "posizione remota sconosciuta"
 
     private decimal FeeFrac => FeePercent / 100m;
 
@@ -99,8 +100,27 @@ public sealed class TradingEngine(
         var row = await db.TradingEngineStates.Where(s => s.LaneId == laneId).OrderBy(s => s.Id).FirstOrDefaultAsync(ct);
         if (row is not null) _state = row;
         var positions = await db.OpenPositions.AsNoTracking().Where(p => p.LaneId == laneId).ToListAsync(ct);
+
+        // [M2] Discriminatore anti-mescolamento: si ricaricano SOLO le posizioni aperte nella
+        // modalità corrente della corsia. Righe di un'altra modalità (residuo di una promozione/
+        // retrocessione interrotta a metà) vengono PURGATE con audit: una posizione simulata
+        // Paper non deve mai sembrare esposizione reale Testnet, né viceversa.
+        var stale = positions.Where(p => p.OpenedInMode != _state.Mode).ToList();
+        if (stale.Count > 0)
+        {
+            var ids = stale.Select(p => p.Id).ToList();
+            await db.OpenPositions.Where(p => ids.Contains(p.Id)).ExecuteDeleteAsync(ct);
+            logger.LogWarning("Purgate {N} posizioni di una modalità diversa ({Modes}) dalla corsia in {Mode}.",
+                stale.Count, string.Join(",", stale.Select(p => p.OpenedInMode).Distinct()), _state.Mode);
+            await AuditAsync("StalePositionsPurged", new
+            {
+                mode = _state.Mode.ToString(),
+                purged = stale.Select(p => new { p.PositionId, p.Symbol, openedInMode = p.OpenedInMode.ToString(), p.Quantity }),
+            }, DateTime.UtcNow, ct);
+        }
+
         _positions.Clear();
-        _positions.AddRange(positions);
+        _positions.AddRange(positions.Where(p => p.OpenedInMode == _state.Mode));
         // Solo i job Running (i chiusi sono storia, mai riletti a runtime): cache piccola per sempre.
         var jobs = await db.ExecutionJobs.AsNoTracking().Where(j => j.LaneId == laneId && j.Status == "Running").ToListAsync(ct);
         _executionJobs.Clear();
@@ -117,6 +137,16 @@ public sealed class TradingEngine(
         await _gate.WaitAsync(ct);
         try
         {
+            // Con la master key placeholder del template (pubblica su git) le credenziali
+            // exchange "cifrate" sono in chiaro di fatto: soldi veri MAI su quella base.
+            // Paper/Testnet restano permessi (comodi in sviluppo).
+            if (mode == TradingMode.Live && masterKeyStatus?.IsDefaultDevKey == true)
+            {
+                throw new InvalidOperationException(
+                    "Trading LIVE bloccato: Security:MasterKey è ancora il placeholder di sviluppo del template. " +
+                    "Genera una chiave reale (base64 di 32 byte, env PROCIONE_MGR_MASTER_KEY) e ricifra le credenziali.");
+            }
+
             var cfg = await ensemble.GetConfigurationAsync(ct);
             var capital = cfg.TotalCapital > 0 ? cfg.TotalCapital : 10_000m;
             var marketType = cfg.IsFutures ? MarketType.Futures : MarketType.Spot;
@@ -130,6 +160,22 @@ public sealed class TradingEngine(
                 throw new InvalidOperationException(
                     $"Leva richiesta {requestedLeverage}x oltre il limite di sicurezza {safety.CurrentValue.MaxLeverageAllowed}x " +
                     "(configurazione Ensemble). Alza il limite in Trading (solo Admin) per procedere consapevolmente, o riduci la leva.");
+            }
+
+            // Coerenza sizing vs safety: il nozionale per posizione (margine × leva sui Futures)
+            // deve stare sotto i cap del SafetyChecker, altrimenti OGNI ordine verrebbe rifiutato
+            // ("Posizione troppo grande") e la corsia non farebbe mai trading — meglio bloccare
+            // l'avvio con una spiegazione che scoprirlo dal silenzio degli ordini.
+            var sizePct = safety.CurrentValue.PositionSizePercent;
+            var notionalPct = marketType == MarketType.Futures ? sizePct * requestedLeverage : sizePct;
+            if (notionalPct > safety.CurrentValue.MaxPositionSizePercent || notionalPct > safety.CurrentValue.MaxTotalExposurePercent)
+            {
+                throw new InvalidOperationException(
+                    $"Sizing incoerente: {sizePct}% di {(marketType == MarketType.Futures ? "margine" : "capitale")}" +
+                    $"{(marketType == MarketType.Futures ? $" × leva {requestedLeverage}x" : "")} = nozionale {notionalPct}% per posizione, " +
+                    $"oltre MaxPositionSizePercent ({safety.CurrentValue.MaxPositionSizePercent}%) o MaxTotalExposurePercent " +
+                    $"({safety.CurrentValue.MaxTotalExposurePercent}%): ogni ordine verrebbe rifiutato dal SafetyChecker. " +
+                    "Alza i limiti nel pannello sicurezza di /trading (solo Admin) o riduci leva/size.");
             }
 
             _state = new TradingEngineState
@@ -250,6 +296,44 @@ public sealed class TradingEngine(
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// [M2] Chiude tutte le posizioni della corsia al miglior prezzo noto SENZA toccare i flag di
+    /// emergenza: è il "flatten" usato dalla promozione/retrocessione di corsia (LanePromoter),
+    /// dove fermare la corsia non è un'emergenza. EmergencyStop condivide lo stesso loop di
+    /// chiusura via <see cref="CloseAllInternalAsync"/>.
+    /// </summary>
+    public async Task CloseAllPositionsAsync(string reason, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await EnsureLoadedAsync(ct);
+            var ts = DateTime.UtcNow;
+            var count = _positions.Count;
+            await CloseAllInternalAsync(reason, ts, ct);
+            await SaveStateAsync(ct);
+            if (count > 0)
+            {
+                await AuditAsync("CloseAllPositions", new { reason, requested = count, remaining = _positions.Count }, ts, ct);
+            }
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Loop di chiusura condiviso tra EmergencyStop e flatten: chiusura market al miglior prezzo
+    /// noto. Una chiusura può NON riuscire (rete incerta / rifiuto exchange): la posizione resta
+    /// in <see cref="_positions"/> e il chiamante decide come procedere (retry, log, ecc.).
+    /// </summary>
+    private async Task CloseAllInternalAsync(string reason, DateTime ts, CancellationToken ct)
+    {
+        foreach (var pos in _positions.ToList())
+        {
+            var exit = pos.CurrentPrice > 0m ? pos.CurrentPrice : pos.EntryPrice;
+            await ClosePositionAsync(pos, exit, reason, ts, ct);
+        }
+    }
+
     private async Task EmergencyInternalAsync(string reason, DateTime ts, CancellationToken ct)
     {
         _state.IsEmergencyStopped = true;
@@ -258,11 +342,7 @@ public sealed class TradingEngine(
 
         // Chiudi TUTTE le posizioni al prezzo corrente (market). ClosePositionAsync annulla anche
         // il piano di esecuzione eventualmente associato a ciascuna posizione (vedi §1 del design).
-        foreach (var pos in _positions.ToList())
-        {
-            var exit = pos.CurrentPrice > 0m ? pos.CurrentPrice : pos.EntryPrice;
-            await ClosePositionAsync(pos, exit, "EmergencyStop", ts, ct);
-        }
+        await CloseAllInternalAsync("EmergencyStop", ts, ct);
 
         // Difesa: qualunque piano ancora Running (posizione non trovata, caso limite) va comunque annullato.
         foreach (var job in _executionJobs.ToList())
@@ -406,8 +486,10 @@ public sealed class TradingEngine(
             // Equity + drawdown.
             var equity = ComputeEquity(price);
             _equity.Add(new EquityPoint { Timestamp = ts, Capital = equity });
+            TrimEquity(_equity);   // M1: la curva in-memory non cresce senza limite (candela ∞)
             if (equity > _state.PeakEquity) _state.PeakEquity = equity;
             var dd = _state.PeakEquity > 0m ? (_state.PeakEquity - equity) / _state.PeakEquity * 100m : 0m;
+            if (dd > _state.MaxDrawdownPercent) _state.MaxDrawdownPercent = dd;   // persistito: sopravvive al riavvio
 
             await SaveStateAsync(ct);
 
@@ -467,10 +549,23 @@ public sealed class TradingEngine(
     {
         if (price <= 0m) return;
 
+        // Guard: sullo SPOT reale non esiste la vendita allo scoperto — un SELL di apertura
+        // su Testnet/Live fallirebbe sull'exchange (saldo insufficiente) o, peggio, venderebbe
+        // asset del conto NON tracciati da questa corsia. In Paper lo short simulato resta
+        // permesso (utile per valutare strategie long/short prima di passarle ai Futures).
+        if (_state.MarketType == MarketType.Spot && side == OrderSide.Sell && _state.Mode != TradingMode.Paper)
+        {
+            logger.LogWarning("Segnale SHORT su SPOT {Mode} ignorato per {Strategy}: vendita allo scoperto non supportata (usa i Futures).",
+                _state.Mode, strat.StrategyName);
+            await AuditAsync("ShortOnSpotBlocked", new { strat.StrategyId, strat.StrategyName, price }, ts, ct);
+            return;
+        }
+
         // Spot: PositionSizePercent è il nozionale investito (leva implicita 1x).
         // Futures: PositionSizePercent è il MARGINE isolato; il nozionale (e quindi
         // l'esposizione reale) è margine × leva — stessa logica del motore di backtest.
-        var margin = _state.TotalCapital * PositionSizePercent / 100m;
+        // La coerenza con MaxPositionSizePercent/MaxTotalExposurePercent è validata a StartAsync.
+        var margin = _state.TotalCapital * safety.CurrentValue.PositionSizePercent / 100m;
         var notional = _state.MarketType == MarketType.Futures ? margin * _state.Leverage : margin;
         var qty = notional / price;
 
@@ -559,6 +654,81 @@ public sealed class TradingEngine(
         }
     }
 
+    // ---------------------------------------------------------------- riconciliazione ordini incerti
+
+    private enum ReconcileStatus { Filled, NotFound, TerminalUnfilled, Uncertain }
+
+    private sealed record ReconcileOutcome(ReconcileStatus Status, decimal? FillPrice, decimal? FillQty, string? ExchangeOrderId);
+
+    /// <summary>
+    /// Riconcilia un ordine MARKET dall'esito di rete incerto interrogando lo STATO per
+    /// clientOrderId (fino a 3 tentativi, pausa 2s). GetOpenOrders NON basta: un MARKET riempito
+    /// durante il blip non è tra gli ordini "aperti" e verrebbe scambiato per "mai piazzato" —
+    /// risultato: posizione reale non tracciata (nessuno stop la gestisce) E ordine duplicato alla
+    /// candela successiva. Se l'ordine risulta ancora vivo viene CANCELLATO e ricontrollato, così
+    /// non può riempirsi "alle nostre spalle" dopo che lo abbiamo dichiarato assente.
+    /// </summary>
+    private async Task<ReconcileOutcome> ReconcileUncertainOrderAsync(
+        string symbol, string clientOrderId, bool futures, TradingCredentials creds, CancellationToken ct)
+    {
+        var spotClient = futures ? null : exchangeFactory.Create(_state.ExchangeName);
+        var futuresClient = futures ? exchangeFactory.CreateFutures(_state.ExchangeName) : null;
+
+        Task<OrderStatusResult> LookupAsync() => futures
+            ? futuresClient!.GetFuturesOrderStatusAsync(symbol, clientOrderId, creds, ct)
+            : spotClient!.GetOrderStatusAsync(symbol, clientOrderId, creds, ct);
+
+        Task<CancelOrderResult> CancelAsync() => futures
+            ? futuresClient!.CancelFuturesOrderAsync(symbol, clientOrderId, creds, ct)
+            : spotClient!.CancelOrderAsync(symbol, clientOrderId, creds, ct);
+
+        static bool HasFill(OrderStatusResult s) =>
+            s.Status is "Filled" or "PartiallyFilled" && s.FilledQuantity is > 0m;
+
+        const int MaxAttempts = 3;
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            var status = await LookupAsync();
+
+            if (status.NetworkUncertain)
+            {
+                if (attempt < MaxAttempts) await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                continue;
+            }
+            if (!status.Found)
+            {
+                return new ReconcileOutcome(ReconcileStatus.NotFound, null, null, null);
+            }
+            if (HasFill(status))
+            {
+                return new ReconcileOutcome(ReconcileStatus.Filled, status.FilledPrice, status.FilledQuantity, status.ExchangeOrderId);
+            }
+            if (status.IsTerminalUnfilled)
+            {
+                return new ReconcileOutcome(ReconcileStatus.TerminalUnfilled, null, null, null);
+            }
+
+            // Ancora vivo: cancella per chiudere la finestra di duplicazione, poi un ultimo
+            // lookup per catturare un fill avvenuto tra la query e la cancellazione.
+            await CancelAsync();
+            var after = await LookupAsync();
+            if (!after.NetworkUncertain)
+            {
+                if (after.Found && HasFill(after))
+                {
+                    return new ReconcileOutcome(ReconcileStatus.Filled, after.FilledPrice, after.FilledQuantity, after.ExchangeOrderId);
+                }
+                return new ReconcileOutcome(ReconcileStatus.TerminalUnfilled, null, null, null);
+            }
+            if (attempt < MaxAttempts) await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        }
+
+        // Stato ancora ignoto dopo tutti i tentativi: cancellazione best-effort per chiudere
+        // comunque la finestra; il chiamante deve loggare CRITICAL per la verifica manuale.
+        await CancelAsync();
+        return new ReconcileOutcome(ReconcileStatus.Uncertain, null, null, null);
+    }
+
     /// <summary>
     /// Esegue effettivamente l'apertura: safety condivisa, poi dispatch Spot/Futures. Ritorna true
     /// se il fill è avvenuto (posizione creata o accresciuta). <paramref name="mergeInto"/> null =
@@ -612,16 +782,45 @@ public sealed class TradingEngine(
 
             if (res.NetworkUncertain)
             {
-                var open = await client.GetOpenOrdersAsync(_state.Symbol, creds, ct);
-                if (!open.Any(o => o.ClientOrderId == order.ClientOrderId))
+                var outcome = await ReconcileUncertainOrderAsync(_state.Symbol, order.ClientOrderId, futures: false, creds, ct);
+                switch (outcome.Status)
                 {
-                    order.Status = OrderStatus.Rejected;
-                    order.ErrorMessage = "Errore di rete: ordine NON riscontrato sull'exchange. " + res.Error;
-                    await SaveOrderAsync(order, isExisting, ct);
-                    await AuditAsync("OrderRejected", new { order.ClientOrderId, reason = "network-uncertain-not-found", res.Error }, ts, ct);
-                    return false;
+                    case ReconcileStatus.Filled:
+                        logger.LogWarning("Ordine {Cid} riconciliato come ESEGUITO dopo errore di rete (fill {Price} x {Qty}).",
+                            order.ClientOrderId, outcome.FillPrice, outcome.FillQty);
+                        await AuditAsync("OrderReconciledFilled",
+                            new { order.ClientOrderId, fillPrice = outcome.FillPrice, fillQty = outcome.FillQty }, ts, ct);
+                        res = new PlaceOrderResult
+                        {
+                            Success = true,
+                            FilledPrice = outcome.FillPrice,
+                            FilledQuantity = outcome.FillQty,
+                            ExchangeOrderId = outcome.ExchangeOrderId,
+                        };
+                        break;
+
+                    case ReconcileStatus.Uncertain:
+                        order.Status = OrderStatus.Rejected;
+                        order.ErrorMessage = "Errore di rete: stato dell'ordine NON verificabile dopo la riconciliazione. " + res.Error;
+                        await SaveOrderAsync(order, isExisting, ct);
+                        await AuditAsync("OrderReconcileUncertain", new { order.ClientOrderId, res.Error }, ts, ct);
+                        logger.LogCritical(
+                            "Ordine {Cid}: stato NON verificabile dopo la riconciliazione (cancellazione best-effort inviata). VERIFICARE MANUALMENTE sull'exchange.",
+                            order.ClientOrderId);
+                        return false;
+
+                    default: // NotFound / TerminalUnfilled: sicuro ritentare alla prossima candela
+                        order.Status = OrderStatus.Rejected;
+                        order.ErrorMessage = "Errore di rete: ordine NON riscontrato sull'exchange. " + res.Error;
+                        await SaveOrderAsync(order, isExisting, ct);
+                        await AuditAsync("OrderRejected", new
+                        {
+                            order.ClientOrderId,
+                            reason = outcome.Status == ReconcileStatus.NotFound ? "network-uncertain-not-found" : "network-uncertain-terminal",
+                            res.Error,
+                        }, ts, ct);
+                        return false;
                 }
-                logger.LogWarning("Ordine {Cid} riconciliato sull'exchange dopo errore di rete.", order.ClientOrderId);
             }
             else if (!res.Success)
             {
@@ -663,6 +862,7 @@ public sealed class TradingEngine(
                 OpenedAtUtc = ts,
                 CurrentPrice = fillPrice,
                 ExchangeOrderId = exchangeOrderId,
+                OpenedInMode = _state.Mode,
                 Leverage = 1,
                 MarginBalance = realNotional,
             };
@@ -723,16 +923,45 @@ public sealed class TradingEngine(
 
             if (res.NetworkUncertain)
             {
-                var open = await futuresClient.GetOpenFuturesOrdersAsync(_state.Symbol, creds, ct);
-                if (!open.Any(o => o.ClientOrderId == order.ClientOrderId))
+                var outcome = await ReconcileUncertainOrderAsync(_state.Symbol, order.ClientOrderId, futures: true, creds, ct);
+                switch (outcome.Status)
                 {
-                    order.Status = OrderStatus.Rejected;
-                    order.ErrorMessage = "Errore di rete: ordine futures NON riscontrato sull'exchange. " + res.Error;
-                    await SaveOrderAsync(order, isExisting, ct);
-                    await AuditAsync("OrderRejected", new { order.ClientOrderId, reason = "network-uncertain-not-found", res.Error }, ts, ct);
-                    return false;
+                    case ReconcileStatus.Filled:
+                        logger.LogWarning("Ordine futures {Cid} riconciliato come ESEGUITO dopo errore di rete (fill {Price} x {Qty}).",
+                            order.ClientOrderId, outcome.FillPrice, outcome.FillQty);
+                        await AuditAsync("OrderReconciledFilled",
+                            new { order.ClientOrderId, fillPrice = outcome.FillPrice, fillQty = outcome.FillQty }, ts, ct);
+                        res = new PlaceOrderResult
+                        {
+                            Success = true,
+                            FilledPrice = outcome.FillPrice,
+                            FilledQuantity = outcome.FillQty,
+                            ExchangeOrderId = outcome.ExchangeOrderId,
+                        };
+                        break;
+
+                    case ReconcileStatus.Uncertain:
+                        order.Status = OrderStatus.Rejected;
+                        order.ErrorMessage = "Errore di rete: stato dell'ordine futures NON verificabile dopo la riconciliazione. " + res.Error;
+                        await SaveOrderAsync(order, isExisting, ct);
+                        await AuditAsync("OrderReconcileUncertain", new { order.ClientOrderId, res.Error }, ts, ct);
+                        logger.LogCritical(
+                            "Ordine futures {Cid}: stato NON verificabile dopo la riconciliazione (cancellazione best-effort inviata). VERIFICARE MANUALMENTE sull'exchange.",
+                            order.ClientOrderId);
+                        return false;
+
+                    default: // NotFound / TerminalUnfilled: sicuro ritentare alla prossima candela
+                        order.Status = OrderStatus.Rejected;
+                        order.ErrorMessage = "Errore di rete: ordine futures NON riscontrato sull'exchange. " + res.Error;
+                        await SaveOrderAsync(order, isExisting, ct);
+                        await AuditAsync("OrderRejected", new
+                        {
+                            order.ClientOrderId,
+                            reason = outcome.Status == ReconcileStatus.NotFound ? "network-uncertain-not-found" : "network-uncertain-terminal",
+                            res.Error,
+                        }, ts, ct);
+                        return false;
                 }
-                logger.LogWarning("Ordine futures {Cid} riconciliato sull'exchange dopo errore di rete.", order.ClientOrderId);
             }
             else if (!res.Success)
             {
@@ -793,6 +1022,7 @@ public sealed class TradingEngine(
                 OpenedAtUtc = ts,
                 CurrentPrice = fillPrice,
                 ExchangeOrderId = exchangeOrderId,
+                OpenedInMode = _state.Mode,
                 Leverage = leverage,
                 LiquidationPrice = liquidationPrice,
                 MarginBalance = margin,
@@ -876,11 +1106,18 @@ public sealed class TradingEngine(
 
         if (pos.StopLoss is decimal sl && sl > 0m) await PlaceAsync(sl, isStopLoss: true, id => pos.StopOrderId = id);
         if (pos.TakeProfit is decimal tp && tp > 0m) await PlaceAsync(tp, isStopLoss: false, id => pos.TakeProfitOrderId = id);
+
+        // [M3] Persistenza immediata degli id: senza, un riavvio perdeva i clientOrderId dei
+        // trigger REALI ancora armati sull'exchange e la chiusura non poteva più cancellarli.
+        if (pos.StopOrderId is not null || pos.TakeProfitOrderId is not null)
+        {
+            await UpdatePositionRowAsync(pos, ct);
+        }
     }
 
     /// <summary>
-    /// [P0-5 follow-up — SCAFFOLDING] Cancella gli ordini TRIGGER resting prima di chiudere a mercato,
-    /// così non restano ordini orfani sull'exchange. INERTE finché non ci sono id (feature off/stub).
+    /// [P0-5] Cancella gli ordini TRIGGER resting prima di chiudere a mercato, così non restano
+    /// ordini orfani sull'exchange. INERTE se non ci sono id (feature off, default).
     /// </summary>
     private async Task TryCancelRestingBracketAsync(OpenPosition pos, TradingCredentials creds, CancellationToken ct)
     {
@@ -896,6 +1133,7 @@ public sealed class TradingEngine(
         }
         pos.StopOrderId = null;
         pos.TakeProfitOrderId = null;
+        await UpdatePositionRowAsync(pos, ct);   // [M3] azzeramento persistito come il piazzamento
     }
 
     // ---------------------------------------------------------------- esecuzione a fette (TWAP/VWAP/Iceberg)
@@ -1251,12 +1489,26 @@ public sealed class TradingEngine(
             }, ct);
             if (res.NetworkUncertain)
             {
-                var open = await client.GetOpenOrdersAsync(pos.Symbol, creds, ct);
-                if (!open.Any(o => o.ClientOrderId == closeClientId))
+                var outcome = await ReconcileUncertainOrderAsync(pos.Symbol, closeClientId, futures: false, creds, ct);
+                if (outcome.Status == ReconcileStatus.Filled)
                 {
-                    // Chiusura non riscontrata: NON rimuovere la posizione, logga e riprova al prossimo ciclo.
-                    logger.LogError("Chiusura {Pid} incerta e non riscontrata sull'exchange: la posizione resta aperta.", pos.PositionId);
-                    await AuditAsync("CloseUncertain", new { pos.PositionId, res.Error }, ts, ct);
+                    // La chiusura È avvenuta durante il blip: si finalizza con il fill reale.
+                    // Prima (check sui soli open orders) la posizione restava aperta localmente
+                    // PER SEMPRE: ogni retry rivendeva un asset già venduto (oversell rifiutato).
+                    logger.LogWarning("Chiusura {Pid} riconciliata come ESEGUITA dopo errore di rete (fill {Price}).",
+                        pos.PositionId, outcome.FillPrice);
+                    await AuditAsync("CloseReconciledFilled",
+                        new { pos.PositionId, closeClientId, fillPrice = outcome.FillPrice }, ts, ct);
+                    if (outcome.FillPrice is decimal rp && rp > 0m) exitPrice = rp;
+                }
+                else
+                {
+                    // NotFound/terminale: mai eseguita → retry alla prossima candela (nuovo ordine).
+                    // Uncertain: una chiusura NON si finalizza MAI da uno stato ignoto (il rischio
+                    // di oversell è peggiore del retry); la cancellazione best-effort è già partita.
+                    logger.LogError("Chiusura {Pid} incerta e non confermata dall'exchange (esito {Outcome}): la posizione resta aperta.",
+                        pos.PositionId, outcome.Status);
+                    await AuditAsync("CloseUncertain", new { pos.PositionId, outcome = outcome.Status.ToString(), res.Error }, ts, ct);
                     return;
                 }
             }
@@ -1266,7 +1518,10 @@ public sealed class TradingEngine(
                 await AuditAsync("CloseRejected", new { pos.PositionId, res.Error }, ts, ct);
                 return;
             }
-            if (res.FilledPrice is decimal fp && fp > 0m) exitPrice = fp;
+            else if (res.FilledPrice is decimal fp && fp > 0m)
+            {
+                exitPrice = fp;
+            }
         }
 
         var entryFee = qty * entry * FeeFrac;
@@ -1367,11 +1622,26 @@ public sealed class TradingEngine(
             }, reduceOnly: true, ct);
             if (res.NetworkUncertain)
             {
-                var open = await futuresClient.GetOpenFuturesOrdersAsync(pos.Symbol, creds, ct);
-                if (!open.Any(o => o.ClientOrderId == closeClientId))
+                var outcome = await ReconcileUncertainOrderAsync(pos.Symbol, closeClientId, futures: true, creds, ct);
+                if (outcome.Status == ReconcileStatus.Filled)
                 {
-                    logger.LogError("Chiusura futures {Pid} incerta e non riscontrata sull'exchange: la posizione resta aperta.", pos.PositionId);
-                    await AuditAsync("CloseUncertain", new { pos.PositionId, res.Error }, ts, ct);
+                    // La chiusura È avvenuta durante il blip: si finalizza con il fill reale.
+                    // Prima la posizione restava aperta finché ReconcileFuturesPositionsAsync non
+                    // la forzava a lastKnownPrice come "Liquidation/ExternalClose" — prezzo
+                    // sbagliato e WasLiquidated fuorviante.
+                    logger.LogWarning("Chiusura futures {Pid} riconciliata come ESEGUITA dopo errore di rete (fill {Price}).",
+                        pos.PositionId, outcome.FillPrice);
+                    await AuditAsync("CloseReconciledFilled",
+                        new { pos.PositionId, closeClientId, fillPrice = outcome.FillPrice }, ts, ct);
+                    if (outcome.FillPrice is decimal rp && rp > 0m) exitPrice = rp;
+                }
+                else
+                {
+                    // NotFound/terminale: mai eseguita → retry alla prossima candela (nuovo ordine).
+                    // Uncertain: mai finalizzare da stato ignoto (cancellazione best-effort già partita).
+                    logger.LogError("Chiusura futures {Pid} incerta e non confermata dall'exchange (esito {Outcome}): la posizione resta aperta.",
+                        pos.PositionId, outcome.Status);
+                    await AuditAsync("CloseUncertain", new { pos.PositionId, outcome = outcome.Status.ToString(), res.Error }, ts, ct);
                     return;
                 }
             }
@@ -1381,7 +1651,10 @@ public sealed class TradingEngine(
                 await AuditAsync("CloseRejected", new { pos.PositionId, res.Error }, ts, ct);
                 return;
             }
-            if (res.FilledPrice is decimal fp && fp > 0m) exitPrice = fp;
+            else if (res.FilledPrice is decimal fp && fp > 0m)
+            {
+                exitPrice = fp;
+            }
         }
 
         var entryFee = qty * entry * FeeFrac;
@@ -1460,7 +1733,9 @@ public sealed class TradingEngine(
     /// </summary>
     private async Task ReconcileFuturesPositionsAsync(decimal lastKnownPrice, DateTime ts, CancellationToken ct)
     {
-        if (_state.MarketType != MarketType.Futures || _state.Mode == TradingMode.Paper || _creds is not TradingCredentials creds || _positions.Count == 0)
+        // NB: si interroga l'exchange anche a posizioni locali ZERO, per la difesa inversa qui
+        // sotto (posizione remota che il motore non conosce) — una chiamata firmata per candela.
+        if (_state.MarketType != MarketType.Futures || _state.Mode == TradingMode.Paper || _creds is not TradingCredentials creds)
         {
             return;
         }
@@ -1477,8 +1752,32 @@ public sealed class TradingEngine(
             return;
         }
 
-        if (remote is not null) return;
+        if (remote is not null)
+        {
+            // Difesa inversa: posizione APERTA sull'exchange ma sconosciuta al motore (es. esito
+            // di un ordine dichiarato incerto, o apertura manuale fuori piattaforma). NESSUNA
+            // auto-azione — chiuderla d'ufficio potrebbe distruggere un'operazione voluta
+            // dall'operatore; si allerta una sola volta finché la condizione persiste.
+            if (!_positions.Any(p => p.Symbol == _state.Symbol))
+            {
+                if (!_untrackedRemoteAlerted)
+                {
+                    _untrackedRemoteAlerted = true;
+                    logger.LogCritical(
+                        "Posizione {Side} {Qty} {Sym} APERTA sull'exchange ma SCONOSCIUTA al motore: VERIFICARE MANUALMENTE (nessuna azione automatica).",
+                        remote.Side, remote.Quantity, _state.Symbol);
+                    await AuditAsync("UntrackedRemotePosition",
+                        new { _state.Symbol, remote.Side, remote.Quantity, remote.EntryPrice }, ts, ct);
+                }
+            }
+            else
+            {
+                _untrackedRemoteAlerted = false;
+            }
+            return;
+        }
 
+        _untrackedRemoteAlerted = false;
         foreach (var pos in _positions.Where(p => p.Symbol == _state.Symbol).ToList())
         {
             logger.LogWarning("Posizione {Pid} risulta chiusa sull'exchange ma aperta localmente: riconciliazione (probabile liquidazione esterna).", pos.PositionId);
@@ -1623,8 +1922,12 @@ public sealed class TradingEngine(
         {
             EquityCurve = _equity.ToList(),
             TotalReturn = _state.TotalCapital > 0m ? _state.RealizedPnl / _state.TotalCapital * 100m : 0m,
+            // Sharpe calcolato sulla FINESTRA ritenuta della curva (bounded, vedi TrimEquity):
+            // per una metrica di promozione la storia recente è quella che conta. Il MaxDrawdown
+            // invece è il PEGGIORE tra ricalcolo locale e valore di sessione persistito — un
+            // riavvio (curva vuota) o il trim non possono più "amnesiare" un drawdown già subito.
             SharpeRatio = Statistics.SharpeRatio(_equity, ppy),
-            MaxDrawdown = MaxDrawdown(_equity),
+            MaxDrawdown = Math.Max(_state.MaxDrawdownPercent, MaxDrawdown(_equity)),
             TotalTrades = trades.Count,
             WinRate = trades.Count > 0 ? (decimal)wins.Count / trades.Count * 100m : 0m,
             AverageWin = wins.Count > 0 ? wins.Average(t => t.Pnl) : 0m,
@@ -1649,7 +1952,23 @@ public sealed class TradingEngine(
         var eq = _state.AvailableCapital;
         foreach (var pos in _positions)
         {
-            eq += pos.Side == OrderSide.Buy ? pos.Quantity * price : -pos.Quantity * price;
+            // Dopo un riavvio il buffer può essere vuoto e il chiamante passa 0: si ricade
+            // sull'ultimo prezzo noto della posizione, mai su un mark-to-market a prezzo nullo.
+            var mark = price > 0m ? price : (pos.CurrentPrice > 0m ? pos.CurrentPrice : pos.EntryPrice);
+            if (_state.MarketType == MarketType.Futures)
+            {
+                // Margine ISOLATO: l'apertura sottrae solo margine+fee e la chiusura restituisce
+                // margine+PnL, quindi l'equity è disponibile + margine bloccato + PnL non
+                // realizzato — MAI il nozionale (±qty·prezzo è il modello di cassa dello Spot:
+                // applicato a uno short leveraged renderebbe l'equity profondamente negativa e
+                // farebbe scattare un falso MaxDrawdown emergency stop alla candela di apertura).
+                var upnl = (pos.Side == OrderSide.Buy ? mark - pos.EntryPrice : pos.EntryPrice - mark) * pos.Quantity;
+                eq += pos.MarginBalance + upnl;
+            }
+            else
+            {
+                eq += pos.Side == OrderSide.Buy ? pos.Quantity * mark : -pos.Quantity * mark;
+            }
         }
         return eq;
     }
@@ -1688,6 +2007,22 @@ public sealed class TradingEngine(
             if (peak > 0m) { var d = (peak - p.Capital) / peak * 100m; if (d > maxDd) maxDd = d; }
         }
         return maxDd;
+    }
+
+    /// <summary>
+    /// [M1] Ritenzione bounded della curva equity in-memory: oltre <paramref name="maxPoints"/>
+    /// punti si scarta il BLOCCO più vecchio (una RemoveRange ogni <paramref name="trimBlock"/>
+    /// candele, non una RemoveAt per candela). A 5m sono ~34 giorni di storia: abbastanza per
+    /// Sharpe/drawdown recenti; il MaxDrawdown di sessione resta comunque esatto perché è
+    /// tracciato incrementalmente in <see cref="TradingEngineState.MaxDrawdownPercent"/>.
+    /// </summary>
+    internal static void TrimEquity(List<EquityPoint> curve, int maxPoints = 10_000, int trimBlock = 2_000)
+    {
+        ArgumentNullException.ThrowIfNull(curve);
+        if (curve.Count > maxPoints)
+        {
+            curve.RemoveRange(0, Math.Min(trimBlock, curve.Count - 1));
+        }
     }
 
     // ---------------------------------------------------------------- persistenza
@@ -1738,6 +2073,8 @@ public sealed class TradingEngine(
         row.CurrentPrice = pos.CurrentPrice;
         row.LiquidationPrice = pos.LiquidationPrice;
         row.ExchangeOrderId = pos.ExchangeOrderId;
+        row.StopOrderId = pos.StopOrderId;               // [M3] i trigger resting sopravvivono al riavvio
+        row.TakeProfitOrderId = pos.TakeProfitOrderId;
         await db.SaveChangesAsync(ct);
     }
 

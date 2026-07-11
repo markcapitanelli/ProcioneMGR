@@ -1,0 +1,139 @@
+@* Preset di configurazione con nome + memoria dell'ultima configurazione usata (per utente).
+   Il parent fornisce Capture (fotografa il form in JSON) e Apply (riporta il JSON sul form);
+   il componente gestisce dropdown, salva-con-nome ed elimina, e — se AutoRestoreLast —
+   ripristina l'ultima configurazione usata al primo accesso alla pagina (mai quando si
+   arriva via handoff da un'altra pagina: quel contesto ha la precedenza).
+   Il parent chiama SaveLastUsedAsync() all'avvio del Run, via @@ref. *@
+
+@using ProcioneMGR.Services.Preferences
+@inject IPageConfigStore Store
+
+@if (UserId is not null && !ShowUi && _note is not null)
+{
+    @* Modalità silenziosa (form minimi): niente gestione preset, solo il cenno del ripristino. *@
+    <div class="form-text mb-2">@_note</div>
+}
+@if (UserId is not null && ShowUi)
+{
+    <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+        <label class="form-label mb-0 text-muted">Preset</label>
+        <select class="form-select form-select-sm" style="width: auto; min-width: 10rem;"
+                value="@_selected" @onchange="OnPresetSelectedAsync" disabled="@(Disabled || _names.Count == 0)">
+            <option value="">@(_names.Count == 0 ? "— nessuno salvato —" : "—")</option>
+            @foreach (var n in _names)
+            {
+                <option value="@n">@n</option>
+            }
+        </select>
+        @if (_selected.Length > 0)
+        {
+            <button type="button" class="btn btn-sm btn-outline-danger" title="Elimina il preset selezionato"
+                    @onclick="DeleteSelectedAsync" disabled="@Disabled"><i class="bi bi-trash"></i></button>
+        }
+        <div class="input-group input-group-sm" style="max-width: 19rem;">
+            @* oninput (non il change al blur): così "Salva" si abilita mentre digiti e il primo
+               click va a segno — col binding di default il bottone sarebbe ancora disabled. *@
+            <input class="form-control" placeholder="salva configurazione come…" maxlength="64"
+                   @bind="_newName" @bind:event="oninput" disabled="@Disabled" />
+            <button type="button" class="btn btn-outline-secondary" @onclick="SaveCurrentAsync"
+                    disabled="@(Disabled || string.IsNullOrWhiteSpace(_newName))">Salva</button>
+        </div>
+        @if (_note is not null)
+        {
+            <span class="form-text m-0">@_note</span>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>Chiave stabile della pagina (es. "backtest"): partiziona preset e ultima configurazione.</summary>
+    [Parameter, EditorRequired] public string PageKey { get; set; } = "";
+
+    /// <summary>Utente corrente; null = componente invisibile (nessuna persistenza possibile).</summary>
+    [Parameter] public string? UserId { get; set; }
+
+    /// <summary>Fotografa la configurazione corrente del form in JSON (schema a carico della pagina).</summary>
+    [Parameter, EditorRequired] public Func<string> Capture { get; set; } = () => "{}";
+
+    /// <summary>Riporta un JSON (preset o ultima configurazione) sui campi del form.</summary>
+    [Parameter, EditorRequired] public EventCallback<string> Apply { get; set; }
+
+    /// <summary>true mentre il parent è occupato: disabilita ogni azione.</summary>
+    [Parameter] public bool Disabled { get; set; }
+
+    /// <summary>false quando la pagina è stata aperta con contesto via query string (handoff vince).</summary>
+    [Parameter] public bool AutoRestoreLast { get; set; } = true;
+
+    /// <summary>false = modalità silenziosa per form minimi: solo memoria dell'ultima
+    /// configurazione (ripristino + SaveLastUsedAsync), senza gestione preset visibile.</summary>
+    [Parameter] public bool ShowUi { get; set; } = true;
+
+    private List<string> _names = new();
+    private string _selected = "";
+    private string _newName = "";
+    private string? _note;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (UserId is null) return;
+        try
+        {
+            _names = ShowUi ? await Store.ListNamesAsync(UserId, PageKey) : new();
+            if (AutoRestoreLast)
+            {
+                var last = await Store.LoadAsync(UserId, PageKey, IPageConfigStore.LastUsedName);
+                if (last is not null)
+                {
+                    await Apply.InvokeAsync(last);
+                    _note = "Ripristinata l'ultima configurazione usata.";
+                }
+            }
+        }
+        catch
+        {
+            // Best-effort: i preset sono una comodità, mai un requisito per usare la pagina.
+        }
+    }
+
+    /// <summary>Salva la configurazione corrente come "ultima usata". Chiamato dal parent al Run; best-effort.</summary>
+    public async Task SaveLastUsedAsync()
+    {
+        if (UserId is null) return;
+        try { await Store.SaveAsync(UserId, PageKey, IPageConfigStore.LastUsedName, Capture()); }
+        catch { /* mai bloccare un run per la memoria di configurazione */ }
+    }
+
+    private async Task OnPresetSelectedAsync(ChangeEventArgs e)
+    {
+        _selected = e.Value?.ToString() ?? "";
+        if (UserId is null || _selected.Length == 0) { _note = null; return; }
+        var json = await Store.LoadAsync(UserId, PageKey, _selected);
+        if (json is not null)
+        {
+            await Apply.InvokeAsync(json);
+            _note = $"Preset '{_selected}' applicato.";
+        }
+    }
+
+    private async Task SaveCurrentAsync()
+    {
+        if (UserId is null) return;
+        var name = _newName.Trim();
+        if (name.Length == 0) return;
+        await Store.SaveAsync(UserId, PageKey, name, Capture());
+        _names = await Store.ListNamesAsync(UserId, PageKey);
+        _selected = name;
+        _newName = "";
+        _note = $"Preset '{name}' salvato.";
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        if (UserId is null || _selected.Length == 0) return;
+        var deleted = _selected;
+        await Store.DeleteAsync(UserId, PageKey, deleted);
+        _names = await Store.ListNamesAsync(UserId, PageKey);
+        _selected = "";
+        _note = $"Preset '{deleted}' eliminato.";
+    }
+}
