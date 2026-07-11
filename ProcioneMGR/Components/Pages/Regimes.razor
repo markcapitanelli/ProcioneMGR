@@ -90,7 +90,8 @@
                 <input type="range" class="form-range" min="2" max="8" @bind="_k" disabled="@_busy" style="width:8rem" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" @onclick="TrainAsync" disabled="@_busy">
+                <button class="btn btn-primary" @onclick="TrainAsync" disabled="@(_busy || !_hasData)"
+                        title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Train Model
                 </button>
@@ -100,6 +101,11 @@
                 <div class="col-auto"><button class="btn btn-success" @onclick="ActivateAsync" disabled="@_busy">✔ Activate Model</button></div>
             }
         </div>
+
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
+
         @if (!string.IsNullOrEmpty(_status))
         {
             <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
@@ -238,6 +244,9 @@
     private string? _currentRegimeLabel;
 
     private bool _busy;
+
+    // Aggiornato dal componente DataAvailability (gating del training).
+    private bool _hasData = true;
     private bool _isError;
     private string? _status;
 

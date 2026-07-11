@@ -1,0 +1,122 @@
+@* Validazione preventiva dei dati: mostra quali candele esistono per symbol+timeframe
+   PRIMA di lanciare l'operazione, con warning se il periodo scelto è fuori range e
+   scorciatoia "Usa tutto il range". Il parent viene avvisato via OnHasDataChanged
+   (per disabilitare il Run) e OnApplyRange (quando l'utente aggancia le date ai dati).
+   Se il periodo selezionato non tocca nemmeno il range disponibile, le date vengono
+   agganciate automaticamente ai dati veri (fallirebbero comunque). *@
+
+@using Microsoft.EntityFrameworkCore
+@using ProcioneMGR.Data
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+@if (_checked)
+{
+    @if (_range is null)
+    {
+        <div class="alert alert-warning py-2 mt-2 mb-0">
+            <i class="bi bi-exclamation-triangle me-1"></i>
+            Nessun dato per <strong>@Symbol @Timeframe</strong>:
+            scaricali prima da <a href="market/watchlist" class="alert-link">Watchlist</a>
+            o <a href="dashboard" class="alert-link">Dashboard</a>.
+        </div>
+    }
+    else
+    {
+        <div class="form-text mt-2 mb-0 d-flex align-items-center gap-2 flex-wrap">
+            <span>
+                <i class="bi bi-database-check me-1"></i>
+                Dati disponibili: <strong>@_range.Value.From.ToString("yyyy-MM-dd")</strong> →
+                <strong>@_range.Value.To.ToString("yyyy-MM-dd")</strong>
+                (@_range.Value.Count.ToString("N0") candele)
+            </span>
+            @if (ShowUseFullRange)
+            {
+                <button type="button" class="btn btn-link btn-sm p-0" @onclick="ApplyFullRangeAsync" disabled="@Disabled">Usa tutto il range</button>
+            }
+            @if (RangeOutsideData)
+            {
+                <span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Il periodo selezionato è fuori dal range disponibile.</span>
+            }
+        </div>
+    }
+}
+
+@code {
+    /// <summary>Simbolo di mercato (es. "BTC/USDT"). Cambiarlo ricarica il range.</summary>
+    [Parameter, EditorRequired] public string Symbol { get; set; } = "";
+
+    /// <summary>Timeframe (es. "1h"). Cambiarlo ricarica il range.</summary>
+    [Parameter, EditorRequired] public string Timeframe { get; set; } = "";
+
+    /// <summary>Inizio del periodo selezionato dall'utente (per il warning fuori-range).</summary>
+    [Parameter] public DateTime From { get; set; }
+
+    /// <summary>Fine del periodo selezionato dall'utente (per il warning fuori-range).</summary>
+    [Parameter] public DateTime To { get; set; }
+
+    /// <summary>true mentre il parent è occupato: disabilita "Usa tutto il range".</summary>
+    [Parameter] public bool Disabled { get; set; }
+
+    /// <summary>false per nascondere la scorciatoia (pagine senza campi data).</summary>
+    [Parameter] public bool ShowUseFullRange { get; set; } = true;
+
+    /// <summary>Notifica al parent il nuovo periodo quando l'utente clicca "Usa tutto il range" o scatta l'auto-aggancio.</summary>
+    [Parameter] public EventCallback<(DateTime From, DateTime To)> OnApplyRange { get; set; }
+
+    /// <summary>true appena si sa che esistono dati per symbol+timeframe correnti, false altrimenti (per gating del Run).</summary>
+    [Parameter] public EventCallback<bool> OnHasDataChanged { get; set; }
+
+    private (DateTime From, DateTime To, int Count)? _range;
+    private bool _checked;
+    private string? _loadedKey;
+
+    private bool RangeOutsideData =>
+        ShowUseFullRange && _range is { } r && (From.Date > r.To.Date || To.Date < r.From.Date);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var key = $"{Symbol.Trim()}|{Timeframe}";
+        if (key == _loadedKey)
+        {
+            return; // Cambiate solo le date: nessuna nuova query.
+        }
+        _loadedKey = key;
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        var symbol = Symbol.Trim();
+        if (symbol.Length == 0)
+        {
+            _range = null;
+        }
+        else
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var agg = await db.OhlcvData
+                .Where(c => c.Symbol == symbol && c.Timeframe == Timeframe)
+                .GroupBy(_ => 1)
+                .Select(g => new { Min = g.Min(c => c.TimestampUtc), Max = g.Max(c => c.TimestampUtc), Count = g.Count() })
+                .FirstOrDefaultAsync();
+            _range = agg is null ? null : (agg.Min, agg.Max, agg.Count);
+        }
+        _checked = true;
+
+        await OnHasDataChanged.InvokeAsync(_range is not null);
+
+        // Default derivato dai dati: periodo del tutto fuori range → si aggancia ai dati.
+        if (RangeOutsideData)
+        {
+            await ApplyFullRangeAsync();
+        }
+    }
+
+    private async Task ApplyFullRangeAsync()
+    {
+        if (_range is { } r)
+        {
+            await OnApplyRange.InvokeAsync((r.From.Date, r.To.Date));
+        }
+    }
+}

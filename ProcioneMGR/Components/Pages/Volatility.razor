@@ -77,12 +77,17 @@
                 <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_busy || !_hasData)"
+                        title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Stima GARCH
                 </button>
             </div>
         </div>
+
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
 
         @if (!string.IsNullOrEmpty(_status))
         {
@@ -148,6 +153,9 @@
     private readonly int[] _forecastHorizons = [1, 5, 10, 20, 50, 100];
 
     private bool _busy;
+
+    // Aggiornato dal componente DataAvailability (gating della stima).
+    private bool _hasData = true;
     private bool _isError;
     private string? _status;
 

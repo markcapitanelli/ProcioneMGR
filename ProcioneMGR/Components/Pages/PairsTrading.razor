@@ -90,50 +90,58 @@
             </div>
         </div>
 
-        <hr />
+        @* Due gambe = due verifiche dati (la scorciatoia date solo sulla prima). *@
+        <DataAvailability Symbol="@_symbolY" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasDataY = has)" />
+        <DataAvailability Symbol="@_symbolX" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          ShowUseFullRange="false"
+                          OnHasDataChanged="@(has => _hasDataX = has)" />
 
-        <div class="row g-3 align-items-end">
-            <div class="col-auto">
-                <label class="form-label">Lookback ristima (barre)</label>
-                <input type="number" class="form-control" style="width: 9rem;" @bind="_lookbackWindow" disabled="@_busy" />
+        @* Parametri dello spread e attriti hanno default sensati: pannello avanzate. *@
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Lookback ristima (barre)</label>
+                    <input type="number" class="form-control" style="width: 9rem;" @bind="_lookbackWindow" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Ricalibra ogni (barre)</label>
+                    <input type="number" class="form-control" style="width: 9rem;" @bind="_recalibrationInterval" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Z-score lookback</label>
+                    <input type="number" class="form-control" style="width: 9rem;" @bind="_zScoreLookback" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Soglia entrata (|z|)</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_entryZScore" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Soglia uscita (|z|)</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_exitZScore" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Capitale iniziale</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_initialCapital" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Position size % (per gamba)</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_positionSizePercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Fee %</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
+                </div>
             </div>
-            <div class="col-auto">
-                <label class="form-label">Ricalibra ogni (barre)</label>
-                <input type="number" class="form-control" style="width: 9rem;" @bind="_recalibrationInterval" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Z-score lookback</label>
-                <input type="number" class="form-control" style="width: 9rem;" @bind="_zScoreLookback" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Soglia entrata (|z|)</label>
-                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_entryZScore" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Soglia uscita (|z|)</label>
-                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_exitZScore" disabled="@_busy" />
-            </div>
-        </div>
+        </AdvancedPanel>
 
-        <div class="row g-3 align-items-end mt-1">
-            <div class="col-auto">
-                <label class="form-label">Capitale iniziale</label>
-                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_initialCapital" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Position size % (per gamba)</label>
-                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_positionSizePercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Fee %</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
-                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                    Analizza e Backtest
-                </button>
-            </div>
+        <div class="mt-3">
+            <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_busy || !_hasDataY || !_hasDataX)"
+                    title="@(!_hasDataY || !_hasDataX ? "Mancano dati per una delle due gambe: scaricali prima da Watchlist." : null)">
+                @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Analizza e Backtest
+            </button>
         </div>
 
         @if (!string.IsNullOrEmpty(_status))
@@ -234,6 +242,16 @@
     private decimal _initialCapital = 10_000m;
     private decimal _positionSizePercent = 10m;
     private decimal _feePercent = 0.1m;
+
+    // Aggiornati dai due componenti DataAvailability (una verifica per gamba).
+    private bool _hasDataY = true;
+    private bool _hasDataX = true;
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Lookback {_lookbackWindow} · Ricalibra {_recalibrationInterval} · Z-lookback {_zScoreLookback}"
+        + $" · Entrata |z|≥{_entryZScore:0.##} · Uscita |z|≤{_exitZScore:0.##}"
+        + $" · Capitale {_initialCapital:N0} · Size {_positionSizePercent:0.##}% · Fee {_feePercent:0.##}%";
 
     private List<string> _knownSymbols = new();
     private CointegrationResult? _cointegration;

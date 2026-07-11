@@ -113,6 +113,10 @@
             </div>
         </div>
 
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
+
         <hr />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
@@ -121,14 +125,6 @@
                     @foreach (var p in StrategyFactory.Prototypes) { <option value="@p.Name">@p.DisplayName</option> }
                     <option value="@MlStrategyName">Modello ML (salvato)</option>
                 </select>
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Capitale</label>
-                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_initialCapital" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Commissione %</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_commission" disabled="@_busy" />
             </div>
         </div>
 
@@ -223,29 +219,42 @@
             </div>
         </div>
 
-        <hr />
-        <div class="row g-3 align-items-end">
-            <div class="col-auto">
-                <label class="form-label">In-Sample (mesi)</label>
-                <input type="number" class="form-control" style="width:7rem" @bind="_inSampleMonths" disabled="@_busy" />
+        @* Capitale, commissione e finestre walk-forward hanno default sensati:
+           fuori dalla vista finché non servono, riassunto sempre leggibile. *@
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Capitale</label>
+                    <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_initialCapital" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Commissione %</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_commission" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">In-Sample (mesi)</label>
+                    <input type="number" class="form-control" style="width:7rem" @bind="_inSampleMonths" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Out-of-Sample (mesi)</label>
+                    <input type="number" class="form-control" style="width:7rem" @bind="_oosMonths" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Step (mesi)</label>
+                    <input type="number" class="form-control" style="width:7rem" @bind="_stepMonths" disabled="@_busy" />
+                </div>
             </div>
-            <div class="col-auto">
-                <label class="form-label">Out-of-Sample (mesi)</label>
-                <input type="number" class="form-control" style="width:7rem" @bind="_oosMonths" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Step (mesi)</label>
-                <input type="number" class="form-control" style="width:7rem" @bind="_stepMonths" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <button class="btn btn-primary" @onclick="StartAsync" disabled="@_busy">
-                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                    Start Optimization
-                </button>
-            </div>
+        </AdvancedPanel>
+
+        <div class="mt-3 d-flex gap-2 align-items-center">
+            <button class="btn btn-primary" @onclick="StartAsync" disabled="@(_busy || !_hasData)"
+                    title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
+                @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Start Optimization
+            </button>
             @if (_busy)
             {
-                <div class="col-auto"><button class="btn btn-outline-danger" @onclick="Stop">Stop</button></div>
+                <button class="btn btn-outline-danger" @onclick="Stop">Stop</button>
             }
         </div>
 
@@ -357,6 +366,16 @@
 }
 
 @code {
+    // Contesto opzionale passato dal Backtest ("Ottimizza questa strategia →"):
+    // precompila simbolo/periodo/strategia e ricentra i range sui parametri del run.
+    [SupplyParameterFromQuery(Name = "exchange")] private string? QueryExchange { get; set; }
+    [SupplyParameterFromQuery(Name = "symbol")] private string? QuerySymbol { get; set; }
+    [SupplyParameterFromQuery(Name = "timeframe")] private string? QueryTimeframe { get; set; }
+    [SupplyParameterFromQuery(Name = "strategy")] private string? QueryStrategy { get; set; }
+    [SupplyParameterFromQuery(Name = "from")] private string? QueryFrom { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] private string? QueryTo { get; set; }
+    [SupplyParameterFromQuery(Name = "parameters")] private string? QueryParameters { get; set; }
+
     private ExchangeName _exchange = ExchangeName.Binance;
     private string _symbol = "BTC/USDT";
     private string _timeframe = "1h";
@@ -392,6 +411,14 @@
     private OptimizationProgress _progress = new();
     private CancellationTokenSource? _cts;
 
+    // Aggiornato dal componente DataAvailability (gating dello Start).
+    private bool _hasData = true;
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Capitale {_initialCapital:N0} · Commissione {_commission:0.##}%"
+        + $" · Walk-forward {_inSampleMonths}/{_oosMonths}/{_stepMonths} mesi (IS/OOS/Step)";
+
     private IJSObjectReference? _heatmapModule;
     private bool _heatmapPending;
 
@@ -411,10 +438,60 @@
     {
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        ApplyHandoffContext();
         BuildRanges();
+        RecenterRangesOnHandoffParameters();
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
         _mlModels = await db.SavedMlModels.OrderByDescending(m => m.CreatedAtUtc).ToListAsync();
+    }
+
+    // Applica il contesto arrivato via query string (dal Backtest). Valori assenti
+    // o malformati lasciano i default: il link è una comodità, mai un requisito.
+    private void ApplyHandoffContext()
+    {
+        if (!string.IsNullOrWhiteSpace(QuerySymbol)) _symbol = QuerySymbol.Trim();
+        if (!string.IsNullOrWhiteSpace(QueryTimeframe) && Timeframes.Supported.ContainsKey(QueryTimeframe)) _timeframe = QueryTimeframe;
+        if (Enum.TryParse<ExchangeName>(QueryExchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (DateTime.TryParse(QueryFrom, out var from)) _from = from.Date;
+        if (DateTime.TryParse(QueryTo, out var to)) _to = to.Date;
+
+        if (!string.IsNullOrWhiteSpace(QueryStrategy) &&
+            (QueryStrategy == MlStrategyName || StrategyFactory.Prototypes.Any(p => p.Name == QueryStrategy)))
+        {
+            _strategyName = QueryStrategy;
+        }
+
+        if (!string.IsNullOrWhiteSpace(QuerySymbol))
+        {
+            _status = $"Configurazione importata dal Backtest: {_symbol} {_timeframe}, strategia {_strategyName}.";
+            _isError = false;
+        }
+    }
+
+    // Ricentra i range di ricerca sui parametri effettivi del backtest di partenza
+    // (stessa forma dei default: min = valore, max = valore + 4 step).
+    private void RecenterRangesOnHandoffParameters()
+    {
+        if (string.IsNullOrWhiteSpace(QueryParameters)) return;
+        try
+        {
+            var values = JsonSerializer.Deserialize<Dictionary<string, decimal>>(QueryParameters);
+            if (values is null) return;
+            foreach (var range in _ranges)
+            {
+                if (!values.TryGetValue(range.Key, out var v)) continue;
+                var step = range.IsInteger ? Math.Max(1m, Math.Round(v * 0.2m)) : Math.Round(v * 0.1m, 4);
+                if (step <= 0m) step = range.IsInteger ? 1m : 0.01m;
+                range.Min = v;
+                range.Max = v + 4 * step;
+                range.Step = step;
+            }
+        }
+        catch (JsonException)
+        {
+            // Query malformata: si tengono i range di default.
+        }
     }
 
     private void OnStrategyChanged(ChangeEventArgs e)
