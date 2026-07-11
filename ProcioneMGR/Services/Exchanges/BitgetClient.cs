@@ -204,6 +204,78 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
         return list;
     }
 
+    public async Task<OrderStatusResult> GetOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default)
+    {
+        // L'endpoint accetta orderId O clientOid; il simbolo non è richiesto.
+        var (ok, resp, uncertain, error) = await SignedAsync(HttpMethod.Get, "/api/v2/spot/trade/orderInfo", $"clientOid={clientOrderId}", string.Empty, creds, ct);
+        if (!ok)
+        {
+            return BuildStatusLookupFailure(resp, uncertain, error);
+        }
+
+        using var doc = JsonDocument.Parse(resp);
+        if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0)
+        {
+            return new OrderStatusResult { Found = false, Error = "orderInfo: nessun ordine per questo clientOid." };
+        }
+
+        var o = data[0];
+        var filled = o.TryGetProperty("baseVolume", out var bv) ? ParseDecimalOrZero(bv) : 0m;
+        var avg = o.TryGetProperty("priceAvg", out var pa) ? ParseDecimalOrZero(pa) : 0m;
+        return new OrderStatusResult
+        {
+            Found = true,
+            Status = NormalizeBitgetOrderStatus(o.TryGetProperty("status", out var st) ? st.GetString() ?? "" : ""),
+            FilledPrice = avg > 0m ? avg : null,
+            FilledQuantity = filled > 0m ? filled : null,
+            ExchangeOrderId = o.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
+        };
+    }
+
+    /// <summary>
+    /// Mappa un fallimento del lookup di stato: 43001 ("The order does not exist") = NON TROVATO
+    /// certo; QUALUNQUE altro errore = stato IGNOTO (NetworkUncertain), mai "non trovato" —
+    /// scambiare un errore generico per un not-found riaprirebbe la finestra dell'ordine duplicato.
+    /// </summary>
+    private static OrderStatusResult BuildStatusLookupFailure(string body, bool uncertain, string? error)
+    {
+        if (!uncertain && !string.IsNullOrEmpty(body))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                var code = doc.RootElement.TryGetProperty("code", out var c) ? c.GetString() : null;
+                var msg = doc.RootElement.TryGetProperty("msg", out var m) ? m.GetString() ?? "" : "";
+                if (code == "43001" || msg.Contains("not exist", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new OrderStatusResult { Found = false, Error = error };
+                }
+            }
+            catch (JsonException) { /* body non-JSON: stato resta ignoto */ }
+        }
+        return new OrderStatusResult { Found = false, NetworkUncertain = true, Error = error };
+    }
+
+    /// <summary>Normalizza lo stato ordine Bitget (spot "status" / mix "state") nello schema comune.</summary>
+    internal static string NormalizeBitgetOrderStatus(string status) => status.ToLowerInvariant() switch
+    {
+        "live" or "new" or "init" or "not_trigger" => "Open",
+        "partially_filled" or "partial-fill" => "PartiallyFilled",
+        "filled" or "full-fill" => "Filled",
+        "cancelled" or "canceled" or "cancel" => "Cancelled",
+        "rejected" or "reject" => "Rejected",
+        "expired" => "Expired",
+        // Stato sconosciuto: trattato come vivo, così il riconciliatore cancella e ricontrolla.
+        _ => "Open",
+    };
+
+    /// <summary>Come <see cref="ParseDecimal"/> ma tollera campi vuoti (Bitget usa "" per i non valorizzati).</summary>
+    private static decimal ParseDecimalOrZero(JsonElement element)
+    {
+        var raw = element.GetString();
+        return string.IsNullOrEmpty(raw) ? 0m : decimal.Parse(raw, CultureInfo.InvariantCulture);
+    }
+
     public async Task<AccountBalance> GetBalanceAsync(TradingCredentials creds, CancellationToken ct = default)
     {
         var (ok, resp, _, _) = await SignedAsync(HttpMethod.Get, "/api/v2/spot/account/assets", string.Empty, string.Empty, creds, ct);
@@ -506,6 +578,35 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
             });
         }
         return list;
+    }
+
+    public async Task<OrderStatusResult> GetFuturesOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)
+    {
+        var market = ToExchangeSymbol(symbol);
+        var productType = ProductType(credentials.IsTestnet);
+        var query = $"symbol={market}&productType={productType}&clientOid={clientOrderId}";
+        var (ok, resp, uncertain, error) = await SignedAsync(HttpMethod.Get, "/api/v2/mix/order/detail", query, string.Empty, credentials, ct);
+        if (!ok)
+        {
+            return BuildStatusLookupFailure(resp, uncertain, error);
+        }
+
+        using var doc = JsonDocument.Parse(resp);
+        if (!doc.RootElement.TryGetProperty("data", out var o) || o.ValueKind != JsonValueKind.Object)
+        {
+            return new OrderStatusResult { Found = false, Error = "order detail: nessun ordine per questo clientOid." };
+        }
+
+        var filled = o.TryGetProperty("baseVolume", out var bv) ? ParseDecimalOrZero(bv) : 0m;
+        var avg = o.TryGetProperty("priceAvg", out var pa) ? ParseDecimalOrZero(pa) : 0m;
+        return new OrderStatusResult
+        {
+            Found = true,
+            Status = NormalizeBitgetOrderStatus(o.TryGetProperty("state", out var st) ? st.GetString() ?? "" : ""),
+            FilledPrice = avg > 0m ? avg : null,
+            FilledQuantity = filled > 0m ? filled : null,
+            ExchangeOrderId = o.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
+        };
     }
 
     public async Task<FuturesBalance> GetFuturesBalanceAsync(TradingCredentials credentials, CancellationToken ct = default)

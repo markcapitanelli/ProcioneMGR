@@ -48,6 +48,34 @@ public class CancelOrderResult
     public string? Error { get; set; }
 }
 
+/// <summary>
+/// Stato di un ordine interrogato per clientOrderId, per la riconciliazione post-errore-di-rete.
+/// A differenza di GetOpenOrdersAsync (solo ordini "resting"), questo lookup vede anche gli ordini
+/// GIÀ ESEGUITI: un MARKET riempito durante un blip di rete non è negli open orders ma esiste qui —
+/// senza questa distinzione un fill reale verrebbe scambiato per "mai piazzato" (ordine duplicato).
+/// </summary>
+public class OrderStatusResult
+{
+    /// <summary>False se l'exchange dichiara esplicitamente che l'ordine non esiste.</summary>
+    public bool Found { get; set; }
+
+    /// <summary>True se il lookup stesso è fallito (timeout/5xx): stato ancora IGNOTO, ritentare.</summary>
+    public bool NetworkUncertain { get; set; }
+
+    /// <summary>Normalizzato: Filled | PartiallyFilled | Open | Cancelled | Rejected | Expired.</summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>Prezzo medio di esecuzione (null se non ancora eseguito o non disponibile).</summary>
+    public decimal? FilledPrice { get; set; }
+
+    public decimal? FilledQuantity { get; set; }
+    public string? ExchangeOrderId { get; set; }
+    public string? Error { get; set; }
+
+    /// <summary>True se l'ordine esiste ma è terminato SENZA esecuzione (safe da ritentare).</summary>
+    public bool IsTerminalUnfilled => Found && Status is "Cancelled" or "Rejected" or "Expired";
+}
+
 public class OpenOrder
 {
     public string ExchangeOrderId { get; set; } = string.Empty;

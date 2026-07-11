@@ -74,4 +74,140 @@ public class BitgetClientTests
 
         Assert.Equal(0m, balance.AvailableMargin);
     }
+
+    // --- Lookup stato ordine per clientOid (fix C2) ---------------------------------------------
+
+    [Fact]
+    public async Task GetOrderStatusAsync_SpotFilled_ParsesPriceAvgBaseVolumeAndOrderId()
+    {
+        var handler = new FakeHandler(HttpStatusCode.OK, """
+            {"code":"00000","msg":"success","requestTime":1,"data":[
+                {"orderId":"btg-1","clientOid":"cid-1","status":"filled","priceAvg":"101.5","baseVolume":"80","symbol":"BTCUSDT"}
+            ]}
+            """);
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-1", Creds);
+
+        Assert.True(result.Found);
+        Assert.Equal("Filled", result.Status);
+        Assert.Equal(101.5m, result.FilledPrice);
+        Assert.Equal(80m, result.FilledQuantity);
+        Assert.Equal("btg-1", result.ExchangeOrderId);
+
+        var url = handler.LastRequest!.RequestUri!.ToString();
+        Assert.Contains("/api/v2/spot/trade/orderInfo", url);
+        Assert.Contains("clientOid=cid-1", url);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_SpotLiveUnfilled_EmptyDecimalFieldsTolerated()
+    {
+        // Bitget usa stringhe vuote per i campi non ancora valorizzati: niente FormatException.
+        var handler = new FakeHandler(HttpStatusCode.OK, """
+            {"code":"00000","msg":"success","requestTime":1,"data":[
+                {"orderId":"btg-2","clientOid":"cid-2","status":"live","priceAvg":"","baseVolume":""}
+            ]}
+            """);
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-2", Creds);
+
+        Assert.True(result.Found);
+        Assert.Equal("Open", result.Status);
+        Assert.Null(result.FilledPrice);
+        Assert.Null(result.FilledQuantity);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_EmptyDataArray_IsCertainNotFound()
+    {
+        var handler = new FakeHandler(HttpStatusCode.OK, """{"code":"00000","msg":"success","requestTime":1,"data":[]}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-x", Creds);
+
+        Assert.False(result.Found);
+        Assert.False(result.NetworkUncertain);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_Error43001_IsCertainNotFound_NotUncertain()
+    {
+        var handler = new FakeHandler(HttpStatusCode.OK, """{"code":"43001","msg":"The order does not exist","requestTime":1,"data":null}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-x", Creds);
+
+        Assert.False(result.Found);
+        Assert.False(result.NetworkUncertain);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_OtherApplicationError_IsUncertain_NeverNotFound()
+    {
+        // Dichiarare "non trovato" un errore generico riaprirebbe la finestra dell'ordine
+        // duplicato che il fix C2 chiude: deve restare IGNOTO (il riconciliatore ritenta).
+        var handler = new FakeHandler(HttpStatusCode.OK, """{"code":"40009","msg":"sign signature error","requestTime":1,"data":null}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-x", Creds);
+
+        Assert.False(result.Found);
+        Assert.True(result.NetworkUncertain);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_Http500_IsUncertain()
+    {
+        var handler = new FakeHandler(HttpStatusCode.InternalServerError, "Bad Gateway");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-x", Creds);
+
+        Assert.False(result.Found);
+        Assert.True(result.NetworkUncertain);
+    }
+
+    [Fact]
+    public async Task GetFuturesOrderStatusAsync_MixDetail_ParsesStateFieldAndDemoProductType()
+    {
+        // L'endpoint mix restituisce un OGGETTO (non array) e chiama lo stato "state" (non "status").
+        var handler = new FakeHandler(HttpStatusCode.OK, """
+            {"code":"00000","msg":"success","requestTime":1,"data":
+                {"orderId":"btg-f1","clientOid":"cid-f","state":"filled","priceAvg":"27100.5","baseVolume":"0.04"}
+            }
+            """);
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetFuturesOrderStatusAsync("BTC/USDT", "cid-f", Creds);
+
+        Assert.True(result.Found);
+        Assert.Equal("Filled", result.Status);
+        Assert.Equal(27_100.5m, result.FilledPrice);
+        Assert.Equal(0.04m, result.FilledQuantity);
+        Assert.Equal("btg-f1", result.ExchangeOrderId);
+
+        var url = handler.LastRequest!.RequestUri!.ToString();
+        Assert.Contains("/api/v2/mix/order/detail", url);
+        Assert.Contains("productType=SUSDT-FUTURES", url);   // credenziali demo → productType demo
+        Assert.Contains("clientOid=cid-f", url);
+        Assert.Contains("symbol=BTCUSDT", url);
+    }
+
+    [Theory]
+    [InlineData("live", "Open")]
+    [InlineData("new", "Open")]
+    [InlineData("init", "Open")]
+    [InlineData("not_trigger", "Open")]
+    [InlineData("partially_filled", "PartiallyFilled")]
+    [InlineData("partial-fill", "PartiallyFilled")]
+    [InlineData("filled", "Filled")]
+    [InlineData("full-fill", "Filled")]
+    [InlineData("cancelled", "Cancelled")]
+    [InlineData("canceled", "Cancelled")]
+    [InlineData("rejected", "Rejected")]
+    [InlineData("stato_nuovo_ignoto", "Open")]   // ignoto → vivo: il riconciliatore cancella e ricontrolla
+    public void NormalizeBitgetOrderStatus_MapsToCommonSchema(string exchange, string expected)
+        => Assert.Equal(expected, BitgetClient.NormalizeBitgetOrderStatus(exchange));
 }
