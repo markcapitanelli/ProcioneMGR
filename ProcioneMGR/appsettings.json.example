@@ -63,12 +63,14 @@
   "Trading": {
     "Safety": {
       "MaxPositionSizePercent": 10.0,
+      "PositionSizePercent": 8.0,
       "MaxTotalExposurePercent": 50.0,
       "MaxDailyLossPercent": 5.0,
       "MaxDrawdownPercent": 20.0,
       "MaxOpenPositions": 5,
       "MinOrderIntervalSeconds": 10,
-      "RequireManualConfirmationForLive": true
+      "RequireManualConfirmationForLive": true,
+      "MaxLeverageAllowed": 5
     },
     "LiveExecution": {
       "Enabled": false,

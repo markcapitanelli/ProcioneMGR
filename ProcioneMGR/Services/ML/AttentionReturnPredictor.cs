@@ -10,7 +10,8 @@ namespace ProcioneMGR.Services.ML;
 /// L'input è una finestra di T timestep × F fattori (vedi <see cref="ISequencePredictor"/> e
 /// <see cref="SequenceWindowing"/>). Architettura minimale ma reale:
 ///   X[T,F] → (standardizzazione) → embed lineare E=X·Wᵢₙ+bᵢₙ [T,D] → + positional encoding
-///   → self-attention a 1 testa con residuo (Q,K,V,O) → mean-pool sui timestep → testa FFN (tanh)
+///   → self-attention a 1 testa con residuo (Q,K,V,O) → readout sull'ULTIMO timestep ("ora",
+///   che via attention ha già raccolto tutta la storia) → testa FFN (tanh)
 ///   → scalare (rendimento forward atteso).
 ///
 /// Addestramento con backpropagation MANUALE (softmax/matmul/residuo) e mini-batch SGD con weight

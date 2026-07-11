@@ -359,21 +359,21 @@ else
             <div class="card-header">Strategie (live)</div>
             <div class="table-responsive">
                 <table class="table table-sm table-striped mb-0">
-                    <thead><tr><th>Strategia</th><th>Capitale</th><th>Alloc %</th><th>PnL</th><th>PnL %</th><th>Rolling Sharpe</th><th>Trades</th><th>Win %</th><th>Attiva</th></tr></thead>
+                    <thead><tr><th>Strategia</th><th class="text-end">Capitale</th><th class="text-end">Alloc %</th><th class="text-end">PnL</th><th class="text-end">PnL %</th><th class="text-end">Rolling Sharpe</th><th class="text-end">Trades</th><th class="text-end">Win %</th><th class="text-center">Attiva</th></tr></thead>
                     <tbody>
                         @{ var bestSharpe = _status.Strategies.Count > 0 ? _status.Strategies.Max(x => x.RollingSharpe) : 0m; }
                         @foreach (var s in _status.Strategies.OrderByDescending(x => x.RollingSharpe))
                         {
                             <tr class="@(s.RollingSharpe == bestSharpe ? "table-success" : "")">
                                 <td>@s.DisplayName</td>
-                                <td>@s.CurrentCapital.ToString("N2")</td>
-                                <td>@s.Allocation.ToString("F1")%</td>
-                                <td class="@(s.Pnl >= 0 ? "text-success" : "text-danger")">@s.Pnl.ToString("N2")</td>
-                                <td class="@(s.PnlPercent >= 0 ? "text-success" : "text-danger")">@s.PnlPercent.ToString("F2")%</td>
-                                <td class="fw-semibold">@s.RollingSharpe.ToString("F2")</td>
-                                <td>@s.TotalTrades</td>
-                                <td>@s.WinRate.ToString("F0")%</td>
-                                <td>@(s.IsActive ? "✓" : "—")</td>
+                                <td class="text-end">@s.CurrentCapital.ToString("N2")</td>
+                                <td class="text-end">@s.Allocation.ToString("F1")%</td>
+                                <td class="text-end @(s.Pnl >= 0 ? "text-success" : "text-danger")">@s.Pnl.ToString("N2")</td>
+                                <td class="text-end @(s.PnlPercent >= 0 ? "text-success" : "text-danger")">@s.PnlPercent.ToString("F2")%</td>
+                                <td class="text-end fw-semibold">@s.RollingSharpe.ToString("F2")</td>
+                                <td class="text-end">@s.TotalTrades</td>
+                                <td class="text-end">@s.WinRate.ToString("F0")%</td>
+                                <td class="text-center">@(s.IsActive ? "✓" : "—")</td>
                             </tr>
                         }
                     </tbody>
@@ -615,8 +615,8 @@ else
 
     private static readonly string[] Palette = ["#2962FF", "#E53935", "#43A047", "#FB8C00", "#8E24AA", "#00897B"];
 
-    /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): stesso numero registrato in Program.cs.</summary>
-    private const int LaneCount = 3;
+    /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): fonte unica TradingLanes.Count.</summary>
+    private const int LaneCount = TradingLanes.Count;
     private int _laneId;
 
     /// <summary>Ensemble della corsia selezionata (keyed DI): risolto ad ogni accesso, mai messo in cache tra un cambio corsia e l'altro.</summary>
@@ -889,11 +889,14 @@ else
 
     private void SetMsg(string text, bool error) { _message = text; _isError = error; }
 
+    // Delega al componente condiviso <Stat> (stile unico in app.css), come le altre pagine.
     private RenderFragment Metric(string label, string value, bool? positive = null) => builder =>
     {
-        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
-        builder.AddMarkupContent(0, $@"<div class='card text-center' style='min-width:9rem;'><div class='card-body py-2'>
-            <div class='text-muted small'>{label}</div><div class='fs-5 fw-semibold {cls}'>{value}</div></div></div>");
+        builder.OpenComponent<Stat>(0);
+        builder.AddComponentParameter(1, nameof(Stat.Label), label);
+        builder.AddComponentParameter(2, nameof(Stat.Value), value);
+        builder.AddComponentParameter(3, nameof(Stat.Positive), positive);
+        builder.CloseComponent();
     };
 
     public void Dispose() => _refreshTimer?.Dispose();

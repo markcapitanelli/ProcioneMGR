@@ -21,14 +21,12 @@ public sealed class MarketDataSyncWorker(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!configuration.GetValue("MarketData:Enabled", true))
-        {
-            logger.LogInformation("MarketDataSyncWorker disabilitato da configurazione.");
-            return;
-        }
-
+        // Enabled è riletto a OGNI tick da IConfiguration (reloadOnChange): il toggle da
+        // /admin/autonomy prende effetto a caldo, senza riavvio. L'intervallo invece è fisso
+        // al primo avvio (PeriodicTimer): cambiarlo richiede riavvio.
         var interval = TimeSpan.FromMinutes(Math.Max(1, configuration.GetValue("MarketData:SyncIntervalMinutes", 5)));
-        logger.LogInformation("MarketDataSyncWorker avviato, intervallo {Interval}.", interval);
+        logger.LogInformation("MarketDataSyncWorker avviato, intervallo {Interval} (Enabled={Enabled}).",
+            interval, configuration.GetValue("MarketData:Enabled", true));
 
         // Breve attesa iniziale per non competere con lo startup dell'app.
         try
@@ -45,9 +43,12 @@ public sealed class MarketDataSyncWorker(
         {
             try
             {
-                using var scope = scopeFactory.CreateScope();
-                var sync = scope.ServiceProvider.GetRequiredService<IMarketDataSyncService>();
-                await sync.SyncAllEnabledAsync(stoppingToken);
+                if (configuration.GetValue("MarketData:Enabled", true))
+                {
+                    using var scope = scopeFactory.CreateScope();
+                    var sync = scope.ServiceProvider.GetRequiredService<IMarketDataSyncService>();
+                    await sync.SyncAllEnabledAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException)
             {

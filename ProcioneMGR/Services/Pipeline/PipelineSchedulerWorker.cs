@@ -53,7 +53,7 @@ public sealed class PipelineSchedulerWorker(
     IPipelineApplier applier,
     IEnsembleComparator comparator,
     IPipelineSupervisorAgent supervisor,
-    AutoReapplyOptions autoReapply,
+    Microsoft.Extensions.Options.IOptionsMonitor<AutoReapplyOptions> autoReapply,
     ILogger<PipelineSchedulerWorker> logger,
     ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null) : BackgroundService
 {
@@ -65,7 +65,7 @@ public sealed class PipelineSchedulerWorker(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("PipelineSchedulerWorker avviato (check ogni {Interval}, ri-applica automatica={Auto}).",
-            CheckInterval, autoReapply.Enabled);
+            CheckInterval, autoReapply.CurrentValue.Enabled);
 
         try { await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); }
         catch (OperationCanceledException) { return; }
@@ -105,7 +105,9 @@ public sealed class PipelineSchedulerWorker(
             }
         }
 
-        if (autoReapply.Enabled)
+        // Letto a ogni tick (hot-reload da /admin/autonomy): accendere/spegnere la ri-applica
+        // automatica non richiede riavvio.
+        if (autoReapply.CurrentValue.Enabled)
         {
             await ProcessCompletedRunsAsync(ct);
         }
@@ -164,7 +166,8 @@ public sealed class PipelineSchedulerWorker(
     /// </summary>
     public async Task ProcessCompletedRunsAsync(CancellationToken ct)
     {
-        var since = DateTime.UtcNow.AddDays(-Math.Max(1, autoReapply.LookbackDays));
+        var opt = autoReapply.CurrentValue;
+        var since = DateTime.UtcNow.AddDays(-Math.Max(1, opt.LookbackDays));
         List<Guid> pending;
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
@@ -176,7 +179,7 @@ public sealed class PipelineSchedulerWorker(
                 .Where(r => !db.PipelineArtifacts.Any(a => a.RunId == r.Id && a.Kind == AutoReapplyArtifactKinds.Decision))
                 .OrderBy(r => r.CompletedAt)
                 .Select(r => r.Id)
-                .Take(Math.Max(1, autoReapply.MaxPerTick))
+                .Take(Math.Max(1, opt.MaxPerTick))
                 .ToListAsync(ct);
         }
 

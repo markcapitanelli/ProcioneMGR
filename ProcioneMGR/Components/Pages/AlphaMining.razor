@@ -1,10 +1,12 @@
 @page "/alpha-mining"
 @rendermode InteractiveServer
 @using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.AlphaMining
+@using ProcioneMGR.Services.Exchanges
 @using ProcioneMGR.Services.Experiments
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 
@@ -33,6 +35,8 @@
 
 <div class="card mb-3">
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="alpha-mining" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-2 align-items-end">
             <div class="col-auto">
                 <label class="form-label mb-0">Symbol</label>
@@ -65,32 +69,40 @@
                 <input type="date" class="form-control form-control-sm" @bind="_holdTo" />
             </div>
         </div>
-        <div class="row g-2 align-items-end mt-1">
-            <div class="col-auto">
-                <label class="form-label mb-0">Orizzonte</label>
-                <input type="number" class="form-control form-control-sm" @bind="_horizon" style="max-width: 90px;" />
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" Disabled="_busy" ShowUseFullRange="false"
+                          OnHasDataChanged="@(has => _hasData = has)" />
+
+        @* Iperparametri del genetic miner: default sensati, pannello avanzate. *@
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label mb-0">Orizzonte</label>
+                    <input type="number" class="form-control form-control-sm" @bind="_horizon" style="max-width: 90px;" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0">Popolazione</label>
+                    <input type="number" class="form-control form-control-sm" @bind="_population" style="max-width: 100px;" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0">Generazioni</label>
+                    <input type="number" class="form-control form-control-sm" @bind="_generations" style="max-width: 100px;" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0">Prof. max</label>
+                    <input type="number" class="form-control form-control-sm" @bind="_maxDepth" style="max-width: 90px;" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0">Seed</label>
+                    <input type="number" class="form-control form-control-sm" @bind="_seed" style="max-width: 90px;" />
+                </div>
             </div>
-            <div class="col-auto">
-                <label class="form-label mb-0">Popolazione</label>
-                <input type="number" class="form-control form-control-sm" @bind="_population" style="max-width: 100px;" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label mb-0">Generazioni</label>
-                <input type="number" class="form-control form-control-sm" @bind="_generations" style="max-width: 100px;" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label mb-0">Prof. max</label>
-                <input type="number" class="form-control form-control-sm" @bind="_maxDepth" style="max-width: 90px;" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label mb-0">Seed</label>
-                <input type="number" class="form-control form-control-sm" @bind="_seed" style="max-width: 90px;" />
-            </div>
-            <div class="col-auto">
-                <button class="btn btn-sm btn-primary" @onclick="RunAsync" disabled="@_busy">
-                    @(_busy ? "Mining…" : "Cerca alpha")
-                </button>
-            </div>
+        </AdvancedPanel>
+
+        <div class="mt-3">
+            <button class="btn btn-sm btn-primary" @onclick="RunAsync" disabled="@(_busy || !_hasData)"
+                    title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
+                @(_busy ? "Mining…" : "Cerca alpha")
+            </button>
         </div>
         @if (!string.IsNullOrEmpty(_msg))
         {
@@ -180,7 +192,7 @@
 }
 
 @code {
-    private string _symbol = "BTCUSDT";
+    private string _symbol = "BTC/USDT"; // Convenzione piattaforma: con slash, come Backtest/ML Lab.
     private string _timeframe = "1h";
     private DateTime _selFrom = DateTime.UtcNow.Date.AddMonths(-9);
     private DateTime _selTo = DateTime.UtcNow.Date.AddMonths(-3);
@@ -196,6 +208,14 @@
     private ProcioneMGR.Services.Validation.PboResult? _pbo;
     private List<SavedFactor> _saved = new();
     private bool _busy;
+
+    // Aggiornato dal componente DataAvailability (gating del mining).
+    private bool _hasData = true;
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Orizzonte {_horizon} · Popolazione {_population} · Generazioni {_generations}"
+        + $" · Profondità max {_maxDepth} · Seed {_seed}";
     private bool _isError;
     private string? _msg;
     private string? _userId;
@@ -212,6 +232,37 @@
     private bool Survived(MinedFactor m)
         => m.HoldoutIc is double h && Math.Abs(h) > HoldoutSurvivalIc && Math.Sign(h) == Math.Sign(m.SelectionIc);
 
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        string Symbol, string Timeframe, DateTime SelFrom, DateTime SelTo, DateTime HoldFrom, DateTime HoldTo,
+        int Horizon, int Population, int Generations, int MaxDepth, int Seed);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _symbol.Trim(), _timeframe, _selFrom, _selTo, _holdFrom, _holdTo,
+        _horizon, _population, _generations, _maxDepth, _seed));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _selFrom = cfg.SelFrom.Date;
+        _selTo = cfg.SelTo.Date;
+        _holdFrom = cfg.HoldFrom.Date;
+        _holdTo = cfg.HoldTo.Date;
+        _horizon = cfg.Horizon;
+        _population = cfg.Population;
+        _generations = cfg.Generations;
+        _maxDepth = cfg.MaxDepth;
+        _seed = cfg.Seed;
+    }
+
     private async Task<List<OhlcvData>> LoadCandlesAsync(DateTime from, DateTime to)
     {
         var fromUtc = DateTime.SpecifyKind(from, DateTimeKind.Utc);
@@ -227,6 +278,10 @@
     private async Task RunAsync()
     {
         if (_busy) return;
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
+
         _busy = true; _msg = null; _isError = false; _mined = new(); _pbo = null;
         try
         {

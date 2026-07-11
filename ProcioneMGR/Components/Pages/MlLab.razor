@@ -69,6 +69,8 @@
 <div class="card mb-3">
     <div class="card-header">1. Dati e fattori</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="ml" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -107,14 +109,6 @@
                 <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
             </div>
             <div class="col-auto">
-                <label class="form-label">% Train</label>
-                <input type="number" step="1" min="10" max="90" class="form-control" style="width: 7rem;" @bind="_trainSplitPercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Orizzonte forward</label>
-                <input type="number" step="1" min="1" class="form-control" style="width: 8rem;" @bind="_forwardHorizon" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
                 <label class="form-label">Modello</label>
                 <select class="form-select" @bind="_modelType" disabled="@_busy">
                     <option value="Linear">Lineare (SDCA)</option>
@@ -126,6 +120,10 @@
                 </select>
             </div>
         </div>
+
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
 
         @if (_modelType == "Stacked")
         {
@@ -210,8 +208,23 @@
             </div>
         }
 
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">% Train</label>
+                    <input type="number" step="1" min="10" max="90" class="form-control" style="width: 7rem;" @bind="_trainSplitPercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Orizzonte forward</label>
+                    <input type="number" step="1" min="1" class="form-control" style="width: 8rem;" @bind="_forwardHorizon" disabled="@_busy" />
+                </div>
+            </div>
+        </AdvancedPanel>
+
         <div class="mt-3">
-            <button class="btn btn-primary" @onclick="TrainAsync" disabled="@(_busy || (_selectedFactors.Count == 0 && _selectedSavedFactorIds.Count == 0))">
+            <button class="btn btn-primary" @onclick="TrainAsync"
+                    disabled="@(_busy || !_hasData || (_selectedFactors.Count == 0 && _selectedSavedFactorIds.Count == 0))"
+                    title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                 @if (_busy && _stage == Stage.Training)
                 {
                     <span class="spinner-border spinner-border-sm me-1"></span>
@@ -252,6 +265,8 @@
                             <td class="text-end">@m.TrainRowCount</td>
                             <td class="text-end">@m.TrainCorrelation.ToString("F3")</td>
                             <td class="text-end">
+                                <a class="btn btn-sm btn-outline-success @(_busy ? "disabled" : "")" href="@OptimizationHandoffUrl(m)"
+                                   title="Ottimizza le soglie Long/Short di questo modello in walk-forward, sui dati successivi al training">Ottimizza →</a>
                                 <button class="btn btn-sm btn-outline-primary" @onclick="() => LoadSavedModelAsync(m.Id)" disabled="@_busy">Carica</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteSavedModelAsync(m.Id)" disabled="@_busy">Elimina</button>
                             </td>
@@ -454,6 +469,13 @@
 
     private Stage _stage = Stage.Idle;
     private bool _busy;
+
+    // Aggiornato dal componente DataAvailability (gating dell'addestramento).
+    private bool _hasData = true;
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Train {_trainSplitPercent}% · Orizzonte forward {_forwardHorizon} candel{(_forwardHorizon == 1 ? "a" : "e")}";
     private bool _isError;
     private string? _status;
 
@@ -491,6 +513,73 @@
             .ToListAsync();
     }
 
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
+        int TrainSplitPercent, int ForwardHorizon, List<string> Factors, List<int> SavedFactorIds,
+        string ModelType, List<string> StackBaseModels, string StackMode, int AttnWindow, int AttnEmbed,
+        decimal LongThreshold, decimal ShortThreshold, decimal InitialCapital,
+        decimal PositionSizePercent, decimal FeePercent);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to,
+        _trainSplitPercent, _forwardHorizon, _selectedFactors.ToList(), _selectedSavedFactorIds.ToList(),
+        _modelType, _stackBaseModels.ToList(), _stackMode.ToString(), _attnWindow, _attnEmbed,
+        _longThreshold, _shortThreshold, _initialCapital, _positionSizePercent, _feePercent));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _trainSplitPercent = cfg.TrainSplitPercent;
+        _forwardHorizon = cfg.ForwardHorizon;
+
+        // Solo nomi/ID che esistono ancora: cataloghi e fattori minati possono cambiare nel tempo.
+        _selectedFactors.Clear();
+        foreach (var f in cfg.Factors.Where(f => FactorFactory.Prototypes.Any(p => p.Name == f)))
+            _selectedFactors.Add(f);
+        _selectedSavedFactorIds.Clear();
+        foreach (var id in cfg.SavedFactorIds.Where(id => _savedFactors.Any(s => s.Id == id)))
+            _selectedSavedFactorIds.Add(id);
+
+        if (ReturnPredictorCatalog.BaseTypes.Contains(cfg.ModelType) || cfg.ModelType is "Stacked" or "Attention")
+            _modelType = cfg.ModelType;
+        _stackBaseModels.Clear();
+        foreach (var m in cfg.StackBaseModels.Where(m => ReturnPredictorCatalog.BaseTypes.Contains(m)))
+            _stackBaseModels.Add(m);
+        if (Enum.TryParse<StackingMode>(cfg.StackMode, out var sm)) _stackMode = sm;
+        _attnWindow = cfg.AttnWindow;
+        _attnEmbed = cfg.AttnEmbed;
+
+        _longThreshold = cfg.LongThreshold;
+        _shortThreshold = cfg.ShortThreshold;
+        _initialCapital = cfg.InitialCapital;
+        _positionSizePercent = cfg.PositionSizePercent;
+        _feePercent = cfg.FeePercent;
+    }
+
+    /// <summary>
+    /// Link a Optimization precompilata: strategia ML + questo modello, con periodo che parte
+    /// dalla fine del training (le soglie Long/Short si scelgono su dati che il modello non ha visto).
+    /// </summary>
+    private static string OptimizationHandoffUrl(SavedMlModel m) =>
+        "optimization?strategy=Ml"
+        + $"&model={m.Id}"
+        + $"&symbol={Uri.EscapeDataString(m.Symbol)}"
+        + $"&timeframe={Uri.EscapeDataString(m.Timeframe)}"
+        + $"&from={m.TrainingDataTo:yyyy-MM-dd}"
+        + $"&to={DateTime.UtcNow:yyyy-MM-dd}";
+
     private void ToggleFactor(string name, bool selected)
     {
         if (selected) _selectedFactors.Add(name);
@@ -516,6 +605,9 @@
             SetStatus("Controlla symbol e intervallo date.", error: true);
             return;
         }
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
 
         _busy = true;
         _stage = Stage.Training;
@@ -893,15 +985,14 @@
 
     public void Dispose() => _predictor?.Dispose();
 
+    // Delega al componente condiviso <Stat> (stile unico in app.css). Le call-site
+    // (@MetricCard(...)) restano invariate: qui cambia solo la resa.
     private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
     {
-        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
-        builder.AddMarkupContent(0, $@"
-            <div class='card text-center' style='min-width: 9rem;'>
-                <div class='card-body py-2'>
-                    <div class='text-muted small'>{label}</div>
-                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
-                </div>
-            </div>");
+        builder.OpenComponent<Stat>(0);
+        builder.AddComponentParameter(1, nameof(Stat.Label), label);
+        builder.AddComponentParameter(2, nameof(Stat.Value), value);
+        builder.AddComponentParameter(3, nameof(Stat.Positive), positive);
+        builder.CloseComponent();
     };
 }

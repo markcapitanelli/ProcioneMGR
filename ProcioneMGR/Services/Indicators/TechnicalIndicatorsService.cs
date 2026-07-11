@@ -14,6 +14,9 @@ public sealed class TechnicalIndicatorsService : ITechnicalIndicatorsService
     public Task<List<decimal?>> CalculateRsiAsync(List<decimal> closes, int period = 14, CancellationToken ct = default)
         => Task.FromResult(Rsi(closes, period, ct));
 
+    public List<decimal?> CalculateRsi(List<decimal> closes, int period = 14, CancellationToken ct = default)
+        => Rsi(closes, period, ct);
+
     public Task<(List<decimal?> Macd, List<decimal?> Signal, List<decimal?> Histogram)> CalculateMacdAsync(
         List<decimal> closes, int fastPeriod = 12, int slowPeriod = 26, int signalPeriod = 9, CancellationToken ct = default)
         => Task.FromResult(Macd(closes, fastPeriod, slowPeriod, signalPeriod, ct));

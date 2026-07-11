@@ -84,6 +84,9 @@
 <div class="card mb-3">
     <div class="card-header">Configurazione</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="backtest" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson"
+                       AutoRestoreLast="@(Load is null && string.IsNullOrEmpty(QuerySymbol))" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -123,6 +126,11 @@
             </div>
         </div>
 
+        @* Validazione preventiva: la pagina sa quali dati esistono PRIMA del Run. *@
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
+
         <hr />
 
         <div class="row g-3 align-items-end">
@@ -151,44 +159,52 @@
                 <label class="form-label">Position size %</label>
                 <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_positionSizePercent" disabled="@_busy" />
             </div>
-            <div class="col-auto">
-                <label class="form-label">Fee %</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Stop loss % (0=off)</label>
-                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_stopLossPercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Take profit % (0=off)</label>
-                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_takeProfitPercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Trailing stop % (0=off)</label>
-                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_trailingStopPercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto align-self-end">
-                <button type="button" class="btn btn-outline-secondary" @onclick="SuggestBracketAsync" disabled="@_busy"
-                        title="Calcola SL e TP dai dati (percentili 95° di escursione avversa/favorevole) per la coppia/timeframe selezionata">
-                    Suggerisci SL/TP
-                </button>
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Leva (1=spot)</label>
-                <input type="number" step="1" min="1" max="125" class="form-control" style="width: 7rem;" @bind="_leverage" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Slippage %</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_slippagePercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Funding %/8h</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_fundingPercent" disabled="@_busy" />
-            </div>
         </div>
 
+        @* Fee, protezioni e attriti di mercato hanno default sensati: fuori dalla vista
+           finché non servono, ma con riassunto sempre leggibile. *@
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Fee %</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Stop loss % (0=off)</label>
+                    <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_stopLossPercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Take profit % (0=off)</label>
+                    <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_takeProfitPercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Trailing stop % (0=off)</label>
+                    <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_trailingStopPercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto align-self-end">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="SuggestBracketAsync" disabled="@_busy"
+                            title="Calcola SL e TP dai dati (percentili 95° di escursione avversa/favorevole) per la coppia/timeframe selezionata">
+                        Suggerisci SL/TP
+                    </button>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Leva (1=spot)</label>
+                    <input type="number" step="1" min="1" max="125" class="form-control" style="width: 7rem;" @bind="_leverage" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Slippage %</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_slippagePercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Funding %/8h</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_fundingPercent" disabled="@_busy" />
+                </div>
+            </div>
+        </AdvancedPanel>
+
         <div class="mt-3 d-flex gap-2 align-items-center">
-            <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+            <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_busy || NoData)"
+                    title="@(NoData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                 @if (_busy)
                 {
                     <span class="spinner-border spinner-border-sm me-1"></span>
@@ -227,6 +243,17 @@
             <div class="col-auto">@MetricCard("⚠ LIQUIDAZIONI", $"{_result.LiquidationCount}", false)</div>
         }
     </div>
+
+    @* Passaggio di contesto al passo successivo del workflow: Optimization si apre
+       già precompilata con simbolo, periodo, strategia e parametri di questo run. *@
+    <AuthorizeView Roles="@($"{AppRoles.Manager},{AppRoles.Admin}")">
+        <div class="mb-3 d-flex align-items-center gap-2 flex-wrap">
+            <a class="btn btn-outline-primary btn-sm" href="@OptimizationHandoffUrl">
+                <i class="bi bi-sliders2 me-1"></i>Ottimizza questa strategia →
+            </a>
+            <span class="form-text">Apre Optimization precompilata con questi simbolo, periodo e parametri.</span>
+        </div>
+    </AuthorizeView>
 
     @if (_tradeReport is not null && _tradeReport.OperationCount > 0)
     {
@@ -423,6 +450,16 @@
 @code {
     [SupplyParameterFromQuery] private int? Load { get; set; }
 
+    // Contesto opzionale passato dall'Optimization ("Backtest →" sulle righe della Top 10):
+    // precompila exchange/simbolo/periodo/strategia e i valori dei parametri.
+    [SupplyParameterFromQuery(Name = "exchange")] private string? QueryExchange { get; set; }
+    [SupplyParameterFromQuery(Name = "symbol")] private string? QuerySymbol { get; set; }
+    [SupplyParameterFromQuery(Name = "timeframe")] private string? QueryTimeframe { get; set; }
+    [SupplyParameterFromQuery(Name = "strategy")] private string? QueryStrategy { get; set; }
+    [SupplyParameterFromQuery(Name = "from")] private string? QueryFrom { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] private string? QueryTo { get; set; }
+    [SupplyParameterFromQuery(Name = "parameters")] private string? QueryParameters { get; set; }
+
     private ExchangeName _exchange = ExchangeName.Binance;
     private string _symbol = "BTC/USDT";
     private string _timeframe = "1h";
@@ -460,6 +497,83 @@
     private bool _isError;
     private string? _status;
     private CancellationTokenSource? _cts;
+
+    // Aggiornato dal componente DataAvailability: false = nessuna candela per
+    // symbol+timeframe correnti, quindi il Run è disabilitato con motivo visibile.
+    private bool _hasData = true;
+
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
+        decimal InitialCapital, decimal PositionSizePercent, decimal FeePercent,
+        decimal StopLossPercent, decimal TakeProfitPercent, decimal TrailingStopPercent,
+        decimal Leverage, decimal SlippagePercent, decimal FundingPercent,
+        string StrategyName, Dictionary<string, decimal> Parameters);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to,
+        _initialCapital, _positionSizePercent, _feePercent,
+        _stopLossPercent, _takeProfitPercent, _trailingStopPercent,
+        _leverage, _slippagePercent, _fundingPercent,
+        _strategyName, _paramInputs.ToDictionary(p => p.Key, p => p.Value)));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _initialCapital = cfg.InitialCapital;
+        _positionSizePercent = cfg.PositionSizePercent;
+        _feePercent = cfg.FeePercent;
+        _stopLossPercent = cfg.StopLossPercent;
+        _takeProfitPercent = cfg.TakeProfitPercent;
+        _trailingStopPercent = cfg.TrailingStopPercent;
+        _leverage = cfg.Leverage;
+        _slippagePercent = cfg.SlippagePercent;
+        _fundingPercent = cfg.FundingPercent;
+
+        if (StrategyFactory.Prototypes.Any(p => p.Name == cfg.StrategyName)) _strategyName = cfg.StrategyName;
+        BuildParamInputs();
+        foreach (var pi in _paramInputs)
+        {
+            if (cfg.Parameters.TryGetValue(pi.Key, out var v)) pi.Value = v;
+        }
+    }
+
+    private bool NoData => !_hasData;
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Fee {_feePercent:0.##}% · SL {PctOrOff(_stopLossPercent)} · TP {PctOrOff(_takeProfitPercent)}"
+        + $" · Trailing {PctOrOff(_trailingStopPercent)} · Leva {_leverage:0}×"
+        + $" · Slippage {_slippagePercent:0.##}% · Funding {_fundingPercent:0.##}%";
+
+    private static string PctOrOff(decimal v) => v > 0m ? $"{v:0.##}%" : "off";
+
+    /// <summary>Link a Optimization precompilata col contesto di questo backtest.</summary>
+    private string OptimizationHandoffUrl
+    {
+        get
+        {
+            var parameters = JsonSerializer.Serialize(_paramInputs.ToDictionary(p => p.Key, p => p.Value));
+            return "optimization"
+                 + $"?exchange={Uri.EscapeDataString(_exchange.ToString())}"
+                 + $"&symbol={Uri.EscapeDataString(_symbol.Trim())}"
+                 + $"&timeframe={Uri.EscapeDataString(_timeframe)}"
+                 + $"&strategy={Uri.EscapeDataString(_strategyName)}"
+                 + $"&from={_from:yyyy-MM-dd}&to={_to:yyyy-MM-dd}"
+                 + $"&parameters={Uri.EscapeDataString(parameters)}";
+        }
+    }
 
     /// <summary>
     /// Calcola SL e TP dai dati della coppia/timeframe nella finestra selezionata (media dei
@@ -514,15 +628,57 @@
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        BuildParamInputs(); // default per la strategia iniziale
+        ApplyHandoffContext();  // eventuale contesto dall'Optimization, prima dei default
+        BuildParamInputs();     // default per la strategia (iniziale o importata)
+        ApplyHandoffParameters();
 
-        await using var db = await DbFactory.CreateDbContextAsync();
-        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        await using (var db = await DbFactory.CreateDbContextAsync())
+        {
+            _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        }
 
         if (Load is int id)
         {
             await LoadStrategyAsync(id);
         }
+    }
+
+    // Applica il contesto arrivato via query string (dall'Optimization). Valori assenti
+    // o malformati lasciano i default: il link è una comodità, mai un requisito.
+    private void ApplyHandoffContext()
+    {
+        if (!string.IsNullOrWhiteSpace(QuerySymbol)) _symbol = QuerySymbol.Trim();
+        if (!string.IsNullOrWhiteSpace(QueryTimeframe) && Timeframes.Supported.ContainsKey(QueryTimeframe)) _timeframe = QueryTimeframe;
+        if (Enum.TryParse<ExchangeName>(QueryExchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (DateTime.TryParse(QueryFrom, out var from)) _from = from.Date;
+        if (DateTime.TryParse(QueryTo, out var to)) _to = to.Date;
+
+        if (!string.IsNullOrWhiteSpace(QueryStrategy) && StrategyFactory.Prototypes.Any(p => p.Name == QueryStrategy))
+        {
+            _strategyName = QueryStrategy;
+        }
+
+        if (!string.IsNullOrWhiteSpace(QuerySymbol))
+        {
+            SetStatus($"Configurazione importata dall'Optimization: {_symbol} {_timeframe}, strategia {_strategyName}.", error: false);
+        }
+    }
+
+    // Applica i valori dei parametri passati via query string, dopo che BuildParamInputs
+    // ha creato gli input coi default: le chiavi sconosciute vengono ignorate.
+    private void ApplyHandoffParameters()
+    {
+        if (string.IsNullOrWhiteSpace(QueryParameters)) return;
+        try
+        {
+            var values = JsonSerializer.Deserialize<Dictionary<string, decimal>>(QueryParameters);
+            if (values is null) return;
+            foreach (var pi in _paramInputs)
+            {
+                if (values.TryGetValue(pi.Key, out var v)) pi.Value = v;
+            }
+        }
+        catch (JsonException) { /* parametri malformati: restano i default */ }
     }
 
     private void OnStrategyChanged(ChangeEventArgs e)
@@ -547,6 +703,9 @@
             SetStatus("Controlla symbol e intervallo date.", error: true);
             return;
         }
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
 
         _busy = true;
         _isError = false;
@@ -733,15 +892,14 @@
         _isError = error;
     }
 
+    // Delega al componente condiviso <Stat> (stile unico in app.css). Le call-site
+    // (@MetricCard(...)) restano invariate: qui cambia solo la resa.
     private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
     {
-        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
-        builder.AddMarkupContent(0, $@"
-            <div class='card text-center' style='min-width: 9rem;'>
-                <div class='card-body py-2'>
-                    <div class='text-muted small'>{label}</div>
-                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
-                </div>
-            </div>");
+        builder.OpenComponent<Stat>(0);
+        builder.AddComponentParameter(1, nameof(Stat.Label), label);
+        builder.AddComponentParameter(2, nameof(Stat.Value), value);
+        builder.AddComponentParameter(3, nameof(Stat.Positive), positive);
+        builder.CloseComponent();
     };
 }

@@ -1,0 +1,35 @@
+@* Pannello a scomparsa per le impostazioni avanzate di un form di configurazione:
+   chiuso di default, mostra un riassunto inline dei valori correnti così si vede
+   cosa c'è dentro senza aprirlo. I campi restano bindati normalmente nel parent
+   (il contenuto è un semplice RenderFragment). *@
+
+<div class="advanced-panel">
+    <button type="button" class="advanced-toggle" @onclick="Toggle"
+            aria-expanded="@_open.ToString().ToLowerInvariant()">
+        <i class="bi bi-chevron-right advanced-caret @(_open ? "open" : "")"></i>
+        <span>@Title</span>
+        @if (!_open && !string.IsNullOrWhiteSpace(Summary))
+        {
+            <span class="advanced-summary">@Summary</span>
+        }
+    </button>
+    @if (_open)
+    {
+        <div class="advanced-body">
+            @ChildContent
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Impostazioni avanzate";
+
+    /// <summary>Riassunto dei valori correnti, mostrato quando il pannello è chiuso (es. "Fee 0,1% · Leva 1×").</summary>
+    [Parameter] public string? Summary { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool _open;
+
+    private void Toggle() => _open = !_open;
+}

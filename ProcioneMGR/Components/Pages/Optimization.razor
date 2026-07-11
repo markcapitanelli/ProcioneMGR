@@ -82,6 +82,9 @@
 <div class="card mb-3">
     <div class="card-header">Configurazione</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="optimization" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson"
+                       AutoRestoreLast="@(string.IsNullOrEmpty(QuerySymbol))" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -113,6 +116,10 @@
             </div>
         </div>
 
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
+
         <hr />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
@@ -121,14 +128,6 @@
                     @foreach (var p in StrategyFactory.Prototypes) { <option value="@p.Name">@p.DisplayName</option> }
                     <option value="@MlStrategyName">Modello ML (salvato)</option>
                 </select>
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Capitale</label>
-                <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_initialCapital" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Commissione %</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_commission" disabled="@_busy" />
             </div>
         </div>
 
@@ -223,29 +222,42 @@
             </div>
         </div>
 
-        <hr />
-        <div class="row g-3 align-items-end">
-            <div class="col-auto">
-                <label class="form-label">In-Sample (mesi)</label>
-                <input type="number" class="form-control" style="width:7rem" @bind="_inSampleMonths" disabled="@_busy" />
+        @* Capitale, commissione e finestre walk-forward hanno default sensati:
+           fuori dalla vista finché non servono, riassunto sempre leggibile. *@
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Capitale</label>
+                    <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_initialCapital" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Commissione %</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_commission" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">In-Sample (mesi)</label>
+                    <input type="number" class="form-control" style="width:7rem" @bind="_inSampleMonths" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Out-of-Sample (mesi)</label>
+                    <input type="number" class="form-control" style="width:7rem" @bind="_oosMonths" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Step (mesi)</label>
+                    <input type="number" class="form-control" style="width:7rem" @bind="_stepMonths" disabled="@_busy" />
+                </div>
             </div>
-            <div class="col-auto">
-                <label class="form-label">Out-of-Sample (mesi)</label>
-                <input type="number" class="form-control" style="width:7rem" @bind="_oosMonths" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Step (mesi)</label>
-                <input type="number" class="form-control" style="width:7rem" @bind="_stepMonths" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <button class="btn btn-primary" @onclick="StartAsync" disabled="@_busy">
-                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                    Start Optimization
-                </button>
-            </div>
+        </AdvancedPanel>
+
+        <div class="mt-3 d-flex gap-2 align-items-center">
+            <button class="btn btn-primary" @onclick="StartAsync" disabled="@(_busy || !_hasData)"
+                    title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
+                @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Start Optimization
+            </button>
             @if (_busy)
             {
-                <div class="col-auto"><button class="btn btn-outline-danger" @onclick="Stop">Stop</button></div>
+                <button class="btn btn-outline-danger" @onclick="Stop">Stop</button>
             }
         </div>
 
@@ -287,7 +299,7 @@
         </div>
         <div class="table-responsive">
             <table class="table table-sm table-striped mb-0">
-                <thead><tr><th>#</th><th>Parametri</th><th>Sharpe IS</th><th>Sharpe OOS</th><th>Return %</th><th>Max DD %</th><th>Trades</th></tr></thead>
+                <thead><tr><th>#</th><th>Parametri</th><th class="text-end">Sharpe IS</th><th class="text-end">Sharpe OOS</th><th class="text-end">Return %</th><th class="text-end">Max DD %</th><th class="text-end">Trades</th><th></th></tr></thead>
                 <tbody>
                     @{ var rank = 0; }
                     @foreach (var s in _result.BestParameters)
@@ -296,21 +308,33 @@
                         <tr class="@(rank == 1 ? "table-success" : "")">
                             <td>@rank</td>
                             <td>@FormatParams(s.Parameters)</td>
-                            <td>@s.InSampleSharpe.ToString("F2")</td>
-                            <td class="fw-semibold">@s.OutOfSampleSharpe.ToString("F2")</td>
-                            <td class="@(s.TotalReturn >= 0 ? "text-success" : "text-danger")">@s.TotalReturn.ToString("F2")</td>
-                            <td class="text-danger">@s.MaxDrawdown.ToString("F2")</td>
-                            <td>@s.TotalTrades</td>
+                            <td class="text-end">@s.InSampleSharpe.ToString("F2")</td>
+                            <td class="text-end fw-semibold">@s.OutOfSampleSharpe.ToString("F2")</td>
+                            <td class="text-end @(s.TotalReturn >= 0 ? "text-success" : "text-danger")">@s.TotalReturn.ToString("F2")</td>
+                            <td class="text-end text-danger">@s.MaxDrawdown.ToString("F2")</td>
+                            <td class="text-end">@s.TotalTrades</td>
+                            <td class="text-end">
+                                @if (_resultConfig is not null && _resultConfig.StrategyName != MlStrategyName)
+                                {
+                                    <a class="btn btn-sm btn-outline-primary py-0" href="@BacktestHandoffUrl(s.Parameters)"
+                                       title="Apri il Backtest precompilato con questi parametri">Backtest →</a>
+                                }
+                            </td>
                         </tr>
                     }
                 </tbody>
             </table>
         </div>
-        <div class="card-footer">
+        <div class="card-footer d-flex align-items-center gap-2 flex-wrap">
             <div class="input-group" style="max-width: 520px;">
                 <input class="form-control" placeholder="nome configurazione" @bind="_saveName" />
                 <button class="btn btn-success" @onclick="SaveBestAsync">💾 Save Best Configuration</button>
             </div>
+            @if (_savedOk)
+            {
+                <a class="btn btn-outline-primary" href="ensemble"
+                   title="Le configurazioni ottimizzate salvate sono selezionabili nell'Ensemble">Aggiungila all'Ensemble →</a>
+            }
         </div>
     </div>
 
@@ -336,7 +360,7 @@
         <div class="card-header">Finestre Walk-Forward</div>
         <div class="table-responsive">
             <table class="table table-sm table-striped mb-0">
-                <thead><tr><th>#</th><th>In-Sample</th><th>Out-of-Sample</th><th>Best params</th><th>Sharpe IS</th><th>Sharpe OOS</th><th>OOS Return %</th></tr></thead>
+                <thead><tr><th>#</th><th>In-Sample</th><th>Out-of-Sample</th><th>Best params</th><th class="text-end">Sharpe IS</th><th class="text-end">Sharpe OOS</th><th class="text-end">OOS Return %</th></tr></thead>
                 <tbody>
                     @foreach (var win in _result.WalkForwardAnalysis.Windows)
                     {
@@ -345,9 +369,9 @@
                             <td>@win.InSampleStart.ToString("yyyy-MM") → @win.InSampleEnd.ToString("yyyy-MM")</td>
                             <td>@win.OutOfSampleStart.ToString("yyyy-MM") → @win.OutOfSampleEnd.ToString("yyyy-MM")</td>
                             <td>@FormatParams(win.BestParameters)</td>
-                            <td>@win.InSampleSharpe.ToString("F2")</td>
-                            <td>@win.OutOfSampleSharpe.ToString("F2")</td>
-                            <td class="@(win.OutOfSampleReturn >= 0 ? "text-success" : "text-danger")">@win.OutOfSampleReturn.ToString("F2")</td>
+                            <td class="text-end">@win.InSampleSharpe.ToString("F2")</td>
+                            <td class="text-end">@win.OutOfSampleSharpe.ToString("F2")</td>
+                            <td class="text-end @(win.OutOfSampleReturn >= 0 ? "text-success" : "text-danger")">@win.OutOfSampleReturn.ToString("F2")</td>
                         </tr>
                     }
                 </tbody>
@@ -357,6 +381,18 @@
 }
 
 @code {
+    // Contesto opzionale passato dal Backtest ("Ottimizza questa strategia →") o dal
+    // ML Lab ("Ottimizza" su un modello salvato): precompila simbolo/periodo/strategia,
+    // ricentra i range sui parametri del run e preseleziona il modello ML.
+    [SupplyParameterFromQuery(Name = "exchange")] private string? QueryExchange { get; set; }
+    [SupplyParameterFromQuery(Name = "symbol")] private string? QuerySymbol { get; set; }
+    [SupplyParameterFromQuery(Name = "timeframe")] private string? QueryTimeframe { get; set; }
+    [SupplyParameterFromQuery(Name = "strategy")] private string? QueryStrategy { get; set; }
+    [SupplyParameterFromQuery(Name = "from")] private string? QueryFrom { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] private string? QueryTo { get; set; }
+    [SupplyParameterFromQuery(Name = "parameters")] private string? QueryParameters { get; set; }
+    [SupplyParameterFromQuery(Name = "model")] private int? QueryModelId { get; set; }
+
     private ExchangeName _exchange = ExchangeName.Binance;
     private string _symbol = "BTC/USDT";
     private string _timeframe = "1h";
@@ -382,6 +418,8 @@
     private int _addMlModelId;
 
     private OptimizationResult? _result;
+    private OptimizationConfiguration? _resultConfig; // contesto del run corrente: i link "Backtest →" restano coerenti anche se il form cambia dopo
+    private bool _savedOk;                            // mostra il testimone "Aggiungila all'Ensemble →" dopo un salvataggio riuscito
     private List<IndicatorSeries> _equitySeries = new();
     private string _saveName = "";
     private string? _userId;
@@ -391,6 +429,70 @@
     private string? _status;
     private OptimizationProgress _progress = new();
     private CancellationTokenSource? _cts;
+
+    // Aggiornato dal componente DataAvailability (gating dello Start).
+    private bool _hasData = true;
+
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record RangeDto(string Key, decimal Min, decimal Max, decimal Step);
+    private sealed record PageConfig(
+        string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
+        decimal InitialCapital, decimal Commission, int InSampleMonths, int OosMonths, int StepMonths,
+        string SearchStrategy, int BayesIterations, int BayesInitialRandom, int BayesSeed,
+        string StrategyName, int MlModelId, List<RangeDto> Ranges);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to,
+        _initialCapital, _commission, _inSampleMonths, _oosMonths, _stepMonths,
+        _searchStrategy.ToString(), _bayesIterations, _bayesInitialRandom, _bayesSeed,
+        _strategyName, _addMlModelId,
+        _ranges.Select(r => new RangeDto(r.Key, r.Min, r.Max, r.Step)).ToList()));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _initialCapital = cfg.InitialCapital;
+        _commission = cfg.Commission;
+        _inSampleMonths = cfg.InSampleMonths;
+        _oosMonths = cfg.OosMonths;
+        _stepMonths = cfg.StepMonths;
+        if (Enum.TryParse<SearchStrategy>(cfg.SearchStrategy, out var ss)) _searchStrategy = ss;
+        _bayesIterations = cfg.BayesIterations;
+        _bayesInitialRandom = cfg.BayesInitialRandom;
+        _bayesSeed = cfg.BayesSeed;
+
+        if (cfg.StrategyName == MlStrategyName || StrategyFactory.Prototypes.Any(p => p.Name == cfg.StrategyName))
+        {
+            _strategyName = cfg.StrategyName;
+        }
+        _addMlModelId = _strategyName == MlStrategyName ? cfg.MlModelId : 0;
+
+        BuildRanges();
+        foreach (var range in _ranges)
+        {
+            var saved = cfg.Ranges.FirstOrDefault(r => r.Key == range.Key);
+            if (saved is null) continue;
+            range.Min = saved.Min;
+            range.Max = saved.Max;
+            range.Step = saved.Step;
+        }
+    }
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Capitale {_initialCapital:N0} · Commissione {_commission:0.##}%"
+        + $" · Walk-forward {_inSampleMonths}/{_oosMonths}/{_stepMonths} mesi (IS/OOS/Step)";
 
     private IJSObjectReference? _heatmapModule;
     private bool _heatmapPending;
@@ -411,10 +513,67 @@
     {
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        ApplyHandoffContext();
         BuildRanges();
+        RecenterRangesOnHandoffParameters();
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
         _mlModels = await db.SavedMlModels.OrderByDescending(m => m.CreatedAtUtc).ToListAsync();
+    }
+
+    // Applica il contesto arrivato via query string (dal Backtest). Valori assenti
+    // o malformati lasciano i default: il link è una comodità, mai un requisito.
+    private void ApplyHandoffContext()
+    {
+        if (!string.IsNullOrWhiteSpace(QuerySymbol)) _symbol = QuerySymbol.Trim();
+        if (!string.IsNullOrWhiteSpace(QueryTimeframe) && Timeframes.Supported.ContainsKey(QueryTimeframe)) _timeframe = QueryTimeframe;
+        if (Enum.TryParse<ExchangeName>(QueryExchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (DateTime.TryParse(QueryFrom, out var from)) _from = from.Date;
+        if (DateTime.TryParse(QueryTo, out var to)) _to = to.Date;
+
+        if (!string.IsNullOrWhiteSpace(QueryStrategy) &&
+            (QueryStrategy == MlStrategyName || StrategyFactory.Prototypes.Any(p => p.Name == QueryStrategy)))
+        {
+            _strategyName = QueryStrategy;
+        }
+
+        // Modello ML preselezionato (dal ML Lab): la select lo mostra se compatibile con symbol/timeframe.
+        if (_strategyName == MlStrategyName && QueryModelId is > 0)
+        {
+            _addMlModelId = QueryModelId.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(QuerySymbol))
+        {
+            var source = QueryModelId is > 0 ? "dal ML Lab" : "dal Backtest";
+            _status = $"Configurazione importata {source}: {_symbol} {_timeframe}, strategia {_strategyName}.";
+            _isError = false;
+        }
+    }
+
+    // Ricentra i range di ricerca sui parametri effettivi del backtest di partenza
+    // (stessa forma dei default: min = valore, max = valore + 4 step).
+    private void RecenterRangesOnHandoffParameters()
+    {
+        if (string.IsNullOrWhiteSpace(QueryParameters)) return;
+        try
+        {
+            var values = JsonSerializer.Deserialize<Dictionary<string, decimal>>(QueryParameters);
+            if (values is null) return;
+            foreach (var range in _ranges)
+            {
+                if (!values.TryGetValue(range.Key, out var v)) continue;
+                var step = range.IsInteger ? Math.Max(1m, Math.Round(v * 0.2m)) : Math.Round(v * 0.1m, 4);
+                if (step <= 0m) step = range.IsInteger ? 1m : 0.01m;
+                range.Min = v;
+                range.Max = v + 4 * step;
+                range.Step = step;
+            }
+        }
+        catch (JsonException)
+        {
+            // Query malformata: si tengono i range di default.
+        }
     }
 
     private void OnStrategyChanged(ChangeEventArgs e)
@@ -469,7 +628,11 @@
 
     private async Task StartAsync()
     {
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
+
         _busy = true; _isError = false; _status = null; _result = null; _equitySeries = new();
+        _resultConfig = null; _savedOk = false;
         _progress = new(); _cts = new CancellationTokenSource();
         try
         {
@@ -514,6 +677,7 @@
 
             var progress = new Progress<OptimizationProgress>(p => { _progress = p; InvokeAsync(StateHasChanged); });
             _result = await OptEngine.OptimizeAsync(config, progress, _cts.Token);
+            _resultConfig = config;
 
             _equitySeries = new()
             {
@@ -633,6 +797,21 @@
         await db.SaveChangesAsync();
         SetStatus($"Configurazione ottimizzata '{_saveName}' salvata (Sharpe OOS {best.OutOfSampleSharpe:F2}).", false);
         _saveName = "";
+        _savedOk = true; // prossimo passo del flusso: l'Ensemble la vede tra le configurazioni ottimizzate
+    }
+
+    /// <summary>Link al Backtest precompilato col contesto del run e i parametri della riga scelta.</summary>
+    private string BacktestHandoffUrl(Dictionary<string, decimal> parameters)
+    {
+        if (_resultConfig is null) return "backtest";
+        var json = JsonSerializer.Serialize(parameters);
+        return "backtest"
+             + $"?exchange={Uri.EscapeDataString(_resultConfig.ExchangeName)}"
+             + $"&symbol={Uri.EscapeDataString(_resultConfig.Symbol)}"
+             + $"&timeframe={Uri.EscapeDataString(_resultConfig.Timeframe)}"
+             + $"&strategy={Uri.EscapeDataString(_resultConfig.StrategyName)}"
+             + $"&from={_resultConfig.From:yyyy-MM-dd}&to={_resultConfig.To:yyyy-MM-dd}"
+             + $"&parameters={Uri.EscapeDataString(json)}";
     }
 
     private static string FormatParams(Dictionary<string, decimal> p) =>

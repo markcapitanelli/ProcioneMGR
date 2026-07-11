@@ -1,6 +1,9 @@
 @page "/pairs-trading"
 @rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Backtesting
@@ -12,6 +15,7 @@
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IPairsBacktestEngine Engine
+@inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Pairs Trading</PageTitle>
 
@@ -55,6 +59,8 @@
 <div class="card mb-3">
     <div class="card-header">Configurazione</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="pairs-trading" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -90,50 +96,58 @@
             </div>
         </div>
 
-        <hr />
+        @* Due gambe = due verifiche dati (la scorciatoia date solo sulla prima). *@
+        <DataAvailability Symbol="@_symbolY" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasDataY = has)" />
+        <DataAvailability Symbol="@_symbolX" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          ShowUseFullRange="false"
+                          OnHasDataChanged="@(has => _hasDataX = has)" />
 
-        <div class="row g-3 align-items-end">
-            <div class="col-auto">
-                <label class="form-label">Lookback ristima (barre)</label>
-                <input type="number" class="form-control" style="width: 9rem;" @bind="_lookbackWindow" disabled="@_busy" />
+        @* Parametri dello spread e attriti hanno default sensati: pannello avanzate. *@
+        <AdvancedPanel Summary="@AdvancedSummary">
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Lookback ristima (barre)</label>
+                    <input type="number" class="form-control" style="width: 9rem;" @bind="_lookbackWindow" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Ricalibra ogni (barre)</label>
+                    <input type="number" class="form-control" style="width: 9rem;" @bind="_recalibrationInterval" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Z-score lookback</label>
+                    <input type="number" class="form-control" style="width: 9rem;" @bind="_zScoreLookback" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Soglia entrata (|z|)</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_entryZScore" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Soglia uscita (|z|)</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_exitZScore" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Capitale iniziale</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_initialCapital" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Position size % (per gamba)</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_positionSizePercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Fee %</label>
+                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
+                </div>
             </div>
-            <div class="col-auto">
-                <label class="form-label">Ricalibra ogni (barre)</label>
-                <input type="number" class="form-control" style="width: 9rem;" @bind="_recalibrationInterval" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Z-score lookback</label>
-                <input type="number" class="form-control" style="width: 9rem;" @bind="_zScoreLookback" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Soglia entrata (|z|)</label>
-                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_entryZScore" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Soglia uscita (|z|)</label>
-                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_exitZScore" disabled="@_busy" />
-            </div>
-        </div>
+        </AdvancedPanel>
 
-        <div class="row g-3 align-items-end mt-1">
-            <div class="col-auto">
-                <label class="form-label">Capitale iniziale</label>
-                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_initialCapital" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Position size % (per gamba)</label>
-                <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_positionSizePercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label">Fee %</label>
-                <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
-            </div>
-            <div class="col-auto">
-                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
-                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                    Analizza e Backtest
-                </button>
-            </div>
+        <div class="mt-3">
+            <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_busy || !_hasDataY || !_hasDataX)"
+                    title="@(!_hasDataY || !_hasDataX ? "Mancano dati per una delle due gambe: scaricali prima da Watchlist." : null)">
+                @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Analizza e Backtest
+            </button>
         </div>
 
         @if (!string.IsNullOrEmpty(_status))
@@ -235,6 +249,16 @@
     private decimal _positionSizePercent = 10m;
     private decimal _feePercent = 0.1m;
 
+    // Aggiornati dai due componenti DataAvailability (una verifica per gamba).
+    private bool _hasDataY = true;
+    private bool _hasDataX = true;
+
+    /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
+    private string AdvancedSummary =>
+        $"Lookback {_lookbackWindow} · Ricalibra {_recalibrationInterval} · Z-lookback {_zScoreLookback}"
+        + $" · Entrata |z|≥{_entryZScore:0.##} · Uscita |z|≤{_exitZScore:0.##}"
+        + $" · Capitale {_initialCapital:N0} · Size {_positionSizePercent:0.##}% · Fee {_feePercent:0.##}%";
+
     private List<string> _knownSymbols = new();
     private CointegrationResult? _cointegration;
     private PairsBacktestResult? _result;
@@ -247,8 +271,48 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    private string? _userId;
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        string Exchange, string SymbolY, string SymbolX, string Timeframe, DateTime From, DateTime To,
+        int LookbackWindow, int RecalibrationInterval, int ZScoreLookback,
+        decimal EntryZScore, decimal ExitZScore,
+        decimal InitialCapital, decimal PositionSizePercent, decimal FeePercent);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbolY.Trim(), _symbolX.Trim(), _timeframe, _from, _to,
+        _lookbackWindow, _recalibrationInterval, _zScoreLookback,
+        _entryZScore, _exitZScore, _initialCapital, _positionSizePercent, _feePercent));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.SymbolY)) _symbolY = cfg.SymbolY;
+        if (!string.IsNullOrWhiteSpace(cfg.SymbolX)) _symbolX = cfg.SymbolX;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _lookbackWindow = cfg.LookbackWindow;
+        _recalibrationInterval = cfg.RecalibrationInterval;
+        _zScoreLookback = cfg.ZScoreLookback;
+        _entryZScore = cfg.EntryZScore;
+        _exitZScore = cfg.ExitZScore;
+        _initialCapital = cfg.InitialCapital;
+        _positionSizePercent = cfg.PositionSizePercent;
+        _feePercent = cfg.FeePercent;
     }
 
     private async Task RunAsync()
@@ -258,6 +322,9 @@
             SetStatus("Controlla i due symbol (devono essere diversi) e l'intervallo date.", error: true);
             return;
         }
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
 
         _busy = true;
         _isError = false;
@@ -372,15 +439,14 @@
         _isError = error;
     }
 
+    // Delega al componente condiviso <Stat> (stile unico in app.css). Le call-site
+    // (@MetricCard(...)) restano invariate: qui cambia solo la resa.
     private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
     {
-        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
-        builder.AddMarkupContent(0, $@"
-            <div class='card text-center' style='min-width: 9rem;'>
-                <div class='card-body py-2'>
-                    <div class='text-muted small'>{label}</div>
-                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
-                </div>
-            </div>");
+        builder.OpenComponent<Stat>(0);
+        builder.AddComponentParameter(1, nameof(Stat.Label), label);
+        builder.AddComponentParameter(2, nameof(Stat.Value), value);
+        builder.AddComponentParameter(3, nameof(Stat.Positive), positive);
+        builder.CloseComponent();
     };
 }

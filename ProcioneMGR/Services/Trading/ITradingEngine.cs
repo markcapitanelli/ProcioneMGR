@@ -17,6 +17,14 @@ public interface ITradingEngine
     Task ClosePositionAsync(string positionId, CancellationToken ct = default);
 
     /// <summary>
+    /// [M2] Chiude tutte le posizioni della corsia al miglior prezzo noto SENZA attivare
+    /// l'emergency stop: flatten ordinato usato dalla promozione/retrocessione di corsia
+    /// (LanePromoter) prima del cambio modalità. Best-effort: una chiusura può non riuscire
+    /// (rete incerta) e la posizione resta aperta per il retry.
+    /// </summary>
+    Task CloseAllPositionsAsync(string reason, CancellationToken ct = default);
+
+    /// <summary>
     /// Imposta/aggiorna stop loss, take profit e trailing stop (%) di una posizione aperta.
     /// Una modifica manuale ha sempre priorità: da qui in poi l'automatismo di apertura non
     /// ritocca più questi valori (si applica solo alla creazione della posizione).

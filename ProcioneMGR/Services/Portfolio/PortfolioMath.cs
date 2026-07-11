@@ -163,6 +163,30 @@ internal static class PortfolioMath
         return w;
     }
 
+    /// <summary>
+    /// Contributi di rischio percentuali di un portafoglio: RC_i = w_i·(Σw)_i / (wᵀΣw), somma 1.
+    /// È la quantità che l'ERC pareggia — mostrarla è il modo onesto di verificare quanto una
+    /// allocazione concentra il rischio (i pesi da soli non bastano: un asset più volatile
+    /// contribuisce più del suo peso).
+    /// </summary>
+    public static double[] RiskContributions(Matrix<double> covariance, IReadOnlyList<double> weights)
+    {
+        var p = covariance.RowCount;
+        var w = Vector<double>.Build.Dense(p, i => weights[i]);
+        var sigmaW = covariance * w;
+        var total = w * sigmaW; // varianza del portafoglio
+        var rc = new double[p];
+        if (total <= 1e-18)
+        {
+            return rc;
+        }
+        for (var i = 0; i < p; i++)
+        {
+            rc[i] = w[i] * sigmaW[i] / total;
+        }
+        return rc;
+    }
+
     public static double[,] CorrelationFromCovariance(Matrix<double> covariance)
     {
         var p = covariance.RowCount;

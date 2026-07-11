@@ -1,6 +1,9 @@
 @page "/volatility"
 @rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Exchanges
@@ -10,6 +13,7 @@
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IGarchModel Garch
+@inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Volatilità (GARCH)</PageTitle>
 
@@ -47,6 +51,8 @@
 <div class="card mb-3">
     <div class="card-header">Configurazione</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="volatility" UserId="@_userId" Disabled="_busy"
+                       ShowUi="false" Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -77,12 +83,17 @@
                 <input type="date" class="form-control" @bind="_to" disabled="@_busy" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+                <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_busy || !_hasData)"
+                        title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Stima GARCH
                 </button>
             </div>
         </div>
+
+        <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
+                          OnHasDataChanged="@(has => _hasData = has)" />
 
         @if (!string.IsNullOrEmpty(_status))
         {
@@ -148,11 +159,38 @@
     private readonly int[] _forecastHorizons = [1, 5, 10, 20, 50, 100];
 
     private bool _busy;
+
+    // Aggiornato dal componente DataAvailability (gating della stima).
+    private bool _hasData = true;
     private bool _isError;
     private string? _status;
 
+    private string? _userId;
+    private ConfigPresets? _presets;
+
+    /// <summary>Memoria dell'ultima configurazione usata (modalità silenziosa: form minimo).</summary>
+    private sealed record PageConfig(string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; }
+        if (cfg is null) return;
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+    }
+
     protected override async Task OnInitializedAsync()
     {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
     }
@@ -166,6 +204,9 @@
             SetStatus("Controlla symbol e intervallo date.", error: true);
             return;
         }
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
 
         _busy = true;
         _isError = false;
@@ -234,15 +275,14 @@
         _isError = error;
     }
 
+    // Delega al componente condiviso <Stat> (stile unico in app.css). Le call-site
+    // (@MetricCard(...)) restano invariate: qui cambia solo la resa.
     private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
     {
-        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
-        builder.AddMarkupContent(0, $@"
-            <div class='card text-center' style='min-width: 10rem;'>
-                <div class='card-body py-2'>
-                    <div class='text-muted small'>{label}</div>
-                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
-                </div>
-            </div>");
+        builder.OpenComponent<Stat>(0);
+        builder.AddComponentParameter(1, nameof(Stat.Label), label);
+        builder.AddComponentParameter(2, nameof(Stat.Value), value);
+        builder.AddComponentParameter(3, nameof(Stat.Positive), positive);
+        builder.CloseComponent();
     };
 }

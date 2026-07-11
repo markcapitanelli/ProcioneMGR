@@ -80,8 +80,9 @@ public sealed class MarketFeatureExtractor(
         // ATR(14) con smoothing di Wilder.
         var atr = WilderAtr(high, low, close, AtrPeriod);
 
-        // RSI(14) via servizio indicatori (già anti-look-ahead).
-        var rsi = indicators.CalculateRsiAsync([.. close], RsiPeriod, ct).GetAwaiter().GetResult();
+        // RSI(14) via servizio indicatori (già anti-look-ahead), variante sincrona:
+        // il calcolo è CPU-bound, il vecchio .GetAwaiter().GetResult() era sync-over-async.
+        var rsi = indicators.CalculateRsi([.. close], RsiPeriod, ct);
 
         var sqrtPpy = Statistics.Sqrt(Statistics.PeriodsPerYear(timeframe));
 
