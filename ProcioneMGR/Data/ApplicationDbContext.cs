@@ -112,7 +112,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // SEGRETI CIFRATI A RIPOSO (AES-256-GCM via converter).
             entity.Property(e => e.ApiKey).HasConversion(encryptedConverter).IsRequired();
             entity.Property(e => e.ApiSecret).HasConversion(encryptedConverter).IsRequired();
-            entity.Property(e => e.Passphrase).HasConversion(encryptedConverter); // nullable: il converter non viene invocato sui null
+            // Nullable: EF non invoca mai il converter sui null; il cast alla base non generica
+            // evita il falso positivo CS8620 (varianza dei nullable negli argomenti generici).
+            entity.Property(e => e.Passphrase)
+                  .HasConversion((Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter)encryptedConverter);
 
             // Relazione 1-a-molti con l'utente; cancellando l'utente si cancellano le credenziali.
             entity.HasOne(e => e.User)
