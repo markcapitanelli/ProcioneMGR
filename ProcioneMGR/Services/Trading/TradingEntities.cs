@@ -29,6 +29,14 @@ public class TradingEngineState
     /// <summary>Equity massima raggiunta (per il calcolo del drawdown).</summary>
     public decimal PeakEquity { get; set; }
 
+    /// <summary>
+    /// Massimo drawdown % osservato dalla StartAsync della sessione (persistito): prima viveva
+    /// solo nella curva equity in-memory, quindi un riavvio lo azzerava — e il gate assoluto
+    /// HardMaxDrawdownPercent di PromotionEvaluator poteva promuovere una corsia che aveva già
+    /// bucato il limite prima del riavvio. Azzerato solo da un nuovo StartAsync.
+    /// </summary>
+    public decimal MaxDrawdownPercent { get; set; }
+
     /// <summary>PnL realizzato nelle ultime 24h (rolling), per il safety check daily-loss.</summary>
     public decimal DailyPnl { get; set; }
     public DateTime DailyAnchorUtc { get; set; }

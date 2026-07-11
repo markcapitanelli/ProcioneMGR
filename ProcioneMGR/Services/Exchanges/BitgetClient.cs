@@ -162,15 +162,19 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
         {
             return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = error };
         }
-        using var doc = JsonDocument.Parse(resp);
-        var root = doc.RootElement;
-        var data = root.TryGetProperty("data", out var d) ? d : default;
-        return new PlaceOrderResult
+        PlaceOrderResult result;
+        using (var doc = JsonDocument.Parse(resp))
         {
-            Success = true,
-            ExchangeOrderId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
-            Status = "submitted",
-        };
+            var data = doc.RootElement.TryGetProperty("data", out var d) ? d : default;
+            result = new PlaceOrderResult
+            {
+                Success = true,
+                ExchangeOrderId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
+                Status = "submitted",
+            };
+        }
+        return await EnrichWithFillAsync(result,
+            () => GetOrderStatusAsync(request.Symbol, request.ClientOrderId, request.Credentials, ct), ct);
     }
 
     public async Task<CancelOrderResult> CancelOrderAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default)
@@ -437,14 +441,56 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger) 
         {
             return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = error };
         }
-        using var doc = JsonDocument.Parse(resp);
-        var data = doc.RootElement.TryGetProperty("data", out var d) ? d : default;
-        return new PlaceOrderResult
+        PlaceOrderResult result;
+        using (var doc = JsonDocument.Parse(resp))
         {
-            Success = true,
-            ExchangeOrderId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
-            Status = "submitted",
-        };
+            var data = doc.RootElement.TryGetProperty("data", out var d) ? d : default;
+            result = new PlaceOrderResult
+            {
+                Success = true,
+                ExchangeOrderId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("orderId", out var oid) ? oid.GetString() : null,
+                Status = "submitted",
+            };
+        }
+        return await EnrichWithFillAsync(result,
+            () => GetFuturesOrderStatusAsync(request.Symbol, request.ClientOrderId, request.Credentials, ct), ct);
+    }
+
+    /// <summary>
+    /// [M4] Bitget non restituisce i fill nella risposta di piazzamento (a differenza del POST
+    /// Binance con <c>fills[]</c>): senza un lookup l'engine ripiegava SEMPRE su currentPrice
+    /// come prezzo d'ingresso e lo slippage reale restava invisibile a PnL/stop. Poll breve e
+    /// best-effort del lookup C2: subito + 1 retry dopo 500ms se l'ordine è ancora vivo; ogni
+    /// altro esito lascia i fill null (l'engine degrada come prima). MAI un errore qui può
+    /// far fallire un piazzamento riuscito.
+    /// </summary>
+    private static async Task<PlaceOrderResult> EnrichWithFillAsync(
+        PlaceOrderResult placed, Func<Task<OrderStatusResult>> lookup, CancellationToken ct)
+    {
+        try
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var status = await lookup();
+                if (status.Found && status.Status is "Filled" or "PartiallyFilled" && status.FilledQuantity is > 0m)
+                {
+                    placed.FilledPrice = status.FilledPrice;
+                    placed.FilledQuantity = status.FilledQuantity;
+                    placed.Status = status.Status;
+                    return placed;
+                }
+                if (status.NetworkUncertain || !status.Found || status.IsTerminalUnfilled)
+                {
+                    return placed;   // niente di meglio da fare: fill null, degradazione odierna
+                }
+                if (attempt == 0) await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // best-effort per definizione: il place è riuscito, l'arricchimento no — pazienza.
+        }
+        return placed;
     }
 
     /// <summary>

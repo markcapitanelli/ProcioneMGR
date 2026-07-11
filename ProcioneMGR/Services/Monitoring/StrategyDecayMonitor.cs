@@ -1,4 +1,5 @@
 using ProcioneMGR.Services.Ensemble;
+using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Trading;
 
 namespace ProcioneMGR.Services.Monitoring;
@@ -18,7 +19,11 @@ public interface IStrategyDecayMonitor
     /// è fatto internamente, così il chiamante può passare l'intera tabella TradeRecords senza
     /// doverla già segmentare per gamba).
     /// </summary>
-    DecayReport Analyze(EnsembleStrategy strategy, IReadOnlyList<TradeRecord> allClosedTrades, DecayMonitorOptions? options = null);
+    /// <param name="timeframe">
+    /// [M5] Timeframe della corsia (es. "1h"): serve a portare lo Sharpe realizzato sulla STESSA
+    /// base per-candela dello Sharpe atteso, altrimenti il confronto non è interpretabile.
+    /// </param>
+    DecayReport Analyze(EnsembleStrategy strategy, IReadOnlyList<TradeRecord> allClosedTrades, string timeframe, DecayMonitorOptions? options = null);
 }
 
 /// <summary>Soglie del monitor di decadimento. Stessa finestra funge da minimo di trade richiesti e da ampiezza del rolling.</summary>
@@ -38,7 +43,19 @@ public sealed class DecayReport
     public string DisplayName { get; set; } = string.Empty;
 
     public decimal? ExpectedSharpe { get; set; }
+
+    /// <summary>
+    /// [M5] Sharpe realizzato su base PER-CANDELA (bucket del timeframe, bucket senza trade = 0),
+    /// annualizzato come lo Sharpe holdout: è il numero CONFRONTABILE con <see cref="ExpectedSharpe"/>.
+    /// </summary>
     public decimal? RealizedSharpe { get; set; }
+
+    /// <summary>
+    /// Sharpe realizzato "a trade" (annualizzato con sqrt(trade/anno) stimati dalla cadenza del
+    /// campione) — il valore storico del monitor, conservato come INFORMATIVO: non è sulla stessa
+    /// base dell'atteso e non partecipa più alla soglia di alert.
+    /// </summary>
+    public decimal? RealizedTradeSharpe { get; set; }
 
     /// <summary>RealizedSharpe - ExpectedSharpe.</summary>
     public decimal? SharpeDelta { get; set; }
@@ -60,7 +77,7 @@ public sealed class DecayReport
 
 public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
 {
-    public DecayReport Analyze(EnsembleStrategy strategy, IReadOnlyList<TradeRecord> allClosedTrades, DecayMonitorOptions? options = null)
+    public DecayReport Analyze(EnsembleStrategy strategy, IReadOnlyList<TradeRecord> allClosedTrades, string timeframe, DecayMonitorOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(strategy);
         allClosedTrades ??= [];
@@ -77,7 +94,7 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
         };
 
         // Ultime N chiuse (piu' recenti prima per il Take, poi rimesse in ordine cronologico:
-        // la stima della cadenza annua dei trade ha bisogno dell'ordine temporale corretto).
+        // il bucketing per periodo ha bisogno dell'ordine temporale corretto).
         var window = allClosedTrades
             .Where(t => t.StrategyId == strategy.StrategyId)
             .OrderByDescending(t => t.ClosedAtUtc)
@@ -98,8 +115,20 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
             return report;
         }
 
-        var (realizedSharpe, realizedPf) = ComputeRealizedMetrics(window);
+        // [M5] Base OMOGENEA con l'atteso: l'ExpectedSharpe della gamba viene dal backtest/holdout,
+        // calcolato su rendimenti PER CANDELA annualizzati con sqrt(candele/anno) (vedi
+        // Statistics.SharpeRatio e PipelineApplier). Il vecchio realizzato era invece "a trade"
+        // annualizzato con sqrt(trade/anno): due unità di misura diverse — es. una strategia con
+        // 1 trade/settimana su 1h aveva un realizzato sgonfiato di ~sqrt(8760/52) ≈ 13x rispetto
+        // all'atteso, e la soglia del 50% scattava (o taceva) senza significato. Qui i trade
+        // vengono proiettati sui bucket del timeframe (bucket senza trade = rendimento 0, come le
+        // candele piatte dell'holdout) e annualizzati con la STESSA convenzione.
+        var (periodReturns, bucketsPerYear) = BuildPeriodReturns(window, timeframe);
+        var realizedSharpe = AnnualizedSharpe(periodReturns, bucketsPerYear);
+        var (tradeSharpe, realizedPf) = ComputeTradeMetrics(window);
+
         report.RealizedSharpe = realizedSharpe;
+        report.RealizedTradeSharpe = tradeSharpe;
         report.RealizedProfitFactor = realizedPf;
         report.SharpeDelta = realizedSharpe - expected;
 
@@ -122,20 +151,59 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
     }
 
     /// <summary>
-    /// Sharpe "a trade" e Profit Factor sugli ultimi N trade (in ordine cronologico).
-    ///
-    /// Annualizzazione: lo Sharpe holdout del backtest è calcolato su rendimenti PER CANDELA
-    /// (vedi <see cref="Optimization.Statistics.SharpeRatio"/>, annualizzato con sqrt(candele/anno)
-    /// del timeframe). Qui i "periodi" sono TRADE, non candele — usare sqrt(candele/anno) darebbe
-    /// un numero senza senso se la strategia fa, es., un trade a settimana su un timeframe 1h
-    /// (8760 candele/anno ma ~52 trade/anno: l'annualizzazione andrebbe sovrastimata di oltre
-    /// 100x). Si stima invece la cadenza REALE dei trade dal campione stesso — trade/anno =
-    /// N / giorni_di_ampiezza * 365 — e si annualizza con sqrt(trade/anno), la convenzione
-    /// standard per uno Sharpe "per trade" quando la frequenza dei trade non è fissa.
-    /// L'ampiezza è vincolata ad almeno 1 giorno per evitare stime assurde su campioni compressi
-    /// in poche ore (es. un burst di trade in modalità Paper ad alta frequenza di replay).
+    /// [M5] Proietta i trade chiusi sui bucket temporali del timeframe: bucket i = periodo
+    /// i-esimo dal primo trade, ogni trade contribuisce il proprio rendimento (PnlPercent/100)
+    /// al bucket della sua CHIUSURA, bucket senza trade = 0 (come le candele piatte
+    /// dell'holdout, dove l'equity non si muove). Se la finestra copre più di
+    /// <paramref name="maxBuckets"/> periodi il bucket viene ingrossato di un fattore k intero
+    /// (es. 2 candele per bucket) e l'annualizzazione usa i periodi-per-anno del bucket
+    /// EFFETTIVO (PeriodsPerYear/k), così il vettore resta bounded senza distorcere la scala.
     /// </summary>
-    private static (decimal Sharpe, decimal ProfitFactor) ComputeRealizedMetrics(IReadOnlyList<TradeRecord> chronological)
+    internal static (IReadOnlyList<decimal> Returns, decimal BucketsPerYear) BuildPeriodReturns(
+        IReadOnlyList<TradeRecord> chronological, string timeframe, int maxBuckets = 20_000)
+    {
+        var ppy = Statistics.PeriodsPerYear(timeframe);
+        var period = TimeSpan.FromDays(365.0 / ppy);
+
+        var start = chronological[0].ClosedAtUtc;
+        var end = chronological[^1].ClosedAtUtc;
+        var rawBuckets = (long)Math.Floor((end - start) / period) + 1;
+        var k = (int)Math.Max(1L, (rawBuckets + maxBuckets - 1) / maxBuckets);
+        var bucket = period * k;
+
+        var count = (int)Math.Floor((end - start) / bucket) + 1;
+        var returns = new decimal[count];
+        foreach (var t in chronological)
+        {
+            var idx = (int)Math.Floor((t.ClosedAtUtc - start) / bucket);
+            returns[idx] += t.PnlPercent / 100m;
+        }
+        return (returns, (decimal)ppy / k);
+    }
+
+    /// <summary>Sharpe annualizzato mean/std × sqrt(bucket/anno), varianza di popolazione (coerente con Statistics.SharpeRatio). 0 se degenere.</summary>
+    private static decimal AnnualizedSharpe(IReadOnlyList<decimal> returns, decimal periodsPerYear)
+    {
+        if (returns.Count < 2) return 0m;
+        var mean = returns.Average();
+        decimal sumSq = 0m;
+        foreach (var r in returns)
+        {
+            var d = r - mean;
+            sumSq += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sumSq / returns.Count));
+        return stdDev == 0m ? 0m : mean / stdDev * (decimal)Math.Sqrt((double)periodsPerYear);
+    }
+
+    /// <summary>
+    /// Metriche "a trade": Profit Factor (invariato) e lo Sharpe per-trade storico, annualizzato
+    /// con sqrt(trade/anno) stimati dalla cadenza reale del campione (trade/anno = N / giorni di
+    /// ampiezza × 365, ampiezza ≥ 1 giorno per non esplodere su burst compressi). Dal fix M5
+    /// questo numero è solo INFORMATIVO (<see cref="DecayReport.RealizedTradeSharpe"/>): non è
+    /// sulla stessa base per-candela dell'atteso e non pilota più la soglia di alert.
+    /// </summary>
+    private static (decimal Sharpe, decimal ProfitFactor) ComputeTradeMetrics(IReadOnlyList<TradeRecord> chronological)
     {
         var returns = chronological.Select(t => t.PnlPercent / 100m).ToList();
         var n = returns.Count;

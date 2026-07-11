@@ -54,17 +54,19 @@ public class SafetyConfiguration
     public decimal MaintenanceMarginPercent { get; set; } = 0.5m;
 
     /// <summary>
-    /// [P0-5 follow-up — SCAFFOLDING, non ancora attivo] Se true, all'apertura di una posizione
-    /// FUTURES in Testnet/Live il motore piazza sull'exchange ordini TRIGGER reduce-only (stop-market
-    /// e take-profit-market) come protezione "resting": restano validi sull'exchange anche se il
-    /// processo va giù o perde connettività, chiudendo la posizione contro i gap-through — cosa che
-    /// gli stop software-monitored su candela chiusa NON garantiscono.
+    /// [P0-5] Se true, all'apertura di una posizione FUTURES in Testnet/Live il motore piazza
+    /// sull'exchange ordini TRIGGER reduce-only (stop-market e take-profit-market) come protezione
+    /// "resting": restano validi sull'exchange anche se il processo va giù o perde connettività,
+    /// chiudendo la posizione contro i gap-through — cosa che gli stop software-monitored su
+    /// candela chiusa NON garantiscono.
     ///
     /// Default FALSE: gli stop restano software-monitored (fonte di verità <see cref="OpenPosition.StopLoss"/>).
-    /// Gli endpoint trigger sono ora IMPLEMENTATI su Bitget/Binance
+    /// Gli endpoint trigger sono IMPLEMENTATI su Bitget/Binance
     /// (<see cref="ProcioneMGR.Services.Exchanges.IFuturesExchangeClient.PlaceFuturesTriggerOrderAsync"/>)
-    /// ma vanno VERIFICATI su Demo/Testnet prima di attivarli in Live. Il branch guardato non blocca mai
-    /// l'apertura: se il piazzamento del trigger fallisce, logga un warning e restano gli stop software.
+    /// e gli id dei trigger sono PERSISTITI sulla posizione (M3, sopravvivono al riavvio), ma la
+    /// semantica va VERIFICATA su Demo/Testnet prima di attivarli in Live. Il branch guardato non
+    /// blocca mai l'apertura: se il piazzamento del trigger fallisce, logga un warning e restano
+    /// gli stop software.
     /// </summary>
     public bool UseExchangeRestingStops { get; set; }
 }
