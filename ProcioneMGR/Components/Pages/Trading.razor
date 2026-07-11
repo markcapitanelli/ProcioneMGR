@@ -72,8 +72,8 @@
             <table class="table table-sm align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Corsia</th><th>Simbolo</th><th>Modalità</th><th>Sharpe</th><th>Trade</th>
-                        <th>Max DD</th><th>Win</th><th>Osserv.</th><th>Stato</th><th></th>
+                        <th>Corsia</th><th>Simbolo</th><th>Modalità</th><th class="text-end">Sharpe</th><th class="text-end">Trade</th>
+                        <th class="text-end">Max DD</th><th class="text-end">Win</th><th class="text-end">Osserv.</th><th>Stato</th><th></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -83,11 +83,11 @@
                             <td>@p.LaneId</td>
                             <td>@(string.IsNullOrEmpty(p.Symbol) ? "—" : p.Symbol)</td>
                             <td><span class="badge @ModeBadge(p.CurrentMode)">@p.CurrentMode</span></td>
-                            <td>@p.Metrics.RealizedSharpe.ToString("F2")</td>
-                            <td>@p.Metrics.TradeCount</td>
-                            <td>@p.Metrics.MaxDrawdown.ToString("F1")%</td>
-                            <td>@p.Metrics.WinRate.ToString("P0")</td>
-                            <td>@p.Metrics.ObservationPeriod.TotalDays.ToString("F0")gg</td>
+                            <td class="text-end">@p.Metrics.RealizedSharpe.ToString("F2")</td>
+                            <td class="text-end">@p.Metrics.TradeCount</td>
+                            <td class="text-end">@p.Metrics.MaxDrawdown.ToString("F1")%</td>
+                            <td class="text-end">@p.Metrics.WinRate.ToString("P0")</td>
+                            <td class="text-end">@p.Metrics.ObservationPeriod.TotalDays.ToString("F0")gg</td>
                             <td>
                                 @if (p.CurrentMode == TradingMode.Testnet)
                                 {
@@ -304,8 +304,8 @@
         {
             <div class="table-responsive">
                 <table class="table table-sm mb-0 align-middle">
-                    <thead><tr><th>Strategy</th><th>Side</th><th>Entry</th><th>Current</th><th>Qty</th><th>Unreal. PnL</th><th>PnL %</th>
-                        @if (_status?.MarketType == MarketType.Futures) { <th>Leva</th><th>Liq. Price</th> }
+                    <thead><tr><th>Strategy</th><th>Side</th><th class="text-end">Entry</th><th class="text-end">Current</th><th class="text-end">Qty</th><th class="text-end">Unreal. PnL</th><th class="text-end">PnL %</th>
+                        @if (_status?.MarketType == MarketType.Futures) { <th>Leva</th><th class="text-end">Liq. Price</th> }
                         <th>Stop Loss</th><th>Take Profit</th><th>Trailing %</th><th class="text-end">Azioni</th></tr></thead>
                     <tbody>
                         @foreach (var p in _positions)
@@ -313,15 +313,15 @@
                             <tr>
                                 <td><code class="small">@p.StrategyId[..6]</code></td>
                                 <td><span class="badge @(p.Side == OrderSide.Buy ? "bg-success" : "bg-danger")">@(p.Side == OrderSide.Buy ? "Long" : "Short")</span></td>
-                                <td>@p.EntryPrice.ToString("N2")</td>
-                                <td>@p.CurrentPrice.ToString("N2")</td>
-                                <td>@p.Quantity.ToString("N5")</td>
-                                <td class="@(p.UnrealizedPnl >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnl.ToString("N2")</td>
-                                <td class="@(p.UnrealizedPnlPercent >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnlPercent.ToString("F2")%</td>
+                                <td class="text-end">@p.EntryPrice.ToString("N2")</td>
+                                <td class="text-end">@p.CurrentPrice.ToString("N2")</td>
+                                <td class="text-end">@p.Quantity.ToString("N5")</td>
+                                <td class="text-end @(p.UnrealizedPnl >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnl.ToString("N2")</td>
+                                <td class="text-end @(p.UnrealizedPnlPercent >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnlPercent.ToString("F2")%</td>
                                 @if (_status?.MarketType == MarketType.Futures)
                                 {
                                     <td>@(p.Leverage)x</td>
-                                    <td class="@LiqPriceClass(p)">@(p.LiquidationPrice?.ToString("N2") ?? "—")</td>
+                                    <td class="text-end @LiqPriceClass(p)">@(p.LiquidationPrice?.ToString("N2") ?? "—")</td>
                                 }
                                 <td><input type="number" step="any" class="form-control form-control-sm" style="width:7rem"
                                            placeholder="—" value="@SlValue(p)" @onchange="e => OnSlChanged(p.PositionId, e.Value?.ToString())" /></td>
@@ -704,11 +704,14 @@
 
     private void SetMsg(string text, bool error) { _message = text; _isError = error; }
 
+    // Delega al componente condiviso <Stat> (stile unico in app.css), come le altre pagine.
     private RenderFragment Metric(string label, string value, bool? positive = null) => builder =>
     {
-        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
-        builder.AddMarkupContent(0, $@"<div class='card text-center' style='min-width:8rem;'><div class='card-body py-2'>
-            <div class='text-muted small'>{label}</div><div class='fs-6 fw-semibold {cls}'>{value}</div></div></div>");
+        builder.OpenComponent<Stat>(0);
+        builder.AddComponentParameter(1, nameof(Stat.Label), label);
+        builder.AddComponentParameter(2, nameof(Stat.Value), value);
+        builder.AddComponentParameter(3, nameof(Stat.Positive), positive);
+        builder.CloseComponent();
     };
 
     public void Dispose() => _timer?.Dispose();
