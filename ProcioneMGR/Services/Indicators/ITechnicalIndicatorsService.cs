@@ -17,6 +17,13 @@ public interface ITechnicalIndicatorsService
     /// <summary>RSI (Relative Strength Index) con smoothing di Wilder.</summary>
     Task<List<decimal?>> CalculateRsiAsync(List<decimal> closes, int period = 14, CancellationToken ct = default);
 
+    /// <summary>
+    /// Variante SINCRONA di <see cref="CalculateRsiAsync"/>: il calcolo è CPU-bound e l'async è
+    /// solo un Task.FromResult — i chiamanti sincroni prima ripiegavano su
+    /// .GetAwaiter().GetResult() (sync-over-async inutile).
+    /// </summary>
+    List<decimal?> CalculateRsi(List<decimal> closes, int period = 14, CancellationToken ct = default);
+
     /// <summary>MACD: linea = EMA(fast) - EMA(slow); signal = EMA(MACD, signalPeriod); histogram = MACD - signal.</summary>
     Task<(List<decimal?> Macd, List<decimal?> Signal, List<decimal?> Histogram)> CalculateMacdAsync(
         List<decimal> closes, int fastPeriod = 12, int slowPeriod = 26, int signalPeriod = 9, CancellationToken ct = default);

@@ -831,6 +831,64 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.ToTable("ExperimentRuns", (string)null);
                 });
 
+            modelBuilder.Entity("ProcioneMGR.Services.Monitoring.Drift.DriftCheckResult", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("AlertFeatures")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("ChampionRetired")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("CheckedAtUtc")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<int>("DriftingFeatures")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ModelId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ModelName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("Overall")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Timeframe")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<string>("TopFeaturesJson")
+                        .HasColumnType("text");
+
+                    b.Property<int>("TotalFeatures")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CheckedAtUtc");
+
+                    b.HasIndex("ModelId", "CheckedAtUtc");
+
+                    b.ToTable("DriftCheckResults", (string)null);
+                });
+
             modelBuilder.Entity("ProcioneMGR.Services.Pipeline.PipelineArtifact", b =>
                 {
                     b.Property<int>("Id")
@@ -1166,6 +1224,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.Property<DateTime>("OpenedAtUtc")
                         .HasColumnType("timestamp without time zone");
 
+                    b.Property<int>("OpenedInMode")
+                        .HasColumnType("integer");
+
                     b.Property<string>("PositionId")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1181,6 +1242,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.Property<decimal?>("StopLoss")
                         .HasColumnType("numeric");
 
+                    b.Property<string>("StopOrderId")
+                        .HasColumnType("text");
+
                     b.Property<string>("StrategyId")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1191,6 +1255,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
 
                     b.Property<decimal?>("TakeProfit")
                         .HasColumnType("numeric");
+
+                    b.Property<string>("TakeProfitOrderId")
+                        .HasColumnType("text");
 
                     b.Property<decimal?>("TrailingStopPercent")
                         .HasColumnType("numeric");
@@ -1466,6 +1533,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasMaxLength(8)
                         .HasColumnType("character varying(8)");
+
+                    b.Property<decimal>("MaxDrawdownPercent")
+                        .HasColumnType("numeric");
 
                     b.Property<string>("Mode")
                         .IsRequired()

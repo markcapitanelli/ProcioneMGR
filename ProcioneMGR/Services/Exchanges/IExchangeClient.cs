@@ -44,6 +44,13 @@ public interface IExchangeClient
     /// <summary>Ordini aperti (per riconciliazione dopo un errore di rete).</summary>
     Task<List<OpenOrder>> GetOpenOrdersAsync(string symbol, TradingCredentials creds, CancellationToken ct = default);
 
+    /// <summary>
+    /// Stato di un ordine per client order id, INCLUSI gli ordini già eseguiti/terminati (a
+    /// differenza di <see cref="GetOpenOrdersAsync"/>). È il lookup autorevole per la
+    /// riconciliazione dopo un <see cref="PlaceOrderResult.NetworkUncertain"/>.
+    /// </summary>
+    Task<OrderStatusResult> GetOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default);
+
     /// <summary>Saldi del conto.</summary>
     Task<AccountBalance> GetBalanceAsync(TradingCredentials creds, CancellationToken ct = default);
 

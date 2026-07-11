@@ -1,0 +1,490 @@
+@page "/admin/autonomy"
+@rendermode InteractiveServer
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Options
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Config
+@using ProcioneMGR.Services.Llm
+@using ProcioneMGR.Services.Monitoring.Drift
+@using ProcioneMGR.Services.Pipeline
+@using ProcioneMGR.Services.Trading
+@attribute [Authorize(Roles = AppRoles.Admin)]
+
+@inject IAppConfigWriter ConfigWriter
+@inject IConfiguration Config
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject IOptionsMonitor<LiveExecutionOptions> LiveExecMonitor
+@inject IOptionsMonitor<AutoReapplyOptions> AutoReapplyMonitor
+@inject IOptionsMonitor<PromotionEvaluatorOptions> PromotionMonitor
+@inject IOptionsMonitor<LlmOptions> LlmMonitor
+@inject IOptionsMonitor<DriftMonitorOptions> DriftMonitor
+@inject ILlmClient LlmClient
+@inject LlmSupervisorWorker LlmWorker
+@inject FeatureDriftWorker DriftWorker
+
+<PageTitle>Autonomia</PageTitle>
+
+<h1>Controlli di autonomia <span class="badge bg-secondary">Admin</span></h1>
+
+<GuidaPanel Title="Autonomia — tutti gli automatismi della piattaforma, in un posto solo">
+    <p>
+        La piattaforma ha diversi cicli automatici (esecuzione a fette, ri-applica dell'ensemble,
+        promozione corsie, supervisione AI, drift monitor, sync dati). Finora si controllavano solo
+        da <code>appsettings.json</code>: questa pagina li espone tutti, con salvataggio immediato.
+        I valori vengono scritti in <code>appsettings.json</code> e ricaricati dall'app entro ~1
+        secondo (<em>reload on change</em>) — <strong>senza riavvio</strong> per i campi marcati
+        <span class="badge bg-success">a caldo</span>. I campi marcati
+        <span class="badge bg-warning text-dark">riavvio</span> (gli intervalli dei timer) vengono
+        salvati subito ma il nuovo valore vale dal prossimo riavvio dell'app.
+    </p>
+    <p class="mb-0">
+        <strong>Confini di sicurezza (non modificabili da qui):</strong> nessun automatismo può
+        portare una corsia in <strong>Live</strong> (la promozione arriva al massimo a Testnet, il
+        Live resta manuale con conferma per-ordine); il layer AI è solo advisory e può al massimo
+        porre un <em>veto</em>; la ri-applica scrive solo configurazione. Questi limiti sono nel
+        codice, non in configurazione.
+    </p>
+</GuidaPanel>
+
+@if (!string.IsNullOrEmpty(_status))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_status</div>
+}
+
+@* ============================ 1. Esecuzione live a fette ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-stack me-1"></i>Esecuzione live "a fette" (TWAP/VWAP/Iceberg)</span>
+        <span>@StateBadge(_liveExec.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Spezza gli ordini di apertura su Testnet/Live in fette temporali per ridurre l'impatto.
+            Master switch default OFF: con l'interruttore spento nessun piano viene creato né avanzato.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="le_en" @bind="_liveExec.Enabled" />
+                <label class="form-check-label" for="le_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Finestra default (min) @Hot()</label>
+                <input type="number" class="form-control" @bind="_liveExec.DefaultWindowMinutes" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Tick worker (s) @Restart()</label>
+                <input type="number" class="form-control" @bind="_liveExec.WorkerTickSeconds" min="5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Grazia abbandono (min) @Hot()</label>
+                <input type="number" class="form-control" @bind="_liveExec.AbandonGraceMinutes" min="0" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("Trading:LiveExecution", _liveExec, "Esecuzione live")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 2. Ri-applica automatica ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-arrow-repeat me-1"></i>Ri-applica automatica dell'ensemble</span>
+        <span>@StateBadge(_autoReapply.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Dopo ogni run schedulato completato, se il nuovo ensemble batte il corrente (confronto
+            oggettivo con hysteresis) e il supervisore AI non pone veto, lo schiera da solo sulle
+            corsie. Scrive SOLO configurazione: mai avvia trading, mai Live.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="ar_en" @bind="_autoReapply.Enabled" />
+                <label class="form-check-label" for="ar_en">Abilitata @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Lookback (giorni) @Hot()</label>
+                <input type="number" class="form-control" @bind="_autoReapply.LookbackDays" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Max run per tick @Hot()</label>
+                <input type="number" class="form-control" @bind="_autoReapply.MaxPerTick" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("AutoReapply", _autoReapply, "Ri-applica automatica")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 3. Promozione corsie ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-ladder me-1"></i>Promozione corsie (Paper → Testnet, mai Live)</span>
+        <span>@StateBadge(_promotion.AutoPromoteToTestnet)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Promuove a Testnet le corsie Paper che performano bene abbastanza a lungo, e retrocede
+            a Paper quelle Testnet il cui edge svanisce. Le soglie valgono dal prossimo ciclo di
+            valutazione (default ogni @_promotion.EvaluationIntervalHours h).
+        </p>
+        <div class="row g-3">
+            <div class="col-auto form-check form-switch ms-2 align-self-end">
+                <input class="form-check-input" type="checkbox" id="pr_auto" @bind="_promotion.AutoPromoteToTestnet" />
+                <label class="form-check-label" for="pr_auto">Auto-promozione @Hot()</label>
+            </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="pr_dem" @bind="_promotion.AutoDemoteToPaper" />
+                <label class="form-check-label" for="pr_dem">Auto-retrocessione @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Sharpe minimo @Hot()</label>
+                <input type="number" step="0.1" class="form-control" @bind="_promotion.MinSharpeRealized" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Trade minimi @Hot()</label>
+                <input type="number" class="form-control" @bind="_promotion.MinTradeCount" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Settimane min @Hot()</label>
+                <input type="number" class="form-control" @bind="_promotion.MinObservationWeeks" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Max drawdown % @Hot()</label>
+                <input type="number" step="0.5" class="form-control" @bind="_promotion.MaxDrawdownPercent" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">DD hard-block % @Hot()</label>
+                <input type="number" step="0.5" class="form-control" @bind="_promotion.HardMaxDrawdownPercent" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Win rate min (0-1) @Hot()</label>
+                <input type="number" step="0.05" class="form-control" @bind="_promotion.MinWinRate" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Sharpe retrocessione @Hot()</label>
+                <input type="number" step="0.1" class="form-control" @bind="_promotion.DemoteSharpeThreshold" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Intervallo (ore) @Restart()</label>
+                <input type="number" class="form-control" @bind="_promotion.EvaluationIntervalHours" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto align-self-end">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("PromotionEvaluator", _promotion, "Promozione corsie")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 4. Supervisione AI (LLM) ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-robot me-1"></i>Supervisione AI dei run (advisory)</span>
+        <span>
+            @if (LlmClient.IsConfigured)
+            { <span class="badge bg-success me-1">ANTHROPIC_API_KEY presente</span> }
+            else
+            { <span class="badge bg-danger me-1">ANTHROPIC_API_KEY assente</span> }
+            @StateBadge(_llm.Enabled)
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Dopo ogni run del pipeline, l'agente AI scrive un parere leggibile (mai comandi). La API
+            key si legge SOLO dalla variabile d'ambiente <code>ANTHROPIC_API_KEY</code>: se assente,
+            il ciclo automatico resta fermo fino al riavvio con la chiave impostata (l'“Esegui ora”
+            qui sotto invece prova comunque, utile per verificare la configurazione).
+            Esiti in <a href="admin/ai-supervisor">/admin/ai-supervisor</a>.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="llm_en" @bind="_llm.Enabled" />
+                <label class="form-check-label" for="llm_en">Abilitata @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Modello @Hot()</label>
+                <input class="form-control" @bind="_llm.Model" style="width: 14rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Max token @Hot()</label>
+                <input type="number" class="form-control" @bind="_llm.MaxTokens" min="256" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Poll (min) @Restart()</label>
+                <input type="number" class="form-control" @bind="_llm.PollIntervalMinutes" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Llm", _llm, "Supervisione AI")' disabled="@_busy">Salva</button>
+                <button class="btn btn-outline-secondary" @onclick="RunLlmNowAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Esegui supervisione ora
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 5. Drift feature ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-graph-down-arrow me-1"></i>Drift monitor delle feature ML</span>
+        <span>@StateBadge(_drift.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Confronta periodicamente la distribuzione recente delle feature di ogni modello salvato
+            con quella di training (PSI, KS, Page-Hinkley). Un Champion in alert può essere ritirato
+            automaticamente dal registry (solo governance dei record: nessun retrain automatico,
+            nessun impatto sul trading). Ogni check viene registrato nella tabella qui sotto.
+        </p>
+        <div class="row g-3 align-items-end mb-3">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="dr_en" @bind="_drift.Enabled" />
+                <label class="form-check-label" for="dr_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Intervallo (ore) @Restart()</label>
+                <input type="number" class="form-control" @bind="_drift.IntervalHours" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Candele recenti @Hot()</label>
+                <input type="number" class="form-control" @bind="_drift.RecentCandles" min="20" style="width: 8rem;" />
+            </div>
+            <div class="col-auto form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="dr_ret" @bind="_drift.RetireChampionOnAlert" />
+                <label class="form-check-label" for="dr_ret">Ritira Champion in alert @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Alert min per ritiro @Hot()</label>
+                <input type="number" class="form-control" @bind="_drift.MinAlertsToRetire" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Drift", _drift, "Drift monitor")' disabled="@_busy">Salva</button>
+                <button class="btn btn-outline-secondary" @onclick="RunDriftNowAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Esegui check ora
+                </button>
+            </div>
+        </div>
+
+        <h6>Ultimi esiti (@_driftResults.Count)</h6>
+        @if (_driftResults.Count == 0)
+        {
+            <p class="text-muted small mb-0"><em>Nessun check registrato: abilita il worker o usa "Esegui check ora" (serve almeno un modello ML salvato).</em></p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th>Quando (UTC)</th><th>Modello</th><th>Serie</th>
+                            <th class="text-end">Feature drift/tot</th><th class="text-end">Alert</th>
+                            <th>Esito</th><th>Top feature</th><th>Champion ritirato</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in _driftResults)
+                        {
+                            <tr>
+                                <td>@r.CheckedAtUtc.ToString("MM-dd HH:mm")</td>
+                                <td>@r.ModelName</td>
+                                <td>@r.Symbol @r.Timeframe</td>
+                                <td class="text-end">@r.DriftingFeatures/@r.TotalFeatures</td>
+                                <td class="text-end">@r.AlertFeatures</td>
+                                <td>@SeverityBadge(r.Overall)</td>
+                                <td class="small">@TopFeatures(r.TopFeaturesJson)</td>
+                                <td>@(r.ChampionRetired ? "⚠️ sì" : "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@* ============================ 6. Sync dati & retraining regime ============================ *@
+<div class="card mb-4">
+    <div class="card-header"><i class="bi bi-cloud-arrow-down me-1"></i>Sync dati di mercato &amp; retraining regime</div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Il sync scarica le candele nuove per le serie abilitate della watchlist; il retraining
+            riallena periodicamente il modello di regime (attivandolo solo se il Silhouette migliora).
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="md_en" @bind="_marketData.Enabled" />
+                <label class="form-check-label" for="md_en">Sync abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Intervallo sync (min) @Restart()</label>
+                <input type="number" class="form-control" @bind="_marketData.SyncIntervalMinutes" min="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Backfill default (giorni) @Hot()</label>
+                <input type="number" class="form-control" @bind="_marketData.DefaultBackfillDays" min="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("MarketData", _marketData, "Sync dati")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        <hr />
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="mr_en" @bind="_marketRegime.Enabled" />
+                <label class="form-check-label" for="mr_en">Retraining abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Intervallo (giorni) @Restart()</label>
+                <input type="number" class="form-control" @bind="_marketRegime.RetrainingIntervalDays" min="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("MarketRegime", _marketRegime, "Retraining regime")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    // Copie LOCALI modificabili: si parte da CurrentValue e si scrive solo al Salva — così i campi
+    // non "saltano" sotto le dita dell'utente quando il monitor ricarica il file appena scritto.
+    private LiveExecutionOptions _liveExec = new();
+    private AutoReapplyOptions _autoReapply = new();
+    private PromotionEvaluatorOptions _promotion = new();
+    private LlmOptions _llm = new();
+    private DriftMonitorOptions _drift = new();
+    private MarketDataConfig _marketData = new();
+    private MarketRegimeConfig _marketRegime = new();
+
+    private List<DriftCheckResult> _driftResults = new();
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    /// <summary>Sezione MarketData di appsettings (nessun POCO esistente: il worker legge IConfiguration).</summary>
+    private sealed class MarketDataConfig
+    {
+        public bool Enabled { get; set; } = true;
+        public int SyncIntervalMinutes { get; set; } = 5;
+        public int DefaultBackfillDays { get; set; } = 7;
+    }
+
+    /// <summary>Sezione MarketRegime di appsettings (come sopra).</summary>
+    private sealed class MarketRegimeConfig
+    {
+        public bool Enabled { get; set; } = true;
+        public int RetrainingIntervalDays { get; set; } = 7;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _liveExec = Clone(LiveExecMonitor.CurrentValue);
+        _autoReapply = Clone(AutoReapplyMonitor.CurrentValue);
+        _promotion = Clone(PromotionMonitor.CurrentValue);
+        _llm = Clone(LlmMonitor.CurrentValue);
+        _drift = Clone(DriftMonitor.CurrentValue);
+        _marketData = new MarketDataConfig
+        {
+            Enabled = Config.GetValue("MarketData:Enabled", true),
+            SyncIntervalMinutes = Config.GetValue("MarketData:SyncIntervalMinutes", 5),
+            DefaultBackfillDays = Config.GetValue("MarketData:DefaultBackfillDays", 7),
+        };
+        _marketRegime = new MarketRegimeConfig
+        {
+            Enabled = Config.GetValue("MarketRegime:Enabled", true),
+            RetrainingIntervalDays = Config.GetValue("MarketRegime:RetrainingIntervalDays", 7),
+        };
+        await LoadDriftResultsAsync();
+    }
+
+    /// <summary>Copia per-serializzazione: stacca l'istanza della UI da quella viva del monitor.</summary>
+    private static T Clone<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
+
+    private async Task LoadDriftResultsAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _driftResults = await db.DriftCheckResults.AsNoTracking()
+            .OrderByDescending(r => r.CheckedAtUtc)
+            .Take(20)
+            .ToListAsync();
+    }
+
+    private async Task SaveAsync<T>(string section, T model, string label)
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            await ConfigWriter.SaveSectionAsync(section, model);
+            SetStatus($"{label}: salvato in appsettings.json — i campi ✅ valgono entro ~1s, quelli ⟳ dal prossimo riavvio.", false);
+        }
+        catch (Exception ex) { SetStatus($"{label}: salvataggio fallito — {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private async Task RunLlmNowAsync()
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            await LlmWorker.TickAsync(CancellationToken.None);
+            SetStatus(LlmClient.IsConfigured
+                ? "Supervisione eseguita: eventuali advisory nuovi sono in /admin/ai-supervisor."
+                : "Tick eseguito SENZA API key: i run pendenti producono un advisory di errore (visibile in /admin/ai-supervisor) — imposta ANTHROPIC_API_KEY e riavvia per il ciclo automatico.", false);
+        }
+        catch (Exception ex) { SetStatus($"Supervisione fallita: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private async Task RunDriftNowAsync()
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            await DriftWorker.TickAsync(CancellationToken.None);
+            await LoadDriftResultsAsync();
+            SetStatus("Check drift eseguito su tutti i modelli salvati: esiti nella tabella.", false);
+        }
+        catch (Exception ex) { SetStatus($"Check drift fallito: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private void SetStatus(string text, bool error) { _status = text; _isError = error; }
+
+    // --- Frammenti di markup riusati -----------------------------------------------------------
+
+    private static RenderFragment Hot() => b => b.AddMarkupContent(0,
+        "<span class='badge bg-success' title='Effetto entro ~1 secondo, senza riavvio'>✅</span>");
+
+    private static RenderFragment Restart() => b => b.AddMarkupContent(0,
+        "<span class='badge bg-warning text-dark' title='Salvato subito, ma il timer legge il valore solo al riavvio'>⟳</span>");
+
+    private static RenderFragment StateBadge(bool enabled) => b => b.AddMarkupContent(0, enabled
+        ? "<span class='badge bg-success'>ATTIVO</span>"
+        : "<span class='badge bg-secondary'>SPENTO</span>");
+
+    private static RenderFragment SeverityBadge(DriftSeverity s) => b => b.AddMarkupContent(0, s switch
+    {
+        DriftSeverity.Alert => "<span class='badge bg-danger'>Alert</span>",
+        DriftSeverity.Warning => "<span class='badge bg-warning text-dark'>Warning</span>",
+        _ => "<span class='badge bg-success'>Pulito</span>",
+    });
+
+    /// <summary>Rende leggibile il JSON top-feature ("nome[Severity]"); tollerante ai payload vecchi/corrotti.</summary>
+    private static string TopFeatures(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return "—";
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return string.Join(", ", doc.RootElement.EnumerateArray()
+                .Select(e => $"{e.GetProperty("name").GetString()}[{e.GetProperty("severity").GetString()}]"));
+        }
+        catch { return "—"; }
+    }
+}

@@ -150,7 +150,7 @@ public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
             applier ?? new FakeApplier(),
             new EnsembleComparator(new EnsembleComparatorOptions()),
             supervisor ?? new LoggingSupervisorAgent(NullLogger<LoggingSupervisorAgent>.Instance),
-            autoReapply ?? new AutoReapplyOptions(), // Enabled=false di default: comportamento invariato
+            (autoReapply ?? new AutoReapplyOptions()).AsMonitor(), // Enabled=false di default: comportamento invariato
             NullLogger<PipelineSchedulerWorker>.Instance);
         return (worker, engine, dbFactory);
     }

@@ -13,15 +13,17 @@ namespace ProcioneMGR.Services.Trading;
 public sealed class PromotionWorker(
     IPromotionEvaluator evaluator,
     ILanePromoter promoter,
-    PromotionEvaluatorOptions options,
+    Microsoft.Extensions.Options.IOptionsMonitor<PromotionEvaluatorOptions> options,
     ILogger<PromotionWorker> logger,
     ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var interval = TimeSpan.FromHours(Math.Max(1, options.EvaluationIntervalHours));
+        // Intervallo fisso all'avvio (PeriodicTimer): cambiarlo richiede riavvio. Le soglie e i
+        // flag di auto-promozione/retrocessione sono invece letti a ogni valutazione (hot).
+        var interval = TimeSpan.FromHours(Math.Max(1, options.CurrentValue.EvaluationIntervalHours));
         logger.LogInformation("PromotionWorker avviato (check ogni {Interval}, auto-promozione={Auto}).",
-            interval, options.AutoPromoteToTestnet);
+            interval, options.CurrentValue.AutoPromoteToTestnet);
 
         try { await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken); }
         catch (OperationCanceledException) { return; }

@@ -135,16 +135,17 @@ public sealed class IcebergExecutionAlgorithm : IExecutionAlgorithm
 
 /// <summary>
 /// ADATTIVO (Almgren-Chriss semplificato, NON appreso — deliberatamente scartato un agente RL: si
-/// sarebbe allenato contro il nostro stesso simulatore d'impatto lineare/illustrativo, imparando i
-/// suoi artefatti invece della dinamica reale del mercato — rischio di "sim-to-real gap" e overfitting
+/// sarebbe allenato contro il nostro stesso simulatore d'impatto illustrativo (√-partecipazione,
+/// legge di Almgren, vedi ExecutionSimulator — era lineare prima di E1), imparando i suoi
+/// artefatti invece della dinamica reale del mercato — rischio di "sim-to-real gap" e overfitting
 /// documentato in letteratura per questo esatto ambito). Come VWAP ma pesa MOLTIPLICATIVAMENTE il
 /// profilo di volume con un decadimento esponenziale nel tempo la cui intensità dipende dalla
 /// volatilità realizzata del profilo: più alta la volatilità, più front-loaded l'esecuzione — si
 /// riduce l'esposizione al RISCHIO di prezzo nel tempo (non il costo di impatto simulato, che nel
-/// modello di fill dipende solo da partecipazione al volume, mai da volatilità). Degrada a VWAP
-/// quando la volatilità è nulla (mercato piatto: decayWeight uniforme) e a TWAP quando il volume è
-/// nullo (stesso fallback esplicito di VWAP). Formula chiusa, deterministica, verificabile per
-/// lettura — nessun training, nessun rischio di convergenza.
+/// modello di fill dipende solo dalla √ della partecipazione al volume, mai da volatilità).
+/// Degrada a VWAP quando la volatilità è nulla (mercato piatto: decayWeight uniforme) e a TWAP
+/// quando il volume è nullo (stesso fallback esplicito di VWAP). Formula chiusa, deterministica,
+/// verificabile per lettura — nessun training, nessun rischio di convergenza.
 /// </summary>
 public sealed class AdaptiveExecutionAlgorithm : IExecutionAlgorithm
 {

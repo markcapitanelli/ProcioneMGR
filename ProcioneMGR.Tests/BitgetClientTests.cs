@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcioneMGR.Services.Exchanges;
 
@@ -73,5 +74,286 @@ public class BitgetClientTests
         var balance = await client.GetFuturesBalanceAsync(Creds);
 
         Assert.Equal(0m, balance.AvailableMargin);
+    }
+
+    // --- Lookup stato ordine per clientOid (fix C2) ---------------------------------------------
+
+    [Fact]
+    public async Task GetOrderStatusAsync_SpotFilled_ParsesPriceAvgBaseVolumeAndOrderId()
+    {
+        var handler = new FakeHandler(HttpStatusCode.OK, """
+            {"code":"00000","msg":"success","requestTime":1,"data":[
+                {"orderId":"btg-1","clientOid":"cid-1","status":"filled","priceAvg":"101.5","baseVolume":"80","symbol":"BTCUSDT"}
+            ]}
+            """);
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-1", Creds);
+
+        Assert.True(result.Found);
+        Assert.Equal("Filled", result.Status);
+        Assert.Equal(101.5m, result.FilledPrice);
+        Assert.Equal(80m, result.FilledQuantity);
+        Assert.Equal("btg-1", result.ExchangeOrderId);
+
+        var url = handler.LastRequest!.RequestUri!.ToString();
+        Assert.Contains("/api/v2/spot/trade/orderInfo", url);
+        Assert.Contains("clientOid=cid-1", url);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_SpotLiveUnfilled_EmptyDecimalFieldsTolerated()
+    {
+        // Bitget usa stringhe vuote per i campi non ancora valorizzati: niente FormatException.
+        var handler = new FakeHandler(HttpStatusCode.OK, """
+            {"code":"00000","msg":"success","requestTime":1,"data":[
+                {"orderId":"btg-2","clientOid":"cid-2","status":"live","priceAvg":"","baseVolume":""}
+            ]}
+            """);
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-2", Creds);
+
+        Assert.True(result.Found);
+        Assert.Equal("Open", result.Status);
+        Assert.Null(result.FilledPrice);
+        Assert.Null(result.FilledQuantity);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_EmptyDataArray_IsCertainNotFound()
+    {
+        var handler = new FakeHandler(HttpStatusCode.OK, """{"code":"00000","msg":"success","requestTime":1,"data":[]}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-x", Creds);
+
+        Assert.False(result.Found);
+        Assert.False(result.NetworkUncertain);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_Error43001_IsCertainNotFound_NotUncertain()
+    {
+        var handler = new FakeHandler(HttpStatusCode.OK, """{"code":"43001","msg":"The order does not exist","requestTime":1,"data":null}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-x", Creds);
+
+        Assert.False(result.Found);
+        Assert.False(result.NetworkUncertain);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_OtherApplicationError_IsUncertain_NeverNotFound()
+    {
+        // Dichiarare "non trovato" un errore generico riaprirebbe la finestra dell'ordine
+        // duplicato che il fix C2 chiude: deve restare IGNOTO (il riconciliatore ritenta).
+        var handler = new FakeHandler(HttpStatusCode.OK, """{"code":"40009","msg":"sign signature error","requestTime":1,"data":null}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-x", Creds);
+
+        Assert.False(result.Found);
+        Assert.True(result.NetworkUncertain);
+    }
+
+    [Fact]
+    public async Task GetOrderStatusAsync_Http500_IsUncertain()
+    {
+        var handler = new FakeHandler(HttpStatusCode.InternalServerError, "Bad Gateway");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetOrderStatusAsync("BTC/USDT", "cid-x", Creds);
+
+        Assert.False(result.Found);
+        Assert.True(result.NetworkUncertain);
+    }
+
+    [Fact]
+    public async Task GetFuturesOrderStatusAsync_MixDetail_ParsesStateFieldAndDemoProductType()
+    {
+        // L'endpoint mix restituisce un OGGETTO (non array) e chiama lo stato "state" (non "status").
+        var handler = new FakeHandler(HttpStatusCode.OK, """
+            {"code":"00000","msg":"success","requestTime":1,"data":
+                {"orderId":"btg-f1","clientOid":"cid-f","state":"filled","priceAvg":"27100.5","baseVolume":"0.04"}
+            }
+            """);
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var result = await client.GetFuturesOrderStatusAsync("BTC/USDT", "cid-f", Creds);
+
+        Assert.True(result.Found);
+        Assert.Equal("Filled", result.Status);
+        Assert.Equal(27_100.5m, result.FilledPrice);
+        Assert.Equal(0.04m, result.FilledQuantity);
+        Assert.Equal("btg-f1", result.ExchangeOrderId);
+
+        var url = handler.LastRequest!.RequestUri!.ToString();
+        Assert.Contains("/api/v2/mix/order/detail", url);
+        Assert.Contains("productType=SUSDT-FUTURES", url);   // credenziali demo → productType demo
+        Assert.Contains("clientOid=cid-f", url);
+        Assert.Contains("symbol=BTCUSDT", url);
+    }
+
+    [Theory]
+    [InlineData("live", "Open")]
+    [InlineData("new", "Open")]
+    [InlineData("init", "Open")]
+    [InlineData("not_trigger", "Open")]
+    [InlineData("partially_filled", "PartiallyFilled")]
+    [InlineData("partial-fill", "PartiallyFilled")]
+    [InlineData("filled", "Filled")]
+    [InlineData("full-fill", "Filled")]
+    [InlineData("cancelled", "Cancelled")]
+    [InlineData("canceled", "Cancelled")]
+    [InlineData("rejected", "Rejected")]
+    [InlineData("stato_nuovo_ignoto", "Open")]   // ignoto → vivo: il riconciliatore cancella e ricontrolla
+    public void NormalizeBitgetOrderStatus_MapsToCommonSchema(string exchange, string expected)
+        => Assert.Equal(expected, BitgetClient.NormalizeBitgetOrderStatus(exchange));
+
+    // --- [M4] Recupero dei fill reali dopo il place --------------------------------------------
+
+    /// <summary>Handler a CODA di risposte: ogni richiesta consuma la successiva (place → lookup → …).</summary>
+    private sealed class SequenceHandler(params (HttpStatusCode Status, string Body)[] responses) : HttpMessageHandler
+    {
+        private readonly Queue<(HttpStatusCode Status, string Body)> _queue = new(responses);
+        public List<string> RequestedUrls { get; } = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            RequestedUrls.Add(request.RequestUri!.ToString());
+            var (status, body) = _queue.Count > 0 ? _queue.Dequeue()
+                : throw new InvalidOperationException("Richiesta HTTP oltre lo script del test.");
+            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+        }
+    }
+
+    [Fact]
+    public async Task PlaceOrderAsync_LookupFilled_PopulatesRealFill()
+    {
+        // Bitget NON restituisce i fill nel POST di place: senza il lookup M4 l'engine ripiegava
+        // sempre su currentPrice e lo slippage reale restava invisibile.
+        var handler = new SequenceHandler(
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","data":{"orderId":"btg-9","clientOid":"cid-9"}}"""),
+            (HttpStatusCode.OK, """
+                {"code":"00000","msg":"success","requestTime":1,"data":[
+                    {"orderId":"btg-9","clientOid":"cid-9","status":"filled","priceAvg":"100.35","baseVolume":"2"}
+                ]}
+                """));
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        // SELL: la semantica base-qty è quella giusta per i market-sell (il BUY è dietro guard).
+        var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "BTC/USDT", Side = "SELL", Type = "MARKET", Quantity = 2m,
+            ClientOrderId = "cid-9", Credentials = Creds,
+        });
+
+        Assert.True(res.Success);
+        Assert.Equal(100.35m, res.FilledPrice);
+        Assert.Equal(2m, res.FilledQuantity);
+        Assert.Contains(handler.RequestedUrls, u => u.Contains("/api/v2/spot/trade/orderInfo") && u.Contains("clientOid=cid-9"));
+    }
+
+    [Fact]
+    public async Task PlaceOrderAsync_LookupFails_PlaceStillSucceeds_FillNull()
+    {
+        var handler = new SequenceHandler(
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","data":{"orderId":"btg-9"}}"""),
+            (HttpStatusCode.InternalServerError, "Bad Gateway"));
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "BTC/USDT", Side = "SELL", Type = "MARKET", Quantity = 2m,
+            ClientOrderId = "cid-9", Credentials = Creds,
+        });
+
+        // Il place È riuscito: l'arricchimento best-effort non deve mai trasformarlo in errore.
+        Assert.True(res.Success);
+        Assert.Null(res.FilledPrice);
+        Assert.Null(res.FilledQuantity);
+    }
+
+    // --- Guard MARKET-BUY spot (semantica size quote-vs-base non ancora verificata) --------------
+
+    [Fact]
+    public async Task PlaceOrderAsync_SpotMarketBuy_NotVerified_RejectedWithoutNetworkCall()
+    {
+        var handler = new SequenceHandler();   // nessuna risposta prevista: la rete non va toccata
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "BTC/USDT", Side = "BUY", Type = "MARKET", Quantity = 0.05m,
+            ClientOrderId = "cid-buy", Credentials = Creds,
+        });
+
+        Assert.False(res.Success);
+        Assert.False(res.NetworkUncertain);   // rifiuto CERTO: nessuna riconciliazione da fare
+        Assert.Contains("SpotMarketBuyVerified", res.Error);
+        Assert.Empty(handler.RequestedUrls);
+    }
+
+    [Fact]
+    public async Task PlaceOrderAsync_SpotMarketBuy_VerifiedByConfig_GoesThrough()
+    {
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Trading:Bitget:SpotMarketBuyVerified"] = "true" })
+            .Build();
+        var handler = new SequenceHandler(
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","data":{"orderId":"btg-buy"}}"""),
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","requestTime":1,"data":[]}"""));   // lookup: not found → fill null
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance, config);
+
+        var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "BTC/USDT", Side = "BUY", Type = "MARKET", Quantity = 0.05m,
+            ClientOrderId = "cid-buy", Credentials = Creds,
+        });
+
+        Assert.True(res.Success);
+        Assert.Contains(handler.RequestedUrls, u => u.Contains("/api/v2/spot/trade/place-order"));
+    }
+
+    [Fact]
+    public async Task PlaceOrderAsync_SpotLimitBuy_NotAffectedByGuard()
+    {
+        // Il guard riguarda SOLO i MARKET-BUY (unico caso con size quote-vs-base ambigua):
+        // i LIMIT esprimono size in base qty senza ambiguità.
+        var handler = new SequenceHandler(
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","data":{"orderId":"btg-lim"}}"""),
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","requestTime":1,"data":[]}"""));
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "BTC/USDT", Side = "BUY", Type = "LIMIT", Quantity = 0.05m, Price = 90m,
+            ClientOrderId = "cid-lim", Credentials = Creds,
+        });
+
+        Assert.True(res.Success);
+    }
+
+    [Fact]
+    public async Task PlaceFuturesOrderAsync_StillOpenThenFilled_OneRetryRecoversFill()
+    {
+        var handler = new SequenceHandler(
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","data":{"orderId":"btg-f9"}}"""),
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","requestTime":1,"data":{"orderId":"btg-f9","state":"live","priceAvg":"","baseVolume":""}}"""),
+            (HttpStatusCode.OK, """{"code":"00000","msg":"success","requestTime":1,"data":{"orderId":"btg-f9","state":"filled","priceAvg":"27100.5","baseVolume":"0.04"}}"""));
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var res = await client.PlaceFuturesOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "BTC/USDT", Side = "BUY", Type = "MARKET", Quantity = 0.04m,
+            ClientOrderId = "cid-f9", Credentials = Creds,
+        }, reduceOnly: false);
+
+        Assert.True(res.Success);
+        Assert.Equal(27_100.5m, res.FilledPrice);     // recuperato al 2° lookup (dopo 500ms)
+        Assert.Equal(0.04m, res.FilledQuantity);
+        Assert.Equal(3, handler.RequestedUrls.Count); // place + 2 lookup, non di più
     }
 }

@@ -18,15 +18,13 @@ public sealed class RegimeRetrainingWorker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!configuration.GetValue("MarketRegime:Enabled", true))
-        {
-            logger.LogInformation("RegimeRetrainingWorker disabilitato da configurazione.");
-            return;
-        }
-
+        // Enabled è riletto a OGNI tick da IConfiguration (reloadOnChange): il toggle da
+        // /admin/autonomy prende effetto a caldo. L'intervallo è fisso al primo avvio
+        // (PeriodicTimer): cambiarlo richiede riavvio.
         var days = Math.Max(1, configuration.GetValue("MarketRegime:RetrainingIntervalDays", 7));
         var interval = TimeSpan.FromDays(days);
-        logger.LogInformation("RegimeRetrainingWorker avviato (ogni {Days} giorni).", days);
+        logger.LogInformation("RegimeRetrainingWorker avviato (ogni {Days} giorni, Enabled={Enabled}).",
+            days, configuration.GetValue("MarketRegime:Enabled", true));
 
         try { await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); }
         catch (OperationCanceledException) { return; }
@@ -36,7 +34,10 @@ public sealed class RegimeRetrainingWorker(
         {
             try
             {
-                await RetrainAsync(stoppingToken);
+                if (configuration.GetValue("MarketRegime:Enabled", true))
+                {
+                    await RetrainAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)

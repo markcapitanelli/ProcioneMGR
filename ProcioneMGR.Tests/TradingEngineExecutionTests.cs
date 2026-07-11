@@ -85,6 +85,7 @@ public sealed class TradingEngineExecutionTests : IAsyncDisposable
         }
         public Task<CancelOrderResult> CancelOrderAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<OpenOrder>> GetOpenOrdersAsync(string symbol, TradingCredentials creds, CancellationToken ct = default) => Task.FromResult(new List<OpenOrder>());
+        public Task<OrderStatusResult> GetOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<AccountBalance> GetBalanceAsync(TradingCredentials creds, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<SymbolFilters> GetSymbolFiltersAsync(string symbol, bool testnet, CancellationToken ct = default)
             => Task.FromResult(new SymbolFilters { StepSize = 0.00001m, MinQty = 0.00001m, TickSize = 0.01m, MinNotional = 0.0001m });
@@ -250,11 +251,16 @@ public sealed class TradingEngineExecutionTests : IAsyncDisposable
     [Fact]
     public async Task ExecutionPlan_TotalExceedsMaxPositionSize_RejectedUpfront_NoJobCreated()
     {
-        // MaxPositionSizePercent basso: il piano (8% del capitale) supera il limite → rifiutato in blocco.
-        var safety = new SafetyConfiguration { MinOrderIntervalSeconds = 0, MaxPositionSizePercent = 5m };
+        // Il caso "config incoerente fin dall'avvio" ora è bloccato da StartAsync (fail-fast H1),
+        // ma la safety è hot-reloadable (IOptionsMonitor): se MaxPositionSizePercent viene
+        // ABBASSATO a motore avviato, il pre-check AGGREGATO resta l'unica difesa contro il
+        // bypass per fette (ogni fetta da sola starebbe sotto il limite). SafetyConfiguration è
+        // mutabile e StaticOptionsMonitor restituisce la stessa istanza: mutarla simula il reload.
+        var safety = new SafetyConfiguration { MinOrderIntervalSeconds = 0 };
         var prices = new Queue<decimal>([100m, 100m, 100m, 100m]);
         var (engine, dbFactory) = await BuildAsync(TwapStrategy(), i => i == 4 ? Signal.Long : Signal.Hold, prices, safety);
         await engine.StartAsync(TradingMode.Testnet);
+        safety.MaxPositionSizePercent = 5m;   // hot-reload: il piano (8%) ora supera il limite
         await WarmUpAndSignalAsync(engine);
 
         Assert.Empty(await engine.GetOpenPositionsAsync());   // nessuna posizione: nemmeno la prima fetta parte
