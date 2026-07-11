@@ -1,10 +1,12 @@
 @page "/alpha-mining"
 @rendermode InteractiveServer
 @using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.AlphaMining
+@using ProcioneMGR.Services.Exchanges
 @using ProcioneMGR.Services.Experiments
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 
@@ -33,6 +35,8 @@
 
 <div class="card mb-3">
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="alpha-mining" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-2 align-items-end">
             <div class="col-auto">
                 <label class="form-label mb-0">Symbol</label>
@@ -228,6 +232,37 @@
     private bool Survived(MinedFactor m)
         => m.HoldoutIc is double h && Math.Abs(h) > HoldoutSurvivalIc && Math.Sign(h) == Math.Sign(m.SelectionIc);
 
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        string Symbol, string Timeframe, DateTime SelFrom, DateTime SelTo, DateTime HoldFrom, DateTime HoldTo,
+        int Horizon, int Population, int Generations, int MaxDepth, int Seed);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _symbol.Trim(), _timeframe, _selFrom, _selTo, _holdFrom, _holdTo,
+        _horizon, _population, _generations, _maxDepth, _seed));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _selFrom = cfg.SelFrom.Date;
+        _selTo = cfg.SelTo.Date;
+        _holdFrom = cfg.HoldFrom.Date;
+        _holdTo = cfg.HoldTo.Date;
+        _horizon = cfg.Horizon;
+        _population = cfg.Population;
+        _generations = cfg.Generations;
+        _maxDepth = cfg.MaxDepth;
+        _seed = cfg.Seed;
+    }
+
     private async Task<List<OhlcvData>> LoadCandlesAsync(DateTime from, DateTime to)
     {
         var fromUtc = DateTime.SpecifyKind(from, DateTimeKind.Utc);
@@ -243,6 +278,10 @@
     private async Task RunAsync()
     {
         if (_busy) return;
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
+
         _busy = true; _msg = null; _isError = false; _mined = new(); _pbo = null;
         try
         {

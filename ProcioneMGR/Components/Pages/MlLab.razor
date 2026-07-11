@@ -69,6 +69,8 @@
 <div class="card mb-3">
     <div class="card-header">1. Dati e fattori</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="ml" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -263,6 +265,8 @@
                             <td class="text-end">@m.TrainRowCount</td>
                             <td class="text-end">@m.TrainCorrelation.ToString("F3")</td>
                             <td class="text-end">
+                                <a class="btn btn-sm btn-outline-success @(_busy ? "disabled" : "")" href="@OptimizationHandoffUrl(m)"
+                                   title="Ottimizza le soglie Long/Short di questo modello in walk-forward, sui dati successivi al training">Ottimizza →</a>
                                 <button class="btn btn-sm btn-outline-primary" @onclick="() => LoadSavedModelAsync(m.Id)" disabled="@_busy">Carica</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteSavedModelAsync(m.Id)" disabled="@_busy">Elimina</button>
                             </td>
@@ -509,6 +513,73 @@
             .ToListAsync();
     }
 
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
+        int TrainSplitPercent, int ForwardHorizon, List<string> Factors, List<int> SavedFactorIds,
+        string ModelType, List<string> StackBaseModels, string StackMode, int AttnWindow, int AttnEmbed,
+        decimal LongThreshold, decimal ShortThreshold, decimal InitialCapital,
+        decimal PositionSizePercent, decimal FeePercent);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to,
+        _trainSplitPercent, _forwardHorizon, _selectedFactors.ToList(), _selectedSavedFactorIds.ToList(),
+        _modelType, _stackBaseModels.ToList(), _stackMode.ToString(), _attnWindow, _attnEmbed,
+        _longThreshold, _shortThreshold, _initialCapital, _positionSizePercent, _feePercent));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _trainSplitPercent = cfg.TrainSplitPercent;
+        _forwardHorizon = cfg.ForwardHorizon;
+
+        // Solo nomi/ID che esistono ancora: cataloghi e fattori minati possono cambiare nel tempo.
+        _selectedFactors.Clear();
+        foreach (var f in cfg.Factors.Where(f => FactorFactory.Prototypes.Any(p => p.Name == f)))
+            _selectedFactors.Add(f);
+        _selectedSavedFactorIds.Clear();
+        foreach (var id in cfg.SavedFactorIds.Where(id => _savedFactors.Any(s => s.Id == id)))
+            _selectedSavedFactorIds.Add(id);
+
+        if (ReturnPredictorCatalog.BaseTypes.Contains(cfg.ModelType) || cfg.ModelType is "Stacked" or "Attention")
+            _modelType = cfg.ModelType;
+        _stackBaseModels.Clear();
+        foreach (var m in cfg.StackBaseModels.Where(m => ReturnPredictorCatalog.BaseTypes.Contains(m)))
+            _stackBaseModels.Add(m);
+        if (Enum.TryParse<StackingMode>(cfg.StackMode, out var sm)) _stackMode = sm;
+        _attnWindow = cfg.AttnWindow;
+        _attnEmbed = cfg.AttnEmbed;
+
+        _longThreshold = cfg.LongThreshold;
+        _shortThreshold = cfg.ShortThreshold;
+        _initialCapital = cfg.InitialCapital;
+        _positionSizePercent = cfg.PositionSizePercent;
+        _feePercent = cfg.FeePercent;
+    }
+
+    /// <summary>
+    /// Link a Optimization precompilata: strategia ML + questo modello, con periodo che parte
+    /// dalla fine del training (le soglie Long/Short si scelgono su dati che il modello non ha visto).
+    /// </summary>
+    private static string OptimizationHandoffUrl(SavedMlModel m) =>
+        "optimization?strategy=Ml"
+        + $"&model={m.Id}"
+        + $"&symbol={Uri.EscapeDataString(m.Symbol)}"
+        + $"&timeframe={Uri.EscapeDataString(m.Timeframe)}"
+        + $"&from={m.TrainingDataTo:yyyy-MM-dd}"
+        + $"&to={DateTime.UtcNow:yyyy-MM-dd}";
+
     private void ToggleFactor(string name, bool selected)
     {
         if (selected) _selectedFactors.Add(name);
@@ -534,6 +605,9 @@
             SetStatus("Controlla symbol e intervallo date.", error: true);
             return;
         }
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
 
         _busy = true;
         _stage = Stage.Training;

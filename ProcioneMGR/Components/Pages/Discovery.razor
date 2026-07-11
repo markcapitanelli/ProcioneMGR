@@ -61,6 +61,8 @@
 <div class="card mb-3">
     <div class="card-header">Universo di ricerca</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="discovery" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row">
             <div class="col-md-4 mb-2">
                 <label class="form-label fw-semibold">Coppie</label>
@@ -256,6 +258,42 @@
         if (on) set.Add(val); else set.Remove(val);
     }
 
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        List<string> Symbols, List<string> Timeframes, List<string> Strategies,
+        DateTime From, DateTime To, int InSample, int Oos, int Step, bool Creative, int CreativeMax);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _selSymbols.ToList(), _selTfs.ToList(), _selStrats.ToList(),
+        _from, _to, _inSample, _oos, _step, _creative, _creativeMax));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        // Solo voci ancora esistenti nell'universo corrente (dati e strategie cambiano nel tempo);
+        // una selezione salvata che si svuoterebbe del tutto lascia i default (meglio di zero scelte).
+        var symbols = cfg.Symbols.Where(_symbols.Contains).ToList();
+        if (symbols.Count > 0) { _selSymbols.Clear(); foreach (var s in symbols) _selSymbols.Add(s); }
+        var tfs = cfg.Timeframes.Where(_timeframes.Contains).ToList();
+        if (tfs.Count > 0) { _selTfs.Clear(); foreach (var t in tfs) _selTfs.Add(t); }
+        var strats = cfg.Strategies.Where(s => StrategyFactory.Prototypes.Any(p => p.Name == s)).ToList();
+        if (strats.Count > 0) { _selStrats.Clear(); foreach (var s in strats) _selStrats.Add(s); }
+
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _inSample = cfg.InSample;
+        _oos = cfg.Oos;
+        _step = cfg.Step;
+        _creative = cfg.Creative;
+        _creativeMax = cfg.CreativeMax;
+    }
+
     private async Task RunAsync()
     {
         if (_selSymbols.Count == 0 || _selTfs.Count == 0 || _selStrats.Count == 0)
@@ -263,6 +301,9 @@
             SetStatus("Seleziona almeno una coppia, un timeframe e una strategia.", true);
             return;
         }
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
         _busy = true; _isError = false; _status = null; _result = null; _progress = new();
         _cts = new CancellationTokenSource();
         try

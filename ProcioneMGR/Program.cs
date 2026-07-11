@@ -112,6 +112,9 @@ builder.Services.Configure<LiveExecutionOptions>(builder.Configuration.GetSectio
 builder.Services.AddSingleton<IStrategyFactory, StrategyFactory>();
 builder.Services.AddScoped<IBacktestEngine, BacktestEngine>();
 
+// Preset di configurazione pagina + memoria dell'ultima configurazione usata (per utente).
+builder.Services.AddScoped<ProcioneMGR.Services.Preferences.IPageConfigStore, ProcioneMGR.Services.Preferences.PageConfigStore>();
+
 // --- Parameter optimization (Grid Search + Walk-Forward) ---
 builder.Services.AddScoped<IOptimizationEngine, OptimizationEngine>();
 // Ottimizzazione bayesiana (Fase 6): surrogato GP + Expected Improvement, affiancabile al grid.

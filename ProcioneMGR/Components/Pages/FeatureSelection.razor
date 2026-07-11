@@ -1,6 +1,9 @@
 @page "/feature-selection"
 @rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @using Microsoft.JSInterop
 @using ProcioneMGR.Data
@@ -16,6 +19,7 @@
 @inject IAlphaFactorFactory Factory
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Selezione feature (IC)</PageTitle>
 
@@ -44,6 +48,8 @@
 <div class="card mb-3">
     <div class="card-header">Configurazione</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="feature-selection" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -200,9 +206,44 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         _alpha158Count = Factory.Prototypes.Count(IsAlpha158);
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    private string? _userId;
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
+        int ForwardHorizon, int TopN, double MinAbsIc, double MinIr,
+        bool RequireConsistentSign, bool IncludeAlpha158);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to,
+        _forwardHorizon, _topN, _minAbsIc, _minIr, _requireConsistentSign, _includeAlpha158));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _forwardHorizon = cfg.ForwardHorizon;
+        _topN = cfg.TopN;
+        _minAbsIc = cfg.MinAbsIc;
+        _minIr = cfg.MinIr;
+        _requireConsistentSign = cfg.RequireConsistentSign;
+        _includeAlpha158 = cfg.IncludeAlpha158;
     }
 
     private static bool IsAlpha158(IAlphaFactor f) => Alpha158Catalog.TryCreate(f.Name, out _);
@@ -216,6 +257,9 @@
 
     private async Task RunAsync()
     {
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
+
         _busy = true; _isError = false; _status = null; _ranked = null;
         try
         {

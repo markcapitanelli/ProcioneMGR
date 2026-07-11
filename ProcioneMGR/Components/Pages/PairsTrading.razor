@@ -1,6 +1,9 @@
 @page "/pairs-trading"
 @rendermode InteractiveServer
+@using System.Security.Claims
+@using System.Text.Json
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Backtesting
@@ -12,6 +15,7 @@
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IPairsBacktestEngine Engine
+@inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Pairs Trading</PageTitle>
 
@@ -55,6 +59,8 @@
 <div class="card mb-3">
     <div class="card-header">Configurazione</div>
     <div class="card-body">
+        <ConfigPresets @ref="_presets" PageKey="pairs-trading" UserId="@_userId" Disabled="_busy"
+                       Capture="CaptureConfigJson" Apply="ApplyConfigJson" />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
                 <label class="form-label">Exchange</label>
@@ -265,8 +271,48 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    private string? _userId;
+    private ConfigPresets? _presets;
+
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    private sealed record PageConfig(
+        string Exchange, string SymbolY, string SymbolX, string Timeframe, DateTime From, DateTime To,
+        int LookbackWindow, int RecalibrationInterval, int ZScoreLookback,
+        decimal EntryZScore, decimal ExitZScore,
+        decimal InitialCapital, decimal PositionSizePercent, decimal FeePercent);
+
+    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
+        _exchange.ToString(), _symbolY.Trim(), _symbolX.Trim(), _timeframe, _from, _to,
+        _lookbackWindow, _recalibrationInterval, _zScoreLookback,
+        _entryZScore, _exitZScore, _initialCapital, _positionSizePercent, _feePercent));
+
+    private void ApplyConfigJson(string json)
+    {
+        PageConfig? cfg;
+        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
+        catch (JsonException) { return; } // preset malformato: il form resta com'è
+        if (cfg is null) return;
+
+        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
+        if (!string.IsNullOrWhiteSpace(cfg.SymbolY)) _symbolY = cfg.SymbolY;
+        if (!string.IsNullOrWhiteSpace(cfg.SymbolX)) _symbolX = cfg.SymbolX;
+        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
+        _from = cfg.From.Date;
+        _to = cfg.To.Date;
+        _lookbackWindow = cfg.LookbackWindow;
+        _recalibrationInterval = cfg.RecalibrationInterval;
+        _zScoreLookback = cfg.ZScoreLookback;
+        _entryZScore = cfg.EntryZScore;
+        _exitZScore = cfg.ExitZScore;
+        _initialCapital = cfg.InitialCapital;
+        _positionSizePercent = cfg.PositionSizePercent;
+        _feePercent = cfg.FeePercent;
     }
 
     private async Task RunAsync()
@@ -276,6 +322,9 @@
             SetStatus("Controlla i due symbol (devono essere diversi) e l'intervallo date.", error: true);
             return;
         }
+
+        // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
+        if (_presets is not null) await _presets.SaveLastUsedAsync();
 
         _busy = true;
         _isError = false;
