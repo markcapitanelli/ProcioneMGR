@@ -575,3 +575,64 @@ h1:focus {
     border-color: #8b949e;
     color: #e6edf3;
 }
+
+/* ============================================================================
+   Leggibilità dei NUMERI (una web-app di trading è fatta di numeri).
+   ========================================================================== */
+
+/* Cifre a larghezza fissa: le colonne di numeri nelle tabelle si incolonnano
+   verticalmente (un "1" occupa quanto un "9"), rendendo scansionabili a colpo
+   d'occhio prezzi, PnL e percentuali. Applicato a tabelle e valori KPI. */
+.table,
+.stat-card-value {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Evidenziazione della riga sotto il puntatore: nelle tabelle lunghe (trade list,
+   leaderboard, watchlist) aiuta a seguire una riga da sinistra a destra senza
+   perderla. Sovrapposizione translucida che convive con .table-striped. */
+[data-bs-theme="dark"] .table tbody tr:hover > * {
+    background-color: rgba(88, 166, 255, 0.09);
+}
+
+/* ============================================================================
+   Tessera KPI (.stat-card) — la "metrica in evidenza" mostrata dopo un run
+   (Backtest, ML, Volatilità, Pairs, Sentiment). Prima era markup duplicato e
+   leggermente diverso in ogni pagina; ora è un unico stile condiviso, usato dal
+   componente <Stat>. Etichetta piccola in maiuscoletto + valore grande, con
+   colorazione semantica opzionale (verde = buono, rosso = negativo/attenzione).
+   ========================================================================== */
+.stat-card {
+    min-width: 9rem;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 0.55rem 0.95rem;
+    text-align: center;
+}
+
+.stat-card-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #8b949e;
+    margin-bottom: 0.15rem;
+    white-space: nowrap;
+}
+
+.stat-card-value {
+    font-size: 1.2rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: #e6edf3;
+}
+
+.stat-card-value.pos { color: #3fb950; }
+.stat-card-value.neg { color: #f85149; }
+
+.stat-card-hint {
+    font-size: 0.7rem;
+    color: #8b949e;
+    margin-top: 0.1rem;
+}

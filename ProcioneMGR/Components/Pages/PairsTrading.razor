@@ -439,15 +439,14 @@
         _isError = error;
     }
 
+    // Delega al componente condiviso <Stat> (stile unico in app.css). Le call-site
+    // (@MetricCard(...)) restano invariate: qui cambia solo la resa.
     private RenderFragment MetricCard(string label, string value, bool? positive = null) => builder =>
     {
-        var cls = positive is null ? "" : positive.Value ? "text-success" : "text-danger";
-        builder.AddMarkupContent(0, $@"
-            <div class='card text-center' style='min-width: 9rem;'>
-                <div class='card-body py-2'>
-                    <div class='text-muted small'>{label}</div>
-                    <div class='fs-5 fw-semibold {cls}'>{value}</div>
-                </div>
-            </div>");
+        builder.OpenComponent<Stat>(0);
+        builder.AddComponentParameter(1, nameof(Stat.Label), label);
+        builder.AddComponentParameter(2, nameof(Stat.Value), value);
+        builder.AddComponentParameter(3, nameof(Stat.Positive), positive);
+        builder.CloseComponent();
     };
 }

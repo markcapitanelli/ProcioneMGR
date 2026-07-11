@@ -1,0 +1,38 @@
+@*
+    Tessera KPI riusabile: etichetta + valore, con colorazione semantica opzionale.
+    Unica fonte di verità per le "metriche in evidenza" mostrate dopo un run
+    (Backtest, ML, Volatilità, Pairs, Sentiment) — prima ogni pagina duplicava
+    il proprio MetricCard. Lo stile vive in wwwroot/app.css (.stat-card*).
+
+    Uso:
+      Positive="true"  -> valore verde (buono);
+      Positive="false" -> valore rosso (negativo/attenzione, es. drawdown);
+      Positive omesso  -> valore neutro (grigio chiaro).
+*@
+<div class="stat-card">
+    <div class="stat-card-label">@Label</div>
+    <div class="stat-card-value@(ColorSuffix)">@Value</div>
+    @if (!string.IsNullOrWhiteSpace(Hint))
+    {
+        <div class="stat-card-hint">@Hint</div>
+    }
+</div>
+
+@code {
+    /// <summary>Didascalia della metrica (es. "Total Return").</summary>
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+
+    /// <summary>Valore già formattato (es. "12.34%"). Reso come testo: nessun HTML.</summary>
+    [Parameter, EditorRequired] public string Value { get; set; } = "";
+
+    /// <summary>
+    /// Colorazione semantica: null = neutro (grigio chiaro), true = verde (positivo),
+    /// false = rosso (negativo o da tenere d'occhio, es. drawdown).
+    /// </summary>
+    [Parameter] public bool? Positive { get; set; }
+
+    /// <summary>Nota opzionale sotto il valore (es. "storico", "95° pct").</summary>
+    [Parameter] public string? Hint { get; set; }
+
+    private string ColorSuffix => Positive is null ? "" : Positive.Value ? " pos" : " neg";
+}
