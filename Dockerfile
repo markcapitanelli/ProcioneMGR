@@ -1,9 +1,10 @@
-# Dockerfile UNIFICATO per tutte le immagini ProcioneMGR (Fasi 0-2a microservizi).
+# Dockerfile UNIFICATO per tutte le immagini ProcioneMGR (Fasi 0-2b microservizi).
 # Un solo stage "build" condiviso compila il monolite UNA volta (i publish successivi nello
-# stesso layer riusano gli obj/bin già prodotti), poi 5 target runtime leggeri:
+# stesso layer riusano gli obj/bin già prodotti), poi 6 target runtime leggeri:
 #   --target procionemgr            (monolite Blazor Server)
 #   --target procionemgr-ingestion  (microservizio ingestione OHLCV)
 #   --target procionemgr-ml         (microservizio inferenza ML, gRPC — Fase 2a)
+#   --target procionemgr-trading    (microservizio trading, gRPC — Fase 2b)
 #   --target strategyhunter         (tool CLI batch, K8s Job)
 #   --target dbbackup               (tool CLI backup, K8s CronJob — include pg_dump/pg_restore)
 # La configurazione reale (MasterKey, password Postgres) NON entra nelle immagini: vedi
@@ -20,11 +21,13 @@ COPY ProcioneMGR/ProcioneMGR.csproj ProcioneMGR/
 COPY ProcioneMGR.Contracts/ProcioneMGR.Contracts.csproj ProcioneMGR.Contracts/
 COPY ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj ProcioneMGR.Ingestion/
 COPY ProcioneMGR.Ml/ProcioneMGR.Ml.csproj ProcioneMGR.Ml/
+COPY ProcioneMGR.Trading/ProcioneMGR.Trading.csproj ProcioneMGR.Trading/
 COPY tools/DbBackup/DbBackup.csproj tools/DbBackup/
 COPY tools/StrategyHunter/StrategyHunter.csproj tools/StrategyHunter/
 RUN dotnet restore ProcioneMGR/ProcioneMGR.csproj \
  && dotnet restore ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj \
  && dotnet restore ProcioneMGR.Ml/ProcioneMGR.Ml.csproj \
+ && dotnet restore ProcioneMGR.Trading/ProcioneMGR.Trading.csproj \
  && dotnet restore tools/DbBackup/DbBackup.csproj \
  && dotnet restore tools/StrategyHunter/StrategyHunter.csproj
 
@@ -32,6 +35,7 @@ COPY ProcioneMGR/ ProcioneMGR/
 COPY ProcioneMGR.Contracts/ ProcioneMGR.Contracts/
 COPY ProcioneMGR.Ingestion/ ProcioneMGR.Ingestion/
 COPY ProcioneMGR.Ml/ ProcioneMGR.Ml/
+COPY ProcioneMGR.Trading/ ProcioneMGR.Trading/
 COPY tools/DbBackup/ tools/DbBackup/
 COPY tools/StrategyHunter/ tools/StrategyHunter/
 
@@ -41,10 +45,12 @@ COPY tools/StrategyHunter/ tools/StrategyHunter/
 RUN dotnet publish ProcioneMGR/ProcioneMGR.csproj -c Release -o /out/procionemgr --no-restore \
  && dotnet publish ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj -c Release -o /out/procionemgr-ingestion --no-restore \
  && dotnet publish ProcioneMGR.Ml/ProcioneMGR.Ml.csproj -c Release -o /out/procionemgr-ml --no-restore \
+ && dotnet publish ProcioneMGR.Trading/ProcioneMGR.Trading.csproj -c Release -o /out/procionemgr-trading --no-restore \
  && dotnet publish tools/DbBackup/DbBackup.csproj -c Release -o /out/dbbackup --no-restore \
  && dotnet publish tools/StrategyHunter/StrategyHunter.csproj -c Release -o /out/strategyhunter --no-restore \
  && rm -f /out/procionemgr-ingestion/appsettings.Development.json /out/procionemgr-ingestion/appsettings.Production.json \
           /out/procionemgr-ml/appsettings.Development.json /out/procionemgr-ml/appsettings.Production.json \
+          /out/procionemgr-trading/appsettings.Development.json /out/procionemgr-trading/appsettings.Production.json \
           /out/dbbackup/appsettings.*.json /out/strategyhunter/appsettings.*.json
 
 # --- Target: monolite ---
@@ -72,6 +78,20 @@ WORKDIR /app
 COPY --from=build /out/procionemgr-ml .
 EXPOSE 8080 8081
 ENTRYPOINT ["dotnet", "ProcioneMGR.Ml.dll"]
+
+# --- Target: microservizio trading (comandi gRPC + worker delle 3 lane, Fase 2b) ---
+# Unico target che a runtime riceve la MASTER KEY reale (Security__MasterKey via Secret
+# trading-secrets): gli serve per decifrare le credenziali exchange e firmare gli ordini
+# Testnet/Live. La chiave NON è nell'immagine — arriva solo da env a runtime.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS procionemgr-trading
+WORKDIR /app
+COPY --from=build /out/procionemgr-trading .
+# Niente ASPNETCORE_URLS: gli endpoint sono configurati in Program.cs via ConfigureKestrel, che ha
+# la precedenza e renderebbe questa variabile solo fuorviante. 8080 = gRPC (h2c, HTTP/2 esplicito:
+# in chiaro Kestrel servirebbe HTTP/1.1 e ogni RPC fallirebbe), 8081 = /health in HTTP/1.1 per le
+# probe di Kubernetes (che non parlano HTTP/2).
+EXPOSE 8080 8081
+ENTRYPOINT ["dotnet", "ProcioneMGR.Trading.dll"]
 
 # --- Target: StrategyHunter (K8s Job) ---
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS strategyhunter

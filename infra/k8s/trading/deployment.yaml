@@ -1,0 +1,97 @@
+# Deployment del microservizio di trading (Fase 2b).
+#
+# replicas: 1 SEMPRE — VINCOLO DI SICUREZZA NON NEGOZIABILE, il più stringente del progetto.
+# Le 3 lane girano tutte DENTRO questo singolo processo, e la mutua esclusione "mai due esecuzioni
+# simultanee sulla stessa corsia" è garantita da un SemaphoreSlim di ISTANZA (TradingEngine._gate),
+# non da un lock distribuito. Con 2 repliche quel semaforo protegge due stati in-memory scollegati:
+# due processi aprirebbero ordini sulla stessa corsia, con denaro reale in Live. Non scalare.
+# Se un giorno servisse davvero scalare, il prerequisito è un lock distribuito (o uno sharding delle
+# lane per pod), NON un aumento di questo numero.
+#
+# ⚠ Doppio motore: deployare SOLO col monolite in modalità remota (Trading:UseRemoteTrading=true,
+# che non registra i worker locali). Con il toggle a false il monolite esegue in proprio e questo
+# servizio sarebbe un secondo esecutore sullo stesso DB. La composizione DI garantisce l'esclusione
+# DENTRO un processo (TradingServiceCollectionExtensionsTests); FRA i due processi la garantisce
+# questa scelta operativa.
+#
+# Prerequisiti nel namespace:
+#   - Secret trading-secrets (ConnectionStrings__PostgresConnection + Security__MasterKey)
+#     → scripts/k8s-trading-secret.ps1
+#   - PVC procionemgr-config (RWX) con l'appsettings.json CONDIVISO col monolite: è da lì che
+#     arriva SafetyConfiguration, che il monolite scrive dal pannello /trading e questo servizio
+#     rilegge a caldo. Senza lo stesso file, i limiti di sicurezza applicati qui divergono da
+#     quelli mostrati in UI. Vedi infra/k8s/README.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: procionemgr-trading
+  namespace: procionemgr-trading
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: trading
+spec:
+  replicas: 1
+  strategy:
+    # Recreate, non RollingUpdate: durante un rolling update le due repliche coesisterebbero per
+    # qualche secondo — esattamente lo scenario di doppia esecuzione che replicas:1 esclude.
+    # Il prezzo è una finestra di indisponibilità a ogni deploy: accettata di proposito (la UI la
+    # dichiara col banner "dati trading non aggiornati" invece di mostrare numeri stantii).
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: trading
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: procionemgr
+        app.kubernetes.io/component: trading
+    spec:
+      containers:
+        - name: trading
+          image: ghcr.io/markcapitanelli/procionemgr-trading:latest
+          ports:
+            # Due porte separate per necessità, non per gusto: gRPC richiede HTTP/2 (h2c), mentre le
+            # probe httpGet qui sotto parlano HTTP/1.1. Un endpoint solo-HTTP/2 le farebbe fallire e
+            # il pod verrebbe riavviato in ciclo; uno HTTP/1.1 rifiuterebbe ogni RPC.
+            - name: grpc
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
+          envFrom:
+            - secretRef:
+                # ConnectionStrings__PostgresConnection + Security__MasterKey.
+                # La master key NON sta in questo YAML né nell'immagine: solo nel Secret.
+                name: trading-secrets
+          volumeMounts:
+            - name: shared-config
+              # STESSO path assoluto del ContentRootPath del monolite: AppConfigWriter scrive
+              # letteralmente su <ContentRoot>/appsettings.json, non c'è un provider astratto da
+              # ripuntare altrove senza refactor. Il file condiviso è il meccanismo.
+              mountPath: /app/appsettings.json
+              subPath: appsettings.json
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health   # 8081, HTTP/1.1: le probe non parlano HTTP/2
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+      volumes:
+        - name: shared-config
+          persistentVolumeClaim:
+            # RWX (ReadWriteMany): montato in scrittura dal monolite e in lettura da qui, su nodi
+            # potenzialmente diversi. Richiede una storage class che supporti RWX (NFS, CephFS,
+            # Azure Files...): la default di kind (local-path) è solo RWO. Limite noto, vedi README.
+            claimName: procionemgr-config

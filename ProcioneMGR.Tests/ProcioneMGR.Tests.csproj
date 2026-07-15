@@ -24,6 +24,7 @@
     <ProjectReference Include="..\ProcioneMGR\ProcioneMGR.csproj" />
     <ProjectReference Include="..\ProcioneMGR.Contracts\ProcioneMGR.Contracts.csproj" />
     <ProjectReference Include="..\ProcioneMGR.Ml\ProcioneMGR.Ml.csproj" />
+    <ProjectReference Include="..\ProcioneMGR.Trading\ProcioneMGR.Trading.csproj" />
   </ItemGroup>
 
   <ItemGroup>

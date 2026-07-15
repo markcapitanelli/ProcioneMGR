@@ -15,7 +15,13 @@ namespace ProcioneMGR.Services.Ingestion;
 /// </summary>
 public static class IngestionServiceCollectionExtensions
 {
-    public static IServiceCollection AddOhlcvIngestion(this IServiceCollection services)
+    /// <summary>
+    /// Solo i client exchange (Binance/Bitget + <see cref="IExchangeClientFactory"/>), senza
+    /// <see cref="IOhlcvIngestionService"/>. Estratto da <see cref="AddOhlcvIngestion"/> per
+    /// <c>ProcioneMGR.Trading</c> (Fase 2b), che deve firmare le chiamate Testnet/Live ma non
+    /// ingerisce candele: trascinare l'ingestione nel suo host sarebbe una dipendenza inutile.
+    /// </summary>
+    public static IServiceCollection AddExchangeClients(this IServiceCollection services)
     {
         // I client sono typed HttpClient: base address e User-Agent centralizzati qui.
         services.AddHttpClient<BinanceClient>(client =>
@@ -29,6 +35,13 @@ public static class IngestionServiceCollectionExtensions
             client.DefaultRequestHeaders.UserAgent.ParseAdd("ProcioneMGR/1.0");
         });
         services.AddSingleton<IExchangeClientFactory, ExchangeClientFactory>();
+
+        return services;
+    }
+
+    public static IServiceCollection AddOhlcvIngestion(this IServiceCollection services)
+    {
+        services.AddExchangeClients();
 
         // Servizio di ingestione OHLCV (usato anche da pipeline e dashboard, non solo dalla sync).
         services.AddScoped<IOhlcvIngestionService, OhlcvIngestionService>();
