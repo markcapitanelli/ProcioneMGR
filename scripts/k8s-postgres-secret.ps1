@@ -20,7 +20,7 @@ param([string]$ConnectionString)
 
 $ErrorActionPreference = "Stop"
 $clusterCtx = "kind-procionemgr-dev"
-$namespaces = @("procionemgr-pipeline", "procionemgr-supervisor", "procionemgr-ingestion")
+$namespaces = @("procionemgr-pipeline", "procionemgr-supervisor", "procionemgr-ingestion", "procionemgr-ml")
 
 if (-not $ConnectionString) { $ConnectionString = $env:ConnectionStrings__PostgresConnection }
 if (-not $ConnectionString) {

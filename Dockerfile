@@ -1,8 +1,9 @@
-# Dockerfile UNIFICATO per tutte le immagini ProcioneMGR (Fasi 0-1 microservizi).
+# Dockerfile UNIFICATO per tutte le immagini ProcioneMGR (Fasi 0-2a microservizi).
 # Un solo stage "build" condiviso compila il monolite UNA volta (i publish successivi nello
-# stesso layer riusano gli obj/bin già prodotti), poi 4 target runtime leggeri:
+# stesso layer riusano gli obj/bin già prodotti), poi 5 target runtime leggeri:
 #   --target procionemgr            (monolite Blazor Server)
 #   --target procionemgr-ingestion  (microservizio ingestione OHLCV)
+#   --target procionemgr-ml         (microservizio inferenza ML, gRPC — Fase 2a)
 #   --target strategyhunter         (tool CLI batch, K8s Job)
 #   --target dbbackup               (tool CLI backup, K8s CronJob — include pg_dump/pg_restore)
 # La configurazione reale (MasterKey, password Postgres) NON entra nelle immagini: vedi
@@ -16,27 +17,34 @@ WORKDIR /src
 
 # Restore separato dai sorgenti per sfruttare la cache layer sui cambi di solo codice.
 COPY ProcioneMGR/ProcioneMGR.csproj ProcioneMGR/
+COPY ProcioneMGR.Contracts/ProcioneMGR.Contracts.csproj ProcioneMGR.Contracts/
 COPY ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj ProcioneMGR.Ingestion/
+COPY ProcioneMGR.Ml/ProcioneMGR.Ml.csproj ProcioneMGR.Ml/
 COPY tools/DbBackup/DbBackup.csproj tools/DbBackup/
 COPY tools/StrategyHunter/StrategyHunter.csproj tools/StrategyHunter/
 RUN dotnet restore ProcioneMGR/ProcioneMGR.csproj \
  && dotnet restore ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj \
+ && dotnet restore ProcioneMGR.Ml/ProcioneMGR.Ml.csproj \
  && dotnet restore tools/DbBackup/DbBackup.csproj \
  && dotnet restore tools/StrategyHunter/StrategyHunter.csproj
 
 COPY ProcioneMGR/ ProcioneMGR/
+COPY ProcioneMGR.Contracts/ ProcioneMGR.Contracts/
 COPY ProcioneMGR.Ingestion/ ProcioneMGR.Ingestion/
+COPY ProcioneMGR.Ml/ ProcioneMGR.Ml/
 COPY tools/DbBackup/ tools/DbBackup/
 COPY tools/StrategyHunter/ tools/StrategyHunter/
 
 # Publish in sequenza nello stesso layer: ProcioneMGR viene COMPILATO UNA VOLTA (dal primo
-# publish) e riusato dagli altri tre. I satelliti NON devono ereditare gli appsettings del
+# publish) e riusato dagli altri. I satelliti NON devono ereditare gli appsettings del
 # monolite (config bleed): la loro configurazione arriva da env/Secret.
 RUN dotnet publish ProcioneMGR/ProcioneMGR.csproj -c Release -o /out/procionemgr --no-restore \
  && dotnet publish ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj -c Release -o /out/procionemgr-ingestion --no-restore \
+ && dotnet publish ProcioneMGR.Ml/ProcioneMGR.Ml.csproj -c Release -o /out/procionemgr-ml --no-restore \
  && dotnet publish tools/DbBackup/DbBackup.csproj -c Release -o /out/dbbackup --no-restore \
  && dotnet publish tools/StrategyHunter/StrategyHunter.csproj -c Release -o /out/strategyhunter --no-restore \
  && rm -f /out/procionemgr-ingestion/appsettings.Development.json /out/procionemgr-ingestion/appsettings.Production.json \
+          /out/procionemgr-ml/appsettings.Development.json /out/procionemgr-ml/appsettings.Production.json \
           /out/dbbackup/appsettings.*.json /out/strategyhunter/appsettings.*.json
 
 # --- Target: monolite ---
@@ -54,6 +62,14 @@ COPY --from=build /out/procionemgr-ingestion .
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "ProcioneMGR.Ingestion.dll"]
+
+# --- Target: microservizio ml (inferenza gRPC, Fase 2a) ---
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS procionemgr-ml
+WORKDIR /app
+COPY --from=build /out/procionemgr-ml .
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "ProcioneMGR.Ml.dll"]
 
 # --- Target: StrategyHunter (K8s Job) ---
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS strategyhunter

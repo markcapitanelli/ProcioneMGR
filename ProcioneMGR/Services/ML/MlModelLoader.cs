@@ -21,14 +21,23 @@ public static class MlModelLoader
         "RandomForest" => new RandomForestReturnPredictor(),
         "GradientBoosting" => new GradientBoostingReturnPredictor(),
         "Mlp" => new MlpReturnPredictor(),
+        // Attention/Stacked mancavano: un Champion di questi tipi veniva caricato in silenzio come
+        // Linear (modello vuoto/sbagliato). Entrambi hanno un costruttore di caricamento senza
+        // argomenti; lo stato reale arriva da Load(blob).
+        "Attention" => new AttentionReturnPredictor(),
+        "Stacked" => new StackedReturnPredictor(),
         _ => new LinearReturnPredictor(),
     };
 
-    public static async Task<(MlStrategy Strategy, IReturnPredictor Predictor)> LoadAsync(
-        SavedMlModel saved, IAlphaFactorFactory alphaFactorFactory, IFactorCache? factorCache, CancellationToken ct)
+    /// <summary>
+    /// Carica il solo <see cref="IReturnPredictor"/> dal blob, senza ricostruire <see cref="MlStrategy"/>
+    /// né i <see cref="FactorSpec"/>. Usata dal servizio ml (Fase 2a), che riceve il vettore di input
+    /// già pronto e non calcola mai fattori: evita a quell'host la dipendenza da
+    /// <see cref="IAlphaFactorFactory"/>/<see cref="IFactorCache"/>/Alpha158.
+    /// </summary>
+    public static async Task<IReturnPredictor> LoadPredictorAsync(SavedMlModel saved, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(saved);
-        ArgumentNullException.ThrowIfNull(alphaFactorFactory);
 
         var predictor = CreatePredictor(saved.ModelType);
 
@@ -43,6 +52,17 @@ public static class MlModelLoader
         {
             if (File.Exists(tempPath)) File.Delete(tempPath);
         }
+
+        return predictor;
+    }
+
+    public static async Task<(MlStrategy Strategy, IReturnPredictor Predictor)> LoadAsync(
+        SavedMlModel saved, IAlphaFactorFactory alphaFactorFactory, IFactorCache? factorCache, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(saved);
+        ArgumentNullException.ThrowIfNull(alphaFactorFactory);
+
+        var predictor = await LoadPredictorAsync(saved, ct);
 
         var factorsDto = JsonSerializer.Deserialize<List<SavedFactorSpecDto>>(saved.FactorsJson) ?? [];
         var factors = factorsDto

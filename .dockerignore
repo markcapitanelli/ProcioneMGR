@@ -11,8 +11,9 @@
 # appsettings.json) e quindi entrano regolarmente nel contesto.
 
 # Artefatti di build e file non necessari al contesto.
-# NB: tools/ e ProcioneMGR.Ingestion/ NON sono esclusi — servono al Dockerfile unificato
-# multi-target (i loro bin/obj sono comunque coperti da **/bin/ e **/obj/).
+# NB: tools/, ProcioneMGR.Ingestion/, ProcioneMGR.Ml/ e ProcioneMGR.Contracts/ NON sono esclusi —
+# servono al Dockerfile unificato multi-target (i loro bin/obj sono comunque coperti da **/bin/ e
+# **/obj/). ProcioneMGR.Contracts genera il C# dai .proto ed è referenziato da ProcioneMGR (Fase 2a).
 **/bin/
 **/obj/
 .git/
@@ -26,7 +27,6 @@ infra/
 scripts/
 ProcioneMGR.Tests/
 ProcioneMGR.Migrations.Postgres/
-ProcioneMGR.Contracts/
 *.db
 *.db-*
 *.md

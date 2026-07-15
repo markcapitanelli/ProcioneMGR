@@ -64,6 +64,12 @@
     "Enabled": true,
     "RetrainingIntervalDays": 7
   },
+  "Ml": {
+    "_comment": "Fase 2a microservizi: dual-read OSSERVATIVO verso procionemgr-ml. Il monolite decide i trade col modello IN-PROCESS; con Enabled=true confronta ANCHE il segnale del servizio remoto (solo log+metrica procione.ml.comparisons, MAI una decisione). Enabled è hot-reload; RemoteUrl RICHIEDE RIAVVIO (canale gRPC creato una volta sola) e se vuoto il client non viene registrato (confronto spento, zero overhead). Servizio ml in kind: port-forward (kubectl port-forward -n procionemgr-ml svc/procionemgr-ml 18091:8080) => http://localhost:18091.",
+    "Enabled": false,
+    "RemoteUrl": "",
+    "TimeoutMs": 300
+  },
   "Trading": {
     "Safety": {
       "MaxPositionSizePercent": 10.0,
