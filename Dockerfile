@@ -64,11 +64,13 @@ EXPOSE 8080
 ENTRYPOINT ["dotnet", "ProcioneMGR.Ingestion.dll"]
 
 # --- Target: microservizio ml (inferenza gRPC, Fase 2a) ---
+# Due porte, a differenza degli altri target: 8080 gRPC (h2c, solo HTTP/2) e 8081 /health
+# (HTTP/1.1, per le probe di Kubernetes). Le porte le apre ConfigureKestrel in Program.cs, che ha
+# la precedenza su ASPNETCORE_URLS: la variabile qui sarebbe ignorata e quindi fuorviante.
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS procionemgr-ml
 WORKDIR /app
 COPY --from=build /out/procionemgr-ml .
-ENV ASPNETCORE_URLS=http://+:8080
-EXPOSE 8080
+EXPOSE 8080 8081
 ENTRYPOINT ["dotnet", "ProcioneMGR.Ml.dll"]
 
 # --- Target: StrategyHunter (K8s Job) ---
