@@ -14,11 +14,16 @@ using ProcioneMGR.Services.Registry;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// Prova che il servizio ml serve davvero via gRPC su HTTP/2 (host reale ProcioneMGR.Ml, non una
-/// chiamata C# diretta) e che il valore attraversa la (de)serializzazione protobuf senza perdita:
+/// Prova che il valore attraversa la pipeline gRPC e la (de)serializzazione protobuf senza perdita:
 /// la predizione ricevuta sul wire è ESATTAMENTE uguale a quella calcolata in locale. Senza DB:
 /// l'IModelRegistry è sostituito con uno fake, la connection string è fittizia (Npgsql non si
 /// connette a startup e il registry fake non tocca il DB).
+/// ATTENZIONE — cosa questo test NON copre: WebApplicationFactory usa il TestServer in-memory, che
+/// NON passa da Kestrel. Il trasporto reale (h2c) qui non è esercitato, quindi questo test resta
+/// verde anche se gli endpoint Kestrel sono configurati male. È esattamente così che è sfuggito il
+/// bug HTTP_1_1_REQUIRED (0xd) corretto in ProcioneMGR.Ml/Program.cs: gli endpoint erano lasciati
+/// al default Http1AndHttp2 e in chiaro (senza ALPN) NESSUNA chiamata gRPC passava in K8s. La
+/// configurazione delle porte va verificata contro Kestrel vero, non qui.
 /// </summary>
 public class MlGrpcRoundTripTests
 {

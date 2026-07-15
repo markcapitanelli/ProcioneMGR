@@ -26,21 +26,27 @@ spec:
       containers:
         - name: ml
           image: ghcr.io/markcapitanelli/procionemgr-ml:latest
+          # Due porte: il gRPC gira in h2c (solo HTTP/2) su 8080, mentre le probe httpGet qui sotto
+          # parlano HTTP/1.1 e devono quindi puntare a un endpoint separato (8081), altrimenti
+          # fallirebbero contro l'endpoint solo-HTTP/2 e manderebbero il pod in CrashLoop.
           ports:
-            - containerPort: 8080
+            - name: grpc
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
           envFrom:
             - secretRef:
                 name: postgres-conn   # fornisce ConnectionStrings__PostgresConnection
           readinessProbe:
             httpGet:
               path: /health
-              port: 8080
+              port: health
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
-              port: 8080
+              port: health
             initialDelaySeconds: 15
             periodSeconds: 30
           resources:
