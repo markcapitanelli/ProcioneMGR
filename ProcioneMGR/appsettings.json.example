@@ -71,6 +71,10 @@
     "TimeoutMs": 300
   },
   "Trading": {
+    "_comment_UseRemoteTrading": "Fase 2b microservizi. false (default): il motore di trading gira in-process nel monolite (TradingEngine + TradingWorker + ExecutionWorker per ogni corsia), esattamente come prima. true: il monolite diventa un client puro (RemoteTradingEngineClient via gRPC verso procionemgr-trading) e NON registra alcun motore/worker locale — le candele e gli ordini li elabora il servizio remoto. I due insiemi sono mutuamente esclusivi per costruzione (vedi TradingServiceCollectionExtensions): mai due esecuzioni sulla stessa corsia. RICHIEDE RIAVVIO (il canale gRPC si crea una volta sola). ATTENZIONE: se attivi questo, il Deployment procionemgr-trading DEVE essere vivo, e viceversa non deve MAI essere vivo con il toggle a false (sarebbe un secondo esecutore sullo stesso DB). NON esporre in /admin/autonomy.",
+    "_comment_RemoteUrl": "Obbligatorio quando UseRemoteTrading=true (fail-fast a startup se vuoto: meglio non partire che avere un trading muto). Monolite sull'host + servizio in kind: port-forward (kubectl port-forward -n procionemgr-trading svc/procionemgr-trading 18092:8080) => http://localhost:18092. Il DNS cluster-interno (http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8080) vale solo quando ANCHE il monolite gira nel cluster. Ignorato dall'host ProcioneMGR.Trading stesso, che esegue sempre in locale.",
+    "UseRemoteTrading": false,
+    "RemoteUrl": "",
     "Safety": {
       "MaxPositionSizePercent": 10.0,
       "PositionSizePercent": 8.0,

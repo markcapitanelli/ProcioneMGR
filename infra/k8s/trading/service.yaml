@@ -1,0 +1,35 @@
+# Service ClusterIP del microservizio trading: SOLO interno al cluster, MAI un Ingress.
+# A differenza di ingestion/ml (dove il confine "rete del cluster" è accettabile perché le
+# operazioni sono a bassa sensibilità), qui gli RPC avviano sessioni Live e confermano ordini reali:
+# l'esposizione è ulteriormente ristretta dalla NetworkPolicy in networkpolicy.yaml (ingress solo
+# dal pod ui). Il Service definisce DOVE si arriva, la NetworkPolicy CHI può arrivarci.
+#
+# gRPC su HTTP/2 in chiaro dentro il cluster. DNS interno:
+#   procionemgr-trading.procionemgr-trading.svc.cluster.local:8080
+# → è il valore di Trading:RemoteUrl per il monolite in-cluster (http://, non https://).
+#
+# Dal monolite sull'host di sviluppo (fuori dal cluster) si raggiunge con:
+#   kubectl port-forward -n procionemgr-trading svc/procionemgr-trading 18092:8080
+# NB: il port-forward passa dall'API server, NON dalla rete dei pod: scavalca la NetworkPolicy.
+# Comodo in sviluppo, da non confondere con un accesso consentito in produzione.
+apiVersion: v1
+kind: Service
+metadata:
+  name: procionemgr-trading
+  namespace: procionemgr-trading
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: trading
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: trading
+  ports:
+    # 8080 = comandi gRPC (h2c). 8081 = /health in HTTP/1.1 (le probe di K8s non parlano HTTP/2);
+    # esposto nel Service per comodità diagnostica, non espone nulla di sensibile ({status:ok}).
+    - name: grpc
+      port: 8080
+      targetPort: grpc
+    - name: health
+      port: 8081
+      targetPort: health

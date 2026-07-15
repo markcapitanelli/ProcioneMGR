@@ -20,19 +20,45 @@ public class ContractsSmokeTests
         var original = new GetLaneStatusResponse
         {
             LaneId = 2,
-            Mode = "Paper",
+            // In Fase 2b la modalità è un enum (era una stringa nella bozza di Fase 0): decide se si
+            // muovono soldi veri, quindi l'insieme dei valori è chiuso ed esplicito. Vedi trading.proto.
+            Mode = TradingMode.Paper,
             Running = true,
-            OpenPositions = 3,
+            OpenPositionCount = 3,
             // -1.75: units e nanos con lo stesso segno (convenzione DecimalValue in common.proto)
-            RealizedPnl = new DecimalValue { Units = -1, Nanos = -750_000_000 },
-            LastTickUtc = Timestamp.FromDateTime(new DateTime(2026, 7, 15, 12, 0, 0, DateTimeKind.Utc)),
+            TotalPnl = new DecimalValue { Units = -1, Nanos = -750_000_000 },
+            StartedAtUtc = Timestamp.FromDateTime(new DateTime(2026, 7, 15, 12, 0, 0, DateTimeKind.Utc)),
         };
 
         var roundTripped = GetLaneStatusResponse.Parser.ParseFrom(original.ToByteArray());
 
         Assert.Equal(original, roundTripped);
-        Assert.Equal(-1L, roundTripped.RealizedPnl.Units);
-        Assert.Equal(-750_000_000, roundTripped.RealizedPnl.Nanos);
+        Assert.Equal(-1L, roundTripped.TotalPnl.Units);
+        Assert.Equal(-750_000_000, roundTripped.TotalPnl.Nanos);
+        Assert.Equal(TradingMode.Paper, roundTripped.Mode);
+    }
+
+    [Fact]
+    public void SetStopLossTakeProfit_AbsentField_IsDistinguishableFromZero()
+    {
+        // Il tri-stato su cui poggia SetStopLossTakeProfitAsync: "non toccare" (campo assente) e
+        // "azzera lo stop" (campo presente a zero) DEVONO restare distinguibili dopo il round-trip.
+        // Se collassassero, disarmare uno stop loss e lasciarlo armato diventerebbero la stessa
+        // richiesta — per questo i campi sono message e non scalari.
+        var original = new SetStopLossTakeProfitRequest
+        {
+            LaneId = 0,
+            PositionId = "p1",
+            StopLoss = new DecimalValue { Units = 0, Nanos = 0 }, // presente, zero => azzera
+            // TakeProfit deliberatamente non assegnato => assente => non toccare
+        };
+
+        var roundTripped = SetStopLossTakeProfitRequest.Parser.ParseFrom(original.ToByteArray());
+
+        Assert.NotNull(roundTripped.StopLoss);
+        Assert.Equal(0L, roundTripped.StopLoss.Units);
+        Assert.Null(roundTripped.TakeProfit);
+        Assert.Null(roundTripped.TrailingStopPercent);
     }
 
     [Fact]

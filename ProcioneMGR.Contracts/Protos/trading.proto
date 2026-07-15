@@ -1,5 +1,12 @@
-// Contratto sincrono ui -> trading (PRD: la UI diventa client puro e interroga lo stato delle
-// lane via gRPC invece di accedere in-process a ITradingWorker). Cablato in Fase 2.
+// Contratto sincrono ui -> trading (PRD: la UI diventa client puro e comanda le lane via gRPC
+// invece di accedere in-process al motore). Cablato in Fase 2b: gli RPC qui sotto corrispondono
+// 1:1 ai membri non-worker di ITradingEngine, così RemoteTradingEngineClient ne può implementare
+// l'intera interfaccia e i consumer esistenti (Trading.razor, LanePromoter, PromotionEvaluator,
+// PromotionWorker) restano ignari di avere un motore remoto dietro.
+//
+// ProcessCandle/ProcessDueExecutionSlices NON sono RPC: sono il ciclo interno del worker che gira
+// DENTRO il servizio di trading. GetOrderHistory/GetPendingOrders nemmeno: sono query dirette su
+// Postgres (sola lettura, nessuno stato in-memory), che il monolite fa da sé.
 syntax = "proto3";
 
 package procionemgr.trading.v1;
@@ -9,22 +16,259 @@ option csharp_namespace = "ProcioneMGR.Contracts.Trading.V1";
 import "google/protobuf/timestamp.proto";
 import "common.proto";
 
-service TradingStatusService {
-  // Stato corrente di una lane di trading (equivalente remoto della lettura in-process attuale).
+service TradingCommandService {
+  // --- Lettura ---
+  // Stato corrente di una lane (equivalente remoto di ITradingEngine.GetStatusAsync).
   rpc GetLaneStatus(GetLaneStatusRequest) returns (GetLaneStatusResponse);
+  // Posizioni aperte con prezzo/PnL mark-to-market: NON ricostruibili da una query DB (OpenPositions
+  // in tabella ha CurrentPrice aggiornato solo sui fill, mai a ogni candela), vivono solo in memoria
+  // nel motore. Per questo passano di qui e non dal bypass DB come gli ordini.
+  rpc GetOpenPositions(GetOpenPositionsRequest) returns (GetOpenPositionsResponse);
+  // Equity curve + metriche realizzate. Consumata anche da PromotionEvaluator (automatismo).
+  rpc GetPerformance(GetPerformanceRequest) returns (GetPerformanceResponse);
+
+  // --- Comandi (mutano lo stato di esecuzione) ---
+  rpc StartLane(StartLaneRequest) returns (StartLaneResponse);
+  rpc StopLane(StopLaneRequest) returns (StopLaneResponse);
+  rpc EmergencyStop(EmergencyStopRequest) returns (EmergencyStopResponse);
+  rpc ClosePosition(ClosePositionRequest) returns (ClosePositionResponse);
+  rpc CloseAllPositions(CloseAllPositionsRequest) returns (CloseAllPositionsResponse);
+  rpc SetStopLossTakeProfit(SetStopLossTakeProfitRequest) returns (SetStopLossTakeProfitResponse);
+  // ATTENZIONE: sblocca il piazzamento REALE di un ordine Live. Nessun controllo di autorizzazione
+  // a questo livello — l'unico confine è di rete (NetworkPolicy: ingress solo dal pod ui).
+  rpc ConfirmOrder(ConfirmOrderRequest) returns (ConfirmOrderResponse);
+  rpc RejectOrder(RejectOrderRequest) returns (RejectOrderResponse);
 }
+
+// --- Enum di dominio -------------------------------------------------------------------------
+// Stesso patto della Fase 2a (ml.proto/ModelStage): zero-value = UNSPECIFIED e mappatura ESPLICITA
+// a switch (MAI cast ordinale), così un valore nuovo o sconosciuto fallisce rumorosamente invece di
+// diventare per sbaglio il vicino di enum.
+//
+// NB: la bozza di Fase 0 usava una stringa per la modalità, per non imporre una redeploy dei client
+// all'aggiunta di una modalità. In Fase 2b la scelta si ribalta di proposito: la modalità decide se
+// si muovono SOLDI VERI (StartLane(LIVE)), quindi l'insieme dei valori dev'essere chiuso, esplicito
+// e rivisto — aggiungerne uno DEVE passare da una modifica di contratto, non scivolare dentro come
+// stringa opaca.
+
+// Allineato a ProcioneMGR.Services.Trading.TradingMode.
+enum TradingMode {
+  TRADING_MODE_UNSPECIFIED = 0;
+  TRADING_MODE_PAPER = 1;    // simulazione con dati reali, nessun denaro
+  TRADING_MODE_TESTNET = 2;  // testnet exchange (Binance Testnet, Bitget Demo)
+  TRADING_MODE_LIVE = 3;     // produzione, denaro reale
+}
+
+// Allineato a ProcioneMGR.Services.Trading.MarketType.
+enum MarketType {
+  MARKET_TYPE_UNSPECIFIED = 0;
+  MARKET_TYPE_SPOT = 1;
+  MARKET_TYPE_FUTURES = 2;
+}
+
+// Allineato a ProcioneMGR.Services.Trading.OrderSide.
+enum OrderSide {
+  ORDER_SIDE_UNSPECIFIED = 0;
+  ORDER_SIDE_BUY = 1;   // apertura/copertura Long
+  ORDER_SIDE_SELL = 2;  // apertura/copertura Short
+}
+
+// --- Stato lane ------------------------------------------------------------------------------
 
 message GetLaneStatusRequest {
   int32 lane_id = 1;
 }
 
+// Proiezione 1:1 di TradingEngineStatus. I campi monetari sono DecimalValue (mai double sul denaro,
+// vedi common.proto); le percentuali restano DecimalValue per non introdurre un secondo criterio.
 message GetLaneStatusResponse {
   int32 lane_id = 1;
-  // Paper | Testnet | Live (stringa e non enum: le modalita' sono governate dal dominio trading,
-  // il contratto non deve costringere una redeploy dei client per aggiungerne una).
-  string mode = 2;
-  bool running = 3;
-  int32 open_positions = 4;
-  procionemgr.common.v1.DecimalValue realized_pnl = 5;
-  google.protobuf.Timestamp last_tick_utc = 6;
+  TradingMode mode = 2;
+  MarketType market_type = 3;
+  int32 leverage = 4;
+  bool running = 5;
+  string exchange_name = 6;
+  string symbol = 7;
+  procionemgr.common.v1.DecimalValue total_capital = 8;
+  procionemgr.common.v1.DecimalValue available_capital = 9;
+  // Nozionale pieno per lo Spot, solo il MARGINE isolato per i Futures.
+  procionemgr.common.v1.DecimalValue used_capital = 10;
+  procionemgr.common.v1.DecimalValue total_pnl = 11;
+  procionemgr.common.v1.DecimalValue total_pnl_percent = 12;
+  // PnL realizzato nelle ultime 24h (negativo = perdita).
+  procionemgr.common.v1.DecimalValue daily_pnl = 13;
+  // Max drawdown corrente in PERCENTUALE (0-100).
+  procionemgr.common.v1.DecimalValue max_drawdown = 14;
+  int32 total_trades = 15;
+  int32 open_position_count = 16;
+  procionemgr.common.v1.DecimalValue win_rate = 17;
+  // Assenti (non zero) se la lane non è mai partita / non ha mai ordinato: campi message => nullable.
+  google.protobuf.Timestamp started_at_utc = 18;
+  google.protobuf.Timestamp last_order_utc = 19;
+  bool emergency_stopped = 20;
+  string emergency_stop_reason = 21;
+}
+
+// --- Posizioni -------------------------------------------------------------------------------
+
+message GetOpenPositionsRequest {
+  int32 lane_id = 1;
+}
+
+message GetOpenPositionsResponse {
+  repeated OpenPosition positions = 1;
+}
+
+// Proiezione 1:1 di OpenPosition. I decimal? del dominio sono campi message: in proto3 un message
+// ha la has-bit, quindi "assente" e "presente a zero" restano distinguibili senza wrapper extra.
+message OpenPosition {
+  int32 id = 1;
+  int32 lane_id = 2;
+  string position_id = 3;
+  string strategy_id = 4;
+  string symbol = 5;
+  OrderSide side = 6;
+  procionemgr.common.v1.DecimalValue entry_price = 7;
+  procionemgr.common.v1.DecimalValue quantity = 8;
+  procionemgr.common.v1.DecimalValue stop_loss = 9;               // opzionale
+  procionemgr.common.v1.DecimalValue take_profit = 10;            // opzionale
+  procionemgr.common.v1.DecimalValue trailing_stop_percent = 11;  // opzionale
+  procionemgr.common.v1.DecimalValue best_price_since_entry = 12; // opzionale (null finché il trailing non è attivo)
+  google.protobuf.Timestamp opened_at_utc = 13;
+  procionemgr.common.v1.DecimalValue current_price = 14;
+  procionemgr.common.v1.DecimalValue unrealized_pnl = 15;
+  procionemgr.common.v1.DecimalValue unrealized_pnl_percent = 16;
+  string exchange_order_id = 17;
+  // Modalità in cui la posizione è stata APERTA (discriminatore anti-mescolamento Paper/Testnet).
+  TradingMode opened_in_mode = 18;
+  string stop_order_id = 19;         // trigger reduce-only resting sull'exchange
+  string take_profit_order_id = 20;  // idem
+  int32 leverage = 21;
+  procionemgr.common.v1.DecimalValue liquidation_price = 22; // opzionale (solo Futures)
+  procionemgr.common.v1.DecimalValue margin_balance = 23;
+}
+
+message ClosePositionRequest {
+  int32 lane_id = 1;
+  string position_id = 2;
+}
+
+message ClosePositionResponse {}
+
+message CloseAllPositionsRequest {
+  int32 lane_id = 1;
+  string reason = 2;
+}
+
+message CloseAllPositionsResponse {}
+
+message SetStopLossTakeProfitRequest {
+  int32 lane_id = 1;
+  string position_id = 2;
+  // Semantica TRI-STATO, identica a ITradingEngine.SetStopLossTakeProfitAsync: campo ASSENTE =
+  // "non toccare", PRESENTE A ZERO = "azzera lo stop esistente". Per questo sono message e non
+  // scalari: uno scalare proto3 non distingue "non impostato" da "impostato a 0", e la differenza
+  // qui è fra lasciare uno stop loss armato e disarmarlo.
+  procionemgr.common.v1.DecimalValue stop_loss = 3;
+  procionemgr.common.v1.DecimalValue take_profit = 4;
+  procionemgr.common.v1.DecimalValue trailing_stop_percent = 5;
+}
+
+message SetStopLossTakeProfitResponse {}
+
+// --- Comandi di sessione ---------------------------------------------------------------------
+
+message StartLaneRequest {
+  int32 lane_id = 1;
+  TradingMode mode = 2;
+}
+
+message StartLaneResponse {}
+
+message StopLaneRequest {
+  int32 lane_id = 1;
+}
+
+message StopLaneResponse {}
+
+message EmergencyStopRequest {
+  int32 lane_id = 1;
+  string reason = 2;
+}
+
+message EmergencyStopResponse {}
+
+// --- Conferma ordini Live --------------------------------------------------------------------
+
+message ConfirmOrderRequest {
+  int32 lane_id = 1;
+  string order_id = 2;
+  // Operatore che conferma (audit). Opzionale nel dominio (string? userId): stringa vuota = assente.
+  string user_id = 3;
+}
+
+message ConfirmOrderResponse {}
+
+message RejectOrderRequest {
+  int32 lane_id = 1;
+  string order_id = 2;
+  string user_id = 3;
+}
+
+message RejectOrderResponse {}
+
+// --- Performance -----------------------------------------------------------------------------
+
+message GetPerformanceRequest {
+  int32 lane_id = 1;
+  // Opzionale: se assente, tutto lo storico della lane.
+  google.protobuf.Timestamp from_utc = 2;
+}
+
+message GetPerformanceResponse {
+  repeated EquityPoint equity_curve = 1;
+  procionemgr.common.v1.DecimalValue total_return = 2;
+  procionemgr.common.v1.DecimalValue sharpe_ratio = 3;
+  procionemgr.common.v1.DecimalValue max_drawdown = 4;
+  int32 total_trades = 5;
+  // In PERCENTUALE (0-100), come TradingPerformance.WinRate.
+  procionemgr.common.v1.DecimalValue win_rate = 6;
+  procionemgr.common.v1.DecimalValue average_win = 7;
+  procionemgr.common.v1.DecimalValue average_loss = 8;
+  procionemgr.common.v1.DecimalValue profit_factor = 9;
+  // Storico completo dei trade chiusi da from_utc. Nessun consumer attuale lo legge (Trading.razor
+  // usa equity_curve, PromotionEvaluator le metriche aggregate), ma ITradingEngine lo promette:
+  // ometterlo renderebbe il client remoto silenziosamente diverso da quello locale. Limite noto:
+  // a storico molto lungo può avvicinare il tetto di 4MB del messaggio gRPC — usare from_utc.
+  repeated TradeRecord trades = 10;
+}
+
+message EquityPoint {
+  google.protobuf.Timestamp timestamp = 1;
+  procionemgr.common.v1.DecimalValue capital = 2;
+}
+
+// Proiezione 1:1 di TradeRecord (trade CHIUSO).
+message TradeRecord {
+  int32 id = 1;
+  int32 lane_id = 2;
+  string position_id = 3;
+  string strategy_id = 4;
+  string symbol = 5;
+  OrderSide side = 6;
+  procionemgr.common.v1.DecimalValue entry_price = 7;
+  procionemgr.common.v1.DecimalValue exit_price = 8;
+  procionemgr.common.v1.DecimalValue quantity = 9;
+  procionemgr.common.v1.DecimalValue pnl = 10;
+  procionemgr.common.v1.DecimalValue pnl_percent = 11;
+  google.protobuf.Timestamp opened_at_utc = 12;
+  google.protobuf.Timestamp closed_at_utc = 13;
+  // Durata in secondi (TimeSpan del dominio): ridondante con closed-opened ma la teniamo esplicita
+  // per non ricalcolare (e divergere) lato client.
+  int64 duration_seconds = 14;
+  string exit_reason = 15;
+  TradingMode mode = 16;
+  MarketType market_type = 17;
+  int32 leverage = 18;
+  bool was_liquidated = 19;
 }
