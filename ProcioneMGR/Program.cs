@@ -264,6 +264,19 @@ var registryOptions = builder.Configuration.GetSection("Registry").Get<ProcioneM
 builder.Services.AddSingleton(registryOptions);
 builder.Services.AddSingleton<ProcioneMGR.Services.Registry.IModelRegistry, ProcioneMGR.Services.Registry.ModelRegistry>();
 
+// --- Dual-read ML (Fase 2a): confronto OSSERVATIVO col servizio remoto procionemgr-ml. ---
+// Ml:Enabled è hot-reload (letto a ogni candela); Ml:RemoteUrl richiede riavvio (il canale gRPC è
+// creato una sola volta). Se RemoteUrl è vuoto il client NON viene registrato: il TradingEngine
+// riceve null e il confronto è staticamente spento (zero overhead, nessun impatto sul trading).
+builder.Services.Configure<ProcioneMGR.Services.ML.MlComparisonOptions>(builder.Configuration.GetSection("Ml"));
+var mlRemoteUrl = builder.Configuration["Ml:RemoteUrl"];
+if (!string.IsNullOrWhiteSpace(mlRemoteUrl))
+{
+    builder.Services.AddGrpcClient<ProcioneMGR.Contracts.Ml.V1.InferenceService.InferenceServiceClient>(o =>
+        o.Address = new Uri(mlRemoteUrl));
+    builder.Services.AddSingleton<ProcioneMGR.Services.ML.IMlComparisonClient, ProcioneMGR.Services.ML.MlComparisonClient>();
+}
+
 // --- Backup DB (pagina /admin/backup): pg_dump/pg_restore del database Postgres + cartella backup/ ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Admin.DatabaseBackupService>();
 
@@ -300,7 +313,11 @@ for (var lane = 0; lane < TradingLanes.Count; lane++)
         sp.GetRequiredService<ProcioneMGR.Services.Registry.IModelRegistry>(),
         sp.GetRequiredService<ProcioneMGR.Services.Alpha.IAlphaFactorFactory>(),
         sp.GetRequiredService<ProcioneMGR.Services.Alpha.IFactorCache>(),
-        sp.GetRequiredService<IMasterKeyStatus>()));
+        sp.GetRequiredService<IMasterKeyStatus>(),
+        // Dual-read ML (Fase 2a): opzionali. GetService (non Required): null se Ml:RemoteUrl non è
+        // configurato → confronto spento, comportamento identico a prima.
+        sp.GetService<ProcioneMGR.Services.ML.IMlComparisonClient>(),
+        sp.GetService<IOptionsMonitor<ProcioneMGR.Services.ML.MlComparisonOptions>>()));
 
     builder.Services.AddSingleton<IHostedService>(sp => new TradingWorker(
         sp.GetRequiredKeyedService<ITradingEngine>(laneId),

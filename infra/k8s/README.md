@@ -51,6 +51,7 @@ Mapping namespace → workload:
 | Workload | Namespace | Tipo | Note |
 |---|---|---|---|
 | `procionemgr-ingestion` | `procionemgr-ingestion` | `Deployment` + `Service` | **`replicas: 1` sempre** + strategy `Recreate` (mai due worker di sync vivi insieme). Service solo `ClusterIP`: nessun Ingress in Fase 1 (l'endpoint `/sync` non ha autenticazione; il confine è la rete del cluster). **⚠ Doppio scrittore**: deployare questo servizio SOLO con il monolite in modalità remota (`MarketData:UseRemoteIngestion=true`, che spegne il worker locale) oppure con `MarketData:Enabled=false` nel monolite — mai entrambi i worker attivi sullo stesso DB. |
+| `procionemgr-ml` | `procionemgr-ml` | `Deployment` + `Service` | **Sola lettura** (inferenza gRPC, Fase 2a dual-read): legge i `SavedMlModels`, nessuna scrittura → **nessun** vincolo `replicas: 1` (parte a 1 solo per prudenza, scalabile in futuro). Service `ClusterIP`, nessun Ingress. Il monolite lo usa in modo puramente osservativo (`Ml:Enabled`+`Ml:RemoteUrl`): un servizio ml giù non impatta il trading. Nessun rischio doppio-scrittore. |
 | `strategyhunter-discover` | `procionemgr-pipeline` | `Job` | Discovery/ottimizzazione batch. Fase esplicita via args (`discover`); `all` non esiste nel tool. |
 | `dbbackup-nightly` | `procionemgr-supervisor` | `CronJob` | **`suspend: true` di default**: con l'`emptyDir` attuale i backup andrebbero persi alla fine del pod. Attivare solo dopo aver montato un PVC. Solo `backup`/`verify`/`list`; **`restore` mai schedulato** (distruttivo → gate umano manuale). |
 

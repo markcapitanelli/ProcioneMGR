@@ -23,6 +23,7 @@ public sealed class ProcioneMetrics : IDisposable
     private readonly Counter<long> _tradesExecuted;
     private readonly Counter<long> _executionJobs;
     private readonly Histogram<double> _executionSlippageBps;
+    private readonly Counter<long> _mlComparisons;
 
     public ProcioneMetrics()
     {
@@ -41,6 +42,8 @@ public sealed class ProcioneMetrics : IDisposable
             description: "Job di esecuzione a fette (TWAP/VWAP/Iceberg) per esito.");
         _executionSlippageBps = _meter.CreateHistogram<double>("procione.execution.slippage_bps", unit: "bps",
             description: "Implementation shortfall degli ordini eseguiti a fette.");
+        _mlComparisons = _meter.CreateCounter<long>("procione.ml.comparisons", unit: "{comparison}",
+            description: "Confronti locale/remoto del segnale ml (dual-read Fase 2a), per esito.");
     }
 
     public void RecordLanePromotion(int laneId, string newMode) =>
@@ -66,6 +69,10 @@ public sealed class ProcioneMetrics : IDisposable
 
     public void RecordExecutionSlippage(double bps, string algorithm) =>
         _executionSlippageBps.Record(bps, new KeyValuePair<string, object?>("algorithm", algorithm));
+
+    /// <summary>Esito di un confronto dual-read: match | mismatch | timeout | error.</summary>
+    public void RecordMlComparison(string outcome) =>
+        _mlComparisons.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
 
     public void Dispose() => _meter.Dispose();
 }

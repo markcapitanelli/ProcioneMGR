@@ -19,6 +19,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DbBackup", "tools\DbBackup\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StrategyHunter", "tools\StrategyHunter\StrategyHunter.csproj", "{C67376DE-EDC1-42CF-8A4C-C8D0C9AA78CD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProcioneMGR.Ml", "ProcioneMGR.Ml\ProcioneMGR.Ml.csproj", "{DE454F55-B560-48C1-9074-A398FD9AED8C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -113,6 +115,18 @@ Global
 		{C67376DE-EDC1-42CF-8A4C-C8D0C9AA78CD}.Release|x64.Build.0 = Release|Any CPU
 		{C67376DE-EDC1-42CF-8A4C-C8D0C9AA78CD}.Release|x86.ActiveCfg = Release|Any CPU
 		{C67376DE-EDC1-42CF-8A4C-C8D0C9AA78CD}.Release|x86.Build.0 = Release|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Debug|x64.Build.0 = Debug|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Debug|x86.Build.0 = Debug|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Release|x64.ActiveCfg = Release|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Release|x64.Build.0 = Release|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Release|x86.ActiveCfg = Release|Any CPU
+		{DE454F55-B560-48C1-9074-A398FD9AED8C}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
