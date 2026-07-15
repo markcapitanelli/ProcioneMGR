@@ -1,0 +1,59 @@
+# DbBackup come Kubernetes CronJob (Fase 1 microservizi). Schedule notturno, SOLO il sottocomando
+# non interattivo "backup". "restore" NON va MAI schedulato: è distruttivo e resta manuale/interattivo
+# (gate umano, coerente con Sicurezza > Solidità > Velocità).
+# Prerequisito: Secret postgres-conn nel namespace (vedi infra/k8s/README.md, non committato).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dbbackup-nightly
+  namespace: procionemgr-supervisor
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: dbbackup
+spec:
+  # SOSPESO di default: con emptyDir (sotto) i backup notturni verrebbero creati e PERSI alla
+  # terminazione del pod — job verdi, zero backup recuperabili. Attivare (suspend: false) SOLO
+  # dopo aver sostituito emptyDir con un PersistentVolumeClaim. Lo smoke test one-shot
+  # (kubectl create job --from=cronjob/...) funziona anche da sospeso.
+  suspend: true
+  schedule: "0 3 * * *"   # 03:00 ogni notte
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600   # 1h
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: procionemgr
+            app.kubernetes.io/component: dbbackup
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: dbbackup
+              image: ghcr.io/markcapitanelli/dbbackup:latest
+              args: ["backup"]
+              env:
+                - name: BACKUP_DIR
+                  value: /backup
+              envFrom:
+                - secretRef:
+                    name: postgres-conn   # fornisce ConnectionStrings__PostgresConnection
+              volumeMounts:
+                - name: backup-vol
+                  mountPath: /backup
+              resources:
+                requests:
+                  cpu: "250m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+          volumes:
+            # PRODUZIONE: sostituire con un persistentVolumeClaim (i backup DEVONO sopravvivere al
+            # pod). emptyDir qui rende il CronJob auto-contenuto per lo smoke test su kind: valida
+            # il wiring (immagine, Secret, pg_dump) ma i backup non persistono.
+            - name: backup-vol
+              emptyDir: {}

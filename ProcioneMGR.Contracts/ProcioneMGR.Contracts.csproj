@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Contratti API dei futuri microservizi (Fase 0 del PRD "Da Monolite a Microservizi").
+       Libreria condivisa: definisce i .proto e il C# generato, ma NON viene referenziata da
+       ProcioneMGR (il cablaggio nell'app avviene in Fase 2+). Grpc.AspNetCore appartiene ai
+       futuri progetti host dei servizi, non a questa libreria. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.28.3" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.66.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.67.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos\**\*.proto" ProtoRoot="Protos" GrpcServices="Both" />
+  </ItemGroup>
+
+</Project>

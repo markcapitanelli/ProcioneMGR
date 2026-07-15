@@ -15,8 +15,20 @@ using ProcioneMGR.Services.Ingestion;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Risk;
 
+// Guida raggiungibile a zero configurazione: senza argomenti si stampa l'usage e si esce,
+// PRIMA di pretendere la connection string (che serve solo alle fasi vere).
+if (args.Length == 0)
+{
+    Console.WriteLine("Uso: StrategyHunter <fase>  —  fasi: ingest | ingest2 | discover | validate | probe | save [indici]");
+    Console.WriteLine("Env richiesta: ConnectionStrings__PostgresConnection");
+    return;
+}
+
+// Connection string: solo da env, nessun fallback hardcoded con password (evita che una
+// credenziale finisca nel sorgente / venga usata per errore in un container).
 var pgConn = Environment.GetEnvironmentVariable("ConnectionStrings__PostgresConnection")
-    ?? "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure";
+    ?? throw new InvalidOperationException(
+        "Variabile d'ambiente ConnectionStrings__PostgresConnection non impostata (obbligatoria).");
 var harnessDir = AppContext.BaseDirectory;
 var resultsPath = Path.Combine(harnessDir, "discovery-results.json");
 var validationPath = Path.Combine(harnessDir, "validation-results.json");

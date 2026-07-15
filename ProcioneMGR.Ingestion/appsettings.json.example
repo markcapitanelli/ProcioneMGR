@@ -1,0 +1,23 @@
+{
+  "ConnectionStrings": {
+    "_comment_PostgresConnection": "Stesso Postgres condiviso del monolite. In K8s va fornita via Secret (env ConnectionStrings__PostgresConnection), non committata. Da un pod in kind verso il Postgres dell'host di sviluppo usare host.docker.internal come Host.",
+    "PostgresConnection": "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=__CHANGE_ME__"
+  },
+  "MarketData": {
+    "Enabled": true,
+    "SyncIntervalMinutes": 5,
+    "DefaultBackfillDays": 7
+  },
+  "Observability": {
+    "_comment": "Export OTLP opt-in di metriche e log verso il collector locale (infra/observability/). Stesso wiring del monolite, default OFF. Dentro il cluster kind l'endpoint del collector sull'host e' http://host.docker.internal:4317.",
+    "Enabled": false,
+    "OtlpEndpoint": "http://localhost:4317"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Microservizio di ingestione OHLCV (Fase 1 "Da Monolite a Microservizi").
+       Riusa VERBATIM la logica del monolite via ProjectReference (stesso pattern dei tool CLI):
+       MarketDataSyncWorker, MarketDataSyncService, OhlcvIngestionService, ApplicationDbContext.
+       Non duplica una riga di logica di dominio. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProcioneMGR\ProcioneMGR.csproj" />
+  </ItemGroup>
+
+</Project>

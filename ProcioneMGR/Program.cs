@@ -2,7 +2,6 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using OpenTelemetry.Metrics;
 using ProcioneMGR.Components;
 using ProcioneMGR.Components.Account;
 using ProcioneMGR.Data;
@@ -12,6 +11,7 @@ using ProcioneMGR.Services.Ensemble;
 using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Ingestion;
+using ProcioneMGR.Services.Observability;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Regime;
 using ProcioneMGR.Services.Security;
@@ -56,41 +56,42 @@ builder.Services.AddSingleton<IMasterKeyStatus>(sp => (AesGcmEncryptionService)s
 // evitare un ciclo di progetti. Nessuna IDesignTimeDbContextFactory: EF usa l'host dell'app per
 // costruire il context a design-time, così Identity applica correttamente SchemaVersion=Version3
 // (una factory custom la bypasserebbe, causando il drop spurio di AspNetUserPasskeys).
-void ConfigureDatabase(DbContextOptionsBuilder options)
-{
-    var pg = builder.Configuration.GetConnectionString("PostgresConnection")
-             ?? throw new InvalidOperationException("Connection string 'PostgresConnection' non trovata.");
-    options.UseNpgsql(pg, npgsql => npgsql.MigrationsAssembly("ProcioneMGR.Migrations.Postgres"));
-}
-
 // DbContextFactory (per servizi a lunga durata e componenti Blazor interattivi) +
 // bridge scoped richiesto da ASP.NET Core Identity. Entrambi condividono lo stesso
-// IEncryptionService iniettato nel costruttore del DbContext.
-builder.Services.AddDbContextFactory<ApplicationDbContext>(ConfigureDatabase);
+// IEncryptionService iniettato nel costruttore del DbContext. La registrazione della factory
+// è condivisa con gli host satellite (AddProcioneDatabase, vedi DatabaseServiceCollectionExtensions).
+builder.Services.AddProcioneDatabase(builder.Configuration);
 builder.Services.AddScoped<ApplicationDbContext>(sp =>
     sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContext());
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
-// --- Layer Exchange (Strategy/Factory) ---
-// I client sono typed HttpClient: base address e User-Agent centralizzati qui.
-builder.Services.AddHttpClient<BinanceClient>(client =>
-{
-    client.BaseAddress = new Uri("https://api.binance.com");
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("ProcioneMGR/1.0");
-});
-builder.Services.AddHttpClient<BitgetClient>(client =>
-{
-    client.BaseAddress = new Uri("https://api.bitget.com");
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("ProcioneMGR/1.0");
-});
-builder.Services.AddSingleton<IExchangeClientFactory, ExchangeClientFactory>();
+// --- Layer Exchange + ingestione OHLCV (infrastruttura condivisa con ProcioneMGR.Ingestion) ---
+// Client exchange + IOhlcvIngestionService: servono sempre (trading, pipeline, dashboard li usano).
+builder.Services.AddOhlcvIngestion();
 
-// --- Servizio di ingestione OHLCV ---
-builder.Services.AddScoped<IOhlcvIngestionService, OhlcvIngestionService>();
-
-// --- Sincronizzazione watchlist (manuale + schedulata in background) ---
-builder.Services.AddScoped<IMarketDataSyncService, MarketDataSyncService>();
-builder.Services.AddHostedService<MarketDataSyncWorker>();
+// --- Sincronizzazione watchlist: locale (worker in-process) oppure remota (servizio Ingestion) ---
+// Fase 1 microservizi. Il toggle decide UNA SOLA VOLTA a startup quale IMarketDataSyncService
+// registrare (richiede riavvio per cambiare, a differenza di MarketData:Enabled che è hot-reload).
+// Watchlist.razor inietta sempre l'interfaccia, ignaro di quale implementazione sia attiva.
+if (builder.Configuration.GetValue<bool>("MarketData:UseRemoteIngestion"))
+{
+    // Il worker schedulato NON viene registrato: lo scheduling periodico vive nel servizio remoto,
+    // che scrive direttamente sul Postgres condiviso. Il monolite delega solo le sync puntuali.
+    builder.Services.AddHttpClient<IMarketDataSyncService, RemoteMarketDataSyncService>(c =>
+    {
+        c.BaseAddress = new Uri(builder.Configuration["MarketData:RemoteIngestionUrl"]
+            ?? throw new InvalidOperationException(
+                "MarketData:RemoteIngestionUrl è obbligatorio quando MarketData:UseRemoteIngestion=true."));
+        // Una prima sync con backfill (giorni di candele, paginazione con rate-limit 300ms lato
+        // servizio) può superare di molto i 100s di default di HttpClient: timeout largo.
+        c.Timeout = TimeSpan.FromMinutes(10);
+    });
+}
+else
+{
+    builder.Services.AddScoped<IMarketDataSyncService, MarketDataSyncService>();
+    builder.Services.AddHostedService<MarketDataSyncWorker>();
+}
 
 // --- Indicatori tecnici (stateless) ---
 builder.Services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
@@ -251,21 +252,11 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Observability.ProcioneMetrics
 builder.Services.AddSingleton<ProcioneMGR.Services.Observability.MetricsCollector>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Observability.MetricsCollector>());
 
-// Export OpenTelemetry OPT-IN (default OFF): senza questo blocco il meter emette a vuoto (costo ~0).
-// Con Observability:Enabled=true si esporta via OTLP verso il collector (endpoint da config, default
-// localhost:4317). Nessun impatto sul comportamento dell'app, solo telemetria in uscita.
-if (builder.Configuration.GetValue<bool>("Observability:Enabled"))
-{
-    builder.Services.AddOpenTelemetry().WithMetrics(m =>
-    {
-        m.AddMeter(ProcioneMGR.Services.Observability.ProcioneMetrics.MeterName);
-        var otlpEndpoint = builder.Configuration.GetValue<string>("Observability:OtlpEndpoint");
-        m.AddOtlpExporter(o =>
-        {
-            if (!string.IsNullOrWhiteSpace(otlpEndpoint)) o.Endpoint = new Uri(otlpEndpoint);
-        });
-    });
-}
+// Export OpenTelemetry OPT-IN (default OFF): senza il flag il meter emette a vuoto (costo ~0).
+// Con Observability:Enabled=true si esportano metriche E log via OTLP verso il collector locale
+// (endpoint da config, default localhost:4317; stack in infra/observability/docker-compose.yml).
+// Nessun impatto sul comportamento dell'app, solo telemetria in uscita.
+builder.Services.AddProcioneObservability(builder.Configuration);
 
 // --- Model registry (Fase 2): ciclo di vita dei modelli ML con gate DSR + ciclo chiuso col drift. ---
 var registryOptions = builder.Configuration.GetSection("Registry").Get<ProcioneMGR.Services.Registry.ModelRegistryOptions>()

@@ -1,0 +1,31 @@
+# Configurazione OTel Collector: riceve OTLP dall'app (metriche + log) e li smista
+# a Prometheus (scrape su :8889) e Loki (ingestione OTLP nativa di Loki 3.x).
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  # Le metriche vengono esposte in formato Prometheus su :8889 (scrapeato da prometheus.yml).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  # I log vanno a Loki via il suo endpoint OTLP nativo (Loki >= 3.0).
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/loki]
