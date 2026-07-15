@@ -1,0 +1,52 @@
+# Deployment del microservizio di inferenza ML (Fase 2a, dual-read).
+# A differenza di ingestion/trading, questo servizio è SOLA LETTURA nel path di inferenza (legge i
+# SavedMlModels, nessuna scrittura DB): NON ha il vincolo "mai due scrittori", quindi NESSUN
+# replicas:1 obbligatorio e RollingUpdate va bene. In Fase 2a si parte comunque con replicas: 1
+# come scelta prudente di primo lancio (non per vincolo tecnico): scalarlo in futuro è sicuro.
+# Prerequisito: Secret postgres-conn nel namespace (scripts/k8s-postgres-secret.ps1).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: procionemgr-ml
+  namespace: procionemgr-ml
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: ml
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: ml
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: procionemgr
+        app.kubernetes.io/component: ml
+    spec:
+      containers:
+        - name: ml
+          image: ghcr.io/markcapitanelli/procionemgr-ml:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: postgres-conn   # fornisce ConnectionStrings__PostgresConnection
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

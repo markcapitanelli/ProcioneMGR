@@ -1,0 +1,23 @@
+// Schema dati del servizio ingestion (PRD: procionemgr-ingestion espone una API semplice di
+// sincronizzazione, es. /sync/{symbol}). Solo message, nessun service: l'API di ingestion sara'
+// REST (Fase 1) e questi message ne definiscono il payload in modo indipendente dal trasporto.
+syntax = "proto3";
+
+package procionemgr.ingestion.v1;
+
+option csharp_namespace = "ProcioneMGR.Contracts.Ingestion.V1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+message SyncRequest {
+  procionemgr.common.v1.Instrument instrument = 1;
+  // Giorni di backfill richiesti (0 = solo delta dall'ultima candela nota).
+  int32 backfill_days = 2;
+}
+
+message SyncResult {
+  procionemgr.common.v1.Instrument instrument = 1;
+  int32 candles_added = 2;
+  google.protobuf.Timestamp latest_candle_utc = 3;
+}

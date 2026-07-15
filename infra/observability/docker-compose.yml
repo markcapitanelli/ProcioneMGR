@@ -1,0 +1,45 @@
+# Stack di observability locale per la Fase 0 (vedi infra/observability/README.md):
+# OTel Collector (riceve OTLP dall'app) -> Prometheus (metriche) + Loki (log) -> Grafana (UI).
+# Solo per sviluppo locale: credenziali fittizie, nessun dato sensibile, tutto su Docker Desktop.
+name: procionemgr-observability
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC (endpoint di default dell'app: Observability:OtlpEndpoint)
+      - "4318:4318"   # OTLP HTTP
+    depends_on:
+      - loki
+      - prometheus
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  loki:
+    image: grafana/loki:3.3.2
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    # Nessuna porta esposta sull'host: Loki è raggiunto solo dal collector e da Grafana
+    # sulla rete interna del compose.
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      # Credenziali SOLO locali (stack di sviluppo, mai esposto fuori da localhost).
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: procione-local
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki

@@ -49,7 +49,9 @@ public sealed class TradingEngine(
     IModelRegistry? modelRegistry = null,
     IAlphaFactorFactory? alphaFactorFactory = null,
     IFactorCache? factorCache = null,
-    ProcioneMGR.Services.Security.IMasterKeyStatus? masterKeyStatus = null) : ITradingEngine
+    ProcioneMGR.Services.Security.IMasterKeyStatus? masterKeyStatus = null,
+    ProcioneMGR.Services.ML.IMlComparisonClient? mlComparisonClient = null,
+    IOptionsMonitor<ProcioneMGR.Services.ML.MlComparisonOptions>? mlComparisonOptions = null) : ITradingEngine
 {
     public int LaneId => laneId;
 
@@ -73,6 +75,11 @@ public sealed class TradingEngine(
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private static readonly JsonSerializerOptions Json = new();
+
+    // Dual-read ML (Fase 2a): 0/1 via Interlocked. Garantisce UN SOLO confronto remoto in volo per
+    // lane — se il remoto è lento, la candela successiva salta il confronto invece di accodarne
+    // un altro (mai una coda che cresce col servizio ml giù).
+    private int _mlComparisonInFlight;
 
     private TradingEngineState _state = new();
     private readonly List<OpenPosition> _positions = new();
@@ -465,6 +472,13 @@ public sealed class TradingEngine(
                     await s.InitializeAsync(closes, _buffer, strat.Parameters, indicators, ct);
                     var sig = s.EvaluateSignal(closes.Count - 1, price, ts);
 
+                    // Dual-read ML (Fase 2a): confronto OSSERVATIVO col servizio remoto. Fire-and-forget,
+                    // non tocca 'sig' né alcuna decisione — vedi FireAndForgetMlComparison.
+                    if (strat.StrategyName == ChampionStrategyName && s is MlStrategy mlStrat)
+                    {
+                        FireAndForgetMlComparison(mlStrat, closes.Count - 1);
+                    }
+
                     var pos = _positions.FirstOrDefault(p => p.StrategyId == strat.StrategyId);
                     switch (sig)
                     {
@@ -541,6 +555,50 @@ public sealed class TradingEngine(
                 laneId, champion.Id, champion.Version, champion.ModelType, _state.Symbol, _state.Timeframe);
         }
         return _championCache.Strategy;
+    }
+
+    /// <summary>
+    /// Confronto dual-read col servizio ml remoto (Fase 2a): PURAMENTE osservativo. Non fa await (il
+    /// ciclo di trading prosegue subito), non ritorna nulla, non può propagare eccezioni al chiamante.
+    /// Un solo confronto in volo per lane (Interlocked): se il remoto è lento, la candela dopo salta.
+    /// La predizione locale è calcolata QUI, sincrona (modello in cache), per confrontarla col remoto.
+    /// </summary>
+    private void FireAndForgetMlComparison(MlStrategy mlStrat, int index)
+    {
+        if (mlComparisonClient is null) return;                          // client non registrato
+        if (mlComparisonOptions?.CurrentValue.Enabled != true) return;   // toggle spento (hot-reload)
+        if (_championCache is null) return;
+
+        if (Interlocked.CompareExchange(ref _mlComparisonInFlight, 1, 0) != 0) return; // già in volo
+
+        var input = mlStrat.TryGetPredictorInput(index);
+        if (input is null) { Interlocked.Exchange(ref _mlComparisonInFlight, 0); return; } // warm-up
+
+        float localPredicted;
+        try { localPredicted = _championCache.Predictor.Predict(input); }
+        catch { Interlocked.Exchange(ref _mlComparisonInFlight, 0); return; }
+
+        var championId = _championCache.ModelId;
+        var symbol = _state.Symbol;
+        var timeframe = _state.Timeframe;
+
+        // NON await: il ciclo di trading prosegue subito. L'unica mutazione condivisa è il flag
+        // Interlocked; input punta a dati immutabili (array non riscritto dopo la costruzione).
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await mlComparisonClient.CompareAsync(laneId, symbol, timeframe, championId, input, localPredicted, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Lane {Lane}: confronto ml remoto (fire-and-forget) fallito, ignorato.", laneId);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _mlComparisonInFlight, 0);
+            }
+        });
     }
 
     // ---------------------------------------------------------------- open / close

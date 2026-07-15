@@ -14,8 +14,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Contratti gRPC. Cablati per la prima volta in Fase 2a (dual-read ml): il monolite fa da
+         CLIENT (InferenceService.InferenceServiceClient). Il lato server vive in ProcioneMGR.Ml. -->
+    <ProjectReference Include="..\ProcioneMGR.Contracts\ProcioneMGR.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Anthropic" Version="12.35.1" />
     <PackageReference Include="Cronos" Version="0.13.0" />
+    <!-- Client gRPC verso procionemgr-ml (Fase 2a dual-read): AddGrpcClient + factory del canale. -->
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.66.0" />
     <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.16.0" />

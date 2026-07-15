@@ -145,33 +145,8 @@ public sealed class MlStrategy : IStrategy
 
     public Signal EvaluateSignal(int index, decimal currentPrice, DateTime timestamp)
     {
-        var features = _featureMatrix[index];
-        if (features.Length == 0)
-        {
-            return Signal.Hold; // warm-up: almeno un fattore non ancora calcolabile
-        }
-
-        var input = features;
-        if (_sequence is not null)
-        {
-            // Modello sequenziale: costruisci la finestra degli ultimi T timestep (dal più vecchio
-            // al più recente). Se anche una sola candela della finestra è in warm-up → Hold.
-            var t = _sequence.WindowLength;
-            var f = _factors.Count;
-            if (index < t - 1) return Signal.Hold;
-
-            // La finestra deve essere contigua nel tempo (nessuna candela mancante), come in training.
-            if (!ML.SequenceWindowing.IsContiguous(_timestamps, index - t + 1, index, _stepTicks)) return Signal.Hold;
-
-            var window = new float[t * f];
-            for (var k = 0; k < t; k++)
-            {
-                var vec = _featureMatrix[index - t + 1 + k];
-                if (vec.Length == 0) return Signal.Hold;
-                Array.Copy(vec, 0, window, k * f, f);
-            }
-            input = window;
-        }
+        var input = BuildPredictorInput(index);
+        if (input is null) return Signal.Hold; // warm-up (feature non pronte o finestra non contigua)
 
         var predicted = (decimal)_predictor.Predict(input);
         if (predicted > _longThreshold) return Signal.Long;
@@ -182,5 +157,37 @@ public sealed class MlStrategy : IStrategy
         if (Math.Abs(predicted) < flatBand) return Signal.Close;
 
         return Signal.Hold;
+    }
+
+    /// <summary>
+    /// Vettore/finestra di input per il predittore all'indice dato (o null in warm-up). Esposto
+    /// perché il dual-read ML (Fase 2a, TradingEngine) invii al servizio remoto ESATTAMENTE lo
+    /// stesso input usato per la decisione locale — nessuna logica di windowing duplicata.
+    /// </summary>
+    internal float[]? TryGetPredictorInput(int index) => BuildPredictorInput(index);
+
+    private float[]? BuildPredictorInput(int index)
+    {
+        var features = _featureMatrix[index];
+        if (features.Length == 0) return null; // warm-up: almeno un fattore non ancora calcolabile
+
+        if (_sequence is null) return features;
+
+        // Modello sequenziale: finestra degli ultimi T timestep (dal più vecchio al più recente).
+        // Se anche una sola candela della finestra è in warm-up, o la finestra non è contigua nel
+        // tempo (come in training), non c'è input valido → null.
+        var t = _sequence.WindowLength;
+        var f = _factors.Count;
+        if (index < t - 1) return null;
+        if (!ML.SequenceWindowing.IsContiguous(_timestamps, index - t + 1, index, _stepTicks)) return null;
+
+        var window = new float[t * f];
+        for (var k = 0; k < t; k++)
+        {
+            var vec = _featureMatrix[index - t + 1 + k];
+            if (vec.Length == 0) return null;
+            Array.Copy(vec, 0, window, k * f, f);
+        }
+        return window;
     }
 }

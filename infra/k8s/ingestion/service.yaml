@@ -1,0 +1,20 @@
+# Service ClusterIP del microservizio di ingestione: SOLO interno al cluster (nessun Ingress in
+# Fase 1 — l'endpoint /sync non ha autenticazione, il confine di sicurezza è la rete del cluster).
+# DNS interno: procionemgr-ingestion.procionemgr-ingestion.svc.cluster.local:8080.
+# Dal monolite sull'host di sviluppo si raggiunge con:
+#   kubectl port-forward -n procionemgr-ingestion svc/procionemgr-ingestion 18080:8080
+apiVersion: v1
+kind: Service
+metadata:
+  name: procionemgr-ingestion
+  namespace: procionemgr-ingestion
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: ingestion
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: ingestion
+  ports:
+    - port: 8080
+      targetPort: 8080

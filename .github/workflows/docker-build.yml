@@ -1,0 +1,138 @@
+name: Docker build
+
+# Migrazione a microservizi: build+push delle 4 immagini verso GHCR da un UNICO Dockerfile
+# multi-target (stage di build condiviso: il monolite compila UNA volta per run, non 4).
+# Job singolo, non matrice: i 4 build step condividono la cache BuildKit locale del runner.
+# Workflow separato da ci.yml: un errore qui non tocca mai il job build-test richiesto sulle PR.
+# Nessun secret da configurare: usa il GITHUB_TOKEN automatico.
+#
+# NB: gli elenchi `paths:` di push e pull_request sono duplicati perché GitHub Actions NON
+# supporta gli anchor YAML — tenerli allineati a mano quando si aggiunge un percorso.
+on:
+  push:
+    branches: [ "**" ]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "ProcioneMGR/**"
+      - "ProcioneMGR.Contracts/**"
+      - "ProcioneMGR.Ingestion/**"
+      - "ProcioneMGR.Ml/**"
+      - "tools/**"
+      - ".github/workflows/docker-build.yml"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "ProcioneMGR/**"
+      - "ProcioneMGR.Contracts/**"
+      - "ProcioneMGR.Ingestion/**"
+      - "ProcioneMGR.Ml/**"
+      - "tools/**"
+      - ".github/workflows/docker-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGES: procionemgr procionemgr-ingestion procionemgr-ml strategyhunter dbbackup
+
+jobs:
+  build-images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 4 build dallo stesso Dockerfile: il primo materializza lo stage "build" condiviso,
+      # gli altri tre lo riusano dalla cache locale del runner (zero ricompilazioni).
+      - name: Build procionemgr
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: procionemgr
+          load: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/procionemgr:latest
+            ghcr.io/${{ github.repository_owner }}/procionemgr:${{ github.sha }}
+          cache-from: type=gha,scope=unified
+          cache-to: type=gha,mode=max,scope=unified
+
+      - name: Build procionemgr-ingestion
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: procionemgr-ingestion
+          load: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/procionemgr-ingestion:latest
+            ghcr.io/${{ github.repository_owner }}/procionemgr-ingestion:${{ github.sha }}
+          cache-from: type=gha,scope=unified
+
+      - name: Build procionemgr-ml
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: procionemgr-ml
+          load: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/procionemgr-ml:latest
+            ghcr.io/${{ github.repository_owner }}/procionemgr-ml:${{ github.sha }}
+          cache-from: type=gha,scope=unified
+
+      - name: Build strategyhunter
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: strategyhunter
+          load: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/strategyhunter:latest
+            ghcr.io/${{ github.repository_owner }}/strategyhunter:${{ github.sha }}
+          cache-from: type=gha,scope=unified
+
+      - name: Build dbbackup
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: dbbackup
+          load: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/dbbackup:latest
+            ghcr.io/${{ github.repository_owner }}/dbbackup:${{ github.sha }}
+          cache-from: type=gha,scope=unified
+
+      # Guardia di sicurezza su TUTTE le immagini, su OGNI evento, PRIMA di qualunque push:
+      # nessuna immagine deve contenere un appsettings.json reale.
+      - name: Verify no secrets baked into images
+        run: |
+          for image in $IMAGES; do
+            found="$(docker run --rm --entrypoint sh ghcr.io/${{ github.repository_owner }}/$image:${{ github.sha }} -c 'find / -name appsettings.json 2>/dev/null' || true)"
+            if [ -n "$found" ]; then
+              echo "::error::appsettings.json trovato nell'immagine $image: $found"
+              exit 1
+            fi
+            echo "OK: nessun appsettings.json nell'immagine $image."
+          done
+
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Push solo fuori dalle PR e solo DOPO la verify (le immagini sono già nel daemon locale).
+      - name: Push images
+        if: github.event_name != 'pull_request'
+        run: |
+          for image in $IMAGES; do
+            docker push ghcr.io/${{ github.repository_owner }}/$image:latest
+            docker push ghcr.io/${{ github.repository_owner }}/$image:${{ github.sha }}
+          done

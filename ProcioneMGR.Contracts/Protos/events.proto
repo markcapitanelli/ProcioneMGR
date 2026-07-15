@@ -1,0 +1,33 @@
+// Schema degli eventi asincroni tra i futuri microservizi (PRD: ingestion pubblica "nuovo OHLCV
+// disponibile", ml pubblica "segnale alpha pronto", trading consuma). Solo message: lo schema e'
+// indipendente dal trasporto, cosi' la scelta del bus (Redis Streams vs Postgres NOTIFY) resta
+// aperta per le fasi successive senza bloccare il contratto dati.
+syntax = "proto3";
+
+package procionemgr.events.v1;
+
+option csharp_namespace = "ProcioneMGR.Contracts.Events.V1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// Pubblicato da procionemgr-ingestion dopo ogni sync riuscito.
+message MarketDataSyncedEvent {
+  // Id univoco dell'evento: chiave di idempotenza per i consumer (i retry sono la norma nei
+  // sistemi distribuiti; il consumer che ha gia' visto questo id scarta il duplicato).
+  string event_id = 1;
+  procionemgr.common.v1.Instrument instrument = 2;
+  int32 candles_added = 3;
+  google.protobuf.Timestamp latest_candle_utc = 4;
+  google.protobuf.Timestamp emitted_at_utc = 5;
+}
+
+// Pubblicato da procionemgr-ml quando un nuovo segnale e' disponibile per un instrument.
+message AlphaSignalReadyEvent {
+  string event_id = 1;
+  procionemgr.common.v1.Instrument instrument = 2;
+  // Segnale/ritorno atteso (grandezza statistica, non monetaria).
+  double signal = 3;
+  string model_name = 4;
+  google.protobuf.Timestamp generated_at_utc = 5;
+}
