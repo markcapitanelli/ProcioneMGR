@@ -1,7 +1,7 @@
 name: CI
 
-# Resta inerte finche' non esiste un remote GitHub collegato.
-# Nessun secret configurato in questa passata: build + test + audit vulnerabilita'.
+# Build + test + audit vulnerabilita'. Nessun secret richiesto.
+# La build/push delle immagini Docker vive nel workflow separato docker-build.yml (Fase 0 microservizi).
 on:
   push:
     branches: [ "**" ]

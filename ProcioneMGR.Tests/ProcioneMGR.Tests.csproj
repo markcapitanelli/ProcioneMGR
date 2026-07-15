@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ProcioneMGR\ProcioneMGR.csproj" />
+    <ProjectReference Include="..\ProcioneMGR.Contracts\ProcioneMGR.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

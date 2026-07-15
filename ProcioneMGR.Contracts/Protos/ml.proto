@@ -1,0 +1,41 @@
+// Contratto sincrono trading -> ml (PRD: il motore ML isolato riceve un vettore di feature,
+// es. output Alpha158, e restituisce un segnale). Low-latency, cablato in Fase 3.
+syntax = "proto3";
+
+package procionemgr.ml.v1;
+
+option csharp_namespace = "ProcioneMGR.Contracts.Ml.V1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+service InferenceService {
+  rpc PredictSignal(PredictSignalRequest) returns (PredictSignalResponse);
+}
+
+// Stage del modello nel registry (coerente con ModelStage esistente: il Champion e' l'unico
+// modello promosso; il servizio ml potra' servire versioni diverse per sperimentazione).
+enum ModelStage {
+  MODEL_STAGE_UNSPECIFIED = 0;
+  MODEL_STAGE_CHAMPION = 1;
+  MODEL_STAGE_CANDIDATE = 2;
+  MODEL_STAGE_RETIRED = 3;
+}
+
+message PredictSignalRequest {
+  procionemgr.common.v1.Instrument instrument = 1;
+  // Vettore di feature gia' calcolate (es. Alpha158): double va bene qui, sono grandezze
+  // statistiche, non importi monetari.
+  repeated double features = 2;
+  // Stage richiesto (default: Champion). Il nome modello esplicito ha precedenza se valorizzato.
+  ModelStage stage = 3;
+  string model_name = 4;
+}
+
+message PredictSignalResponse {
+  // Ritorno atteso previsto (grandezza statistica, non monetaria).
+  double predicted_return = 1;
+  string model_name = 2;
+  ModelStage stage_used = 3;
+  google.protobuf.Timestamp generated_at_utc = 4;
+}

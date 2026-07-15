@@ -1,0 +1,30 @@
+// Contratto sincrono ui -> trading (PRD: la UI diventa client puro e interroga lo stato delle
+// lane via gRPC invece di accedere in-process a ITradingWorker). Cablato in Fase 2.
+syntax = "proto3";
+
+package procionemgr.trading.v1;
+
+option csharp_namespace = "ProcioneMGR.Contracts.Trading.V1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+service TradingStatusService {
+  // Stato corrente di una lane di trading (equivalente remoto della lettura in-process attuale).
+  rpc GetLaneStatus(GetLaneStatusRequest) returns (GetLaneStatusResponse);
+}
+
+message GetLaneStatusRequest {
+  int32 lane_id = 1;
+}
+
+message GetLaneStatusResponse {
+  int32 lane_id = 1;
+  // Paper | Testnet | Live (stringa e non enum: le modalita' sono governate dal dominio trading,
+  // il contratto non deve costringere una redeploy dei client per aggiungerne una).
+  string mode = 2;
+  bool running = 3;
+  int32 open_positions = 4;
+  procionemgr.common.v1.DecimalValue realized_pnl = 5;
+  google.protobuf.Timestamp last_tick_utc = 6;
+}

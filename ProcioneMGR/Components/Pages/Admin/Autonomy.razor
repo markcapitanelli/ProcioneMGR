@@ -373,6 +373,12 @@
         public bool Enabled { get; set; } = true;
         public int SyncIntervalMinutes { get; set; } = 5;
         public int DefaultBackfillDays { get; set; } = 7;
+
+        // Toggle Fase 1 microservizi: NON esposti nel form (richiedono riavvio, non hot-reload),
+        // ma DEVONO stare nel POCO — SaveSectionAsync sostituisce l'intera sezione MarketData,
+        // e senza queste proprietà un salvataggio da questa pagina le cancellerebbe dal file.
+        public bool UseRemoteIngestion { get; set; }
+        public string? RemoteIngestionUrl { get; set; }
     }
 
     /// <summary>Sezione MarketRegime di appsettings (come sopra).</summary>
@@ -394,6 +400,9 @@
             Enabled = Config.GetValue("MarketData:Enabled", true),
             SyncIntervalMinutes = Config.GetValue("MarketData:SyncIntervalMinutes", 5),
             DefaultBackfillDays = Config.GetValue("MarketData:DefaultBackfillDays", 7),
+            // Round-trip dei toggle Fase 1 (non nel form): preservati al salvataggio della sezione.
+            UseRemoteIngestion = Config.GetValue("MarketData:UseRemoteIngestion", false),
+            RemoteIngestionUrl = Config.GetValue<string?>("MarketData:RemoteIngestionUrl"),
         };
         _marketRegime = new MarketRegimeConfig
         {

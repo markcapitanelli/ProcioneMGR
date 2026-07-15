@@ -1,0 +1,36 @@
+# StrategyHunter come Kubernetes Job (batch single-shot, Fase 1 microservizi).
+# Esegue una fase esplicita (qui "discover"); "all" NON è implementato nel tool.
+# Prerequisito: Secret postgres-conn nel namespace (vedi infra/k8s/README.md, non committato).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: strategyhunter-discover
+  namespace: procionemgr-pipeline
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: strategyhunter
+spec:
+  # Tetto di durata: un batch lungo o bloccato non consuma risorse all'infinito.
+  activeDeadlineSeconds: 21600   # 6h
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: procionemgr
+        app.kubernetes.io/component: strategyhunter
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: strategyhunter
+          image: ghcr.io/markcapitanelli/strategyhunter:latest
+          args: ["discover"]
+          envFrom:
+            - secretRef:
+                name: postgres-conn   # fornisce ConnectionStrings__PostgresConnection
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"

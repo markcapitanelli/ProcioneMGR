@@ -1,0 +1,32 @@
+# SICUREZZA: mai includere nel contesto Docker i file di configurazione con segreti reali
+# (appsettings.json locale contiene MasterKey AES-256 e password Postgres — è gitignorato
+# ma esiste sul disco dello sviluppatore, quindi senza questa esclusione finirebbe nei layer).
+**/appsettings.json
+**/appsettings.*.local.json
+**/*.local.json
+**/secrets.json
+.env*
+
+# NB: i template *.json.example non sono toccati dai pattern sopra (nome diverso da
+# appsettings.json) e quindi entrano regolarmente nel contesto.
+
+# Artefatti di build e file non necessari al contesto.
+# NB: tools/ e ProcioneMGR.Ingestion/ NON sono esclusi — servono al Dockerfile unificato
+# multi-target (i loro bin/obj sono comunque coperti da **/bin/ e **/obj/).
+**/bin/
+**/obj/
+.git/
+.github/
+.claude/
+.vs/
+.vscode/
+backup/
+docs/
+infra/
+scripts/
+ProcioneMGR.Tests/
+ProcioneMGR.Migrations.Postgres/
+ProcioneMGR.Contracts/
+*.db
+*.db-*
+*.md
