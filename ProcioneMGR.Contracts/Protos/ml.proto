@@ -1,0 +1,50 @@
+// Contratto sincrono trading -> ml (PRD: il motore ML isolato riceve un vettore di feature,
+// es. output Alpha158, e restituisce un segnale). Low-latency. Cablato in Fase 2a (dual-read).
+syntax = "proto3";
+
+package procionemgr.ml.v1;
+
+option csharp_namespace = "ProcioneMGR.Contracts.Ml.V1";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+service InferenceService {
+  rpc PredictSignal(PredictSignalRequest) returns (PredictSignalResponse);
+}
+
+// Allineato a ProcioneMGR.Data.ModelStage (persistito come STRINGA: contano i nomi, non i numeri).
+// Shift di +1 rispetto all'enum C# perché in proto3 lo zero-value DEVE essere UNSPECIFIED. La
+// mappatura esplicita vive in MlStageMapper (nessuna aritmetica sugli ordinali).
+enum ModelStage {
+  MODEL_STAGE_UNSPECIFIED = 0;
+  MODEL_STAGE_STAGING = 1;
+  MODEL_STAGE_CHALLENGER = 2;
+  MODEL_STAGE_CHAMPION = 3;
+  MODEL_STAGE_RETIRED = 4;
+}
+
+message PredictSignalRequest {
+  procionemgr.common.v1.Instrument instrument = 1;
+  // Vettore di input GIA' PRONTO per IReturnPredictor.Predict: per un predittore puntuale è il
+  // vettore di fattori Alpha158 (stesso ordine di SavedMlModel.FactorsJson); per un predittore
+  // sequenziale è la finestra T*F già appiattita (stesso layout costruito da MlStrategy). double va
+  // bene: grandezze statistiche, non importi. Il monolite lo calcola comunque per la decisione
+  // locale — qui viene RIUSATO, mai ricalcolato: garantisce input bit-identico locale/remoto.
+  repeated double features = 2;
+  // Stage richiesto (default: Champion) se model_id non è valorizzato.
+  ModelStage stage = 3;
+  // Informativo/debug: SavedMlModel.Name NON è univoco, non usarlo come identificatore.
+  string model_name = 4;
+  // Identificatore primario (SavedMlModel.Id): se > 0 ha precedenza su stage+model_name.
+  int32 model_id = 5;
+}
+
+message PredictSignalResponse {
+  // Ritorno atteso previsto (grandezza statistica, non monetaria).
+  double predicted_return = 1;
+  int32 model_id = 2;
+  string model_name = 3;
+  ModelStage stage_used = 4;
+  google.protobuf.Timestamp generated_at_utc = 5;
+}

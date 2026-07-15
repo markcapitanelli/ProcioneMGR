@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Microservizio di inferenza ML (Fase 2a "Da Monolite a Microservizi", pattern dual-read).
+       Riusa VERBATIM IModelRegistry/MlModelLoader del monolite via ProjectReference (stesso pattern
+       di ProcioneMGR.Ingestion). Espone InferenceService via gRPC (ProcioneMGR.Contracts). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lato server gRPC (AddGrpc/MapGrpcService). I contratti generati arrivano da Contracts. -->
+    <PackageReference Include="Grpc.AspNetCore" Version="2.66.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProcioneMGR\ProcioneMGR.csproj" />
+    <ProjectReference Include="..\ProcioneMGR.Contracts\ProcioneMGR.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -52,13 +52,23 @@
     "MinChampionDeflatedSharpe": 0.95
   },
   "MarketData": {
+    "_comment_UseRemoteIngestion": "Fase 1 microservizi. false (default): la sync watchlist gira in-process nel monolite (MarketDataSyncWorker). true: il monolite delega le sync puntuali al servizio ProcioneMGR.Ingestion via HTTP (RemoteIngestionUrl obbligatorio) e NON avvia il worker locale (lo scheduling periodico vive nel servizio remoto). RICHIEDE RIAVVIO (non hot-reload come Enabled): la scelta avviene una sola volta a startup. NON esporre in /admin/autonomy.",
     "Enabled": true,
     "SyncIntervalMinutes": 5,
-    "DefaultBackfillDays": 7
+    "DefaultBackfillDays": 7,
+    "_comment_RemoteIngestionUrl": "Monolite sull'host + servizio in kind: usa il port-forward (kubectl port-forward -n procionemgr-ingestion svc/procionemgr-ingestion 18080:8080) => http://localhost:18080. Il DNS cluster-interno (http://procionemgr-ingestion.procionemgr-ingestion.svc.cluster.local:8080) vale solo quando ANCHE il chiamante gira nel cluster (Fase 2+). Servizio lanciato localmente con dotnet run: usa il suo URL locale.",
+    "UseRemoteIngestion": false,
+    "RemoteIngestionUrl": "http://localhost:18080"
   },
   "MarketRegime": {
     "Enabled": true,
     "RetrainingIntervalDays": 7
+  },
+  "Ml": {
+    "_comment": "Fase 2a microservizi: dual-read OSSERVATIVO verso procionemgr-ml. Il monolite decide i trade col modello IN-PROCESS; con Enabled=true confronta ANCHE il segnale del servizio remoto (solo log+metrica procione.ml.comparisons, MAI una decisione). Enabled è hot-reload; RemoteUrl RICHIEDE RIAVVIO (canale gRPC creato una volta sola) e se vuoto il client non viene registrato (confronto spento, zero overhead). Servizio ml in kind: port-forward (kubectl port-forward -n procionemgr-ml svc/procionemgr-ml 18091:8080) => http://localhost:18091.",
+    "Enabled": false,
+    "RemoteUrl": "",
+    "TimeoutMs": 300
   },
   "Trading": {
     "Safety": {
@@ -78,6 +88,11 @@
       "WorkerTickSeconds": 15,
       "AbandonGraceMinutes": 5
     }
+  },
+  "Observability": {
+    "_comment": "Export OTLP opt-in di metriche e log verso il collector locale (infra/observability/docker-compose.yml, avvio con scripts/observability-up.ps1). Default OFF: nessun impatto se non abilitato esplicitamente. La dashboard /metrics in-app funziona comunque, anche a flag spento.",
+    "Enabled": false,
+    "OtlpEndpoint": "http://localhost:4317"
   },
   "Logging": {
     "LogLevel": {

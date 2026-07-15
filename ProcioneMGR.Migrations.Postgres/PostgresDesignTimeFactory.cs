@@ -21,14 +21,18 @@ namespace ProcioneMGR.Migrations.Postgres;
 /// <c>--startup-project ProcioneMGR</c> (l'host reale = fonte di verità del modello).
 ///
 /// L'encryption è passthrough: durante <c>database update</c> non si legge/scrive alcun dato cifrato.
-/// Connection string: env <c>PostgresConnection</c> se presente, altrimenti il default locale.
+/// Connection string: SOLO da env <c>PostgresConnection</c>, fail-fast se assente — un fallback
+/// silenzioso al DB locale farebbe applicare migrazioni al database SBAGLIATO senza accorgersene
+/// (stesso fix di igiene già applicato a tools/DbBackup e tools/StrategyHunter).
 /// </summary>
 public sealed class PostgresDesignTimeFactory : IDesignTimeDbContextFactory<ApplicationDbContext>
 {
     public ApplicationDbContext CreateDbContext(string[] args)
     {
         var conn = Environment.GetEnvironmentVariable("PostgresConnection")
-                   ?? "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure";
+                   ?? throw new InvalidOperationException(
+                       "Variabile d'ambiente PostgresConnection non impostata (obbligatoria): " +
+                       "niente fallback al DB locale, per non migrare il database sbagliato.");
 
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseNpgsql(conn, npgsql =>

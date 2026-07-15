@@ -1,0 +1,17 @@
+# Cluster kind locale per la Fase 0 della migrazione a microservizi (vedi infra/k8s/README.md).
+# Mono-nodo: sufficiente per un ambiente di sviluppo single-developer. Nessun workload applicativo
+# viene deployato in Fase 0 — il cluster serve a validare tooling e nomenclatura namespace.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: procionemgr-dev
+nodes:
+  - role: control-plane
+    # Porte 80/443 mappate sull'host: pronte per un futuro ingress-nginx (Fase 1+),
+    # nessun ingress viene installato in Fase 0.
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8443
+        protocol: TCP

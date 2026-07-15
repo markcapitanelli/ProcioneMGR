@@ -1,0 +1,58 @@
+# Deployment del microservizio di ingestione OHLCV (Fase 1).
+# replicas: 1 SEMPRE — vincolo non negoziabile: il cursore di sync (MaxAsync non lockato) e
+# l'upsert SELECT-poi-INSERT non atomico non tollerano due scrittori concorrenti sulla stessa
+# serie. Vedi infra/k8s/README.md.
+# ⚠ DOPPIO SCRITTORE: questo pod esegue il worker di sync schedulato. Va deployato SOLO con il
+# monolite in modalità remota (MarketData:UseRemoteIngestion=true → worker locale spento) oppure
+# con MarketData:Enabled=false nel monolite. Mai due worker sullo stesso DB.
+# Prerequisito: Secret postgres-conn nel namespace (scripts/k8s-postgres-secret.ps1).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: procionemgr-ingestion
+  namespace: procionemgr-ingestion
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: ingestion
+spec:
+  replicas: 1
+  strategy:
+    # Recreate, non RollingUpdate: mai due istanze del worker di sync vive insieme,
+    # nemmeno per la durata di un rollout.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: ingestion
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: procionemgr
+        app.kubernetes.io/component: ingestion
+    spec:
+      containers:
+        - name: ingestion
+          image: ghcr.io/markcapitanelli/procionemgr-ingestion:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: postgres-conn   # fornisce ConnectionStrings__PostgresConnection
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

@@ -1,5 +1,6 @@
 using System.Diagnostics.Metrics;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcioneMGR.Data;
@@ -130,5 +131,45 @@ public class ObservabilityTests
             };
             return Task.FromResult(reports);
         }
+    }
+}
+
+/// <summary>
+/// Test di fumo del wiring OTLP opt-in (Fase 0 microservizi): con Observability:Enabled=true il
+/// container DI si costruisce e i provider OTel si risolvono senza che alcun collector sia in
+/// ascolto (l'exporter OTLP è fire-and-forget); con il flag OFF non viene registrato nulla.
+/// Nessuna dipendenza da Postgres: classe separata fuori dalla collection.
+/// </summary>
+public class ObservabilityWiringTests
+{
+    private static IConfiguration BuildConfig(bool enabled) =>
+        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Observability:Enabled"] = enabled ? "true" : "false",
+            ["Observability:OtlpEndpoint"] = "http://localhost:4317",
+        }).Build();
+
+    [Fact]
+    public void AddProcioneObservability_Enabled_BuildsContainerWithoutCollector()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddProcioneObservability(BuildConfig(enabled: true));
+
+        using var provider = services.BuildServiceProvider();
+        Assert.NotNull(provider.GetRequiredService<OpenTelemetry.Metrics.MeterProvider>());
+        Assert.NotNull(provider.GetRequiredService<OpenTelemetry.Logs.LoggerProvider>());
+    }
+
+    [Fact]
+    public void AddProcioneObservability_Disabled_RegistersNothing()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddProcioneObservability(BuildConfig(enabled: false));
+
+        using var provider = services.BuildServiceProvider();
+        Assert.Null(provider.GetService<OpenTelemetry.Metrics.MeterProvider>());
+        Assert.Null(provider.GetService<OpenTelemetry.Logs.LoggerProvider>());
     }
 }

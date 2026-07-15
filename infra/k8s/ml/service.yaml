@@ -1,0 +1,21 @@
+# Service ClusterIP del microservizio ml: SOLO interno al cluster (nessun Ingress in Fase 2a —
+# il confine di sicurezza è la rete del cluster, coerente con ingestion).
+# gRPC su HTTP/2 in chiaro dentro il cluster. DNS interno:
+#   procionemgr-ml.procionemgr-ml.svc.cluster.local:8080
+# Dal monolite sull'host di sviluppo si raggiunge con:
+#   kubectl port-forward -n procionemgr-ml svc/procionemgr-ml 18091:8080
+apiVersion: v1
+kind: Service
+metadata:
+  name: procionemgr-ml
+  namespace: procionemgr-ml
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: ml
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: ml
+  ports:
+    - port: 8080
+      targetPort: 8080

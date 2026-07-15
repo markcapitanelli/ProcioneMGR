@@ -1,0 +1,45 @@
+# Namespace dichiarativi per i 6 bounded context della migrazione a microservizi (PRD "Da Monolite
+# a Microservizi"). In Fase 0 restano vuoti: fissano solo la nomenclatura per le Fasi 1+.
+# Vincolo di sicurezza da ricordare in Fase 2: i worker in procionemgr-trading avranno SEMPRE
+# replicas: 1 (mai scalare TradingWorker/ExecutionWorker).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: procionemgr-ui
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: procionemgr-trading
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: procionemgr-ml
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: procionemgr-pipeline
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: procionemgr-ingestion
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: procionemgr-supervisor
+  labels:
+    app.kubernetes.io/part-of: procionemgr

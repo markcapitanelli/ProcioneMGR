@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using ProcioneMGR.Data;
@@ -13,7 +14,30 @@ public sealed class MarketDataSyncService(
     IConfiguration configuration,
     ILogger<MarketDataSyncService> logger) : IMarketDataSyncService
 {
+    // Un solo sync per serie alla volta nel processo: il tick del worker e una richiesta manuale
+    // (pulsante UI, o POST /sync del servizio Ingestion) sulla stessa serie non devono correre in
+    // parallelo — l'upsert è SELECT-poi-INSERT e la collisione sull'indice unico sporcherebbe
+    // LastSyncStatus (verificato dal vivo in E2E). Statico: i lock sono di processo, condivisi
+    // tra le istanze scoped; mai rimossi (bounded dal numero di serie, costo trascurabile).
+    // In modalità remota tutti i percorsi di sync convergono nell'unico processo Ingestion
+    // (replicas: 1), quindi questo lock chiude la corsa davvero, non solo in-process.
+    private static readonly ConcurrentDictionary<int, SemaphoreSlim> SeriesLocks = new();
+
     public async Task<int> SyncSeriesAsync(int trackedSeriesId, CancellationToken ct = default)
+    {
+        var gate = SeriesLocks.GetOrAdd(trackedSeriesId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            return await SyncSeriesLockedAsync(trackedSeriesId, ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<int> SyncSeriesLockedAsync(int trackedSeriesId, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
