@@ -1,0 +1,59 @@
+# PRIMA NetworkPolicy del progetto (Fase 2b). Perché proprio qui e non su ingestion/ml:
+#
+# TradingCommandService espone ConfirmOrder (sblocca il piazzamento REALE di un ordine Live) e
+# StartLane(LIVE) (avvia una sessione con denaro vero). Nel monolite quelle azioni sono dietro
+# l'[Authorize(Admin,Manager)] di Trading.razor; una volta estratte dietro gRPC quel gate NON
+# esiste più a livello RPC — chiunque possa aprire una connessione al pod può muovere soldi.
+# Per ingestion/ml il confine "rete del cluster" è accettabile (sync di candele, inferenza in sola
+# lettura); qui non lo è. Finché non c'è autenticazione sul canale (mTLS/token), l'unico controllo
+# di accesso è questo: solo il pod ui può parlare col trading.
+#
+# ⚠ NON È ENFORCED SU OGNI CLUSTER. Una NetworkPolicy è applicata dal CNI: senza un CNI che la
+# implementi viene accettata dall'API server e IGNORATA, in silenzio — sembra protetto e non lo è.
+# In particolare il CNI di default di kind (kindnet) NON le applica: per una verifica reale serve
+# un cluster con Calico/Cilium. Prima di considerare questo confine attivo in un ambiente, provarlo
+# davvero (vedi infra/k8s/README.md per il test da un pod di un namespace terzo).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: procionemgr-trading-allow-ui-only
+  namespace: procionemgr-trading
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: trading
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: trading
+  # Solo Ingress: l'egress resta libero di proposito — il servizio DEVE poter uscire verso il DNS
+  # del cluster, il Postgres dell'host e le API degli exchange (Binance/Bitget). Elencare qui un
+  # egress incompleto significherebbe un motore che non riesce a piazzare ordini.
+  policyTypes:
+    - Ingress
+  ingress:
+    # Regola 1 — i COMANDI (8080, gRPC): solo il pod del monolite/UI.
+    - from:
+        # Namespace + label di componente. Serve la coppia: il solo namespaceSelector aprirebbe a
+        # QUALSIASI pod del namespace ui, il solo podSelector varrebbe unicamente dentro
+        # procionemgr-trading (dove il pod ui non sta). Attenzione: dentro un singolo elemento
+        # `from`, namespaceSelector e podSelector sono in AND; separarli con un "-" li renderebbe
+        # un OR, aprendo di fatto il servizio a tutto il namespace ui.
+        # kubernetes.io/metadata.name è messa da Kubernetes su ogni namespace (>= 1.21).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: procionemgr-ui
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: ui
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Regola 2 — le PROBE (8081, /health): da qualunque origine, di proposito.
+    # `ports` senza `from` = "chiunque, ma solo su questa porta". Le probe di readiness/liveness
+    # partono dal KUBELET (IP del nodo), non da un pod: non sono esprimibili con un podSelector, e
+    # una policy che le bloccasse manderebbe il pod in CrashLoop — cioè un trading fermo. La porta
+    # restituisce solo {status:ok}: nessun dato, nessun comando, niente da proteggere.
+    - ports:
+        - protocol: TCP
+          port: 8081

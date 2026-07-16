@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Microservizio di trading (Fase 2b "Da Monolite a Microservizi"). Riusa VERBATIM
+       TradingEngine/TradingWorker/ExecutionWorker/EnsembleManager del monolite via ProjectReference
+       (stesso pattern di ProcioneMGR.Ingestion/ProcioneMGR.Ml): la logica di esecuzione ordini non
+       viene riscritta né duplicata, cambia solo l'host che la ospita.
+
+       Ospita TUTTE e 3 le lane in un solo processo (deployment replicas:1 + strategy:Recreate): è
+       ciò che rende sufficiente il SemaphoreSlim per-istanza del motore, senza lock distribuito. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lato server gRPC (AddGrpc/MapGrpcService). I contratti generati arrivano da Contracts. -->
+    <PackageReference Include="Grpc.AspNetCore" Version="2.66.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProcioneMGR\ProcioneMGR.csproj" />
+    <ProjectReference Include="..\ProcioneMGR.Contracts\ProcioneMGR.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

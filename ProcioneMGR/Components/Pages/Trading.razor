@@ -1,5 +1,6 @@
 @page "/trading"
 @rendermode InteractiveServer
+@using Grpc.Core
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Extensions.Options
@@ -180,6 +181,15 @@
     </dl>
 </GuidaPanel>
 
+@if (_staleSince is DateTime staleSince)
+{
+    <div class="alert alert-warning fw-bold">
+        ⚠️ DATI TRADING NON AGGIORNATI da @((int)(DateTime.UtcNow - staleSince).TotalSeconds)s: il servizio di
+        trading non risponde (@_lastStaleReason). Quanto vedi qui sotto è l'ultimo stato noto, <u>non</u>
+        quello attuale — posizioni e PnL potrebbero essere cambiati. I comandi falliranno finché il
+        servizio non torna.
+    </div>
+}
 @if (_status?.IsEmergencyStopped == true)
 {
     <div class="alert alert-danger fw-bold">
@@ -469,6 +479,17 @@
     private bool _isError;
     private string? _message;
 
+    /// <summary>
+    /// Da quando il servizio di trading remoto (Fase 2b, Trading:UseRemoteTrading) non risponde;
+    /// null se l'ultimo refresh è andato a buon fine. Resta sempre null col motore locale, dove una
+    /// chiamata in-process non può fallire per rete.
+    /// </summary>
+    private DateTime? _staleSince;
+
+    /// <summary>Codice di stato gRPC dell'ultimo fallimento (Unavailable, DeadlineExceeded, ...): dice
+    /// all'operatore se il servizio è giù o solo lento/rotto.</summary>
+    private string? _lastStaleReason;
+
     private System.Threading.Timer? _timer;
     private bool _running => _status?.IsRunning == true;
 
@@ -549,6 +570,22 @@
                     },
                 }
                 : new();
+
+            // Giro riuscito: quello a schermo è di nuovo lo stato reale.
+            _staleSince = null;
+            _lastStaleReason = null;
+        }
+        catch (RpcException ex)
+        {
+            // QUALUNQUE fallimento gRPC, non solo Unavailable: che il servizio sia irraggiungibile
+            // (rolling restart), lento (DeadlineExceeded) o rotto (Internal), il risultato per chi
+            // guarda è identico — i numeri a schermo sono quelli dell'ultimo giro riuscito. I dati
+            // restano (svuotare la pagina durante un riavvio di pochi secondi sarebbe peggio) ma
+            // vanno dichiarati vecchi: un PnL stantio spacciato per attuale è la premessa di una
+            // decisione sbagliata su un'esposizione che non esiste più. Il primo fallimento fissa
+            // l'istante, così il banner mostra da quanto dura.
+            _staleSince ??= DateTime.UtcNow;
+            _lastStaleReason = ex.StatusCode.ToString();
         }
         catch { /* refresh resiliente */ }
         StateHasChanged();
