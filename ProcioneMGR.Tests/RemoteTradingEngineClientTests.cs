@@ -23,11 +23,14 @@ namespace ProcioneMGR.Tests;
 /// Test di <see cref="RemoteTradingEngineClient"/> (Fase 2b microservizi), sui due aspetti che NON
 /// passano da gRPC (quello è coperto da <see cref="TradingGrpcRoundTripTests"/>):
 ///
-/// 1. Le due letture di ordini che bypassano il servizio e interrogano Postgres direttamente. Non si
-///    verificano contro aspettative scritte a mano ma CONTRO IL MOTORE VERO sullo stesso database:
-///    è l'unico modo di dimostrare davvero l'affermazione "identiche riga per riga", e di far
-///    fallire questo test il giorno in cui la query lato TradingEngine cambiasse senza che la copia
-///    qui venga aggiornata (la deriva che il commento nel client mette in guardia).
+/// 1. Le due letture di ordini che bypassano il servizio e interrogano Postgres direttamente,
+///    confrontate CONTRO IL MOTORE VERO sullo stesso database. Nate come prova dell'affermazione
+///    "identiche riga per riga" quando il client portava una COPIA delle query; oggi entrambi i
+///    lati compongono da TradingOrderQueries e la deriva è impossibile per costruzione — il
+///    confronto resta come cintura: fallirebbe se qualcuno reintroducesse una query locale
+///    scavalcando l'helper. (Nota onesta sul suo limite, ed è parte del perché l'helper esiste:
+///    il confronto vede solo le dimensioni presenti nei dati seminati — un filtro aggiunto su una
+///    colonna che qui non varia produrrebbe risultati identici comunque.)
 /// 2. I due metodi del ciclo worker, che devono lanciare invece di fingere un no-op.
 /// </summary>
 [Collection("Postgres")]

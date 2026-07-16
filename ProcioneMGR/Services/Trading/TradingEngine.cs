@@ -1420,10 +1420,9 @@ public sealed class TradingEngine(
 
     private async Task<List<Order>> GetPendingInternalAsync(CancellationToken ct)
     {
+        // Criterio in TradingOrderQueries, condiviso col client remoto: mai due copie che derivano.
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        return await db.Orders.AsNoTracking()
-            .Where(o => o.LaneId == laneId && o.Status == OrderStatus.Pending && o.Mode == TradingMode.Live)
-            .OrderByDescending(o => o.CreatedAtUtc).ToListAsync(ct);
+        return await TradingOrderQueries.PendingLive(db.Orders.AsNoTracking(), laneId).ToListAsync(ct);
     }
 
     public async Task ConfirmOrderAsync(string orderId, string? userId, CancellationToken ct = default)
@@ -1954,10 +1953,9 @@ public sealed class TradingEngine(
 
     public async Task<List<Order>> GetOrderHistoryAsync(DateTime? from = null, CancellationToken ct = default)
     {
+        // Criterio in TradingOrderQueries, condiviso col client remoto: mai due copie che derivano.
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var q = db.Orders.Where(o => o.LaneId == laneId);
-        if (from is DateTime f) q = q.Where(o => o.CreatedAtUtc >= f);
-        return await q.OrderByDescending(o => o.CreatedAtUtc).Take(500).ToListAsync(ct);
+        return await TradingOrderQueries.History(db.Orders, laneId, from).ToListAsync(ct);
     }
 
     public async Task<TradingPerformance> GetPerformanceAsync(DateTime? from = null, CancellationToken ct = default)
@@ -1974,18 +1972,42 @@ public sealed class TradingEngine(
         var losses = trades.Where(t => t.Pnl < 0m).ToList();
         var grossWin = wins.Sum(t => t.Pnl);
         var grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
-        var ppy = Statistics.PeriodsPerYear(_state.Timeframe);
+
+        // Snapshot ATOMICO di curva e stato sotto il gate — poi si calcola fuori. Prima si leggeva
+        // _equity viva in TRE punti (ToList, SharpeRatio, MaxDrawdown) mentre ProcessCandleAsync
+        // poteva farci Add sotto il SUO gate: una collisione lancia ("collection modified") o copia
+        // una curva strappata. In locale l'eccezione moriva nel catch del refresh della UI; in
+        // remoto diventava una RpcException(Unknown) sul filo — banner "dati non aggiornati" per un
+        // falso allarme e un ciclo di PromotionEvaluator saltato. Il gate è tenuto per il tempo di
+        // una copia (≤10k elementi, vedi TrimEquity), non per i calcoli: nessun impatto percepibile
+        // sul TradingWorker. Bonus: curva restituita e metriche calcolate sono ORA lo stesso
+        // istante, prima potevano differire di qualche candela fra loro.
+        List<EquityPoint> equity;
+        decimal totalCapital, realizedPnl, sessionMaxDrawdown;
+        string timeframe;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            equity = _equity.ToList();
+            totalCapital = _state.TotalCapital;
+            realizedPnl = _state.RealizedPnl;
+            sessionMaxDrawdown = _state.MaxDrawdownPercent;
+            timeframe = _state.Timeframe;
+        }
+        finally { _gate.Release(); }
+
+        var ppy = Statistics.PeriodsPerYear(timeframe);
 
         return new TradingPerformance
         {
-            EquityCurve = _equity.ToList(),
-            TotalReturn = _state.TotalCapital > 0m ? _state.RealizedPnl / _state.TotalCapital * 100m : 0m,
+            EquityCurve = equity,
+            TotalReturn = totalCapital > 0m ? realizedPnl / totalCapital * 100m : 0m,
             // Sharpe calcolato sulla FINESTRA ritenuta della curva (bounded, vedi TrimEquity):
             // per una metrica di promozione la storia recente è quella che conta. Il MaxDrawdown
             // invece è il PEGGIORE tra ricalcolo locale e valore di sessione persistito — un
             // riavvio (curva vuota) o il trim non possono più "amnesiare" un drawdown già subito.
-            SharpeRatio = Statistics.SharpeRatio(_equity, ppy),
-            MaxDrawdown = Math.Max(_state.MaxDrawdownPercent, MaxDrawdown(_equity)),
+            SharpeRatio = Statistics.SharpeRatio(equity, ppy),
+            MaxDrawdown = Math.Max(sessionMaxDrawdown, MaxDrawdown(equity)),
             TotalTrades = trades.Count,
             WinRate = trades.Count > 0 ? (decimal)wins.Count / trades.Count * 100m : 0m,
             AverageWin = wins.Count > 0 ? wins.Average(t => t.Pnl) : 0m,
