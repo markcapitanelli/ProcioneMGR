@@ -286,60 +286,11 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Admin.DatabaseBackupService>(
 // e l'isolamento dati e' garantito dalla colonna discriminante LaneId (TradingEntities/
 // EnsembleState) invece che da DbContext separati. Ogni corsia ha la propria istanza keyed
 // di IEnsembleManager/ITradingEngine + il proprio TradingWorker/EnsembleRebalanceWorker.
-for (var lane = 0; lane < TradingLanes.Count; lane++)
-{
-    var laneId = lane;
-
-    builder.Services.AddKeyedSingleton<IEnsembleManager>(laneId, (sp, _) => new EnsembleManager(
-        laneId,
-        sp.GetRequiredService<IServiceScopeFactory>(),
-        sp.GetRequiredService<IRegimeDetector>(),
-        sp.GetRequiredService<IMarketFeatureExtractor>(),
-        sp.GetRequiredService<ProcioneMGR.Services.Monitoring.IStrategyDecayMonitor>(),
-        sp.GetRequiredService<ILogger<EnsembleManager>>()));
-
-    builder.Services.AddKeyedSingleton<ITradingEngine>(laneId, (sp, _) => new TradingEngine(
-        laneId,
-        sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
-        sp.GetRequiredService<IStrategyFactory>(),
-        sp.GetRequiredService<ITechnicalIndicatorsService>(),
-        sp.GetRequiredService<IExchangeClientFactory>(),
-        sp.GetRequiredKeyedService<IEnsembleManager>(laneId),
-        sp.GetRequiredService<IOptionsMonitor<SafetyConfiguration>>(),
-        sp.GetRequiredService<IOptionsMonitor<LiveExecutionOptions>>(),
-        sp.GetRequiredService<ProcioneMGR.Services.Execution.IExecutionAlgorithmFactory>(),
-        sp.GetRequiredService<ILogger<TradingEngine>>(),
-        sp.GetRequiredService<ProcioneMGR.Services.Observability.ProcioneMetrics>(),
-        sp.GetRequiredService<ProcioneMGR.Services.Registry.IModelRegistry>(),
-        sp.GetRequiredService<ProcioneMGR.Services.Alpha.IAlphaFactorFactory>(),
-        sp.GetRequiredService<ProcioneMGR.Services.Alpha.IFactorCache>(),
-        sp.GetRequiredService<IMasterKeyStatus>(),
-        // Dual-read ML (Fase 2a): opzionali. GetService (non Required): null se Ml:RemoteUrl non è
-        // configurato → confronto spento, comportamento identico a prima.
-        sp.GetService<ProcioneMGR.Services.ML.IMlComparisonClient>(),
-        sp.GetService<IOptionsMonitor<ProcioneMGR.Services.ML.MlComparisonOptions>>()));
-
-    builder.Services.AddSingleton<IHostedService>(sp => new TradingWorker(
-        sp.GetRequiredKeyedService<ITradingEngine>(laneId),
-        sp.GetRequiredKeyedService<IEnsembleManager>(laneId),
-        sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
-        sp.GetRequiredService<ILogger<TradingWorker>>()));
-
-    builder.Services.AddSingleton<IHostedService>(sp => new ExecutionWorker(
-        sp.GetRequiredKeyedService<ITradingEngine>(laneId),
-        sp.GetRequiredService<IOptionsMonitor<LiveExecutionOptions>>(),
-        sp.GetRequiredService<ILogger<ExecutionWorker>>()));
-
-    builder.Services.AddSingleton<IHostedService>(sp => new EnsembleRebalanceWorker(
-        sp.GetRequiredKeyedService<IEnsembleManager>(laneId),
-        sp.GetRequiredService<ILogger<EnsembleRebalanceWorker>>()));
-}
-
-// Fallback non-keyed: risolve sempre la corsia 0. Serve ai consumer non ancora aggiornati con
-// un selettore di corsia esplicito (dashboard, retraining regime, applicazione raccomandazioni
-// pipeline) - comportamento identico a prima dell'introduzione delle corsie multiple.
-builder.Services.AddSingleton<IEnsembleManager>(sp => sp.GetRequiredKeyedService<IEnsembleManager>(0));
-builder.Services.AddSingleton<ITradingEngine>(sp => sp.GetRequiredKeyedService<ITradingEngine>(0));
+//
+// La composizione vive in AddTradingLanes (condivisa verbatim con l'host ProcioneMGR.Trading,
+// Fase 2b): è lì che il toggle Trading:UseRemoteTrading commuta fra motore locale e client
+// remoto, garantendo per costruzione che i due non siano mai attivi insieme sulla stessa corsia.
+builder.Services.AddTradingLanes(builder.Configuration);
 
 // --- Autonomous Pipeline (orchestratore end-to-end: dati -> feature -> discovery -> holdout -> raccomandazione) ---
 // Gli stage sono transient e risolti nello scope del run (dipendono da servizi scoped come
