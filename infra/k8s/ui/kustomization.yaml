@@ -20,9 +20,21 @@ namespace: procionemgr-ui
 
 resources:
   - pvc.yaml
-  - configmap.yaml
   - deployment.yaml
   - service.yaml
+
+# configMapGenerator e non un configmap.yaml scritto a mano: il ConfigMap generato porta un HASH nel
+# nome (ui-config-<hash>), e il riferimento nel Deployment viene riscritto di conseguenza. Cambiare
+# un toggle produce quindi un nome nuovo => il pod viene sostituito e rilegge le env.
+#
+# Con un ConfigMap "nudo" il nome resta uguale: le variabili d'ambiente si leggono SOLO all'avvio del
+# container, quindi il pod continuerebbe a girare con i valori vecchi mentre ArgoCD dichiara
+# "Synced". Su un toggle come Trading__UseRemoteTrading quel divario e' pericoloso: un rollback
+# sembrerebbe applicato e non lo sarebbe.
+configMapGenerator:
+  - name: ui-config
+    envs:
+      - ui-config.env
 
 images:
   - name: ghcr.io/markcapitanelli/procionemgr

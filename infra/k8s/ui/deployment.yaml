@@ -106,10 +106,20 @@ spec:
               cpu: "200m"
               memory: "512Mi"
             limits:
-              # Più alto degli altri servizi: il monolite ospita ancora pipeline/discovery/backtest
-              # in-process (bounded context non ancora estratti), che sono CPU-heavy.
+              # Molto più alti degli altri servizi, e non per abbondanza: il monolite ospita ancora
+              # in-process i bounded context non estratti — l'Autonomous Pipeline (16 stage, con
+              # training ML.NET e discovery) e il suo scheduler Cronos, che possono partire da soli
+              # a notte fonda. Sono gli stessi carichi che in locale giravano senza alcun tetto.
+              #
+              # ⚠ Un limite di memoria troppo stretto qui non degrada: il kernel manda SIGKILL
+              # (exit 137) e il run in corso muore a metà, lasciando righe orfane sul DB
+              # (PipelineEngine tiene lo stato in memoria e non è resiliente al riavvio). Se un run
+              # notturno sparisce senza errori applicativi, sospettare l'OOM-kill PRIMA del codice:
+              #   kubectl get pod -n procionemgr-ui -o jsonpath='{..lastState.terminated.reason}'
+              # Alzare questo tetto è legittimo; la soluzione strutturale è estrarre la pipeline in
+              # un Job K8s con risorse proprie (fuori dallo scope della Fase 3).
               cpu: "2"
-              memory: "2Gi"
+              memory: "4Gi"
       volumes:
         - name: shared-config
           persistentVolumeClaim:

@@ -8,9 +8,13 @@
 # HTTP/2 di Kestrel): scritta a vista sembrava a posto.
 #
 # volumeName + storageClassName: "" NON sono ornamenti: senza, il provisioning dinamico assegnerebbe
-# a questa PVC una PV tutta sua, e quella di procionemgr-ui un'altra ancora. Tutto risulterebbe
-# Bound e funzionante, ma i due pod scriverebbero e leggerebbero due file diversi — il monolite
-# mostrerebbe limiti di rischio che il motore non applica. Vedi shared/pv-config.yaml.
+# a questa PVC una PV tutta sua (backed da una directory PROPRIA), e quella di procionemgr-ui
+# un'altra ancora. Tutto risulterebbe Bound e funzionante, ma i due pod leggerebbero due file
+# diversi — il monolite mostrerebbe limiti di rischio che il motore non applica.
+#
+# Ogni PVC ha la SUA PV (il binding PV<->PVC è 1:1: due PVC non possono condividere una PV, nemmeno
+# in RWX). La condivisione avviene sotto: le due PV puntano allo stesso storage. Vedi
+# shared/pv-config.yaml, che spiega perché e come.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -22,8 +26,8 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: ""                  # disattiva il provisioning dinamico: bind statico
-  volumeName: procionemgr-config-pv     # la STESSA PV usata da procionemgr-ui
+  storageClassName: ""                          # disattiva il provisioning dinamico: bind statico
+  volumeName: procionemgr-config-pv-trading     # la PV di questo namespace (stesso storage di quella di ui)
   resources:
     requests:
       storage: 64Mi
