@@ -238,8 +238,11 @@ message GetPerformanceResponse {
   procionemgr.common.v1.DecimalValue profit_factor = 9;
   // Storico completo dei trade chiusi da from_utc. Nessun consumer attuale lo legge (Trading.razor
   // usa equity_curve, PromotionEvaluator le metriche aggregate), ma ITradingEngine lo promette:
-  // ometterlo renderebbe il client remoto silenziosamente diverso da quello locale. Limite noto:
-  // a storico molto lungo può avvicinare il tetto di 4MB del messaggio gRPC — usare from_utc.
+  // ometterlo renderebbe il client remoto silenziosamente diverso da quello locale.
+  // Dimensioni: è il campo che domina il payload. Trading.razor si limita da sé (from_utc = 90
+  // giorni); per i chiamanti che devono vedere tutto lo storico (PromotionEvaluator, from = avvio
+  // sessione) il canale client alza MaxReceiveMessageSize a 64MB — vedi AddTradingLanes. Un client
+  // NUOVO che chiami senza from_utc e col default di 4MB se lo deve ricordare.
   repeated TradeRecord trades = 10;
 }
 

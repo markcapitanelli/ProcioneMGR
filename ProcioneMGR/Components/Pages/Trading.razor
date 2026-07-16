@@ -554,11 +554,27 @@
     {
         try
         {
-            _status = await Engine.GetStatusAsync();
-            _positions = await Engine.GetOpenPositionsAsync();
-            _orders = await Engine.GetOrderHistoryAsync();
-            _pending = await Engine.GetPendingOrdersAsync();
-            var perf = await Engine.GetPerformanceAsync();
+            // Le cinque letture sono indipendenti: in parallelo, non in fila. In modalità remota
+            // (Trading:UseRemoteTrading) tre di queste sono round-trip gRPC — sommarne le latenze
+            // ogni 2 secondi era solo attesa gratuita. Il motore regge già le chiamate concorrenti
+            // per costruzione: il TradingWorker gli parla in parallelo alla UI da sempre.
+            var statusTask = Engine.GetStatusAsync();
+            var positionsTask = Engine.GetOpenPositionsAsync();
+            var ordersTask = Engine.GetOrderHistoryAsync();
+            var pendingTask = Engine.GetPendingOrdersAsync();
+            // Finestra di 90 giorni (stesso taglio di Ensemble.razor), NON tutto lo storico: questa
+            // pagina di perf usa solo l'equity curve (già bounded a 10k punti dal motore, M1) — i
+            // TradeRecord non li legge nessuno qui. Senza `from` era un full scan della tabella
+            // ogni 2 secondi in locale, e in remoto l'intero storico serializzato sul filo a ogni
+            // giro, col tetto dei 4MB gRPC come orizzonte certo su una lane longeva.
+            var perfTask = Engine.GetPerformanceAsync(DateTime.UtcNow.AddDays(-90));
+            await Task.WhenAll(statusTask, positionsTask, ordersTask, pendingTask, perfTask);
+
+            _status = statusTask.Result;
+            _positions = positionsTask.Result;
+            _orders = ordersTask.Result;
+            _pending = pendingTask.Result;
+            var perf = perfTask.Result;
             _equity = perf.EquityCurve.Count > 0
                 ? new()
                 {

@@ -1,9 +1,18 @@
-# Cluster kind locale per la Fase 0 della migrazione a microservizi (vedi infra/k8s/README.md).
-# Mono-nodo: sufficiente per un ambiente di sviluppo single-developer. Nessun workload applicativo
-# viene deployato in Fase 0 — il cluster serve a validare tooling e nomenclatura namespace.
+# Cluster kind locale per la migrazione a microservizi (vedi infra/k8s/README.md).
+# Mono-nodo: sufficiente per un ambiente di sviluppo single-developer.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: procionemgr-dev
+networking:
+  # Calico al posto di kindnet (Fase 3, consolidamento). kindnet ACCETTA le NetworkPolicy ma le
+  # IGNORA: la policy davanti a procionemgr-trading — l'unico controllo di accesso su ConfirmOrder,
+  # che sblocca ordini Live reali — risultava "applicata" senza esserlo. Un confine di sicurezza che
+  # sembra attivo e non lo è vale meno di nessun confine: almeno quello dichiarato non inganna.
+  # Il CNI lo installa scripts/k8s-bootstrap.ps1 (manifest Calico pinnato) subito dopo la creazione.
+  # NB: un cluster creato PRIMA di questo cambio va ricreato (k8s-teardown + k8s-bootstrap).
+  disableDefaultCNI: true
+  # Allineato al default del manifest Calico (CALICO_IPV4POOL_CIDR): CIDR diversi = pod senza rete.
+  podSubnet: "192.168.0.0/16"
 nodes:
   - role: control-plane
     # Porte 80/443 mappate sull'host: pronte per un futuro ingress-nginx (Fase 1+),
