@@ -8,6 +8,7 @@
 @using ProcioneMGR.Services.Ingestion
 @using ProcioneMGR.Services.Trading
 @attribute [Authorize]
+@implements IDisposable
 
 @inject IOhlcvIngestionService Ingestion
 @inject IExchangeClientFactory ExchangeFactory
@@ -32,7 +33,7 @@
     <dl class="row mb-0">
         <dt class="col-sm-3">Carica simboli</dt>
         <dd class="col-sm-9">Chiede all'exchange l'elenco delle coppie disponibili, per sapere cosa puoi effettivamente richiedere.</dd>
-        <dt class="col-sm-3">Fetch Data</dt>
+        <dt class="col-sm-3">Scarica dati</dt>
         <dd class="col-sm-9">Scarica le candele storiche per il symbol/timeframe/periodo scelto (se già presenti nel database, non le riscarica) e le mostra nel grafico sotto.</dd>
         <dt class="col-sm-3">EMA 20/50, Bollinger, RSI, MACD</dt>
         <dd class="col-sm-9">Indicatori tecnici sovrapposti al grafico — si possono attivare/disattivare senza dover riscaricare i dati, vengono ricalcolati subito sulle candele già in memoria.</dd>
@@ -120,7 +121,7 @@
                             {
                                 <span class="spinner-border spinner-border-sm me-1"></span>
                             }
-                            Fetch Data
+                            Scarica dati
                         </button>
                     </div>
                     <div class="col-auto">
@@ -365,6 +366,16 @@
     }
 
     private void Cancel() => _cts?.Cancel();
+
+    /// <summary>
+    /// Se l'utente naviga via a metà fetch, l'ingestione NON deve continuare in background:
+    /// il componente muore ma il loop di download proseguirebbe fino alla fine dell'intervallo
+    /// (lavoro orfano + connessioni DB). Cancellare qui chiude il ciclo di vita in modo pulito.
+    /// </summary>
+    public void Dispose()
+    {
+        try { _cts?.Cancel(); } catch (ObjectDisposedException) { /* fetch già concluso */ }
+    }
 
     private void SetStatus(string text, bool error)
     {
