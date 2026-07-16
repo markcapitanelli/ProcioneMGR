@@ -42,7 +42,18 @@ public sealed class PostgresFixture : IAsyncLifetime
         var external = Environment.GetEnvironmentVariable("POSTGRES_TEST_ADMIN");
         if (string.IsNullOrWhiteSpace(external))
         {
-            _container = new PostgreSqlBuilder().WithImage("postgres:16-alpine").Build();
+            _container = new PostgreSqlBuilder().WithImage("postgres:16-alpine")
+                // max_connections: il default (100) è un tetto GLOBALE del server, non per database.
+                // Ogni classe di test apre pool Npgsql propri (connection string unica per il DB
+                // isolato) e le connessioni idle restano vive ben oltre il singolo test: attorno ai
+                // ~910 test la suite era già al limite, e l'aggiunta di 2 test ha iniziato a far
+                // fallire vittime INCOLPEVOLI (chiunque apra la connessione dopo) con
+                // "53300: sorry, too many clients already" — riproducibile in suite piena, verde in
+                // isolamento. 300 dà margine per anni di test additivi; il costo è solo RAM del
+                // container effimero. NB: vale solo per il container; su un server esterno
+                // (POSTGRES_TEST_ADMIN) il limite lo decide chi lo amministra.
+                .WithCommand("-c", "max_connections=300")
+                .Build();
         }
         else
         {

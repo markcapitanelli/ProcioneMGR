@@ -126,7 +126,8 @@ public class PipelineEngineConcurrencyTests : IAsyncDisposable
         // Recreate) con un run in corso: la riga resta "Running" sul DB ma nessuno la sta più
         // eseguendo, e ResumeRunAsync la rifiuta credendola viva — bloccata per sempre. La bonifica
         // a startup la porta a "Paused", cioè ESATTAMENTE riprendibile.
-        var (engine, dbFactory) = await BuildAsync(new BlockingStage(new TaskCompletionSource()));
+        var release = new TaskCompletionSource();
+        var (engine, dbFactory) = await BuildAsync(new BlockingStage(release));
 
         var configId = await SeedConfigAsync(dbFactory, "Config orfana");
         Guid orphanId, completedId;
@@ -155,10 +156,23 @@ public class PipelineEngineConcurrencyTests : IAsyncDisposable
         }
 
         // La prova che "Paused" era la scelta giusta: il run bonificato si può davvero riprendere.
-        // (Riparte dalla fase Blocking mai completata; Cancel evita di lasciare un Task.Run appeso.)
         var resumedId = await engine.ResumeRunAsync(orphanId);
         Assert.Equal(orphanId, resumedId);
+
+        // Chiusura DETERMINISTICA del background: Cancel da solo non basta, la fase finta aspetta
+        // release.Task e non osserva il token — senza SetResult il Task.Run resterebbe appeso oltre
+        // la fine del test, con le sue connessioni vive (è il genere di perdita che, sommata, ha
+        // fatto esplodere "too many clients" sull'intera suite). Poi si attende che il motore abbia
+        // davvero finito, così la dispose del provider non corre contro le sue ultime scritture.
         engine.Cancel(orphanId);
+        release.SetResult();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync();
+            if (await db.PipelineRuns.AsNoTracking().AnyAsync(r => r.Id == orphanId && r.Status != "Running")) break;
+            await Task.Delay(100);
+        }
     }
 
     [Fact]
