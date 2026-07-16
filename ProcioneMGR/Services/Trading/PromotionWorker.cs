@@ -59,6 +59,17 @@ public sealed class PromotionWorker(
             {
                 await ActAsync(d.LaneId, TradingMode.Paper, d.Reason, ct);
             }
+            else if (d.ShouldPromote || d.ShouldDemote)
+            {
+                // Difesa in profondità (livello 2): la decisione CHIEDE un'azione ma NON corrisponde a
+                // nessuna transizione lecita (Paper→Testnet / Testnet→Paper) — sintomo di evaluator
+                // buggato o config corrotta, es. SuggestedMode=Live. Non agiamo MAI (il confine
+                // anti-Live regge sotto), ma un bug così NON deve sparire in silenzio: qui diventa un
+                // errore visibile in log/observability invece di uno scarto muto.
+                logger.LogError(
+                    "Corsia {Lane}: decisione di promozione INCOERENTE ignorata (promote={Promote}, demote={Demote}, suggested={Suggested}, current={Current}). {Reason}",
+                    d.LaneId, d.ShouldPromote, d.ShouldDemote, d.SuggestedMode, d.CurrentMode, d.Reason);
+            }
         }
     }
 

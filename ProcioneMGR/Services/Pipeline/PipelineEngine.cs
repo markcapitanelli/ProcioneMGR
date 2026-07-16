@@ -447,11 +447,33 @@ public sealed class PipelineEngine(
                         ctx.Seed,
                     },
                     createdBy: ctx.UserId);
-                await experimentTracker.SafeLogMetricsAsync(expRunId, new Dictionary<string, decimal>
+                // Metriche confrontabili nella tabella /experiments. Oltre ai conteggi, il PROFILO
+                // del miglior sopravvissuto (per Sharpe holdout, la metrica-verdetto mai usata per la
+                // selezione) e i due indicatori anti-overfitting del pannello (Deflated Sharpe del
+                // migliore, PBO comune): così due run di pipeline si confrontano senza aprire lo snapshot.
+                var survivors = ctx.Validated.Where(v => v.Survived).ToList();
+                var best = survivors.OrderByDescending(v => v.HoldoutSharpe).FirstOrDefault();
+                var pipelineMetrics = new Dictionary<string, decimal>
                 {
                     ["Stages"] = ctx.StageSummaries.Count,
-                    ["Survivors"] = ctx.Validated.Count(v => v.Survived),
-                });
+                    ["Candidates"] = ctx.Validated.Count,
+                    ["Survivors"] = survivors.Count,
+                };
+                if (best is not null)
+                {
+                    pipelineMetrics["BestHoldoutSharpe"] = best.HoldoutSharpe;
+                    pipelineMetrics["BestHoldoutReturn"] = best.HoldoutReturn;
+                    pipelineMetrics["BestHoldoutMaxDrawdown"] = best.HoldoutMaxDrawdown;
+                    if (best.DeflatedSharpe is double dsr && double.IsFinite(dsr))
+                        pipelineMetrics["BestDeflatedSharpe"] = (decimal)Math.Clamp(dsr, -1e6, 1e6);
+                }
+                // Il PBO è del PANNELLO (comune a tutti i candidati): leggilo anche se non sono
+                // sopravvissuti candidati (un run che filtra tutto ha comunque un PBO informativo).
+                var panelPbo = ctx.Validated.FirstOrDefault(v => v.PanelPbo.HasValue)?.PanelPbo;
+                if (panelPbo is double pbo && double.IsFinite(pbo))
+                    pipelineMetrics["PanelPbo"] = (decimal)Math.Clamp(pbo, -1e6, 1e6);
+
+                await experimentTracker.SafeLogMetricsAsync(expRunId, pipelineMetrics);
                 await experimentTracker.SafeCompleteAsync(expRunId, status, errorLog);
             }
         }
