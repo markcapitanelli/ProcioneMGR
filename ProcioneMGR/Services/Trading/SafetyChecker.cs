@@ -27,6 +27,15 @@ public static class SafetyChecker
         var capital = status.TotalCapital;
         var notional = order.Notional;
 
+        // 0) Base di calcolo: i check 1-3 confrontano contro percentuali del capitale. Con
+        //    capitale <= 0 (config errata, balance non caricato, conto vuoto) non esiste un
+        //    denominatore valido: fail-CLOSED, nessun ordine è dimensionabile.
+        if (capital <= 0m)
+        {
+            result.Violations.Add(
+                $"Capitale totale non positivo ({capital:N2}): i limiti percentuali non sono verificabili, ordine rifiutato.");
+        }
+
         // 1) Dimensione massima della singola posizione.
         if (capital > 0m && notional > capital * cfg.MaxPositionSizePercent / 100m)
         {
@@ -41,11 +50,14 @@ public static class SafetyChecker
                 $"Esposizione totale eccessiva: {status.UsedCapital + notional:N2} > {cfg.MaxTotalExposurePercent}% del capitale ({capital * cfg.MaxTotalExposurePercent / 100m:N2}).");
         }
 
-        // 3) Perdita giornaliera massima (CRITICA -> emergency stop).
-        if (capital > 0m && status.DailyPnl < 0m && -status.DailyPnl > capital * cfg.MaxDailyLossPercent / 100m)
+        // 3) Perdita giornaliera massima (CRITICA -> emergency stop). Confronto `>=` (fail-closed):
+        //    AL limite si ferma, coerente col drawdown al punto 4 — prima la perdita giornaliera
+        //    usava `>` (permessa esattamente al limite), un'asimmetria senza motivo. Safety-first:
+        //    alla soglia esatta si blocca, non si aspetta il centesimo successivo.
+        if (capital > 0m && status.DailyPnl < 0m && -status.DailyPnl >= capital * cfg.MaxDailyLossPercent / 100m)
         {
             result.Violations.Add(
-                $"Perdita giornaliera {-status.DailyPnl:N2} oltre il limite {cfg.MaxDailyLossPercent}% ({capital * cfg.MaxDailyLossPercent / 100m:N2}).");
+                $"Perdita giornaliera {-status.DailyPnl:N2} al limite o oltre {cfg.MaxDailyLossPercent}% ({capital * cfg.MaxDailyLossPercent / 100m:N2}).");
             result.RequiresEmergencyStop = true;
         }
 

@@ -73,8 +73,12 @@
             <table class="table table-sm align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Corsia</th><th>Simbolo</th><th>Modalità</th><th class="text-end">Sharpe</th><th class="text-end">Trade</th>
-                        <th class="text-end">Max DD</th><th class="text-end">Win</th><th class="text-end">Osserv.</th><th>Stato</th><th></th>
+                        @{ const string sinceStartHint = "Metriche misurate DALL'AVVIO della corsia (stessa base della decisione di promozione): possono differire dai KPI del pannello di controllo qui sotto, che usano una finestra di 90 giorni."; }
+                        <th>Corsia</th><th>Simbolo</th><th>Modalità</th>
+                        <th class="text-end" title="@sinceStartHint">Sharpe</th>
+                        <th class="text-end" title="@sinceStartHint">Trade</th>
+                        <th class="text-end">Max DD</th><th class="text-end">Win</th>
+                        <th class="text-end" title="@sinceStartHint">Osserv.</th><th>Stato</th><th></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -141,7 +145,7 @@
         <dd class="col-sm-9">Ordini <strong>reali</strong> ma su un ambiente di prova dell'exchange (Binance Testnet) con soldi finti forniti dall'exchange stesso — serve una credenziale testnet salvata in <a href="settings/exchanges">Credenziali Exchange</a>. Un passo intermedio realistico prima del Live.</dd>
         <dt class="col-sm-3">Modalità: Live</dt>
         <dd class="col-sm-9">Soldi <strong>veri</strong>. Richiede una conferma esplicita per partire, e ogni singolo ordine automatico resta "in attesa" finché non lo confermi tu manualmente (vedi sotto) — un'ulteriore rete di sicurezza oltre alla configurazione.</dd>
-        <dt class="col-sm-3">Start / Stop Trading</dt>
+        <dt class="col-sm-3">Avvia / Ferma trading</dt>
         <dd class="col-sm-9">Avvia o ferma il motore. In Paper riparte da zero ogni volta; in Testnet/Live riprende lo stato (posizioni aperte incluse) da dove era rimasto, anche dopo un riavvio dell'applicazione.</dd>
         <dt class="col-sm-3">EMERGENCY STOP</dt>
         <dd class="col-sm-9">Chiude <strong>immediatamente tutte</strong> le posizioni aperte e blocca nuovi ordini — da usare se qualcosa non va e vuoi uscire subito da ogni esposizione, senza aspettare i segnali della strategia.</dd>
@@ -220,11 +224,11 @@
             <div class="d-flex gap-2">
                 @if (!_running)
                 {
-                    <button class="btn btn-success" @onclick="StartAsync" disabled="@(_mode == "Live" && !_liveConfirmed)">▶ Start Trading</button>
+                    <button class="btn btn-success" @onclick="StartAsync" disabled="@(_mode == "Live" && !_liveConfirmed)">▶ Avvia trading</button>
                 }
                 else
                 {
-                    <button class="btn btn-warning" @onclick="StopAsync">⏸ Stop Trading</button>
+                    <button class="btn btn-warning" @onclick="StopAsync">⏸ Ferma trading</button>
                 }
                 @if (!_confirmEmergency)
                 {
@@ -398,7 +402,7 @@
                 <div class="row g-3">
                     <div class="col-md-4">
                         <label class="form-label small">Max size per posizione (% capitale)</label>
-                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxPositionSizePercent" />
+                        <input id="safety_maxpos" type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxPositionSizePercent" />
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Size per apertura (% capitale; margine sui Futures)</label>
@@ -415,7 +419,7 @@
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Max drawdown (%) <span class="text-danger">→ emergency stop</span></label>
-                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxDrawdownPercent" />
+                        <input id="safety_maxdd" type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxDrawdownPercent" />
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Max posizioni aperte</label>
