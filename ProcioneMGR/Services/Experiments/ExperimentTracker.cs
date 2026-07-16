@@ -60,14 +60,20 @@ public sealed class ExperimentTracker : IExperimentTracker
 
     public async Task LogMetricsAsync(Guid runId, IReadOnlyDictionary<string, decimal> metrics, CancellationToken ct = default)
     {
-        await using var db = await _dbFactory.CreateDbContextAsync(ct);
-        var run = await db.ExperimentRuns.FirstOrDefaultAsync(r => r.Id == runId, ct);
-        if (run is null) return;
+        if (metrics.Count == 0) return;
+        var patch = JsonSerializer.Serialize(metrics, JsonOptions);
 
-        var existing = Deserialize(run.MetricsJson);
-        foreach (var (k, v) in metrics) existing[k] = v;
-        run.MetricsJson = JsonSerializer.Serialize(existing, JsonOptions);
-        await db.SaveChangesAsync(ct);
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        // Merge JSONB ATOMICO lato server (|| = i valori nuovi vincono sulle chiavi duplicate,
+        // stessa semantica del vecchio merge in memoria). Il read-modify-write client-side
+        // perdeva metriche sotto scrittura concorrente sullo stesso run (lost update: due
+        // logger leggono lo stesso JSON, ciascuno riscrive TUTTO il documento con la sola
+        // propria chiave aggiunta). Run inesistente => 0 righe aggiornate, stesso no-op di prima.
+        await db.Database.ExecuteSqlAsync($$"""
+            UPDATE "ExperimentRuns"
+            SET "MetricsJson" = (COALESCE(NULLIF("MetricsJson", ''), '{}')::jsonb || {{patch}}::jsonb)::text
+            WHERE "Id" = {{runId}}
+            """, ct);
     }
 
     public async Task LogArtifactAsync(Guid runId, string kindTag, object payload, CancellationToken ct = default)
@@ -93,13 +99,6 @@ public sealed class ExperimentTracker : IExperimentTracker
         run.CompletedAt = DateTime.UtcNow;
         if (!string.IsNullOrEmpty(errorLog)) run.ErrorLog = errorLog;
         await db.SaveChangesAsync(ct);
-    }
-
-    private static Dictionary<string, decimal> Deserialize(string json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return new();
-        try { return JsonSerializer.Deserialize<Dictionary<string, decimal>>(json, JsonOptions) ?? new(); }
-        catch (JsonException) { return new(); }
     }
 
     private static string Sha256Hex(string s)
