@@ -46,6 +46,20 @@ spec:
         app.kubernetes.io/part-of: procionemgr
         app.kubernetes.io/component: trading
     spec:
+      initContainers:
+        # Bootstrap del file condiviso (Fase 3). Il volume nasce vuoto: montare un subPath su un file
+        # che non esiste ancora lo materializza VUOTO, e un appsettings.json vuoto non è JSON valido —
+        # il provider di configurazione lo tratta come "presente ma illeggibile" e l'app muore a
+        # startup con un errore di parsing (non un fallback silenzioso: "optional" copre il file
+        # ASSENTE, non quello malformato). Con `{}` il file c'è, è valido e non contiene nulla:
+        # esattamente il default che serve finché il monolite non ci scrive la SafetyConfiguration.
+        # Idempotente (`test -s` = non vuoto): a file già scritto non tocca niente.
+        - name: init-config
+          image: busybox:1.36
+          command: ["sh", "-c", "test -s /mnt/appsettings.json || echo '{}' > /mnt/appsettings.json"]
+          volumeMounts:
+            - name: shared-config
+              mountPath: /mnt   # la directory, non il subPath: qui il file va CREATO
       containers:
         - name: trading
           image: ghcr.io/markcapitanelli/procionemgr-trading:latest
@@ -91,7 +105,9 @@ spec:
       volumes:
         - name: shared-config
           persistentVolumeClaim:
-            # RWX (ReadWriteMany): montato in scrittura dal monolite e in lettura da qui, su nodi
-            # potenzialmente diversi. Richiede una storage class che supporti RWX (NFS, CephFS,
-            # Azure Files...): la default di kind (local-path) è solo RWO. Limite noto, vedi README.
+            # Definita in pvc.yaml (Fase 3): fa bind ESPLICITO sulla PV condivisa
+            # shared/pv-config.yaml, la stessa a cui punta la PVC omonima di procionemgr-ui — è così
+            # che i due namespace vedono un unico file. Senza bind esplicito ognuno otterrebbe una PV
+            # isolata, in silenzio. Richiede una storage class RWX vera (NFS, CephFS, Azure Files) su
+            # cluster multi-nodo; su kind è un hostPath. Limite noto, vedi README.
             claimName: procionemgr-config

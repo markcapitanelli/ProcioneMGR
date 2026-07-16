@@ -1,0 +1,15 @@
+# Fase 3 — GitOps. Il tag pinnato qui vince sul `:latest` placeholder di deployment.yaml: è questo
+# file, in Git, a dire quale build gira sul cluster. Bump manuale (= la promozione resta una scelta
+# umana). Vedi ui/kustomization.yaml per il ragionamento completo.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: procionemgr-ml
+
+resources:
+  - deployment.yaml
+  - service.yaml
+
+images:
+  - name: ghcr.io/markcapitanelli/procionemgr-ml
+    newTag: latest

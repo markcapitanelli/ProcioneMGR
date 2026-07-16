@@ -1,0 +1,23 @@
+# Fase 3 — GitOps per i workload batch. Nessun campo `namespace` qui: i due manifest vivono in
+# namespace DIVERSI (strategyhunter → procionemgr-pipeline, dbbackup → procionemgr-supervisor) e se
+# lo dichiarassero forzato qui verrebbero riscritti entrambi sullo stesso, silenziosamente.
+#
+# ⚠ ATTRITO STRUTTURALE FRA GitOps E I JOB (limite di Kubernetes, non di ArgoCD):
+# i campi di un `Job` sono IMMUTABILI dopo la creazione. Se si cambia il template qui (immagine
+# nuova, args diversi) e si prova a sincronizzare, l'apply sulla risorsa già esistente FALLISCE —
+# GitOps presume "riapplica per convergere", ma su un Job non si può. Serve prima:
+#   kubectl delete job strategyhunter-discover -n procionemgr-pipeline
+# e poi il sync. Il CronJob non ha questo problema (la risorsa CronJob è aggiornabile; sono i Job
+# figli che genera a ogni tick a essere immutabili, e quelli ArgoCD non li traccia).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - strategyhunter-job.yaml
+  - dbbackup-cronjob.yaml
+
+images:
+  - name: ghcr.io/markcapitanelli/strategyhunter
+    newTag: latest
+  - name: ghcr.io/markcapitanelli/dbbackup
+    newTag: latest

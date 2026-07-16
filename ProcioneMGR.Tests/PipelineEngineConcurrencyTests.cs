@@ -119,6 +119,76 @@ public class PipelineEngineConcurrencyTests : IAsyncDisposable
         Assert.Empty(runsForSecondConfig); // la riga orfana del bug originale non deve esistere
     }
 
+    [Fact]
+    public async Task RecoverOrphanedRuns_TurnsInheritedRunningRows_IntoResumablePaused()
+    {
+        // Il caso che questo copre è il riavvio del processo (in K8s: OGNI deploy del pod, strategy
+        // Recreate) con un run in corso: la riga resta "Running" sul DB ma nessuno la sta più
+        // eseguendo, e ResumeRunAsync la rifiuta credendola viva — bloccata per sempre. La bonifica
+        // a startup la porta a "Paused", cioè ESATTAMENTE riprendibile.
+        var release = new TaskCompletionSource();
+        var (engine, dbFactory) = await BuildAsync(new BlockingStage(release));
+
+        var configId = await SeedConfigAsync(dbFactory, "Config orfana");
+        Guid orphanId, completedId;
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            // Riga "Running" scritta a mano: simula l'eredità di un processo morto — questo engine
+            // appena costruito ha lo slot in-memory vuoto, come dopo un riavvio vero.
+            var orphan = new PipelineRun { Id = Guid.NewGuid(), ConfigurationId = configId, Status = "Running", Trigger = "Scheduled", StartedAt = DateTime.UtcNow.AddHours(-2) };
+            var completed = new PipelineRun { Id = Guid.NewGuid(), ConfigurationId = configId, Status = "Completed", Trigger = "Manual", StartedAt = DateTime.UtcNow.AddHours(-3), CompletedAt = DateTime.UtcNow.AddHours(-2.5) };
+            db.PipelineRuns.AddRange(orphan, completed);
+            await db.SaveChangesAsync();
+            (orphanId, completedId) = (orphan.Id, completed.Id);
+        }
+
+        var recovered = await engine.RecoverOrphanedRunsAsync();
+
+        Assert.Equal(1, recovered);
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            var orphan = await db.PipelineRuns.SingleAsync(r => r.Id == orphanId);
+            Assert.Equal("Paused", orphan.Status);                    // riprendibile, non Failed
+            Assert.Null(orphan.CompletedAt);
+            Assert.Contains("riavvio", orphan.ErrorLog);              // l'operatore sa perché è in pausa
+            var completed = await db.PipelineRuns.SingleAsync(r => r.Id == completedId);
+            Assert.Equal("Completed", completed.Status);              // gli altri stati non si toccano
+        }
+
+        // La prova che "Paused" era la scelta giusta: il run bonificato si può davvero riprendere.
+        var resumedId = await engine.ResumeRunAsync(orphanId);
+        Assert.Equal(orphanId, resumedId);
+
+        // Chiusura DETERMINISTICA del background: Cancel da solo non basta, la fase finta aspetta
+        // release.Task e non osserva il token — senza SetResult il Task.Run resterebbe appeso oltre
+        // la fine del test, con le sue connessioni vive (è il genere di perdita che, sommata, ha
+        // fatto esplodere "too many clients" sull'intera suite). Poi si attende che il motore abbia
+        // davvero finito, così la dispose del provider non corre contro le sue ultime scritture.
+        engine.Cancel(orphanId);
+        release.SetResult();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync();
+            if (await db.PipelineRuns.AsNoTracking().AnyAsync(r => r.Id == orphanId && r.Status != "Running")) break;
+            await Task.Delay(100);
+        }
+    }
+
+    [Fact]
+    public async Task RecoverOrphanedRuns_WithNothingToRecover_IsANoOp()
+    {
+        var (engine, dbFactory) = await BuildAsync(new BlockingStage(new TaskCompletionSource()));
+        var configId = await SeedConfigAsync(dbFactory, "Config pulita");
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            db.PipelineRuns.Add(new PipelineRun { Id = Guid.NewGuid(), ConfigurationId = configId, Status = "Completed", StartedAt = DateTime.UtcNow });
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Equal(0, await engine.RecoverOrphanedRunsAsync());
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();

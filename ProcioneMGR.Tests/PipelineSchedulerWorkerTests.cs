@@ -96,6 +96,9 @@ public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
         }
 
         public Task<Guid> ResumeRunAsync(Guid runId, string? userId = null, CancellationToken ct = default) => throw new NotImplementedException();
+        // I test chiamano TickAsync direttamente: la bonifica orfani vive nel loop di ExecuteAsync
+        // (one-shot a startup) e qui non ha nulla da bonificare.
+        public Task<int> RecoverOrphanedRunsAsync(CancellationToken ct = default) => Task.FromResult(0);
         public void RequestPause(Guid runId) => throw new NotImplementedException();
         public void Cancel(Guid runId) => throw new NotImplementedException();
         public PipelineLiveStatus? GetLiveStatus() => null;

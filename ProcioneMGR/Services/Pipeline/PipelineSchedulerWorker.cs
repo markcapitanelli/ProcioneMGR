@@ -71,10 +71,22 @@ public sealed class PipelineSchedulerWorker(
         catch (OperationCanceledException) { return; }
 
         using var timer = new PeriodicTimer(CheckInterval);
+        var orphansRecovered = false;
         do
         {
             try
             {
+                // Bonifica one-shot dei run orfani ("Running" ereditati da un processo morto), NEL
+                // loop e non prima: se il pod parte quando il DB non è ancora raggiungibile (l'ordine
+                // di avvio in K8s non è garantito), il tentativo si ripete al tick successivo invece
+                // di perdersi. Qui e non in TickAsync, che i test chiamano direttamente con una
+                // semantica precisa (schedulazione + auto-reapply) da non allargare.
+                if (!orphansRecovered)
+                {
+                    await engine.RecoverOrphanedRunsAsync(stoppingToken);
+                    orphansRecovered = true;
+                }
+
                 await TickAsync(stoppingToken);
             }
             catch (OperationCanceledException) { break; }

@@ -8,11 +8,14 @@
 # lettura); qui non lo è. Finché non c'è autenticazione sul canale (mTLS/token), l'unico controllo
 # di accesso è questo: solo il pod ui può parlare col trading.
 #
-# ⚠ NON È ENFORCED SU OGNI CLUSTER. Una NetworkPolicy è applicata dal CNI: senza un CNI che la
-# implementi viene accettata dall'API server e IGNORATA, in silenzio — sembra protetto e non lo è.
-# In particolare il CNI di default di kind (kindnet) NON le applica: per una verifica reale serve
-# un cluster con Calico/Cilium. Prima di considerare questo confine attivo in un ambiente, provarlo
-# davvero (vedi infra/k8s/README.md per il test da un pod di un namespace terzo).
+# ⚠ L'ENFORCEMENT DIPENDE DAL CNI, NON DALL'API SERVER. Una NetworkPolicy senza un CNI che la
+# implementi viene accettata e IGNORATA, in silenzio — sembra protetto e non lo è. Il default di
+# kind (kindnet) fa esattamente questo: per i primi giri del cluster questa policy risultava
+# "applicata" senza esserlo. Dalla Fase 3 il bootstrap installa CALICO al posto di kindnet proprio
+# per questo (scripts/k8s-bootstrap.ps1) — su un cluster ricreato da allora il confine è reale.
+# Su QUALUNQUE altro ambiente, prima di considerarlo attivo va provato davvero: il test corretto
+# punta alla porta 8080 (i comandi), NON alla 8081 che la regola 2 apre a chiunque per le probe —
+# sondare la 8081 passa sempre, con o senza enforcement. Vedi infra/k8s/README.md.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

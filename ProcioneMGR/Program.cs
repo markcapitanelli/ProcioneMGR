@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -41,6 +42,26 @@ builder.Services.AddAuthentication(options =>
         options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
     })
     .AddIdentityCookies();
+
+// --- Data Protection: keyring persistito (Fase 3 microservizi) ---
+// È la chiave con cui si firmano/cifrano i cookie di autenticazione. Fuori da un container il
+// default di ASP.NET Core la scrive già in una cartella del profilo utente (persistente fra i
+// riavvii): in sviluppo locale non serve fare nulla, e infatti senza DataProtection:KeyRingPath
+// questo blocco non tocca nulla — comportamento identico a prima.
+//
+// DENTRO un container è un'altra storia: senza un percorso persistito il keyring vive solo in
+// memoria, quindi OGNI riavvio del pod invalida tutti i cookie e disconnette gli utenti. Non è il
+// caso di un deploy pianificato (raro, scelto): basta un OOM-kill o una liveness probe fallita, ed
+// è silenzioso. In K8s si monta una PVC e si punta qui (vedi infra/k8s/ui/deployment.yaml).
+var keyRingPath = builder.Configuration["DataProtection:KeyRingPath"];
+if (!string.IsNullOrWhiteSpace(keyRingPath))
+{
+    builder.Services.AddDataProtection()
+        // Nome esplicito e stabile: il default deriva dal ContentRootPath, che cambiando fra host
+        // (sviluppo vs /app nel container) renderebbe indecifrabili le chiavi già scritte.
+        .SetApplicationName("ProcioneMGR")
+        .PersistKeysToFileSystem(new DirectoryInfo(keyRingPath));
+}
 
 // Servizio di cifratura (AES-256-GCM) per i segreti a riposo. Singleton: la chiave
 // master viene derivata una sola volta. Va registrato PRIMA del DbContext perche'
@@ -392,7 +413,17 @@ else
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-app.UseHttpsRedirection();
+
+// Redirect HTTPS disattivabile via config (Fase 3): dentro il cluster il pod ui parla solo HTTP in
+// chiaro dietro port-forward/Ingress. Oggi il middleware lì è di fatto inerte (nessun listener
+// https configurato => logga un warning e lascia passare), ma il giorno in cui un Ingress
+// terminasse TLS e inoltrasse in chiaro, il redirect incondizionato produrrebbe un loop. Meglio un
+// interruttore esplicito ora (ui-config.env lo spegne nel pod) che una sorpresa dietro l'Ingress
+// futuro. Default false = comportamento locale identico a prima.
+if (!builder.Configuration.GetValue<bool>("Http:DisableHttpsRedirection"))
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseAntiforgery();
 
@@ -403,9 +434,20 @@ app.MapRazorComponents<App>()
 // Add additional endpoints required by the Identity /Account Razor components.
 app.MapAdditionalIdentityEndpoints();
 
-// Applica le migrazioni pendenti e crea i ruoli (Admin/Manager/User) all'avvio.
-// Saltato sotto i tool di design-time (dotnet ef): non deve tentare di connettersi/migrare il DB
-// mentre si generano migrazioni (es. verso un PostgreSQL non ancora creato).
+// Liveness/readiness per Kubernetes (Fase 3): stesso endpoint anonimo già esposto da
+// ingestion/ml/trading — il monolite era l'unico dei quattro a non averlo. Le probe non possono
+// puntare a "/" (redirect di login, negoziazione del circuito Blazor): serve un endpoint che
+// risponda 200 e basta. Nessun dato esposto, nessuna autorizzazione richiesta di proposito.
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+// Crea i ruoli applicativi (Admin/Manager/User) all'avvio. NON applica le migrazioni, nonostante
+// quanto diceva questo commento fino alla Fase 3: lo schema si applica come passo separato
+// (`dotnet ef database update`, pattern migrate-on-deploy) perché l'app non referenzia l'assembly
+// delle migrazioni. Vedi DbInitializer, che lo dichiara esplicitamente. Distinzione tutt'altro che
+// accademica in K8s: con lo schema mancante il pod va in crash-loop su `relation "AspNetRoles" does
+// not exist` e si riprende da solo appena il DB è migrato — vedi infra/k8s/README.md (Fase 3).
+// Saltato sotto i tool di design-time (dotnet ef): non deve tentare di connettersi al DB mentre si
+// generano migrazioni (es. verso un PostgreSQL non ancora creato).
 if (!EF.IsDesignTime)
 {
     await DbInitializer.InitializeAsync(app.Services);

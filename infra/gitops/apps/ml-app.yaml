@@ -1,0 +1,21 @@
+# Microservizio di inferenza ML (Fase 2a, dual-read osservativo). Sola lettura sul DB: un ml giù non
+# impatta il trading. Prerequisito NON gestito da ArgoCD: il Secret postgres-conn nel namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: procionemgr-ml
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/markcapitanelli/ProcioneMGR.git
+    targetRevision: master
+    path: infra/k8s/ml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: procionemgr-ml
+  # Sync manuale: vedi infra/gitops/README.md.

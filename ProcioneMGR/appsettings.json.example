@@ -98,6 +98,14 @@
     "Enabled": false,
     "OtlpEndpoint": "http://localhost:4317"
   },
+  "DataProtection": {
+    "_comment": "Fase 3 microservizi. KeyRingPath: directory dove persistere il keyring che firma/cifra i cookie di autenticazione. VUOTO (default) fuori dal container: ASP.NET Core usa gia' la cartella del profilo utente, persistente fra i riavvii — in locale non serve toccare nulla. DENTRO un container senza questo path il keyring vive solo in memoria e OGNI riavvio del pod (anche un OOM-kill, non solo un deploy) disconnette tutti gli utenti in silenzio: in K8s punta a una PVC dedicata (vedi infra/k8s/ui/, che imposta /keys via env).",
+    "KeyRingPath": ""
+  },
+  "Http": {
+    "_comment": "Fase 3 microservizi. DisableHttpsRedirection=true SOLO quando l'app gira dietro un reverse proxy che le parla in chiaro (il pod ui in K8s: port-forward oggi, Ingress con TLS terminato domani) — un redirect HTTPS incondizionato li' diventerebbe un loop. In locale lasciare false: comportamento storico invariato.",
+    "DisableHttpsRedirection": false
+  },
   "Logging": {
     "LogLevel": {
       "Default": "Information",
