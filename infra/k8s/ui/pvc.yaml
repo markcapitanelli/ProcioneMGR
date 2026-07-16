@@ -3,10 +3,14 @@
 ---
 # 1. L'appsettings.json CONDIVISO con procionemgr-trading (SafetyConfiguration).
 # Il monolite è lo SCRITTORE (pannello /trading e /admin/autonomy via AppConfigWriter), il servizio
-# di trading il lettore. Bind ESPLICITO alla stessa PV a cui punta la PVC omonima nel namespace
-# procionemgr-trading: è l'unico modo perché due namespace vedano un unico file (le PVC sono
-# namespaced, le PV no). Senza volumeName + storageClassName:"" il provisioning dinamico darebbe a
-# ciascuna una PV isolata, senza errori e senza che nulla lo riveli. Vedi shared/pv-config.yaml.
+# di trading il lettore.
+#
+# Bind statico alla PV di QUESTO namespace — non alla stessa PV di trading: il binding PV<->PVC è
+# 1:1, due PVC non possono condividere una PV (nemmeno RWX: quello dice quanti POD montano una PVC,
+# non quante PVC per PV). Con una PV sola, la seconda PVC resterebbe Pending per sempre. La
+# condivisione avviene un livello sotto: le due PV puntano allo stesso storage. Vedi
+# shared/pv-config.yaml. Senza volumeName + storageClassName:"" il provisioning dinamico darebbe a
+# ciascuna una directory isolata: nessun errore, e i due file semplicemente diversi.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -19,7 +23,7 @@ spec:
   accessModes:
     - ReadWriteMany
   storageClassName: ""
-  volumeName: procionemgr-config-pv
+  volumeName: procionemgr-config-pv-ui   # la PV di questo namespace (stesso storage di quella di trading)
   resources:
     requests:
       storage: 64Mi

@@ -430,9 +430,14 @@ app.MapAdditionalIdentityEndpoints();
 // risponda 200 e basta. Nessun dato esposto, nessuna autorizzazione richiesta di proposito.
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-// Applica le migrazioni pendenti e crea i ruoli (Admin/Manager/User) all'avvio.
-// Saltato sotto i tool di design-time (dotnet ef): non deve tentare di connettersi/migrare il DB
-// mentre si generano migrazioni (es. verso un PostgreSQL non ancora creato).
+// Crea i ruoli applicativi (Admin/Manager/User) all'avvio. NON applica le migrazioni, nonostante
+// quanto diceva questo commento fino alla Fase 3: lo schema si applica come passo separato
+// (`dotnet ef database update`, pattern migrate-on-deploy) perché l'app non referenzia l'assembly
+// delle migrazioni. Vedi DbInitializer, che lo dichiara esplicitamente. Distinzione tutt'altro che
+// accademica in K8s: con lo schema mancante il pod va in crash-loop su `relation "AspNetRoles" does
+// not exist` e si riprende da solo appena il DB è migrato — vedi infra/k8s/README.md (Fase 3).
+// Saltato sotto i tool di design-time (dotnet ef): non deve tentare di connettersi al DB mentre si
+// generano migrazioni (es. verso un PostgreSQL non ancora creato).
 if (!EF.IsDesignTime)
 {
     await DbInitializer.InitializeAsync(app.Services);
