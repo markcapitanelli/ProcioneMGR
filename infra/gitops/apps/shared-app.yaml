@@ -1,0 +1,21 @@
+# Risorse cluster-scoped condivise: la PersistentVolume dell'appsettings.json comune a ui e trading.
+# Sync SUBITO DOPO i namespace e PRIMA dei servizi: senza questa PV, le PVC di ui e trading restano
+# Pending e i due pod non partono mai.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: procionemgr-shared
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/markcapitanelli/ProcioneMGR.git
+    targetRevision: master
+    path: infra/k8s/shared
+  destination:
+    server: https://kubernetes.default.svc
+  # Sync manuale (nessun syncPolicy.automated): vedi infra/gitops/README.md.

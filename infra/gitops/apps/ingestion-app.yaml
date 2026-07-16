@@ -1,0 +1,23 @@
+# Microservizio di ingestione OHLCV (Fase 1). Prerequisito NON gestito da ArgoCD: il Secret
+# postgres-conn nel namespace (scripts/k8s-postgres-secret.ps1).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: procionemgr-ingestion
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/markcapitanelli/ProcioneMGR.git
+    targetRevision: master
+    path: infra/k8s/ingestion
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: procionemgr-ingestion
+  # Sync manuale. Fra tutti è il candidato più plausibile a un futuro `automated` (nessuna master
+  # key, nessuno stato, bassa sensibilità) — ma non prima di aver visto parecchi sync manuali
+  # riusciti. Vedi infra/gitops/README.md.

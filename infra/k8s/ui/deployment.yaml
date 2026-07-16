@@ -1,0 +1,129 @@
+# PRIMO Deployment Kubernetes del monolite (Fase 3). Fin qui l'immagine `procionemgr` veniva
+# costruita e pushata su GHCR a ogni build, ma non era mai stata distribuita: il monolite girava solo
+# in locale (`dotnet run` o `docker run`). Da qui in poi è un pod come gli altri tre, e il PRD lo
+# chiama procionemgr-ui — "client puro": con i toggle del ConfigMap non esegue più ordini, non
+# sincronizza candele e non fa inferenza in-process, li comanda ai servizi remoti.
+#
+# replicas: 1 — NON è prudenza, sono due vincoli tecnici indipendenti:
+#   1. Blazor Server tiene un circuito SignalR persistente per tab: una seconda replica non aiuta un
+#      utente già connesso (il suo circuito resta legato al pod che l'ha accolto) e servirebbe
+#      un'affinità di sessione da costruire e validare per un beneficio oggi nullo (un utente solo).
+#   2. AppConfigWriter.FileLock è un SemaphoreSlim DI ISTANZA (AppConfigWriter.cs:26), non un lock
+#      distribuito: due repliche farebbero read-modify-write concorrente sullo stesso appsettings.json
+#      condiviso via PVC. È lo stesso rischio "doppio scrittore" già escluso per ingestion e trading,
+#      qui applicato alla configurazione di sicurezza.
+# Scalare richiede PRIMA un writer coordinato (o un provider di config non-file) E un'affinità di
+# sessione validata — non un numero più alto qui. Stesso schema argomentativo del trading.
+#
+# Prerequisiti nel namespace:
+#   - Secret ui-secrets (ConnectionStrings__PostgresConnection + Security__MasterKey)
+#     → scripts/k8s-ui-secret.ps1. La master key DEVE essere la stessa di trading-secrets.
+#   - PVC procionemgr-config + procionemgr-dataprotection (pvc.yaml) e la PV condivisa
+#     (shared/pv-config.yaml), altrimenti il pod resta Pending.
+#   - Schema DB già migrato: le migrazioni restano un passo manuale (`dotnet ef database update`),
+#     non un Job automatico — una modifica di schema merita lo stesso gate umano di tutto il resto.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: procionemgr-ui
+  namespace: procionemgr-ui
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: ui
+spec:
+  replicas: 1
+  strategy:
+    # Recreate, non RollingUpdate: durante un rolling update due pod ui coesisterebbero per qualche
+    # secondo — due scrittori vivi sullo stesso appsettings.json (vedi vincolo 2 qui sopra). Il
+    # prezzo è una finestra di indisponibilità a ogni deploy, accettata di proposito.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: ui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: procionemgr
+        # Questa label è ciò che la NetworkPolicy del trading cerca per lasciar passare gli RPC
+        # (infra/k8s/trading/networkpolicy.yaml): finora nessun pod la portava, era una regola
+        # scritta in anticipo su un workload inesistente. Da adesso ha un soggetto reale.
+        app.kubernetes.io/component: ui
+    spec:
+      initContainers:
+        # Stesso bootstrap del pod trading: un subPath montato su un file mai creato lo materializza
+        # VUOTO, e un appsettings.json vuoto non è JSON valido — l'app morirebbe a startup con un
+        # errore di parsing. `{}` è valido e neutro. Idempotente: a file già scritto non tocca nulla.
+        - name: init-config
+          image: busybox:1.36
+          command: ["sh", "-c", "test -s /mnt/appsettings.json || echo '{}' > /mnt/appsettings.json"]
+          volumeMounts:
+            - name: shared-config
+              mountPath: /mnt
+      containers:
+        - name: ui
+          image: ghcr.io/markcapitanelli/procionemgr:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                # ConnectionStrings__PostgresConnection + Security__MasterKey.
+                # Stessa master key di trading-secrets: le credenziali exchange cifrate nel DB devono
+                # essere decifrabili da entrambi. Un Secret K8s è namespaced => è per forza una
+                # COPIA, non una condivisione: se le due divergono, il pannello /settings/exchanges
+                # smette di decifrare mentre il motore continua (o viceversa). Vedi README.
+                name: ui-secrets
+            - configMapRef:
+                # Toggle verso i servizi remoti + percorso keyring. Non sensibile, committato.
+                name: ui-config
+          volumeMounts:
+            - name: shared-config
+              # STESSO path assoluto montato dal pod trading (/app = WORKDIR dell'immagine =
+              # ContentRootPath): AppConfigWriter scrive letteralmente qui.
+              mountPath: /app/appsettings.json
+              subPath: appsettings.json
+            - name: dataprotection-keys
+              # Keyring dei cookie: senza persistenza, ogni riavvio del pod disconnette tutti.
+              mountPath: /keys
+          readinessProbe:
+            httpGet:
+              # Endpoint anonimo aggiunto in Fase 3 (Program.cs): "/" non andrebbe bene — redirect di
+              # login e negoziazione del circuito Blazor non dicono nulla sulla salute del processo.
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            # Generosa di proposito: a startup il monolite applica le migrazioni pendenti e crea i
+            # ruoli (DbInitializer). Una liveness troppo aggressiva lo ucciderebbe a metà.
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              # Molto più alti degli altri servizi, e non per abbondanza: il monolite ospita ancora
+              # in-process i bounded context non estratti — l'Autonomous Pipeline (16 stage, con
+              # training ML.NET e discovery) e il suo scheduler Cronos, che possono partire da soli
+              # a notte fonda. Sono gli stessi carichi che in locale giravano senza alcun tetto.
+              #
+              # ⚠ Un limite di memoria troppo stretto qui non degrada: il kernel manda SIGKILL
+              # (exit 137) e il run in corso muore a metà, lasciando righe orfane sul DB
+              # (PipelineEngine tiene lo stato in memoria e non è resiliente al riavvio). Se un run
+              # notturno sparisce senza errori applicativi, sospettare l'OOM-kill PRIMA del codice:
+              #   kubectl get pod -n procionemgr-ui -o jsonpath='{..lastState.terminated.reason}'
+              # Alzare questo tetto è legittimo; la soluzione strutturale è estrarre la pipeline in
+              # un Job K8s con risorse proprie (fuori dallo scope della Fase 3).
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        - name: shared-config
+          persistentVolumeClaim:
+            claimName: procionemgr-config
+        - name: dataprotection-keys
+          persistentVolumeClaim:
+            claimName: procionemgr-dataprotection

@@ -160,6 +160,40 @@ public sealed class PipelineEngine(
         return runId;
     }
 
+    public async Task<int> RecoverOrphanedRunsAsync(CancellationToken ct = default)
+    {
+        // Lo slot del run vivo (_live) esiste SOLO in memoria: dopo un riavvio del processo nessun
+        // run può essere davvero in esecuzione, quindi ogni riga ancora "Running" sul DB è per
+        // forza un orfano del processo precedente. Il problema non è cosmetico: ResumeRunAsync
+        // rifiuta le righe "Running" ("già in esecuzione"), quindi un orfano resta bloccato per
+        // sempre — né vivo né riprendibile. Prima del deploy su Kubernetes capitava solo a un
+        // riavvio manuale con un run in corso; con strategy Recreate capita a OGNI deploy del pod.
+        //
+        // "Paused" e NON "Failed": il checkpoint per-stage (ContextSnapshotJson) è già sul DB, il
+        // run è riprendibile dall'ultimo stage completato esattamente come dopo una pausa chiesta
+        // dall'operatore. Marcare Failed butterebbe via ore di stage CPU-heavy già calcolati.
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var orphans = await db.PipelineRuns.Where(r => r.Status == "Running").ToListAsync(ct);
+        if (orphans.Count == 0) return 0;
+
+        foreach (var run in orphans)
+        {
+            run.Status = "Paused";
+            run.CompletedAt = null;
+            // ErrorLog spiega all'operatore PERCHÉ è in pausa senza che l'abbia chiesto lui.
+            // ResumeRunAsync lo azzera alla ripresa, come per ogni altro run.
+            run.ErrorLog = "Interrotto da un riavvio del processo (deploy/crash del pod): nessuno " +
+                           "stage era più in esecuzione. Riprendibile dall'ultimo checkpoint.";
+        }
+        await db.SaveChangesAsync(ct);
+
+        logger.LogWarning(
+            "Bonifica run pipeline orfani: {Count} run 'Running' ereditati da un processo precedente " +
+            "portati a 'Paused' (riprendibili dal checkpoint). Id: {Ids}.",
+            orphans.Count, string.Join(", ", orphans.Select(r => r.Id)));
+        return orphans.Count;
+    }
+
     public void RequestPause(Guid runId)
     {
         lock (_gate)

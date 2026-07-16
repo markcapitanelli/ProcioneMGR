@@ -28,7 +28,7 @@ kubectl get namespaces --context kind-procionemgr-dev | Select-String procionemg
 
 | File | Scopo |
 |---|---|
-| `kind-config.yaml` | Cluster mono-nodo `procionemgr-dev`, porte 80/443 mappate su 8080/8443 host (pronte per un futuro ingress, Fase 1+) |
+| `kind-config.yaml` | Cluster mono-nodo `procionemgr-dev`, porte 80/443 mappate su 8080/8443 host (pronte per un futuro ingress). Da Fase 3: kindnet disattivato, il CNI è **Calico** (installato dal bootstrap) perché applica le NetworkPolicy che kindnet ignora |
 | `namespaces/00-namespaces.yaml` | I 6 namespace dei bounded context (`procionemgr-ui`, `-trading`, `-ml`, `-pipeline`, `-ingestion`, `-supervisor`) |
 
 ## Vincoli per le fasi successive
@@ -74,8 +74,8 @@ dell'host di sviluppo. Da dentro un pod, `localhost` è il pod stesso — per ra
 ```powershell
 .\scripts\k8s-bootstrap.ps1                       # cluster + namespace
 .\scripts\k8s-postgres-secret.ps1 -ConnectionString "Host=host.docker.internal;..."
-kubectl apply -f infra/k8s/ingestion/             # Deployment + Service ingestion
-kubectl apply -f infra/k8s/jobs/                  # registra Job + CronJob (CronJob sospeso)
+kubectl apply -k infra/k8s/ingestion/             # Deployment + Service ingestion
+kubectl apply -k infra/k8s/jobs/                  # registra Job + CronJob (CronJob sospeso)
 # One-shot del CronJob senza aspettare le 03:00 (funziona anche da sospeso):
 kubectl create job --from=cronjob/dbbackup-nightly dbbackup-smoke -n procionemgr-supervisor
 kubectl logs -f job/dbbackup-smoke -n procionemgr-supervisor
@@ -132,22 +132,38 @@ Un Secret Kubernetes è **base64, non cifrato**: chiunque possa leggere i Secret
 la chiave. Oltre lo sviluppo locale servono RBAC stretto sui Secret + encryption-at-rest di etcd
 (o Vault/Sealed Secrets).
 
-### `NetworkPolicy` — la prima del progetto, e il suo limite
+### `NetworkPolicy` — la prima del progetto
 
 `ConfirmOrder` sblocca un ordine Live reale e `StartLane(LIVE)` avvia una sessione con denaro vero.
 Nel monolite quelle azioni sono dietro `[Authorize(Admin,Manager)]` di `Trading.razor`; **dietro
 gRPC quel gate non esiste**: non c'è autenticazione a livello RPC. `networkpolicy.yaml` è l'unico
-controllo di accesso — ingress consentito solo dal pod `procionemgr-ui`.
+controllo di accesso — ingress su 8080 (comandi) consentito solo dal pod `procionemgr-ui`; la 8081
+(`/health`) è aperta a chiunque **di proposito** (le probe partono dal kubelet, non da un pod).
 
 > ⚠️ **Una NetworkPolicy la applica il CNI.** Senza un CNI che la implementi viene accettata
-> dall'API server e **ignorata in silenzio**: sembra protetta e non lo è. Il CNI di default di kind
-> (**kindnet**) **non le applica** — sul cluster di sviluppo questo confine **non è attivo**. Per
-> una verifica reale serve Calico/Cilium. Da provare esplicitamente, non da dare per fatto:
+> dall'API server e **ignorata in silenzio**: sembra protetta e non lo è. Il default di kind
+> (**kindnet**) fa esattamente questo — e infatti sui primi cluster di sviluppo il confine **non
+> era attivo**, pur risultando "applicato". Dalla Fase 3 il bootstrap installa **Calico** (versione
+> pinnata, `scripts/k8s-bootstrap.ps1`) al posto di kindnet: su un cluster ricreato da allora
+> l'enforcement è reale. Un cluster creato prima va ricreato (`k8s-teardown` + `k8s-bootstrap`).
+
+Il test va fatto **sulla porta giusta**. Sondare `8081/health` non dimostra nulla: la policy la
+apre a chiunque, quindi risponde 200 con o senza enforcement (errore fatto davvero alla prima
+verifica di Fase 3, e da non ripetere). Il test discriminante è la **8080**:
 
 ```powershell
-# Da un pod di un namespace terzo: DEVE fallire (e su kindnet invece riesce).
-kubectl run probe -n procionemgr-pipeline --rm -it --image=curlimages/curl --restart=Never -- `
-  curl -sS -m 5 http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8080/health
+# Da un pod di un namespace TERZO verso la porta dei comandi: con enforcement la connessione viene
+# SCARTATA (timeout, exit code != 0). Senza, fallirebbe comunque ma SUBITO e per un motivo diverso
+# (curl parla HTTP/1.1 a un endpoint solo-h2c): è il TIMEOUT che dimostra il blocco di rete.
+kubectl run probe -n procionemgr-pipeline --rm -i --image=curlimages/curl --restart=Never -- `
+  curl -sS -m 5 http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8080/
+# atteso con Calico: "Connection timed out" dopo 5s.
+
+# Controprova che il traffico LEGITTIMO passa: la 8081 risponde da qualunque namespace (per le
+# probe), e il pod ui parla in gRPC con la 8080 — si vede nei suoi log (TradingCommandServiceClient
+# ... 200) appena i toggle remoti sono attivi.
+kubectl run probe2 -n procionemgr-pipeline --rm -i --image=curlimages/curl --restart=Never -- `
+  curl -sS -m 5 http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8081/health
 ```
 
 Nota: `kubectl port-forward` passa dall'API server e **non** dalla rete dei pod — scavalca la
@@ -175,11 +191,128 @@ Limiti da conoscere:
 .\scripts\k8s-bootstrap.ps1
 $env:PROCIONE_MGR_MASTER_KEY = "<base64 32 byte>"
 .\scripts\k8s-trading-secret.ps1 -ConnectionString "Host=host.docker.internal;Port=5432;..."
-kubectl apply -f infra/k8s/trading/          # Deployment + Service + NetworkPolicy
+kubectl apply -k infra/k8s/trading/          # PVC + Deployment + Service + NetworkPolicy
 kubectl port-forward -n procionemgr-trading svc/procionemgr-trading 18092:8080
 # → poi monolite con Trading:UseRemoteTrading=true e Trading:RemoteUrl=http://localhost:18092
 ```
 
-Il Deployment richiede il PVC `procionemgr-config`: senza, il pod resta in `Pending`. In locale, se
-la storage class non fa RWX, togliere il volume dal manifest e montare l'appsettings condiviso in
-un altro modo (o accettare che le due configurazioni divergano — **mai** con denaro reale).
+Il Deployment richiede il PVC `procionemgr-config`, ora definito in `trading/pvc.yaml` (in Fase 2b
+era referenziato per nome ma non esisteva come manifest: su un cluster pulito il pod sarebbe rimasto
+`Pending`). Vedi la sezione Fase 3 per come è condiviso col monolite.
+
+## Fase 3 — GitOps (ArgoCD) + il monolite come pod (`infra/gitops/`, `infra/k8s/ui/`)
+
+Questa fase non estrae nuovi servizi: **automatizza ciò che esiste** e porta in cluster l'ultimo
+pezzo che non c'era. I bounded context `pipeline` (Autonomous Pipeline in-process) e `supervisor`
+(LlmSupervisorWorker, drift, promozioni) restano nel monolite, per scelta.
+
+| Workload | Namespace | Tipo | Note |
+|---|---|---|---|
+| `procionemgr-ui` | `procionemgr-ui` | `Deployment` + `Service` | **`replicas: 1` sempre** + `Recreate`. Primo deploy K8s del monolite: l'immagine esisteva da mesi, non era mai stata distribuita. Configurato come "client puro" (toggle verso i 3 servizi remoti). Nessun Ingress: `port-forward`. Ha la **master key** (copia di quella di trading). |
+
+### Il tag immagine è pinnato in Git, non `:latest`
+
+Ogni servizio ha un `kustomization.yaml` con un blocco `images:`. I `deployment.yaml` mantengono
+`:latest` come placeholder leggibile, ma **ciò che viene applicato è il tag scritto nel
+kustomization**. `:latest` è un bersaglio mobile: due sync identici a un giorno di distanza possono
+far girare binari diversi senza che il repo lo dica. Con un tag pinnato, "cosa sta girando?" ha una
+risposta in Git e il rollback è un `revert`.
+
+Il bump del tag è **manuale**: il bump *è* la promozione. Automatizzarlo da CI sarebbe l'opposto del
+"nessuna promozione automatica" applicato dappertutto. Quando servirà, il passo giusto è un workflow
+che apre una **PR** col bump, da approvare a mano.
+
+> ⚠️ Aggiungere un `kustomization.yaml` a una cartella **rompe `kubectl apply -f <dir>`**: kubectl
+> proverebbe ad applicare anche quel file come se fosse una risorsa. Da qui in poi si usa
+> `kubectl apply -k <dir>`. Gli script e le istruzioni sopra sono già aggiornati.
+
+### ArgoCD: sync manuale ovunque
+
+```powershell
+.\scripts\k8s-bootstrap.ps1              # cluster + namespace
+.\scripts\k8s-argocd-bootstrap.ps1       # ArgoCD (versione pinnata) + root-app
+# password admin stampata a schermo, mai su file. Poi:
+kubectl port-forward svc/argocd-server -n argocd 8081:443 --context kind-procionemgr-dev
+```
+
+`root-app.yaml` è l'unica Application da applicare a mano: sorveglia `infra/gitops/apps/` e crea da
+sé le altre 7 (app-of-apps). Da lì in poi si aggiunge un servizio committando un file.
+
+**Nessuna Application ha `syncPolicy.automated`.** Non è pigrizia: è lo stesso gate umano di
+`ConfirmOrder`. In più, con `selfHeal` acceso, un `kubectl edit` fatto per diagnosticare un problema
+verrebbe annullato dal controller senza spiegazioni. Per `trading` e `ui` il manuale è definitivo
+(ordini veri; `Recreate` = finestra di indisponibilità che deve essere una scelta).
+
+Ordine di Sync (le `sync-wave` lo codificano): `namespaces` → `shared` → `ingestion`/`ml` →
+`trading` → `ui` → `jobs`.
+
+**Cosa ArgoCD non gestisce**: i Secret (non sono in Git, si creano con gli script) e le migrazioni
+del DB (`dotnet ef database update`, passo manuale — una modifica di schema merita lo stesso
+scrutinio di una promozione). Se il pod ui parte prima della migrazione va in crash-loop con
+`relation "AspNetRoles" does not exist` e si riprende da solo appena lo schema c'è: **migrare
+prima**.
+
+Per provare un branch prima del merge (ArgoCD legge da GitHub, non dal disco):
+```powershell
+.\scripts\k8s-argocd-bootstrap.ps1 -TargetRevision <branch>   # il branch dev'essere PUSHATO
+.\scripts\k8s-argocd-retarget.ps1  -TargetRevision <branch>   # dopo il primo Sync di root-app
+.\scripts\k8s-argocd-retarget.ps1  -TargetRevision master     # ripristino
+```
+Agiscono solo sugli oggetti nel cluster: i file restano puntati a `master`, così non resta un branch
+di lavoro committato per sbaglio.
+
+### Il file di configurazione condiviso: due PV, non una
+
+`AppConfigWriter` scrive **letteralmente** su `<ContentRootPath>/appsettings.json`. Perché i limiti
+di rischio modificati dal pannello `/trading` valgano nel motore che esegue gli ordini, i due pod
+devono vedere **lo stesso file**.
+
+Il punto contro-intuitivo: **il binding PV↔PVC è 1:1, sempre**. RWX dice quanti *pod* possono
+montare *una* PVC, non quante PVC per PV. E le PVC sono namespaced. Quindi `ui` e `trading` **non
+possono** condividere né una PVC né una PV: con una PV sola la prima PVC se la prende e l'altra
+resta `Pending` per sempre (verificato dal vivo, non dedotto).
+
+La soluzione è quella che si usa con NFS: **due PV che puntano allo stesso storage**, ognuna
+pre-legata alla sua PVC con `claimRef` (senza, l'assegnazione dipenderebbe dall'ordine di arrivo).
+La PV non è lo storage, è un puntatore.
+
+Un `initContainer` scrive `{}` al primo mount: un `subPath` montato su un file mai creato lo
+materializza **vuoto**, e un `appsettings.json` vuoto non è JSON valido — l'app morirebbe a startup
+con un errore di parsing (l'`optional` del provider copre il file *assente*, non quello malformato).
+
+### Data Protection: keyring persistito
+
+Il monolite ora chiama `PersistKeysToFileSystem` se `DataProtection:KeyRingPath` è configurato (in
+cluster: una PVC RWO dedicata). Senza, il keyring vive in memoria e **ogni** riavvio del pod — un
+OOM-kill, una liveness probe fallita, non solo un deploy — invalida tutti i cookie e disconnette gli
+utenti in silenzio. Fuori dal cluster la chiave non è impostata e vale il default di ASP.NET Core
+(cartella del profilo utente, già persistente): in locale non cambia nulla.
+
+### Rischi e limiti (Fase 3)
+
+- ⚠️ **`hostPath` non è un vero RWX.** Su kind (mono-nodo) due PV sullo stesso `hostPath` *sono* lo
+  stesso file, e questo basta a validare il **contratto applicativo** (ui scrive → trading rilegge).
+  Non valida la semantica RWX su più nodi: in un cluster reale le due PV vanno ripuntate allo stesso
+  export NFS/CephFS/Azure Files, altrimenti due pod su nodi diversi vedrebbero due file diversi.
+- ⚠️ **La master key è duplicata** in `ui-secrets` e `trading-secrets` (i Secret sono namespaced:
+  è per forza una copia). `k8s-ui-secret.ps1` confronta le due e avvisa se divergono, ma nulla
+  impedisce di ruotarne una sola più tardi: le credenziali si decifrerebbero da una parte e non
+  dall'altra, in silenzio, fino al primo uso.
+- ⚠️ **ArgoCD e i `Job`**: i campi di un Job sono immutabili. Se cambia il template di
+  `strategyhunter-job.yaml`, il sync fallisce finché non si fa
+  `kubectl delete job strategyhunter-discover -n procionemgr-pipeline`. È un limite di Kubernetes
+  (GitOps presume "riapplica per convergere"), non di ArgoCD. Il CronJob non ne soffre.
+- **Ingress rimandato**: si raggiunge la UI solo via `port-forward`. Servirebbe ricreare il cluster
+  con la label `ingress-ready` e installare ingress-nginx. Il redirect HTTPS che l'avrebbe rotto è
+  già disinnescato (`Http:DisableHttpsRedirection`, spento nel pod via `ui-config.env`): quando
+  l'Ingress servirà, quella mina non c'è più.
+- **Il valore di ArgoCD qui è, onestamente, marginale**: un solo sviluppatore, un solo cluster che
+  viene distrutto e ricreato di continuo. Quello che si porta a casa davvero è (a) i tag pinnati e
+  (b) un diff visibile prima di applicare — entrambi ottenibili con `kubectl diff -k` + `apply -k`,
+  senza i ~5 pod di ArgoCD sempre accesi. La scelta di procedere è consapevole: è un investimento
+  per quando gli ambienti saranno più d'uno.
+- **NetworkPolicy: enforcement reale solo da Calico in poi.** Sui primi cluster (kindnet) la policy
+  risultava applicata ma era ignorata; dalla Fase 3 il bootstrap installa Calico e il blocco è
+  stato verificato dal vivo sulla porta giusta (8080 — la prima verifica sondava la 8081, che la
+  policy apre a chiunque: un test che passava comunque, cioè nessun test). Su qualunque altro
+  ambiente resta da provare, mai da presumere.

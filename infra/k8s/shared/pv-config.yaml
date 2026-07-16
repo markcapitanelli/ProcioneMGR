@@ -1,0 +1,89 @@
+# PersistentVolume per l'appsettings.json condiviso fra monolite e servizio di trading — Fase 3.
+#
+# Perché serve: AppConfigWriter scrive LETTERALMENTE su <ContentRootPath>/appsettings.json (non c'è
+# un provider di configurazione astratto da ripuntare altrove senza refactor). Perché i limiti di
+# sicurezza modificati dal pannello /trading del monolite valgano anche nel motore che esegue gli
+# ordini, i due pod devono vedere LO STESSO FILE. Il monolite scrive, procionemgr-trading rilegge a
+# caldo (reloadOnChange, ~1s).
+#
+# --- PERCHÉ DUE PV E NON UNA SOLA (il punto che sembra sbagliato e non lo è) ---
+# Il binding PV <-> PVC è 1:1, SEMPRE. RWX (ReadWriteMany) descrive quanti POD possono montare UNA
+# PVC contemporaneamente; non rende una PV condivisibile fra PVC diverse. E le PVC sono namespaced:
+# procionemgr-ui e procionemgr-trading non possono usare la stessa PVC.
+# Con una PV sola e due PVC, quindi, la prima PVC che arriva la prende e l'altra resta Pending PER
+# SEMPRE — verificato dal vivo su kind, non dedotto: trading si prendeva la PV e il pod ui non
+# partiva mai.
+# La soluzione corretta è quella che si usa con NFS: DUE PV, una per PVC, che puntano allo STESSO
+# STORAGE SOTTOSTANTE. La PV non è lo storage: è un puntatore allo storage. Due puntatori allo
+# stesso path sono legittimi ed è così che si condivide un volume fra namespace.
+#
+# claimRef pre-lega ogni PV alla SUA PVC: senza, le due PVC potrebbero accaparrarsi la PV sbagliata
+# (entrambe sono compatibili per dimensione e access mode) e il risultato dipenderebbe dall'ordine
+# di arrivo — cioè da niente di deterministico.
+#
+# ⚠ LIMITE NOTO — hostPath NON è un vero RWX. Su kind (mono-nodo) tutti i pod girano sullo stesso
+# nodo, quindi due hostPath sullo stesso path SONO lo stesso file e bastano a validare il CONTRATTO
+# APPLICATIVO (il monolite scrive → il trading rilegge). Ciò che NON validano è la semantica RWX su
+# più nodi: in un cluster reale queste due PV vanno sostituite con due PV che puntano allo stesso
+# export NFS/CephFS/Azure Files, altrimenti due pod su nodi diversi vedrebbero due file diversi.
+# Stessa onestà dell'emptyDir in jobs/dbbackup-cronjob.yaml: qui è un sostituto di sviluppo, dichiarato.
+#
+# ⚠ TRAPPOLA DI Retain + claimRef — se cancelli una PVC, ricrearla NON basta.
+# Al primo bind Kubernetes scrive nel claimRef anche l'UID della PVC. Cancellando la PVC, la PV passa
+# a Released conservando quell'UID; Retain impedisce il riciclo automatico. Una PVC ricreata con lo
+# stesso nome ha un UID NUOVO, che non combacia: resta Pending per sempre e il pod non parte, senza
+# che l'errore spieghi il perché. Per sbloccare, azzera il riferimento stantio:
+#   kubectl patch pv procionemgr-config-pv-ui      -p '{"spec":{"claimRef":null}}'
+#   kubectl patch pv procionemgr-config-pv-trading -p '{"spec":{"claimRef":null}}'
+# (la PV torna Available e la PVC si rilega; il contenuto resta intatto — è il punto di Retain).
+# Su kind la scorciatoia è distruggere il cluster: k8s-teardown.ps1 porta via tutto.
+
+---
+# PV per il namespace procionemgr-trading (il LETTORE).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: procionemgr-config-pv-trading
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: shared-config
+spec:
+  capacity:
+    # Requisito formale dell'API: il contenuto reale è un JSON di pochi KB.
+    storage: 64Mi
+  accessModes:
+    - ReadWriteMany
+  # Retain: alla cancellazione della PVC il contenuto NON viene toccato — sono i limiti di rischio
+  # del trading, non un volume usa-e-getta. Il prezzo e' la trappola descritta in fondo al file.
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""                    # nessuna storage class: bind statico, non provisioning
+  claimRef:
+    namespace: procionemgr-trading
+    name: procionemgr-config
+  hostPath:
+    # STESSO path dell'altra PV: è qui che avviene la condivisione.
+    path: /mnt/procionemgr-config
+    type: DirectoryOrCreate
+
+---
+# PV per il namespace procionemgr-ui (lo SCRITTORE). Stesso hostPath: stesso file.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: procionemgr-config-pv-ui
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: shared-config
+spec:
+  capacity:
+    storage: 64Mi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: procionemgr-ui
+    name: procionemgr-config
+  hostPath:
+    path: /mnt/procionemgr-config
+    type: DirectoryOrCreate

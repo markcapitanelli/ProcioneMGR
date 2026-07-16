@@ -1,0 +1,26 @@
+# App-of-apps: l'UNICA Application da applicare a mano (lo fa k8s-argocd-bootstrap.ps1).
+# Sorveglia infra/gitops/apps/ e crea da sé una Application per ogni componente: da qui in poi
+# aggiungere un servizio al cluster è committare un file, non lanciare un comando.
+#
+# targetRevision: master — è il ramo che rappresenta "ciò che deve girare". Per provare un branch
+# prima del merge, k8s-argocd-bootstrap.ps1 accetta -TargetRevision <branch> e ripunta root-app +
+# le Application figlie (i manifest committati restano su master: nessuno deve ricordarsi di
+# rimetterli a posto dopo un test).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: procionemgr-root
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/markcapitanelli/ProcioneMGR.git
+    targetRevision: master
+    path: infra/gitops/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  # Nessun syncPolicy.automated: nemmeno l'albero delle Application si applica da solo. Vale lo
+  # stesso principio del resto — si guarda il diff, poi si decide. Vedi infra/gitops/README.md.

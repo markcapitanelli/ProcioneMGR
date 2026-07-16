@@ -1,0 +1,33 @@
+# PVC per l'appsettings.json condiviso col monolite (SafetyConfiguration).
+#
+# COLMA UN GAP DELLA FASE 2b: deployment.yaml referenzia `claimName: procionemgr-config` dalla Fase
+# 2b, ma questo oggetto non era mai stato scritto — il README lo dava per "scelta operativa, non
+# codice". Finché nessuno aveva provato a fare il deploy davvero su un cluster il buco era
+# invisibile; al primo apply su un cluster pulito il pod sarebbe rimasto Pending in attesa di una
+# PVC inesistente. È lo stesso genere di cosa che in Fase 2b è saltata fuori solo eseguendo (il bug
+# HTTP/2 di Kestrel): scritta a vista sembrava a posto.
+#
+# volumeName + storageClassName: "" NON sono ornamenti: senza, il provisioning dinamico assegnerebbe
+# a questa PVC una PV tutta sua (backed da una directory PROPRIA), e quella di procionemgr-ui
+# un'altra ancora. Tutto risulterebbe Bound e funzionante, ma i due pod leggerebbero due file
+# diversi — il monolite mostrerebbe limiti di rischio che il motore non applica.
+#
+# Ogni PVC ha la SUA PV (il binding PV<->PVC è 1:1: due PVC non possono condividere una PV, nemmeno
+# in RWX). La condivisione avviene sotto: le due PV puntano allo stesso storage. Vedi
+# shared/pv-config.yaml, che spiega perché e come.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: procionemgr-config
+  namespace: procionemgr-trading
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: trading
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""                          # disattiva il provisioning dinamico: bind statico
+  volumeName: procionemgr-config-pv-trading     # la PV di questo namespace (stesso storage di quella di ui)
+  resources:
+    requests:
+      storage: 64Mi

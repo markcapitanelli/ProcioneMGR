@@ -1,0 +1,34 @@
+# Microservizio di trading (Fase 2b): l'unico che esegue ordini veri.
+#
+# Sync wave 3, DOPO ingestion/ml: legge le candele che l'ingestione scrive, e (se Ml:Enabled) fa il
+# dual-read verso ml. Nessuno dei due è un requisito duro per l'avvio, ma partire in ordine evita
+# rumore diagnostico inutile al primo bring-up.
+#
+# ⚠ Sync SEMPRE MANUALE, senza eccezioni e senza ripensamenti futuri: è il servizio che muove
+# denaro. Un `automated: {selfHeal: true}` qui significherebbe che un controller decide da solo di
+# riavviare o riconfigurare il motore mentre ha posizioni aperte. È la stessa ragione per cui non
+# esiste una promozione automatica a Live.
+#
+# ⚠ Prima del sync, verificare che il monolite sia in modalità remota (Trading:UseRemoteTrading=true,
+# che nel ConfigMap di ui è già così): con il toggle a false, questo Deployment sarebbe un SECONDO
+# motore sullo stesso DB. Prerequisiti NON gestiti da ArgoCD: Secret trading-secrets (connection
+# string + MASTER KEY), scripts/k8s-trading-secret.ps1.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: procionemgr-trading
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/markcapitanelli/ProcioneMGR.git
+    targetRevision: master
+    path: infra/k8s/trading
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: procionemgr-trading
+  # Sync manuale, definitivo: vedi sopra.
