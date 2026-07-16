@@ -125,24 +125,21 @@ public sealed class RemoteTradingEngineClient(
     // mark-to-market vive solo nell'engine). Il monolite ha già il DbContextFactory sullo stesso
     // database: un salto di rete servirebbe solo ad aggiungere un modo di fallire.
     //
-    // ATTENZIONE ALLA DERIVA: sono copie riga-per-riga di TradingEngine.GetOrderHistoryAsync e
-    // GetPendingInternalAsync. Se cambia il filtro o l'ordinamento là, va cambiato anche qui, o le
-    // due modalità mostreranno ordini diversi. (Stesso principio del "config bleed" del Dockerfile.)
+    // Il CRITERIO delle query vive in TradingOrderQueries, lo stesso usato dal TradingEngine: in
+    // origine qui c'era una copia riga-per-riga con l'avvertimento "se cambia là, aggiorna qua" —
+    // la composizione condivisa rende la deriva impossibile per costruzione invece che vietata per
+    // convenzione. I test head-to-head (RemoteTradingEngineClientTests) restano come cintura.
 
     public async Task<List<Order>> GetOrderHistoryAsync(DateTime? from = null, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var q = db.Orders.Where(o => o.LaneId == laneId);
-        if (from is DateTime f) q = q.Where(o => o.CreatedAtUtc >= f);
-        return await q.OrderByDescending(o => o.CreatedAtUtc).Take(500).ToListAsync(ct);
+        return await TradingOrderQueries.History(db.Orders, laneId, from).ToListAsync(ct);
     }
 
     public async Task<List<Order>> GetPendingOrdersAsync(CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        return await db.Orders.AsNoTracking()
-            .Where(o => o.LaneId == laneId && o.Status == OrderStatus.Pending && o.Mode == TradingMode.Live)
-            .OrderByDescending(o => o.CreatedAtUtc).ToListAsync(ct);
+        return await TradingOrderQueries.PendingLive(db.Orders.AsNoTracking(), laneId).ToListAsync(ct);
     }
 
     // ------------------------------------------------------------------- cicli del worker
