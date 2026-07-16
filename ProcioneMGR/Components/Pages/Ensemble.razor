@@ -115,7 +115,14 @@
 
 @if (!string.IsNullOrEmpty(_message))
 {
-    <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+    @* Toast flottante (position:fixed): i pulsanti d'azione (Salva/Rebalance) sono in fondo alla
+       pagina, ma l'esito appariva in cima — invisibile da scrollati in basso. Fisso in alto a destra,
+       sopra ogni contenuto, click per chiudere: l'operatore vede sempre la conferma di ciò che ha fatto. *@
+    <div class="alert @(_isError ? "alert-danger" : "alert-success") shadow"
+         style="position:fixed; top:1rem; right:1rem; z-index:1080; max-width:min(92vw,440px); cursor:pointer; margin:0"
+         role="alert" title="Clicca per chiudere" @onclick="() => _message = null">
+        @_message
+    </div>
 }
 
 @if (_config is null)
@@ -255,15 +262,15 @@ else
                     </select>
                 </div>
                 <div class="col-auto"><button class="btn btn-sm btn-outline-primary" @onclick="AddPredefined">+ Aggiungi</button></div>
-                @if (_optimizedStrategies.Count > 0)
+                @if (_savedStrategies.Count > 0)
                 {
                     <div class="col-auto ms-3">
-                        <label class="form-label small">Aggiungi ottimizzata (Fase 5)</label>
+                        <label class="form-label small">Aggiungi salvata</label>
                         <select class="form-select form-select-sm" @bind="_addSavedId">
                             <option value="0">—</option>
-                            @foreach (var so in _optimizedStrategies)
+                            @foreach (var so in _savedStrategies)
                             {
-                                <option value="@so.Id">@so.Name (Sharpe @so.OptimizationSharpe?.ToString("F2"))</option>
+                                <option value="@so.Id">@so.Name@(so.OptimizationSharpe is decimal sh ? $" (Sharpe {sh:F2})" : "")</option>
                             }
                         </select>
                     </div>
@@ -584,7 +591,7 @@ else
     private EnsembleStatus? _status;
     private EnsemblePerformance? _performance;
     private List<IndicatorSeries> _perfSeries = new();
-    private List<SavedStrategy> _optimizedStrategies = new();
+    private List<SavedStrategy> _savedStrategies = new();
     private List<SavedMlModel> _savedMlModels = new();
     private List<DecayReport> _decayReports = new();
     private bool _onlyAlerts;
@@ -626,7 +633,15 @@ else
     {
         await using (var db = await DbFactory.CreateDbContextAsync())
         {
-            _optimizedStrategies = await db.SavedStrategies.Where(s => s.IsOptimized).OrderByDescending(s => s.OptimizationDate).ToListAsync();
+            // TUTTE le strategie salvate sono deployabili in un ensemble, non solo quelle da walk-forward:
+            // una strategia trovata via Discovery e salvata da /backtest ha parametri validi ma
+            // IsOptimized=false (nessuno Sharpe atteso), e prima restava esclusa — i suoi parametri non
+            // erano deployabili senza ripassare da Optimization. Le ottimizzate espongono lo Sharpe atteso
+            // (alimenta il decay monitor); le altre no (decay resta "in attesa", gestito con grazia).
+            _savedStrategies = await db.SavedStrategies
+                .OrderByDescending(s => s.IsOptimized)
+                .ThenByDescending(s => s.OptimizationDate ?? s.CreatedAt)
+                .ToListAsync();
             _savedMlModels = await db.SavedMlModels.OrderByDescending(m => m.CreatedAtUtc).ToListAsync();
         }
         await LoadLaneAsync();
@@ -809,17 +824,16 @@ else
     private void AddFromSaved()
     {
         if (_config is null || _addSavedId == 0) return;
-        var saved = _optimizedStrategies.FirstOrDefault(s => s.Id == _addSavedId);
+        var saved = _savedStrategies.FirstOrDefault(s => s.Id == _addSavedId);
         if (saved is null) return;
-        var proto = StrategyFactory.Prototypes.FirstOrDefault(p => p.Name == saved.StrategyName);
         _config.Strategies.Add(new EnsembleStrategy
         {
             StrategyName = saved.StrategyName,
-            DisplayName = $"{saved.Name} (opt)",
+            DisplayName = $"{saved.Name} ({(saved.IsOptimized ? "opt" : "salvata")})",
             Parameters = JsonSerializer.Deserialize<Dictionary<string, decimal>>(saved.ParametersJson) ?? new(),
             SavedStrategyId = saved.Id,
-            // Solo lo Sharpe è disponibile su SavedStrategy oggi (nessun ProfitFactor/MaxDrawdown
-            // persistito per le strategie salvate da /discovery) — vedi report per il dettaglio.
+            // Solo le strategie ottimizzate (walk-forward) hanno uno Sharpe atteso persistito; per le
+            // altre resta null e il decay monitor mostra "in attesa" (nessuna baseline da confrontare).
             ExpectedSharpe = saved.OptimizationSharpe,
         });
         _addSavedId = 0;
