@@ -1,0 +1,41 @@
+# Configurazione NON sensibile del monolite in-cluster (Fase 3). I segreti (connection string,
+# master key) stanno nel Secret ui-secrets, mai qui: questo file è committato.
+#
+# È QUI che il monolite diventa il "client puro" del PRD: con questi toggle non registra più alcun
+# motore di trading, worker di sync o client ML in-process — delega tutto ai tre servizi via i DNS
+# interni del cluster. Fuori dal cluster gli stessi toggle sono default-off (appsettings.json.example),
+# quindi eseguire il monolite in locale continua a funzionare esattamente come prima.
+#
+# Formato: le chiavi di configurazione .NET usano ':' come separatore, ma nelle variabili d'ambiente
+# si scrive '__' (doppio underscore).
+#
+# NB precedenza: le variabili d'ambiente vincono sull'appsettings.json (che qui è il file condiviso
+# via PVC). Nessuna di queste chiavi è fra quelle scritte da AppConfigWriter (Trading:Safety, Llm,
+# Drift, PromotionEvaluator, AutoReapply, MarketRegime, Trading:LiveExecution), quindi non c'è il
+# rischio che un pannello UI provi a cambiarle senza effetto visibile.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ui-config
+  namespace: procionemgr-ui
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: ui
+data:
+  # --- Ingestion (Fase 1): il worker di sync periodico vive nel servizio remoto, non qui.
+  MarketData__UseRemoteIngestion: "true"
+  MarketData__RemoteIngestionUrl: "http://procionemgr-ingestion.procionemgr-ingestion.svc.cluster.local:8080"
+
+  # --- ML (Fase 2a): dual-read osservativo. RemoteUrl valorizzato = il client gRPC viene registrato;
+  # Ml__Enabled resta gestito da /admin/autonomy (hot-reload), non forzato qui.
+  Ml__RemoteUrl: "http://procionemgr-ml.procionemgr-ml.svc.cluster.local:8080"
+
+  # --- Trading (Fase 2b): il monolite NON esegue più ordini, li comanda via gRPC.
+  # ⚠ Con questo a "true" il Deployment procionemgr-trading DEVE essere vivo, e viceversa quel
+  # Deployment non deve MAI girare con questo a "false": sarebbero due motori sullo stesso DB.
+  Trading__UseRemoteTrading: "true"
+  Trading__RemoteUrl: "http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8080"
+
+  # --- Data Protection (Fase 3): percorso del keyring sul volume dedicato. Vuoto/assente fuori dal
+  # cluster => il default di ASP.NET Core (cartella del profilo utente), che in locale va già bene.
+  DataProtection__KeyRingPath: "/keys"

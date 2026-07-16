@@ -1,0 +1,7 @@
+# Fase 3 — GitOps. I 6 namespace dei bounded context. Nessuna immagine da pinnare qui.
+# Vanno sincronizzati per PRIMI: ogni altra Application ci crea dentro le proprie risorse.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespaces.yaml

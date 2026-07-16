@@ -1,0 +1,21 @@
+# I 6 namespace dei bounded context. Sync per PRIMO: ogni altra Application ci crea dentro le
+# proprie risorse e fallirebbe su un namespace inesistente.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: procionemgr-namespaces
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+  annotations:
+    # Ordine di sync fra Application dell'app-of-apps (più basso = prima).
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/markcapitanelli/ProcioneMGR.git
+    targetRevision: master
+    path: infra/k8s/namespaces
+  destination:
+    server: https://kubernetes.default.svc
+  # Sync manuale (nessun syncPolicy.automated): vedi infra/gitops/README.md.

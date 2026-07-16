@@ -39,7 +39,9 @@ if (Test-KindCluster $clusterName) {
 }
 
 Write-Host "Applico i namespace dei bounded context..." -ForegroundColor Cyan
-kubectl apply -f $namespacesDir --context "kind-$clusterName"
+# -k (kustomize), non -f: da quando la cartella contiene un kustomization.yaml (Fase 3), un
+# `apply -f <dir>` proverebbe ad applicare ANCHE quel file come se fosse una risorsa, e fallirebbe.
+kubectl apply -k $namespacesDir --context "kind-$clusterName"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host ""

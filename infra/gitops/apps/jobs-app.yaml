@@ -1,0 +1,27 @@
+# Workload batch (Fase 1): StrategyHunter Job (namespace procionemgr-pipeline) + DbBackup CronJob
+# (namespace procionemgr-supervisor, `suspend: true` di default finché usa un emptyDir).
+# Nessun `destination.namespace`: i due manifest dichiarano il proprio, e sono diversi.
+#
+# ⚠ ATTRITO NOTO — i campi di un `Job` sono IMMUTABILI dopo la creazione. Se cambia il template di
+# strategyhunter-job.yaml, il sync FALLISCE finché il Job esistente non viene cancellato a mano:
+#   kubectl delete job strategyhunter-discover -n procionemgr-pipeline
+# È un limite di Kubernetes (GitOps presume "riapplica per convergere", su un Job non si può), non
+# di ArgoCD. Vedi infra/k8s/jobs/kustomization.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: procionemgr-jobs
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/markcapitanelli/ProcioneMGR.git
+    targetRevision: master
+    path: infra/k8s/jobs
+  destination:
+    server: https://kubernetes.default.svc
+  # Sync manuale: vedi infra/gitops/README.md.
