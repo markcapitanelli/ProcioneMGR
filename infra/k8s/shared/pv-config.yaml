@@ -1,0 +1,44 @@
+# PersistentVolume CONDIVISA per appsettings.json (SafetyConfiguration) — Fase 3.
+#
+# Perché esiste: AppConfigWriter scrive LETTERALMENTE su <ContentRootPath>/appsettings.json (non c'è
+# un provider di configurazione astratto da ripuntare altrove senza refactor). Perché i limiti di
+# sicurezza modificati dal pannello /trading del monolite valgano anche nel motore che esegue gli
+# ordini, i due pod devono vedere LO STESSO FILE. Il monolite scrive, procionemgr-trading rilegge a
+# caldo (reloadOnChange, ~1s).
+#
+# Perché una PV STATICA e non il provisioning dinamico (il punto delicato):
+# le PVC sono oggetti NAMESPACED, le PV no. procionemgr-ui e procionemgr-trading non possono
+# condividere una PVC: servono due PVC (una per namespace) legate ALLA STESSA PV. Se le lasciassimo
+# al provisioning dinamico, ognuna otterrebbe una PV PROPRIA e ISOLATA: i pod partirebbero, le PVC
+# risulterebbero Bound, nessun errore da nessuna parte — e i due file sarebbero semplicemente file
+# diversi. Un fallimento silenzioso, cioè la categoria peggiore quando in mezzo ci sono i limiti di
+# rischio del trading. Per questo entrambe le PVC fanno bind ESPLICITO per nome su questa PV
+# (spec.volumeName + storageClassName: "" per disattivare il provisioning dinamico).
+#
+# ⚠ LIMITE NOTO — hostPath NON è un vero RWX. Su kind (mono-nodo) tutti i pod girano sullo stesso
+# nodo, quindi un hostPath si comporta DI FATTO come un volume condiviso e basta a validare il
+# CONTRATTO APPLICATIVO (il monolite scrive → il trading rilegge). Ciò che NON valida è la semantica
+# di provisioning RWX vera: su un cluster multi-nodo questo manifest andrebbe sostituito con una PV
+# backed da NFS/CephFS/Azure Files (o equivalente della storage class disponibile), perché due pod
+# su nodi diversi NON vedrebbero lo stesso hostPath. Stessa onestà dell'emptyDir in
+# jobs/dbbackup-cronjob.yaml: qui è un sostituto di sviluppo, dichiarato.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: procionemgr-config-pv
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: shared-config
+spec:
+  capacity:
+    # La dimensione è un requisito formale dell'API: il contenuto reale è un singolo JSON di pochi KB.
+    storage: 64Mi
+  accessModes:
+    # RWX è ciò che il caso d'uso richiede (due pod, due namespace, scritture da uno solo).
+    # Con hostPath su kind è onorato solo perché il nodo è uno: vedi il limite qui sopra.
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain   # mai cancellare la configurazione di sicurezza a PVC rimossa
+  storageClassName: ""                    # nessuna storage class: bind statico, non provisioning
+  hostPath:
+    path: /mnt/procionemgr-config
+    type: DirectoryOrCreate

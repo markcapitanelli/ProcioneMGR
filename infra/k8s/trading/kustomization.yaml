@@ -1,0 +1,21 @@
+# Fase 3 — GitOps. Il tag pinnato qui vince sul `:latest` placeholder di deployment.yaml: è questo
+# file, in Git, a dire quale build gira sul cluster. Bump manuale (= la promozione resta una scelta
+# umana). Vedi ui/kustomization.yaml per il ragionamento completo.
+#
+# Qui il tag pinnato conta più che altrove: è il servizio che esegue ordini veri. Sapere con
+# certezza, da Git, quale binario sta operando sul mercato — e poter tornare indietro con un revert —
+# è esattamente il tipo di garanzia che `:latest` non può dare.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: procionemgr-trading
+
+resources:
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+
+images:
+  - name: ghcr.io/markcapitanelli/procionemgr-trading
+    newTag: latest

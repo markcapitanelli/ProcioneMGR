@@ -74,8 +74,8 @@ dell'host di sviluppo. Da dentro un pod, `localhost` è il pod stesso — per ra
 ```powershell
 .\scripts\k8s-bootstrap.ps1                       # cluster + namespace
 .\scripts\k8s-postgres-secret.ps1 -ConnectionString "Host=host.docker.internal;..."
-kubectl apply -f infra/k8s/ingestion/             # Deployment + Service ingestion
-kubectl apply -f infra/k8s/jobs/                  # registra Job + CronJob (CronJob sospeso)
+kubectl apply -k infra/k8s/ingestion/             # Deployment + Service ingestion
+kubectl apply -k infra/k8s/jobs/                  # registra Job + CronJob (CronJob sospeso)
 # One-shot del CronJob senza aspettare le 03:00 (funziona anche da sospeso):
 kubectl create job --from=cronjob/dbbackup-nightly dbbackup-smoke -n procionemgr-supervisor
 kubectl logs -f job/dbbackup-smoke -n procionemgr-supervisor
@@ -175,7 +175,7 @@ Limiti da conoscere:
 .\scripts\k8s-bootstrap.ps1
 $env:PROCIONE_MGR_MASTER_KEY = "<base64 32 byte>"
 .\scripts\k8s-trading-secret.ps1 -ConnectionString "Host=host.docker.internal;Port=5432;..."
-kubectl apply -f infra/k8s/trading/          # Deployment + Service + NetworkPolicy
+kubectl apply -k infra/k8s/trading/          # PVC + Deployment + Service + NetworkPolicy
 kubectl port-forward -n procionemgr-trading svc/procionemgr-trading 18092:8080
 # → poi monolite con Trading:UseRemoteTrading=true e Trading:RemoteUrl=http://localhost:18092
 ```

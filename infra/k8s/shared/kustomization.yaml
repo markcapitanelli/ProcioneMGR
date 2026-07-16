@@ -1,0 +1,7 @@
+# Risorse cluster-scoped condivise fra namespace (Fase 3). Sincronizzate PRIMA dei servizi che le
+# consumano: senza la PV, le PVC di ui/trading restano Pending e i pod non partono.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - pv-config.yaml

@@ -1,0 +1,30 @@
+# Service ClusterIP del monolite (Fase 3). Nessun Ingress in questa fase: si raggiunge con
+#   kubectl port-forward -n procionemgr-ui svc/procionemgr-ui 18080:8080
+# poi http://localhost:18080 dal browser.
+#
+# Perché niente Ingress ancora: è lo stesso pattern con cui sono stati validati ingestion, ml e
+# trading — port-forward prima, esposizione dopo. In più servirebbero due lavori non banali:
+# ricreare il cluster kind (serve la label ingress-ready sul nodo) e sistemare
+# `app.UseHttpsRedirection()` (Program.cs), oggi chiamato incondizionatamente: dietro un ingress in
+# chiaro rimanderebbe ogni richiesta a https://. Con ASPNETCORE_URLS su solo-HTTP quella chiamata è
+# di fatto inerte (Kestrel non conosce una porta https e non redirige), quindi via port-forward non
+# dà fastidio — ma diventerebbe un problema vero il giorno dell'Ingress. Rimandato, non dimenticato.
+#
+# Nessun sessionAffinity: con replicas:1 sarebbe inerte. Servirà (insieme all'affinità cookie
+# sull'Ingress) solo se un giorno il monolite scalerà — che oggi non può, vedi deployment.yaml.
+apiVersion: v1
+kind: Service
+metadata:
+  name: procionemgr-ui
+  namespace: procionemgr-ui
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: ui
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

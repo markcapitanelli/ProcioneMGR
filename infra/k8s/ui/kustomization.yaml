@@ -1,0 +1,29 @@
+# Fase 3 — GitOps. Il blocco `images` è il punto del passaggio a GitOps: il tag `:latest` scritto in
+# deployment.yaml è solo un placeholder leggibile, ciò che viene applicato davvero è il tag pinnato
+# QUI. È questo file, in Git, la sorgente di verità su quale build gira sul cluster.
+#
+# Perché non `:latest` sul cluster: `:latest` è un bersaglio mobile — due sync identici, a distanza
+# di un giorno, potrebbero far girare due binari diversi senza che nulla in Git lo dica. Con un tag
+# pinnato la domanda "cosa sta girando?" ha una risposta nel repo, e un rollback è un revert.
+#
+# Il bump del tag è MANUALE di proposito (una riga, qui): il bump È la promozione — decide quale
+# build finisce sul cluster. Automatizzarlo da CI sarebbe l'opposto del "nessuna promozione
+# automatica" applicato in tutto il progetto. Quando servirà, il passo giusto è un workflow che apre
+# una PR col bump, da approvare a mano — non un commit diretto da un bot.
+#
+# `newTag: latest` qui sotto è il valore di partenza: sostituirlo con lo sha della build che si vuole
+# promuovere (docker-build.yml tagga ogni immagine anche con ${{ github.sha }}).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: procionemgr-ui
+
+resources:
+  - pvc.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+
+images:
+  - name: ghcr.io/markcapitanelli/procionemgr
+    newTag: latest

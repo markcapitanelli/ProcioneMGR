@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -41,6 +42,26 @@ builder.Services.AddAuthentication(options =>
         options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
     })
     .AddIdentityCookies();
+
+// --- Data Protection: keyring persistito (Fase 3 microservizi) ---
+// È la chiave con cui si firmano/cifrano i cookie di autenticazione. Fuori da un container il
+// default di ASP.NET Core la scrive già in una cartella del profilo utente (persistente fra i
+// riavvii): in sviluppo locale non serve fare nulla, e infatti senza DataProtection:KeyRingPath
+// questo blocco non tocca nulla — comportamento identico a prima.
+//
+// DENTRO un container è un'altra storia: senza un percorso persistito il keyring vive solo in
+// memoria, quindi OGNI riavvio del pod invalida tutti i cookie e disconnette gli utenti. Non è il
+// caso di un deploy pianificato (raro, scelto): basta un OOM-kill o una liveness probe fallita, ed
+// è silenzioso. In K8s si monta una PVC e si punta qui (vedi infra/k8s/ui/deployment.yaml).
+var keyRingPath = builder.Configuration["DataProtection:KeyRingPath"];
+if (!string.IsNullOrWhiteSpace(keyRingPath))
+{
+    builder.Services.AddDataProtection()
+        // Nome esplicito e stabile: il default deriva dal ContentRootPath, che cambiando fra host
+        // (sviluppo vs /app nel container) renderebbe indecifrabili le chiavi già scritte.
+        .SetApplicationName("ProcioneMGR")
+        .PersistKeysToFileSystem(new DirectoryInfo(keyRingPath));
+}
 
 // Servizio di cifratura (AES-256-GCM) per i segreti a riposo. Singleton: la chiave
 // master viene derivata una sola volta. Va registrato PRIMA del DbContext perche'
@@ -402,6 +423,12 @@ app.MapRazorComponents<App>()
 
 // Add additional endpoints required by the Identity /Account Razor components.
 app.MapAdditionalIdentityEndpoints();
+
+// Liveness/readiness per Kubernetes (Fase 3): stesso endpoint anonimo già esposto da
+// ingestion/ml/trading — il monolite era l'unico dei quattro a non averlo. Le probe non possono
+// puntare a "/" (redirect di login, negoziazione del circuito Blazor): serve un endpoint che
+// risponda 200 e basta. Nessun dato esposto, nessuna autorizzazione richiesta di proposito.
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 // Applica le migrazioni pendenti e crea i ruoli (Admin/Manager/User) all'avvio.
 // Saltato sotto i tool di design-time (dotnet ef): non deve tentare di connettersi/migrare il DB

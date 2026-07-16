@@ -1,0 +1,32 @@
+# Il monolite come pod (Fase 3): UI Blazor Server + Identity + i bounded context non ancora estratti
+# (pipeline di discovery, supervisione/governance).
+#
+# Sync wave 4, per ULTIMO: parte già configurato per parlare con i tre servizi remoti (ConfigMap
+# ui-config), quindi ha senso che quelli esistano prima — altrimenti i primi tick di ogni client
+# remoto falliscono e riempiono i log di errori che non sono errori veri.
+#
+# ⚠ Sync SEMPRE MANUALE: la strategy è Recreate (vedi deployment.yaml), quindi ogni sync che tocchi
+# il pod causa una finestra in cui la UI non risponde. Deve essere una decisione, non l'effetto
+# collaterale di un poller che ha visto un commit.
+#
+# Prerequisiti NON gestiti da ArgoCD: Secret ui-secrets (scripts/k8s-ui-secret.ps1, master key
+# IDENTICA a quella di trading-secrets) e schema DB già migrato (`dotnet ef database update`).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: procionemgr-ui
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/markcapitanelli/ProcioneMGR.git
+    targetRevision: master
+    path: infra/k8s/ui
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: procionemgr-ui
+  # Sync manuale, definitivo: vedi sopra.

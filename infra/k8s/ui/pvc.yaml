@@ -1,0 +1,47 @@
+# Due volumi, due scopi diversi — Fase 3.
+
+---
+# 1. L'appsettings.json CONDIVISO con procionemgr-trading (SafetyConfiguration).
+# Il monolite è lo SCRITTORE (pannello /trading e /admin/autonomy via AppConfigWriter), il servizio
+# di trading il lettore. Bind ESPLICITO alla stessa PV a cui punta la PVC omonima nel namespace
+# procionemgr-trading: è l'unico modo perché due namespace vedano un unico file (le PVC sono
+# namespaced, le PV no). Senza volumeName + storageClassName:"" il provisioning dinamico darebbe a
+# ciascuna una PV isolata, senza errori e senza che nulla lo riveli. Vedi shared/pv-config.yaml.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: procionemgr-config
+  namespace: procionemgr-ui
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: ui
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: procionemgr-config-pv
+  resources:
+    requests:
+      storage: 64Mi
+
+---
+# 2. Il keyring di Data Protection (chiavi dei cookie di autenticazione).
+# NON condiviso e non condivisibile: è roba solo del monolite, nessun altro servizio fa auth. RWO e
+# provisioning dinamico bastano (un solo pod, un solo nodo che lo monta) — a differenza del volume
+# qui sopra, qui non c'è nessuna sottigliezza di bind statico da rispettare.
+# Senza questo volume il keyring vivrebbe in memoria e ogni riavvio del pod (anche un OOM-kill, non
+# solo un deploy) disconnetterebbe silenziosamente tutti. Vedi DataProtection:KeyRingPath in Program.cs.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: procionemgr-dataprotection
+  namespace: procionemgr-ui
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: ui
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 64Mi
