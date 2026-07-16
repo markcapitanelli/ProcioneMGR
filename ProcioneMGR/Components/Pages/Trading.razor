@@ -73,8 +73,12 @@
             <table class="table table-sm align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Corsia</th><th>Simbolo</th><th>Modalità</th><th class="text-end">Sharpe</th><th class="text-end">Trade</th>
-                        <th class="text-end">Max DD</th><th class="text-end">Win</th><th class="text-end">Osserv.</th><th>Stato</th><th></th>
+                        @{ const string sinceStartHint = "Metriche misurate DALL'AVVIO della corsia (stessa base della decisione di promozione): possono differire dai KPI del pannello di controllo qui sotto, che usano una finestra di 90 giorni."; }
+                        <th>Corsia</th><th>Simbolo</th><th>Modalità</th>
+                        <th class="text-end" title="@sinceStartHint">Sharpe</th>
+                        <th class="text-end" title="@sinceStartHint">Trade</th>
+                        <th class="text-end">Max DD</th><th class="text-end">Win</th>
+                        <th class="text-end" title="@sinceStartHint">Osserv.</th><th>Stato</th><th></th>
                     </tr>
                 </thead>
                 <tbody>
