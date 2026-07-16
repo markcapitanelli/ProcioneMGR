@@ -28,7 +28,7 @@ kubectl get namespaces --context kind-procionemgr-dev | Select-String procionemg
 
 | File | Scopo |
 |---|---|
-| `kind-config.yaml` | Cluster mono-nodo `procionemgr-dev`, porte 80/443 mappate su 8080/8443 host (pronte per un futuro ingress, Fase 1+) |
+| `kind-config.yaml` | Cluster mono-nodo `procionemgr-dev`, porte 80/443 mappate su 8080/8443 host (pronte per un futuro ingress). Da Fase 3: kindnet disattivato, il CNI è **Calico** (installato dal bootstrap) perché applica le NetworkPolicy che kindnet ignora |
 | `namespaces/00-namespaces.yaml` | I 6 namespace dei bounded context (`procionemgr-ui`, `-trading`, `-ml`, `-pipeline`, `-ingestion`, `-supervisor`) |
 
 ## Vincoli per le fasi successive
@@ -132,22 +132,38 @@ Un Secret Kubernetes è **base64, non cifrato**: chiunque possa leggere i Secret
 la chiave. Oltre lo sviluppo locale servono RBAC stretto sui Secret + encryption-at-rest di etcd
 (o Vault/Sealed Secrets).
 
-### `NetworkPolicy` — la prima del progetto, e il suo limite
+### `NetworkPolicy` — la prima del progetto
 
 `ConfirmOrder` sblocca un ordine Live reale e `StartLane(LIVE)` avvia una sessione con denaro vero.
 Nel monolite quelle azioni sono dietro `[Authorize(Admin,Manager)]` di `Trading.razor`; **dietro
 gRPC quel gate non esiste**: non c'è autenticazione a livello RPC. `networkpolicy.yaml` è l'unico
-controllo di accesso — ingress consentito solo dal pod `procionemgr-ui`.
+controllo di accesso — ingress su 8080 (comandi) consentito solo dal pod `procionemgr-ui`; la 8081
+(`/health`) è aperta a chiunque **di proposito** (le probe partono dal kubelet, non da un pod).
 
 > ⚠️ **Una NetworkPolicy la applica il CNI.** Senza un CNI che la implementi viene accettata
-> dall'API server e **ignorata in silenzio**: sembra protetta e non lo è. Il CNI di default di kind
-> (**kindnet**) **non le applica** — sul cluster di sviluppo questo confine **non è attivo**. Per
-> una verifica reale serve Calico/Cilium. Da provare esplicitamente, non da dare per fatto:
+> dall'API server e **ignorata in silenzio**: sembra protetta e non lo è. Il default di kind
+> (**kindnet**) fa esattamente questo — e infatti sui primi cluster di sviluppo il confine **non
+> era attivo**, pur risultando "applicato". Dalla Fase 3 il bootstrap installa **Calico** (versione
+> pinnata, `scripts/k8s-bootstrap.ps1`) al posto di kindnet: su un cluster ricreato da allora
+> l'enforcement è reale. Un cluster creato prima va ricreato (`k8s-teardown` + `k8s-bootstrap`).
+
+Il test va fatto **sulla porta giusta**. Sondare `8081/health` non dimostra nulla: la policy la
+apre a chiunque, quindi risponde 200 con o senza enforcement (errore fatto davvero alla prima
+verifica di Fase 3, e da non ripetere). Il test discriminante è la **8080**:
 
 ```powershell
-# Da un pod di un namespace terzo: DEVE fallire (e su kindnet invece riesce).
-kubectl run probe -n procionemgr-pipeline --rm -it --image=curlimages/curl --restart=Never -- `
-  curl -sS -m 5 http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8080/health
+# Da un pod di un namespace TERZO verso la porta dei comandi: con enforcement la connessione viene
+# SCARTATA (timeout, exit code != 0). Senza, fallirebbe comunque ma SUBITO e per un motivo diverso
+# (curl parla HTTP/1.1 a un endpoint solo-h2c): è il TIMEOUT che dimostra il blocco di rete.
+kubectl run probe -n procionemgr-pipeline --rm -i --image=curlimages/curl --restart=Never -- `
+  curl -sS -m 5 http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8080/
+# atteso con Calico: "Connection timed out" dopo 5s.
+
+# Controprova che il traffico LEGITTIMO passa: la 8081 risponde da qualunque namespace (per le
+# probe), e il pod ui parla in gRPC con la 8080 — si vede nei suoi log (TradingCommandServiceClient
+# ... 200) appena i toggle remoti sono attivi.
+kubectl run probe2 -n procionemgr-pipeline --rm -i --image=curlimages/curl --restart=Never -- `
+  curl -sS -m 5 http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8081/health
 ```
 
 Nota: `kubectl port-forward` passa dall'API server e **non** dalla rete dei pod — scavalca la
@@ -287,15 +303,16 @@ utenti in silenzio. Fuori dal cluster la chiave non è impostata e vale il defau
   `kubectl delete job strategyhunter-discover -n procionemgr-pipeline`. È un limite di Kubernetes
   (GitOps presume "riapplica per convergere"), non di ArgoCD. Il CronJob non ne soffre.
 - **Ingress rimandato**: si raggiunge la UI solo via `port-forward`. Servirebbe ricreare il cluster
-  (label `ingress-ready`) e sistemare `app.UseHttpsRedirection()` (`Program.cs`), oggi chiamato
-  incondizionatamente: dietro un ingress in chiaro rimanderebbe tutto a `https://`. Con
-  `ASPNETCORE_URLS` solo-HTTP quella riga è di fatto inerte, quindi via port-forward non dà
-  fastidio — ma va risolta *prima* di esporre la UI.
+  con la label `ingress-ready` e installare ingress-nginx. Il redirect HTTPS che l'avrebbe rotto è
+  già disinnescato (`Http:DisableHttpsRedirection`, spento nel pod via `ui-config.env`): quando
+  l'Ingress servirà, quella mina non c'è più.
 - **Il valore di ArgoCD qui è, onestamente, marginale**: un solo sviluppatore, un solo cluster che
   viene distrutto e ricreato di continuo. Quello che si porta a casa davvero è (a) i tag pinnati e
   (b) un diff visibile prima di applicare — entrambi ottenibili con `kubectl diff -k` + `apply -k`,
   senza i ~5 pod di ArgoCD sempre accesi. La scelta di procedere è consapevole: è un investimento
   per quando gli ambienti saranno più d'uno.
-- **La NetworkPolicy resta non applicata su kind** (kindnet la ignora): riverificato in Fase 3 con
-  `ui` come pod reale — una probe da `procionemgr-pipeline` verso trading **passa**. Il confine di
-  autorizzazione davanti a `ConfirmOrder` è attivo solo su un cluster con Calico/Cilium.
+- **NetworkPolicy: enforcement reale solo da Calico in poi.** Sui primi cluster (kindnet) la policy
+  risultava applicata ma era ignorata; dalla Fase 3 il bootstrap installa Calico e il blocco è
+  stato verificato dal vivo sulla porta giusta (8080 — la prima verifica sondava la 8081, che la
+  policy apre a chiunque: un test che passava comunque, cioè nessun test). Su qualunque altro
+  ambiente resta da provare, mai da presumere.

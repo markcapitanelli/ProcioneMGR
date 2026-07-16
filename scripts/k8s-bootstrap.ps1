@@ -32,11 +32,31 @@ foreach ($tool in @("kind", "kubectl")) {
 
 if (Test-KindCluster $clusterName) {
     Write-Host "Cluster '$clusterName' già esistente: salto la creazione." -ForegroundColor Yellow
+    Write-Host "NB: se è stato creato PRIMA del passaggio a Calico (Fase 3), va ricreato:" -ForegroundColor Yellow
+    Write-Host "    .\scripts\k8s-teardown.ps1 ; .\scripts\k8s-bootstrap.ps1" -ForegroundColor Yellow
 } else {
     Write-Host "Creo il cluster kind '$clusterName'..." -ForegroundColor Cyan
     kind create cluster --name $clusterName --config $kindConfig
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
+
+# --- CNI: Calico (Fase 3) ---
+# kind-config.yaml disattiva kindnet (disableDefaultCNI): senza un CNI i nodi restano NotReady e
+# nessun pod parte. Calico è qui perché APPLICA le NetworkPolicy, che kindnet ignora in silenzio —
+# e la policy su procionemgr-trading è l'unico controllo di accesso davanti a ConfirmOrder (ordini
+# Live reali). Versione PINNATA, mai un tag mobile: stesso patto delle nostre immagini e di ArgoCD.
+# L'apply è idempotente: rilanciare lo script su un cluster già con Calico non cambia nulla.
+$calicoVersion = "v3.29.1"
+$calicoManifest = "https://raw.githubusercontent.com/projectcalico/calico/$calicoVersion/manifests/calico.yaml"
+Write-Host "Installo il CNI Calico $calicoVersion (applica le NetworkPolicy, kindnet le ignora)..." -ForegroundColor Cyan
+kubectl apply -f $calicoManifest --context "kind-$clusterName"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host "Attendo che Calico e il nodo siano pronti..." -ForegroundColor Cyan
+kubectl rollout status daemonset/calico-node -n kube-system --timeout=300s --context "kind-$clusterName"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+kubectl wait --for=condition=Ready node --all --timeout=300s --context "kind-$clusterName"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Applico i namespace dei bounded context..." -ForegroundColor Cyan
 # -k (kustomize), non -f: da quando la cartella contiene un kustomization.yaml (Fase 3), un

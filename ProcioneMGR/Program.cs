@@ -413,7 +413,17 @@ else
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-app.UseHttpsRedirection();
+
+// Redirect HTTPS disattivabile via config (Fase 3): dentro il cluster il pod ui parla solo HTTP in
+// chiaro dietro port-forward/Ingress. Oggi il middleware lì è di fatto inerte (nessun listener
+// https configurato => logga un warning e lascia passare), ma il giorno in cui un Ingress
+// terminasse TLS e inoltrasse in chiaro, il redirect incondizionato produrrebbe un loop. Meglio un
+// interruttore esplicito ora (ui-config.env lo spegne nel pod) che una sorpresa dietro l'Ingress
+// futuro. Default false = comportamento locale identico a prima.
+if (!builder.Configuration.GetValue<bool>("Http:DisableHttpsRedirection"))
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseAntiforgery();
 

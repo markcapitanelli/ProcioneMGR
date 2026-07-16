@@ -30,6 +30,16 @@ public interface IPipelineEngine
     /// by enabled stages ordered earlier). Returns the list of problems (empty = valid).
     /// </summary>
     List<string> ValidateConfiguration(IReadOnlyList<StageConfig> stages);
+
+    /// <summary>
+    /// Recovers runs orphaned by a process restart: rows still marked "Running" on the DB when
+    /// no run can possibly be executing (the live slot is in-memory only, so after a restart any
+    /// "Running" row is a leftover of the previous process). They become "Paused" — NOT "Failed":
+    /// the per-stage checkpoint makes them resumable, and <see cref="ResumeRunAsync"/> refuses
+    /// "Running" rows, so without this sweep an orphan is stuck forever. Called once at startup
+    /// (PipelineSchedulerWorker). Returns how many runs were recovered.
+    /// </summary>
+    Task<int> RecoverOrphanedRunsAsync(CancellationToken ct = default);
 }
 
 /// <summary>Catalog of all available stages (prototypes for the UI, factory for the engine).</summary>
