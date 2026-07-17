@@ -1,6 +1,11 @@
 # PRD — Consolidamento Architetturale di ProcioneMGR
 
-**Stato**: proposto, in attesa di esecuzione fase per fase · **Creato**: 2026-07-17 · **Tipo**: documento vivo (aggiornare ad ogni fase completata, vedi §8)
+**Stato**: **Fase 0 sostanzialmente completa** (2026-07-17, stesso giorno della stesura — branch
+`claude/procionemgr-audit-consolidation-b489ce`, 11 commit, 1011/1011 test): tutti gli item
+P0-P3 fatti, TRANNE P1-5 che copre solo `Trading.razor` (il sottoinsieme bloccante per la
+Fase 1) — le altre 5 pagine Razor >780 righe restano aperte, non bloccanti (dettagli §3.6).
+Fase 1/Fase 2 non iniziate · **Creato**: 2026-07-17 · **Tipo**: documento vivo (aggiornare
+ad ogni fase completata, vedi §8)
 
 ## Scopo di questo documento
 
@@ -208,17 +213,46 @@ conviene.
 
 ### 3.6 — Criteri di accettazione Fase 0
 
-- Ogni item chiuso con una PR indipendente, CI verde (`ci.yml`: build + test + audit
+- [x] Ogni item chiuso con una PR indipendente, CI verde (`ci.yml`: build + test + audit
   vulnerabilità, già eseguita a ogni push/PR).
-- Zero regressioni sui 988 test esistenti.
-- Il commento ingannevole `TradingEngine.cs:1118` corretto.
-- Zero classi o registrazioni DI morte rilevabili con la stessa analisi statica usata
+- [x] Zero regressioni sui test esistenti.
+- [x] Il commento ingannevole `TradingEngine.cs:1118` corretto.
+- [x] Zero classi o registrazioni DI morte rilevabili con la stessa analisi statica usata
   dall'audit (grep dei caller, non solo dei tipi).
 
 **Rischio**: basso su tutti gli item — nessun pattern nuovo, nessuna dipendenza nuova, per
 lo più modifiche localizzate a un singolo file. **Approvazione esplicita richiesta**: no —
 è lavoro già scritto o comunque già rivisto concettualmente dall'audit; procede PR per PR a
 discrezione dell'operatore, in qualunque ordine rispetti le due note di sequenza di §3.5.
+
+**FASE 0 SOSTANZIALMENTE COMPLETATA (2026-07-17, stessa giornata della stesura)** — 11 commit sul branch
+`claude/procionemgr-audit-consolidation-b489ce` (report audit + P0-1/P0-2/P0-3/P1-5/P1-6/
+P1-7/P2-8/P2-9/P2-10/P3-11/P3-12), **1011/1011 test verdi con Docker/Postgres reale**. Note
+sugli scostamenti dal design originale, emersi durante l'esecuzione:
+- **P3-11** non ha richiesto codice: investigato prima di implementare, la master key era
+  **già** fuori da appsettings.json in produzione (Secret K8s dedicato in entrambi i
+  deployment, `infra/k8s/{trading,ui}/deployment.yaml`) — Azure Key Vault (proposta
+  originale del TODO nel codice) non è pertinente per uno stack Kubernetes-nativo. Solo il
+  commento è stato corretto. La rotazione della chiave resta l'unico pezzo TODO reale,
+  deliberatamente rimandato come feature a sé.
+- **P3-12** non ha richiesto paginazione vera: investigato prima di costruirla, **nessun
+  consumer attuale legge il campo `trades`** (né locale né remoto — confermato da commenti
+  già presenti nel codice). Fix minimo: troncamento ai 500 trade più recenti nel motore
+  (stesso pattern già in uso in Backtest/MlLab/PairsTrading.razor), non un meccanismo di
+  cursori/continuazione per un campo senza lettori.
+- **P1-6**: l'autorizzazione applicativa gRPC è un `SharedSecretAuthInterceptor` **fail-closed**
+  (rifiuta tutto se il segreto non è configurato, non degrada in silenzio), non una pipeline
+  MediatR — coerente con §4.2, che la Fase 1 conferma.
+- **P2-8** (fee hardcoded) è stato aggiunto **oltre** alla tabella originale di §3.2: la
+  prima stesura del PRD lo aveva elencato ma la sessione di esecuzione lo aveva inizialmente
+  saltato, corretto prima di dichiarare la fase chiusa.
+- **P1-5** ha coperto `Trading.razor` (il prerequisito esplicito per la Fase 1); le altre 5
+  pagine Razor >780 righe (MlLab, Ensemble, Pipeline, Backtest, Optimization) restano da
+  fare, senza vincoli di sequenza tra loro né con la Fase 1.
+
+Branch pushato e PR aperta: [#13](https://github.com/markcapitanelli/ProcioneMGR/pull/13)
+(o successiva se rinominata/sostituita — verificare lo stato reale su GitHub prima di
+assumere che sia ancora quella aperta).
 
 ---
 
@@ -482,12 +516,12 @@ nessuno si verifica, la voce resta non pianificata indefinitamente, e questo è 
 
 ## §7 — Tabella riassuntiva
 
-| Fase | Obiettivo | Rischio | Dipendenze | Approvazione esplicita |
-|---|---|---|---|---|
-| **Fase 0** | Hardening — bonifica rami secchi, `PollingTimer`, retry Postgres, estrazione orchestrazione Razor, auth gRPC, lifetimes HttpClient, fee configurabile, micro-fix, master key, paginazione gRPC | Basso | Porting del lavoro P0 dal worktree `zealous-ellis-b6357f` | No |
-| **Fase 1** | CQRS/MediatR — decomposizione `TradingEngine` (Intervento A: comandi/query; Intervento B: estrazione cascata privata) | **Alto** | Segue, dentro Fase 0: P2-8 (fee configurabile) ed estrazione di `Trading.razor` in `TradingPageService` | Strategica già data; gate operativo = PR verdi + smoke test a ogni merge sull'Intervento B |
-| **Fase 2** | Osservabilità distribuita — tracing (Tempo) | Basso | Nessuna tecnica; raccomandata dopo Fase 1 per priorità, non per necessità | No |
-| **Backlog condizionale** | Pipeline asincrone, caching generalizzato, Mimir, deploy K8s observability | N/A | Attivato solo dai trigger di §6 | N/A — non pianificato |
+| Fase | Obiettivo | Rischio | Dipendenze | Approvazione esplicita | Stato |
+|---|---|---|---|---|---|
+| **Fase 0** | Hardening — bonifica rami secchi, `PollingTimer`, retry Postgres, estrazione orchestrazione Razor, auth gRPC, lifetimes HttpClient, fee configurabile, micro-fix, master key, paginazione gRPC | Basso | Porting del lavoro P0 dal worktree `zealous-ellis-b6357f` | No | ✅ fatta (2026-07-17), tranne 5/6 pagine Razor di P1-5 — vedi §3.6 |
+| **Fase 1** | CQRS/MediatR — decomposizione `TradingEngine` (Intervento A: comandi/query; Intervento B: estrazione cascata privata) | **Alto** | Segue, dentro Fase 0: P2-8 (fee configurabile, fatto) ed estrazione di `Trading.razor` in `TradingPageService` (fatta) — entrambe le precondizioni sono soddisfatte | Strategica già data; gate operativo = PR verdi + smoke test a ogni merge sull'Intervento B | Non iniziata |
+| **Fase 2** | Osservabilità distribuita — tracing (Tempo) | Basso | Nessuna tecnica; raccomandata dopo Fase 1 per priorità, non per necessità | No | Non iniziata |
+| **Backlog condizionale** | Pipeline asincrone, caching generalizzato, Mimir, deploy K8s observability | N/A | Attivato solo dai trigger di §6 | N/A — non pianificato | N/A |
 
 ---
 
