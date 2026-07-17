@@ -198,6 +198,36 @@ public class TradingPageServiceTests
     }
 
     [Fact]
+    public async Task SaveSafetyAsync_NegativeFeePercent_RejectsWithoutCallingWriter()
+    {
+        // P2-8: zero è un valore lecito (promozione a fee zero, test), negativo no — nessun exchange
+        // paga per tradare in questo contesto, e un fee negativo alimenterebbe un PnL live gonfiato.
+        var writer = new RecordingSafetyWriter();
+        var (service, _) = Build(safetyWriter: writer);
+        service.ReloadSafety();
+        service.Safety.FeePercent = -0.1m;
+
+        await service.SaveSafetyAsync();
+
+        Assert.Equal(0, writer.Calls);
+        Assert.True(service.IsError);
+    }
+
+    [Fact]
+    public async Task SaveSafetyAsync_ZeroFeePercent_IsAccepted()
+    {
+        var writer = new RecordingSafetyWriter();
+        var (service, _) = Build(safetyWriter: writer);
+        service.ReloadSafety();
+        service.Safety.FeePercent = 0m;
+
+        await service.SaveSafetyAsync();
+
+        Assert.Equal(1, writer.Calls);
+        Assert.False(service.IsError);
+    }
+
+    [Fact]
     public async Task SaveSafetyAsync_ValidValues_PersistsAndReportsSuccess()
     {
         var writer = new RecordingSafetyWriter();

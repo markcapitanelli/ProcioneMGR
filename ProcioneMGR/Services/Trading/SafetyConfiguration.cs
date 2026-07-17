@@ -69,4 +69,15 @@ public class SafetyConfiguration
     /// gli stop software.
     /// </summary>
     public bool UseExchangeRestingStops { get; set; }
+
+    /// <summary>
+    /// [P2-8] Fee dell'exchange in % del nozionale, applicata sia in apertura sia in chiusura.
+    /// Prima era una costante fissa in TradingEngine (stesso valore di default, 0.1%), scollegata
+    /// dal fee reale e dal parametro equivalente e già configurabile del backtest
+    /// (<c>BacktestConfiguration.FeePercent</c>) — un'asimmetria silenziosa fra backtest e live
+    /// della stessa classe di problema già corretta per lo stop-loss intrabar. Hot-reload via
+    /// IOptionsMonitor: se il fee tier reale cambia (o si cambia exchange), si aggiorna qui senza
+    /// riavviare la corsia.
+    /// </summary>
+    public decimal FeePercent { get; set; } = 0.1m;
 }

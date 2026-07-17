@@ -70,7 +70,6 @@ public sealed class TradingEngine(
     private sealed record ChampionCacheEntry(int ModelId, int Version, MlStrategy Strategy, IReturnPredictor Predictor);
     private ChampionCacheEntry? _championCache;
 
-    private const decimal FeePercent = 0.1m;
     private const int BufferSize = 400;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -94,7 +93,10 @@ public sealed class TradingEngine(
     private SymbolFilters? _filters;      // LOT_SIZE/PRICE_FILTER del simbolo (Testnet/Live)
     private bool _untrackedRemoteAlerted; // dedup dell'allerta "posizione remota sconosciuta"
 
-    private decimal FeeFrac => FeePercent / 100m;
+    // P2-8: prima era una const fissa, scollegata dal fee reale e da BacktestConfiguration.FeePercent
+    // (parametrico) — vedi il doc-comment di SafetyConfiguration.FeePercent. Hot-reload via CurrentValue,
+    // come ogni altra soglia di SafetyConfiguration.
+    private decimal FeeFrac => safety.CurrentValue.FeePercent / 100m;
 
     /// <summary>
     /// Idempotenza: al primo accesso ripristina stato e posizioni aperte dal DB, così dopo
