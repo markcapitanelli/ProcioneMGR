@@ -81,17 +81,13 @@ public static class TradingServiceCollectionExtensions
 
             services.AddGrpcClient<Proto.TradingCommandService.TradingCommandServiceClient>(o =>
                     o.Address = new Uri(remoteUrl))
-                // Il default del client (4MB in ricezione) è un orizzonte certo per GetPerformance:
-                // il campo `trades` porta l'intero storico da `from` in poi, e PromotionEvaluator
-                // passa from=StartedAtUtc — su una lane Paper che gira da mesi sono decine di
-                // migliaia di TradeRecord. Oltre il tetto la chiamata muore con ResourceExhausted e
-                // l'automatismo di promozione smette di valutare la lane, in silenzio. 64MB ≈ ~300k
-                // trade: non è "illimitato" (un tetto di sanità resta), è un tetto che lo storico
-                // reale non raggiunge. Trading.razor invece si limita da sé con una finestra di 90
-                // giorni: questa riga protegge i chiamanti che DEVONO vedere tutto lo storico.
-                .ConfigureChannel(o => o.MaxReceiveMessageSize = 64 * 1024 * 1024)
-                // Factory esplicita (non risolto da DI): il segreto è già in mano qui, non serve
-                // registrare l'interceptor come servizio a sé per un valore letto una volta a startup.
+                // P3-12 (2026-07-17): il default del client (4MB) tornava insufficiente per
+                // GetPerformance quando `trades` portava l'intero storico da `from` in poi — su una
+                // lane Paper che gira da mesi, decine di migliaia di TradeRecord, da qui il
+                // MaxReceiveMessageSize a 64MB che stava prima di questa riga. Non serve più:
+                // TradingEngine.GetPerformanceAsync ora tronca `trades` ai 500 più recenti (il
+                // conteggio vero resta in total_trades), quindi il payload non cresce più con l'età
+                // della lane e il default gRPC basta di nuovo.
                 .AddInterceptor(() => new ProcioneMGR.Contracts.Grpc.SharedSecretClientInterceptor(sharedSecret));
         }
 
