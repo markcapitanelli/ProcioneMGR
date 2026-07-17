@@ -16,6 +16,7 @@
 @inject AuthenticationStateProvider AuthProvider
 @inject IPromotionEvaluator PromotionEval
 @inject ILanePromoter Promoter
+@inject ILogger<Trading> Logger
 
 <PageTitle>Trading</PageTitle>
 <h1>Trading
@@ -494,7 +495,7 @@
     /// all'operatore se il servizio è giù o solo lento/rotto.</summary>
     private string? _lastStaleReason;
 
-    private System.Threading.Timer? _timer;
+    private PollingTimer? _timer;
     private bool _running => _status?.IsRunning == true;
 
     /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): fonte unica TradingLanes.Count.</summary>
@@ -517,8 +518,7 @@
         ReloadSafety();
         await RefreshAsync();
         await RefreshPromotionsAsync();
-        _timer = new System.Threading.Timer(async _ => await InvokeAsync(RefreshAsync), null,
-            TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+        _timer = new PollingTimer(TimeSpan.FromSeconds(2), () => InvokeAsync(RefreshAsync), Logger);
     }
 
     private async Task RefreshPromotionsAsync()
