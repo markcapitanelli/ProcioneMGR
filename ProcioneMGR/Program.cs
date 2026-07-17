@@ -190,7 +190,6 @@ builder.Services.AddSingleton<ProcioneMGR.Services.ML.IHierarchicalClustering, P
 // --- Time-series: volatilità (GARCH) e statistical arbitrage (cointegrazione/pairs) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.TimeSeries.IGarchModel, ProcioneMGR.Services.TimeSeries.GarchModel>();
 builder.Services.AddSingleton<ProcioneMGR.Services.TimeSeries.ICointegrationTest, ProcioneMGR.Services.TimeSeries.EngleGrangerCointegrationTest>();
-builder.Services.AddSingleton<ProcioneMGR.Services.TimeSeries.PairsSpreadAnalyzer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.IPairsBacktestEngine, ProcioneMGR.Services.PairsTrading.PairsBacktestEngine>();
 
 // --- Alt-data (notizie RSS) + sentiment (Fase D) ---

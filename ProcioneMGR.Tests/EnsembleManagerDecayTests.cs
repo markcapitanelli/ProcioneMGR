@@ -35,7 +35,6 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
     {
         public Task<RegimeModel> TrainAsync(TrainingConfiguration config, bool activate = true, CancellationToken ct = default) => throw new NotImplementedException();
         public Task ActivateModelAsync(RegimeModel model, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<int> PredictRegimeAsync(MarketFeatures features, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<MarketFeatures>> LabelFeaturesAsync(List<MarketFeatures> features, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<RegimeModel?> LoadLatestModelAsync(CancellationToken ct = default) => throw new NotImplementedException();
     }
