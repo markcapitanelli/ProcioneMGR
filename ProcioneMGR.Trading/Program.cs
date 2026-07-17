@@ -100,7 +100,11 @@ builder.Services.AddTradingLanes(builder.Configuration, isTradingServiceHost: tr
 
 builder.Services.AddProcioneObservability(builder.Configuration);
 
-builder.Services.AddGrpc();
+// P1-6 (audit consolidamento 2026-07-17): SharedSecretAuthInterceptor applica un'autorizzazione
+// applicativa a OGNI rpc di questo servizio, in aggiunta alla NetworkPolicy K8s (confine di rete,
+// non applicativo). Registrato globalmente su AddGrpc: un solo servizio gRPC in questo host
+// (TradingCommandServiceImpl), non serve applicarlo per-metodo.
+builder.Services.AddGrpc(options => options.Interceptors.Add<SharedSecretAuthInterceptor>());
 
 var app = builder.Build();
 

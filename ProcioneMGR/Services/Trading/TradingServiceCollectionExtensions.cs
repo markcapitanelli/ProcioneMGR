@@ -69,6 +69,16 @@ public static class TradingServiceCollectionExtensions
                     "Trading:RemoteUrl è obbligatorio quando Trading:UseRemoteTrading=true.");
             }
 
+            // P1-6: stesso fail-fast di RemoteUrl. Il segreto deve combaciare con quello letto da
+            // SharedSecretAuthInterceptor lato procionemgr-trading (K8s: STESSO Secret montato in
+            // entrambi i pod, come già avviene per Security:MasterKey — vedi infra/k8s/README.md).
+            var sharedSecret = configuration["Trading:GrpcSharedSecret"];
+            if (string.IsNullOrWhiteSpace(sharedSecret))
+            {
+                throw new InvalidOperationException(
+                    "Trading:GrpcSharedSecret è obbligatorio quando Trading:UseRemoteTrading=true.");
+            }
+
             services.AddGrpcClient<Proto.TradingCommandService.TradingCommandServiceClient>(o =>
                     o.Address = new Uri(remoteUrl))
                 // Il default del client (4MB in ricezione) è un orizzonte certo per GetPerformance:
@@ -79,7 +89,10 @@ public static class TradingServiceCollectionExtensions
                 // trade: non è "illimitato" (un tetto di sanità resta), è un tetto che lo storico
                 // reale non raggiunge. Trading.razor invece si limita da sé con una finestra di 90
                 // giorni: questa riga protegge i chiamanti che DEVONO vedere tutto lo storico.
-                .ConfigureChannel(o => o.MaxReceiveMessageSize = 64 * 1024 * 1024);
+                .ConfigureChannel(o => o.MaxReceiveMessageSize = 64 * 1024 * 1024)
+                // Factory esplicita (non risolto da DI): il segreto è già in mano qui, non serve
+                // registrare l'interceptor come servizio a sé per un valore letto una volta a startup.
+                .AddInterceptor(() => new ProcioneMGR.Contracts.Grpc.SharedSecretClientInterceptor(sharedSecret));
         }
 
         for (var lane = 0; lane < TradingLanes.Count; lane++)

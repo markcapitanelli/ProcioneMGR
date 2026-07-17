@@ -34,8 +34,9 @@ service TradingCommandService {
   rpc ClosePosition(ClosePositionRequest) returns (ClosePositionResponse);
   rpc CloseAllPositions(CloseAllPositionsRequest) returns (CloseAllPositionsResponse);
   rpc SetStopLossTakeProfit(SetStopLossTakeProfitRequest) returns (SetStopLossTakeProfitResponse);
-  // ATTENZIONE: sblocca il piazzamento REALE di un ordine Live. Nessun controllo di autorizzazione
-  // a questo livello — l'unico confine è di rete (NetworkPolicy: ingress solo dal pod ui).
+  // ATTENZIONE: sblocca il piazzamento REALE di un ordine Live. Due livelli di protezione (P1-6,
+  // non uno solo): NetworkPolicy (ingress solo dal pod ui) + SharedSecretAuthInterceptor lato
+  // server (header x-trading-shared-secret, fail-closed se il segreto non è configurato).
   rpc ConfirmOrder(ConfirmOrderRequest) returns (ConfirmOrderResponse);
   rpc RejectOrder(RejectOrderRequest) returns (RejectOrderResponse);
 }

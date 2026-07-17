@@ -24,14 +24,21 @@
     DEVE essere la STESSA del monolite: le credenziali sono cifrate con quella: con una chiave
     diversa il servizio parte e fallisce solo al primo ordine Testnet/Live, non prima.
 
+.PARAMETER GrpcSharedSecret
+    Segreto condiviso per l'autorizzazione applicativa sul gRPC di trading (P1-6). Se omesso, si
+    legge da $env:PROCIONE_MGR_TRADING_GRPC_SECRET. DEVE essere lo STESSO del monolite (ui-secrets):
+    con un valore diverso ogni chiamata gRPC del monolite verso questo servizio viene rifiutata
+    Unauthenticated da SharedSecretAuthInterceptor.
+
 .NOTES
     Uso (chiave dalla env, così non finisce nella cronologia):
         $env:PROCIONE_MGR_MASTER_KEY = "<base64 32 byte>"
+        $env:PROCIONE_MGR_TRADING_GRPC_SECRET = "<stringa casuale, es. openssl rand -base64 32>"
         .\scripts\k8s-trading-secret.ps1 -ConnectionString "Host=host.docker.internal;Port=5432;..."
     Il namespace deve già esistere (scripts\k8s-bootstrap.ps1).
 #>
 
-param([string]$ConnectionString, [string]$MasterKey)
+param([string]$ConnectionString, [string]$MasterKey, [string]$GrpcSharedSecret)
 
 $ErrorActionPreference = "Stop"
 $clusterCtx = "kind-procionemgr-dev"
@@ -63,14 +70,22 @@ if ($keyBytes.Length -ne 32) {
     exit 1
 }
 
+if (-not $GrpcSharedSecret) { $GrpcSharedSecret = $env:PROCIONE_MGR_TRADING_GRPC_SECRET }
+if (-not $GrpcSharedSecret) {
+    Write-Host "ERRORE: passa -GrpcSharedSecret oppure imposta `$env:PROCIONE_MGR_TRADING_GRPC_SECRET." -ForegroundColor Red
+    Write-Host "Deve essere lo STESSO segreto di ui-secrets, altrimenti il monolite non puo' chiamare questo servizio." -ForegroundColor Yellow
+    exit 1
+}
+
 Write-Host "Creo/aggiorno Secret 'trading-secrets' in $namespace..." -ForegroundColor Cyan
 # --dry-run=client | apply: idempotente (crea o aggiorna senza errore se gia' esiste).
 kubectl create secret generic trading-secrets `
     --namespace $namespace `
     --from-literal=ConnectionStrings__PostgresConnection=$ConnectionString `
     --from-literal=Security__MasterKey=$MasterKey `
+    --from-literal=Trading__GrpcSharedSecret=$GrpcSharedSecret `
     --dry-run=client -o yaml --context $clusterCtx | kubectl apply --context $clusterCtx -f -
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Secret 'trading-secrets' pronto in $namespace (connection string + master key)." -ForegroundColor Green
+Write-Host "Secret 'trading-secrets' pronto in $namespace (connection string + master key + segreto gRPC)." -ForegroundColor Green
 Write-Host "Ricorda: solo questo namespace deve avere la master key." -ForegroundColor Yellow

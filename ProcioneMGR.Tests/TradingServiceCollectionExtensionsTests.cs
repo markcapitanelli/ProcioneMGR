@@ -48,6 +48,7 @@ public class TradingServiceCollectionExtensionsTests
         {
             ["Trading:UseRemoteTrading"] = useRemoteTrading ? "true" : "false",
             ["Trading:RemoteUrl"] = "http://trading.local",
+            ["Trading:GrpcSharedSecret"] = "test-only-shared-secret",
             ["ConnectionStrings:PostgresConnection"] = "Host=localhost;Database=unused;Username=x;Password=x",
         }).Build();
 
@@ -227,6 +228,22 @@ public class TradingServiceCollectionExtensionsTests
 
         var ex = Assert.Throws<InvalidOperationException>(() => new ServiceCollection().AddTradingLanes(config));
         Assert.Contains("Trading:RemoteUrl", ex.Message);
+    }
+
+    [Fact]
+    public void ToggleOn_WithoutGrpcSharedSecret_FailsFast()
+    {
+        // P1-6: stesso principio fail-fast di RemoteUrl. Senza il segreto il client remoto
+        // partirebbe e ogni chiamata fallirebbe solo al primo uso, rifiutata dal
+        // SharedSecretAuthInterceptor lato servizio — meglio non partire.
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Trading:UseRemoteTrading"] = "true",
+            ["Trading:RemoteUrl"] = "http://trading.local",
+        }).Build();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => new ServiceCollection().AddTradingLanes(config));
+        Assert.Contains("Trading:GrpcSharedSecret", ex.Message);
     }
 
     [Fact]

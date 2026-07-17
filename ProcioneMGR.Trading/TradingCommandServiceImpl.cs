@@ -11,10 +11,14 @@ namespace ProcioneMGR.Trading;
 /// logica di dominio vive qui, è un adattatore fra il filo e il motore riusato verbatim.
 ///
 /// SICUREZZA: <see cref="ConfirmOrder"/> sblocca il piazzamento REALE di un ordine Live e
-/// <see cref="StartLane"/> può avviare una sessione con soldi veri. A questo livello NON c'è alcun
-/// controllo di autorizzazione — nel monolite il gate è l'[Authorize] di Trading.razor, che qui non
-/// esiste. L'unico confine è di rete: la NetworkPolicy che accetta ingress solo dal pod
-/// procionemgr-ui (infra/k8s/trading/networkpolicy.yaml). Non esporre questo servizio altrove.
+/// <see cref="StartLane"/> può avviare una sessione con soldi veri. A questo livello non c'è
+/// l'equivalente esatto dell'[Authorize] di Trading.razor (qui il chiamante è un processo, non un
+/// utente autenticato), ma DUE livelli indipendenti proteggono comunque ogni rpc (P1-6, 2026-07-17):
+/// la NetworkPolicy che accetta ingress solo dal pod procionemgr-ui
+/// (infra/k8s/trading/networkpolicy.yaml) e, registrato globalmente su AddGrpc in Program.cs,
+/// <see cref="SharedSecretAuthInterceptor"/> — un segreto condiviso verificato a tempo costante,
+/// fail-closed se non configurato. Non esporre comunque questo servizio altrove: nessuno dei due è
+/// un sostituto di autenticazione/autorizzazione per-utente.
 /// </summary>
 public sealed class TradingCommandServiceImpl(
     IServiceProvider serviceProvider,
