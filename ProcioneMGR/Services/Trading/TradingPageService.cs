@@ -248,15 +248,16 @@ public sealed class TradingPageService(
             MaintenanceMarginPercent = c.MaintenanceMarginPercent,
             PositionSizePercent = c.PositionSizePercent,
             UseExchangeRestingStops = c.UseExchangeRestingStops,
+            FeePercent = c.FeePercent,
         };
     }
 
     public async Task SaveSafetyAsync()
     {
         if (Safety.MaxPositionSizePercent <= 0 || Safety.MaxTotalExposurePercent <= 0 ||
-            Safety.MaxOpenPositions < 1 || Safety.MaxLeverageAllowed < 1)
+            Safety.MaxOpenPositions < 1 || Safety.MaxLeverageAllowed < 1 || Safety.FeePercent < 0)
         {
-            SetMsg("Valori non validi: size/esposizione devono essere > 0, almeno 1 posizione e leva massima >= 1.", true);
+            SetMsg("Valori non validi: size/esposizione devono essere > 0, almeno 1 posizione, leva massima >= 1 e fee >= 0.", true);
             return;
         }
         try

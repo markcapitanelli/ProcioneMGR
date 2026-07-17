@@ -86,7 +86,8 @@
       "MaxOpenPositions": 5,
       "MinOrderIntervalSeconds": 10,
       "RequireManualConfirmationForLive": true,
-      "MaxLeverageAllowed": 5
+      "MaxLeverageAllowed": 5,
+      "FeePercent": 0.1
     },
     "LiveExecution": {
       "Enabled": false,

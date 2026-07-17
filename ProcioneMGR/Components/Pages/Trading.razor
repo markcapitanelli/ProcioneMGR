@@ -432,6 +432,11 @@
                         <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MaintenanceMarginPercent" />
                         <div class="form-text">Usato per stimare il prezzo di liquidazione quando l'exchange non lo riporta ancora.</div>
                     </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Fee exchange (%)</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.FeePercent" />
+                        <div class="form-text">Applicata in apertura e in chiusura. Tienila allineata al fee tier reale dell'exchange.</div>
+                    </div>
                     <div class="col-12">
                         <div class="form-check">
                             <input type="checkbox" class="form-check-input" id="reqConfirm" @bind="Service.Safety.RequireManualConfirmationForLive" />
