@@ -208,13 +208,16 @@ builder.Services.AddHttpClient("AltDataForexFactory", c =>
 builder.Services.AddHttpClient("AltDataRetailSentiment", c => c.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddSingleton<IEnumerable<ProcioneMGR.Services.AltData.IAltDataSource>>(sp =>
 {
+    // Si inietta la IHttpClientFactory stessa (è lei, non i client che produce, il tipo pensato per
+    // essere trattenuto a lungo termine): ogni fonte chiama CreateClient() per fetch, non qui una
+    // volta sola a startup — vedi il commento in RssNewsSource.FetchLatestAsync.
     var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
     var sources = ProcioneMGR.Services.AltData.NewsFeeds.KnownFeeds
-        .Select(kv => (ProcioneMGR.Services.AltData.IAltDataSource)new ProcioneMGR.Services.AltData.RssNewsSource(kv.Key, kv.Value, httpClientFactory.CreateClient("AltDataRss")))
+        .Select(kv => (ProcioneMGR.Services.AltData.IAltDataSource)new ProcioneMGR.Services.AltData.RssNewsSource(kv.Key, kv.Value, httpClientFactory))
         .ToList();
-    sources.Add(new ProcioneMGR.Services.AltData.ForexFactoryIngestor(httpClientFactory.CreateClient("AltDataForexFactory")));
-    sources.Add(new ProcioneMGR.Services.AltData.RetailSentimentIngestor("FXSSI", "fxssi", httpClientFactory.CreateClient("AltDataRetailSentiment")));
-    sources.Add(new ProcioneMGR.Services.AltData.RetailSentimentIngestor("MyFxBook", "myfxbook", httpClientFactory.CreateClient("AltDataRetailSentiment")));
+    sources.Add(new ProcioneMGR.Services.AltData.ForexFactoryIngestor(httpClientFactory));
+    sources.Add(new ProcioneMGR.Services.AltData.RetailSentimentIngestor("FXSSI", "fxssi", httpClientFactory));
+    sources.Add(new ProcioneMGR.Services.AltData.RetailSentimentIngestor("MyFxBook", "myfxbook", httpClientFactory));
     return sources;
 });
 builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentScorer, ProcioneMGR.Services.Sentiment.KeywordSentimentScorer>();

@@ -30,7 +30,7 @@ namespace ProcioneMGR.Services.AltData;
 /// Un'istanza per fonte (stesso principio di <see cref="RssNewsSource"/> con
 /// <see cref="NewsFeeds.KnownFeeds"/>): "un ingestor, più istanze" invece di una classe per sito.
 /// </summary>
-public sealed class RetailSentimentIngestor(string sourceName, string brokerKey, HttpClient httpClient) : IAltDataSource
+public sealed class RetailSentimentIngestor(string sourceName, string brokerKey, IHttpClientFactory httpClientFactory) : IAltDataSource
 {
     private const string ApiUrl = "https://c.fxssi.com/api/current-ratio";
     private const string PublicPageUrl = "https://fxssi.com/tools/current-ratio";
@@ -46,6 +46,9 @@ public sealed class RetailSentimentIngestor(string sourceName, string brokerKey,
 
     public async Task<IReadOnlyList<RawNewsItem>> FetchLatestAsync(CancellationToken ct)
     {
+        // CreateClient per chiamata (vedi RssNewsSource): evita di catturare l'HttpClient e il suo
+        // handler per l'intera vita del processo, vanificando la rotazione anti-DNS-stale.
+        var httpClient = httpClientFactory.CreateClient("AltDataRetailSentiment");
         var response = await httpClient.GetFromJsonAsync<FxssiApiResponse>(ApiUrl, ct);
         if (response?.Brokers is null || !response.Brokers.TryGetValue(brokerKey, out var ratios))
         {
