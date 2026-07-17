@@ -42,24 +42,6 @@ public class ExcursionAnalyzerTests
     }
 
     [Fact]
-    public void ComputeBarAnatomy_HandComputed()
-    {
-        var anatomy = new ExcursionAnalyzer().ComputeBarAnatomy([Bar(100m, 110m, 95m, 105m)]);
-
-        var a = Assert.Single(anatomy);
-        Assert.Equal(5m, a.Body);            // 105 - 100
-        Assert.Equal(15m, a.Range);          // 110 - 95
-        Assert.Equal(5m, a.OpenLow);         // 100 - 95
-        Assert.Equal(10m, a.HighOpen);       // 110 - 100
-        Assert.Equal(10m, a.CloseLow);       // 105 - 95
-        Assert.Equal(5m, a.HighClose);       // 110 - 105
-        Assert.True(a.IsWhite);
-        // BodyRangePerc = 5/15 = 33.33%; ClosePerc = (105-95)/15 = 66.67%.
-        Assert.InRange(a.BodyRangePercent, 33.3m, 33.4m);
-        Assert.InRange(a.ClosePercent, 66.6m, 66.7m);
-    }
-
-    [Fact]
     public void LaggedAutocorrelation_AlternatingSeries_Lag1Negative_Lag2Positive()
     {
         // Variazioni alternate +1% / -1%: autocorrelazione lag1 fortemente negativa,

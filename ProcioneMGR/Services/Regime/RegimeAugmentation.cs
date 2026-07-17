@@ -15,8 +15,8 @@ namespace ProcioneMGR.Services.Regime;
 /// memoria) seguito da <see cref="IRegimeDetector.LabelFeaturesAsync"/> (smoothing a finestra
 /// passata). Lo stesso metodo è usato sia in costruzione dataset (train) sia in
 /// <c>MlStrategy</c> (serve): sulla stessa serie producono le stesse etichette, quindi niente
-/// train/serve skew. NON si usa <c>PredictRegimeAsync</c> (nearest-centroid grezzo, senza
-/// smoothing): darebbe un'etichetta diversa da quella vista in addestramento.
+/// train/serve skew. NON si usa il nearest-centroid grezzo per-feature (senza smoothing):
+/// darebbe un'etichetta diversa da quella vista in addestramento.
 /// </summary>
 public static class RegimeAugmentation
 {

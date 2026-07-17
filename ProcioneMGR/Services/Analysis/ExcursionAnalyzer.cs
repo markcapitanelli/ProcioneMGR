@@ -136,7 +136,7 @@ public sealed class ExcursionAnalyzer
     /// della MFE. Distanze in % dal prezzo d'ingresso (close di barra). <see cref="RegimeConditionedBracket.CurrentRegime"/>
     /// è il regime dell'ultima candela, per l'uso adattivo.
     /// </summary>
-    public RegimeConditionedBracket SuggestHorizonBracket(
+    internal RegimeConditionedBracket SuggestHorizonBracket(
         IReadOnlyList<OhlcvData> candles, OrderSide side, int horizon = 10, decimal percentile = 0.95m, int atrPeriod = 14)
     {
         ArgumentNullException.ThrowIfNull(candles);
@@ -272,35 +272,6 @@ public sealed class ExcursionAnalyzer
         => atrPct <= lo ? VolatilityRegime.Low : atrPct >= hi ? VolatilityRegime.High : VolatilityRegime.Normal;
 
     /// <summary>
-    /// Anatomia della singola barra (i "mattoni elementari" del cap. 4). Liste allineate
-    /// per indice alle candele. Percentuali in [0,100]; ClosePerc = dove chiude la barra
-    /// rispetto al proprio range (0 = sul low, 100 = sul high).
-    /// </summary>
-    public IReadOnlyList<BarAnatomy> ComputeBarAnatomy(IReadOnlyList<OhlcvData> candles)
-    {
-        ArgumentNullException.ThrowIfNull(candles);
-        var result = new List<BarAnatomy>(candles.Count);
-        foreach (var c in candles)
-        {
-            var range = c.High - c.Low;
-            var body = c.Close - c.Open;
-            result.Add(new BarAnatomy(
-                Timestamp: c.TimestampUtc,
-                Body: body,
-                Range: range,
-                CloseOpen: c.Close - c.Open,
-                OpenLow: c.Open - c.Low,
-                HighOpen: c.High - c.Open,
-                CloseLow: c.Close - c.Low,
-                HighClose: c.High - c.Close,
-                BodyRangePercent: range == 0m ? 0m : Math.Abs(body) / range * 100m,
-                ClosePercent: range == 0m ? 0m : (c.Close - c.Low) / range * 100m,
-                IsWhite: c.Close > c.Open));
-        }
-        return result;
-    }
-
-    /// <summary>
     /// Autocorrelazione ritardata ("effetto memoria", cap. 4): correlazione di Pearson tra la
     /// serie delle variazioni percentuali e le sue copie ritardate di 1..maxLag periodi.
     /// Correlazioni "deboli" (10-30%) su lag brevi sono gia' sfruttabili come filtro operativo.
@@ -432,20 +403,6 @@ public sealed record RegimeConditionedBracket(
     IReadOnlyDictionary<VolatilityRegime, HorizonExcursion> ByRegime,
     HorizonExcursion Overall,
     VolatilityRegime CurrentRegime);
-
-/// <summary>Attributi elementari di una barra (cap. 4 del libro).</summary>
-public sealed record BarAnatomy(
-    DateTime Timestamp,
-    decimal Body,
-    decimal Range,
-    decimal CloseOpen,
-    decimal OpenLow,
-    decimal HighOpen,
-    decimal CloseLow,
-    decimal HighClose,
-    decimal BodyRangePercent,
-    decimal ClosePercent,
-    bool IsWhite);
 
 /// <summary>Correlazione di Pearson tra la serie delle variazioni e la sua copia ritardata di Lag periodi.</summary>
 public sealed record LagCorrelation(int Lag, decimal Correlation);

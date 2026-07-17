@@ -1115,8 +1115,9 @@ public sealed class TradingEngine(
             }, ts, ct);
 
         // [P0-5 follow-up] Protezione "resting" sull'exchange: solo se abilitata (default OFF), su nuova
-        // posizione Testnet/Live. Non blocca mai l'apertura — con i client trigger ancora stub registra
-        // un warning e restano gli stop software (fonte di verità). Vedi SafetyConfiguration.UseExchangeRestingStops.
+        // posizione Testnet/Live. Non blocca mai l'apertura — se un trigger reduce-only non viene piazzato
+        // (rifiuto dell'exchange), registra un warning e restano gli stop software (fonte di verità).
+        // Vedi SafetyConfiguration.UseExchangeRestingStops.
         if (mergeInto is null && _state.Mode != TradingMode.Paper
             && safety.CurrentValue.UseExchangeRestingStops && _creds is TradingCredentials restingCreds)
         {

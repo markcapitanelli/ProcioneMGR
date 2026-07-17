@@ -47,7 +47,6 @@ public class RegimeAugmentationTests
             return r % k;
         }
 
-        public Task<int> PredictRegimeAsync(MarketFeatures features, CancellationToken ct = default) => Task.FromResult(RegimeOf(features));
         public Task<List<MarketFeatures>> LabelFeaturesAsync(List<MarketFeatures> features, CancellationToken ct = default)
         {
             foreach (var f in features) f.RegimeId = RegimeOf(f);
