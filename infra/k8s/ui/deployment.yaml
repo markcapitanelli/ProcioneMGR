@@ -16,8 +16,9 @@
 # sessione validata — non un numero più alto qui. Stesso schema argomentativo del trading.
 #
 # Prerequisiti nel namespace:
-#   - Secret ui-secrets (ConnectionStrings__PostgresConnection + Security__MasterKey)
-#     → scripts/k8s-ui-secret.ps1. La master key DEVE essere la stessa di trading-secrets.
+#   - Secret ui-secrets (ConnectionStrings__PostgresConnection + Security__MasterKey +
+#     Trading__GrpcSharedSecret) → scripts/k8s-ui-secret.ps1. Master key E segreto gRPC
+#     DEVONO essere gli stessi di trading-secrets (lo script li confronta e avvisa se divergono).
 #   - PVC procionemgr-config + procionemgr-dataprotection (pvc.yaml) e la PV condivisa
 #     (shared/pv-config.yaml), altrimenti il pod resta Pending.
 #   - Schema DB già migrato: le migrazioni restano un passo manuale (`dotnet ef database update`),
