@@ -1,37 +1,30 @@
 @page "/trading"
 @rendermode InteractiveServer
-@using Grpc.Core
 @using Microsoft.AspNetCore.Authorization
-@using Microsoft.Extensions.DependencyInjection
-@using Microsoft.Extensions.Options
 @using ProcioneMGR.Services.Backtesting
 @using ProcioneMGR.Services.Indicators
 @using ProcioneMGR.Services.Trading
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 @implements IDisposable
 
-@inject IServiceProvider Services
-@inject IOptionsMonitor<SafetyConfiguration> Safety
-@inject ISafetyConfigWriter SafetyWriter
+@inject TradingPageService Service
 @inject AuthenticationStateProvider AuthProvider
-@inject IPromotionEvaluator PromotionEval
-@inject ILanePromoter Promoter
 @inject ILogger<Trading> Logger
 
 <PageTitle>Trading</PageTitle>
 <h1>Trading
-    @if (_status is not null)
+    @if (Service.Status is not null)
     {
-        <span class="badge @ModeBadge(_status.Mode)">@_status.Mode</span>
-        @if (_status.MarketType == MarketType.Futures)
+        <span class="badge @ModeBadge(Service.Status.Mode)">@Service.Status.Mode</span>
+        @if (Service.Status.MarketType == MarketType.Futures)
         {
-            <span class="badge bg-dark">FUTURES @(_status.Leverage)x</span>
+            <span class="badge bg-dark">FUTURES @(Service.Status.Leverage)x</span>
         }
         else
         {
             <span class="badge bg-light text-dark border">SPOT</span>
         }
-        @if (_status.IsRunning) { <span class="badge bg-success">RUNNING</span> }
+        @if (Service.Status.IsRunning) { <span class="badge bg-success">RUNNING</span> }
         else { <span class="badge bg-secondary">STOPPED</span> }
     }
 </h1>
@@ -50,7 +43,7 @@
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Promozioni — da Paper a Testnet (mai a Live in automatico)</span>
-        <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshPromotionsAsync" disabled="@_promoBusy">Rivaluta ora</button>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshPromotionsAsync" disabled="@Service.PromoBusy">Rivaluta ora</button>
     </div>
     <div class="card-body">
         <GuidaPanel Title="Come funziona la promozione automatica">
@@ -65,7 +58,7 @@
                 automatico — richiede sempre la conferma manuale qui sotto, dietro i controlli di sicurezza.
             </p>
         </GuidaPanel>
-        @if (_promotions.Count == 0)
+        @if (Service.Promotions.Count == 0)
         {
             <p class="text-muted mb-0">Nessuna valutazione disponibile (avvia una corsia in Paper per iniziare a raccogliere metriche).</p>
         }
@@ -83,7 +76,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var p in _promotions)
+                    @foreach (var p in Service.Promotions)
                     {
                         <tr>
                             <td>@p.LaneId</td>
@@ -116,7 +109,7 @@
                             <td class="text-end">
                                 @if (p.CurrentMode == TradingMode.Paper && p.ReadyForTestnet)
                                 {
-                                    <button class="btn btn-sm btn-success" @onclick="() => PromoteAsync(p.LaneId, TradingMode.Testnet)" disabled="@_promoBusy">▲ Promuovi a Testnet</button>
+                                    <button class="btn btn-sm btn-success" @onclick="() => PromoteAsync(p.LaneId, TradingMode.Testnet)" disabled="@Service.PromoBusy">▲ Promuovi a Testnet</button>
                                 }
                                 <button class="btn btn-sm btn-outline-danger" disabled title="Live richiede conferma manuale dai controlli di modalità qui sotto.">▲ Promuovi a Live</button>
                             </td>
@@ -125,9 +118,9 @@
                 </tbody>
             </table>
         }
-        @if (!string.IsNullOrEmpty(_promoMessage))
+        @if (!string.IsNullOrEmpty(Service.PromoMessage))
         {
-            <div class="alert @(_promoIsError ? "alert-danger" : "alert-success") mt-2 mb-0 py-2">@_promoMessage</div>
+            <div class="alert @(Service.PromoIsError ? "alert-danger" : "alert-success") mt-2 mb-0 py-2">@Service.PromoMessage</div>
         }
     </div>
 </div>
@@ -186,24 +179,24 @@
     </dl>
 </GuidaPanel>
 
-@if (_staleSince is DateTime staleSince)
+@if (Service.StaleSince is DateTime staleSince)
 {
     <div class="alert alert-warning fw-bold">
         ⚠️ DATI TRADING NON AGGIORNATI da @((int)(DateTime.UtcNow - staleSince).TotalSeconds)s: il servizio di
-        trading non risponde (@_lastStaleReason). Quanto vedi qui sotto è l'ultimo stato noto, <u>non</u>
+        trading non risponde (@Service.LastStaleReason). Quanto vedi qui sotto è l'ultimo stato noto, <u>non</u>
         quello attuale — posizioni e PnL potrebbero essere cambiati. I comandi falliranno finché il
         servizio non torna.
     </div>
 }
-@if (_status?.IsEmergencyStopped == true)
+@if (Service.Status?.IsEmergencyStopped == true)
 {
     <div class="alert alert-danger fw-bold">
-        🛑 EMERGENCY STOP ATTIVATO: @_status.EmergencyStopReason. Riavvia manualmente dopo aver verificato.
+        🛑 EMERGENCY STOP ATTIVATO: @Service.Status.EmergencyStopReason. Riavvia manualmente dopo aver verificato.
     </div>
 }
-@if (!string.IsNullOrEmpty(_message))
+@if (!string.IsNullOrEmpty(Service.Message))
 {
-    <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+    <div class="alert @(Service.IsError ? "alert-danger" : "alert-success")">@Service.Message</div>
 }
 
 <div class="card mb-3">
@@ -265,32 +258,32 @@
     </div>
 </div>
 
-@if (_status is not null)
+@if (Service.Status is not null)
 {
     <div class="row g-2 mb-3">
-        <div class="col-auto">@Metric("Total Capital", _status.TotalCapital.ToString("N2"))</div>
-        <div class="col-auto">@Metric("Available", _status.AvailableCapital.ToString("N2"))</div>
-        <div class="col-auto">@Metric(_status.MarketType == MarketType.Futures ? "Margine usato" : "Used", _status.UsedCapital.ToString("N2"))</div>
-        @if (_status.MarketType == MarketType.Futures)
+        <div class="col-auto">@Metric("Total Capital", Service.Status.TotalCapital.ToString("N2"))</div>
+        <div class="col-auto">@Metric("Available", Service.Status.AvailableCapital.ToString("N2"))</div>
+        <div class="col-auto">@Metric(Service.Status.MarketType == MarketType.Futures ? "Margine usato" : "Used", Service.Status.UsedCapital.ToString("N2"))</div>
+        @if (Service.Status.MarketType == MarketType.Futures)
         {
-            <div class="col-auto">@Metric("Leva", _status.Leverage + "x")</div>
+            <div class="col-auto">@Metric("Leva", Service.Status.Leverage + "x")</div>
         }
-        <div class="col-auto">@Metric("Total PnL", _status.TotalPnl.ToString("N2"), _status.TotalPnl >= 0)</div>
-        <div class="col-auto">@Metric("PnL %", _status.TotalPnlPercent.ToString("F2") + "%", _status.TotalPnlPercent >= 0)</div>
-        <div class="col-auto">@Metric("Max DD %", _status.MaxDrawdown.ToString("F2"), false)</div>
-        <div class="col-auto">@Metric("Trades", _status.TotalTrades.ToString())</div>
-        <div class="col-auto">@Metric("Win Rate", _status.WinRate.ToString("F0") + "%")</div>
+        <div class="col-auto">@Metric("Total PnL", Service.Status.TotalPnl.ToString("N2"), Service.Status.TotalPnl >= 0)</div>
+        <div class="col-auto">@Metric("PnL %", Service.Status.TotalPnlPercent.ToString("F2") + "%", Service.Status.TotalPnlPercent >= 0)</div>
+        <div class="col-auto">@Metric("Max DD %", Service.Status.MaxDrawdown.ToString("F2"), false)</div>
+        <div class="col-auto">@Metric("Trades", Service.Status.TotalTrades.ToString())</div>
+        <div class="col-auto">@Metric("Win Rate", Service.Status.WinRate.ToString("F0") + "%")</div>
     </div>
 
-    @if (_pending.Count > 0)
+    @if (Service.Pending.Count > 0)
     {
         <div class="card mb-3 border-warning">
-            <div class="card-header bg-warning text-dark fw-bold">⏳ Conferme in attesa (Live) — @_pending.Count</div>
+            <div class="card-header bg-warning text-dark fw-bold">⏳ Conferme in attesa (Live) — @Service.Pending.Count</div>
             <div class="table-responsive">
                 <table class="table table-sm mb-0 align-middle">
                     <thead><tr><th>Creato</th><th>Side</th><th>Qty</th><th>Prezzo rif.</th><th class="text-end">Azioni</th></tr></thead>
                     <tbody>
-                        @foreach (var o in _pending)
+                        @foreach (var o in Service.Pending)
                         {
                             <tr>
                                 <td class="small">@o.CreatedAtUtc.ToString("MM-dd HH:mm")</td>
@@ -310,8 +303,8 @@
     }
 
     <div class="card mb-3">
-        <div class="card-header">Posizioni aperte (@_positions.Count)</div>
-        @if (_positions.Count == 0)
+        <div class="card-header">Posizioni aperte (@Service.Positions.Count)</div>
+        @if (Service.Positions.Count == 0)
         {
             <div class="card-body text-muted">Nessuna posizione aperta.</div>
         }
@@ -320,10 +313,10 @@
             <div class="table-responsive">
                 <table class="table table-sm mb-0 align-middle">
                     <thead><tr><th>Strategy</th><th>Side</th><th class="text-end">Entry</th><th class="text-end">Current</th><th class="text-end">Qty</th><th class="text-end">Unreal. PnL</th><th class="text-end">PnL %</th>
-                        @if (_status?.MarketType == MarketType.Futures) { <th>Leva</th><th class="text-end">Liq. Price</th> }
+                        @if (Service.Status?.MarketType == MarketType.Futures) { <th>Leva</th><th class="text-end">Liq. Price</th> }
                         <th>Stop Loss</th><th>Take Profit</th><th>Trailing %</th><th class="text-end">Azioni</th></tr></thead>
                     <tbody>
-                        @foreach (var p in _positions)
+                        @foreach (var p in Service.Positions)
                         {
                             <tr>
                                 <td><code class="small">@p.StrategyId[..6]</code></td>
@@ -333,17 +326,17 @@
                                 <td class="text-end">@p.Quantity.ToString("N5")</td>
                                 <td class="text-end @(p.UnrealizedPnl >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnl.ToString("N2")</td>
                                 <td class="text-end @(p.UnrealizedPnlPercent >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnlPercent.ToString("F2")%</td>
-                                @if (_status?.MarketType == MarketType.Futures)
+                                @if (Service.Status?.MarketType == MarketType.Futures)
                                 {
                                     <td>@(p.Leverage)x</td>
                                     <td class="text-end @LiqPriceClass(p)">@(p.LiquidationPrice?.ToString("N2") ?? "—")</td>
                                 }
                                 <td><input type="number" step="any" class="form-control form-control-sm" style="width:7rem"
-                                           placeholder="—" value="@SlValue(p)" @onchange="e => OnSlChanged(p.PositionId, e.Value?.ToString())" /></td>
+                                           placeholder="—" value="@Service.SlValue(p)" @onchange="e => OnSlChanged(p.PositionId, e.Value?.ToString())" /></td>
                                 <td><input type="number" step="any" class="form-control form-control-sm" style="width:7rem"
-                                           placeholder="—" value="@TpValue(p)" @onchange="e => OnTpChanged(p.PositionId, e.Value?.ToString())" /></td>
+                                           placeholder="—" value="@Service.TpValue(p)" @onchange="e => OnTpChanged(p.PositionId, e.Value?.ToString())" /></td>
                                 <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:6rem"
-                                           placeholder="—" value="@TslValue(p)" @onchange="e => OnTslChanged(p.PositionId, e.Value?.ToString())" /></td>
+                                           placeholder="—" value="@Service.TslValue(p)" @onchange="e => OnTslChanged(p.PositionId, e.Value?.ToString())" /></td>
                                 <td class="text-end text-nowrap">
                                     <button class="btn btn-sm btn-outline-primary me-1" title="Salva SL/TP/Trailing" @onclick="() => SaveSlTpAsync(p.PositionId)">Set SL/TP</button>
                                     <button class="btn btn-sm btn-outline-danger" @onclick="() => CloseAsync(p.PositionId)">Close</button>
@@ -356,21 +349,21 @@
         }
     </div>
 
-    @if (_equity.Count > 0)
+    @if (Service.Equity.Count > 0)
     {
         <div class="card mb-3">
             <div class="card-header">Equity curve</div>
-            <div class="card-body"><OhlcvChart ShowCandles="false" Indicators="_equity" Height="280" /></div>
+            <div class="card-body"><OhlcvChart ShowCandles="false" Indicators="Service.Equity" Height="280" /></div>
         </div>
     }
 
     <div class="card mb-3">
-        <div class="card-header">Ordini recenti (@_orders.Count)</div>
+        <div class="card-header">Ordini recenti (@Service.Orders.Count)</div>
         <div class="table-responsive" style="max-height: 320px; overflow:auto;">
             <table class="table table-sm table-striped mb-0">
                 <thead class="table-light" style="position:sticky;top:0;"><tr><th>Timestamp</th><th>Side</th><th>Type</th><th>Qty</th><th>Price</th><th>Status</th><th>Error</th></tr></thead>
                 <tbody>
-                    @foreach (var o in _orders)
+                    @foreach (var o in Service.Orders)
                     {
                         <tr>
                             <td class="small">@o.CreatedAtUtc.ToString("MM-dd HH:mm")</td>
@@ -403,45 +396,45 @@
                 <div class="row g-3">
                     <div class="col-md-4">
                         <label class="form-label small">Max size per posizione (% capitale)</label>
-                        <input id="safety_maxpos" type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxPositionSizePercent" />
+                        <input id="safety_maxpos" type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MaxPositionSizePercent" />
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Size per apertura (% capitale; margine sui Futures)</label>
-                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.PositionSizePercent" />
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.PositionSizePercent" />
                         <div class="form-text">Sui Futures il nozionale è size × leva: deve stare sotto la max size per posizione.</div>
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Max esposizione totale (%)</label>
-                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxTotalExposurePercent" />
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MaxTotalExposurePercent" />
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Max perdita giornaliera (%)</label>
-                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxDailyLossPercent" />
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MaxDailyLossPercent" />
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Max drawdown (%) <span class="text-danger">→ emergency stop</span></label>
-                        <input id="safety_maxdd" type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxDrawdownPercent" />
+                        <input id="safety_maxdd" type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MaxDrawdownPercent" />
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Max posizioni aperte</label>
-                        <input type="number" step="1" min="1" class="form-control form-control-sm" @bind="_safety.MaxOpenPositions" />
+                        <input type="number" step="1" min="1" class="form-control form-control-sm" @bind="Service.Safety.MaxOpenPositions" />
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Intervallo minimo tra ordini (s)</label>
-                        <input type="number" step="1" min="0" class="form-control form-control-sm" @bind="_safety.MinOrderIntervalSeconds" />
+                        <input type="number" step="1" min="0" class="form-control form-control-sm" @bind="Service.Safety.MinOrderIntervalSeconds" />
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Leva massima consentita (Futures)</label>
-                        <input type="number" step="1" min="1" class="form-control form-control-sm" @bind="_safety.MaxLeverageAllowed" />
+                        <input type="number" step="1" min="1" class="form-control form-control-sm" @bind="Service.Safety.MaxLeverageAllowed" />
                     </div>
                     <div class="col-md-4">
                         <label class="form-label small">Margine di mantenimento stimato (%)</label>
-                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaintenanceMarginPercent" />
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MaintenanceMarginPercent" />
                         <div class="form-text">Usato per stimare il prezzo di liquidazione quando l'exchange non lo riporta ancora.</div>
                     </div>
                     <div class="col-12">
                         <div class="form-check">
-                            <input type="checkbox" class="form-check-input" id="reqConfirm" @bind="_safety.RequireManualConfirmationForLive" />
+                            <input type="checkbox" class="form-check-input" id="reqConfirm" @bind="Service.Safety.RequireManualConfirmationForLive" />
                             <label class="form-check-label" for="reqConfirm">
                                 Richiedi conferma manuale per ogni ordine in <strong>Live</strong>
                                 <span class="text-muted">(consigliato: attivo)</span>
@@ -463,89 +456,45 @@
 </style>
 
 @code {
-    private TradingEngineStatus? _status;
-    private List<OpenPosition> _positions = new();
-    private List<Order> _orders = new();
-    private List<Order> _pending = new();
-    private List<IndicatorSeries> _equity = new();
     private string? _userId;
-
-    // Valori SL/TP/Trailing in modifica (sopravvivono al refresh automatico finché non salvati).
-    private readonly Dictionary<string, decimal?> _slEdits = new();
-    private readonly Dictionary<string, decimal?> _tpEdits = new();
-    private readonly Dictionary<string, decimal?> _tslEdits = new();
-
-    // Copia di lavoro delle soglie di sicurezza (form Admin).
-    private SafetyConfiguration _safety = new();
 
     private string _mode = "Paper";
     private bool _liveConfirmed;
     private bool _confirmEmergency;
-    private bool _isError;
-    private string? _message;
-
-    /// <summary>
-    /// Da quando il servizio di trading remoto (Fase 2b, Trading:UseRemoteTrading) non risponde;
-    /// null se l'ultimo refresh è andato a buon fine. Resta sempre null col motore locale, dove una
-    /// chiamata in-process non può fallire per rete.
-    /// </summary>
-    private DateTime? _staleSince;
-
-    /// <summary>Codice di stato gRPC dell'ultimo fallimento (Unavailable, DeadlineExceeded, ...): dice
-    /// all'operatore se il servizio è giù o solo lento/rotto.</summary>
-    private string? _lastStaleReason;
 
     private PollingTimer? _timer;
-    private bool _running => _status?.IsRunning == true;
+    private bool _running => Service.Status?.IsRunning == true;
 
     /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): fonte unica TradingLanes.Count.</summary>
     private const int LaneCount = TradingLanes.Count;
     private int _laneId;
 
-    /// <summary>Motore della corsia selezionata (keyed DI): risolto ad ogni accesso, mai messo in cache tra un cambio corsia e l'altro.</summary>
-    private ITradingEngine Engine => Services.GetRequiredKeyedService<ITradingEngine>(_laneId);
-
-    // Stato del pannello Promozioni (valutato meno spesso del refresh a 2s: le metriche cambiano lentamente).
-    private List<PromotionDecision> _promotions = new();
-    private bool _promoBusy;
-    private string? _promoMessage;
-    private bool _promoIsError;
-
     protected override async Task OnInitializedAsync()
     {
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-        ReloadSafety();
+        Service.ReloadSafety();
         await RefreshAsync();
-        await RefreshPromotionsAsync();
+        await Service.RefreshPromotionsAsync();
         _timer = new PollingTimer(TimeSpan.FromSeconds(2), () => InvokeAsync(RefreshAsync), Logger);
     }
 
+    // I metodi sotto sono wrapper sottili: la logica di orchestrazione (chiamate al motore, gestione
+    // stato, validazione) vive in TradingPageService, testabile senza Blazor — vedi il doc-comment
+    // della classe e TradingPageServiceTests. Qui resta solo ciò che è intrinsecamente di UI: passare
+    // la corsia/l'utente correnti (stato di navigazione, non di dominio) e richiamare StateHasChanged
+    // dove il refresh non arriva già da un evento @onclick (es. dal tick del PollingTimer).
+
     private async Task RefreshPromotionsAsync()
     {
-        _promoBusy = true;
-        try
-        {
-            _promotions = (await PromotionEval.EvaluateAllLanesAsync()).ToList();
-        }
-        catch (Exception ex) { _promoMessage = $"Valutazione promozioni fallita: {ex.Message}"; _promoIsError = true; }
-        finally { _promoBusy = false; }
+        await Service.RefreshPromotionsAsync();
+        StateHasChanged();
     }
 
     private async Task PromoteAsync(int laneId, TradingMode newMode)
     {
-        _promoBusy = true;
-        _promoMessage = null;
-        try
-        {
-            await Promoter.PromoteLaneAsync(laneId, newMode, "Promozione manuale dall'operatore");
-            _promoIsError = false;
-            _promoMessage = $"Corsia {laneId} promossa a {newMode}.";
-            await RefreshPromotionsAsync();
-            if (laneId == _laneId) await RefreshAsync();
-        }
-        catch (Exception ex) { _promoIsError = true; _promoMessage = $"Promozione fallita: {ex.Message}"; }
-        finally { _promoBusy = false; }
+        await Service.PromoteAsync(laneId, newMode, _laneId);
+        StateHasChanged();
     }
 
     private async Task OnLaneChangedAsync(ChangeEventArgs e)
@@ -556,185 +505,69 @@
 
     private async Task RefreshAsync()
     {
-        try
-        {
-            // Le cinque letture sono indipendenti: in parallelo, non in fila. In modalità remota
-            // (Trading:UseRemoteTrading) tre di queste sono round-trip gRPC — sommarne le latenze
-            // ogni 2 secondi era solo attesa gratuita. Il motore regge già le chiamate concorrenti
-            // per costruzione: il TradingWorker gli parla in parallelo alla UI da sempre.
-            var statusTask = Engine.GetStatusAsync();
-            var positionsTask = Engine.GetOpenPositionsAsync();
-            var ordersTask = Engine.GetOrderHistoryAsync();
-            var pendingTask = Engine.GetPendingOrdersAsync();
-            // Finestra di 90 giorni (stesso taglio di Ensemble.razor), NON tutto lo storico: questa
-            // pagina di perf usa solo l'equity curve (già bounded a 10k punti dal motore, M1) — i
-            // TradeRecord non li legge nessuno qui. Senza `from` era un full scan della tabella
-            // ogni 2 secondi in locale, e in remoto l'intero storico serializzato sul filo a ogni
-            // giro, col tetto dei 4MB gRPC come orizzonte certo su una lane longeva.
-            var perfTask = Engine.GetPerformanceAsync(DateTime.UtcNow.AddDays(-90));
-            await Task.WhenAll(statusTask, positionsTask, ordersTask, pendingTask, perfTask);
-
-            _status = statusTask.Result;
-            _positions = positionsTask.Result;
-            _orders = ordersTask.Result;
-            _pending = pendingTask.Result;
-            var perf = perfTask.Result;
-            _equity = perf.EquityCurve.Count > 0
-                ? new()
-                {
-                    new IndicatorSeries
-                    {
-                        Title = "Equity", Color = "#2962FF", Type = IndicatorSeriesType.Line,
-                        Points = perf.EquityCurve.Select(p => new IndicatorPoint(
-                            new DateTimeOffset(DateTime.SpecifyKind(p.Timestamp, DateTimeKind.Utc)).ToUnixTimeSeconds(), (double)p.Capital)).ToList(),
-                    },
-                }
-                : new();
-
-            // Giro riuscito: quello a schermo è di nuovo lo stato reale.
-            _staleSince = null;
-            _lastStaleReason = null;
-        }
-        catch (RpcException ex)
-        {
-            // QUALUNQUE fallimento gRPC, non solo Unavailable: che il servizio sia irraggiungibile
-            // (rolling restart), lento (DeadlineExceeded) o rotto (Internal), il risultato per chi
-            // guarda è identico — i numeri a schermo sono quelli dell'ultimo giro riuscito. I dati
-            // restano (svuotare la pagina durante un riavvio di pochi secondi sarebbe peggio) ma
-            // vanno dichiarati vecchi: un PnL stantio spacciato per attuale è la premessa di una
-            // decisione sbagliata su un'esposizione che non esiste più. Il primo fallimento fissa
-            // l'istante, così il banner mostra da quanto dura.
-            _staleSince ??= DateTime.UtcNow;
-            _lastStaleReason = ex.StatusCode.ToString();
-        }
-        catch { /* refresh resiliente */ }
+        await Service.RefreshAsync(_laneId);
         StateHasChanged();
     }
 
     private async Task StartAsync()
     {
         var mode = Enum.Parse<TradingMode>(_mode);
-        try
-        {
-            await Engine.StartAsync(mode);
-            var note = mode switch
-            {
-                TradingMode.Paper => "Paper trading avviato. Il worker sta riproducendo le candele reali…",
-                TradingMode.Testnet => "Testnet avviato: gli ordini vengono piazzati su Binance Testnet con le tue credenziali.",
-                _ => "Live avviato. ⚠️ In Live ogni ordine richiede conferma manuale (safety): gli ordini automatici vengono rifiutati finché non confermati.",
-            };
-            SetMsg(note, false);
-            _confirmEmergency = false;
-            await RefreshAsync();
-        }
-        catch (Exception ex)
-        {
-            SetMsg($"Avvio {mode} fallito: {ex.Message}", true);
-        }
+        await Service.StartAsync(_laneId, mode);
+        _confirmEmergency = false;
+        StateHasChanged();
     }
 
     private async Task StopAsync()
     {
-        await Engine.StopAsync();
-        SetMsg("Trading fermato (posizioni lasciate aperte).", false);
-        await RefreshAsync();
+        await Service.StopAsync(_laneId);
+        StateHasChanged();
     }
 
     private async Task EmergencyAsync()
     {
         _confirmEmergency = false;
-        await Engine.EmergencyStopAsync("Stop manuale dall'operatore");
-        SetMsg("EMERGENCY STOP eseguito: tutte le posizioni chiuse.", false);
-        await RefreshAsync();
+        await Service.EmergencyAsync(_laneId);
+        StateHasChanged();
     }
 
     private async Task CloseAsync(string positionId)
     {
-        await Engine.ClosePositionAsync(positionId);
-        await RefreshAsync();
+        await Service.CloseAsync(_laneId, positionId);
+        StateHasChanged();
     }
 
-    private string? SlValue(OpenPosition p) =>
-        (_slEdits.TryGetValue(p.PositionId, out var v) ? v : p.StopLoss)?.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-    private string? TpValue(OpenPosition p) =>
-        (_tpEdits.TryGetValue(p.PositionId, out var v) ? v : p.TakeProfit)?.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-    private string? TslValue(OpenPosition p) =>
-        (_tslEdits.TryGetValue(p.PositionId, out var v) ? v : p.TrailingStopPercent)?.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-    private void OnSlChanged(string id, string? raw) => _slEdits[id] = ParseLevel(raw);
-    private void OnTpChanged(string id, string? raw) => _tpEdits[id] = ParseLevel(raw);
-    private void OnTslChanged(string id, string? raw) => _tslEdits[id] = ParseLevel(raw);
-
-    private static decimal? ParseLevel(string? raw) =>
-        decimal.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d) && d > 0m
-            ? d : (decimal?)null;
+    private void OnSlChanged(string id, string? raw) => Service.SetSlEdit(id, raw);
+    private void OnTpChanged(string id, string? raw) => Service.SetTpEdit(id, raw);
+    private void OnTslChanged(string id, string? raw) => Service.SetTslEdit(id, raw);
 
     private async Task SaveSlTpAsync(string positionId)
     {
-        var pos = _positions.FirstOrDefault(p => p.PositionId == positionId);
-        var sl = _slEdits.TryGetValue(positionId, out var s) ? s : pos?.StopLoss;
-        var tp = _tpEdits.TryGetValue(positionId, out var t) ? t : pos?.TakeProfit;
-        var tsl = _tslEdits.TryGetValue(positionId, out var tr) ? tr : pos?.TrailingStopPercent;
-        await Engine.SetStopLossTakeProfitAsync(positionId, sl, tp, tsl);
-        _slEdits.Remove(positionId);
-        _tpEdits.Remove(positionId);
-        _tslEdits.Remove(positionId);
-        SetMsg($"SL/TP/Trailing aggiornati (SL={sl?.ToString("N2") ?? "—"}, TP={tp?.ToString("N2") ?? "—"}, Trailing={tsl?.ToString("F1") ?? "—"}%).", false);
-        await RefreshAsync();
+        await Service.SaveSlTpAsync(_laneId, positionId);
+        StateHasChanged();
     }
 
     private async Task ConfirmAsync(string orderId)
     {
-        await Engine.ConfirmOrderAsync(orderId, _userId);
-        SetMsg("Ordine confermato e inviato all'exchange.", false);
-        await RefreshAsync();
+        await Service.ConfirmAsync(_laneId, orderId, _userId);
+        StateHasChanged();
     }
 
     private async Task RejectAsync(string orderId)
     {
-        await Engine.RejectOrderAsync(orderId, _userId);
-        SetMsg("Ordine rifiutato.", false);
-        await RefreshAsync();
+        await Service.RejectAsync(_laneId, orderId, _userId);
+        StateHasChanged();
     }
 
     private void ReloadSafety()
     {
-        var c = Safety.CurrentValue;
-        _safety = new SafetyConfiguration
-        {
-            MaxPositionSizePercent = c.MaxPositionSizePercent,
-            MaxTotalExposurePercent = c.MaxTotalExposurePercent,
-            MaxDailyLossPercent = c.MaxDailyLossPercent,
-            MaxDrawdownPercent = c.MaxDrawdownPercent,
-            MaxOpenPositions = c.MaxOpenPositions,
-            MinOrderIntervalSeconds = c.MinOrderIntervalSeconds,
-            RequireManualConfirmationForLive = c.RequireManualConfirmationForLive,
-            MaxLeverageAllowed = c.MaxLeverageAllowed,
-            MaintenanceMarginPercent = c.MaintenanceMarginPercent,
-            PositionSizePercent = c.PositionSizePercent,
-            UseExchangeRestingStops = c.UseExchangeRestingStops,
-        };
+        Service.ReloadSafety();
+        StateHasChanged();
     }
 
     private async Task SaveSafetyAsync()
     {
-        if (_safety.MaxPositionSizePercent <= 0 || _safety.MaxTotalExposurePercent <= 0 ||
-            _safety.MaxOpenPositions < 1 || _safety.MaxLeverageAllowed < 1)
-        {
-            SetMsg("Valori non validi: size/esposizione devono essere > 0, almeno 1 posizione e leva massima >= 1.", true);
-            return;
-        }
-        try
-        {
-            await SafetyWriter.SaveAsync(_safety);
-            SetMsg("Configurazione di sicurezza salvata (attiva entro pochi secondi).", false);
-        }
-        catch (Exception ex)
-        {
-            SetMsg($"Salvataggio fallito: {ex.Message}", true);
-        }
+        await Service.SaveSafetyAsync();
+        StateHasChanged();
     }
 
     /// <summary>Colora il prezzo di liquidazione in base a quanto è vicino al prezzo corrente (rischio crescente).</summary>
@@ -765,8 +598,6 @@
         OrderStatus.Pending => "bg-secondary",
         _ => "bg-warning text-dark",
     };
-
-    private void SetMsg(string text, bool error) { _message = text; _isError = error; }
 
     // Delega al componente condiviso <Stat> (stile unico in app.css), come le altre pagine.
     private RenderFragment Metric(string label, string value, bool? positive = null) => builder =>
