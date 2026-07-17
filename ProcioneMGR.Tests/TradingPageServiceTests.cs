@@ -25,18 +25,29 @@ public class TradingPageServiceTests
         public List<Order> PendingToReturn { get; set; } = [];
         public TradingPerformance PerformanceToReturn { get; set; } = new();
         public Exception? ThrowOnRefresh { get; set; }
+        public Exception? ThrowOnStart { get; set; }
         public (decimal? Sl, decimal? Tp, decimal? Tsl)? LastSlTp { get; private set; }
         public string? LastConfirmedOrderId { get; private set; }
         public string? LastConfirmedUserId { get; private set; }
+        public string? LastRejectedOrderId { get; private set; }
+        public string? LastRejectedUserId { get; private set; }
+        public string? LastClosedPositionId { get; private set; }
+        public string? LastEmergencyReason { get; private set; }
         public TradingMode? StartedWith { get; private set; }
+        public bool StopCalled { get; private set; }
 
         public Task<TradingEngineStatus> GetStatusAsync(CancellationToken ct = default)
             => ThrowOnRefresh is not null ? Task.FromException<TradingEngineStatus>(ThrowOnRefresh) : Task.FromResult(StatusToReturn);
-        public Task StartAsync(TradingMode mode, CancellationToken ct = default) { StartedWith = mode; return Task.CompletedTask; }
-        public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task EmergencyStopAsync(string reason, CancellationToken ct = default) => Task.CompletedTask;
+        public Task StartAsync(TradingMode mode, CancellationToken ct = default)
+        {
+            if (ThrowOnStart is not null) return Task.FromException(ThrowOnStart);
+            StartedWith = mode;
+            return Task.CompletedTask;
+        }
+        public Task StopAsync(CancellationToken ct = default) { StopCalled = true; return Task.CompletedTask; }
+        public Task EmergencyStopAsync(string reason, CancellationToken ct = default) { LastEmergencyReason = reason; return Task.CompletedTask; }
         public Task<List<OpenPosition>> GetOpenPositionsAsync(CancellationToken ct = default) => Task.FromResult(PositionsToReturn);
-        public Task ClosePositionAsync(string positionId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ClosePositionAsync(string positionId, CancellationToken ct = default) { LastClosedPositionId = positionId; return Task.CompletedTask; }
         public Task CloseAllPositionsAsync(string reason, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetStopLossTakeProfitAsync(string positionId, decimal? stopLoss, decimal? takeProfit, decimal? trailingStopPercent = null, CancellationToken ct = default)
         {
@@ -50,7 +61,12 @@ public class TradingPageServiceTests
             LastConfirmedUserId = userId;
             return Task.CompletedTask;
         }
-        public Task RejectOrderAsync(string orderId, string? userId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task RejectOrderAsync(string orderId, string? userId, CancellationToken ct = default)
+        {
+            LastRejectedOrderId = orderId;
+            LastRejectedUserId = userId;
+            return Task.CompletedTask;
+        }
         public Task<List<Order>> GetOrderHistoryAsync(DateTime? from = null, CancellationToken ct = default) => Task.FromResult(OrdersToReturn);
         public Task<TradingPerformance> GetPerformanceAsync(DateTime? from = null, CancellationToken ct = default) => Task.FromResult(PerformanceToReturn);
         public Task ProcessCandleAsync(OhlcvData candle, CancellationToken ct = default) => Task.CompletedTask;
@@ -170,6 +186,91 @@ public class TradingPageServiceTests
 
         Assert.Null(service.StaleSince);
         Assert.Null(service.LastStaleReason);
+    }
+
+    // --- Start/Stop/Emergency/Close/Confirm/Reject: pass-through al motore ---------------------
+    // Questa è l'esatta superficie che la Fase 1 (CQRS/Mediator) sposterà dietro
+    // IMediator.Send(...): senza una rete di regressione qui, un refactor che sbagliasse verbo o
+    // argomento passerebbe inosservato fino alla UI.
+
+    [Fact]
+    public async Task StartAsync_CallsEngineStart_WithGivenMode_AndSetsSuccessMessage()
+    {
+        var (service, engine) = Build();
+
+        await service.StartAsync(0, TradingMode.Testnet);
+
+        Assert.Equal(TradingMode.Testnet, engine.StartedWith);
+        Assert.False(service.IsError);
+        Assert.Contains("Testnet", service.Message);
+    }
+
+    [Fact]
+    public async Task StartAsync_EngineThrows_SetsErrorMessage()
+    {
+        var (service, engine) = Build();
+        engine.ThrowOnStart = new InvalidOperationException("credenziali mancanti");
+
+        await service.StartAsync(0, TradingMode.Testnet);
+
+        Assert.True(service.IsError);
+        Assert.Contains("credenziali mancanti", service.Message);
+    }
+
+    [Fact]
+    public async Task StopAsync_CallsEngineStop_AndSetsMessage()
+    {
+        var (service, engine) = Build();
+
+        await service.StopAsync(0);
+
+        Assert.True(engine.StopCalled);
+        Assert.False(service.IsError);
+    }
+
+    [Fact]
+    public async Task EmergencyAsync_CallsEngineEmergencyStop_WithFixedReason()
+    {
+        var (service, engine) = Build();
+
+        await service.EmergencyAsync(0);
+
+        Assert.Equal("Stop manuale dall'operatore", engine.LastEmergencyReason);
+        Assert.False(service.IsError);
+    }
+
+    [Fact]
+    public async Task CloseAsync_CallsEngineClosePosition_WithGivenPositionId()
+    {
+        var (service, engine) = Build();
+
+        await service.CloseAsync(0, "p1");
+
+        Assert.Equal("p1", engine.LastClosedPositionId);
+    }
+
+    [Fact]
+    public async Task ConfirmAsync_CallsEngineConfirmOrder_WithGivenOrderIdAndUserId()
+    {
+        var (service, engine) = Build();
+
+        await service.ConfirmAsync(0, "o1", "user-42");
+
+        Assert.Equal("o1", engine.LastConfirmedOrderId);
+        Assert.Equal("user-42", engine.LastConfirmedUserId);
+        Assert.False(service.IsError);
+    }
+
+    [Fact]
+    public async Task RejectAsync_CallsEngineRejectOrder_WithGivenOrderIdAndUserId()
+    {
+        var (service, engine) = Build();
+
+        await service.RejectAsync(0, "o1", "user-42");
+
+        Assert.Equal("o1", engine.LastRejectedOrderId);
+        Assert.Equal("user-42", engine.LastRejectedUserId);
+        Assert.False(service.IsError);
     }
 
     // --- SaveSafetyAsync: validazione --------------------------------------------------------
