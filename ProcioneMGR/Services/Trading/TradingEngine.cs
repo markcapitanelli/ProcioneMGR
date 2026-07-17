@@ -2021,7 +2021,13 @@ public sealed class TradingEngine(
             AverageWin = wins.Count > 0 ? wins.Average(t => t.Pnl) : 0m,
             AverageLoss = losses.Count > 0 ? losses.Average(t => t.Pnl) : 0m,
             ProfitFactor = grossLoss > 0m ? grossWin / grossLoss : 0m,
-            Trades = trades,
+            // P3-12: le metriche sopra usano già la lista COMPLETA (trades.Count, wins, losses) —
+            // solo la lista esposta è tagliata, ai 500 più recenti (query ordinata ascendente per
+            // ClosedAtUtc, quindi TakeLast = i più recenti). Nessun consumer oggi legge questo campo
+            // (Trading.razor usa EquityCurve, PromotionEvaluator le metriche aggregate — vedi i loro
+            // commenti), ma un domani che lo legga trova comunque uno storico recente utile, non un
+            // payload che su una lane longeva era arrivato a giustificare un tetto gRPC a 64MB.
+            Trades = trades.TakeLast(500).ToList(),
         };
     }
 
