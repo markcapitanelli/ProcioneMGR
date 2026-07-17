@@ -374,6 +374,11 @@ builder.Services.AddSingleton<IPromotionEvaluator, PromotionEvaluator>();
 builder.Services.AddSingleton<ILanePromoter, LanePromoter>();
 builder.Services.AddHostedService<PromotionWorker>();
 
+// P1-5 (audit consolidamento 2026-07-17): orchestrazione di Trading.razor estratta in un service
+// testabile senza Blazor — vedi il doc-comment della classe. Scoped: uno scope Blazor Server = un
+// circuito, quindi un'istanza per sessione utente, come il componente che la consuma.
+builder.Services.AddScoped<ProcioneMGR.Services.Trading.TradingPageService>();
+
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
         // Fase 1: nessun server email reale (IdentityNoOpEmailSender), quindi
