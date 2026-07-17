@@ -1,3 +1,4 @@
+using Mediator;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
@@ -314,6 +315,17 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Admin.DatabaseBackupService>(
 // Fase 2b): è lì che il toggle Trading:UseRemoteTrading commuta fra motore locale e client
 // remoto, garantendo per costruzione che i due non siano mai attivi insieme sulla stessa corsia.
 builder.Services.AddTradingLanes(builder.Configuration);
+
+// --- CQRS/Mediator (Fase 1, PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4) ---
+// Solo lato Blazor: TradingCommandServiceImpl (ProcioneMGR.Trading, gRPC standalone) non
+// referenzia questo pacchetto e continua a chiamare ITradingEngine direttamente (§4.2/§4.3).
+// Un solo IMediator globale, non keyed per corsia: il routing per corsia avviene per dato
+// (ogni comando/query porta LaneId), non per istanza di servizio.
+builder.Services.AddMediator(o =>
+{
+    o.ServiceLifetime = ServiceLifetime.Singleton;
+    o.PipelineBehaviors = [typeof(ProcioneMGR.Services.Trading.Behaviors.LoggingBehavior<,>)];
+});
 
 // --- Autonomous Pipeline (orchestratore end-to-end: dati -> feature -> discovery -> holdout -> raccomandazione) ---
 // Gli stage sono transient e risolti nello scope del run (dipendono da servizi scoped come
