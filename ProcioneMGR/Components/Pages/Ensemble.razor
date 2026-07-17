@@ -22,6 +22,7 @@
 @inject IFeatureDriftMonitor DriftMonitor
 @inject IModelRegistry Registry
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ILogger<Ensemble> Logger
 
 <PageTitle>Ensemble</PageTitle>
 
@@ -618,7 +619,7 @@ else
     private bool _isError;
     private string? _message;
 
-    private System.Threading.Timer? _refreshTimer;
+    private PollingTimer? _refreshTimer;
 
     private static readonly string[] Palette = ["#2962FF", "#E53935", "#43A047", "#FB8C00", "#8E24AA", "#00897B"];
 
@@ -647,8 +648,7 @@ else
         await LoadLaneAsync();
 
         // Auto-refresh status ogni 15s.
-        _refreshTimer = new System.Threading.Timer(async _ => await InvokeAsync(RefreshAsync), null,
-            TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+        _refreshTimer = new PollingTimer(TimeSpan.FromSeconds(15), () => InvokeAsync(RefreshAsync), Logger);
     }
 
     private async Task OnLaneChangedAsync(ChangeEventArgs e)

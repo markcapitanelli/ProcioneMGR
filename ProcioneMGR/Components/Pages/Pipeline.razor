@@ -19,6 +19,7 @@
 @inject IEnsembleManager EnsembleMgr
 @inject AuthenticationStateProvider AuthProvider
 @inject IPipelineApplier Applier
+@inject ILogger<Pipeline> Logger
 
 <PageTitle>Pipeline autonomo</PageTitle>
 <h1>Pipeline autonomo
@@ -519,7 +520,7 @@
     private string? _userId;
     private string? _message;
     private bool _isError;
-    private System.Threading.Timer? _timer;
+    private PollingTimer? _timer;
     private bool _wasRunning;
 
     protected override async Task OnInitializedAsync()
@@ -527,7 +528,7 @@
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         await ReloadAsync();
-        _timer = new System.Threading.Timer(async _ => await InvokeAsync(TickAsync), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+        _timer = new PollingTimer(TimeSpan.FromSeconds(2), () => InvokeAsync(TickAsync), Logger);
     }
 
     private async Task TickAsync()
