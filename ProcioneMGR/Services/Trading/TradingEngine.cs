@@ -291,6 +291,13 @@ public sealed class TradingEngine(
             _state.IsRunning = false;
             await SaveStateAsync(ct);
             await AuditAsync("StopEngine", new { }, DateTime.UtcNow, ct);
+            // Il predictor ML del Champion resta vivo solo mentre la corsia gira: allo stop lo
+            // liberiamo subito invece di aspettare il prossimo cambio Champion (che potrebbe non
+            // arrivare mai su una lane fermata). Azzerare il riferimento, non solo il dispose, evita
+            // che un riavvio con lo STESSO Champion (stesso ModelId/Version) trovi in cache un
+            // predictor già disposto e provi a riusarlo (vedi il confronto in ResolveChampionStrategyAsync).
+            _championCache?.Predictor.Dispose();
+            _championCache = null;
             logger.LogInformation("Trading engine fermato (posizioni lasciate aperte).");
         }
         finally { _gate.Release(); }
