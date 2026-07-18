@@ -1,7 +1,7 @@
 using Grpc.Core;
 using Mediator;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using ProcioneMGR.Services.Trading.Commands;
 using ProcioneMGR.Services.Trading.Queries;
 
 namespace ProcioneMGR.Services.Trading;
@@ -25,7 +25,6 @@ namespace ProcioneMGR.Services.Trading;
 /// di dominio — tenerla fuori evita che un'istanza single-per-circuito "ricordi" una corsia stantia.
 /// </summary>
 public sealed class TradingPageService(
-    IServiceProvider services,
     IMediator mediator,
     IPromotionEvaluator promotionEval,
     ILanePromoter promoter,
@@ -59,9 +58,6 @@ public sealed class TradingPageService(
     private readonly Dictionary<string, decimal?> _tpEdits = new();
     private readonly Dictionary<string, decimal?> _tslEdits = new();
 
-    /// <summary>Motore della corsia indicata (keyed DI): risolto ad ogni chiamata, mai messo in cache tra una corsia e l'altra.</summary>
-    private ITradingEngine Engine(int laneId) => services.GetRequiredKeyedService<ITradingEngine>(laneId);
-
     public async Task RefreshAsync(int laneId)
     {
         try
@@ -70,8 +66,8 @@ public sealed class TradingPageService(
             // (Trading:UseRemoteTrading) tre di queste sono round-trip gRPC — sommarne le latenze
             // ogni 2 secondi era solo attesa gratuita. Il motore regge già le chiamate concorrenti
             // per costruzione: il TradingWorker gli parla in parallelo alla UI da sempre.
-            // Passano da IMediator (Fase 1, PRD §4.6 "query pilota") invece che da Engine(laneId)
-            // diretto: i sei comandi sotto restano invariati in questa tranche.
+            // Tutte le letture e i comandi di questa classe passano ora da IMediator (Fase 1) —
+            // nessuna risoluzione diretta di ITradingEngine resta in questo file.
             var statusTask = mediator.Send(new GetLaneStatusQuery(laneId)).AsTask();
             var positionsTask = mediator.Send(new GetOpenPositionsQuery(laneId)).AsTask();
             var ordersTask = mediator.Send(new GetOrderHistoryQuery(laneId)).AsTask();
@@ -151,7 +147,7 @@ public sealed class TradingPageService(
     {
         try
         {
-            await Engine(laneId).StartAsync(mode);
+            await mediator.Send(new StartLaneCommand(laneId, mode));
             var note = mode switch
             {
                 TradingMode.Paper => "Paper trading avviato. Il worker sta riproducendo le candele reali…",
@@ -169,21 +165,21 @@ public sealed class TradingPageService(
 
     public async Task StopAsync(int laneId)
     {
-        await Engine(laneId).StopAsync();
+        await mediator.Send(new StopLaneCommand(laneId));
         SetMsg("Trading fermato (posizioni lasciate aperte).", false);
         await RefreshAsync(laneId);
     }
 
     public async Task EmergencyAsync(int laneId)
     {
-        await Engine(laneId).EmergencyStopAsync("Stop manuale dall'operatore");
+        await mediator.Send(new EmergencyStopCommand(laneId, "Stop manuale dall'operatore"));
         SetMsg("EMERGENCY STOP eseguito: tutte le posizioni chiuse.", false);
         await RefreshAsync(laneId);
     }
 
     public async Task CloseAsync(int laneId, string positionId)
     {
-        await Engine(laneId).ClosePositionAsync(positionId);
+        await mediator.Send(new ClosePositionCommand(laneId, positionId));
         await RefreshAsync(laneId);
     }
 
@@ -212,7 +208,7 @@ public sealed class TradingPageService(
         var sl = _slEdits.TryGetValue(positionId, out var s) ? s : pos?.StopLoss;
         var tp = _tpEdits.TryGetValue(positionId, out var t) ? t : pos?.TakeProfit;
         var tsl = _tslEdits.TryGetValue(positionId, out var tr) ? tr : pos?.TrailingStopPercent;
-        await Engine(laneId).SetStopLossTakeProfitAsync(positionId, sl, tp, tsl);
+        await mediator.Send(new SetStopLossTakeProfitCommand(laneId, positionId, sl, tp, tsl));
         _slEdits.Remove(positionId);
         _tpEdits.Remove(positionId);
         _tslEdits.Remove(positionId);
@@ -222,14 +218,14 @@ public sealed class TradingPageService(
 
     public async Task ConfirmAsync(int laneId, string orderId, string? userId)
     {
-        await Engine(laneId).ConfirmOrderAsync(orderId, userId);
+        await mediator.Send(new ConfirmOrderCommand(laneId, orderId, userId));
         SetMsg("Ordine confermato e inviato all'exchange.", false);
         await RefreshAsync(laneId);
     }
 
     public async Task RejectAsync(int laneId, string orderId, string? userId)
     {
-        await Engine(laneId).RejectOrderAsync(orderId, userId);
+        await mediator.Send(new RejectOrderCommand(laneId, orderId, userId));
         SetMsg("Ordine rifiutato.", false);
         await RefreshAsync(laneId);
     }
