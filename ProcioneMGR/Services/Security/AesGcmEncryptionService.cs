@@ -17,10 +17,19 @@ namespace ProcioneMGR.Services.Security;
 ///   - se il valore e' base64 di esattamente 32 byte, viene usato direttamente;
 ///   - altrimenti viene derivata via SHA-256 della stringa UTF-8.
 ///
-/// TODO(produzione): NON tenere la master key in appsettings.json. Spostarla in
-/// User Secrets (dev) e in Azure Key Vault / variabile d'ambiente protetta
-/// (PROCIONE_MGR_MASTER_KEY) in produzione, idealmente con rotazione via il byte
-/// di versione gia' previsto nel formato.
+/// STATO (verificato 2026-07-17): in produzione la master key NON vive in appsettings.json.
+/// I deployment K8s (infra/k8s/trading/deployment.yaml, infra/k8s/ui/deployment.yaml)
+/// la iniettano gia' via Secret dedicato (rispettivamente trading-secrets/ui-secrets,
+/// chiave Security__MasterKey, mai nell'immagine) — le due copie devono restare identiche
+/// perche' entrambi i processi decifrano le stesse credenziali exchange nel DB. In locale
+/// resta l'appsettings.json gitignored (con placeholder committato solo nel .example) o la
+/// variabile PROCIONE_MGR_MASTER_KEY, sufficiente per un progetto a operatore singolo.
+/// Azure Key Vault non e' pertinente: lo stack e' Kubernetes-nativo, senza alcuna presenza
+/// Azure altrove — introdurlo sarebbe una dipendenza cloud spuria per un problema gia'
+/// risolto dal Secret K8s. L'unico pezzo TODO reale, deliberatamente rimandato perche'
+/// e' una feature a se' (non un fix puntuale): la rotazione della chiave, per cui il
+/// formato riserva gia' il byte di versione ma manca ancora il supporto multi-chiave
+/// (decifra-con-la-vecchia/cifra-con-la-nuova) e uno strumento di re-cifratura di massa.
 /// </summary>
 public sealed class AesGcmEncryptionService : IEncryptionService, IMasterKeyStatus
 {

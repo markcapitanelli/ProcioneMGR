@@ -190,7 +190,6 @@ builder.Services.AddSingleton<ProcioneMGR.Services.ML.IHierarchicalClustering, P
 // --- Time-series: volatilità (GARCH) e statistical arbitrage (cointegrazione/pairs) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.TimeSeries.IGarchModel, ProcioneMGR.Services.TimeSeries.GarchModel>();
 builder.Services.AddSingleton<ProcioneMGR.Services.TimeSeries.ICointegrationTest, ProcioneMGR.Services.TimeSeries.EngleGrangerCointegrationTest>();
-builder.Services.AddSingleton<ProcioneMGR.Services.TimeSeries.PairsSpreadAnalyzer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.IPairsBacktestEngine, ProcioneMGR.Services.PairsTrading.PairsBacktestEngine>();
 
 // --- Alt-data (notizie RSS) + sentiment (Fase D) ---
@@ -209,13 +208,16 @@ builder.Services.AddHttpClient("AltDataForexFactory", c =>
 builder.Services.AddHttpClient("AltDataRetailSentiment", c => c.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddSingleton<IEnumerable<ProcioneMGR.Services.AltData.IAltDataSource>>(sp =>
 {
+    // Si inietta la IHttpClientFactory stessa (è lei, non i client che produce, il tipo pensato per
+    // essere trattenuto a lungo termine): ogni fonte chiama CreateClient() per fetch, non qui una
+    // volta sola a startup — vedi il commento in RssNewsSource.FetchLatestAsync.
     var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
     var sources = ProcioneMGR.Services.AltData.NewsFeeds.KnownFeeds
-        .Select(kv => (ProcioneMGR.Services.AltData.IAltDataSource)new ProcioneMGR.Services.AltData.RssNewsSource(kv.Key, kv.Value, httpClientFactory.CreateClient("AltDataRss")))
+        .Select(kv => (ProcioneMGR.Services.AltData.IAltDataSource)new ProcioneMGR.Services.AltData.RssNewsSource(kv.Key, kv.Value, httpClientFactory))
         .ToList();
-    sources.Add(new ProcioneMGR.Services.AltData.ForexFactoryIngestor(httpClientFactory.CreateClient("AltDataForexFactory")));
-    sources.Add(new ProcioneMGR.Services.AltData.RetailSentimentIngestor("FXSSI", "fxssi", httpClientFactory.CreateClient("AltDataRetailSentiment")));
-    sources.Add(new ProcioneMGR.Services.AltData.RetailSentimentIngestor("MyFxBook", "myfxbook", httpClientFactory.CreateClient("AltDataRetailSentiment")));
+    sources.Add(new ProcioneMGR.Services.AltData.ForexFactoryIngestor(httpClientFactory));
+    sources.Add(new ProcioneMGR.Services.AltData.RetailSentimentIngestor("FXSSI", "fxssi", httpClientFactory));
+    sources.Add(new ProcioneMGR.Services.AltData.RetailSentimentIngestor("MyFxBook", "myfxbook", httpClientFactory));
     return sources;
 });
 builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentScorer, ProcioneMGR.Services.Sentiment.KeywordSentimentScorer>();
@@ -371,6 +373,11 @@ builder.Services.Configure<PromotionEvaluatorOptions>(builder.Configuration.GetS
 builder.Services.AddSingleton<IPromotionEvaluator, PromotionEvaluator>();
 builder.Services.AddSingleton<ILanePromoter, LanePromoter>();
 builder.Services.AddHostedService<PromotionWorker>();
+
+// P1-5 (audit consolidamento 2026-07-17): orchestrazione di Trading.razor estratta in un service
+// testabile senza Blazor — vedi il doc-comment della classe. Scoped: uno scope Blazor Server = un
+// circuito, quindi un'istanza per sessione utente, come il componente che la consuma.
+builder.Services.AddScoped<ProcioneMGR.Services.Trading.TradingPageService>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {

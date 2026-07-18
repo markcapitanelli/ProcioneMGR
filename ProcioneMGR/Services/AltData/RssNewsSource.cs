@@ -34,12 +34,16 @@ public static class NewsFeeds
 }
 
 /// <summary>Implementazione di <see cref="IAltDataSource"/> per un singolo feed RSS/Atom.</summary>
-public sealed class RssNewsSource(string name, string feedUrl, HttpClient httpClient) : IAltDataSource
+public sealed class RssNewsSource(string name, string feedUrl, IHttpClientFactory httpClientFactory) : IAltDataSource
 {
     public string Name { get; } = name;
 
     public async Task<IReadOnlyList<RawNewsItem>> FetchLatestAsync(CancellationToken ct)
     {
+        // CreateClient per chiamata, non un HttpClient catturato una volta a startup: cosi' la
+        // rotazione periodica dell'handler di IHttpClientFactory (contro il DNS stale) funziona
+        // davvero anche per una fonte che vive nel processo per settimane.
+        var httpClient = httpClientFactory.CreateClient("AltDataRss");
         await using var stream = await httpClient.GetStreamAsync(feedUrl, ct);
         using var reader = XmlReader.Create(stream);
         var feed = SyndicationFeed.Load(reader);

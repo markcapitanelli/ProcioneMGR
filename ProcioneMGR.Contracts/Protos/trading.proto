@@ -34,8 +34,9 @@ service TradingCommandService {
   rpc ClosePosition(ClosePositionRequest) returns (ClosePositionResponse);
   rpc CloseAllPositions(CloseAllPositionsRequest) returns (CloseAllPositionsResponse);
   rpc SetStopLossTakeProfit(SetStopLossTakeProfitRequest) returns (SetStopLossTakeProfitResponse);
-  // ATTENZIONE: sblocca il piazzamento REALE di un ordine Live. Nessun controllo di autorizzazione
-  // a questo livello — l'unico confine è di rete (NetworkPolicy: ingress solo dal pod ui).
+  // ATTENZIONE: sblocca il piazzamento REALE di un ordine Live. Due livelli di protezione (P1-6,
+  // non uno solo): NetworkPolicy (ingress solo dal pod ui) + SharedSecretAuthInterceptor lato
+  // server (header x-trading-shared-secret, fail-closed se il segreto non è configurato).
   rpc ConfirmOrder(ConfirmOrderRequest) returns (ConfirmOrderResponse);
   rpc RejectOrder(RejectOrderRequest) returns (RejectOrderResponse);
 }
@@ -236,13 +237,13 @@ message GetPerformanceResponse {
   procionemgr.common.v1.DecimalValue average_win = 7;
   procionemgr.common.v1.DecimalValue average_loss = 8;
   procionemgr.common.v1.DecimalValue profit_factor = 9;
-  // Storico completo dei trade chiusi da from_utc. Nessun consumer attuale lo legge (Trading.razor
-  // usa equity_curve, PromotionEvaluator le metriche aggregate), ma ITradingEngine lo promette:
-  // ometterlo renderebbe il client remoto silenziosamente diverso da quello locale.
-  // Dimensioni: è il campo che domina il payload. Trading.razor si limita da sé (from_utc = 90
-  // giorni); per i chiamanti che devono vedere tutto lo storico (PromotionEvaluator, from = avvio
-  // sessione) il canale client alza MaxReceiveMessageSize a 64MB — vedi AddTradingLanes. Un client
-  // NUOVO che chiami senza from_utc e col default di 4MB se lo deve ricordare.
+  // Trade chiusi da from_utc, i 500 più RECENTI (P3-12, 2026-07-17: prima era lo storico completo,
+  // che su una lane longeva era il campo che dominava il payload e aveva richiesto di alzare
+  // MaxReceiveMessageSize a 64MB in AddTradingLanes — ora non più necessario, il tetto è tornato al
+  // default gRPC). total_trades resta il conteggio VERO, non quello della lista troncata. Nessun
+  // consumer attuale legge questo campo (Trading.razor usa equity_curve, PromotionEvaluator le
+  // metriche aggregate), ma ITradingEngine lo promette: ometterlo del tutto renderebbe il client
+  // remoto silenziosamente diverso da quello locale, un troncamento bounded no.
   repeated TradeRecord trades = 10;
 }
 

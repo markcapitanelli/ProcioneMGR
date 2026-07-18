@@ -16,7 +16,16 @@ public static class DatabaseServiceCollectionExtensions
         var pg = configuration.GetConnectionString("PostgresConnection")
                  ?? throw new InvalidOperationException("Connection string 'PostgresConnection' non trovata.");
         services.AddDbContextFactory<ApplicationDbContext>(options =>
-            options.UseNpgsql(pg, npgsql => npgsql.MigrationsAssembly("ProcioneMGR.Migrations.Postgres")));
+            options.UseNpgsql(pg, npgsql => npgsql
+                .MigrationsAssembly("ProcioneMGR.Migrations.Postgres")
+                // Retrying execution strategy: assorbe i transitori (rete, failover, connessione
+                // ricreata) che in K8s sono fisiologici. Il punto più delicato è la persistenza
+                // POST-fill in TradingEngine.ProcessCandleAsync: un blip verso Postgres lì, senza
+                // retry, lascerebbe un ordine reale eseguito e non persistito (rete di sicurezza:
+                // ReconcileUncertainOrder). Sicuro qui perché il codice NON apre transazioni
+                // esplicite (BeginTransaction/TransactionScope): l'unico caso incompatibile con la
+                // strategia di retry non è presente. Ereditata da tutti gli host (monolite + satelliti).
+                .EnableRetryOnFailure(maxRetryCount: 3, maxRetryDelay: TimeSpan.FromSeconds(5), errorCodesToAdd: null)));
         return services;
     }
 }

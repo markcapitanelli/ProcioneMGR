@@ -9,6 +9,7 @@
 
 @inject MetricsCollector Collector
 @inject IJSRuntime JS
+@inject ILogger<Metrics> Logger
 
 <PageTitle>Metriche</PageTitle>
 
@@ -106,7 +107,7 @@
 @code {
     private MetricsSnapshot _s = default!;
     private DateTime _lastRefresh = DateTime.UtcNow;
-    private System.Threading.Timer? _timer;
+    private PollingTimer? _timer;
 
     private IJSObjectReference? _charts;
     private bool _renderPending;
@@ -114,7 +115,7 @@
     protected override void OnInitialized()
     {
         _s = Collector.Snapshot();
-        _timer = new System.Threading.Timer(_ => InvokeAsync(Refresh), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+        _timer = new PollingTimer(TimeSpan.FromSeconds(5), () => InvokeAsync(Refresh), Logger);
     }
 
     private void Refresh()
@@ -192,7 +193,7 @@
 
     public async ValueTask DisposeAsync()
     {
-        _timer?.Dispose();
+        if (_timer is not null) await _timer.DisposeAsync();
         try
         {
             if (_charts is not null)

@@ -93,33 +93,24 @@ public class CointegrationTests
         Assert.Throws<ArgumentException>(() => _test.Test(y, x));
     }
 
-    // --- PairsSpreadAnalyzer -------------------------------------------------------------------
+    // --- PairsSpreadAnalyzer.RollingZScore (z-score causale) -----------------------------------
 
     [Fact]
-    public void SpreadAnalyzer_ZScore_NullDuringWarmup_ThenPopulated()
+    public void RollingZScore_NullDuringWarmup_ThenPopulated()
     {
-        var x = RandomWalk(500, 1.0, seed: 3);
-        var rnd = new Random(4);
-        var y = x.Select(xi => (decimal)(1.5 * (double)xi + (rnd.NextDouble() - 0.5) * 0.3)).ToList();
+        var spread = Enumerable.Range(0, 500).Select(i => Math.Sin(i * 0.1) * 10).ToList();
+        var z = PairsSpreadAnalyzer.RollingZScore(spread, lookback: 20);
 
-        var analyzer = new PairsSpreadAnalyzer(_test);
-        var analysis = analyzer.Analyze(y, x, zScoreLookback: 20);
-
-        for (var i = 0; i < 19; i++) Assert.Null(analysis.ZScore[i]);
-        for (var i = 19; i < 500; i++) Assert.NotNull(analysis.ZScore[i]);
+        for (var i = 0; i < 19; i++) Assert.Null(z[i]);
+        for (var i = 19; i < 500; i++) Assert.NotNull(z[i]);
     }
 
     [Fact]
-    public void SpreadAnalyzer_ZScore_IsCausal_TruncationDoesNotChangePastValues()
+    public void RollingZScore_IsCausal_TruncationDoesNotChangePastValues()
     {
-        // Lo z-score rolling e' causale rispetto allo SPREAD (non rispetto all'hedge ratio,
-        // stimato sull'intero campione - limite dichiarato). A parita' di spread, il valore di
-        // z a un indice i non deve cambiare troncando la serie DOPO i.
-        var x = RandomWalk(300, 1.0, seed: 5);
-        var rnd = new Random(6);
-        var y = x.Select(xi => (decimal)(0.8 * (double)xi + (rnd.NextDouble() - 0.5) * 0.2)).ToList();
-
-        var spread = Enumerable.Range(0, 300).Select(i => Math.Sin(i * 0.1) * 10).ToList(); // spread sintetico noto
+        // Lo z-score rolling e' causale: il valore a un indice i non deve cambiare troncando la
+        // serie DOPO i (usa solo la finestra passata dello spread).
+        var spread = Enumerable.Range(0, 300).Select(i => Math.Sin(i * 0.1) * 10).ToList();
         var full = PairsSpreadAnalyzer.RollingZScore(spread, 20);
         var truncated = PairsSpreadAnalyzer.RollingZScore(spread.Take(150).ToList(), 20);
 
@@ -127,14 +118,5 @@ public class CointegrationTests
         {
             Assert.Equal(full[i]!.Value, truncated[i]!.Value, 9);
         }
-    }
-
-    [Fact]
-    public void SpreadAnalyzer_InvalidLookback_Throws()
-    {
-        var x = RandomWalk(100, 1.0, 1);
-        var y = RandomWalk(100, 1.0, 2);
-        var analyzer = new PairsSpreadAnalyzer(_test);
-        Assert.Throws<ArgumentOutOfRangeException>(() => analyzer.Analyze(y, x, zScoreLookback: 2));
     }
 }

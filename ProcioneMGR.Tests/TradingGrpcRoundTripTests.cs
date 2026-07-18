@@ -1,8 +1,10 @@
 using Grpc.Core;
+using Grpc.Core.Interceptors;
 using Grpc.Net.Client;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using ProcioneMGR.Contracts.Grpc;
 using ProcioneMGR.Contracts.Trading.V1;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Trading;
@@ -73,7 +75,11 @@ public class TradingGrpcRoundTripTests
         public Task ProcessDueExecutionSlicesAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private static WebApplicationFactory<TradingCommandServiceImpl> CreateHost(Action<RecordingEngine>? configure = null)
+    /// <summary>Segreto di test per SharedSecretAuthInterceptor — deve combaciare con quello passato a <see cref="ClientFor"/>.</summary>
+    private const string TestSharedSecret = "test-only-shared-secret";
+
+    private static WebApplicationFactory<TradingCommandServiceImpl> CreateHost(
+        Action<RecordingEngine>? configure = null, bool configureSharedSecret = true)
     {
         // WebApplicationFactory<TradingCommandServiceImpl> e non <Program>: ProcioneMGR.Ml e
         // ProcioneMGR.Trading dichiarano entrambi un `public partial class Program` nel namespace
@@ -86,6 +92,10 @@ public class TradingGrpcRoundTripTests
             // serve per le credenziali exchange) e senza chiave il DbContext non si costruirebbe.
             // Nessun test qui cifra o decifra alcunché.
             b.UseSetting("Security:MasterKey", Convert.ToBase64String(new byte[32]));
+            if (configureSharedSecret)
+            {
+                b.UseSetting("Trading:GrpcSharedSecret", TestSharedSecret);
+            }
 
             b.ConfigureTestServices(services =>
             {
@@ -108,7 +118,17 @@ public class TradingGrpcRoundTripTests
         });
     }
 
+    /// <summary>Client con l'header shared-secret già allegato — stesso SharedSecretClientInterceptor usato in produzione da AddTradingLanes.</summary>
     private static TradingCommandService.TradingCommandServiceClient ClientFor(WebApplicationFactory<TradingCommandServiceImpl> factory)
+    {
+        var channel = GrpcChannel.ForAddress(factory.Server.BaseAddress,
+            new GrpcChannelOptions { HttpHandler = factory.Server.CreateHandler() });
+        var invoker = channel.Intercept(new SharedSecretClientInterceptor(TestSharedSecret));
+        return new TradingCommandService.TradingCommandServiceClient(invoker);
+    }
+
+    /// <summary>Client SENZA l'header shared-secret — per provare che SharedSecretAuthInterceptor rifiuta davvero.</summary>
+    private static TradingCommandService.TradingCommandServiceClient ClientWithoutSecretFor(WebApplicationFactory<TradingCommandServiceImpl> factory)
     {
         var channel = GrpcChannel.ForAddress(factory.Server.BaseAddress,
             new GrpcChannelOptions { HttpHandler = factory.Server.CreateHandler() });
@@ -304,5 +324,35 @@ public class TradingGrpcRoundTripTests
 
         Assert.Equal(StatusCode.FailedPrecondition, ex.StatusCode);
         Assert.Contains(reason, ex.Status.Detail);
+    }
+
+    // ---------------------------------------------------------- P1-6: SharedSecretAuthInterceptor
+
+    [Fact]
+    public async Task MissingSharedSecretHeader_IsRejected_Unauthenticated()
+    {
+        // Server configurato correttamente, client che NON manda l'header: deve essere rifiutato
+        // dall'interceptor, prima ancora che il servizio invochi il motore.
+        await using var factory = CreateHost();
+        var client = ClientWithoutSecretFor(factory);
+
+        var ex = await Assert.ThrowsAsync<RpcException>(() =>
+            client.GetLaneStatusAsync(new GetLaneStatusRequest { LaneId = 0 }).ResponseAsync);
+
+        Assert.Equal(StatusCode.Unauthenticated, ex.StatusCode);
+    }
+
+    [Fact]
+    public async Task ServerWithoutConfiguredSecret_RejectsEveryCall_FailClosed()
+    {
+        // Fail-closed per scelta: un server mal configurato (segreto assente) deve rifiutare
+        // TUTTO, mai degradare in silenzio a "nessuna autorizzazione applicativa".
+        await using var factory = CreateHost(configureSharedSecret: false);
+        var client = ClientFor(factory); // manda comunque l'header: non basta, il server non ha nulla con cui confrontarlo
+
+        var ex = await Assert.ThrowsAsync<RpcException>(() =>
+            client.GetLaneStatusAsync(new GetLaneStatusRequest { LaneId = 0 }).ResponseAsync);
+
+        Assert.Equal(StatusCode.Unauthenticated, ex.StatusCode);
     }
 }

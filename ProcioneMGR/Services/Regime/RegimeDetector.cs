@@ -131,17 +131,6 @@ public sealed class RegimeDetector(
             model.Symbol, model.Timeframe, model.SilhouetteScore);
     }
 
-    public async Task<int> PredictRegimeAsync(MarketFeatures features, CancellationToken ct = default)
-    {
-        var loaded = await EnsureCacheAsync(ct);
-        if (loaded is null)
-        {
-            return -1;
-        }
-        var normalized = loaded.Value.Scaling.Transform(features.ToClusteringVector());
-        return RegimeAssignment.NearestCentroid(normalized, loaded.Value.Centroids);
-    }
-
     public async Task<List<MarketFeatures>> LabelFeaturesAsync(List<MarketFeatures> features, CancellationToken ct = default)
     {
         var loaded = await EnsureCacheAsync(ct);
