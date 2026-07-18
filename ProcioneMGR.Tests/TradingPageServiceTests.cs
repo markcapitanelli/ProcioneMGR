@@ -1,4 +1,5 @@
 using Grpc.Core;
+using Mediator;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Trading;
@@ -111,11 +112,14 @@ public class TradingPageServiceTests
     {
         var engine0 = new FakeTradingEngine(0);
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddKeyedSingleton<ITradingEngine>(0, engine0);
+        services.AddMediator();
         var provider = services.BuildServiceProvider();
 
         var service = new TradingPageService(
             provider,
+            provider.GetRequiredService<IMediator>(),
             promotionEval ?? new FakePromotionEvaluator([]),
             promoter ?? new RecordingPromoter(),
             (safety ?? new SafetyConfiguration { MaxPositionSizePercent = 10m, MaxTotalExposurePercent = 50m, MaxOpenPositions = 5, MaxLeverageAllowed = 5 }).AsMonitor(),
