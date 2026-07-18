@@ -15,14 +15,10 @@
 @using ProcioneMGR.Services.Optimization
 @using ProcioneMGR.Services.Experiments
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
-@implements IDisposable
 
-@inject IDbContextFactory<ApplicationDbContext> DbFactory
-@inject IBacktestEngine Engine
 @inject IAlphaFactorFactory FactorFactory
-@inject IDatasetBuilder Builder
-@inject IExperimentTracker Tracker
 @inject AuthenticationStateProvider AuthProvider
+@inject MlLabService Svc
 
 <PageTitle>ML Lab</PageTitle>
 
@@ -85,7 +81,7 @@
                 <label class="form-label">Symbol</label>
                 <input class="form-control" list="ml_symbols" @bind="_symbol" style="width: 11rem;" disabled="@_busy" />
                 <datalist id="ml_symbols">
-                    @foreach (var s in _knownSymbols)
+                    @foreach (var s in Svc.KnownSymbols)
                     {
                         <option value="@s"></option>
                     }
@@ -190,11 +186,11 @@
             }
         </div>
 
-        @if (_savedFactors.Count > 0)
+        @if (Svc.SavedFactors.Count > 0)
         {
             <label class="form-label d-block mt-3">Fattori minati (Alpha Mining)</label>
             <div class="d-flex flex-wrap gap-3">
-                @foreach (var sf in _savedFactors)
+                @foreach (var sf in Svc.SavedFactors)
                 {
                     <div class="form-check" title="@sf.Expression">
                         <input class="form-check-input" type="checkbox" id="@("sf_" + sf.Id)"
@@ -240,7 +236,7 @@
     </div>
 </div>
 
-@if (_savedModels.Count > 0)
+@if (Svc.SavedModels.Count > 0)
 {
     <div class="card mb-3">
         <div class="card-header">Modelli salvati</div>
@@ -254,7 +250,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var m in _savedModels)
+                    @foreach (var m in Svc.SavedModels)
                     {
                         <tr>
                             <td>@m.Name</td>
@@ -265,7 +261,7 @@
                             <td class="text-end">@m.TrainRowCount</td>
                             <td class="text-end">@m.TrainCorrelation.ToString("F3")</td>
                             <td class="text-end">
-                                <a class="btn btn-sm btn-outline-success @(_busy ? "disabled" : "")" href="@OptimizationHandoffUrl(m)"
+                                <a class="btn btn-sm btn-outline-success @(_busy ? "disabled" : "")" href="@MlLabService.OptimizationHandoffUrl(m)"
                                    title="Ottimizza le soglie Long/Short di questo modello in walk-forward, sui dati successivi al training">Ottimizza →</a>
                                 <button class="btn btn-sm btn-outline-primary" @onclick="() => LoadSavedModelAsync(m.Id)" disabled="@_busy">Carica</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteSavedModelAsync(m.Id)" disabled="@_busy">Elimina</button>
@@ -278,25 +274,25 @@
     </div>
 }
 
-@if (_predictor is not null)
+@if (Svc.HasTrainedModel)
 {
     <div class="card mb-3">
         <div class="card-header">Modello addestrato</div>
         <div class="card-body">
             <div class="row g-3 mb-3">
-                <div class="col-auto">@MetricCard("Righe train", $"{_trainRowCount}")</div>
-                <div class="col-auto">@MetricCard("Correlazione in-sample", $"{_trainCorrelation:F3}")</div>
-                <div class="col-auto">@MetricCard("Candele test (OOS)", $"{_testCandles?.Count ?? 0}")</div>
+                <div class="col-auto">@MetricCard("Righe train", $"{Svc.TrainRowCount}")</div>
+                <div class="col-auto">@MetricCard("Correlazione in-sample", $"{Svc.TrainCorrelation:F3}")</div>
+                <div class="col-auto">@MetricCard("Candele test (OOS)", $"{Svc.TestCandles?.Count ?? 0}")</div>
             </div>
 
-            @if (_featureImportance.Count > 0)
+            @if (Svc.FeatureImportance.Count > 0)
             {
                 <div class="mb-3">
                     <label class="form-label d-block">Feature importance (permutation, in-sample)</label>
                     <table class="table table-sm" style="max-width: 30rem;">
                         <thead><tr><th>Fattore</th><th class="text-end">Calo R² se permutato</th></tr></thead>
                         <tbody>
-                            @foreach (var fi in _featureImportance)
+                            @foreach (var fi in Svc.FeatureImportance)
                             {
                                 <tr>
                                     <td>@fi.FeatureName</td>
@@ -355,45 +351,45 @@
     </div>
 }
 
-@if (_result is not null)
+@if (Svc.Result is { } result)
 {
     <div class="row g-3 mb-3">
         @{
-            var positive = _result.TotalReturnPercent >= 0;
+            var positive = result.TotalReturnPercent >= 0;
         }
-        <div class="col-auto">@MetricCard("Final Capital", $"{_result.FinalCapital:N2}")</div>
-        <div class="col-auto">@MetricCard("Total Return", $"{_result.TotalReturnPercent:N2}%", positive)</div>
-        <div class="col-auto">@MetricCard("Win Rate", $"{_result.WinRate:N1}%")</div>
-        <div class="col-auto">@MetricCard("Max Drawdown", $"{_result.MaxDrawdownPercent:N2}%", false)</div>
-        <div class="col-auto">@MetricCard("Trades", $"{_result.TotalTrades} ({_result.WinningTrades}W/{_result.LosingTrades}L)")</div>
+        <div class="col-auto">@MetricCard("Final Capital", $"{result.FinalCapital:N2}")</div>
+        <div class="col-auto">@MetricCard("Total Return", $"{result.TotalReturnPercent:N2}%", positive)</div>
+        <div class="col-auto">@MetricCard("Win Rate", $"{result.WinRate:N1}%")</div>
+        <div class="col-auto">@MetricCard("Max Drawdown", $"{result.MaxDrawdownPercent:N2}%", false)</div>
+        <div class="col-auto">@MetricCard("Trades", $"{result.TotalTrades} ({result.WinningTrades}W/{result.LosingTrades}L)")</div>
     </div>
 
-    @if (_tearsheet is not null)
+    @if (Svc.Tearsheet is { } tearsheet)
     {
         <div class="row g-3 mb-3">
-            <div class="col-auto">@MetricCard("Sharpe", $"{_tearsheet.Sharpe:F2}")</div>
-            <div class="col-auto">@MetricCard("Sortino", $"{_tearsheet.Sortino:F2}")</div>
-            <div class="col-auto">@MetricCard("Calmar", $"{_tearsheet.Calmar:F2}")</div>
-            <div class="col-auto">@MetricCard("Omega", $"{_tearsheet.Omega:F2}")</div>
-            <div class="col-auto">@MetricCard("VaR 95%", $"{_tearsheet.ValueAtRisk95:P2}")</div>
-            <div class="col-auto">@MetricCard("CVaR 95%", $"{_tearsheet.ConditionalValueAtRisk95:P2}")</div>
-            <div class="col-auto">@MetricCard("Max DD durata", $"{_tearsheet.MaxDrawdownDurationPeriods} periodi")</div>
-            <div class="col-auto">@MetricCard("Esposizione", $"{_tearsheet.ExposurePercent:F1}%")</div>
+            <div class="col-auto">@MetricCard("Sharpe", $"{tearsheet.Sharpe:F2}")</div>
+            <div class="col-auto">@MetricCard("Sortino", $"{tearsheet.Sortino:F2}")</div>
+            <div class="col-auto">@MetricCard("Calmar", $"{tearsheet.Calmar:F2}")</div>
+            <div class="col-auto">@MetricCard("Omega", $"{tearsheet.Omega:F2}")</div>
+            <div class="col-auto">@MetricCard("VaR 95%", $"{tearsheet.ValueAtRisk95:P2}")</div>
+            <div class="col-auto">@MetricCard("CVaR 95%", $"{tearsheet.ConditionalValueAtRisk95:P2}")</div>
+            <div class="col-auto">@MetricCard("Max DD durata", $"{tearsheet.MaxDrawdownDurationPeriods} periodi")</div>
+            <div class="col-auto">@MetricCard("Esposizione", $"{tearsheet.ExposurePercent:F1}%")</div>
         </div>
     }
 
     <div class="card mb-3">
         <div class="card-header">Equity curve (out-of-sample)</div>
         <div class="card-body">
-            @if (_equitySeries.Count > 0)
+            @if (Svc.EquitySeries.Count > 0)
             {
-                <OhlcvChart ShowCandles="false" Indicators="_equitySeries" Height="320" />
+                <OhlcvChart ShowCandles="false" Indicators="Svc.EquitySeries" Height="320" />
             }
         </div>
     </div>
 
     <div class="card">
-        <div class="card-header">Trade list (@_result.Trades.Count)</div>
+        <div class="card-header">Trade list (@result.Trades.Count)</div>
         <div class="table-responsive" style="max-height: 460px; overflow:auto;">
             <table class="table table-sm table-striped mb-0">
                 <thead class="table-light" style="position: sticky; top: 0;">
@@ -407,7 +403,7 @@
                     @{
                         var idx = 0;
                     }
-                    @foreach (var t in _result.Trades.Take(500))
+                    @foreach (var t in result.Trades.Take(500))
                     {
                         idx++;
                         <tr>
@@ -424,9 +420,9 @@
                 </tbody>
             </table>
         </div>
-        @if (_result.Trades.Count > 500)
+        @if (result.Trades.Count > 500)
         {
-            <div class="card-footer text-muted">Mostrati i primi 500 di @_result.Trades.Count trade.</div>
+            <div class="card-footer text-muted">Mostrati i primi 500 di @result.Trades.Count trade.</div>
         }
     </div>
 }
@@ -442,7 +438,6 @@
     private int _trainSplitPercent = 70;
     private int _forwardHorizon = 1;
 
-    private List<string> _knownSymbols = new();
     private readonly HashSet<string> _selectedFactors = new() { "Momentum", "RsiFactor", "MacdFactor" };
 
     private decimal _longThreshold = 0.005m;
@@ -456,16 +451,6 @@
     private StackingMode _stackMode = StackingMode.StackedRidge;
     private int _attnWindow = 8;
     private int _attnEmbed = 16;
-    private IReturnPredictor? _predictor;
-    private List<FactorSpec>? _trainedFactors;
-    private List<OhlcvData>? _testCandles;
-    private int _trainRowCount;
-    private double _trainCorrelation;
-    private List<FeatureImportance> _featureImportance = new();
-
-    private BacktestResult? _result;
-    private TearsheetMetrics? _tearsheet;
-    private List<IndicatorSeries> _equitySeries = new();
 
     private Stage _stage = Stage.Idle;
     private bool _busy;
@@ -481,104 +466,52 @@
 
     private string? _userId;
     private string _saveModelName = "";
-    private List<SavedMlModel> _savedModels = new();
-    private List<SavedFactor> _savedFactors = new();
     private readonly HashSet<int> _selectedSavedFactorIds = new();
+
+    private ConfigPresets? _presets;
 
     protected override async Task OnInitializedAsync()
     {
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
-
-        await using var db = await DbFactory.CreateDbContextAsync();
-        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
-        if (_userId is not null)
-        {
-            _savedFactors = await db.SavedFactors
-                .Where(f => f.UserId == _userId)
-                .OrderByDescending(f => f.CreatedAtUtc)
-                .ToListAsync();
-        }
-
-        await LoadSavedModelsListAsync();
+        await Svc.LoadInitialDataAsync(_userId);
     }
 
-    private async Task LoadSavedModelsListAsync()
-    {
-        if (_userId is null) return;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        _savedModels = await db.SavedMlModels
-            .Where(m => m.UserId == _userId)
-            .OrderByDescending(m => m.CreatedAtUtc)
-            .ToListAsync();
-    }
+    /// <summary>Fotografia corrente del form, passata al service per train/backtest/save/preset.</summary>
+    private MlConfigSnapshot Snapshot() => new(
+        _exchange, _symbol, _timeframe, _from, _to, _trainSplitPercent, _forwardHorizon,
+        _selectedFactors.ToList(), _selectedSavedFactorIds.ToList(),
+        _modelType, _stackBaseModels.ToList(), _stackMode, _attnWindow, _attnEmbed,
+        _longThreshold, _shortThreshold, _initialCapital, _positionSizePercent, _feePercent);
 
-    private ConfigPresets? _presets;
-
-    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
-    private sealed record PageConfig(
-        string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
-        int TrainSplitPercent, int ForwardHorizon, List<string> Factors, List<int> SavedFactorIds,
-        string ModelType, List<string> StackBaseModels, string StackMode, int AttnWindow, int AttnEmbed,
-        decimal LongThreshold, decimal ShortThreshold, decimal InitialCapital,
-        decimal PositionSizePercent, decimal FeePercent);
-
-    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
-        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to,
-        _trainSplitPercent, _forwardHorizon, _selectedFactors.ToList(), _selectedSavedFactorIds.ToList(),
-        _modelType, _stackBaseModels.ToList(), _stackMode.ToString(), _attnWindow, _attnEmbed,
-        _longThreshold, _shortThreshold, _initialCapital, _positionSizePercent, _feePercent));
+    private string CaptureConfigJson() => Svc.SerializeConfig(Snapshot());
 
     private void ApplyConfigJson(string json)
     {
-        PageConfig? cfg;
-        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
-        catch (JsonException) { return; } // preset malformato: il form resta com'è
-        if (cfg is null) return;
-
-        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
-        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
-        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
-        _from = cfg.From.Date;
-        _to = cfg.To.Date;
+        var cfg = Svc.ApplyConfig(json, Snapshot());
+        _exchange = cfg.Exchange;
+        _symbol = cfg.Symbol;
+        _timeframe = cfg.Timeframe;
+        _from = cfg.From;
+        _to = cfg.To;
         _trainSplitPercent = cfg.TrainSplitPercent;
         _forwardHorizon = cfg.ForwardHorizon;
-
-        // Solo nomi/ID che esistono ancora: cataloghi e fattori minati possono cambiare nel tempo.
         _selectedFactors.Clear();
-        foreach (var f in cfg.Factors.Where(f => FactorFactory.Prototypes.Any(p => p.Name == f)))
-            _selectedFactors.Add(f);
+        foreach (var f in cfg.Factors) _selectedFactors.Add(f);
         _selectedSavedFactorIds.Clear();
-        foreach (var id in cfg.SavedFactorIds.Where(id => _savedFactors.Any(s => s.Id == id)))
-            _selectedSavedFactorIds.Add(id);
-
-        if (ReturnPredictorCatalog.BaseTypes.Contains(cfg.ModelType) || cfg.ModelType is "Stacked" or "Attention")
-            _modelType = cfg.ModelType;
+        foreach (var id in cfg.SavedFactorIds) _selectedSavedFactorIds.Add(id);
+        _modelType = cfg.ModelType;
         _stackBaseModels.Clear();
-        foreach (var m in cfg.StackBaseModels.Where(m => ReturnPredictorCatalog.BaseTypes.Contains(m)))
-            _stackBaseModels.Add(m);
-        if (Enum.TryParse<StackingMode>(cfg.StackMode, out var sm)) _stackMode = sm;
+        foreach (var m in cfg.StackBaseModels) _stackBaseModels.Add(m);
+        _stackMode = cfg.StackMode;
         _attnWindow = cfg.AttnWindow;
         _attnEmbed = cfg.AttnEmbed;
-
         _longThreshold = cfg.LongThreshold;
         _shortThreshold = cfg.ShortThreshold;
         _initialCapital = cfg.InitialCapital;
         _positionSizePercent = cfg.PositionSizePercent;
         _feePercent = cfg.FeePercent;
     }
-
-    /// <summary>
-    /// Link a Optimization precompilata: strategia ML + questo modello, con periodo che parte
-    /// dalla fine del training (le soglie Long/Short si scelgono su dati che il modello non ha visto).
-    /// </summary>
-    private static string OptimizationHandoffUrl(SavedMlModel m) =>
-        "optimization?strategy=Ml"
-        + $"&model={m.Id}"
-        + $"&symbol={Uri.EscapeDataString(m.Symbol)}"
-        + $"&timeframe={Uri.EscapeDataString(m.Timeframe)}"
-        + $"&from={m.TrainingDataTo:yyyy-MM-dd}"
-        + $"&to={DateTime.UtcNow:yyyy-MM-dd}";
 
     private void ToggleFactor(string name, bool selected)
     {
@@ -611,146 +544,11 @@
 
         _busy = true;
         _stage = Stage.Training;
-        _isError = false;
-        _status = null;
-        _predictor?.Dispose();
-        _predictor = null;
-        _featureImportance = new();
-        _result = null;
-        _tearsheet = null;
-        _equitySeries = new();
-
+        SetStatus(null, error: false);
         try
         {
-            var fromUtc = DateTime.SpecifyKind(_from, DateTimeKind.Utc);
-            var toUtc = DateTime.SpecifyKind(_to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
-
-            List<OhlcvData> candles;
-            await using (var db = await DbFactory.CreateDbContextAsync())
-            {
-                candles = await db.OhlcvData
-                    .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe
-                                && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
-                    .OrderBy(c => c.TimestampUtc)
-                    .ToListAsync();
-            }
-
-            if (candles.Count < 50)
-            {
-                SetStatus("Dati insufficienti nel range selezionato (servono almeno 50 candele).", error: true);
-                return;
-            }
-
-            var splitIndex = candles.Count * Math.Clamp(_trainSplitPercent, 10, 90) / 100;
-            var trainCandles = candles.Take(splitIndex).ToList();
-            var testCandles = candles.Skip(splitIndex).ToList();
-            if (trainCandles.Count < 30 || testCandles.Count < 10)
-            {
-                SetStatus("Split train/test non praticabile: allarga il range o cambia la percentuale.", error: true);
-                return;
-            }
-
-            var factors = _selectedFactors.Select(name =>
-            {
-                var factor = FactorFactory.Create(name);
-                var defaults = factor.ParameterDefinitions.ToDictionary(d => d.Key, d => d.Default);
-                return new FactorSpec(name, factor, defaults);
-            }).ToList();
-
-            // Fattori minati (Alpha Mining) scelti dall'utente: il nome "expr:…" li fa ricostruire dalla
-            // factory al reload, quindi il round-trip del modello resta valido come per gli altri fattori.
-            foreach (var sf in _savedFactors.Where(f => _selectedSavedFactorIds.Contains(f.Id)))
-            {
-                var factor = FactorFactory.Create(AlphaExpressionFactor.NamePrefix + sf.Expression);
-                factors.Add(new FactorSpec(sf.Name, factor, new Dictionary<string, decimal>()));
-            }
-
-            if (factors.Count == 0)
-            {
-                SetStatus("Seleziona almeno un fattore (alpha o minato).", error: true);
-                return;
-            }
-
-            var dataset = Builder.Build(trainCandles, factors, _forwardHorizon);
-            if (dataset.RowCount < 20)
-            {
-                SetStatus("Troppo poche righe utilizzabili dopo il warm-up dei fattori: allarga il periodo di train.", error: true);
-                return;
-            }
-
-            if (_modelType == "Stacked" && _stackBaseModels.Count == 0)
-            {
-                SetStatus("Seleziona almeno un modello base per lo stacking.", error: true);
-                return;
-            }
-
-            var mlContext = new MLContext(seed: 42);
-            IReturnPredictor predictor = _modelType switch
-            {
-                "Stacked" => new StackedReturnPredictor(_stackBaseModels.OrderBy(b => b).ToList(), _stackMode),
-                "Attention" => new AttentionReturnPredictor(windowLength: _attnWindow, embedDim: _attnEmbed),
-                "RandomForest" => new RandomForestReturnPredictor(),
-                "GradientBoosting" => new GradientBoostingReturnPredictor(),
-                "Mlp" => new MlpReturnPredictor(),
-                _ => new LinearReturnPredictor(),
-            };
-
-            // I modelli sequenziali (attention) si addestrano su finestre di T candele: la stessa
-            // matrice di fattori, vista come sequenze. Gli altri restano puntuali.
-            var mlData = predictor is ISequencePredictor seq ? SequenceWindowing.Build(dataset, seq.WindowLength) : dataset;
-            if (mlData.RowCount < 20)
-            {
-                SetStatus("Troppe poche finestre dopo il windowing: riduci la finestra o allarga il periodo di train.", error: true);
-                return;
-            }
-
-            var trainDataView = mlData.ToDataView(mlContext);
-            predictor.Fit(mlContext, trainDataView);
-
-            // Diagnostica in-sample: correlazione fra predizione e rendimento forward realizzato.
-            var predicted = new double[mlData.RowCount];
-            var actual = new double[mlData.RowCount];
-            for (var i = 0; i < mlData.RowCount; i++)
-            {
-                predicted[i] = predictor.Predict(mlData.Rows[i].Features);
-                actual[i] = mlData.Rows[i].Label;
-            }
-
-            _predictor = predictor;
-            _trainedFactors = factors;
-            _testCandles = testCandles;
-            _trainRowCount = mlData.RowCount;
-            _trainCorrelation = Correlation.Pearson(predicted, actual);
-            _featureImportance = predictor.ComputeFeatureImportance(mlContext, trainDataView, mlData.FeatureNames).ToList();
-
-            // Experiment tracking (osservabilità confrontabile): registra questo training accanto
-            // a ogni altro run, così "modello con 8 fattori vs con Alpha158" è una query, non un
-            // ricordo. Best-effort: non fa mai cadere il training.
-            var mlRunId = await Tracker.SafeStartRunAsync(
-                "MlTraining",
-                $"{_modelType} · {_symbol.Trim()} · {factors.Count} fattori",
-                new
-                {
-                    ModelType = _modelType,
-                    Symbol = _symbol.Trim(),
-                    Timeframe = _timeframe,
-                    ForwardHorizon = _forwardHorizon,
-                    TrainSplitPercent = _trainSplitPercent,
-                    From = _from,
-                    To = _to,
-                    FactorCount = factors.Count,
-                    Factors = factors.Select(f => f.FeatureName).OrderBy(n => n).ToList(),
-                },
-                _symbol.Trim(), _timeframe, _userId);
-            await Tracker.SafeLogMetricsAsync(mlRunId, new Dictionary<string, decimal>
-            {
-                ["TrainRows"] = dataset.RowCount,
-                ["FeatureCount"] = dataset.FeatureCount,
-                ["TrainCorrelation"] = (decimal)_trainCorrelation,
-            });
-            await Tracker.SafeCompleteAsync(mlRunId, "Completed");
-
-            SetStatus($"Modello addestrato su {dataset.RowCount} righe (train). Ora esegui il backtest sul periodo di test, mai visto in addestramento.", error: false);
+            var res = await Svc.TrainAsync(Snapshot(), _userId);
+            SetStatus(res.Message, res.IsError);
         }
         catch (Exception ex)
         {
@@ -765,53 +563,13 @@
 
     private async Task BacktestAsync()
     {
-        if (_predictor is null || _trainedFactors is null || _testCandles is null) return;
-
         _busy = true;
         _stage = Stage.Backtesting;
         _isError = false;
-        _result = null;
-        _tearsheet = null;
-        _equitySeries = new();
-
         try
         {
-            var strategy = new MlStrategy(_predictor, _trainedFactors);
-            var config = new BacktestConfiguration
-            {
-                ExchangeName = _exchange.ToString(),
-                Symbol = _symbol.Trim(),
-                Timeframe = _timeframe,
-                InitialCapital = _initialCapital,
-                PositionSizePercent = _positionSizePercent,
-                FeePercent = _feePercent,
-                StrategyName = "Ml",
-                StrategyParameters = new Dictionary<string, decimal>
-                {
-                    ["LongThreshold"] = _longThreshold,
-                    ["ShortThreshold"] = _shortThreshold,
-                },
-            };
-
-            _result = await Engine.RunBacktestAsync(config, _testCandles, strategy, CancellationToken.None);
-            _tearsheet = Statistics.ComputeTearsheet(_result.EquityCurve, _result.Trades, Statistics.PeriodsPerYear(_timeframe));
-
-            _equitySeries = new()
-            {
-                new IndicatorSeries
-                {
-                    Title = "Equity",
-                    Color = "#2962FF",
-                    Type = IndicatorSeriesType.Line,
-                    Points = _result.EquityCurve
-                        .Select(p => new IndicatorPoint(
-                            new DateTimeOffset(DateTime.SpecifyKind(p.Timestamp, DateTimeKind.Utc)).ToUnixTimeSeconds(),
-                            (double)p.Capital))
-                        .ToList(),
-                },
-            };
-
-            SetStatus($"Backtest out-of-sample completato su {_result.CandlesEvaluated} candele mai viste in training.", error: false);
+            var res = await Svc.BacktestAsync(Snapshot());
+            SetStatus(res.Message, res.IsError);
         }
         catch (Exception ex)
         {
@@ -826,51 +584,12 @@
 
     private async Task SaveModelAsync()
     {
-        if (_predictor is null || _trainedFactors is null || _userId is null) return;
-        if (string.IsNullOrWhiteSpace(_saveModelName))
-        {
-            SetStatus("Inserisci un nome per salvare il modello.", error: true);
-            return;
-        }
-
-        var tempPath = Path.Combine(Path.GetTempPath(), $"mlmodel_save_{Guid.NewGuid():N}.zip");
+        _busy = true;
         try
         {
-            _predictor.Save(new MLContext(), tempPath);
-            var bytes = await File.ReadAllBytesAsync(tempPath);
-
-            var factorsDto = _trainedFactors
-                .Select(f => new SavedFactorSpecDto(f.FeatureName, f.Factor.Name, new Dictionary<string, decimal>(f.Parameters)))
-                .ToList();
-
-            // Deflated Sharpe del modello dal backtest sul range di test (se disponibile): è ciò che
-            // il ModelRegistry richiede per la promozione a Champion. Singolo track ⇒ un solo trial:
-            // il DSR collassa sul Probabilistic Sharpe (significatività vs Sharpe 0), corretto per
-            // lunghezza del track e non-normalità dei rendimenti.
-            var deflatedSharpe = Statistics.DeflatedSharpeSingleTrack(_result?.EquityCurve, Statistics.PeriodsPerYear(_timeframe));
-
-            await using var db = await DbFactory.CreateDbContextAsync();
-            db.SavedMlModels.Add(new SavedMlModel
-            {
-                UserId = _userId,
-                Name = _saveModelName.Trim(),
-                ModelType = _modelType,
-                Symbol = _symbol.Trim(),
-                Timeframe = _timeframe,
-                TrainingDataFrom = _from,
-                TrainingDataTo = _to,
-                ForwardHorizon = _forwardHorizon,
-                FactorsJson = JsonSerializer.Serialize(factorsDto),
-                ModelBytes = bytes,
-                TrainRowCount = _trainRowCount,
-                TrainCorrelation = _trainCorrelation,
-                DeflatedSharpe = deflatedSharpe,
-            });
-            await db.SaveChangesAsync();
-
-            _saveModelName = "";
-            await LoadSavedModelsListAsync();
-            SetStatus("Modello salvato.", error: false);
+            var res = await Svc.SaveModelAsync(Snapshot(), _saveModelName, _userId);
+            if (!res.IsError) _saveModelName = "";
+            SetStatus(res.Message, res.IsError);
         }
         catch (Exception ex)
         {
@@ -878,7 +597,7 @@
         }
         finally
         {
-            if (File.Exists(tempPath)) File.Delete(tempPath);
+            _busy = false;
         }
     }
 
@@ -886,76 +605,13 @@
     {
         _busy = true;
         _isError = false;
-        _result = null;
-        _tearsheet = null;
-        _equitySeries = new();
-        _predictor?.Dispose();
-        _predictor = null;
-
         try
         {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            var saved = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == id && m.UserId == _userId);
-            if (saved is null)
-            {
-                SetStatus("Modello non trovato.", error: true);
-                return;
-            }
-
-            IReturnPredictor predictor = saved.ModelType switch
-            {
-                "Stacked" => new StackedReturnPredictor(),
-                "Attention" => new AttentionReturnPredictor(), // config reale letta dal blob al Load
-                "RandomForest" => new RandomForestReturnPredictor(),
-                "GradientBoosting" => new GradientBoostingReturnPredictor(),
-                "Mlp" => new MlpReturnPredictor(),
-                _ => new LinearReturnPredictor(),
-            };
-
-            var tempPath = Path.Combine(Path.GetTempPath(), $"mlmodel_load_{Guid.NewGuid():N}.zip");
-            try
-            {
-                await File.WriteAllBytesAsync(tempPath, saved.ModelBytes);
-                predictor.Load(new MLContext(), tempPath);
-            }
-            finally
-            {
-                if (File.Exists(tempPath)) File.Delete(tempPath);
-            }
-
-            var factorsDto = JsonSerializer.Deserialize<List<SavedFactorSpecDto>>(saved.FactorsJson) ?? [];
-            var factors = factorsDto
-                .Select(dto => new FactorSpec(dto.FeatureName, FactorFactory.Create(dto.FactorName), dto.Parameters))
-                .ToList();
-
-            // Nessuno split: il modello è già addestrato. L'intero intervallo Da/A selezionato
-            // sopra viene usato direttamente come test out-of-sample.
-            var fromUtc = DateTime.SpecifyKind(_from, DateTimeKind.Utc);
-            var toUtc = DateTime.SpecifyKind(_to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
-            List<OhlcvData> candles;
-            await using (var db2 = await DbFactory.CreateDbContextAsync())
-            {
-                candles = await db2.OhlcvData
-                    .Where(c => c.Symbol == saved.Symbol && c.Timeframe == saved.Timeframe
-                                && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
-                    .OrderBy(c => c.TimestampUtc)
-                    .ToListAsync();
-            }
-
-            _symbol = saved.Symbol;
-            _timeframe = saved.Timeframe;
-            _modelType = saved.ModelType;
-            _predictor = predictor;
-            _trainedFactors = factors;
-            _testCandles = candles;
-            _trainRowCount = saved.TrainRowCount;
-            _trainCorrelation = saved.TrainCorrelation;
-            _featureImportance = new(); // non ricalcolata: servirebbe il dataset di training originale
-
-            var warn = candles.Count == 0 ? " ATTENZIONE: nessuna candela nell'intervallo Da/A selezionato." : "";
-            SetStatus($"Modello '{saved.Name}' caricato (addestrato su {saved.TrainingDataFrom:yyyy-MM-dd}→{saved.TrainingDataTo:yyyy-MM-dd}). " +
-                      $"L'intervallo Da/A sopra ({_from:yyyy-MM-dd}→{_to:yyyy-MM-dd}, {candles.Count} candele) verrà usato per il backtest: " +
-                      $"assicurati che sia successivo al periodo di addestramento originale.{warn}", error: candles.Count == 0);
+            var res = await Svc.LoadSavedModelAsync(id, _from, _to, _userId);
+            if (res.Symbol is not null) _symbol = res.Symbol;
+            if (res.Timeframe is not null) _timeframe = res.Timeframe;
+            if (res.ModelType is not null) _modelType = res.ModelType;
+            SetStatus(res.Message, res.IsError);
         }
         catch (Exception ex)
         {
@@ -967,23 +623,13 @@
         }
     }
 
-    private async Task DeleteSavedModelAsync(int id)
-    {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var saved = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == id && m.UserId == _userId);
-        if (saved is null) return;
-        db.SavedMlModels.Remove(saved);
-        await db.SaveChangesAsync();
-        await LoadSavedModelsListAsync();
-    }
+    private async Task DeleteSavedModelAsync(int id) => await Svc.DeleteSavedModelAsync(id, _userId);
 
-    private void SetStatus(string text, bool error)
+    private void SetStatus(string? text, bool error)
     {
         _status = text;
         _isError = error;
     }
-
-    public void Dispose() => _predictor?.Dispose();
 
     // Delega al componente condiviso <Stat> (stile unico in app.css). Le call-site
     // (@MetricCard(...)) restano invariate: qui cambia solo la resa.
