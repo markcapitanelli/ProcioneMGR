@@ -782,105 +782,15 @@ public sealed class TradingEngine(
     /// Decide fra apertura IMMEDIATA (comportamento odierno) ed esecuzione a fette. L'aggancio è QUI,
     /// dopo il gate di conferma manuale Live, così lo slicing non lo scavalca mai. Rif. ROADMAP-QLIB §1.2.
     /// </summary>
-    private async Task TryBuildAndStartExecutionPlanAsync(Order order, EnsembleStrategy? strat, string strategyName, decimal price, DateTime ts, CancellationToken ct, bool isExisting)
-    {
-        var algoName = strat?.ExecutionAlgorithmName;
-        var sliced = _state.Mode != TradingMode.Paper
-                     && !string.IsNullOrEmpty(algoName) && algoName != "Immediate"
-                     && liveExecution.CurrentValue.Enabled;
+    private ExecutionSlicePlanner ExecutionSlicePlanner => new(executionAlgorithms, liveExecution, safety, metrics, Persistence, laneId);
 
-        if (!sliced)
-        {
-            await ExecuteOpenAsync(order, strategyName, price, ts, ct, isExisting);   // percorso INVARIATO
-            return;
-        }
-
-        // Pre-check AGGREGATO sulla quantità PIENA: senza, ogni fetta vedrebbe solo 1/N del nozionale
-        // e MaxPositionSizePercent sarebbe bypassabile. Order sintetico (mai piazzato, solo per il check).
-        var fullOrder = new Order
-        {
-            Quantity = order.Quantity, Price = price, MarketType = _state.MarketType,
-            Leverage = order.Leverage, Mode = _state.Mode, Side = order.Side,
-        };
-        var aggregate = SafetyChecker.Evaluate(fullOrder, BuildSafetyStatus(price), safety.CurrentValue, ts);
-        if (!aggregate.IsAllowed)
-        {
-            order.Status = OrderStatus.Rejected;
-            order.ErrorMessage = string.Join(" | ", aggregate.Violations);
-            await SaveOrderAsync(order, isExisting, ct);
-            await AuditAsync("ExecutionPlanRejected", new { strategyName, qty = order.Quantity, price, aggregate.Violations }, ts, ct);
-            if (aggregate.RequiresEmergencyStop)
-                await EmergencyInternalAsync("Safety critico: " + string.Join("; ", aggregate.Violations), ts, ct);
-            return;
-        }
-
-        // Finestra e numero massimo di fette: lo spacing minimo deve rispettare MinOrderIntervalSeconds
-        // (non si bypassa il check, ci si pianifica dentro).
-        var windowMinutes = strat?.ExecutionWindowMinutes is int m and > 0 ? m : liveExecution.CurrentValue.DefaultWindowMinutes;
-        var windowSeconds = Math.Max(60, windowMinutes * 60);
-        var minInterval = Math.Max(1, safety.CurrentValue.MinOrderIntervalSeconds);
-        var maxSlices = Math.Max(1, windowSeconds / minInterval);
-        var cap = (int)Math.Min(maxSlices, 12);
-
-        List<OhlcvData> profile;
-        await using (var db = await dbFactory.CreateDbContextAsync(ct))
-        {
-            profile = await db.OhlcvData.AsNoTracking()
-                .Where(c => c.Symbol == _state.Symbol && c.Timeframe == _state.Timeframe)
-                .OrderByDescending(c => c.TimestampUtc)
-                .Take((int)Math.Min(maxSlices, 60))
-                .ToListAsync(ct);
-        }
-        profile.Reverse();
-
-        var execParams = new ExecutionParameters
-        {
-            MaxSlices = cap,
-            IcebergClipFraction = Math.Max(0.1m, 1m / cap),
-        };
-        var intent = new ExecutionIntent(_state.Symbol,
-            order.Side == OrderSide.Buy ? ExecutionSide.Buy : ExecutionSide.Sell, order.Quantity, price);
-        var plan = profile.Count >= 2
-            ? executionAlgorithms.Create(algoName!).BuildPlan(intent, profile, execParams)
-            : null;
-        var n = plan?.SliceCount ?? 0;
-        if (plan is null || n <= 1)
-        {
-            // Nessun profilo utile o piano a una sola fetta: apertura immediata (meglio eseguire subito).
-            await ExecuteOpenAsync(order, strategyName, price, ts, ct, isExisting);
-            return;
-        }
-
-        // Fetta #1 SUBITO: crea la posizione (mergeInto=null). Se rifiutata, nessun job.
-        order.Quantity = plan.Slices[0].Quantity;
-        var filled = await ExecuteOpenAsync(order, strategyName, price, ts, ct, isExisting, mergeInto: null);
-        if (!filled) return;
-
-        var slices = new List<ExecutionJobSlice>(n - 1);
-        for (var i = 1; i < n; i++)
-        {
-            slices.Add(new ExecutionJobSlice
-            {
-                OffsetSeconds = (int)((long)i * windowSeconds / n),
-                Quantity = plan.Slices[i].Quantity,
-                Status = "Pending",
-            });
-        }
-        var pos = _positions.First(p => p.PositionId == order.PositionId);
-        var job = new ExecutionJob
-        {
-            Id = Guid.NewGuid(), LaneId = laneId, StrategyId = order.StrategyId, PositionId = order.PositionId,
-            Symbol = _state.Symbol, MarketType = _state.MarketType, Side = order.Side,
-            TotalQuantity = plan.PlannedQuantity, FilledQuantity = order.FilledQuantity ?? plan.Slices[0].Quantity,
-            EntryPriceWeightedAvg = pos.EntryPrice, Algorithm = algoName!, WindowSeconds = windowSeconds,
-            Status = "Running", CreatedAtUtc = ts, SlicesJson = ExecutionJobSlices.Serialize(slices),
-            ArrivalPrice = price,   // t0 di decisione: base per l'implementation shortfall a fine job
-        };
-        _executionJobs.Add(job);
-        await PersistExecutionJobAsync(job, ct);
-        metrics?.RecordExecutionJob(algoName!, "Started");
-        await AuditAsync("ExecutionPlanStarted", new { job.Id, algoName, slices = n, windowSeconds }, ts, ct);
-    }
+    private Task TryBuildAndStartExecutionPlanAsync(Order order, EnsembleStrategy? strat, string strategyName, decimal price, DateTime ts, CancellationToken ct, bool isExisting) =>
+        ExecutionSlicePlanner.TryBuildAndStartExecutionPlanAsync(
+            _state, _positions, _executionJobs,
+            BuildSafetyStatus,
+            (o, sn, p, t, c, ie, mi) => ExecuteOpenAsync(o, sn, p, t, c, ie, mi),
+            EmergencyInternalAsync,
+            order, strat, strategyName, price, ts, ct, isExisting);
 
     /// <summary>
     /// Avanza le fette dovute di ogni piano Running di questa corsia. Chiamato dall'<c>ExecutionWorker</c>.
