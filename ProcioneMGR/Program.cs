@@ -397,6 +397,9 @@ builder.Services.AddScoped<ProcioneMGR.Services.ML.MlLabService>();
 // Orchestrazione di Backtest.razor estratta in un service testabile (P1-5, PRD §3.3). Scoped come sopra.
 builder.Services.AddScoped<ProcioneMGR.Services.Backtesting.BacktestPageService>();
 
+// Orchestrazione di Optimization.razor estratta in un service testabile (P1-5, PRD §3.3). Scoped come sopra.
+builder.Services.AddScoped<ProcioneMGR.Services.Optimization.OptimizationPageService>();
+
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
         // Fase 1: nessun server email reale (IdentityNoOpEmailSender), quindi
