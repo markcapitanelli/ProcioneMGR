@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
@@ -12,6 +11,7 @@ using ProcioneMGR.Services.ML;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Registry;
 using ProcioneMGR.Services.Risk;
+using ProcioneMGR.Services.Trading.Internal;
 
 namespace ProcioneMGR.Services.Trading;
 
@@ -73,7 +73,20 @@ public sealed class TradingEngine(
     private const int BufferSize = 400;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private static readonly JsonSerializerOptions Json = new();
+
+    /// <summary>Intervento B (Fase 1, PRD §4.5): operazioni di persistenza DB condivise da tutta la cascata estratta.</summary>
+    private TradingPersistence Persistence => new(dbFactory, laneId);
+
+    /// <summary>
+    /// Intervento B (Fase 1, PRD §4.5): collaboratore estratto per il piazzamento/cancellazione dei
+    /// bracket resting. Istanziato ad ogni chiamata (stateless, nessun costo reale) invece che come
+    /// campo: un inizializzatore di campo non può referenziare metodi d'istanza (CS0236) prima che
+    /// "this" sia costruito.
+    /// </summary>
+    private BracketOrderManager BracketOrderManager => new(
+        exchangeFactory, logger,
+        (action, details, ts, ct) => Persistence.AuditAsync(action, details, _state.Mode, ts, ct),
+        Persistence.UpdatePositionRowAsync);
 
     // Dual-read ML (Fase 2a): 0/1 via Interlocked. Garantisce UN SOLO confronto remoto in volo per
     // lane — se il remoto è lento, la candela successiva salta il confronto invece di accodarne
@@ -612,81 +625,10 @@ public sealed class TradingEngine(
 
     // ---------------------------------------------------------------- open / close
 
-    private async Task TryOpenAsync(EnsembleStrategy strat, OrderSide side, decimal price, DateTime ts, CancellationToken ct)
-    {
-        if (price <= 0m) return;
+    private SignalOrderBuilder SignalOrderBuilder => new(logger, Persistence, safety);
 
-        // Guard: sullo SPOT reale non esiste la vendita allo scoperto — un SELL di apertura
-        // su Testnet/Live fallirebbe sull'exchange (saldo insufficiente) o, peggio, venderebbe
-        // asset del conto NON tracciati da questa corsia. In Paper lo short simulato resta
-        // permesso (utile per valutare strategie long/short prima di passarle ai Futures).
-        if (_state.MarketType == MarketType.Spot && side == OrderSide.Sell && _state.Mode != TradingMode.Paper)
-        {
-            logger.LogWarning("Segnale SHORT su SPOT {Mode} ignorato per {Strategy}: vendita allo scoperto non supportata (usa i Futures).",
-                _state.Mode, strat.StrategyName);
-            await AuditAsync("ShortOnSpotBlocked", new { strat.StrategyId, strat.StrategyName, price }, ts, ct);
-            return;
-        }
-
-        // Spot: PositionSizePercent è il nozionale investito (leva implicita 1x).
-        // Futures: PositionSizePercent è il MARGINE isolato; il nozionale (e quindi
-        // l'esposizione reale) è margine × leva — stessa logica del motore di backtest.
-        // La coerenza con MaxPositionSizePercent/MaxTotalExposurePercent è validata a StartAsync.
-        var margin = _state.TotalCapital * safety.CurrentValue.PositionSizePercent / 100m;
-        var notional = _state.MarketType == MarketType.Futures ? margin * _state.Leverage : margin;
-        var qty = notional / price;
-
-        // Arrotonda al LOT_SIZE reale del simbolo (da exchangeInfo) per Testnet/Live;
-        // in Paper usa una precisione fissa ragionevole.
-        if (_state.Mode != TradingMode.Paper && _filters is not null)
-        {
-            qty = _filters.RoundQuantity(qty);
-            if (!_filters.IsTradable(qty, price))
-            {
-                logger.LogWarning("Ordine sotto i minimi del simbolo (qty {Qty}, notional {N}): saltato.", qty, qty * price);
-                return;
-            }
-        }
-        else
-        {
-            qty = Math.Round(qty, 5, MidpointRounding.ToZero);
-        }
-        if (qty <= 0m) return;
-
-        var order = new Order
-        {
-            PositionId = Guid.NewGuid().ToString("N"),
-            StrategyId = strat.StrategyId,
-            Symbol = _state.Symbol,
-            Side = side,
-            Type = OrderType.Market,
-            Quantity = qty,
-            Price = price,
-            Status = OrderStatus.Pending,
-            CreatedAtUtc = ts,
-            Mode = _state.Mode,
-            MarketType = _state.MarketType,
-            Leverage = _state.MarketType == MarketType.Futures ? _state.Leverage : 1,
-        };
-
-        // Live: l'apertura richiede conferma manuale dell'operatore -> resta Pending in coda.
-        if (_state.Mode == TradingMode.Live && safety.CurrentValue.RequireManualConfirmationForLive)
-        {
-            // Un solo ordine in coda per strategia (niente duplicati se non si conferma subito).
-            var pending = await GetPendingInternalAsync(ct);
-            if (pending.Any(o => o.StrategyId == strat.StrategyId))
-            {
-                return;
-            }
-            await PersistOrderAsync(order, ct);
-            await AuditAsync("PendingConfirmation",
-                new { order.ClientOrderId, strat.StrategyName, side = side.ToString(), qty, price }, ts, ct);
-            logger.LogInformation("Ordine Live {Cid} in attesa di conferma manuale.", order.ClientOrderId);
-            return;
-        }
-
-        await TryBuildAndStartExecutionPlanAsync(order, strat, strat.StrategyName, price, ts, ct, isExisting: false);
-    }
+    private Task TryOpenAsync(EnsembleStrategy strat, OrderSide side, decimal price, DateTime ts, CancellationToken ct) =>
+        SignalOrderBuilder.TryOpenAsync(_state, _filters, TryBuildAndStartExecutionPlanAsync, strat, side, price, ts, ct);
 
     /// <summary>
     /// Applica automaticamente lo stop-loss/take-profit/trailing validati nel backtest (se
@@ -697,104 +639,13 @@ public sealed class TradingEngine(
     /// posizione — non serve un controllo esplicito di "già impostato", perché a questo punto
     /// la posizione non esiste ancora.
     /// </summary>
-    private void ApplyAutoStops(OpenPosition pos, Order order)
-    {
-        var strat = _active.FirstOrDefault(s => s.StrategyId == order.StrategyId);
-        if (strat is null) return;
-
-        if (strat.StopLossPercent is decimal slPct && slPct > 0m)
-        {
-            pos.StopLoss = pos.Side == OrderSide.Buy
-                ? pos.EntryPrice * (1m - slPct / 100m)
-                : pos.EntryPrice * (1m + slPct / 100m);
-        }
-        if (strat.TakeProfitPercent is decimal tpPct && tpPct > 0m)
-        {
-            pos.TakeProfit = pos.Side == OrderSide.Buy
-                ? pos.EntryPrice * (1m + tpPct / 100m)
-                : pos.EntryPrice * (1m - tpPct / 100m);
-        }
-        if (strat.TrailingStopPercent is decimal trailPct && trailPct > 0m)
-        {
-            pos.TrailingStopPercent = trailPct;
-            pos.BestPriceSinceEntry = pos.EntryPrice;
-        }
-    }
+    private void ApplyAutoStops(OpenPosition pos, Order order) => AutoStopApplier.Apply(pos, order, _active);
 
     // ---------------------------------------------------------------- riconciliazione ordini incerti
 
-    private enum ReconcileStatus { Filled, NotFound, TerminalUnfilled, Uncertain }
-
-    private sealed record ReconcileOutcome(ReconcileStatus Status, decimal? FillPrice, decimal? FillQty, string? ExchangeOrderId);
-
-    /// <summary>
-    /// Riconcilia un ordine MARKET dall'esito di rete incerto interrogando lo STATO per
-    /// clientOrderId (fino a 3 tentativi, pausa 2s). GetOpenOrders NON basta: un MARKET riempito
-    /// durante il blip non è tra gli ordini "aperti" e verrebbe scambiato per "mai piazzato" —
-    /// risultato: posizione reale non tracciata (nessuno stop la gestisce) E ordine duplicato alla
-    /// candela successiva. Se l'ordine risulta ancora vivo viene CANCELLATO e ricontrollato, così
-    /// non può riempirsi "alle nostre spalle" dopo che lo abbiamo dichiarato assente.
-    /// </summary>
-    private async Task<ReconcileOutcome> ReconcileUncertainOrderAsync(
-        string symbol, string clientOrderId, bool futures, TradingCredentials creds, CancellationToken ct)
-    {
-        var spotClient = futures ? null : exchangeFactory.Create(_state.ExchangeName);
-        var futuresClient = futures ? exchangeFactory.CreateFutures(_state.ExchangeName) : null;
-
-        Task<OrderStatusResult> LookupAsync() => futures
-            ? futuresClient!.GetFuturesOrderStatusAsync(symbol, clientOrderId, creds, ct)
-            : spotClient!.GetOrderStatusAsync(symbol, clientOrderId, creds, ct);
-
-        Task<CancelOrderResult> CancelAsync() => futures
-            ? futuresClient!.CancelFuturesOrderAsync(symbol, clientOrderId, creds, ct)
-            : spotClient!.CancelOrderAsync(symbol, clientOrderId, creds, ct);
-
-        static bool HasFill(OrderStatusResult s) =>
-            s.Status is "Filled" or "PartiallyFilled" && s.FilledQuantity is > 0m;
-
-        const int MaxAttempts = 3;
-        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
-        {
-            var status = await LookupAsync();
-
-            if (status.NetworkUncertain)
-            {
-                if (attempt < MaxAttempts) await Task.Delay(TimeSpan.FromSeconds(2), ct);
-                continue;
-            }
-            if (!status.Found)
-            {
-                return new ReconcileOutcome(ReconcileStatus.NotFound, null, null, null);
-            }
-            if (HasFill(status))
-            {
-                return new ReconcileOutcome(ReconcileStatus.Filled, status.FilledPrice, status.FilledQuantity, status.ExchangeOrderId);
-            }
-            if (status.IsTerminalUnfilled)
-            {
-                return new ReconcileOutcome(ReconcileStatus.TerminalUnfilled, null, null, null);
-            }
-
-            // Ancora vivo: cancella per chiudere la finestra di duplicazione, poi un ultimo
-            // lookup per catturare un fill avvenuto tra la query e la cancellazione.
-            await CancelAsync();
-            var after = await LookupAsync();
-            if (!after.NetworkUncertain)
-            {
-                if (after.Found && HasFill(after))
-                {
-                    return new ReconcileOutcome(ReconcileStatus.Filled, after.FilledPrice, after.FilledQuantity, after.ExchangeOrderId);
-                }
-                return new ReconcileOutcome(ReconcileStatus.TerminalUnfilled, null, null, null);
-            }
-            if (attempt < MaxAttempts) await Task.Delay(TimeSpan.FromSeconds(2), ct);
-        }
-
-        // Stato ancora ignoto dopo tutti i tentativi: cancellazione best-effort per chiudere
-        // comunque la finestra; il chiamante deve loggare CRITICAL per la verifica manuale.
-        await CancelAsync();
-        return new ReconcileOutcome(ReconcileStatus.Uncertain, null, null, null);
-    }
+    /// <summary>Delegato all'Intervento B (Fase 1, PRD §4.5): vedi <see cref="OrderReconciler"/>.</summary>
+    private Task<ReconcileOutcome> ReconcileUncertainOrderAsync(string symbol, string clientOrderId, bool futures, TradingCredentials creds, CancellationToken ct) =>
+        new OrderReconciler(exchangeFactory).ReconcileUncertainOrderAsync(_state.ExchangeName, symbol, clientOrderId, futures, creds, ct);
 
     /// <summary>
     /// Esegue effettivamente l'apertura: safety condivisa, poi dispatch Spot/Futures. Ritorna true
@@ -824,316 +675,19 @@ public sealed class TradingEngine(
             : await ExecuteSpotOpenAsync(order, strategyName, currentPrice, ts, ct, isExisting, mergeInto);
     }
 
+    private PositionOpener PositionOpener => new(exchangeFactory, logger, Persistence, metrics, safety);
+
     /// <summary>Apertura SPOT. mergeInto=null crea una nuova posizione (INVARIATO); non-null fonde il fill via media ponderata.</summary>
-    private async Task<bool> ExecuteSpotOpenAsync(Order order, string strategyName, decimal currentPrice, DateTime ts, CancellationToken ct, bool isExisting, OpenPosition? mergeInto = null)
-    {
-        var side = order.Side;
-        var qty = order.Quantity;
-
-        var fillPrice = currentPrice;
-        var fillQty = qty;
-        string? exchangeOrderId = null;
-
-        if (_state.Mode != TradingMode.Paper && _creds is TradingCredentials creds)
-        {
-            var client = exchangeFactory.Create(_state.ExchangeName);
-            var res = await client.PlaceOrderAsync(new PlaceOrderRequest
-            {
-                Symbol = _state.Symbol,
-                Side = side == OrderSide.Buy ? "BUY" : "SELL",
-                Type = "MARKET",
-                Quantity = qty,
-                ClientOrderId = order.ClientOrderId,
-                Credentials = creds,
-            }, ct);
-
-            if (res.NetworkUncertain)
-            {
-                var outcome = await ReconcileUncertainOrderAsync(_state.Symbol, order.ClientOrderId, futures: false, creds, ct);
-                switch (outcome.Status)
-                {
-                    case ReconcileStatus.Filled:
-                        logger.LogWarning("Ordine {Cid} riconciliato come ESEGUITO dopo errore di rete (fill {Price} x {Qty}).",
-                            order.ClientOrderId, outcome.FillPrice, outcome.FillQty);
-                        await AuditAsync("OrderReconciledFilled",
-                            new { order.ClientOrderId, fillPrice = outcome.FillPrice, fillQty = outcome.FillQty }, ts, ct);
-                        res = new PlaceOrderResult
-                        {
-                            Success = true,
-                            FilledPrice = outcome.FillPrice,
-                            FilledQuantity = outcome.FillQty,
-                            ExchangeOrderId = outcome.ExchangeOrderId,
-                        };
-                        break;
-
-                    case ReconcileStatus.Uncertain:
-                        order.Status = OrderStatus.Rejected;
-                        order.ErrorMessage = "Errore di rete: stato dell'ordine NON verificabile dopo la riconciliazione. " + res.Error;
-                        await SaveOrderAsync(order, isExisting, ct);
-                        await AuditAsync("OrderReconcileUncertain", new { order.ClientOrderId, res.Error }, ts, ct);
-                        logger.LogCritical(
-                            "Ordine {Cid}: stato NON verificabile dopo la riconciliazione (cancellazione best-effort inviata). VERIFICARE MANUALMENTE sull'exchange.",
-                            order.ClientOrderId);
-                        return false;
-
-                    default: // NotFound / TerminalUnfilled: sicuro ritentare alla prossima candela
-                        order.Status = OrderStatus.Rejected;
-                        order.ErrorMessage = "Errore di rete: ordine NON riscontrato sull'exchange. " + res.Error;
-                        await SaveOrderAsync(order, isExisting, ct);
-                        await AuditAsync("OrderRejected", new
-                        {
-                            order.ClientOrderId,
-                            reason = outcome.Status == ReconcileStatus.NotFound ? "network-uncertain-not-found" : "network-uncertain-terminal",
-                            res.Error,
-                        }, ts, ct);
-                        return false;
-                }
-            }
-            else if (!res.Success)
-            {
-                order.Status = OrderStatus.Rejected;
-                order.ErrorMessage = res.Error;
-                await SaveOrderAsync(order, isExisting, ct);
-                await AuditAsync("OrderRejected", new { order.ClientOrderId, res.Error }, ts, ct);
-                return false;
-            }
-
-            fillPrice = res.FilledPrice ?? currentPrice;
-            fillQty = res.FilledQuantity ?? qty;
-            exchangeOrderId = res.ExchangeOrderId;
-        }
-
-        var realNotional = fillQty * fillPrice;
-        var fee = realNotional * FeeFrac;
-        if (side == OrderSide.Buy) _state.AvailableCapital -= realNotional + fee;
-        else _state.AvailableCapital += realNotional - fee;
-
-        order.Status = OrderStatus.Filled;
-        order.FilledPrice = fillPrice;
-        order.FilledQuantity = fillQty;
-        order.FilledAtUtc = ts;
-        order.ExchangeOrderId = exchangeOrderId;
-        metrics?.RecordTradeExecuted(_state.Mode.ToString(), side.ToString(), "Open");
-
-        OpenPosition pos;
-        if (mergeInto is null)
-        {
-            pos = new OpenPosition
-            {
-                PositionId = order.PositionId,
-                StrategyId = order.StrategyId,
-                Symbol = _state.Symbol,
-                Side = side,
-                EntryPrice = fillPrice,
-                Quantity = fillQty,
-                OpenedAtUtc = ts,
-                CurrentPrice = fillPrice,
-                ExchangeOrderId = exchangeOrderId,
-                OpenedInMode = _state.Mode,
-                Leverage = 1,
-                MarginBalance = realNotional,
-            };
-            ApplyAutoStops(pos, order);   // SOLO alla creazione — mai su merge
-            _positions.Add(pos);
-        }
-        else
-        {
-            pos = mergeInto;
-            var newQty = pos.Quantity + fillQty;
-            pos.EntryPrice = newQty > 0m ? (pos.Quantity * pos.EntryPrice + fillQty * fillPrice) / newQty : fillPrice;
-            pos.Quantity = newQty;
-            pos.MarginBalance += realNotional;
-            pos.CurrentPrice = fillPrice;
-            pos.ExchangeOrderId = exchangeOrderId;
-            // StopLoss/TakeProfit/TrailingStopPercent NON toccati: restano quelli della 1ª fetta.
-        }
-        _state.LastOrderUtc = ts;
-
-        await SaveOrderAsync(order, isExisting, ct);
-        if (mergeInto is null) await PersistNewPositionAsync(pos, ct); else await UpdatePositionRowAsync(pos, ct);
-        await AuditAsync("PlaceOrder", new
-        {
-            order.ClientOrderId, strategyName, side = side.ToString(), qty = fillQty, price = fillPrice, merged = mergeInto is not null,
-            autoStopLoss = pos.StopLoss, autoTakeProfit = pos.TakeProfit, autoTrailingStopPercent = pos.TrailingStopPercent,
-        }, ts, ct);
-        return true;
-    }
+    private Task<bool> ExecuteSpotOpenAsync(Order order, string strategyName, decimal currentPrice, DateTime ts, CancellationToken ct, bool isExisting, OpenPosition? mergeInto = null) =>
+        PositionOpener.ExecuteSpotOpenAsync(_state, _positions, _active, _creds, FeeFrac, order, strategyName, currentPrice, ts, ct, isExisting, mergeInto);
 
     /// <summary>
     /// Apertura FUTURES: margine ISOLATO (solo il margine viene sottratto ad AvailableCapital,
     /// non l'intero nozionale leveraged), prezzo di liquidazione dalla fonte di verità
     /// dell'exchange (con fallback alla stima locale <see cref="MarginMath"/>).
     /// </summary>
-    private async Task<bool> ExecuteFuturesOpenAsync(Order order, string strategyName, decimal currentPrice, DateTime ts, CancellationToken ct, bool isExisting, OpenPosition? mergeInto = null)
-    {
-        var side = order.Side;
-        var qty = order.Quantity;
-        var leverage = Math.Max(1, order.Leverage);
-
-        var fillPrice = currentPrice;
-        var fillQty = qty;
-        string? exchangeOrderId = null;
-        decimal? liquidationPrice = null;
-
-        if (_state.Mode != TradingMode.Paper && _creds is TradingCredentials creds)
-        {
-            var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
-            var res = await futuresClient.PlaceFuturesOrderAsync(new PlaceOrderRequest
-            {
-                Symbol = _state.Symbol,
-                Side = side == OrderSide.Buy ? "BUY" : "SELL",
-                Type = "MARKET",
-                Quantity = qty,
-                ClientOrderId = order.ClientOrderId,
-                Credentials = creds,
-            }, reduceOnly: false, ct);
-
-            if (res.NetworkUncertain)
-            {
-                var outcome = await ReconcileUncertainOrderAsync(_state.Symbol, order.ClientOrderId, futures: true, creds, ct);
-                switch (outcome.Status)
-                {
-                    case ReconcileStatus.Filled:
-                        logger.LogWarning("Ordine futures {Cid} riconciliato come ESEGUITO dopo errore di rete (fill {Price} x {Qty}).",
-                            order.ClientOrderId, outcome.FillPrice, outcome.FillQty);
-                        await AuditAsync("OrderReconciledFilled",
-                            new { order.ClientOrderId, fillPrice = outcome.FillPrice, fillQty = outcome.FillQty }, ts, ct);
-                        res = new PlaceOrderResult
-                        {
-                            Success = true,
-                            FilledPrice = outcome.FillPrice,
-                            FilledQuantity = outcome.FillQty,
-                            ExchangeOrderId = outcome.ExchangeOrderId,
-                        };
-                        break;
-
-                    case ReconcileStatus.Uncertain:
-                        order.Status = OrderStatus.Rejected;
-                        order.ErrorMessage = "Errore di rete: stato dell'ordine futures NON verificabile dopo la riconciliazione. " + res.Error;
-                        await SaveOrderAsync(order, isExisting, ct);
-                        await AuditAsync("OrderReconcileUncertain", new { order.ClientOrderId, res.Error }, ts, ct);
-                        logger.LogCritical(
-                            "Ordine futures {Cid}: stato NON verificabile dopo la riconciliazione (cancellazione best-effort inviata). VERIFICARE MANUALMENTE sull'exchange.",
-                            order.ClientOrderId);
-                        return false;
-
-                    default: // NotFound / TerminalUnfilled: sicuro ritentare alla prossima candela
-                        order.Status = OrderStatus.Rejected;
-                        order.ErrorMessage = "Errore di rete: ordine futures NON riscontrato sull'exchange. " + res.Error;
-                        await SaveOrderAsync(order, isExisting, ct);
-                        await AuditAsync("OrderRejected", new
-                        {
-                            order.ClientOrderId,
-                            reason = outcome.Status == ReconcileStatus.NotFound ? "network-uncertain-not-found" : "network-uncertain-terminal",
-                            res.Error,
-                        }, ts, ct);
-                        return false;
-                }
-            }
-            else if (!res.Success)
-            {
-                order.Status = OrderStatus.Rejected;
-                order.ErrorMessage = res.Error;
-                await SaveOrderAsync(order, isExisting, ct);
-                await AuditAsync("OrderRejected", new { order.ClientOrderId, res.Error }, ts, ct);
-                return false;
-            }
-
-            fillPrice = res.FilledPrice ?? currentPrice;
-            fillQty = res.FilledQuantity ?? qty;
-            exchangeOrderId = res.ExchangeOrderId;
-
-            // Prezzo di liquidazione: fonte di verità è l'exchange. Se la posizione non è
-            // ancora visibile (race condition tra fill e query) si ricade sulla stima locale.
-            try
-            {
-                var remotePos = await futuresClient.GetPositionAsync(_state.Symbol, creds, ct);
-                liquidationPrice = remotePos?.LiquidationPrice;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Lettura prezzo di liquidazione dall'exchange fallita: uso la stima locale.");
-            }
-        }
-
-        var margin = fillQty * fillPrice / leverage;
-        var notional = fillQty * fillPrice;
-        var fee = notional * FeeFrac;
-
-        // Margine ISOLATO: sia long sia short bloccano lo STESSO margine (a differenza dello
-        // Spot, qui non c'è "incasso della vendita allo scoperto").
-        _state.AvailableCapital -= margin + fee;
-
-        liquidationPrice ??= MarginMath.LiquidationPrice(
-            fillPrice, fillQty, margin, notional, isLong: side == OrderSide.Buy,
-            safety.CurrentValue.MaintenanceMarginPercent / 100m);
-
-        order.Status = OrderStatus.Filled;
-        order.FilledPrice = fillPrice;
-        order.FilledQuantity = fillQty;
-        order.FilledAtUtc = ts;
-        order.ExchangeOrderId = exchangeOrderId;
-        metrics?.RecordTradeExecuted(_state.Mode.ToString(), side.ToString(), "Open");
-
-        OpenPosition pos;
-        if (mergeInto is null)
-        {
-            pos = new OpenPosition
-            {
-                PositionId = order.PositionId,
-                StrategyId = order.StrategyId,
-                Symbol = _state.Symbol,
-                Side = side,
-                EntryPrice = fillPrice,
-                Quantity = fillQty,
-                OpenedAtUtc = ts,
-                CurrentPrice = fillPrice,
-                ExchangeOrderId = exchangeOrderId,
-                OpenedInMode = _state.Mode,
-                Leverage = leverage,
-                LiquidationPrice = liquidationPrice,
-                MarginBalance = margin,
-            };
-            ApplyAutoStops(pos, order);
-            _positions.Add(pos);
-        }
-        else
-        {
-            pos = mergeInto;
-            var newQty = pos.Quantity + fillQty;
-            pos.EntryPrice = newQty > 0m ? (pos.Quantity * pos.EntryPrice + fillQty * fillPrice) / newQty : fillPrice;
-            pos.Quantity = newQty;
-            pos.MarginBalance += margin;
-            pos.CurrentPrice = fillPrice;
-            pos.ExchangeOrderId = exchangeOrderId;
-            // Liquidazione ricalcolata sui valori FUSI (fonte exchange se disponibile, altrimenti stima locale).
-            pos.LiquidationPrice = liquidationPrice ?? MarginMath.LiquidationPrice(
-                pos.EntryPrice, pos.Quantity, pos.MarginBalance, pos.Quantity * pos.EntryPrice,
-                isLong: pos.Side == OrderSide.Buy, safety.CurrentValue.MaintenanceMarginPercent / 100m);
-        }
-        _state.LastOrderUtc = ts;
-
-        await SaveOrderAsync(order, isExisting, ct);
-        if (mergeInto is null) await PersistNewPositionAsync(pos, ct); else await UpdatePositionRowAsync(pos, ct);
-        await AuditAsync("PlaceOrder",
-            new
-            {
-                order.ClientOrderId, strategyName, side = side.ToString(), qty = fillQty, price = fillPrice, leverage,
-                liquidationPrice = pos.LiquidationPrice, merged = mergeInto is not null,
-                autoStopLoss = pos.StopLoss, autoTakeProfit = pos.TakeProfit, autoTrailingStopPercent = pos.TrailingStopPercent,
-            }, ts, ct);
-
-        // [P0-5 follow-up] Protezione "resting" sull'exchange: solo se abilitata (default OFF), su nuova
-        // posizione Testnet/Live. Non blocca mai l'apertura — se un trigger reduce-only non viene piazzato
-        // (rifiuto dell'exchange), registra un warning e restano gli stop software (fonte di verità).
-        // Vedi SafetyConfiguration.UseExchangeRestingStops.
-        if (mergeInto is null && _state.Mode != TradingMode.Paper
-            && safety.CurrentValue.UseExchangeRestingStops && _creds is TradingCredentials restingCreds)
-        {
-            await TryPlaceRestingBracketAsync(pos, restingCreds, ts, ct);
-        }
-        return true;
-    }
+    private Task<bool> ExecuteFuturesOpenAsync(Order order, string strategyName, decimal currentPrice, DateTime ts, CancellationToken ct, bool isExisting, OpenPosition? mergeInto = null) =>
+        PositionOpener.ExecuteFuturesOpenAsync(_state, _positions, _active, _creds, FeeFrac, order, strategyName, currentPrice, ts, ct, isExisting, mergeInto);
 
     /// <summary>
     /// [P0-5] Piazza sull'exchange gli ordini TRIGGER reduce-only (stop-market e take-profit-market) che
@@ -1141,68 +695,15 @@ public sealed class TradingEngine(
     /// <see cref="SafetyConfiguration.UseExchangeRestingStops"/> è attivo (default OFF). Mai bloccante: ogni
     /// fallimento è solo loggato e gli stop software restano la fonte di verità.
     /// </summary>
-    private async Task TryPlaceRestingBracketAsync(OpenPosition pos, TradingCredentials creds, DateTime ts, CancellationToken ct)
-    {
-        var closeSide = pos.Side == OrderSide.Buy ? "SELL" : "BUY"; // ordine di protezione = lato opposto
-        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
-
-        async Task PlaceAsync(decimal trigger, bool isStopLoss, Action<string> onPlaced)
-        {
-            var clientId = Guid.NewGuid().ToString("N");
-            var res = await futuresClient.PlaceFuturesTriggerOrderAsync(new PlaceOrderRequest
-            {
-                Symbol = pos.Symbol,
-                Side = closeSide,
-                Type = isStopLoss ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
-                Quantity = pos.Quantity,
-                TriggerPrice = trigger,
-                ClientOrderId = clientId,
-                Credentials = creds,
-            }, isStopLoss, ct);
-
-            if (res.Success)
-            {
-                onPlaced(clientId);
-                await AuditAsync("RestingStopPlaced", new { pos.PositionId, kind = isStopLoss ? "stop" : "target", trigger, clientId }, ts, ct);
-            }
-            else
-            {
-                logger.LogWarning("Ordine resting {Kind} non piazzato per {Pid}: {Err}. Resta lo stop software.",
-                    isStopLoss ? "stop" : "target", pos.PositionId, res.Error);
-            }
-        }
-
-        if (pos.StopLoss is decimal sl && sl > 0m) await PlaceAsync(sl, isStopLoss: true, id => pos.StopOrderId = id);
-        if (pos.TakeProfit is decimal tp && tp > 0m) await PlaceAsync(tp, isStopLoss: false, id => pos.TakeProfitOrderId = id);
-
-        // [M3] Persistenza immediata degli id: senza, un riavvio perdeva i clientOrderId dei
-        // trigger REALI ancora armati sull'exchange e la chiusura non poteva più cancellarli.
-        if (pos.StopOrderId is not null || pos.TakeProfitOrderId is not null)
-        {
-            await UpdatePositionRowAsync(pos, ct);
-        }
-    }
+    private Task TryPlaceRestingBracketAsync(OpenPosition pos, TradingCredentials creds, DateTime ts, CancellationToken ct) =>
+        BracketOrderManager.TryPlaceRestingBracketAsync(pos, creds, _state.ExchangeName, ts, ct);
 
     /// <summary>
     /// [P0-5] Cancella gli ordini TRIGGER resting prima di chiudere a mercato, così non restano
     /// ordini orfani sull'exchange. INERTE se non ci sono id (feature off, default).
     /// </summary>
-    private async Task TryCancelRestingBracketAsync(OpenPosition pos, TradingCredentials creds, CancellationToken ct)
-    {
-        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
-        foreach (var clientId in new[] { pos.StopOrderId, pos.TakeProfitOrderId })
-        {
-            if (string.IsNullOrEmpty(clientId)) continue;
-            var res = await futuresClient.CancelFuturesOrderAsync(pos.Symbol, clientId, creds, ct);
-            if (!res.Success)
-            {
-                logger.LogWarning("Cancellazione ordine resting {Cid} per {Pid} fallita: {Err}.", clientId, pos.PositionId, res.Error);
-            }
-        }
-        pos.StopOrderId = null;
-        pos.TakeProfitOrderId = null;
-        await UpdatePositionRowAsync(pos, ct);   // [M3] azzeramento persistito come il piazzamento
-    }
+    private Task TryCancelRestingBracketAsync(OpenPosition pos, TradingCredentials creds, CancellationToken ct) =>
+        BracketOrderManager.TryCancelRestingBracketAsync(pos, creds, _state.ExchangeName, ct);
 
     // ---------------------------------------------------------------- esecuzione a fette (TWAP/VWAP/Iceberg)
 
@@ -1210,105 +711,15 @@ public sealed class TradingEngine(
     /// Decide fra apertura IMMEDIATA (comportamento odierno) ed esecuzione a fette. L'aggancio è QUI,
     /// dopo il gate di conferma manuale Live, così lo slicing non lo scavalca mai. Rif. ROADMAP-QLIB §1.2.
     /// </summary>
-    private async Task TryBuildAndStartExecutionPlanAsync(Order order, EnsembleStrategy? strat, string strategyName, decimal price, DateTime ts, CancellationToken ct, bool isExisting)
-    {
-        var algoName = strat?.ExecutionAlgorithmName;
-        var sliced = _state.Mode != TradingMode.Paper
-                     && !string.IsNullOrEmpty(algoName) && algoName != "Immediate"
-                     && liveExecution.CurrentValue.Enabled;
+    private ExecutionSlicePlanner ExecutionSlicePlanner => new(executionAlgorithms, liveExecution, safety, metrics, Persistence, laneId);
 
-        if (!sliced)
-        {
-            await ExecuteOpenAsync(order, strategyName, price, ts, ct, isExisting);   // percorso INVARIATO
-            return;
-        }
-
-        // Pre-check AGGREGATO sulla quantità PIENA: senza, ogni fetta vedrebbe solo 1/N del nozionale
-        // e MaxPositionSizePercent sarebbe bypassabile. Order sintetico (mai piazzato, solo per il check).
-        var fullOrder = new Order
-        {
-            Quantity = order.Quantity, Price = price, MarketType = _state.MarketType,
-            Leverage = order.Leverage, Mode = _state.Mode, Side = order.Side,
-        };
-        var aggregate = SafetyChecker.Evaluate(fullOrder, BuildSafetyStatus(price), safety.CurrentValue, ts);
-        if (!aggregate.IsAllowed)
-        {
-            order.Status = OrderStatus.Rejected;
-            order.ErrorMessage = string.Join(" | ", aggregate.Violations);
-            await SaveOrderAsync(order, isExisting, ct);
-            await AuditAsync("ExecutionPlanRejected", new { strategyName, qty = order.Quantity, price, aggregate.Violations }, ts, ct);
-            if (aggregate.RequiresEmergencyStop)
-                await EmergencyInternalAsync("Safety critico: " + string.Join("; ", aggregate.Violations), ts, ct);
-            return;
-        }
-
-        // Finestra e numero massimo di fette: lo spacing minimo deve rispettare MinOrderIntervalSeconds
-        // (non si bypassa il check, ci si pianifica dentro).
-        var windowMinutes = strat?.ExecutionWindowMinutes is int m and > 0 ? m : liveExecution.CurrentValue.DefaultWindowMinutes;
-        var windowSeconds = Math.Max(60, windowMinutes * 60);
-        var minInterval = Math.Max(1, safety.CurrentValue.MinOrderIntervalSeconds);
-        var maxSlices = Math.Max(1, windowSeconds / minInterval);
-        var cap = (int)Math.Min(maxSlices, 12);
-
-        List<OhlcvData> profile;
-        await using (var db = await dbFactory.CreateDbContextAsync(ct))
-        {
-            profile = await db.OhlcvData.AsNoTracking()
-                .Where(c => c.Symbol == _state.Symbol && c.Timeframe == _state.Timeframe)
-                .OrderByDescending(c => c.TimestampUtc)
-                .Take((int)Math.Min(maxSlices, 60))
-                .ToListAsync(ct);
-        }
-        profile.Reverse();
-
-        var execParams = new ExecutionParameters
-        {
-            MaxSlices = cap,
-            IcebergClipFraction = Math.Max(0.1m, 1m / cap),
-        };
-        var intent = new ExecutionIntent(_state.Symbol,
-            order.Side == OrderSide.Buy ? ExecutionSide.Buy : ExecutionSide.Sell, order.Quantity, price);
-        var plan = profile.Count >= 2
-            ? executionAlgorithms.Create(algoName!).BuildPlan(intent, profile, execParams)
-            : null;
-        var n = plan?.SliceCount ?? 0;
-        if (plan is null || n <= 1)
-        {
-            // Nessun profilo utile o piano a una sola fetta: apertura immediata (meglio eseguire subito).
-            await ExecuteOpenAsync(order, strategyName, price, ts, ct, isExisting);
-            return;
-        }
-
-        // Fetta #1 SUBITO: crea la posizione (mergeInto=null). Se rifiutata, nessun job.
-        order.Quantity = plan.Slices[0].Quantity;
-        var filled = await ExecuteOpenAsync(order, strategyName, price, ts, ct, isExisting, mergeInto: null);
-        if (!filled) return;
-
-        var slices = new List<ExecutionJobSlice>(n - 1);
-        for (var i = 1; i < n; i++)
-        {
-            slices.Add(new ExecutionJobSlice
-            {
-                OffsetSeconds = (int)((long)i * windowSeconds / n),
-                Quantity = plan.Slices[i].Quantity,
-                Status = "Pending",
-            });
-        }
-        var pos = _positions.First(p => p.PositionId == order.PositionId);
-        var job = new ExecutionJob
-        {
-            Id = Guid.NewGuid(), LaneId = laneId, StrategyId = order.StrategyId, PositionId = order.PositionId,
-            Symbol = _state.Symbol, MarketType = _state.MarketType, Side = order.Side,
-            TotalQuantity = plan.PlannedQuantity, FilledQuantity = order.FilledQuantity ?? plan.Slices[0].Quantity,
-            EntryPriceWeightedAvg = pos.EntryPrice, Algorithm = algoName!, WindowSeconds = windowSeconds,
-            Status = "Running", CreatedAtUtc = ts, SlicesJson = ExecutionJobSlices.Serialize(slices),
-            ArrivalPrice = price,   // t0 di decisione: base per l'implementation shortfall a fine job
-        };
-        _executionJobs.Add(job);
-        await PersistExecutionJobAsync(job, ct);
-        metrics?.RecordExecutionJob(algoName!, "Started");
-        await AuditAsync("ExecutionPlanStarted", new { job.Id, algoName, slices = n, windowSeconds }, ts, ct);
-    }
+    private Task TryBuildAndStartExecutionPlanAsync(Order order, EnsembleStrategy? strat, string strategyName, decimal price, DateTime ts, CancellationToken ct, bool isExisting) =>
+        ExecutionSlicePlanner.TryBuildAndStartExecutionPlanAsync(
+            _state, _positions, _executionJobs,
+            BuildSafetyStatus,
+            (o, sn, p, t, c, ie, mi) => ExecuteOpenAsync(o, sn, p, t, c, ie, mi),
+            EmergencyInternalAsync,
+            order, strat, strategyName, price, ts, ct, isExisting);
 
     /// <summary>
     /// Avanza le fette dovute di ogni piano Running di questa corsia. Chiamato dall'<c>ExecutionWorker</c>.
@@ -1428,12 +839,7 @@ public sealed class TradingEngine(
 
     public Task<List<Order>> GetPendingOrdersAsync(CancellationToken ct = default) => GetPendingInternalAsync(ct);
 
-    private async Task<List<Order>> GetPendingInternalAsync(CancellationToken ct)
-    {
-        // Criterio in TradingOrderQueries, condiviso col client remoto: mai due copie che derivano.
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        return await TradingOrderQueries.PendingLive(db.Orders.AsNoTracking(), laneId).ToListAsync(ct);
-    }
+    private Task<List<Order>> GetPendingInternalAsync(CancellationToken ct) => Persistence.GetPendingOrdersAsync(ct);
 
     public async Task ConfirmOrderAsync(string orderId, string? userId, CancellationToken ct = default)
     {
@@ -1475,29 +881,7 @@ public sealed class TradingEngine(
         finally { _gate.Release(); }
     }
 
-    private async Task SaveOrderAsync(Order order, bool isExisting, CancellationToken ct)
-    {
-        order.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        if (isExisting)
-        {
-            var existing = await db.Orders.FirstOrDefaultAsync(o => o.LaneId == laneId && o.OrderId == order.OrderId, ct);
-            if (existing is not null)
-            {
-                existing.Status = order.Status;
-                existing.FilledPrice = order.FilledPrice;
-                existing.FilledQuantity = order.FilledQuantity;
-                existing.FilledAtUtc = order.FilledAtUtc;
-                existing.ExchangeOrderId = order.ExchangeOrderId;
-                existing.ErrorMessage = order.ErrorMessage;
-                existing.ManuallyConfirmed = order.ManuallyConfirmed;
-                await db.SaveChangesAsync(ct);
-                return;
-            }
-        }
-        db.Orders.Add(order);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task SaveOrderAsync(Order order, bool isExisting, CancellationToken ct) => Persistence.SaveOrderAsync(order, isExisting, ct);
 
     private async Task ClosePositionAsync(OpenPosition pos, decimal exitPrice, string reason, DateTime ts, CancellationToken ct, bool alreadyClosedOnExchange = false)
     {
@@ -1533,263 +917,19 @@ public sealed class TradingEngine(
             metrics?.RecordTradeExecuted(_state.Mode.ToString(), pos.Side.ToString(), "Close");
     }
 
+    private PositionCloser PositionCloser => new(exchangeFactory, logger, Persistence);
+
     /// <summary>Chiusura SPOT (comportamento INVARIATO rispetto a prima dell'introduzione dei Futures).</summary>
-    private async Task CloseSpotPositionAsync(OpenPosition pos, decimal exitPrice, string reason, DateTime ts, CancellationToken ct)
-    {
-        var qty = pos.Quantity;
-        var entry = pos.EntryPrice;
-        var closeSide = pos.Side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
-        var closeClientId = Guid.NewGuid().ToString("N");
-
-        // Testnet/Live: piazza l'ordine di chiusura reale (market opposto).
-        if (_state.Mode != TradingMode.Paper && _creds is TradingCredentials creds)
-        {
-            var client = exchangeFactory.Create(_state.ExchangeName);
-            var res = await client.PlaceOrderAsync(new PlaceOrderRequest
-            {
-                Symbol = pos.Symbol,
-                Side = closeSide == OrderSide.Buy ? "BUY" : "SELL",
-                Type = "MARKET",
-                Quantity = qty,
-                ClientOrderId = closeClientId,
-                Credentials = creds,
-            }, ct);
-            if (res.NetworkUncertain)
-            {
-                var outcome = await ReconcileUncertainOrderAsync(pos.Symbol, closeClientId, futures: false, creds, ct);
-                if (outcome.Status == ReconcileStatus.Filled)
-                {
-                    // La chiusura È avvenuta durante il blip: si finalizza con il fill reale.
-                    // Prima (check sui soli open orders) la posizione restava aperta localmente
-                    // PER SEMPRE: ogni retry rivendeva un asset già venduto (oversell rifiutato).
-                    logger.LogWarning("Chiusura {Pid} riconciliata come ESEGUITA dopo errore di rete (fill {Price}).",
-                        pos.PositionId, outcome.FillPrice);
-                    await AuditAsync("CloseReconciledFilled",
-                        new { pos.PositionId, closeClientId, fillPrice = outcome.FillPrice }, ts, ct);
-                    if (outcome.FillPrice is decimal rp && rp > 0m) exitPrice = rp;
-                }
-                else
-                {
-                    // NotFound/terminale: mai eseguita → retry alla prossima candela (nuovo ordine).
-                    // Uncertain: una chiusura NON si finalizza MAI da uno stato ignoto (il rischio
-                    // di oversell è peggiore del retry); la cancellazione best-effort è già partita.
-                    logger.LogError("Chiusura {Pid} incerta e non confermata dall'exchange (esito {Outcome}): la posizione resta aperta.",
-                        pos.PositionId, outcome.Status);
-                    await AuditAsync("CloseUncertain", new { pos.PositionId, outcome = outcome.Status.ToString(), res.Error }, ts, ct);
-                    return;
-                }
-            }
-            else if (!res.Success)
-            {
-                logger.LogError("Chiusura {Pid} rifiutata dall'exchange: {Err}. Posizione mantenuta.", pos.PositionId, res.Error);
-                await AuditAsync("CloseRejected", new { pos.PositionId, res.Error }, ts, ct);
-                return;
-            }
-            else if (res.FilledPrice is decimal fp && fp > 0m)
-            {
-                exitPrice = fp;
-            }
-        }
-
-        var entryFee = qty * entry * FeeFrac;
-        var exitFee = qty * exitPrice * FeeFrac;
-
-        decimal pnl;
-        if (pos.Side == OrderSide.Buy)
-        {
-            _state.AvailableCapital += qty * exitPrice - exitFee;
-            pnl = (exitPrice - entry) * qty - entryFee - exitFee;
-        }
-        else
-        {
-            _state.AvailableCapital -= qty * exitPrice + exitFee;
-            pnl = (entry - exitPrice) * qty - entryFee - exitFee;
-        }
-
-        _state.RealizedPnl += pnl;
-        if ((ts - _state.DailyAnchorUtc).TotalHours >= 24) { _state.DailyPnl = 0m; _state.DailyAnchorUtc = ts; }
-        _state.DailyPnl += pnl;
-
-        var closeOrder = new Order
-        {
-            ClientOrderId = closeClientId,
-            PositionId = pos.PositionId,
-            StrategyId = pos.StrategyId,
-            Symbol = pos.Symbol,
-            Side = closeSide,
-            Type = OrderType.Market,
-            Quantity = qty,
-            Price = exitPrice,
-            Status = OrderStatus.Filled,
-            FilledPrice = exitPrice,
-            FilledQuantity = qty,
-            CreatedAtUtc = ts,
-            FilledAtUtc = ts,
-            Mode = _state.Mode,
-        };
-
-        var trade = new TradeRecord
-        {
-            PositionId = pos.PositionId,
-            StrategyId = pos.StrategyId,
-            Symbol = pos.Symbol,
-            Side = pos.Side,
-            EntryPrice = entry,
-            ExitPrice = exitPrice,
-            Quantity = qty,
-            Pnl = pnl,
-            PnlPercent = entry > 0m ? pnl / (qty * entry) * 100m : 0m,
-            OpenedAtUtc = pos.OpenedAtUtc,
-            ClosedAtUtc = ts,
-            Duration = ts - pos.OpenedAtUtc,
-            ExitReason = reason,
-            Mode = _state.Mode,
-        };
-
-        _positions.Remove(pos);
-        _state.LastOrderUtc = ts;
-
-        await PersistOrderAsync(closeOrder, ct);
-        await RemovePositionAsync(pos, ct);
-        await PersistTradeAsync(trade, ct);
-        await AuditAsync("ClosePosition", new { pos.PositionId, pnl, reason }, ts, ct);
-    }
+    private Task CloseSpotPositionAsync(OpenPosition pos, decimal exitPrice, string reason, DateTime ts, CancellationToken ct) =>
+        PositionCloser.CloseSpotPositionAsync(_state, _positions, _creds, FeeFrac, pos, exitPrice, reason, ts, ct);
 
     /// <summary>
     /// Chiusura FUTURES: ordine reduceOnly opposto (salvo <paramref name="alreadyClosedOnExchange"/>,
     /// usato dalla riconciliazione quando l'exchange ha già liquidato/chiuso la posizione), rimborso
     /// del margine isolato (non del nozionale) + PnL, PnL% calcolata sul margine.
     /// </summary>
-    private async Task CloseFuturesPositionAsync(OpenPosition pos, decimal exitPrice, string reason, DateTime ts, CancellationToken ct, bool alreadyClosedOnExchange)
-    {
-        var qty = pos.Quantity;
-        var entry = pos.EntryPrice;
-        var closeSide = pos.Side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
-        var closeClientId = Guid.NewGuid().ToString("N");
-
-        if (!alreadyClosedOnExchange && _state.Mode != TradingMode.Paper && _creds is TradingCredentials creds)
-        {
-            var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
-
-            // [P0-5 follow-up] Cancella eventuali ordini TRIGGER resting prima del market close, per non
-            // lasciarli orfani sull'exchange. Inerte se non ce ne sono (feature off/stub → id sempre null).
-            if (pos.StopOrderId is not null || pos.TakeProfitOrderId is not null)
-            {
-                await TryCancelRestingBracketAsync(pos, creds, ct);
-            }
-
-            var res = await futuresClient.PlaceFuturesOrderAsync(new PlaceOrderRequest
-            {
-                Symbol = pos.Symbol,
-                Side = closeSide == OrderSide.Buy ? "BUY" : "SELL",
-                Type = "MARKET",
-                Quantity = qty,
-                ClientOrderId = closeClientId,
-                Credentials = creds,
-            }, reduceOnly: true, ct);
-            if (res.NetworkUncertain)
-            {
-                var outcome = await ReconcileUncertainOrderAsync(pos.Symbol, closeClientId, futures: true, creds, ct);
-                if (outcome.Status == ReconcileStatus.Filled)
-                {
-                    // La chiusura È avvenuta durante il blip: si finalizza con il fill reale.
-                    // Prima la posizione restava aperta finché ReconcileFuturesPositionsAsync non
-                    // la forzava a lastKnownPrice come "Liquidation/ExternalClose" — prezzo
-                    // sbagliato e WasLiquidated fuorviante.
-                    logger.LogWarning("Chiusura futures {Pid} riconciliata come ESEGUITA dopo errore di rete (fill {Price}).",
-                        pos.PositionId, outcome.FillPrice);
-                    await AuditAsync("CloseReconciledFilled",
-                        new { pos.PositionId, closeClientId, fillPrice = outcome.FillPrice }, ts, ct);
-                    if (outcome.FillPrice is decimal rp && rp > 0m) exitPrice = rp;
-                }
-                else
-                {
-                    // NotFound/terminale: mai eseguita → retry alla prossima candela (nuovo ordine).
-                    // Uncertain: mai finalizzare da stato ignoto (cancellazione best-effort già partita).
-                    logger.LogError("Chiusura futures {Pid} incerta e non confermata dall'exchange (esito {Outcome}): la posizione resta aperta.",
-                        pos.PositionId, outcome.Status);
-                    await AuditAsync("CloseUncertain", new { pos.PositionId, outcome = outcome.Status.ToString(), res.Error }, ts, ct);
-                    return;
-                }
-            }
-            else if (!res.Success)
-            {
-                logger.LogError("Chiusura futures {Pid} rifiutata dall'exchange: {Err}. Posizione mantenuta.", pos.PositionId, res.Error);
-                await AuditAsync("CloseRejected", new { pos.PositionId, res.Error }, ts, ct);
-                return;
-            }
-            else if (res.FilledPrice is decimal fp && fp > 0m)
-            {
-                exitPrice = fp;
-            }
-        }
-
-        var entryFee = qty * entry * FeeFrac;
-        var exitFee = qty * exitPrice * FeeFrac;
-
-        var pnl = pos.Side == OrderSide.Buy
-            ? (exitPrice - entry) * qty - entryFee - exitFee
-            : (entry - exitPrice) * qty - entryFee - exitFee;
-
-        // Margine ISOLATO: si restituisce il margine bloccato + PnL (guadagno o perdita),
-        // MAI il nozionale intero (a differenza dello Spot).
-        _state.AvailableCapital += pos.MarginBalance + pnl;
-
-        _state.RealizedPnl += pnl;
-        if ((ts - _state.DailyAnchorUtc).TotalHours >= 24) { _state.DailyPnl = 0m; _state.DailyAnchorUtc = ts; }
-        _state.DailyPnl += pnl;
-
-        var wasLiquidated = reason.StartsWith("Liquidation", StringComparison.Ordinal);
-
-        var closeOrder = new Order
-        {
-            ClientOrderId = closeClientId,
-            PositionId = pos.PositionId,
-            StrategyId = pos.StrategyId,
-            Symbol = pos.Symbol,
-            Side = closeSide,
-            Type = OrderType.Market,
-            Quantity = qty,
-            Price = exitPrice,
-            Status = OrderStatus.Filled,
-            FilledPrice = exitPrice,
-            FilledQuantity = qty,
-            CreatedAtUtc = ts,
-            FilledAtUtc = ts,
-            Mode = _state.Mode,
-            MarketType = MarketType.Futures,
-            Leverage = pos.Leverage,
-        };
-
-        var trade = new TradeRecord
-        {
-            PositionId = pos.PositionId,
-            StrategyId = pos.StrategyId,
-            Symbol = pos.Symbol,
-            Side = pos.Side,
-            EntryPrice = entry,
-            ExitPrice = exitPrice,
-            Quantity = qty,
-            Pnl = pnl,
-            PnlPercent = pos.MarginBalance > 0m ? pnl / pos.MarginBalance * 100m : 0m,
-            OpenedAtUtc = pos.OpenedAtUtc,
-            ClosedAtUtc = ts,
-            Duration = ts - pos.OpenedAtUtc,
-            ExitReason = reason,
-            Mode = _state.Mode,
-            MarketType = MarketType.Futures,
-            Leverage = pos.Leverage,
-            WasLiquidated = wasLiquidated,
-        };
-
-        _positions.Remove(pos);
-        _state.LastOrderUtc = ts;
-
-        await PersistOrderAsync(closeOrder, ct);
-        await RemovePositionAsync(pos, ct);
-        await PersistTradeAsync(trade, ct);
-        await AuditAsync("ClosePosition", new { pos.PositionId, pnl, reason, wasLiquidated }, ts, ct);
-    }
+    private Task CloseFuturesPositionAsync(OpenPosition pos, decimal exitPrice, string reason, DateTime ts, CancellationToken ct, bool alreadyClosedOnExchange) =>
+        PositionCloser.CloseFuturesPositionAsync(_state, _positions, _creds, FeeFrac, pos, exitPrice, reason, ts, ct, alreadyClosedOnExchange);
 
     /// <summary>
     /// Ogni candela (solo Futures, Testnet/Live), verifica sull'exchange che le posizioni locali
@@ -1800,56 +940,8 @@ public sealed class TradingEngine(
     /// </summary>
     private async Task ReconcileFuturesPositionsAsync(decimal lastKnownPrice, DateTime ts, CancellationToken ct)
     {
-        // NB: si interroga l'exchange anche a posizioni locali ZERO, per la difesa inversa qui
-        // sotto (posizione remota che il motore non conosce) — una chiamata firmata per candela.
-        if (_state.MarketType != MarketType.Futures || _state.Mode == TradingMode.Paper || _creds is not TradingCredentials creds)
-        {
-            return;
-        }
-
-        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
-        FuturesPosition? remote;
-        try
-        {
-            remote = await futuresClient.GetPositionAsync(_state.Symbol, creds, ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Riconciliazione futures fallita (rete): salto questo ciclo.");
-            return;
-        }
-
-        if (remote is not null)
-        {
-            // Difesa inversa: posizione APERTA sull'exchange ma sconosciuta al motore (es. esito
-            // di un ordine dichiarato incerto, o apertura manuale fuori piattaforma). NESSUNA
-            // auto-azione — chiuderla d'ufficio potrebbe distruggere un'operazione voluta
-            // dall'operatore; si allerta una sola volta finché la condizione persiste.
-            if (!_positions.Any(p => p.Symbol == _state.Symbol))
-            {
-                if (!_untrackedRemoteAlerted)
-                {
-                    _untrackedRemoteAlerted = true;
-                    logger.LogCritical(
-                        "Posizione {Side} {Qty} {Sym} APERTA sull'exchange ma SCONOSCIUTA al motore: VERIFICARE MANUALMENTE (nessuna azione automatica).",
-                        remote.Side, remote.Quantity, _state.Symbol);
-                    await AuditAsync("UntrackedRemotePosition",
-                        new { _state.Symbol, remote.Side, remote.Quantity, remote.EntryPrice }, ts, ct);
-                }
-            }
-            else
-            {
-                _untrackedRemoteAlerted = false;
-            }
-            return;
-        }
-
-        _untrackedRemoteAlerted = false;
-        foreach (var pos in _positions.Where(p => p.Symbol == _state.Symbol).ToList())
-        {
-            logger.LogWarning("Posizione {Pid} risulta chiusa sull'exchange ma aperta localmente: riconciliazione (probabile liquidazione esterna).", pos.PositionId);
-            await ClosePositionAsync(pos, lastKnownPrice, "Liquidation/ExternalClose", ts, ct, alreadyClosedOnExchange: true);
-        }
+        _untrackedRemoteAlerted = await new FuturesPositionReconciler(exchangeFactory, logger, Persistence)
+            .ReconcileAsync(_state, _positions, _creds, ClosePositionAsync, _untrackedRemoteAlerted, lastKnownPrice, ts, ct);
     }
 
     // ---------------------------------------------------------------- queries
@@ -2141,77 +1233,21 @@ public sealed class TradingEngine(
         await db.SaveChangesAsync(ct);
     }
 
-    private async Task PersistOrderAsync(Order order, CancellationToken ct)
-    {
-        order.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        db.Orders.Add(order);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task PersistOrderAsync(Order order, CancellationToken ct) => Persistence.PersistOrderAsync(order, ct);
 
-    private async Task PersistNewPositionAsync(OpenPosition pos, CancellationToken ct)
-    {
-        pos.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        db.OpenPositions.Add(pos);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task PersistNewPositionAsync(OpenPosition pos, CancellationToken ct) => Persistence.PersistNewPositionAsync(pos, ct);
 
     /// <summary>Aggiorna la riga di una posizione ESISTENTE dopo un fill fuso (media ponderata di una fetta).</summary>
-    private async Task UpdatePositionRowAsync(OpenPosition pos, CancellationToken ct)
-    {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var row = await db.OpenPositions.FirstOrDefaultAsync(p => p.LaneId == laneId && p.PositionId == pos.PositionId, ct);
-        if (row is null) return;
-        row.Quantity = pos.Quantity;
-        row.EntryPrice = pos.EntryPrice;
-        row.MarginBalance = pos.MarginBalance;
-        row.CurrentPrice = pos.CurrentPrice;
-        row.LiquidationPrice = pos.LiquidationPrice;
-        row.ExchangeOrderId = pos.ExchangeOrderId;
-        row.StopOrderId = pos.StopOrderId;               // [M3] i trigger resting sopravvivono al riavvio
-        row.TakeProfitOrderId = pos.TakeProfitOrderId;
-        await db.SaveChangesAsync(ct);
-    }
+    private Task UpdatePositionRowAsync(OpenPosition pos, CancellationToken ct) => Persistence.UpdatePositionRowAsync(pos, ct);
 
     /// <summary>Inserisce o aggiorna la riga di un ExecutionJob (idempotente per Id).</summary>
-    private async Task PersistExecutionJobAsync(ExecutionJob job, CancellationToken ct)
-    {
-        job.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var row = await db.ExecutionJobs.FirstOrDefaultAsync(j => j.Id == job.Id, ct);
-        if (row is null) db.ExecutionJobs.Add(job);
-        else db.Entry(row).CurrentValues.SetValues(job);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task PersistExecutionJobAsync(ExecutionJob job, CancellationToken ct) => Persistence.PersistExecutionJobAsync(job, ct);
 
-    private async Task RemovePositionAsync(OpenPosition pos, CancellationToken ct)
-    {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        await db.OpenPositions.Where(p => p.LaneId == laneId && p.PositionId == pos.PositionId).ExecuteDeleteAsync(ct);
-    }
+    private Task RemovePositionAsync(OpenPosition pos, CancellationToken ct) => Persistence.RemovePositionAsync(pos, ct);
 
-    private async Task PersistTradeAsync(TradeRecord trade, CancellationToken ct)
-    {
-        trade.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        db.TradeRecords.Add(trade);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task PersistTradeAsync(TradeRecord trade, CancellationToken ct) => Persistence.PersistTradeAsync(trade, ct);
 
-    private async Task AuditAsync(string action, object details, DateTime ts, CancellationToken ct)
-    {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        db.TradingAuditLogs.Add(new TradingAuditLog
-        {
-            LaneId = laneId,
-            TimestampUtc = ts,
-            Action = action,
-            Details = JsonSerializer.Serialize(details, Json),
-            Mode = _state.Mode,
-        });
-        await db.SaveChangesAsync(ct);
-    }
+    private Task AuditAsync(string action, object details, DateTime ts, CancellationToken ct) => Persistence.AuditAsync(action, details, _state.Mode, ts, ct);
 
     /// <summary>Carica le credenziali firmate dell'exchange (decifrate dal converter EF).</summary>
     private async Task<TradingCredentials?> LoadCredentialsAsync(string exchangeName, bool testnet, CancellationToken ct)
