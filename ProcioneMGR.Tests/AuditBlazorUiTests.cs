@@ -64,18 +64,26 @@ public class AuditBlazorUiTests : BunitContext
     private sealed class FakeTradingEngine(int laneId) : ITradingEngine
     {
         public int LaneId => laneId;
+        public bool IsRunning { get; set; }
+        public List<Order> PendingToReturn { get; set; } = [];
+        public TradingMode? StartedWith { get; private set; }
+        public bool StopCalled { get; private set; }
+        public string? LastEmergencyReason { get; private set; }
+        public (string OrderId, string? UserId)? LastConfirmed { get; private set; }
+        public (string OrderId, string? UserId)? LastRejected { get; private set; }
+
         public Task<TradingEngineStatus> GetStatusAsync(CancellationToken ct = default)
-            => Task.FromResult(new TradingEngineStatus { Mode = TradingMode.Paper, IsRunning = false, Symbol = "BTC/USDT" });
-        public Task StartAsync(TradingMode mode, CancellationToken ct = default) => Task.CompletedTask;
-        public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task EmergencyStopAsync(string reason, CancellationToken ct = default) => Task.CompletedTask;
+            => Task.FromResult(new TradingEngineStatus { Mode = TradingMode.Paper, IsRunning = IsRunning, Symbol = "BTC/USDT" });
+        public Task StartAsync(TradingMode mode, CancellationToken ct = default) { StartedWith = mode; return Task.CompletedTask; }
+        public Task StopAsync(CancellationToken ct = default) { StopCalled = true; return Task.CompletedTask; }
+        public Task EmergencyStopAsync(string reason, CancellationToken ct = default) { LastEmergencyReason = reason; return Task.CompletedTask; }
         public Task<List<OpenPosition>> GetOpenPositionsAsync(CancellationToken ct = default) => Task.FromResult(new List<OpenPosition>());
         public Task ClosePositionAsync(string positionId, CancellationToken ct = default) => Task.CompletedTask;
         public Task CloseAllPositionsAsync(string reason, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetStopLossTakeProfitAsync(string positionId, decimal? stopLoss, decimal? takeProfit, decimal? trailingStopPercent = null, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<List<Order>> GetPendingOrdersAsync(CancellationToken ct = default) => Task.FromResult(new List<Order>());
-        public Task ConfirmOrderAsync(string orderId, string? userId, CancellationToken ct = default) => Task.CompletedTask;
-        public Task RejectOrderAsync(string orderId, string? userId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<List<Order>> GetPendingOrdersAsync(CancellationToken ct = default) => Task.FromResult(PendingToReturn);
+        public Task ConfirmOrderAsync(string orderId, string? userId, CancellationToken ct = default) { LastConfirmed = (orderId, userId); return Task.CompletedTask; }
+        public Task RejectOrderAsync(string orderId, string? userId, CancellationToken ct = default) { LastRejected = (orderId, userId); return Task.CompletedTask; }
         public Task<List<Order>> GetOrderHistoryAsync(DateTime? from = null, CancellationToken ct = default) => Task.FromResult(new List<Order>());
         public Task<TradingPerformance> GetPerformanceAsync(DateTime? from = null, CancellationToken ct = default) => Task.FromResult(new TradingPerformance());
         public Task ProcessCandleAsync(OhlcvData candle, CancellationToken ct = default) => Task.CompletedTask;
@@ -139,13 +147,15 @@ public class AuditBlazorUiTests : BunitContext
 
     // --- Test 2: il percorso verso Live è sbarrato nella UI --------------------------------------
 
-    private RecordingSafetyWriter RegisterTradingServices()
+    private (RecordingSafetyWriter Writer, FakeTradingEngine[] Engines) RegisterTradingServices()
     {
         Services.AddLogging();
         Services.AddMediator();
+        var engines = new FakeTradingEngine[TradingLanes.Count];
         for (var lane = 0; lane < TradingLanes.Count; lane++)
         {
-            Services.AddKeyedSingleton<ITradingEngine>(lane, new FakeTradingEngine(lane));
+            engines[lane] = new FakeTradingEngine(lane);
+            Services.AddKeyedSingleton<ITradingEngine>(lane, engines[lane]);
         }
         // Soglie di default sane (>0) così l'apertura del pannello non è già in stato invalido.
         Services.AddSingleton(new SafetyConfiguration
@@ -160,7 +170,7 @@ public class AuditBlazorUiTests : BunitContext
         ]));
         Services.AddSingleton<ILanePromoter>(new ThrowingPromoter());
         Services.AddScoped<TradingPageService>();
-        return writer;
+        return (writer, engines);
     }
 
     private sealed class ThrowingPromoter : ILanePromoter
@@ -218,6 +228,91 @@ public class AuditBlazorUiTests : BunitContext
         Assert.False(start.HasAttribute("disabled"));
     }
 
+    // --- Test 2b: i 7 comandi Mediator arrivano davvero all'engine, cliccando l'UI reale
+    //     (Fase 1 §4.6 — sostituisce lo smoke test manuale "avvio/apertura/chiusura ordine" con
+    //     un test bUnit ripetibile: stesso percorso UI->TradingPageService->IMediator->handler
+    //     ->ITradingEngine, ma su un fake, mai un ordine vero) ------------------------------------
+
+    [Fact]
+    public void Trading_ClickAvviaTrading_CallsEngineStart_ThroughMediator()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        var (_, engines) = RegisterTradingServices();
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+        cut.FindAll("button").Single(b => b.TextContent.Contains("Avvia trading")).Click();
+
+        Assert.Equal(TradingMode.Paper, engines[0].StartedWith);
+    }
+
+    [Fact]
+    public void Trading_ClickFermaTrading_CallsEngineStop_ThroughMediator()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        var (_, engines) = RegisterTradingServices();
+        engines[0].IsRunning = true; // altrimenti la UI mostra "Avvia trading", non "Ferma trading"
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+        cut.FindAll("button").Single(b => b.TextContent.Contains("Ferma trading")).Click();
+
+        Assert.True(engines[0].StopCalled);
+    }
+
+    [Fact]
+    public void Trading_EmergencyStop_FirstClickOnlyAsksConfirmation_SecondClickCallsEngine()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        var (_, engines) = RegisterTradingServices();
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+
+        // Primo click: solo la richiesta di conferma, l'engine non deve ancora essere chiamato —
+        // un doppio-click accidentale non deve mai chiudere posizioni reali.
+        cut.FindAll("button").Single(b => b.TextContent.Contains("EMERGENCY STOP")).Click();
+        Assert.Null(engines[0].LastEmergencyReason);
+        Assert.Contains("Chiuderà TUTTE le posizioni", cut.Markup);
+
+        // Solo la conferma esplicita chiama davvero EmergencyStopCommand.
+        cut.FindAll("button").Single(b => b.TextContent.Contains("SÌ, FERMA TUTTO")).Click();
+        Assert.NotNull(engines[0].LastEmergencyReason);
+    }
+
+    [Fact]
+    public void Trading_ConfirmPendingOrder_CallsEngine_WithCorrectOrderId()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        var (_, engines) = RegisterTradingServices();
+        engines[0].PendingToReturn = [new Order { OrderId = "confirm-me", Side = OrderSide.Buy }];
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+        cut.FindAll("button").Single(b => b.TextContent.Contains("Conferma")).Click();
+
+        Assert.Equal("confirm-me", engines[0].LastConfirmed?.OrderId);
+    }
+
+    [Fact]
+    public void Trading_RejectPendingOrder_CallsEngine_WithCorrectOrderId()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        var (_, engines) = RegisterTradingServices();
+        engines[0].PendingToReturn = [new Order { OrderId = "reject-me", Side = OrderSide.Sell }];
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+        cut.FindAll("button").Single(b => b.TextContent.Contains("Rifiuta")).Click();
+
+        Assert.Equal("reject-me", engines[0].LastRejected?.OrderId);
+    }
+
     // --- Test 3: validazione client del form dati ------------------------------------------------
 
     [Fact]
@@ -269,7 +364,7 @@ public class AuditBlazorUiTests : BunitContext
         var auth = AddAuthorization();
         auth.SetAuthorized("auditor");
         auth.SetRoles(AppRoles.Admin);
-        var writer = RegisterTradingServices();
+        var (writer, _) = RegisterTradingServices();
 
         var cut = Render<ProcioneMGR.Components.Pages.Trading>();
 
@@ -289,7 +384,7 @@ public class AuditBlazorUiTests : BunitContext
         var auth = AddAuthorization();
         auth.SetAuthorized("auditor");
         auth.SetRoles(AppRoles.Admin);
-        var writer = RegisterTradingServices();
+        var (writer, _) = RegisterTradingServices();
 
         var cut = Render<ProcioneMGR.Components.Pages.Trading>();
 
