@@ -118,7 +118,6 @@ public class TradingPageServiceTests
         var provider = services.BuildServiceProvider();
 
         var service = new TradingPageService(
-            provider,
             provider.GetRequiredService<IMediator>(),
             promotionEval ?? new FakePromotionEvaluator([]),
             promoter ?? new RecordingPromoter(),
