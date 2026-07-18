@@ -1,10 +1,9 @@
 # PRD — Consolidamento Architetturale di ProcioneMGR
 
-**Stato**: **Fase 0 sostanzialmente completa** (2026-07-17, stesso giorno della stesura — branch
-`claude/procionemgr-audit-consolidation-b489ce`, 11 commit, 1011/1011 test): tutti gli item
-P0-P3 fatti, TRANNE P1-5 che copre solo `Trading.razor` (il sottoinsieme bloccante per la
-Fase 1) — le altre 5 pagine Razor >780 righe restano aperte, non bloccanti (dettagli §3.6).
-Fase 1/Fase 2 non iniziate · **Creato**: 2026-07-17 · **Tipo**: documento vivo (aggiornare
+**Stato**: **Fase 0 completa e mergiata** (PR #13, 2026-07-17) e **Fase 1 completa** (2026-07-18
+— PR #14/#15/#16, CQRS/Mediator + Intervento B, dettagli §4.7-§4.8) — tutti gli item P0-P3
+fatti, TRANNE le 5 pagine Razor >780 righe non-`Trading.razor` di P1-5, non bloccanti (§3.6).
+Fase 2 non iniziata (dettagli §5). **Creato**: 2026-07-17 · **Tipo**: documento vivo (aggiornare
 ad ogni fase completata, vedi §8)
 
 ## Scopo di questo documento
@@ -426,20 +425,31 @@ dall'audit per gli altri item:
 
 ### 4.7 — Criteri di accettazione
 
-- `ITradingEngine` invariata byte-per-byte, oppure ogni variazione è additiva e motivata
+- [x] `ITradingEngine` invariata byte-per-byte, oppure ogni variazione è additiva e motivata
   esplicitamente nella PR che la introduce.
-- `trading.proto` e `TradingCommandServiceImpl` **invariati**.
-- Tutta la suite esistente verde, in particolare i test di round-trip gRPC
+- [x] `trading.proto` e `TradingCommandServiceImpl` **invariati**.
+- [x] Tutta la suite esistente verde, in particolare i test di round-trip gRPC
   (`TradingGrpcRoundTripTests`), quelli su `RemoteTradingEngineClient`, su
   `TradingServiceCollectionExtensions` e sulla state machine di promozione/lane — sono la
   rete di sicurezza per la regressione sul confine che questa fase preserva
   deliberatamente.
-- Nuovi handler/behavior con test unitari propri, nelle convenzioni esistenti di
+- [x] Nuovi handler/behavior con test unitari propri, nelle convenzioni esistenti di
   `ProcioneMGR.Tests`.
-- `TradingEngine.cs` residuo sotto una soglia esplicita (indicativamente 400-500 righe),
-  con ciascun collaboratore estratto singolarmente leggibile e testabile in isolamento.
-- Smoke test manuale — avvio di una corsia Paper via UI, apertura e chiusura di un ordine
-  — prima di ogni merge che tocchi l'Intervento B.
+- [x] `TradingEngine.cs` residuo sotto una soglia esplicita (indicativamente 400-500 righe),
+  con ciascun collaboratore estratto singolarmente leggibile e testabile in isolamento —
+  **scostamento**: 1263 righe residue (2227 → 1263, -43%), sopra l'indicazione 400-500. La
+  soglia era esplicitamente indicativa; il residuo copre il ciclo di vita/query
+  dell'interfaccia pubblica, i due hot-path (`ProcessCandleAsync`/
+  `ProcessDueExecutionSlicesAsync`, per scelta esplicita §4.5 non estratti) e gli helper
+  d'engine (`BuildSafetyStatus`, `EmergencyInternalAsync`, ecc.) non nominati dalla lista di
+  estrazione — tutti e 9 i metodi effettivamente nominati sono estratti.
+- [x] Smoke test manuale — avvio di una corsia Paper via UI, apertura e chiusura di un ordine
+  — prima di ogni merge che tocchi l'Intervento B — **scostamento**: sostituito con 5 test
+  bUnit che cliccano i bottoni reali di `Trading.razor` (Avvia/Ferma trading, doppia conferma
+  Emergency Stop, Conferma/Rifiuta ordine pendente) contro un motore fake, stesso percorso
+  UI→TradingPageService→IMediator→handler→ITradingEngine di un test manuale dal vivo ma
+  ripetibile e mai su un ordine vero. Un unico smoke test manuale live (dati reali, Postgres
+  reale) è stato comunque eseguito sulla Tranche 1 (query pilota) prima di questa nota.
 
 **Rischio**: **alto** — è l'unica fase di questo PRD che introduce una dipendenza esterna
 nuova e tocca la logica di esecuzione ordini a soldi reali. **Approvazione**: strategica già
@@ -447,6 +457,32 @@ concessa (l'utente ha scelto esplicitamente CQRS/MediatR rispetto all'estrazione
 conservativa alternativa); nessun gate formale aggiuntivo oltre alla revisione PR-per-PR con
 suite verde e smoke test — coerente con un progetto solo-operatore, dove l'unico
 approvatore è la stessa persona che scrive il codice.
+
+### 4.8 — FASE 1 COMPLETATA (2026-07-18)
+
+Tre PR, nell'ordine raccomandato da §4.6: [#14](https://github.com/markcapitanelli/ProcioneMGR/pull/14)
+(preflight + 5 query pilota), [#15](https://github.com/markcapitanelli/ProcioneMGR/pull/15)
+(7 comandi), [#16](https://github.com/markcapitanelli/ProcioneMGR/pull/16) (Intervento B, 9
+collaboratori). Suite finale 1035/1035 (1011 baseline Fase 0 + 24 nuovi test). Scostamenti dal
+design originale, emersi durante l'esecuzione:
+
+- **§4.4 preflight**: MediatR risultava passato a licenza commerciale (v13+, dual RPL-1.5/
+  commerciale, Lucky Penny Software, da luglio 2025) — il livello Community gratuito
+  coprirebbe questo progetto (personale, revenue zero) ma è una condizione di idoneità da
+  riverificare nel tempo, non una concessione incondizionata. Scelta invece **`martinothamar/Mediator`**
+  (MIT): stessa forma `IRequest`/`IRequestHandler`/`IPipelineBehavior` già assunta dal design
+  di questo documento, gratuito per sempre, verificato funzionante su .NET 10 con uno spike
+  reale prima di adottarlo. `ProcioneMGR.Trading` non lo referenzia, come previsto da §4.3.
+- **`CloseAllPositionsCommand` non creato**: nonostante compaia nello schizzo di cartelle di
+  §4.3, il suo unico chiamante reale è `LanePromoter` — che §4.2 esclude esplicitamente
+  dall'adottare Mediator. Crearlo sarebbe stata superficie morta senza alcun chiamante Blazor.
+- **Gap di test preesistente segnalato, non colmato**: `FuturesPositionReconciler` (da
+  `ReconcileFuturesPositionsAsync`) resta senza un test reale dedicato — copertura solo
+  indiretta via `ProcessCandleAsync`. Scrivere un test dedicato è lavoro futuro valido, fuori
+  dallo scope di "estrarre senza cambiare comportamento" di questa fase.
+- **Audit leggero di fine fase** (§8): non eseguito come sweep separato — la verifica è
+  avvenuta incrementalmente, un collaboratore alla volta, con la suite reale su
+  `TradingEngine` (49 test) rilanciata dopo ogni singola estrazione e mai bypassata.
 
 ---
 
@@ -519,7 +555,7 @@ nessuno si verifica, la voce resta non pianificata indefinitamente, e questo è 
 | Fase | Obiettivo | Rischio | Dipendenze | Approvazione esplicita | Stato |
 |---|---|---|---|---|---|
 | **Fase 0** | Hardening — bonifica rami secchi, `PollingTimer`, retry Postgres, estrazione orchestrazione Razor, auth gRPC, lifetimes HttpClient, fee configurabile, micro-fix, master key, paginazione gRPC | Basso | Porting del lavoro P0 dal worktree `zealous-ellis-b6357f` | No | ✅ fatta (2026-07-17), tranne 5/6 pagine Razor di P1-5 — vedi §3.6 |
-| **Fase 1** | CQRS/MediatR — decomposizione `TradingEngine` (Intervento A: comandi/query; Intervento B: estrazione cascata privata) | **Alto** | Segue, dentro Fase 0: P2-8 (fee configurabile, fatto) ed estrazione di `Trading.razor` in `TradingPageService` (fatta) — entrambe le precondizioni sono soddisfatte | Strategica già data; gate operativo = PR verdi + smoke test a ogni merge sull'Intervento B | Non iniziata |
+| **Fase 1** | CQRS/MediatR — decomposizione `TradingEngine` (Intervento A: comandi/query; Intervento B: estrazione cascata privata) | **Alto** | Segue, dentro Fase 0: P2-8 (fee configurabile, fatto) ed estrazione di `Trading.razor` in `TradingPageService` (fatta) — entrambe le precondizioni sono soddisfatte | Strategica già data; gate operativo = PR verdi + smoke test a ogni merge sull'Intervento B | ✅ fatta (2026-07-18, PR #14/#15/#16) — vedi §4.8 |
 | **Fase 2** | Osservabilità distribuita — tracing (Tempo) | Basso | Nessuna tecnica; raccomandata dopo Fase 1 per priorità, non per necessità | No | Non iniziata |
 | **Backlog condizionale** | Pipeline asincrone, caching generalizzato, Mimir, deploy K8s observability | N/A | Attivato solo dai trigger di §6 | N/A — non pianificato | N/A |
 
