@@ -1101,56 +1101,8 @@ public sealed class TradingEngine(
     /// </summary>
     private async Task ReconcileFuturesPositionsAsync(decimal lastKnownPrice, DateTime ts, CancellationToken ct)
     {
-        // NB: si interroga l'exchange anche a posizioni locali ZERO, per la difesa inversa qui
-        // sotto (posizione remota che il motore non conosce) — una chiamata firmata per candela.
-        if (_state.MarketType != MarketType.Futures || _state.Mode == TradingMode.Paper || _creds is not TradingCredentials creds)
-        {
-            return;
-        }
-
-        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
-        FuturesPosition? remote;
-        try
-        {
-            remote = await futuresClient.GetPositionAsync(_state.Symbol, creds, ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Riconciliazione futures fallita (rete): salto questo ciclo.");
-            return;
-        }
-
-        if (remote is not null)
-        {
-            // Difesa inversa: posizione APERTA sull'exchange ma sconosciuta al motore (es. esito
-            // di un ordine dichiarato incerto, o apertura manuale fuori piattaforma). NESSUNA
-            // auto-azione — chiuderla d'ufficio potrebbe distruggere un'operazione voluta
-            // dall'operatore; si allerta una sola volta finché la condizione persiste.
-            if (!_positions.Any(p => p.Symbol == _state.Symbol))
-            {
-                if (!_untrackedRemoteAlerted)
-                {
-                    _untrackedRemoteAlerted = true;
-                    logger.LogCritical(
-                        "Posizione {Side} {Qty} {Sym} APERTA sull'exchange ma SCONOSCIUTA al motore: VERIFICARE MANUALMENTE (nessuna azione automatica).",
-                        remote.Side, remote.Quantity, _state.Symbol);
-                    await AuditAsync("UntrackedRemotePosition",
-                        new { _state.Symbol, remote.Side, remote.Quantity, remote.EntryPrice }, ts, ct);
-                }
-            }
-            else
-            {
-                _untrackedRemoteAlerted = false;
-            }
-            return;
-        }
-
-        _untrackedRemoteAlerted = false;
-        foreach (var pos in _positions.Where(p => p.Symbol == _state.Symbol).ToList())
-        {
-            logger.LogWarning("Posizione {Pid} risulta chiusa sull'exchange ma aperta localmente: riconciliazione (probabile liquidazione esterna).", pos.PositionId);
-            await ClosePositionAsync(pos, lastKnownPrice, "Liquidation/ExternalClose", ts, ct, alreadyClosedOnExchange: true);
-        }
+        _untrackedRemoteAlerted = await new FuturesPositionReconciler(exchangeFactory, logger, Persistence)
+            .ReconcileAsync(_state, _positions, _creds, ClosePositionAsync, _untrackedRemoteAlerted, lastKnownPrice, ts, ct);
     }
 
     // ---------------------------------------------------------------- queries
