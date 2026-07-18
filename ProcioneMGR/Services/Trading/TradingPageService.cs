@@ -1,6 +1,8 @@
 using Grpc.Core;
+using Mediator;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using ProcioneMGR.Services.Trading.Queries;
 
 namespace ProcioneMGR.Services.Trading;
 
@@ -24,6 +26,7 @@ namespace ProcioneMGR.Services.Trading;
 /// </summary>
 public sealed class TradingPageService(
     IServiceProvider services,
+    IMediator mediator,
     IPromotionEvaluator promotionEval,
     ILanePromoter promoter,
     IOptionsMonitor<SafetyConfiguration> safetyMonitor,
@@ -67,15 +70,16 @@ public sealed class TradingPageService(
             // (Trading:UseRemoteTrading) tre di queste sono round-trip gRPC — sommarne le latenze
             // ogni 2 secondi era solo attesa gratuita. Il motore regge già le chiamate concorrenti
             // per costruzione: il TradingWorker gli parla in parallelo alla UI da sempre.
-            var engine = Engine(laneId);
-            var statusTask = engine.GetStatusAsync();
-            var positionsTask = engine.GetOpenPositionsAsync();
-            var ordersTask = engine.GetOrderHistoryAsync();
-            var pendingTask = engine.GetPendingOrdersAsync();
+            // Passano da IMediator (Fase 1, PRD §4.6 "query pilota") invece che da Engine(laneId)
+            // diretto: i sei comandi sotto restano invariati in questa tranche.
+            var statusTask = mediator.Send(new GetLaneStatusQuery(laneId)).AsTask();
+            var positionsTask = mediator.Send(new GetOpenPositionsQuery(laneId)).AsTask();
+            var ordersTask = mediator.Send(new GetOrderHistoryQuery(laneId)).AsTask();
+            var pendingTask = mediator.Send(new GetPendingOrdersQuery(laneId)).AsTask();
             // Finestra di 90 giorni (stesso taglio di Ensemble.razor), NON tutto lo storico: questa
             // pagina di perf usa solo l'equity curve (già bounded a 10k punti dal motore) — i
             // TradeRecord non li legge nessuno qui (vedi anche P3-12: il motore stesso li tronca ora).
-            var perfTask = engine.GetPerformanceAsync(DateTime.UtcNow.AddDays(-90));
+            var perfTask = mediator.Send(new GetPerformanceQuery(laneId, DateTime.UtcNow.AddDays(-90))).AsTask();
             await Task.WhenAll(statusTask, positionsTask, ordersTask, pendingTask, perfTask);
 
             Status = statusTask.Result;
