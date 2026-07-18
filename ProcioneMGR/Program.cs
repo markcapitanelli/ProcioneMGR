@@ -403,6 +403,9 @@ builder.Services.AddScoped<ProcioneMGR.Services.Optimization.OptimizationPageSer
 // Orchestrazione di Ensemble.razor estratta in un service testabile (P1-5, PRD §3.3). Scoped come sopra.
 builder.Services.AddScoped<ProcioneMGR.Services.Ensemble.EnsemblePageService>();
 
+// Orchestrazione di Pipeline.razor estratta in un service testabile (P1-5, PRD §3.3). Scoped come sopra.
+builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.PipelinePageService>();
+
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
         // Fase 1: nessun server email reale (IdentityNoOpEmailSender), quindi
