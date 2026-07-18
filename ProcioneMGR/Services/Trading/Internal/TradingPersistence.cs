@@ -14,6 +14,19 @@ namespace ProcioneMGR.Services.Trading.Internal;
 /// </summary>
 internal sealed class TradingPersistence(IDbContextFactory<ApplicationDbContext> dbFactory, int laneId)
 {
+    /// <summary>Ultime <paramref name="take"/> candele (ordine cronologico crescente) per costruire il profilo di esecuzione a fette.</summary>
+    public async Task<List<OhlcvData>> GetRecentCandlesAsync(string symbol, string timeframe, int take, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var profile = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == symbol && c.Timeframe == timeframe)
+            .OrderByDescending(c => c.TimestampUtc)
+            .Take(take)
+            .ToListAsync(ct);
+        profile.Reverse();
+        return profile;
+    }
+
     public async Task<List<Order>> GetPendingOrdersAsync(CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
