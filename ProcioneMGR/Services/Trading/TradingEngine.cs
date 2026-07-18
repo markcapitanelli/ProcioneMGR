@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
@@ -74,15 +73,20 @@ public sealed class TradingEngine(
     private const int BufferSize = 400;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private static readonly JsonSerializerOptions Json = new();
+
+    /// <summary>Intervento B (Fase 1, PRD §4.5): operazioni di persistenza DB condivise da tutta la cascata estratta.</summary>
+    private TradingPersistence Persistence => new(dbFactory, laneId);
 
     /// <summary>
     /// Intervento B (Fase 1, PRD §4.5): collaboratore estratto per il piazzamento/cancellazione dei
     /// bracket resting. Istanziato ad ogni chiamata (stateless, nessun costo reale) invece che come
-    /// campo: un inizializzatore di campo non può referenziare AuditAsync/UpdatePositionRowAsync
-    /// (metodi d'istanza, CS0236) prima che "this" sia costruito.
+    /// campo: un inizializzatore di campo non può referenziare metodi d'istanza (CS0236) prima che
+    /// "this" sia costruito.
     /// </summary>
-    private BracketOrderManager BracketOrderManager => new(exchangeFactory, logger, AuditAsync, UpdatePositionRowAsync);
+    private BracketOrderManager BracketOrderManager => new(
+        exchangeFactory, logger,
+        (action, details, ts, ct) => Persistence.AuditAsync(action, details, _state.Mode, ts, ct),
+        Persistence.UpdatePositionRowAsync);
 
     // Dual-read ML (Fase 2a): 0/1 via Interlocked. Garantisce UN SOLO confronto remoto in volo per
     // lane — se il remoto è lento, la candela successiva salta il confronto invece di accodarne
@@ -710,78 +714,9 @@ public sealed class TradingEngine(
 
     // ---------------------------------------------------------------- riconciliazione ordini incerti
 
-    private enum ReconcileStatus { Filled, NotFound, TerminalUnfilled, Uncertain }
-
-    private sealed record ReconcileOutcome(ReconcileStatus Status, decimal? FillPrice, decimal? FillQty, string? ExchangeOrderId);
-
-    /// <summary>
-    /// Riconcilia un ordine MARKET dall'esito di rete incerto interrogando lo STATO per
-    /// clientOrderId (fino a 3 tentativi, pausa 2s). GetOpenOrders NON basta: un MARKET riempito
-    /// durante il blip non è tra gli ordini "aperti" e verrebbe scambiato per "mai piazzato" —
-    /// risultato: posizione reale non tracciata (nessuno stop la gestisce) E ordine duplicato alla
-    /// candela successiva. Se l'ordine risulta ancora vivo viene CANCELLATO e ricontrollato, così
-    /// non può riempirsi "alle nostre spalle" dopo che lo abbiamo dichiarato assente.
-    /// </summary>
-    private async Task<ReconcileOutcome> ReconcileUncertainOrderAsync(
-        string symbol, string clientOrderId, bool futures, TradingCredentials creds, CancellationToken ct)
-    {
-        var spotClient = futures ? null : exchangeFactory.Create(_state.ExchangeName);
-        var futuresClient = futures ? exchangeFactory.CreateFutures(_state.ExchangeName) : null;
-
-        Task<OrderStatusResult> LookupAsync() => futures
-            ? futuresClient!.GetFuturesOrderStatusAsync(symbol, clientOrderId, creds, ct)
-            : spotClient!.GetOrderStatusAsync(symbol, clientOrderId, creds, ct);
-
-        Task<CancelOrderResult> CancelAsync() => futures
-            ? futuresClient!.CancelFuturesOrderAsync(symbol, clientOrderId, creds, ct)
-            : spotClient!.CancelOrderAsync(symbol, clientOrderId, creds, ct);
-
-        static bool HasFill(OrderStatusResult s) =>
-            s.Status is "Filled" or "PartiallyFilled" && s.FilledQuantity is > 0m;
-
-        const int MaxAttempts = 3;
-        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
-        {
-            var status = await LookupAsync();
-
-            if (status.NetworkUncertain)
-            {
-                if (attempt < MaxAttempts) await Task.Delay(TimeSpan.FromSeconds(2), ct);
-                continue;
-            }
-            if (!status.Found)
-            {
-                return new ReconcileOutcome(ReconcileStatus.NotFound, null, null, null);
-            }
-            if (HasFill(status))
-            {
-                return new ReconcileOutcome(ReconcileStatus.Filled, status.FilledPrice, status.FilledQuantity, status.ExchangeOrderId);
-            }
-            if (status.IsTerminalUnfilled)
-            {
-                return new ReconcileOutcome(ReconcileStatus.TerminalUnfilled, null, null, null);
-            }
-
-            // Ancora vivo: cancella per chiudere la finestra di duplicazione, poi un ultimo
-            // lookup per catturare un fill avvenuto tra la query e la cancellazione.
-            await CancelAsync();
-            var after = await LookupAsync();
-            if (!after.NetworkUncertain)
-            {
-                if (after.Found && HasFill(after))
-                {
-                    return new ReconcileOutcome(ReconcileStatus.Filled, after.FilledPrice, after.FilledQuantity, after.ExchangeOrderId);
-                }
-                return new ReconcileOutcome(ReconcileStatus.TerminalUnfilled, null, null, null);
-            }
-            if (attempt < MaxAttempts) await Task.Delay(TimeSpan.FromSeconds(2), ct);
-        }
-
-        // Stato ancora ignoto dopo tutti i tentativi: cancellazione best-effort per chiudere
-        // comunque la finestra; il chiamante deve loggare CRITICAL per la verifica manuale.
-        await CancelAsync();
-        return new ReconcileOutcome(ReconcileStatus.Uncertain, null, null, null);
-    }
+    /// <summary>Delegato all'Intervento B (Fase 1, PRD §4.5): vedi <see cref="OrderReconciler"/>.</summary>
+    private Task<ReconcileOutcome> ReconcileUncertainOrderAsync(string symbol, string clientOrderId, bool futures, TradingCredentials creds, CancellationToken ct) =>
+        new OrderReconciler(exchangeFactory).ReconcileUncertainOrderAsync(_state.ExchangeName, symbol, clientOrderId, futures, creds, ct);
 
     /// <summary>
     /// Esegue effettivamente l'apertura: safety condivisa, poi dispatch Spot/Futures. Ritorna true
@@ -1362,12 +1297,7 @@ public sealed class TradingEngine(
 
     public Task<List<Order>> GetPendingOrdersAsync(CancellationToken ct = default) => GetPendingInternalAsync(ct);
 
-    private async Task<List<Order>> GetPendingInternalAsync(CancellationToken ct)
-    {
-        // Criterio in TradingOrderQueries, condiviso col client remoto: mai due copie che derivano.
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        return await TradingOrderQueries.PendingLive(db.Orders.AsNoTracking(), laneId).ToListAsync(ct);
-    }
+    private Task<List<Order>> GetPendingInternalAsync(CancellationToken ct) => Persistence.GetPendingOrdersAsync(ct);
 
     public async Task ConfirmOrderAsync(string orderId, string? userId, CancellationToken ct = default)
     {
@@ -1409,29 +1339,7 @@ public sealed class TradingEngine(
         finally { _gate.Release(); }
     }
 
-    private async Task SaveOrderAsync(Order order, bool isExisting, CancellationToken ct)
-    {
-        order.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        if (isExisting)
-        {
-            var existing = await db.Orders.FirstOrDefaultAsync(o => o.LaneId == laneId && o.OrderId == order.OrderId, ct);
-            if (existing is not null)
-            {
-                existing.Status = order.Status;
-                existing.FilledPrice = order.FilledPrice;
-                existing.FilledQuantity = order.FilledQuantity;
-                existing.FilledAtUtc = order.FilledAtUtc;
-                existing.ExchangeOrderId = order.ExchangeOrderId;
-                existing.ErrorMessage = order.ErrorMessage;
-                existing.ManuallyConfirmed = order.ManuallyConfirmed;
-                await db.SaveChangesAsync(ct);
-                return;
-            }
-        }
-        db.Orders.Add(order);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task SaveOrderAsync(Order order, bool isExisting, CancellationToken ct) => Persistence.SaveOrderAsync(order, isExisting, ct);
 
     private async Task ClosePositionAsync(OpenPosition pos, decimal exitPrice, string reason, DateTime ts, CancellationToken ct, bool alreadyClosedOnExchange = false)
     {
@@ -2075,77 +1983,21 @@ public sealed class TradingEngine(
         await db.SaveChangesAsync(ct);
     }
 
-    private async Task PersistOrderAsync(Order order, CancellationToken ct)
-    {
-        order.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        db.Orders.Add(order);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task PersistOrderAsync(Order order, CancellationToken ct) => Persistence.PersistOrderAsync(order, ct);
 
-    private async Task PersistNewPositionAsync(OpenPosition pos, CancellationToken ct)
-    {
-        pos.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        db.OpenPositions.Add(pos);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task PersistNewPositionAsync(OpenPosition pos, CancellationToken ct) => Persistence.PersistNewPositionAsync(pos, ct);
 
     /// <summary>Aggiorna la riga di una posizione ESISTENTE dopo un fill fuso (media ponderata di una fetta).</summary>
-    private async Task UpdatePositionRowAsync(OpenPosition pos, CancellationToken ct)
-    {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var row = await db.OpenPositions.FirstOrDefaultAsync(p => p.LaneId == laneId && p.PositionId == pos.PositionId, ct);
-        if (row is null) return;
-        row.Quantity = pos.Quantity;
-        row.EntryPrice = pos.EntryPrice;
-        row.MarginBalance = pos.MarginBalance;
-        row.CurrentPrice = pos.CurrentPrice;
-        row.LiquidationPrice = pos.LiquidationPrice;
-        row.ExchangeOrderId = pos.ExchangeOrderId;
-        row.StopOrderId = pos.StopOrderId;               // [M3] i trigger resting sopravvivono al riavvio
-        row.TakeProfitOrderId = pos.TakeProfitOrderId;
-        await db.SaveChangesAsync(ct);
-    }
+    private Task UpdatePositionRowAsync(OpenPosition pos, CancellationToken ct) => Persistence.UpdatePositionRowAsync(pos, ct);
 
     /// <summary>Inserisce o aggiorna la riga di un ExecutionJob (idempotente per Id).</summary>
-    private async Task PersistExecutionJobAsync(ExecutionJob job, CancellationToken ct)
-    {
-        job.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var row = await db.ExecutionJobs.FirstOrDefaultAsync(j => j.Id == job.Id, ct);
-        if (row is null) db.ExecutionJobs.Add(job);
-        else db.Entry(row).CurrentValues.SetValues(job);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task PersistExecutionJobAsync(ExecutionJob job, CancellationToken ct) => Persistence.PersistExecutionJobAsync(job, ct);
 
-    private async Task RemovePositionAsync(OpenPosition pos, CancellationToken ct)
-    {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        await db.OpenPositions.Where(p => p.LaneId == laneId && p.PositionId == pos.PositionId).ExecuteDeleteAsync(ct);
-    }
+    private Task RemovePositionAsync(OpenPosition pos, CancellationToken ct) => Persistence.RemovePositionAsync(pos, ct);
 
-    private async Task PersistTradeAsync(TradeRecord trade, CancellationToken ct)
-    {
-        trade.LaneId = laneId;
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        db.TradeRecords.Add(trade);
-        await db.SaveChangesAsync(ct);
-    }
+    private Task PersistTradeAsync(TradeRecord trade, CancellationToken ct) => Persistence.PersistTradeAsync(trade, ct);
 
-    private async Task AuditAsync(string action, object details, DateTime ts, CancellationToken ct)
-    {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        db.TradingAuditLogs.Add(new TradingAuditLog
-        {
-            LaneId = laneId,
-            TimestampUtc = ts,
-            Action = action,
-            Details = JsonSerializer.Serialize(details, Json),
-            Mode = _state.Mode,
-        });
-        await db.SaveChangesAsync(ct);
-    }
+    private Task AuditAsync(string action, object details, DateTime ts, CancellationToken ct) => Persistence.AuditAsync(action, details, _state.Mode, ts, ct);
 
     /// <summary>Carica le credenziali firmate dell'exchange (decifrate dal converter EF).</summary>
     private async Task<TradingCredentials?> LoadCredentialsAsync(string exchangeName, bool testnet, CancellationToken ct)
