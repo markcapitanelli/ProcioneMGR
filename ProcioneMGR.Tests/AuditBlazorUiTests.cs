@@ -1,4 +1,5 @@
 using Bunit;
+using Mediator;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Exchanges;
@@ -140,6 +141,8 @@ public class AuditBlazorUiTests : BunitContext
 
     private RecordingSafetyWriter RegisterTradingServices()
     {
+        Services.AddLogging();
+        Services.AddMediator();
         for (var lane = 0; lane < TradingLanes.Count; lane++)
         {
             Services.AddKeyedSingleton<ITradingEngine>(lane, new FakeTradingEngine(lane));
