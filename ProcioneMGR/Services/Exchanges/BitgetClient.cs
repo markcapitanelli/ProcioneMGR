@@ -193,7 +193,7 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, 
             };
         }
         return await EnrichWithFillAsync(result,
-            () => GetOrderStatusAsync(request.Symbol, request.ClientOrderId, request.Credentials, ct), ct);
+            () => GetOrderStatusAsync(request.Symbol, request.ClientOrderId, request.Credentials, ct), ct, logger);
     }
 
     public async Task<CancelOrderResult> CancelOrderAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default)
@@ -472,7 +472,7 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, 
             };
         }
         return await EnrichWithFillAsync(result,
-            () => GetFuturesOrderStatusAsync(request.Symbol, request.ClientOrderId, request.Credentials, ct), ct);
+            () => GetFuturesOrderStatusAsync(request.Symbol, request.ClientOrderId, request.Credentials, ct), ct, logger);
     }
 
     /// <summary>
@@ -484,7 +484,7 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, 
     /// far fallire un piazzamento riuscito.
     /// </summary>
     private static async Task<PlaceOrderResult> EnrichWithFillAsync(
-        PlaceOrderResult placed, Func<Task<OrderStatusResult>> lookup, CancellationToken ct)
+        PlaceOrderResult placed, Func<Task<OrderStatusResult>> lookup, CancellationToken ct, ILogger logger)
     {
         try
         {
@@ -507,7 +507,10 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, 
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // best-effort per definizione: il place è riuscito, l'arricchimento no — pazienza.
+            // Best-effort per definizione (il place è riuscito, solo l'arricchimento fallisce), ma
+            // un fallimento sistematico di questo lookup (es. l'endpoint Bitget cambia forma) deve
+            // lasciare una traccia diagnosticabile invece di sparire nel nulla.
+            logger.LogDebug(ex, "EnrichWithFillAsync: lookup fill fallito, l'ordine resta senza prezzo/quantità arricchiti.");
         }
         return placed;
     }

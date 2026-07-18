@@ -118,13 +118,16 @@ partire con un trading muto).
 
 ### 3. Master key: il salto di sensibilità
 
-`trading-secrets` contiene `ConnectionStrings__PostgresConnection` **+ `Security__MasterKey`.
-È l'unico servizio satellite che riceve la master key**: gli serve per decifrare le credenziali
-exchange e firmare le chiamate Testnet/Live (ingestion e ml usano un `IEncryptionService` no-op e
-non la ricevono). Deve essere la **stessa** del monolite, o le credenziali non si decifrano.
+`trading-secrets` contiene `ConnectionStrings__PostgresConnection` **+ `Security__MasterKey`
++ `Trading__GrpcSharedSecret`. È l'unico servizio satellite che riceve la master key**: gli
+serve per decifrare le credenziali exchange e firmare le chiamate Testnet/Live (ingestion e ml
+usano un `IEncryptionService` no-op e non la ricevono). Entrambi i valori devono essere gli
+**stessi** del monolite (`ui-secrets`), o le credenziali non si decifrano / ogni chiamata gRPC
+viene rifiutata — vedi P1-6 più sotto.
 
 ```powershell
 $env:PROCIONE_MGR_MASTER_KEY = "<base64 32 byte>"   # via env: non finisce nella cronologia shell
+$env:PROCIONE_MGR_TRADING_GRPC_SECRET = "<stringa casuale>"
 .\scripts\k8s-trading-secret.ps1 -ConnectionString "Host=host.docker.internal;Port=5432;..."
 ```
 
@@ -132,13 +135,21 @@ Un Secret Kubernetes è **base64, non cifrato**: chiunque possa leggere i Secret
 la chiave. Oltre lo sviluppo locale servono RBAC stretto sui Secret + encryption-at-rest di etcd
 (o Vault/Sealed Secrets).
 
-### `NetworkPolicy` — la prima del progetto
+### `NetworkPolicy` + autorizzazione applicativa (P1-6) — due livelli, non uno solo
 
 `ConfirmOrder` sblocca un ordine Live reale e `StartLane(LIVE)` avvia una sessione con denaro vero.
 Nel monolite quelle azioni sono dietro `[Authorize(Admin,Manager)]` di `Trading.razor`; **dietro
-gRPC quel gate non esiste**: non c'è autenticazione a livello RPC. `networkpolicy.yaml` è l'unico
-controllo di accesso — ingress su 8080 (comandi) consentito solo dal pod `procionemgr-ui`; la 8081
-(`/health`) è aperta a chiunque **di proposito** (le probe partono dal kubelet, non da un pod).
+gRPC quel gate non esiste** allo stesso modo — non c'è un utente autenticato da controllare, il
+chiamante è un processo. Fino al 2026-07-17 l'UNICO controllo era `networkpolicy.yaml` (confine di
+rete: ingress su 8080 consentito solo dal pod `procionemgr-ui`), un limite noto perché
+`kubectl port-forward` lo scavalca (vedi sotto). Da allora ogni rpc passa ANCHE da
+`SharedSecretAuthInterceptor`: un header (`x-trading-shared-secret`) verificato a tempo costante
+contro `Trading:GrpcSharedSecret`, **fail-closed** se il segreto non è configurato (rifiuta tutto,
+non degrada in silenzio a "nessuna autorizzazione"). Non è mTLS — resta un secondo fattore a costo
+quasi zero, non un sistema di identità — ma un `port-forward` da solo non basta più: serve anche il
+segreto, che non è mai nel manifest né nell'immagine, solo nel Secret. La 8081 (`/health`) resta
+aperta a chiunque **di proposito** (le probe partono dal kubelet, non da un pod, e non passano
+dall'interceptor: `AddGrpc` lo applica solo ai servizi gRPC mappati, non all'endpoint `/health`).
 
 > ⚠️ **Una NetworkPolicy la applica il CNI.** Senza un CNI che la implementi viene accettata
 > dall'API server e **ignorata in silenzio**: sembra protetta e non lo è. Il default di kind
@@ -294,10 +305,11 @@ utenti in silenzio. Fuori dal cluster la chiave non è impostata e vale il defau
   stesso file, e questo basta a validare il **contratto applicativo** (ui scrive → trading rilegge).
   Non valida la semantica RWX su più nodi: in un cluster reale le due PV vanno ripuntate allo stesso
   export NFS/CephFS/Azure Files, altrimenti due pod su nodi diversi vedrebbero due file diversi.
-- ⚠️ **La master key è duplicata** in `ui-secrets` e `trading-secrets` (i Secret sono namespaced:
-  è per forza una copia). `k8s-ui-secret.ps1` confronta le due e avvisa se divergono, ma nulla
-  impedisce di ruotarne una sola più tardi: le credenziali si decifrerebbero da una parte e non
-  dall'altra, in silenzio, fino al primo uso.
+- ⚠️ **La master key (e dal P1-6 anche il segreto gRPC) sono duplicati** in `ui-secrets` e
+  `trading-secrets` (i Secret sono namespaced: è per forza una copia). `k8s-ui-secret.ps1`
+  confronta entrambi e avvisa se divergono, ma nulla impedisce di ruotarne uno solo più tardi: le
+  credenziali si decifrerebbero da una parte e non dall'altra (master key) o ogni rpc verrebbe
+  rifiutata Unauthenticated (segreto gRPC), in silenzio, fino al primo uso.
 - ⚠️ **ArgoCD e i `Job`**: i campi di un Job sono immutabili. Se cambia il template di
   `strategyhunter-job.yaml`, il sync fallisce finché non si fa
   `kubectl delete job strategyhunter-discover -n procionemgr-pipeline`. È un limite di Kubernetes

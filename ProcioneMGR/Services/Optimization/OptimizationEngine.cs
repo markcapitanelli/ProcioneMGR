@@ -156,11 +156,13 @@ public sealed class OptimizationEngine(
 
             if (bayesian)
             {
-                // La ricerca bayesiana è sequenziale e l'obiettivo blocca (GetAwaiter().GetResult()
-                // dentro un Func sincrono): la eseguo su un thread del pool con Task.Run, così NON
-                // blocca il thread chiamante (in Blazor Server è il circuito → la UI resterebbe
-                // congelata per l'intera ricerca). Simmetrico al grid, che gira su Parallel.ForEachAsync.
-                await Task.Run(() => RunBayesianWindow(config, EvaluateAsync, ct), ct);
+                // La ricerca bayesiana è sequenziale: ogni iterazione rifitta il surrogato Gaussian
+                // Process e ottimizza l'Expected Improvement, lavoro CPU-bound che altrimenti girerebbe
+                // sul thread chiamante (in Blazor Server è il circuito → la UI resterebbe congelata per
+                // l'intera ricerca). Task.Run lo sposta su un thread del pool; l'obiettivo stesso è
+                // ormai genuinamente asincrono (nessun sync-over-async), quindi la sola CPU del GP
+                // resta la ragione dell'offload. Simmetrico al grid, che gira su Parallel.ForEachAsync.
+                await Task.Run(() => RunBayesianWindowAsync(config, EvaluateAsync, ct), ct);
             }
             else
             {
@@ -343,7 +345,7 @@ public sealed class OptimizationEngine(
     /// — lo STESSO percorso del grid (IS+OOS, agg, best, progress). Il verdetto Deflated Sharpe
     /// resta calcolato UNA VOLTA a fine sweep in <see cref="BuildResult"/>, sui punti visitati.
     /// </summary>
-    private static void RunBayesianWindow(
+    private static async Task RunBayesianWindowAsync(
         OptimizationConfiguration config,
         Func<Dictionary<string, decimal>, CancellationToken, Task<ComboResult?>> evaluateAsync,
         CancellationToken ct)
@@ -352,20 +354,16 @@ public sealed class OptimizationEngine(
         var search = new BayesianSearch(new BayesianOptimizationEngine(new BayesianOptions { Seed = config.BayesianSeed }));
         var selectOos = config.SelectionMetric == OptimizationSelectionMetric.OutOfSampleSharpe;
 
-        double Objective(double[] vector)
+        async Task<double> ObjectiveAsync(double[] vector)
         {
             ct.ThrowIfCancellationRequested();
             var combo = ToCombo(space, vector);
-            // Sync-over-async DELIBERATO (audit 2026-07: keep): BayesianSearch richiede un
-            // obiettivo sincrono double[]→double, e qui girano su thread di lavoro senza
-            // SynchronizationContext (niente rischio deadlock) — rendere async l'intera
-            // catena Maximize per questo solo punto non ripaga.
-            var cr = evaluateAsync(combo, ct).GetAwaiter().GetResult();
+            var cr = await evaluateAsync(combo, ct);
             if (cr is null) return double.MinValue;   // combinazione invalida: regione da evitare
             return (double)(selectOos ? cr.OosSharpe : cr.IsSharpe);
         }
 
-        search.Maximize(space, Objective, config.BayesianIterations, config.BayesianInitialRandom, config.BayesianSeed);
+        await search.MaximizeAsync(space, ObjectiveAsync, config.BayesianIterations, config.BayesianInitialRandom, config.BayesianSeed);
     }
 
     private static ParameterSpace BuildParameterSpace(List<ParameterRange> ranges)

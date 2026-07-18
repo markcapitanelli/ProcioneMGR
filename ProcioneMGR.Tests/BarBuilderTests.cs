@@ -88,24 +88,6 @@ public class BarBuilderTests
     }
 
     [Fact]
-    public void ToOhlcv_ProducesSyntheticCandles()
-    {
-        var candles = new List<OhlcvData>
-        {
-            Bar(0, 100m, 102m, 99m, 101m, 60m),
-            Bar(1, 101m, 104m, 100m, 103m, 50m),
-        };
-        var builder = new BarBuilder();
-        var bars = builder.BuildVolumeBars(candles, 100m);
-        var synthetic = builder.ToOhlcv(bars, "TEST", "vol100");
-
-        var s = Assert.Single(synthetic);
-        Assert.Equal("vol100", s.Timeframe);
-        Assert.Equal(bars[0].EndUtc, s.TimestampUtc);
-        Assert.Equal(bars[0].Close, s.Close);
-    }
-
-    [Fact]
     public void InvalidThreshold_Throws()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new BarBuilder().BuildVolumeBars([], 0m));

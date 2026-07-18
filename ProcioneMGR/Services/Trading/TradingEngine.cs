@@ -70,7 +70,6 @@ public sealed class TradingEngine(
     private sealed record ChampionCacheEntry(int ModelId, int Version, MlStrategy Strategy, IReturnPredictor Predictor);
     private ChampionCacheEntry? _championCache;
 
-    private const decimal FeePercent = 0.1m;
     private const int BufferSize = 400;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -94,7 +93,10 @@ public sealed class TradingEngine(
     private SymbolFilters? _filters;      // LOT_SIZE/PRICE_FILTER del simbolo (Testnet/Live)
     private bool _untrackedRemoteAlerted; // dedup dell'allerta "posizione remota sconosciuta"
 
-    private decimal FeeFrac => FeePercent / 100m;
+    // P2-8: prima era una const fissa, scollegata dal fee reale e da BacktestConfiguration.FeePercent
+    // (parametrico) — vedi il doc-comment di SafetyConfiguration.FeePercent. Hot-reload via CurrentValue,
+    // come ogni altra soglia di SafetyConfiguration.
+    private decimal FeeFrac => safety.CurrentValue.FeePercent / 100m;
 
     /// <summary>
     /// Idempotenza: al primo accesso ripristina stato e posizioni aperte dal DB, così dopo
@@ -291,6 +293,13 @@ public sealed class TradingEngine(
             _state.IsRunning = false;
             await SaveStateAsync(ct);
             await AuditAsync("StopEngine", new { }, DateTime.UtcNow, ct);
+            // Il predictor ML del Champion resta vivo solo mentre la corsia gira: allo stop lo
+            // liberiamo subito invece di aspettare il prossimo cambio Champion (che potrebbe non
+            // arrivare mai su una lane fermata). Azzerare il riferimento, non solo il dispose, evita
+            // che un riavvio con lo STESSO Champion (stesso ModelId/Version) trovi in cache un
+            // predictor già disposto e provi a riusarlo (vedi il confronto in ResolveChampionStrategyAsync).
+            _championCache?.Predictor.Dispose();
+            _championCache = null;
             logger.LogInformation("Trading engine fermato (posizioni lasciate aperte).");
         }
         finally { _gate.Release(); }
@@ -1115,8 +1124,9 @@ public sealed class TradingEngine(
             }, ts, ct);
 
         // [P0-5 follow-up] Protezione "resting" sull'exchange: solo se abilitata (default OFF), su nuova
-        // posizione Testnet/Live. Non blocca mai l'apertura — con i client trigger ancora stub registra
-        // un warning e restano gli stop software (fonte di verità). Vedi SafetyConfiguration.UseExchangeRestingStops.
+        // posizione Testnet/Live. Non blocca mai l'apertura — se un trigger reduce-only non viene piazzato
+        // (rifiuto dell'exchange), registra un warning e restano gli stop software (fonte di verità).
+        // Vedi SafetyConfiguration.UseExchangeRestingStops.
         if (mergeInto is null && _state.Mode != TradingMode.Paper
             && safety.CurrentValue.UseExchangeRestingStops && _creds is TradingCredentials restingCreds)
         {
@@ -2013,7 +2023,13 @@ public sealed class TradingEngine(
             AverageWin = wins.Count > 0 ? wins.Average(t => t.Pnl) : 0m,
             AverageLoss = losses.Count > 0 ? losses.Average(t => t.Pnl) : 0m,
             ProfitFactor = grossLoss > 0m ? grossWin / grossLoss : 0m,
-            Trades = trades,
+            // P3-12: le metriche sopra usano già la lista COMPLETA (trades.Count, wins, losses) —
+            // solo la lista esposta è tagliata, ai 500 più recenti (query ordinata ascendente per
+            // ClosedAtUtc, quindi TakeLast = i più recenti). Nessun consumer oggi legge questo campo
+            // (Trading.razor usa EquityCurve, PromotionEvaluator le metriche aggregate — vedi i loro
+            // commenti), ma un domani che lo legga trova comunque uno storico recente utile, non un
+            // payload che su una lane longeva era arrivato a giustificare un tetto gRPC a 64MB.
+            Trades = trades.TakeLast(500).ToList(),
         };
     }
 

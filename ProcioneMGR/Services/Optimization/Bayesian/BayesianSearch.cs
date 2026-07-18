@@ -12,8 +12,8 @@ public sealed record BayesianSearchResult(double[] BestParameters, double BestSc
 /// </summary>
 public sealed class BayesianSearch(IHyperparameterOptimizer optimizer)
 {
-    public BayesianSearchResult Maximize(
-        ParameterSpace space, Func<double[], double> objective, int iterations, int initialRandom = 5, int seed = 42)
+    public async Task<BayesianSearchResult> MaximizeAsync(
+        ParameterSpace space, Func<double[], Task<double>> objective, int iterations, int initialRandom = 5, int seed = 42)
     {
         ArgumentNullException.ThrowIfNull(space);
         ArgumentNullException.ThrowIfNull(objective);
@@ -25,14 +25,14 @@ public sealed class BayesianSearch(IHyperparameterOptimizer optimizer)
         for (var i = 0; i < Math.Max(1, initialRandom); i++)
         {
             var p = space.Denormalize(SampleUnit(rng, space.Dimensions.Count));
-            history.Add(new EvaluatedPoint(p, objective(p)));
+            history.Add(new EvaluatedPoint(p, await objective(p)));
         }
 
         // Fase guidata: ogni passo massimizza l'Expected Improvement sul surrogato aggiornato.
         for (var i = 0; i < Math.Max(0, iterations); i++)
         {
             var next = optimizer.SuggestNext(history, space);
-            history.Add(new EvaluatedPoint(next, objective(next)));
+            history.Add(new EvaluatedPoint(next, await objective(next)));
         }
 
         var best = history[0];

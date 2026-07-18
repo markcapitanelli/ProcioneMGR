@@ -11,9 +11,6 @@ public interface IRegimeDetector
     /// <summary>Salva e rende attivo un modello (es. dopo una preview o dal retraining worker).</summary>
     Task ActivateModelAsync(RegimeModel model, CancellationToken ct = default);
 
-    /// <summary>Regime (nearest centroid) per una singola feature, usando il modello attivo.</summary>
-    Task<int> PredictRegimeAsync(MarketFeatures features, CancellationToken ct = default);
-
     /// <summary>Etichetta una sequenza di feature col modello attivo, applicando lo smoothing.</summary>
     Task<List<MarketFeatures>> LabelFeaturesAsync(List<MarketFeatures> features, CancellationToken ct = default);
 

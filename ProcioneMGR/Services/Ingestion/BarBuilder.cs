@@ -61,27 +61,6 @@ public sealed class BarBuilder
         return total <= 0m ? 0m : total / targetBarCount;
     }
 
-    /// <summary>
-    /// Converte le barre aggregate in <see cref="OhlcvData"/> "sintetici" (timestamp = fine
-    /// barra) riusabili da indicatori/fattori/analisi esistenti, che sono agnostici rispetto
-    /// alla spaziatura temporale.
-    /// </summary>
-    public IReadOnlyList<OhlcvData> ToOhlcv(IReadOnlyList<AggregatedBar> bars, string symbol, string timeframeLabel)
-    {
-        ArgumentNullException.ThrowIfNull(bars);
-        return bars.Select(b => new OhlcvData
-        {
-            Symbol = symbol,
-            Timeframe = timeframeLabel,
-            TimestampUtc = b.EndUtc,
-            Open = b.Open,
-            High = b.High,
-            Low = b.Low,
-            Close = b.Close,
-            Volume = b.Volume,
-        }).ToList();
-    }
-
     private static IReadOnlyList<AggregatedBar> Build(
         IReadOnlyList<OhlcvData> candles, decimal threshold, Func<OhlcvData, decimal> measure)
     {

@@ -25,7 +25,7 @@ namespace ProcioneMGR.Services.AltData;
 /// esplicita perché il fuso di default non è documentato/garantito stabile. Accettabile per
 /// un'analisi di impatto a granularità oraria/giornaliera, non per un timing al minuto.
 /// </summary>
-public sealed class ForexFactoryIngestor(HttpClient httpClient) : IAltDataSource
+public sealed class ForexFactoryIngestor(IHttpClientFactory httpClientFactory) : IAltDataSource
 {
     public string Name => "ForexFactory";
 
@@ -33,6 +33,9 @@ public sealed class ForexFactoryIngestor(HttpClient httpClient) : IAltDataSource
 
     public async Task<IReadOnlyList<RawNewsItem>> FetchLatestAsync(CancellationToken ct)
     {
+        // CreateClient per chiamata (vedi RssNewsSource): evita di catturare l'HttpClient e il suo
+        // handler per l'intera vita del processo, vanificando la rotazione anti-DNS-stale.
+        var httpClient = httpClientFactory.CreateClient("AltDataForexFactory");
         var html = await httpClient.GetStringAsync(CalendarUrl, ct);
         return ParseCalendar(html);
     }

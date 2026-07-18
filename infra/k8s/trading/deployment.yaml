@@ -15,7 +15,8 @@
 # questa scelta operativa.
 #
 # Prerequisiti nel namespace:
-#   - Secret trading-secrets (ConnectionStrings__PostgresConnection + Security__MasterKey)
+#   - Secret trading-secrets (ConnectionStrings__PostgresConnection + Security__MasterKey +
+#     Trading__GrpcSharedSecret, quest'ultimo per SharedSecretAuthInterceptor — P1-6)
 #     → scripts/k8s-trading-secret.ps1
 #   - PVC procionemgr-config (RWX) con l'appsettings.json CONDIVISO col monolite: è da lì che
 #     arriva SafetyConfiguration, che il monolite scrive dal pannello /trading e questo servizio
