@@ -625,81 +625,10 @@ public sealed class TradingEngine(
 
     // ---------------------------------------------------------------- open / close
 
-    private async Task TryOpenAsync(EnsembleStrategy strat, OrderSide side, decimal price, DateTime ts, CancellationToken ct)
-    {
-        if (price <= 0m) return;
+    private SignalOrderBuilder SignalOrderBuilder => new(logger, Persistence, safety);
 
-        // Guard: sullo SPOT reale non esiste la vendita allo scoperto — un SELL di apertura
-        // su Testnet/Live fallirebbe sull'exchange (saldo insufficiente) o, peggio, venderebbe
-        // asset del conto NON tracciati da questa corsia. In Paper lo short simulato resta
-        // permesso (utile per valutare strategie long/short prima di passarle ai Futures).
-        if (_state.MarketType == MarketType.Spot && side == OrderSide.Sell && _state.Mode != TradingMode.Paper)
-        {
-            logger.LogWarning("Segnale SHORT su SPOT {Mode} ignorato per {Strategy}: vendita allo scoperto non supportata (usa i Futures).",
-                _state.Mode, strat.StrategyName);
-            await AuditAsync("ShortOnSpotBlocked", new { strat.StrategyId, strat.StrategyName, price }, ts, ct);
-            return;
-        }
-
-        // Spot: PositionSizePercent è il nozionale investito (leva implicita 1x).
-        // Futures: PositionSizePercent è il MARGINE isolato; il nozionale (e quindi
-        // l'esposizione reale) è margine × leva — stessa logica del motore di backtest.
-        // La coerenza con MaxPositionSizePercent/MaxTotalExposurePercent è validata a StartAsync.
-        var margin = _state.TotalCapital * safety.CurrentValue.PositionSizePercent / 100m;
-        var notional = _state.MarketType == MarketType.Futures ? margin * _state.Leverage : margin;
-        var qty = notional / price;
-
-        // Arrotonda al LOT_SIZE reale del simbolo (da exchangeInfo) per Testnet/Live;
-        // in Paper usa una precisione fissa ragionevole.
-        if (_state.Mode != TradingMode.Paper && _filters is not null)
-        {
-            qty = _filters.RoundQuantity(qty);
-            if (!_filters.IsTradable(qty, price))
-            {
-                logger.LogWarning("Ordine sotto i minimi del simbolo (qty {Qty}, notional {N}): saltato.", qty, qty * price);
-                return;
-            }
-        }
-        else
-        {
-            qty = Math.Round(qty, 5, MidpointRounding.ToZero);
-        }
-        if (qty <= 0m) return;
-
-        var order = new Order
-        {
-            PositionId = Guid.NewGuid().ToString("N"),
-            StrategyId = strat.StrategyId,
-            Symbol = _state.Symbol,
-            Side = side,
-            Type = OrderType.Market,
-            Quantity = qty,
-            Price = price,
-            Status = OrderStatus.Pending,
-            CreatedAtUtc = ts,
-            Mode = _state.Mode,
-            MarketType = _state.MarketType,
-            Leverage = _state.MarketType == MarketType.Futures ? _state.Leverage : 1,
-        };
-
-        // Live: l'apertura richiede conferma manuale dell'operatore -> resta Pending in coda.
-        if (_state.Mode == TradingMode.Live && safety.CurrentValue.RequireManualConfirmationForLive)
-        {
-            // Un solo ordine in coda per strategia (niente duplicati se non si conferma subito).
-            var pending = await GetPendingInternalAsync(ct);
-            if (pending.Any(o => o.StrategyId == strat.StrategyId))
-            {
-                return;
-            }
-            await PersistOrderAsync(order, ct);
-            await AuditAsync("PendingConfirmation",
-                new { order.ClientOrderId, strat.StrategyName, side = side.ToString(), qty, price }, ts, ct);
-            logger.LogInformation("Ordine Live {Cid} in attesa di conferma manuale.", order.ClientOrderId);
-            return;
-        }
-
-        await TryBuildAndStartExecutionPlanAsync(order, strat, strat.StrategyName, price, ts, ct, isExisting: false);
-    }
+    private Task TryOpenAsync(EnsembleStrategy strat, OrderSide side, decimal price, DateTime ts, CancellationToken ct) =>
+        SignalOrderBuilder.TryOpenAsync(_state, _filters, TryBuildAndStartExecutionPlanAsync, strat, side, price, ts, ct);
 
     /// <summary>
     /// Applica automaticamente lo stop-loss/take-profit/trailing validati nel backtest (se
