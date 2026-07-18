@@ -12,6 +12,7 @@ using ProcioneMGR.Services.ML;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Registry;
 using ProcioneMGR.Services.Risk;
+using ProcioneMGR.Services.Trading.Internal;
 
 namespace ProcioneMGR.Services.Trading;
 
@@ -74,6 +75,14 @@ public sealed class TradingEngine(
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private static readonly JsonSerializerOptions Json = new();
+
+    /// <summary>
+    /// Intervento B (Fase 1, PRD §4.5): collaboratore estratto per il piazzamento/cancellazione dei
+    /// bracket resting. Istanziato ad ogni chiamata (stateless, nessun costo reale) invece che come
+    /// campo: un inizializzatore di campo non può referenziare AuditAsync/UpdatePositionRowAsync
+    /// (metodi d'istanza, CS0236) prima che "this" sia costruito.
+    /// </summary>
+    private BracketOrderManager BracketOrderManager => new(exchangeFactory, logger, AuditAsync, UpdatePositionRowAsync);
 
     // Dual-read ML (Fase 2a): 0/1 via Interlocked. Garantisce UN SOLO confronto remoto in volo per
     // lane — se il remoto è lento, la candela successiva salta il confronto invece di accodarne
@@ -697,29 +706,7 @@ public sealed class TradingEngine(
     /// posizione — non serve un controllo esplicito di "già impostato", perché a questo punto
     /// la posizione non esiste ancora.
     /// </summary>
-    private void ApplyAutoStops(OpenPosition pos, Order order)
-    {
-        var strat = _active.FirstOrDefault(s => s.StrategyId == order.StrategyId);
-        if (strat is null) return;
-
-        if (strat.StopLossPercent is decimal slPct && slPct > 0m)
-        {
-            pos.StopLoss = pos.Side == OrderSide.Buy
-                ? pos.EntryPrice * (1m - slPct / 100m)
-                : pos.EntryPrice * (1m + slPct / 100m);
-        }
-        if (strat.TakeProfitPercent is decimal tpPct && tpPct > 0m)
-        {
-            pos.TakeProfit = pos.Side == OrderSide.Buy
-                ? pos.EntryPrice * (1m + tpPct / 100m)
-                : pos.EntryPrice * (1m - tpPct / 100m);
-        }
-        if (strat.TrailingStopPercent is decimal trailPct && trailPct > 0m)
-        {
-            pos.TrailingStopPercent = trailPct;
-            pos.BestPriceSinceEntry = pos.EntryPrice;
-        }
-    }
+    private void ApplyAutoStops(OpenPosition pos, Order order) => AutoStopApplier.Apply(pos, order, _active);
 
     // ---------------------------------------------------------------- riconciliazione ordini incerti
 
@@ -1141,68 +1128,15 @@ public sealed class TradingEngine(
     /// <see cref="SafetyConfiguration.UseExchangeRestingStops"/> è attivo (default OFF). Mai bloccante: ogni
     /// fallimento è solo loggato e gli stop software restano la fonte di verità.
     /// </summary>
-    private async Task TryPlaceRestingBracketAsync(OpenPosition pos, TradingCredentials creds, DateTime ts, CancellationToken ct)
-    {
-        var closeSide = pos.Side == OrderSide.Buy ? "SELL" : "BUY"; // ordine di protezione = lato opposto
-        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
-
-        async Task PlaceAsync(decimal trigger, bool isStopLoss, Action<string> onPlaced)
-        {
-            var clientId = Guid.NewGuid().ToString("N");
-            var res = await futuresClient.PlaceFuturesTriggerOrderAsync(new PlaceOrderRequest
-            {
-                Symbol = pos.Symbol,
-                Side = closeSide,
-                Type = isStopLoss ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
-                Quantity = pos.Quantity,
-                TriggerPrice = trigger,
-                ClientOrderId = clientId,
-                Credentials = creds,
-            }, isStopLoss, ct);
-
-            if (res.Success)
-            {
-                onPlaced(clientId);
-                await AuditAsync("RestingStopPlaced", new { pos.PositionId, kind = isStopLoss ? "stop" : "target", trigger, clientId }, ts, ct);
-            }
-            else
-            {
-                logger.LogWarning("Ordine resting {Kind} non piazzato per {Pid}: {Err}. Resta lo stop software.",
-                    isStopLoss ? "stop" : "target", pos.PositionId, res.Error);
-            }
-        }
-
-        if (pos.StopLoss is decimal sl && sl > 0m) await PlaceAsync(sl, isStopLoss: true, id => pos.StopOrderId = id);
-        if (pos.TakeProfit is decimal tp && tp > 0m) await PlaceAsync(tp, isStopLoss: false, id => pos.TakeProfitOrderId = id);
-
-        // [M3] Persistenza immediata degli id: senza, un riavvio perdeva i clientOrderId dei
-        // trigger REALI ancora armati sull'exchange e la chiusura non poteva più cancellarli.
-        if (pos.StopOrderId is not null || pos.TakeProfitOrderId is not null)
-        {
-            await UpdatePositionRowAsync(pos, ct);
-        }
-    }
+    private Task TryPlaceRestingBracketAsync(OpenPosition pos, TradingCredentials creds, DateTime ts, CancellationToken ct) =>
+        BracketOrderManager.TryPlaceRestingBracketAsync(pos, creds, _state.ExchangeName, ts, ct);
 
     /// <summary>
     /// [P0-5] Cancella gli ordini TRIGGER resting prima di chiudere a mercato, così non restano
     /// ordini orfani sull'exchange. INERTE se non ci sono id (feature off, default).
     /// </summary>
-    private async Task TryCancelRestingBracketAsync(OpenPosition pos, TradingCredentials creds, CancellationToken ct)
-    {
-        var futuresClient = exchangeFactory.CreateFutures(_state.ExchangeName);
-        foreach (var clientId in new[] { pos.StopOrderId, pos.TakeProfitOrderId })
-        {
-            if (string.IsNullOrEmpty(clientId)) continue;
-            var res = await futuresClient.CancelFuturesOrderAsync(pos.Symbol, clientId, creds, ct);
-            if (!res.Success)
-            {
-                logger.LogWarning("Cancellazione ordine resting {Cid} per {Pid} fallita: {Err}.", clientId, pos.PositionId, res.Error);
-            }
-        }
-        pos.StopOrderId = null;
-        pos.TakeProfitOrderId = null;
-        await UpdatePositionRowAsync(pos, ct);   // [M3] azzeramento persistito come il piazzamento
-    }
+    private Task TryCancelRestingBracketAsync(OpenPosition pos, TradingCredentials creds, CancellationToken ct) =>
+        BracketOrderManager.TryCancelRestingBracketAsync(pos, creds, _state.ExchangeName, ct);
 
     // ---------------------------------------------------------------- esecuzione a fette (TWAP/VWAP/Iceberg)
 
