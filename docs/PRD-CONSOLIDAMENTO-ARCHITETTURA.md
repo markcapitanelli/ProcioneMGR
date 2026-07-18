@@ -2,8 +2,10 @@
 
 **Stato**: **tutte e 3 le fasi completate** — Fase 0 (PR #13, 2026-07-17), Fase 1 (PR
 #14/#15/#16, 2026-07-18, CQRS/Mediator + Intervento B, dettagli §4.7-§4.8), Fase 2 (PR #17,
-2026-07-18, tracing distribuito, dettagli §5.2). Unico item aperto: le 5 pagine Razor >780
-righe non-`Trading.razor` di P1-5, non bloccanti (§3.6). Resta solo il Backlog Condizionale
+2026-07-18, tracing distribuito, dettagli §5.2). Audit leggero post-Fase 1 (§8.1) eseguito il
+2026-07-18: decomposizione confermata behavior-preserving, nessuna regressione, unico rilievo
+(gap di test su `FuturesPositionReconciler`) chiuso in loco. Unico item aperto: le 5 pagine
+Razor >780 righe non-`Trading.razor` di P1-5, non bloccanti (§3.6). Resta solo il Backlog Condizionale
 (§6), non pianificato per definizione finché non si attiva un criterio. **Creato**:
 2026-07-17 · **Tipo**: documento vivo (aggiornare ad ogni fase completata, vedi §8)
 
@@ -477,13 +479,17 @@ design originale, emersi durante l'esecuzione:
 - **`CloseAllPositionsCommand` non creato**: nonostante compaia nello schizzo di cartelle di
   §4.3, il suo unico chiamante reale è `LanePromoter` — che §4.2 esclude esplicitamente
   dall'adottare Mediator. Crearlo sarebbe stata superficie morta senza alcun chiamante Blazor.
-- **Gap di test preesistente segnalato, non colmato**: `FuturesPositionReconciler` (da
-  `ReconcileFuturesPositionsAsync`) resta senza un test reale dedicato — copertura solo
-  indiretta via `ProcessCandleAsync`. Scrivere un test dedicato è lavoro futuro valido, fuori
-  dallo scope di "estrarre senza cambiare comportamento" di questa fase.
-- **Audit leggero di fine fase** (§8): non eseguito come sweep separato — la verifica è
-  avvenuta incrementalmente, un collaboratore alla volta, con la suite reale su
-  `TradingEngine` (49 test) rilanciata dopo ogni singola estrazione e mai bypassata.
+- **Gap di test preesistente segnalato, poi colmato (2026-07-18, audit §8)**:
+  `FuturesPositionReconciler` (da `ReconcileFuturesPositionsAsync`) era rimasto senza un test
+  reale dedicato — copertura solo indiretta via `ProcessCandleAsync`, per giunta con il fake
+  futures che ritorna `GetPositionAsync = null` fisso, quindi i tre rami reali (chiusura forzata
+  su flat remoto, allerta-una-volta su posizione remota non tracciata, no-op su posizione
+  combaciante) non erano mai esercitati. Chiuso con `FuturesPositionReconcilerTests` (8 test): il
+  collaboratore è ora testato in isolamento con un `GetPositionAsync` controllabile e un delegato
+  di chiusura che registra le invocazioni — additivo, zero modifiche al codice di produzione.
+- **Audit leggero di fine fase** (§8): eseguito il 2026-07-18 (vedi la nota in §8). Durante la
+  Fase 1 la verifica era comunque avvenuta incrementalmente, un collaboratore alla volta, con la
+  suite reale su `TradingEngine` (49 test) rilanciata dopo ogni singola estrazione e mai bypassata.
 
 ---
 
@@ -592,3 +598,28 @@ safety dei fondi.
 Il §6 (Backlog Condizionale) resta una sezione viva: nuove idee scartate con riserva vanno
 aggiunte lì, con un criterio di attivazione esplicito, invece di aprire un nuovo documento
 per ciascuna.
+
+### 8.1 — Audit leggero post-Fase 1 (2026-07-18) — ESEGUITO
+
+Perimetro: solo il modulo `Services/Trading/*`. Metodo: sweep stub/TODO/eccezioni-mute/RNG/
+sync-over-async sul modulo + lettura integrale dei collaboratori a soldi veri estratti
+dall'Intervento B (`PositionOpener`, `PositionCloser`, `BracketOrderManager`,
+`FuturesPositionReconciler`, i 7 command / 5 query handler, `LoggingBehavior`,
+`TradingPageService`) + analisi dei caller + build dell'intera soluzione + esecuzione del
+sottoinsieme trading della suite reale (89 test verdi su Postgres).
+
+**Conclusione: la decomposizione ha preservato la safety dei fondi, nessuna regressione.** Le
+guardie critiche del residuo `TradingEngine` sono tutte intatte (blocco Live su master key
+placeholder, cap leva/sizing all'avvio, `SafetyChecker.Evaluate` prima di ogni apertura con
+escalation `RequiresEmergencyStop`, serializzazione via `_gate`); i collaboratori ricevono
+`state`/`positions` per riferimento e mutano esattamente come il codice inline; la cascata di
+riconciliazione di rete incerta (anti-oversell, anti-posizione-fantasma) è integra. Falsi
+allarmi dello sweep verificati e archiviati: il `.Result` in `TradingPageService.RefreshAsync`
+è letto **dopo** `Task.WhenAll` (pattern corretto, non sync-over-async); `PairsSpreadAnalyzer`
+in `Services/TimeSeries` è una classe statica **viva** e testata (`RollingZScore`), diversa dal
+servizio DI morto rimosso da P0-1.
+
+**Unico rilievo → chiuso nello stesso audit**: il gap di test dedicato su
+`FuturesPositionReconciler` (già segnalato in §4.8), un percorso a soldi veri (forza la chiusura
+al miglior prezzo noto come `Liquidation/ExternalClose`). Colmato con `FuturesPositionReconcilerTests`
+(8 test, tutti i rami + guardie). Vedi §4.8.
