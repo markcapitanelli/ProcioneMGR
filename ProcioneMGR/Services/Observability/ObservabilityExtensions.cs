@@ -1,6 +1,7 @@
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 namespace ProcioneMGR.Services.Observability;
 
@@ -36,7 +37,15 @@ public static class ObservabilityExtensions
             })
             // WithLogging registra da solo l'OpenTelemetryLoggerProvider nel logging pipeline:
             // i log ILogger esistenti escono anche via OTLP (Loki), oltre che su console.
-            .WithLogging(l => l.AddOtlpExporter(ConfigureOtlp));
+            .WithLogging(l => l.AddOtlpExporter(ConfigureOtlp))
+            // Fase 2: tracing distribuito (Tempo). Strumenta le richieste HTTP in ingresso
+            // (Blazor/endpoint) e le chiamate gRPC in uscita (verso ProcioneMGR.Ml/.Trading):
+            // senza, un problema cross-servizio è visibile solo come log e metriche disgiunte
+            // per processo, senza correlazione di span.
+            .WithTracing(t => t
+                .AddAspNetCoreInstrumentation()
+                .AddGrpcClientInstrumentation()
+                .AddOtlpExporter(ConfigureOtlp));
 
         return services;
     }
