@@ -1,5 +1,5 @@
-# Stack di observability locale per la Fase 0 (vedi infra/observability/README.md):
-# OTel Collector (riceve OTLP dall'app) -> Prometheus (metriche) + Loki (log) -> Grafana (UI).
+# Stack di observability locale per la Fase 0/Fase 2 (vedi infra/observability/README.md):
+# OTel Collector (riceve OTLP dall'app) -> Prometheus (metriche) + Loki (log) + Tempo (tracce) -> Grafana (UI).
 # Solo per sviluppo locale: credenziali fittizie, nessun dato sensibile, tutto su Docker Desktop.
 name: procionemgr-observability
 
@@ -15,6 +15,15 @@ services:
     depends_on:
       - loki
       - prometheus
+      - tempo
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo/tempo-config.yaml"]
+    volumes:
+      - ./tempo-config.yaml:/etc/tempo/tempo-config.yaml:ro
+    # Nessuna porta esposta sull'host: Tempo riceve OTLP solo dal collector (rete interna del
+    # compose) ed è raggiunto in query solo da Grafana, sulla stessa rete.
 
   prometheus:
     image: prom/prometheus:v3.1.0
@@ -43,3 +52,4 @@ services:
     depends_on:
       - prometheus
       - loki
+      - tempo

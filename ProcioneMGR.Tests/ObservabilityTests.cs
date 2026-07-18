@@ -159,6 +159,7 @@ public class ObservabilityWiringTests
         using var provider = services.BuildServiceProvider();
         Assert.NotNull(provider.GetRequiredService<OpenTelemetry.Metrics.MeterProvider>());
         Assert.NotNull(provider.GetRequiredService<OpenTelemetry.Logs.LoggerProvider>());
+        Assert.NotNull(provider.GetRequiredService<OpenTelemetry.Trace.TracerProvider>());
     }
 
     [Fact]
@@ -171,5 +172,6 @@ public class ObservabilityWiringTests
         using var provider = services.BuildServiceProvider();
         Assert.Null(provider.GetService<OpenTelemetry.Metrics.MeterProvider>());
         Assert.Null(provider.GetService<OpenTelemetry.Logs.LoggerProvider>());
+        Assert.Null(provider.GetService<OpenTelemetry.Trace.TracerProvider>());
     }
 }
