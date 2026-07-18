@@ -1,10 +1,11 @@
 # PRD — Consolidamento Architetturale di ProcioneMGR
 
-**Stato**: **Fase 0 completa e mergiata** (PR #13, 2026-07-17) e **Fase 1 completa** (2026-07-18
-— PR #14/#15/#16, CQRS/Mediator + Intervento B, dettagli §4.7-§4.8) — tutti gli item P0-P3
-fatti, TRANNE le 5 pagine Razor >780 righe non-`Trading.razor` di P1-5, non bloccanti (§3.6).
-Fase 2 non iniziata (dettagli §5). **Creato**: 2026-07-17 · **Tipo**: documento vivo (aggiornare
-ad ogni fase completata, vedi §8)
+**Stato**: **tutte e 3 le fasi completate** — Fase 0 (PR #13, 2026-07-17), Fase 1 (PR
+#14/#15/#16, 2026-07-18, CQRS/Mediator + Intervento B, dettagli §4.7-§4.8), Fase 2 (PR #17,
+2026-07-18, tracing distribuito, dettagli §5.2). Unico item aperto: le 5 pagine Razor >780
+righe non-`Trading.razor` di P1-5, non bloccanti (§3.6). Resta solo il Backlog Condizionale
+(§6), non pianificato per definizione finché non si attiva un criterio. **Creato**:
+2026-07-17 · **Tipo**: documento vivo (aggiornare ad ogni fase completata, vedi §8)
 
 ## Scopo di questo documento
 
@@ -510,16 +511,16 @@ retention osservato, non preventivamente.
 Additivo, stesso gate `Observability:Enabled` (default off) già esistente per
 metrics/logging — costo zero quando disattivato:
 
-- `ObservabilityExtensions.cs`: aggiungere
+- [x] `ObservabilityExtensions.cs`: aggiungere
   `.WithTracing(t => t.AddAspNetCoreInstrumentation().AddGrpcClientInstrumentation().AddOtlpExporter(...))`
   accanto a `.WithMetrics`/`.WithLogging` esistenti.
-- `infra/observability/otel-collector-config.yaml`: aggiungere una pipeline `traces:`
+- [x] `infra/observability/otel-collector-config.yaml`: aggiungere una pipeline `traces:`
   (il receiver `otlp` è già configurato, serve solo l'exporter verso Tempo e la voce in
   `service.pipelines`).
-- `infra/observability/docker-compose.yml`: aggiungere il servizio Tempo.
-- `infra/observability/grafana/provisioning/datasources/datasources.yaml`: aggiungere un
+- [x] `infra/observability/docker-compose.yml`: aggiungere il servizio Tempo.
+- [x] `infra/observability/grafana/provisioning/datasources/datasources.yaml`: aggiungere un
   datasource `type: tempo`, stesso pattern già in uso per Prometheus/Loki.
-- **Non** creare `infra/k8s/observability/` — coerente con §1 (K8s resta in gran parte
+- [x] **Non** creare `infra/k8s/observability/` — coerente con §1 (K8s resta in gran parte
   teorico, lo stack di observability oggi vive solo via `docker-compose`) — a meno che
   l'operatore non stia usando attivamente il cluster `kind` per debug quotidiano al
   momento di eseguire questa fase.
@@ -531,6 +532,20 @@ fondi; resta un'alternativa produttiva per una sessione in cui manca voglia o te
 chirurgia su `TradingEngine.cs`. **Rischio**: basso — additivo, i pacchetti
 `OpenTelemetry.*` sono già referenziati nel progetto, l'estensione a tracing non è
 un'integrazione da zero. **Approvazione esplicita**: no.
+
+### 5.2 — FASE 2 COMPLETATA (2026-07-18)
+
+[PR #17](https://github.com/markcapitanelli/ProcioneMGR/pull/17), nessuno scostamento dal
+design: tutte e 5 le azioni di §5.1 eseguite come descritto. `OpenTelemetry.Instrumentation.AspNetCore`
+e `OpenTelemetry.Instrumentation.GrpcNetClient` aggiunti come nuovi pacchetti NuGet (non erano
+ancora referenziati, solo `OpenTelemetry.Extensions.Hosting`/`.Exporter.OpenTelemetryProtocol`
+lo erano) — propagati agli altri 3 host via `ProjectReference` transitivo, verificato con
+build dell'intera soluzione. `ObservabilityWiringTests` esistenti estesi con l'asserzione su
+`TracerProvider`, stesso pattern già in uso per Meter/LoggerProvider. Suite: 1035/1035.
+
+Con questo, **tutte e 3 le fasi di questo PRD sono completate** (Fase 0, Fase 1, Fase 2). Resta
+aperto solo il Backlog Condizionale (§6), per definizione non pianificato finché non si
+verifica il relativo criterio di attivazione.
 
 ---
 
@@ -556,7 +571,7 @@ nessuno si verifica, la voce resta non pianificata indefinitamente, e questo è 
 |---|---|---|---|---|---|
 | **Fase 0** | Hardening — bonifica rami secchi, `PollingTimer`, retry Postgres, estrazione orchestrazione Razor, auth gRPC, lifetimes HttpClient, fee configurabile, micro-fix, master key, paginazione gRPC | Basso | Porting del lavoro P0 dal worktree `zealous-ellis-b6357f` | No | ✅ fatta (2026-07-17), tranne 5/6 pagine Razor di P1-5 — vedi §3.6 |
 | **Fase 1** | CQRS/MediatR — decomposizione `TradingEngine` (Intervento A: comandi/query; Intervento B: estrazione cascata privata) | **Alto** | Segue, dentro Fase 0: P2-8 (fee configurabile, fatto) ed estrazione di `Trading.razor` in `TradingPageService` (fatta) — entrambe le precondizioni sono soddisfatte | Strategica già data; gate operativo = PR verdi + smoke test a ogni merge sull'Intervento B | ✅ fatta (2026-07-18, PR #14/#15/#16) — vedi §4.8 |
-| **Fase 2** | Osservabilità distribuita — tracing (Tempo) | Basso | Nessuna tecnica; raccomandata dopo Fase 1 per priorità, non per necessità | No | Non iniziata |
+| **Fase 2** | Osservabilità distribuita — tracing (Tempo) | Basso | Nessuna tecnica; raccomandata dopo Fase 1 per priorità, non per necessità | No | ✅ fatta (2026-07-18, PR #17) — vedi §5.2 |
 | **Backlog condizionale** | Pipeline asincrone, caching generalizzato, Mimir, deploy K8s observability | N/A | Attivato solo dai trigger di §6 | N/A — non pianificato | N/A |
 
 ---
