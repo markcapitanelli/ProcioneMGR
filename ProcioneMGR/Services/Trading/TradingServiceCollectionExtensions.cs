@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Backtesting;
@@ -54,6 +55,13 @@ public static class TradingServiceCollectionExtensions
         IConfiguration configuration,
         bool isTradingServiceHost = false)
     {
+        // Lettura resiliente delle credenziali (bug B2): serve al TradingEngine (avvio Testnet/Live
+        // con errore chiaro invece di AuthenticationTagMismatchException grezza) e alla pagina
+        // /settings/exchanges. Registrata QUI perché è la composizione condivisa da entrambi gli
+        // host che decifrano credenziali (monolite e procionemgr-trading). TryAdd: i test possono
+        // sostituirla registrando prima la propria.
+        services.TryAddSingleton<IExchangeCredentialReader, ExchangeCredentialReader>();
+
         var useRemote = !isTradingServiceHost && configuration.GetValue<bool>("Trading:UseRemoteTrading");
 
         if (useRemote)
@@ -138,7 +146,8 @@ public static class TradingServiceCollectionExtensions
                     // Dual-read ML (Fase 2a): opzionali. GetService (non Required): null se Ml:RemoteUrl non è
                     // configurato → confronto spento, comportamento identico a prima.
                     sp.GetService<ML.IMlComparisonClient>(),
-                    sp.GetService<IOptionsMonitor<ML.MlComparisonOptions>>()));
+                    sp.GetService<IOptionsMonitor<ML.MlComparisonOptions>>(),
+                    sp.GetRequiredService<IExchangeCredentialReader>()));
 
                 services.AddSingleton<IHostedService>(sp => new TradingWorker(
                     sp.GetRequiredKeyedService<ITradingEngine>(laneId),
