@@ -1,7 +1,10 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
+using ProcioneMGR.Services.Notifications;
+using ProcioneMGR.Services.Observability;
 using ProcioneMGR.Services.Pipeline;
 
 namespace ProcioneMGR.Services.Llm;
@@ -17,9 +20,18 @@ public interface IPipelineSupervisor
     /// <summary>
     /// Analizza un run completato: legge la sua <c>PipelineRecommendation</c>, chiede un parere
     /// all'LLM e persiste un <see cref="SupervisorAdvisory"/> come PipelineArtifact. Idempotente per
-    /// run (non riscrive se un advisory esiste già). Restituisce false se saltato.
+    /// run (non riscrive se un advisory esiste già). Un errore TRANSITORIO (credito, rate-limit,
+    /// rete, breaker aperto) non persiste nulla: il run resta pendente e verrà ritentato da solo.
+    /// Restituisce false se saltato o rinviato.
     /// </summary>
-    Task<bool> SuperviseRunAsync(Guid runId, CancellationToken ct);
+    Task<bool> SuperviseRunAsync(Guid runId, CancellationToken ct, bool forceProbe = false);
+
+    /// <summary>
+    /// Elimina gli advisory in errore dei run completati da <paramref name="since"/> in poi, così
+    /// il worker li rianalizza (l'idempotenza per-run altrimenti li blocca per sempre). Azione
+    /// manuale-only dalla UI: gli errori più vecchi della finestra restano come record storico.
+    /// </summary>
+    Task<int> DeleteErrorAdvisoriesAsync(DateTime since, CancellationToken ct);
 }
 
 /// <summary>
@@ -32,7 +44,11 @@ public interface IPipelineSupervisor
 public sealed class PipelineSupervisor(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     ILlmClient llm,
-    ILogger<PipelineSupervisor> logger) : IPipelineSupervisor
+    ILlmCallGuard guard,
+    IOptionsMonitor<LlmOptions> options,
+    ILogger<PipelineSupervisor> logger,
+    ProcioneMetrics? metrics = null,
+    INotifier? notifier = null) : IPipelineSupervisor
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
@@ -41,7 +57,9 @@ public sealed class PipelineSupervisor(
         Ricevi il riepilogo (PipelineRecommendation) di UN run di ricerca già concluso: regime di
         mercato, volatilità, sentiment, quanti candidati sono stati valutati e quanti sono
         sopravvissuti alla validazione, il migliore, gli alert e le azioni suggerite dal motore, e i
-        limiti di rischio proposti.
+        limiti di rischio proposti. Ricevi anche il CONTESTO OPERATIVO attuale della piattaforma
+        (stato delle corsie di trading, eventuali quarantene, regime di mercato del run): usalo per
+        ancorare il parere alla situazione reale, non solo ai numeri del run.
 
         Il tuo compito:
         1. Scrivere un riepilogo esecutivo BREVE e LEGGIBILE in italiano per l'utente.
@@ -66,7 +84,7 @@ public sealed class PipelineSupervisor(
         }
         """;
 
-    public async Task<bool> SuperviseRunAsync(Guid runId, CancellationToken ct)
+    public async Task<bool> SuperviseRunAsync(Guid runId, CancellationToken ct, bool forceProbe = false)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
@@ -84,25 +102,41 @@ public sealed class PipelineSupervisor(
             return false; // idempotente
         }
 
-        var userPrompt = BuildUserPrompt(run);
+        var userPrompt = await BuildUserPromptAsync(db, run, ct);
+
+        var result = await guard.ExecuteAsync("advisory",
+            token => llm.CompleteAsync(SystemPrompt, userPrompt, token), forceProbe: forceProbe, ct: ct);
 
         SupervisorAdvisory advisory;
-        try
+        switch (result.Outcome)
         {
-            var raw = await llm.CompleteAsync(SystemPrompt, userPrompt, ct);
-            advisory = ParseAdvisory(raw);
-        }
-        catch (Exception ex)
-        {
-            // Persistiamo comunque un advisory "di errore" così il run non viene riprocessato
-            // all'infinito (un tentativo per run) e l'utente vede cos'è andato storto.
-            logger.LogError(ex, "Supervisione AI fallita per il run {RunId}.", runId);
-            advisory = new SupervisorAdvisory
-            {
-                IsError = true,
-                Summary = $"Supervisione AI non riuscita: {ex.Message}",
-                Confidence = "bassa",
-            };
+            case LlmCallOutcome.Ok:
+                try
+                {
+                    advisory = ParseAdvisory(result.Text!);
+                }
+                catch (Exception ex)
+                {
+                    // Risposta arrivata ma non interpretabile: errore permanente, l'utente deve vederlo.
+                    logger.LogError(ex, "Advisory AI non interpretabile per il run {RunId}.", runId);
+                    advisory = ErrorAdvisory(ex.Message);
+                }
+                break;
+
+            case LlmCallOutcome.SkippedNotConfigured:
+            case LlmCallOutcome.SkippedBreakerOpen:
+                logger.LogDebug("Supervisione rinviata per il run {RunId}: {Cause}.", runId, result.Cause);
+                return false; // nessun artifact: il run resta pendente
+
+            case LlmCallOutcome.FailedRetryable:
+                logger.LogWarning("Supervisione rinviata per il run {RunId} (errore transitorio: {Cause}); verrà ritentata da sola.",
+                    runId, result.Cause);
+                return false; // nessun artifact: il run resta pendente
+
+            default: // FailedPermanent
+                logger.LogError(result.Error, "Supervisione AI fallita per il run {RunId}.", runId);
+                advisory = ErrorAdvisory(result.Error?.Message ?? result.Cause);
+                break;
         }
 
         advisory.ModelUsed = llm.Model;
@@ -118,20 +152,125 @@ public sealed class PipelineSupervisor(
         });
         await db.SaveChangesAsync(ct);
 
+        metrics?.RecordLlmAdvisory(advisory.IsError);
         logger.LogInformation("Advisory AI scritto per il run {RunId} (errore={IsError}).", runId, advisory.IsError);
+
+        if (!advisory.IsError && advisory.DecisionsForUser.Count > 0 && options.CurrentValue.NotifyDecisions && notifier is not null)
+        {
+            await notifier.NotifyAsync(NotificationSeverity.Info, "Advisory AI: decisioni in attesa",
+                $"Run {runId.ToString("N")[..8]}: {advisory.Summary}\n" +
+                $"{advisory.DecisionsForUser.Count} decisioni da confermare in /admin/ai-supervisor.", ct);
+        }
+
         return true;
     }
 
-    private static string BuildUserPrompt(PipelineRun run)
+    public async Task<int> DeleteErrorAdvisoriesAsync(DateTime since, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        // Solo advisory di run ancora nella finestra del worker: cancellare i più vecchi non serve
+        // (non verrebbero comunque ripresi) e distruggerebbe l'unico record di cos'è successo.
+        var candidates = await db.PipelineArtifacts
+            .Where(a => a.Kind == LlmArtifactKinds.Advisory)
+            .Where(a => db.PipelineRuns.Any(r => r.Id == a.RunId && r.CompletedAt != null && r.CompletedAt >= since))
+            .ToListAsync(ct);
+
+        var toDelete = candidates.Where(a =>
+        {
+            try { return JsonSerializer.Deserialize<SupervisorAdvisory>(a.PayloadJson, JsonOpts)?.IsError == true; }
+            catch { return false; }
+        }).ToList();
+
+        if (toDelete.Count == 0) return 0;
+
+        db.PipelineArtifacts.RemoveRange(toDelete);
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Eliminati {Count} advisory in errore: i run verranno rianalizzati dal worker.", toDelete.Count);
+        return toDelete.Count;
+    }
+
+    private static SupervisorAdvisory ErrorAdvisory(string message) => new()
+    {
+        IsError = true,
+        Summary = $"Supervisione AI non riuscita: {message}",
+        Confidence = "bassa",
+    };
+
+    private const string RegimeProfileKind = "RegimeProfile";
+
+    /// <summary>
+    /// Prompt del run + contesto operativo compatto (corsie, quarantene, regime del run). Ogni
+    /// sezione di contesto è DIFENSIVA: se una lettura fallisce, la sezione si salta e l'advisory
+    /// si fa comunque — meglio un parere con meno contesto che nessun parere.
+    /// </summary>
+    private async Task<string> BuildUserPromptAsync(ApplicationDbContext db, PipelineRun run, CancellationToken ct)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Run: {run.Id}  Stato: {run.Status}  Trigger: {run.Trigger}");
         sb.AppendLine($"Conclusione del motore: {run.Conclusion}");
+
+        try
+        {
+            var lanes = await db.TradingEngineStates.AsNoTracking().OrderBy(s => s.LaneId).ToListAsync(ct);
+            if (lanes.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("CORSIE DI TRADING (stato attuale):");
+                foreach (var l in lanes)
+                {
+                    sb.AppendLine($"  - Corsia {l.LaneId}: {l.Mode}{(l.IsRunning ? ", in esecuzione" : ", ferma")}, " +
+                                  $"{(string.IsNullOrWhiteSpace(l.Symbol) ? "nessuna serie" : $"{l.Symbol} {l.Timeframe}")}, " +
+                                  $"capitale {l.TotalCapital:F0}, PnL realizzato {l.RealizedPnl:F2}, max drawdown {l.MaxDrawdownPercent:F1}%");
+                }
+            }
+        }
+        catch (Exception ex) { logger.LogDebug(ex, "Sezione corsie saltata nel prompt advisory."); }
+
+        try
+        {
+            var quarantines = await db.LaneQuarantines.AsNoTracking().OrderBy(q => q.LaneId).ToListAsync(ct);
+            sb.AppendLine();
+            if (quarantines.Count == 0)
+            {
+                sb.AppendLine("QUARANTENE: nessuna corsia in quarantena.");
+            }
+            else
+            {
+                sb.AppendLine("CORSIE IN QUARANTENA (bloccate finché un umano non verifica):");
+                foreach (var q in quarantines)
+                {
+                    sb.AppendLine($"  - Corsia {q.LaneId} dal {q.CreatedAtUtc:yyyy-MM-dd}: {Truncate(q.Reason, 200)}");
+                }
+            }
+        }
+        catch (Exception ex) { logger.LogDebug(ex, "Sezione quarantene saltata nel prompt advisory."); }
+
+        try
+        {
+            var regimeJson = await db.PipelineArtifacts.AsNoTracking()
+                .Where(a => a.RunId == run.Id && a.Kind == RegimeProfileKind)
+                .Select(a => a.PayloadJson)
+                .FirstOrDefaultAsync(ct);
+            if (regimeJson is not null &&
+                JsonSerializer.Deserialize<RegimeOutput>(regimeJson, JsonOpts) is { } regime)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"REGIME DI MERCATO del run: {regime.CurrentRegimeLabel} (id {regime.CurrentRegimeId}), " +
+                              $"silhouette {regime.SilhouetteScore:F2}, {regime.Profiles.Count} profili.");
+            }
+        }
+        catch (Exception ex) { logger.LogDebug(ex, "Sezione regime saltata nel prompt advisory."); }
+
         sb.AppendLine();
         sb.AppendLine("PipelineRecommendation (JSON grezzo prodotto dal motore):");
-        sb.AppendLine(string.IsNullOrWhiteSpace(run.RecommendationJson) ? "{}" : run.RecommendationJson);
+        sb.AppendLine(Truncate(string.IsNullOrWhiteSpace(run.RecommendationJson) ? "{}" : run.RecommendationJson, 8000));
         return sb.ToString();
     }
+
+    /// <summary>Il prompt deve restare bounded: il RecommendationJson può crescere coi run grossi.</summary>
+    private static string Truncate(string value, int max)
+        => value.Length <= max ? value : value[..max] + "\n... [troncato]";
 
     /// <summary>Estrae e deserializza l'oggetto JSON dalla risposta del modello, con tolleranza a testo attorno.</summary>
     public static SupervisorAdvisory ParseAdvisory(string raw)
