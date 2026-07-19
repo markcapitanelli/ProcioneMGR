@@ -226,6 +226,33 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentScorer, P
 builder.Services.AddScoped<ProcioneMGR.Services.AltData.IAltDataSyncService, ProcioneMGR.Services.AltData.AltDataSyncService>();
 builder.Services.AddSingleton<ProcioneMGR.Services.AltData.INewsImpactAnalyzer, ProcioneMGR.Services.AltData.NewsImpactAnalyzer>();
 
+// --- Sentiment 2.0: serie di market mood (Fear & Greed + derivati Binance, API senza chiave) ---
+builder.Services.Configure<ProcioneMGR.Services.Sentiment.SentimentOptions>(builder.Configuration.GetSection("Sentiment"));
+builder.Services.AddHttpClient("SentimentFearGreed", c => c.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddHttpClient("SentimentBinanceFutures", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(15);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("ProcioneMGR/1.0");
+});
+builder.Services.AddSingleton<IEnumerable<ProcioneMGR.Services.Sentiment.Metrics.ISentimentMetricSource>>(sp =>
+{
+    var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+    var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Sentiment.SentimentOptions>>();
+    return new List<ProcioneMGR.Services.Sentiment.Metrics.ISentimentMetricSource>
+    {
+        new ProcioneMGR.Services.Sentiment.Metrics.FearGreedClient(httpClientFactory),
+        new ProcioneMGR.Services.Sentiment.Metrics.BinanceFuturesSentimentClient(options.CurrentValue.Symbols, httpClientFactory),
+    };
+});
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSourceHealthRegistry>();
+builder.Services.AddScoped<ProcioneMGR.Services.Sentiment.Metrics.ISentimentMetricSyncService, ProcioneMGR.Services.Sentiment.Metrics.SentimentMetricSyncService>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSnapshotCache>();
+builder.Services.AddScoped<ProcioneMGR.Services.Sentiment.ISentimentSnapshotService, ProcioneMGR.Services.Sentiment.SentimentSnapshotService>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentNewsProvider, ProcioneMGR.Services.Sentiment.SentimentNewsProvider>();
+// Worker anche singleton risolvibile: "Esegui ora" dalla UI usa la stessa istanza del hosted service.
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>());
+
 // --- Portfolio optimization (Mean-Variance, Risk Parity, HRP) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.MeanVarianceOptimizer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.RiskParityOptimizer>();

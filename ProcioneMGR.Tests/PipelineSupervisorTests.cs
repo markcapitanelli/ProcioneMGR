@@ -99,12 +99,14 @@ public class PipelineSupervisorTests
 
     private static PipelineSupervisor MakeSupervisor(
         IDbContextFactory<ApplicationDbContext> factory, ILlmClient llm,
-        LlmOptions? options = null, INotifier? notifier = null)
+        LlmOptions? options = null, INotifier? notifier = null,
+        ProcioneMGR.Services.Sentiment.SentimentSnapshotCache? sentimentCache = null)
     {
         var monitor = (options ?? new LlmOptions()).AsMonitor();
         var guard = new LlmCallGuard(llm, monitor, NullLogger<LlmCallGuard>.Instance);
         return new(factory, llm, guard, monitor,
-            LoggerFactory.Create(b => { }).CreateLogger<PipelineSupervisor>(), metrics: null, notifier: notifier);
+            LoggerFactory.Create(b => { }).CreateLogger<PipelineSupervisor>(), metrics: null, notifier: notifier,
+            sentimentCache: sentimentCache);
     }
 
     [Fact]
@@ -328,6 +330,37 @@ public class PipelineSupervisorTests
             Assert.Contains("REGIME DI MERCATO del run: trend rialzista (id 2)", prompt);
             Assert.Contains("[troncato]", prompt);
             Assert.True(prompt.Length < 15_000, $"prompt non bounded: {prompt.Length} char");
+        }
+        finally { sp.Dispose(); }
+    }
+
+    [Fact]
+    public async Task UserPrompt_IncludesMarketMoodSection_WhenCacheIsPopulated()
+    {
+        var (factory, sp) = MakeDb();
+        try
+        {
+            var runId = await SeedCompletedRunAsync(factory);
+            var cache = new ProcioneMGR.Services.Sentiment.SentimentSnapshotCache();
+            cache.Set(new ProcioneMGR.Services.Sentiment.SentimentSnapshot
+            {
+                CompositeScore = -0.6,
+                FearGreedValue = 18,
+                FearGreedLabel = "Extreme Fear",
+                Extremes = ["Fear & Greed 18 (extreme fear): mood da capitolazione, storicamente zona contrarian di accumulo."],
+                Symbols = [new ProcioneMGR.Services.Sentiment.SymbolSentiment { Symbol = "BTC", Composite = -0.7, FundingZ = -2.4 }],
+            });
+
+            var llm = new FakeLlmClient(() => """{"summary":"ok","confidence":"media"}""");
+            Assert.True(await MakeSupervisor(factory, llm, sentimentCache: cache).SuperviseRunAsync(runId, CancellationToken.None));
+
+            var prompt = llm.LastUserPrompt!;
+            Assert.Contains("SENTIMENT DI MERCATO", prompt);
+            Assert.Contains("Fear&Greed 18 (Extreme Fear)", prompt);
+            // Asserzioni senza separatore decimale: la formattazione segue la culture del host di test.
+            Assert.Contains("BTC: mood -0", prompt);
+            Assert.Contains("funding z -2", prompt);
+            Assert.Contains("capitolazione", prompt);
         }
         finally { sp.Dispose(); }
     }

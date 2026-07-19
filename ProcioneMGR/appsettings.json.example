@@ -43,6 +43,25 @@
     "ChatId": "",
     "MaxPerHour": 20
   },
+  "Sentiment": {
+    "_comment": "Sentiment 2.0: worker di raccolta del market mood (Fear & Greed di alternative.me + derivati pubblici Binance futures: long/short, taker, open interest, funding — API senza chiave). Default ON: sole GET pubbliche a cadenza modesta, e le serie Binance esistono solo per 30 giorni (i buchi sono irrecuperabili). Enabled e soglie/pesi sono hot-reload da /admin/autonomy; gli intervalli richiedono riavvio. Il composite [-1,+1] e' il mood della folla; la lettura contrarian sta nei flag degli estremi (F&G <=Low/>=High, |z|>=ExtremeZScore). EnableMlFeature=false: il fattore 'Sentiment' NON entra nelle feature ML senza opt-in esplicito. La retention esenta la fonte FearGreed (baseline lungo, ~2500 righe totali).",
+    "Enabled": true,
+    "MetricsIntervalMinutes": 30,
+    "NewsIntervalMinutes": 60,
+    "Symbols": [ "BTCUSDT", "ETHUSDT" ],
+    "NewsRetentionDays": 180,
+    "MetricRetentionDays": 400,
+    "BaselineDays": 30,
+    "ExtremeZScore": 2.0,
+    "FearGreedExtremeLow": 20,
+    "FearGreedExtremeHigh": 80,
+    "WeightNews": 0.20,
+    "WeightFearGreed": 0.25,
+    "WeightFunding": 0.20,
+    "WeightLongShort": 0.20,
+    "WeightTaker": 0.15,
+    "EnableMlFeature": false
+  },
   "Campaign": {
     "_comment": "Campaign Planner (Fase 1, PRD Autonomia): rotazione automatica delle configurazioni di caccia. DEFAULT OFF: e' IL cambio di natura da strumento ad agente, l'attivazione e' una decisione esplicita. Con Enabled=false le campagne in /campaign si preparano ma nessun run parte. L'applica passa dalla stessa catena della ri-applica (supervisore con veto + isteresi); corsie avviate al massimo in Paper, config Live sempre saltate.",
     "Enabled": false,
