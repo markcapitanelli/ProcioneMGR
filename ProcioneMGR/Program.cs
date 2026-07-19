@@ -368,6 +368,7 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Experiments.IExperimentTracke
 // per il bottone "Esegui supervisione ora" (stessa istanza del hosted service).
 builder.Services.Configure<ProcioneMGR.Services.Llm.LlmOptions>(builder.Configuration.GetSection("Llm"));
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmClient, ProcioneMGR.Services.Llm.AnthropicLlmClient>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmCallGuard, ProcioneMGR.Services.Llm.LlmCallGuard>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.IPipelineSupervisor, ProcioneMGR.Services.Llm.PipelineSupervisor>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>());
