@@ -8,11 +8,15 @@
     "MasterKey": "__CHANGE_ME_BASE64_32_BYTES__"
   },
   "Llm": {
-    "_comment": "Layer AI di supervisione del ciclo di ricerca. La API key NON va qui: si legge SOLO dalla variabile d'ambiente ANTHROPIC_API_KEY (SDK Anthropic). Enabled=true: il layer parte SOLO se la env ANTHROPIC_API_KEY e' presente (se manca resta inattivo senza errori). Confine di sicurezza: il layer AI e' SOLO advisory, non puo' avviare Live ne' bypassare SafetyChecker.",
+    "_comment": "Layer AI di supervisione del ciclo di ricerca. La API key NON va qui: si legge SOLO dalla variabile d'ambiente ANTHROPIC_API_KEY (SDK Anthropic, riletta a caldo: niente riavvio). Gli errori transitori (credito API esaurito, rate-limit, rete) aprono un circuit breaker: chiamate sospese dopo BreakerFailureThreshold errori consecutivi, notifica one-shot all'operatore, riprova automatica ogni BreakerCooldownMinutes; nessun advisory d'errore permanente per errori transitori. NotifyDecisions=true notifica (Info) le advisory riuscite con decisioni per l'utente. Confine di sicurezza: il layer AI e' SOLO advisory, non puo' avviare Live ne' bypassare SafetyChecker.",
     "Enabled": true,
     "Model": "claude-opus-4-8",
     "MaxTokens": 4096,
-    "PollIntervalMinutes": 5
+    "PollIntervalMinutes": 5,
+    "RequestTimeoutSeconds": 60,
+    "BreakerFailureThreshold": 3,
+    "BreakerCooldownMinutes": 30,
+    "NotifyDecisions": false
   },
   "EnsembleComparator": {
     "_comment": "Confronto oggettivo 'nuovo ensemble vs corrente' per la ri-applica automatica. MinSharpeImprovementPercent e' l'hysteresis: sotto questa soglia di miglioramento l'ensemble corrente resta (niente cambi per rumore).",
@@ -28,7 +32,7 @@
     "MaxPerTick": 3
   },
   "PipelineSupervisor": {
-    "_comment": "Supervisore AI del ciclo di ri-applica. Provider 'Claude' usa ILlmClient + ANTHROPIC_API_KEY; se la key manca degrada in automatico ad 'approva' (decidono le metriche), senza errori. Il supervisore puo' solo porre un VETO a una sostituzione, mai forzarla, mai avviare trading. La API key NON va qui: solo env ANTHROPIC_API_KEY.",
+    "_comment": "Supervisore AI del ciclo di ri-applica. Provider 'Claude' usa ILlmClient + ANTHROPIC_API_KEY (stesso breaker del layer advisory) ed e' hot-reload: il cambio Logging<->Claude vale dalla prossima valutazione, senza riavvio (/admin/autonomy). Se la key manca, il breaker e' aperto o la chiamata fallisce, degrada in automatico ad 'approva' (decidono le metriche), SUBITO e senza errori. Il supervisore puo' solo porre un VETO a una sostituzione, mai forzarla, mai avviare trading; un veto genera una notifica Warning. La API key NON va qui: solo env ANTHROPIC_API_KEY.",
     "Provider": "Claude",
     "TimeoutSeconds": 30
   },

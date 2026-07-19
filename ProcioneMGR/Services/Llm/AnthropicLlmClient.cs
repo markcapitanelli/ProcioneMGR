@@ -10,6 +10,18 @@ public sealed class LlmOptions
     public string Model { get; set; } = "claude-opus-4-8";
     public int MaxTokens { get; set; } = 4096;
     public int PollIntervalMinutes { get; set; } = 5;
+
+    /// <summary>Timeout della singola chiamata Claude (il SDK da solo aspetterebbe fino a 10 minuti).</summary>
+    public int RequestTimeoutSeconds { get; set; } = 60;
+
+    /// <summary>Errori transitori consecutivi dopo i quali il breaker sospende le chiamate.</summary>
+    public int BreakerFailureThreshold { get; set; } = 3;
+
+    /// <summary>Minuti tra i probe automatici a breaker aperto (il ripristino è autonomo).</summary>
+    public int BreakerCooldownMinutes { get; set; } = 30;
+
+    /// <summary>Notifica (Info) quando un'advisory riuscita contiene decisioni per l'utente. Default off.</summary>
+    public bool NotifyDecisions { get; set; }
 }
 
 /// <summary>
@@ -22,26 +34,28 @@ public sealed class AnthropicLlmClient : ILlmClient
 {
     // IOptionsMonitor (non POCO): modello/token modificabili a caldo da /admin/autonomy.
     private readonly Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> _options;
-    private readonly string? _apiKey;
     private readonly ILogger<AnthropicLlmClient> _logger;
 
     public AnthropicLlmClient(Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> options, ILogger<AnthropicLlmClient> logger)
     {
         _options = options;
         _logger = logger;
-        _apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
     }
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey);
+    // Riletta a OGNI accesso, mai cachata nel ctor: così una chiave impostata nel processo a app
+    // viva prende effetto senza riavvio. (NB Windows consegna le variabili UTENTE nuove solo ai
+    // processi nuovi: l'hot-read serve al worker che non muore più e a chiavi settate in-process.)
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
 
     public string Model => _options.CurrentValue.Model;
 
     public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct)
     {
-        if (!IsConfigured)
+        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("ANTHROPIC_API_KEY non impostata: il client LLM non è configurato.");
 
-        var client = new AnthropicClient { ApiKey = _apiKey };
+        var client = new AnthropicClient { ApiKey = apiKey };
 
         var options = _options.CurrentValue;
         var response = await client.Messages.Create(new MessageCreateParams

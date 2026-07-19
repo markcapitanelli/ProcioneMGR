@@ -5,6 +5,7 @@
 @using Microsoft.EntityFrameworkCore
 @using Microsoft.Extensions.Options
 @using ProcioneMGR.Data
+@using ProcioneMGR.Services.Agents
 @using ProcioneMGR.Services.Config
 @using ProcioneMGR.Services.Llm
 @using ProcioneMGR.Services.Monitoring.Drift
@@ -19,6 +20,7 @@
 @inject IOptionsMonitor<AutoReapplyOptions> AutoReapplyMonitor
 @inject IOptionsMonitor<PromotionEvaluatorOptions> PromotionMonitor
 @inject IOptionsMonitor<LlmOptions> LlmMonitor
+@inject IOptionsMonitor<SupervisorAgentOptions> SupervisorAgentMonitor
 @inject IOptionsMonitor<DriftMonitorOptions> DriftMonitor
 @inject ILlmClient LlmClient
 @inject LlmSupervisorWorker LlmWorker
@@ -196,9 +198,10 @@
         <p class="text-muted small">
             Dopo ogni run del pipeline, l'agente AI scrive un parere leggibile (mai comandi). La API
             key si legge SOLO dalla variabile d'ambiente <code>ANTHROPIC_API_KEY</code>: se assente,
-            il ciclo automatico resta fermo fino al riavvio con la chiave impostata (l'“Esegui ora”
-            qui sotto invece prova comunque, utile per verificare la configurazione).
-            Esiti in <a href="admin/ai-supervisor">/admin/ai-supervisor</a>.
+            il worker resta in attesa e la ritenta a ogni tick (nessun riavvio necessario). Gli
+            errori transitori (credito, rate-limit, rete) aprono un breaker che sospende le chiamate,
+            avvisa una volta e si richiude da solo quando il problema rientra — stato e recupero in
+            <a href="admin/ai-supervisor">/admin/ai-supervisor</a>.
         </p>
         <div class="row g-3 align-items-end">
             <div class="col-auto form-check form-switch ms-2">
@@ -218,11 +221,64 @@
                 <input type="number" class="form-control" @bind="_llm.PollIntervalMinutes" min="1" style="width: 8rem;" />
             </div>
             <div class="col-auto">
+                <label class="form-label">Timeout chiamata (s) @Hot()</label>
+                <input type="number" class="form-control" @bind="_llm.RequestTimeoutSeconds" min="5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Errori per sospendere @Hot()</label>
+                <input type="number" class="form-control" @bind="_llm.BreakerFailureThreshold" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Riprova ogni (min) @Hot()</label>
+                <input type="number" class="form-control" @bind="_llm.BreakerCooldownMinutes" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="llm_nd" @bind="_llm.NotifyDecisions" />
+                <label class="form-check-label" for="llm_nd">Notifica decisioni @Hot()</label>
+            </div>
+            <div class="col-auto">
                 <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Llm", _llm, "Supervisione AI")' disabled="@_busy">Salva</button>
                 <button class="btn btn-outline-secondary" @onclick="RunLlmNowAsync" disabled="@_busy">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Esegui supervisione ora
                 </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 4b. Supervisore veto (ri-applica) ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-shield-check me-1"></i>Supervisore veto del ciclo di ri-applica</span>
+        <span>
+            @if (string.Equals(_supervisorAgent.Provider, "Claude", StringComparison.OrdinalIgnoreCase))
+            { <span class="badge bg-success">Claude</span> }
+            else
+            { <span class="badge bg-secondary">Logging (solo metriche)</span> }
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Prima di ogni ri-applica automatica il supervisore può porre un <strong>veto</strong>
+            (mai forzare, mai avviare trading). Provider "Claude" usa la stessa chiave e lo stesso
+            breaker della supervisione advisory; su qualunque problema approva subito e decidono le
+            metriche. Il cambio provider vale dalla prossima valutazione, senza riavvio.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Provider @Hot()</label>
+                <select class="form-select" @bind="_supervisorAgent.Provider" style="width: 10rem;">
+                    <option value="Logging">Logging</option>
+                    <option value="Claude">Claude</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeout (s) @Hot()</label>
+                <input type="number" class="form-control" @bind="_supervisorAgent.TimeoutSeconds" min="5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("PipelineSupervisor", _supervisorAgent, "Supervisore veto")' disabled="@_busy">Salva</button>
             </div>
         </div>
     </div>
@@ -357,6 +413,7 @@
     private AutoReapplyOptions _autoReapply = new();
     private PromotionEvaluatorOptions _promotion = new();
     private LlmOptions _llm = new();
+    private SupervisorAgentOptions _supervisorAgent = new();
     private DriftMonitorOptions _drift = new();
     private MarketDataConfig _marketData = new();
     private MarketRegimeConfig _marketRegime = new();
@@ -394,6 +451,7 @@
         _autoReapply = Clone(AutoReapplyMonitor.CurrentValue);
         _promotion = Clone(PromotionMonitor.CurrentValue);
         _llm = Clone(LlmMonitor.CurrentValue);
+        _supervisorAgent = Clone(SupervisorAgentMonitor.CurrentValue);
         _drift = Clone(DriftMonitor.CurrentValue);
         _marketData = new MarketDataConfig
         {
@@ -441,10 +499,10 @@
         _busy = true; _isError = false; _status = null;
         try
         {
-            await LlmWorker.TickAsync(CancellationToken.None);
+            await LlmWorker.TickAsync(CancellationToken.None, forceProbe: true);
             SetStatus(LlmClient.IsConfigured
-                ? "Supervisione eseguita: eventuali advisory nuovi sono in /admin/ai-supervisor."
-                : "Tick eseguito SENZA API key: i run pendenti producono un advisory di errore (visibile in /admin/ai-supervisor) — imposta ANTHROPIC_API_KEY e riavvia per il ciclo automatico.", false);
+                ? "Supervisione eseguita (eventuale cooldown del breaker ignorato): esiti e stato in /admin/ai-supervisor."
+                : "Tick eseguito SENZA API key: nessuna chiamata e nessun artifact — imposta ANTHROPIC_API_KEY e il ciclo riparte da solo al prossimo tick.", false);
         }
         catch (Exception ex) { SetStatus($"Supervisione fallita: {ex.Message}", true); }
         finally { _busy = false; }

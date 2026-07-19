@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 using ProcioneMGR.Services.Ensemble;
 using ProcioneMGR.Services.Llm;
 using ProcioneMGR.Services.Pipeline;
@@ -8,15 +9,18 @@ namespace ProcioneMGR.Services.Agents;
 
 /// <summary>
 /// Optional Claude-backed supervisor. It reuses the existing <see cref="ILlmClient"/> (Anthropic SDK,
-/// key from <c>ANTHROPIC_API_KEY</c> only) to produce a qualitative judgment on a proposed ensemble
-/// swap. It has a hard timeout and degrades gracefully: if the key is missing, the call times out, or
-/// anything throws/parses wrong, it returns <c>ApproveReplacement = true</c> (defer to the metrics) so
-/// an AI problem never blocks a metrically-justified replacement. It can only VETO, never force a swap,
-/// never trade, never touch SafetyChecker (no execution service is injected).
+/// key from <c>ANTHROPIC_API_KEY</c> only) through the shared <see cref="ILlmCallGuard"/> (timeout,
+/// circuit breaker, error classification — so the veto path both consults and feeds the same breaker
+/// as the advisory path) and degrades gracefully: if the key is missing, the breaker is open, the call
+/// times out, or anything throws/parses wrong, it returns <c>ApproveReplacement = true</c> (defer to
+/// the metrics) IMMEDIATELY, so an AI problem never blocks a metrically-justified replacement. It can
+/// only VETO, never force a swap, never trade, never touch SafetyChecker (no execution service is
+/// injected).
 /// </summary>
 public sealed class ClaudeSupervisorAgent(
     ILlmClient llm,
-    SupervisorAgentOptions options,
+    ILlmCallGuard guard,
+    IOptionsMonitor<SupervisorAgentOptions> options,
     ILogger<ClaudeSupervisorAgent> logger) : IPipelineSupervisorAgent
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
@@ -53,34 +57,46 @@ public sealed class ClaudeSupervisorAgent(
         EnsembleSummary? candidateEnsemble,
         CancellationToken ct = default)
     {
-        if (!llm.IsConfigured)
-        {
-            logger.LogInformation("Supervisore (Claude): ANTHROPIC_API_KEY assente — approvo di default (decisione alle metriche).");
-            return Fallback("Supervisore Claude selezionato ma ANTHROPIC_API_KEY non impostata: decisione basata solo su metriche.");
-        }
+        var timeoutSeconds = Math.Max(5, options.CurrentValue.TimeoutSeconds);
+        var userPrompt = BuildUserPrompt(run, currentEnsemble, candidateEnsemble);
 
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(5, options.TimeoutSeconds)));
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        var result = await guard.ExecuteAsync("veto",
+            token => llm.CompleteAsync(SystemPrompt, userPrompt, token),
+            timeout: TimeSpan.FromSeconds(timeoutSeconds), ct: ct);
 
-        try
+        switch (result.Outcome)
         {
-            var userPrompt = BuildUserPrompt(run, currentEnsemble, candidateEnsemble);
-            var raw = await llm.CompleteAsync(SystemPrompt, userPrompt, linked.Token);
-            var judgment = Parse(raw);
-            judgment.Provider = Provider;
-            judgment.AnalyzedAt = DateTime.UtcNow;
-            logger.LogInformation("Supervisore (Claude): run {RunId} → approveReplacement={Approve}.", run.Id, judgment.ApproveReplacement);
-            return judgment;
-        }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
-        {
-            logger.LogWarning("Supervisore (Claude): timeout dopo {S}s per il run {RunId} — approvo di default (decisione alle metriche).", options.TimeoutSeconds, run.Id);
-            return Fallback($"Supervisore AI in timeout ({options.TimeoutSeconds}s): decisione basata solo su metriche.");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Supervisore (Claude): errore per il run {RunId} — approvo di default (decisione alle metriche).", run.Id);
-            return Fallback($"Supervisore AI non riuscito ({ex.Message}): decisione basata solo su metriche.");
+            case LlmCallOutcome.Ok:
+                try
+                {
+                    var judgment = Parse(result.Text!);
+                    judgment.Provider = Provider;
+                    judgment.AnalyzedAt = DateTime.UtcNow;
+                    logger.LogInformation("Supervisore (Claude): run {RunId} → approveReplacement={Approve}.", run.Id, judgment.ApproveReplacement);
+                    return judgment;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Supervisore (Claude): risposta non interpretabile per il run {RunId} — approvo di default (decisione alle metriche).", run.Id);
+                    return Fallback($"Supervisore AI non riuscito ({ex.Message}): decisione basata solo su metriche.");
+                }
+
+            case LlmCallOutcome.SkippedNotConfigured:
+                logger.LogInformation("Supervisore (Claude): ANTHROPIC_API_KEY assente — approvo di default (decisione alle metriche).");
+                return Fallback("Supervisore Claude selezionato ma ANTHROPIC_API_KEY non impostata: decisione basata solo su metriche.");
+
+            case LlmCallOutcome.SkippedBreakerOpen:
+                logger.LogInformation("Supervisore (Claude): chiamate sospese (breaker aperto: {Cause}) — approvo di default (decisione alle metriche).", result.Cause);
+                return Fallback($"Supervisore AI sospeso ({result.Cause}): decisione basata solo su metriche.");
+
+            default: // FailedRetryable | FailedPermanent
+                if (result.Cause == "timeout")
+                {
+                    logger.LogWarning("Supervisore (Claude): timeout dopo {S}s per il run {RunId} — approvo di default (decisione alle metriche).", timeoutSeconds, run.Id);
+                    return Fallback($"Supervisore AI in timeout ({timeoutSeconds}s): decisione basata solo su metriche.");
+                }
+                logger.LogError(result.Error, "Supervisore (Claude): errore per il run {RunId} — approvo di default (decisione alle metriche).", run.Id);
+                return Fallback($"Supervisore AI non riuscito ({result.Error?.Message ?? result.Cause}): decisione basata solo su metriche.");
         }
     }
 

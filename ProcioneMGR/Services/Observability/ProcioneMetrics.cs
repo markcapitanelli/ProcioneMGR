@@ -24,6 +24,9 @@ public sealed class ProcioneMetrics : IDisposable
     private readonly Counter<long> _executionJobs;
     private readonly Histogram<double> _executionSlippageBps;
     private readonly Counter<long> _mlComparisons;
+    private readonly Counter<long> _llmCalls;
+    private readonly Counter<long> _llmAdvisories;
+    private readonly Counter<long> _llmVetoes;
 
     public ProcioneMetrics()
     {
@@ -44,6 +47,12 @@ public sealed class ProcioneMetrics : IDisposable
             description: "Implementation shortfall degli ordini eseguiti a fette.");
         _mlComparisons = _meter.CreateCounter<long>("procione.ml.comparisons", unit: "{comparison}",
             description: "Confronti locale/remoto del segnale ml (dual-read Fase 2a), per esito.");
+        _llmCalls = _meter.CreateCounter<long>("procione.llm.calls", unit: "{call}",
+            description: "Chiamate al modello Claude per path (advisory|veto) ed esito.");
+        _llmAdvisories = _meter.CreateCounter<long>("procione.llm.advisories", unit: "{advisory}",
+            description: "Advisory di supervisione AI persistite, per esito.");
+        _llmVetoes = _meter.CreateCounter<long>("procione.llm.vetoes", unit: "{veto}",
+            description: "Veti posti dal supervisore AI sulla ri-applica.");
     }
 
     public void RecordLanePromotion(int laneId, string newMode) =>
@@ -73,6 +82,15 @@ public sealed class ProcioneMetrics : IDisposable
     /// <summary>Esito di un confronto dual-read: match | mismatch | timeout | error.</summary>
     public void RecordMlComparison(string outcome) =>
         _mlComparisons.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
+
+    /// <summary>Chiamata Claude: path advisory|veto, result ok|error|skipped_breaker|skipped_unconfigured.</summary>
+    public void RecordLlmCall(string path, string result) =>
+        _llmCalls.Add(1, new KeyValuePair<string, object?>("path", path), new KeyValuePair<string, object?>("result", result));
+
+    public void RecordLlmAdvisory(bool isError) =>
+        _llmAdvisories.Add(1, new KeyValuePair<string, object?>("esito", isError ? "error" : "ok"));
+
+    public void RecordLlmVeto() => _llmVetoes.Add(1);
 
     public void Dispose() => _meter.Dispose();
 }

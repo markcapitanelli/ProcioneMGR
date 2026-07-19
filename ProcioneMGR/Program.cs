@@ -368,6 +368,7 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Experiments.IExperimentTracke
 // per il bottone "Esegui supervisione ora" (stessa istanza del hosted service).
 builder.Services.Configure<ProcioneMGR.Services.Llm.LlmOptions>(builder.Configuration.GetSection("Llm"));
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmClient, ProcioneMGR.Services.Llm.AnthropicLlmClient>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmCallGuard, ProcioneMGR.Services.Llm.LlmCallGuard>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.IPipelineSupervisor, ProcioneMGR.Services.Llm.PipelineSupervisor>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>());
@@ -386,17 +387,12 @@ builder.Services.AddSingleton<IEnsembleComparator, EnsembleComparator>();
 
 builder.Services.Configure<ProcioneMGR.Services.Pipeline.AutoReapplyOptions>(builder.Configuration.GetSection("AutoReapply"));
 
-var supervisorAgentOptions = builder.Configuration.GetSection("PipelineSupervisor").Get<ProcioneMGR.Services.Agents.SupervisorAgentOptions>()
-                             ?? new ProcioneMGR.Services.Agents.SupervisorAgentOptions();
-builder.Services.AddSingleton(supervisorAgentOptions);
-if (string.Equals(supervisorAgentOptions.Provider, "Claude", StringComparison.OrdinalIgnoreCase))
-{
-    builder.Services.AddSingleton<ProcioneMGR.Services.Agents.IPipelineSupervisorAgent, ProcioneMGR.Services.Agents.ClaudeSupervisorAgent>();
-}
-else
-{
-    builder.Services.AddSingleton<ProcioneMGR.Services.Agents.IPipelineSupervisorAgent, ProcioneMGR.Services.Agents.LoggingSupervisorAgent>();
-}
+// Provider del supervisore-veto scelto PER CHIAMATA (hot-reload da /admin/autonomy), non al boot:
+// entrambe le implementazioni sono registrate, il delegating agent instrada su Provider corrente.
+builder.Services.Configure<ProcioneMGR.Services.Agents.SupervisorAgentOptions>(builder.Configuration.GetSection("PipelineSupervisor"));
+builder.Services.AddSingleton<ProcioneMGR.Services.Agents.LoggingSupervisorAgent>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Agents.ClaudeSupervisorAgent>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Agents.IPipelineSupervisorAgent, ProcioneMGR.Services.Agents.DelegatingSupervisorAgent>();
 
 // --- Autonomia: auto-promozione Paper→Testnet (MAI a Live) ---
 // L'evaluator decide (logica pura, testabile), il promoter agisce (stop→restart della corsia),
