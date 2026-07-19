@@ -62,6 +62,12 @@ public static class TradingServiceCollectionExtensions
         // sostituirla registrando prima la propria.
         services.TryAddSingleton<IExchangeCredentialReader, ExchangeCredentialReader>();
 
+        // Fase 3-C2 (PRD Autonomia): all'avvio, se la master key non decifra le credenziali
+        // esistenti lo si dichiara A VOCE ALTA (LogCritical + notifica + banner UI) invece di
+        // scoprirlo da un 500 o da un avvio Testnet fallito. Sola lettura: vive in ogni host.
+        services.TryAddSingleton<IMasterKeyProbe, MasterKeyProbe>();
+        services.AddHostedService<MasterKeyProbeWorker>();
+
         // Quarantena corsie (Fase 0-A3): lo store serve a ENTRAMBI gli host (la UI del monolite
         // legge/rimuove anche in modalità remota; il watchdog scrive dove gira il motore locale).
         services.TryAddSingleton<ILaneQuarantineStore, LaneQuarantineStore>();

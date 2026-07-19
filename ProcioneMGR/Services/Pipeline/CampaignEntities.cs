@@ -42,6 +42,13 @@ public class VettingCampaign
     public Guid? PendingRunId { get; set; }
 
     /// <summary>
+    /// Corsie configurate dall'ultima applica riuscita (lo "stato ATTESO di flotta" per il
+    /// riallineamento post-riavvio, Fase 3-C3): in osservazione, le corsie 0..N-1 dovrebbero
+    /// essere in esecuzione. 0 = nessuna applica ancora avvenuta.
+    /// </summary>
+    public int ObservedLanes { get; set; }
+
+    /// <summary>
     /// Motivo del "wake" chiesto da un trigger contestuale (Fase 2) e non ancora consumato:
     /// il prossimo run parte subito (backoff bypassato) con trigger "Event".
     /// </summary>

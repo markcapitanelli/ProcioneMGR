@@ -1130,6 +1130,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
+                    b.Property<int>("ObservedLanes")
+                        .HasColumnType("integer");
+
                     b.Property<Guid?>("PendingRunId")
                         .HasColumnType("uuid");
 
