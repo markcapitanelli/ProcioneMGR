@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Bunit;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,6 +31,9 @@ public class ExchangeSettingsPageTests : BunitContext
 
         public Task<DecryptedExchangeCredential?> FindForTradingAsync(ExchangeName exchange, bool testnet, CancellationToken ct = default)
             => throw new NotSupportedException("La pagina non usa il percorso trading.");
+
+        public Task<(int Total, int Unreadable)> CountUnreadableAsync(CancellationToken ct = default)
+            => Task.FromResult((rows.Count, rows.Count(r => !r.IsDecryptable)));
     }
 
     /// <summary>Il rendering non deve toccare il DB: LoadAsync passa dal reader, il DbContext serve solo ad Aggiungi/Elimina.</summary>
@@ -66,6 +69,7 @@ public class ExchangeSettingsPageTests : BunitContext
         Services.AddSingleton<IDbContextFactory<ApplicationDbContext>>(new ThrowingDbFactory());
         Services.AddSingleton<IExchangeClientFactory>(new ThrowingExchangeFactory());
         Services.AddSingleton<IExchangeCredentialReader>(new FakeReader([bad, good]));
+        Services.AddSingleton<IMasterKeyProbe>(new Infrastructure.FakeMasterKeyProbe());
 
         var cut = Render<ProcioneMGR.Components.Pages.ExchangeSettings>();
 
@@ -100,6 +104,7 @@ public class ExchangeSettingsPageTests : BunitContext
         Services.AddSingleton<IDbContextFactory<ApplicationDbContext>>(new ThrowingDbFactory());
         Services.AddSingleton<IExchangeClientFactory>(new ThrowingExchangeFactory());
         Services.AddSingleton<IExchangeCredentialReader>(new FakeReader([]));
+        Services.AddSingleton<IMasterKeyProbe>(new Infrastructure.FakeMasterKeyProbe());
 
         var cut = Render<ProcioneMGR.Components.Pages.ExchangeSettings>();
 

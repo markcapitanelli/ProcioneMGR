@@ -26,6 +26,7 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     BackoffHours = table.Column<int>(type: "integer", nullable: false),
                     AutoStartPaperLanes = table.Column<bool>(type: "boolean", nullable: false),
                     PendingRunId = table.Column<Guid>(type: "uuid", nullable: true),
+                    ObservedLanes = table.Column<int>(type: "integer", nullable: false),
                     PendingWakeReason = table.Column<string>(type: "text", nullable: true),
                     LastOutcome = table.Column<string>(type: "text", nullable: true),
                     LastActionAtUtc = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),

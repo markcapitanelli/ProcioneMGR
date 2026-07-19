@@ -106,6 +106,64 @@ public sealed class CampaignPlanner(
         {
             await TryStartNextConfigAsync(db, campaign, ct);
         }
+        else if (campaign.Status == CampaignStatus.Observing)
+        {
+            await RealignObservedLanesOnceAsync(campaign, ct);
+        }
+    }
+
+    // ------------------------------------------------------------ riallineamento post-riavvio (Fase 3-C3)
+
+    /// <summary>Campagne già verificate DA QUESTO processo: il riallineamento è un check post-riavvio, non un enforcement continuo.</summary>
+    private readonly HashSet<int> _realignedCampaigns = new();
+
+    /// <summary>
+    /// Fase 3-C3 (PRD Autonomia §6): al primo tick dopo un riavvio, per una campagna in
+    /// osservazione, confronta lo stato ATTESO della flotta (corsie 0..ObservedLanes-1 in
+    /// esecuzione) con quello REALE e riallinea o notifica. UNA VOLTA per processo: un check
+    /// continuo combatterebbe l'operatore che ha fermato una corsia apposta. Riallinea (riavvio
+    /// Paper) SOLO il caso pulito — corsia ferma, modalità Paper, niente emergency stop; ogni
+    /// altra divergenza (emergency, modalità diversa, quarantena) viene solo NOTIFICATA: lì la
+    /// decisione è dell'umano.
+    /// </summary>
+    private async Task RealignObservedLanesOnceAsync(VettingCampaign campaign, CancellationToken ct)
+    {
+        if (!_realignedCampaigns.Add(campaign.Id)) return;
+        if (!campaign.AutoStartPaperLanes || campaign.ObservedLanes <= 0) return;
+
+        for (var lane = 0; lane < Math.Min(campaign.ObservedLanes, TradingLanes.Count); lane++)
+        {
+            try
+            {
+                var laneEngine = serviceProvider.GetRequiredKeyedService<ITradingEngine>(lane);
+                var status = await laneEngine.GetStatusAsync(ct);
+                if (status.IsRunning) continue; // stato atteso: niente da fare
+
+                if (status.IsEmergencyStopped || status.Mode != TradingMode.Paper)
+                {
+                    var why = status.IsEmergencyStopped ? "emergency stop attivo" : $"modalità {status.Mode}";
+                    logger.LogWarning("Campagna {Id}: corsia {Lane} attesa in esecuzione ma ferma ({Why}) — divergenza NON riallineata.",
+                        campaign.Id, lane, why);
+                    await NotifyAsync(Notifications.NotificationSeverity.Warning,
+                        $"Campagna '{campaign.Name}': corsia {lane} divergente",
+                        $"Attesa in esecuzione (osservazione) ma ferma con {why}: decidere a mano da /trading.", ct);
+                    continue;
+                }
+
+                await laneEngine.StartAsync(TradingMode.Paper, ct);
+                logger.LogInformation("Campagna {Id}: corsia {Lane} riallineata (riavviata in Paper dopo il restart).", campaign.Id, lane);
+                await NotifyAsync(Notifications.NotificationSeverity.Info,
+                    $"Campagna '{campaign.Name}': corsia {lane} riallineata",
+                    "Era ferma dopo un riavvio: riavviata in Paper come da stato atteso dell'osservazione.", ct);
+            }
+            catch (Exception ex)
+            {
+                // Es. quarantena (Fase 0-A3): il riavvio è rifiutato per costruzione — resta all'operatore.
+                logger.LogWarning(ex, "Campagna {Id}: riallineamento della corsia {Lane} non riuscito: {Msg}", campaign.Id, lane, ex.Message);
+                await NotifyAsync(Notifications.NotificationSeverity.Warning,
+                    $"Campagna '{campaign.Name}': corsia {lane} non riallineabile", ex.Message, ct);
+            }
+        }
     }
 
     // ------------------------------------------------------------ esito del run pendente
@@ -169,6 +227,7 @@ public sealed class CampaignPlanner(
             MarkConfigOutcome(campaign, run.Id, "Applied");
             campaign.PendingRunId = null;
             campaign.Status = CampaignStatus.Observing;
+            campaign.ObservedLanes = outcome.LanesUsed; // stato ATTESO di flotta per il riallineamento C3
             SetOutcome(campaign,
                 $"{survivors} sopravvissuti (config {run.ConfigurationId}): ensemble schierato su {outcome.LanesUsed} corsie. " +
                 "Rotazione ferma, campagna in osservazione.");

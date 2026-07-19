@@ -79,15 +79,19 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
     {
         public int LaneId => laneId;
         public bool IsRunning { get; set; }
+        public bool IsEmergencyStopped { get; set; }
+        public TradingMode StatusMode { get; set; } = TradingMode.Paper;
         public bool ThrowOnStart { get; set; }
         public TradingMode? StartedWith { get; private set; }
+        public int StartCalls { get; private set; }
 
         public Task<TradingEngineStatus> GetStatusAsync(CancellationToken ct = default)
-            => Task.FromResult(new TradingEngineStatus { IsRunning = IsRunning, Mode = TradingMode.Paper });
+            => Task.FromResult(new TradingEngineStatus { IsRunning = IsRunning, Mode = StatusMode, IsEmergencyStopped = IsEmergencyStopped });
         public Task StartAsync(TradingMode mode, CancellationToken ct = default)
         {
             if (ThrowOnStart) throw new InvalidOperationException("Corsia 0 in QUARANTENA (fake).");
             StartedWith = mode;
+            StartCalls++;
             return Task.CompletedTask;
         }
         public Task StopAsync(CancellationToken ct = default) => Task.CompletedTask;
@@ -309,6 +313,7 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
         var campaign = await LoadAsync(dbFactory, campaignId);
         Assert.Equal(CampaignStatus.Observing, campaign.Status);
         Assert.Null(campaign.PendingRunId);
+        Assert.Equal(2, campaign.ObservedLanes); // stato ATTESO di flotta per il riallineamento C3
         Assert.Equal("Applied", CampaignPlanner.ParseConfigStates(campaign.ConfigStatesJson)
             .Single(s => s.ConfigurationId == config1).LastOutcome);
         Assert.Single(evaluator.Evaluated);
@@ -433,6 +438,77 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
 
         Assert.Equal(0, woken);
         Assert.Equal(CampaignStatus.Observing, (await LoadAsync(dbFactory, campaignId)).Status);
+    }
+
+    // --- Riallineamento post-riavvio (Fase 3-C3) ----------------------------------------------
+
+    private static async Task SeedObservingCampaignAsync(IDbContextFactory<ApplicationDbContext> dbFactory,
+        int campaignId, int observedLanes)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var campaign = await db.VettingCampaigns.SingleAsync(c => c.Id == campaignId);
+        campaign.Status = CampaignStatus.Observing;
+        campaign.ObservedLanes = observedLanes;
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task Realign_StoppedPaperLane_RestartedOnce_EmergencyLaneOnlyNotified()
+    {
+        var notifier = new RecordingNotifier();
+        var (planner, _, _, dbFactory, lanes) = await BuildAsync(notifier: notifier);
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+        await SeedObservingCampaignAsync(dbFactory, campaignId, observedLanes: 2);
+
+        lanes[0].IsRunning = false;                 // caso pulito: ferma in Paper → riallineata
+        lanes[1].IsRunning = false;
+        lanes[1].IsEmergencyStopped = true;         // emergency: MAI riavviata, solo notificata
+
+        await planner.TickAsync();
+
+        Assert.Equal(TradingMode.Paper, lanes[0].StartedWith);
+        Assert.Null(lanes[1].StartedWith);
+        Assert.Contains(notifier.Sent, n => n.Title.Contains("corsia 0 riallineata"));
+        Assert.Contains(notifier.Sent, n =>
+            n.Severity == ProcioneMGR.Services.Notifications.NotificationSeverity.Warning && n.Title.Contains("corsia 1 divergente"));
+
+        // Check UNA volta per processo: il tick successivo non combatte l'operatore.
+        lanes[0].IsRunning = false;
+        await planner.TickAsync();
+        Assert.Equal(1, lanes[0].StartCalls);
+    }
+
+    [Fact]
+    public async Task Realign_NonPaperStoppedLane_NotifiedNotRestarted()
+    {
+        var notifier = new RecordingNotifier();
+        var (planner, _, _, dbFactory, lanes) = await BuildAsync(notifier: notifier);
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+        await SeedObservingCampaignAsync(dbFactory, campaignId, observedLanes: 1);
+
+        lanes[0].IsRunning = false;
+        lanes[0].StatusMode = TradingMode.Testnet; // riavviarla in Paper la retrocederebbe in silenzio
+
+        await planner.TickAsync();
+
+        Assert.Null(lanes[0].StartedWith);
+        Assert.Contains(notifier.Sent, n => n.Title.Contains("corsia 0 divergente"));
+    }
+
+    [Fact]
+    public async Task Realign_RunningLanes_NoActionNoNoise()
+    {
+        var notifier = new RecordingNotifier();
+        var (planner, _, _, dbFactory, lanes) = await BuildAsync(notifier: notifier);
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+        await SeedObservingCampaignAsync(dbFactory, campaignId, observedLanes: 2);
+        lanes[0].IsRunning = true;
+        lanes[1].IsRunning = true;
+
+        await planner.TickAsync();
+
+        Assert.All(lanes, l => Assert.Null(l.StartedWith));
+        Assert.Empty(notifier.Sent);
     }
 
     // --- Notifiche (Fase 4) ------------------------------------------------------------------

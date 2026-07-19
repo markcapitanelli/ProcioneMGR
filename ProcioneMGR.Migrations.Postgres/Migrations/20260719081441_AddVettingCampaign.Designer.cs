@@ -12,7 +12,7 @@ using ProcioneMGR.Data;
 namespace ProcioneMGR.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260719071315_AddVettingCampaign")]
+    [Migration("20260719081441_AddVettingCampaign")]
     partial class AddVettingCampaign
     {
         /// <inheritdoc />
@@ -1132,6 +1132,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
+
+                    b.Property<int>("ObservedLanes")
+                        .HasColumnType("integer");
 
                     b.Property<Guid?>("PendingRunId")
                         .HasColumnType("uuid");

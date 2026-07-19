@@ -1,8 +1,9 @@
 # PRD — Autonomia Operativa di ProcioneMGR
 
-**Stato**: **Fase 0 COMPLETA** (2026-07-19): A1 = PR #24, A2 = PR #26, A3 = `LaneInvariantWatchdog`
-+ quarantena corsia (questo branch — regressione sul caso reale della corsia 2, riavvio bloccato
-finché un Admin non rimuove la quarantena in /trading). Fasi 1-4 in lavorazione in questo branch.
+**Stato**: **TUTTE E 5 LE FASI COMPLETE** (2026-07-19, ordine 0 → 1 → 4 → 2 → 3 come
+raccomandato in §9): A1 = PR #24, A2 = PR #26, A3 + Fasi 1/4/2/3 = questo branch. Dettagli e
+scostamenti dal design nei blocchi **FATTO** di ogni sezione. Restano da esercitare dal vivo:
+prova reale Telegram (serve il bot token) e kill-test del processo durante uno smoke run (C1).
 **Creato**: 2026-07-19 · **Tipo**: documento vivo (aggiornare ad ogni fase completata, come il
 PRD di consolidamento).
 
@@ -182,6 +183,24 @@ credenziali (B2) invece di dichiararlo a voce alta.
 **Rischio**: basso-medio. **Criteri**: kill del processo durante un run di smoke test → al riavvio
 il run riprende da solo e lo storico lo mostra; avvio con chiave sbagliata → banner visibile.
 
+**FATTO (2026-07-19)** — **C1**: auto-resume in `PipelineSchedulerWorker.AutoResumePausedRunsAsync`
+(ogni tick, non solo a startup): run Paused con trigger Scheduled/Event/Campaign ripresi da soli;
+Paused MANUALI mai toccati; config Live saltate; slot occupato = check saltato senza consumare
+tentativi (`GetLiveStatus` pre-check); budget di **3 tentativi** per run (marker persistenti su
+PipelineArtifacts, scostamento documentato dal "1 tentativo" del PRD: un run interrotto due volte
+da riavvii innocenti merita più di un tentativo, il tetto esiste contro i crash-loop), a
+esaurimento give-up + notifica una-tantum. **C2**: `IMasterKeyProbe`/`MasterKeyProbeWorker`
+(probe one-shot a startup con retry DB, `IExchangeCredentialReader.CountUnreadableAsync`):
+credenziali non decifrabili ⇒ LogCritical + notifica Critical + banner persistente in /trading e
+/settings/exchanges. Registrato in entrambi gli host (sola lettura). **C3**: campo
+`VettingCampaign.ObservedLanes` (stato ATTESO di flotta, scritto all'applica) +
+`RealignObservedLanesOnceAsync` nel planner: al PRIMO tick per processo di una campagna in
+osservazione confronta atteso vs reale — corsia ferma in Paper pulita ⇒ riavviata (Info); ferma
+con emergency stop / modalità non-Paper / quarantena ⇒ SOLO notifica Warning (decisione umana);
+una volta per processo per non combattere l'operatore. Test: `PipelineAutoResumeTests` (5),
+`MasterKeyProbeTests` (3), riallineamento in `CampaignPlannerTests` (3). Il criterio "kill del
+processo durante uno smoke run" resta da esercitare dal vivo alla prossima sessione operativa.
+
 ---
 
 ## §7 — Fase 4: Canale di notifica
@@ -239,7 +258,7 @@ Fase 2) cablato nella Fase 2.
 | **0** | Fill sanity (A1), credenziali con grazia (A2), watchdog contabile + quarantena (A3) | Medio | — | No (A1/A2 già avviate) | **COMPLETA** — A1 = PR #24; A2 = PR #26; A3 = 2026-07-19 |
 | **1** | Campaign Planner: rotazione cacce, applica-su-successo, corsie per scelta | Medio-alto | Fase 0 | **Sì**: `Campaign:Enabled` default OFF | **COMPLETA** (2026-07-19) |
 | **2** | Trigger contestuali (regime/vol → "Event") | Basso | Fase 1 | No | **COMPLETA** (2026-07-19) |
-| **3** | Auto-resume, fail-fast chiavi, riallineamento corsie | Basso-medio | — (C1 utile già da sola) | No | Progettata |
+| **3** | Auto-resume, fail-fast chiavi, riallineamento corsie | Basso-medio | — (C1 utile già da sola) | No | **COMPLETA** (2026-07-19) |
 | **4** | Notifica (Telegram/logging, default off) | Basso | Massimo valore dopo 0-1 | No | **COMPLETA** (2026-07-19; resta la prova manuale Telegram) |
 
 Ordine raccomandato: **0 → 1 → 4 → 2 → 3** (la notifica subito dopo il planner: un agente che

@@ -8,6 +8,7 @@
 @implements IDisposable
 
 @inject TradingPageService Service
+@inject ProcioneMGR.Services.Security.IMasterKeyProbe KeyProbe
 @inject AuthenticationStateProvider AuthProvider
 @inject ILogger<Trading> Logger
 
@@ -192,6 +193,16 @@
 {
     <div class="alert alert-danger fw-bold">
         🛑 EMERGENCY STOP ATTIVATO: @Service.Status.EmergencyStopReason. Riavvia manualmente dopo aver verificato.
+    </div>
+}
+@if (KeyProbe.Result is { HasUnreadable: true } keyProbe)
+{
+    <div class="alert alert-danger">
+        <div class="fw-bold">🔑 MASTER KEY INCOERENTE: @keyProbe.Unreadable credenziali exchange su @keyProbe.Total non decifrabili.</div>
+        <div class="small mt-1">
+            Gli avvii Testnet/Live falliranno finché non reinserisci le credenziali in
+            <a href="settings/exchanges">/settings/exchanges</a> (o non ripristini la master key giusta).
+        </div>
     </div>
 }
 @if (Service.Quarantine is not null)
