@@ -34,26 +34,28 @@ public sealed class AnthropicLlmClient : ILlmClient
 {
     // IOptionsMonitor (non POCO): modello/token modificabili a caldo da /admin/autonomy.
     private readonly Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> _options;
-    private readonly string? _apiKey;
     private readonly ILogger<AnthropicLlmClient> _logger;
 
     public AnthropicLlmClient(Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> options, ILogger<AnthropicLlmClient> logger)
     {
         _options = options;
         _logger = logger;
-        _apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
     }
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey);
+    // Riletta a OGNI accesso, mai cachata nel ctor: così una chiave impostata nel processo a app
+    // viva prende effetto senza riavvio. (NB Windows consegna le variabili UTENTE nuove solo ai
+    // processi nuovi: l'hot-read serve al worker che non muore più e a chiavi settate in-process.)
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
 
     public string Model => _options.CurrentValue.Model;
 
     public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct)
     {
-        if (!IsConfigured)
+        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("ANTHROPIC_API_KEY non impostata: il client LLM non è configurato.");
 
-        var client = new AnthropicClient { ApiKey = _apiKey };
+        var client = new AnthropicClient { ApiKey = apiKey };
 
         var options = _options.CurrentValue;
         var response = await client.Messages.Create(new MessageCreateParams
