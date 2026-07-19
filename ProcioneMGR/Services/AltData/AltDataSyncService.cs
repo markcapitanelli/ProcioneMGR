@@ -22,7 +22,8 @@ public sealed class AltDataSyncService(
     ISentimentScorer scorer,
     IDbContextFactory<ApplicationDbContext> dbFactory,
     ILogger<AltDataSyncService> logger,
-    SentimentSourceHealthRegistry? health = null) : IAltDataSyncService
+    SentimentSourceHealthRegistry? health = null,
+    ISentimentNewsProvider? newsProvider = null) : IAltDataSyncService
 {
     public async Task<int> SyncAllAsync(CancellationToken ct)
     {
@@ -75,6 +76,12 @@ public sealed class AltDataSyncService(
         if (inserted > 0)
         {
             await db.SaveChangesAsync(ct);
+            // Snapshot per le feature ML (Sentiment 2.0): si aggiorna qui perché OGNI percorso di
+            // sync (worker, stage pipeline, bottone UI) passa da questo metodo.
+            if (newsProvider is not null)
+            {
+                await newsProvider.RefreshAsync(ct);
+            }
         }
         return inserted;
     }

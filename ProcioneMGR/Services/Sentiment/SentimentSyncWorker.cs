@@ -72,6 +72,14 @@ public sealed class SentimentSyncWorker(
             _lastNewsSyncUtc = DateTime.UtcNow;
         }
 
+        // Snapshot news per le feature ML: refresh anche quando la sync non inserisce nulla
+        // (copre il primo tick post-riavvio, quando lo snapshot in-memory è vuoto ma il DB no).
+        if (scope.ServiceProvider.GetService<ISentimentNewsProvider>() is { } newsProvider &&
+            newsProvider.Snapshot.Count == 0)
+        {
+            await newsProvider.RefreshAsync(ct);
+        }
+
         await scope.ServiceProvider
             .GetRequiredService<ISentimentSnapshotService>()
             .ComputeAsync(ct);

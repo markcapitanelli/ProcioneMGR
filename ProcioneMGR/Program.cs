@@ -248,6 +248,7 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSourceHeal
 builder.Services.AddScoped<ProcioneMGR.Services.Sentiment.Metrics.ISentimentMetricSyncService, ProcioneMGR.Services.Sentiment.Metrics.SentimentMetricSyncService>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSnapshotCache>();
 builder.Services.AddScoped<ProcioneMGR.Services.Sentiment.ISentimentSnapshotService, ProcioneMGR.Services.Sentiment.SentimentSnapshotService>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentNewsProvider, ProcioneMGR.Services.Sentiment.SentimentNewsProvider>();
 // Worker anche singleton risolvibile: "Esegui ora" dalla UI usa la stessa istanza del hosted service.
 builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>());
