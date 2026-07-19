@@ -244,6 +244,8 @@ builder.Services.AddSingleton<IEnumerable<ProcioneMGR.Services.Sentiment.Metrics
         new ProcioneMGR.Services.Sentiment.Metrics.BinanceFuturesSentimentClient(options.CurrentValue.Symbols, httpClientFactory),
     };
 });
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSourceHealthRegistry>();
+builder.Services.AddScoped<ProcioneMGR.Services.Sentiment.Metrics.ISentimentMetricSyncService, ProcioneMGR.Services.Sentiment.Metrics.SentimentMetricSyncService>();
 
 // --- Portfolio optimization (Mean-Variance, Risk Parity, HRP) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.MeanVarianceOptimizer>();
