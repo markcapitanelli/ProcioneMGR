@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Agents;
 using ProcioneMGR.Services.Ensemble;
+using ProcioneMGR.Services.Notifications;
+using ProcioneMGR.Services.Observability;
 
 namespace ProcioneMGR.Services.Pipeline;
 
@@ -46,7 +48,9 @@ public sealed class RunApplyEvaluator(
     IPipelineApplier applier,
     IEnsembleComparator comparator,
     IPipelineSupervisorAgent supervisor,
-    ILogger<RunApplyEvaluator> logger) : IRunApplyEvaluator
+    ILogger<RunApplyEvaluator> logger,
+    ProcioneMetrics? metrics = null,
+    INotifier? notifier = null) : IRunApplyEvaluator
 {
     /// <summary>
     /// Serializza l'applicazione dell'ensemble sulle corsie: atomicità globale tra chiamanti
@@ -109,12 +113,30 @@ public sealed class RunApplyEvaluator(
             logger.LogInformation("Applica automatica NON eseguita per il run {RunId}: {Reason}", runId, comparison.Reason);
         }
 
-        await RecordDecisionAsync(runId, applied, message, comparison, judgment, ct);
+        var recorded = await RecordDecisionAsync(runId, applied, message, comparison, judgment, ct);
+
+        // Un veto è raro, una-volta-per-run (gated da "recorded": scheduler e planner valutano lo
+        // stesso run) e operativamente importante: l'operatore lo sa subito, col perché del
+        // supervisore, senza dover passare da /pipeline. Nessun gate dedicato: bastano
+        // Notifications:Enabled + il rate-limit del dispatcher.
+        if (vetoed && recorded)
+        {
+            metrics?.RecordLlmVeto();
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(NotificationSeverity.Warning, "Ri-applica VETATA dal supervisore AI",
+                    $"Run {runId.ToString("N")[..8]}: {judgment.Summary}\nDettagli in /pipeline.", ct);
+            }
+        }
+
         return new RunApplyOutcome { HadCandidate = true, Applied = applied, Vetoed = vetoed, LanesUsed = lanesUsed, Message = message };
     }
 
-    /// <summary>Persiste la decisione come <see cref="PipelineArtifact"/> (marker idempotente + fonte per la UI). Nessuna nuova tabella.</summary>
-    private async Task RecordDecisionAsync(Guid runId, bool applied, string message, EnsembleComparison? comparison, SupervisorJudgment? judgment, CancellationToken ct)
+    /// <summary>
+    /// Persiste la decisione come <see cref="PipelineArtifact"/> (marker idempotente + fonte per la
+    /// UI). Nessuna nuova tabella. Restituisce false quando la decisione esisteva già.
+    /// </summary>
+    private async Task<bool> RecordDecisionAsync(Guid runId, bool applied, string message, EnsembleComparison? comparison, SupervisorJudgment? judgment, CancellationToken ct)
     {
         var payload = new AutoReapplyDecisionArtifact
         {
@@ -127,7 +149,7 @@ public sealed class RunApplyEvaluator(
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var exists = await db.PipelineArtifacts.AnyAsync(a => a.RunId == runId && a.Kind == AutoReapplyArtifactKinds.Decision, ct);
-        if (exists) return; // idempotente
+        if (exists) return false; // idempotente
         db.PipelineArtifacts.Add(new PipelineArtifact
         {
             RunId = runId,
@@ -137,6 +159,7 @@ public sealed class RunApplyEvaluator(
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync(ct);
+        return true;
     }
 
     internal static PipelineRecommendation? DeserializeRecommendation(string? json)
