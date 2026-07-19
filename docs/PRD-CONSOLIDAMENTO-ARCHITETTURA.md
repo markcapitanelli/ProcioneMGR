@@ -2,8 +2,11 @@
 
 **Stato**: **tutte e 3 le fasi completate** — Fase 0 (PR #13, 2026-07-17), Fase 1 (PR
 #14/#15/#16, 2026-07-18, CQRS/Mediator + Intervento B, dettagli §4.7-§4.8), Fase 2 (PR #17,
-2026-07-18, tracing distribuito, dettagli §5.2). Unico item aperto: le 5 pagine Razor >780
-righe non-`Trading.razor` di P1-5, non bloccanti (§3.6). Resta solo il Backlog Condizionale
+2026-07-18, tracing distribuito, dettagli §5.2). Audit leggero post-Fase 1 (§8.1) eseguito il
+2026-07-18: decomposizione confermata behavior-preserving, nessuna regressione, unico rilievo
+(gap di test su `FuturesPositionReconciler`) chiuso in loco. Anche le 5 pagine Razor
+non-`Trading.razor` di P1-5 sono chiuse (PR #19-#23, mergiate 2026-07-18, §3.6). Resta solo il
+Backlog Condizionale
 (§6), non pianificato per definizione finché non si attiva un criterio. **Creato**:
 2026-07-17 · **Tipo**: documento vivo (aggiornare ad ogni fase completata, vedi §8)
 
@@ -145,7 +148,7 @@ ancora disponibili" anche se marcati come pronti sotto.
 | P0-1 | Bonifica rami secchi | Rimuovere: classe morta `PairsSpreadAnalyzer` + relativa registrazione DI; `IRegimeDetector.PredictRegimeAsync` (mai invocato nel flusso reale); `ExcursionAnalyzer.ComputeBarAnatomy` + record `BarAnatomy` (zero caller); `BarBuilder.ToOhlcv` (zero caller); correggere il commento ingannevole `TradingEngine.cs:1118` ("client trigger ancora stub" — falso, sono implementati); `ExcursionAnalyzer.SuggestHorizonBracket` → `internal`. | Invariato dall'audit |
 | P0-2 | `PollingTimer` condiviso | Helper unico (`PeriodicTimer` + loop `try/catch` che logga e continua + `IAsyncDisposable`) in `Components/Shared/`, sostituisce i 4 usi di `System.Threading.Timer` in `Trading.razor:497/520`, `Pipeline.razor:522/530`, `Metrics.razor:109/117`, `Ensemble.razor:621/650`. Elimina il rischio che un'eccezione non catturata in una lambda `async void` abbatta il **processo** (non solo il circuito Blazor). | Invariato dall'audit |
 | P0-3 | `EnableRetryOnFailure` su Npgsql | Una riga in `DatabaseServiceCollectionExtensions.AddProcioneDatabase`, ereditata da tutti gli host. Verificato: zero transazioni esplicite nel codice → nessuna controindicazione. Protegge la persistenza post-fill in `ProcessCandleAsync` dai transitori di rete, fisiologici in K8s. | Invariato dall'audit |
-| P1-5 | Pagine Razor >780 righe | `MlLab.razor` (998), `Ensemble.razor` (917), `Pipeline.razor` (905), `Backtest.razor` (905), `Optimization.razor` (834), `Trading.razor` (782) — più un caso limite, `Sentiment.razor` (742), da includere se si abbassa la soglia a 700. | **Ridisegnato** — vedi §3.3 |
+| P1-5 | Pagine Razor >780 righe | `MlLab.razor` (998), `Ensemble.razor` (917), `Pipeline.razor` (905), `Backtest.razor` (905), `Optimization.razor` (834), `Trading.razor` (782) — più un caso limite, `Sentiment.razor` (742), da includere se si abbassa la soglia a 700. | **Ridisegnato** (vedi §3.3) e **completato**: `Trading.razor` in Fase 0, le altre 5 pagine con PR #19-#23 (mergiate 2026-07-18) |
 | P1-6 | Autorizzazione applicativa gRPC trading | `TradingCommandServiceImpl` (`ConfirmOrder`/`StartLane` possono muovere denaro vero) non ha oggi alcun controllo di autorizzazione applicativa — l'unico confine è la `NetworkPolicy` K8s, bypassabile con `kubectl port-forward` (limite dichiarato in `infra/k8s/README.md`). | **Resta in Fase 0** — vedi §3.4 per la correzione rispetto alla proposta iniziale |
 | P1-7 | Lifetimes `HttpClient` in AltData | `RssNewsSource`, `ForexFactoryIngestor`, `RetailSentimentIngestor` sono registrate come singleton collettivo (`Program.cs:210-220`) che catturano l'`HttpClient` ottenuto da `IHttpClientFactory.CreateClient()` **una sola volta a startup** invece che per-richiesta — vanifica la rotazione degli handler anti-DNS-stale. Fix: iniettare `IHttpClientFactory` nelle classi sorgente, chiamare `CreateClient(...)` per fetch. | Invariato dall'audit |
 | P2-8 | Fee/slippage live hardcoded | `TradingEngine.cs:73` — `private const decimal FeePercent = 0.1m`, usata in 6 punti (righe 898, 1052, 1584-1585, 1717-1718) — contro `BacktestModels.cs:25`, dove `FeePercent` è una proprietà configurabile. Spostare in `SafetyConfiguration`/`LiveExecutionOptions` con hot-reload via `IOptionsMonitor` (già iniettato in `TradingEngine`). | Invariato nel contenuto, **sequenziato per ultimo in Fase 0** — vedi §3.5 |
@@ -247,8 +250,14 @@ sugli scostamenti dal design originale, emersi durante l'esecuzione:
   prima stesura del PRD lo aveva elencato ma la sessione di esecuzione lo aveva inizialmente
   saltato, corretto prima di dichiarare la fase chiusa.
 - **P1-5** ha coperto `Trading.razor` (il prerequisito esplicito per la Fase 1); le altre 5
-  pagine Razor >780 righe (MlLab, Ensemble, Pipeline, Backtest, Optimization) restano da
-  fare, senza vincoli di sequenza tra loro né con la Fase 1.
+  pagine Razor >780 righe sono state chiuse dopo le Fasi 1-2 con uno stack di PR dedicate,
+  una per pagina, mergiate il 2026-07-18: MlLab ([#19](https://github.com/markcapitanelli/ProcioneMGR/pull/19)),
+  Backtest ([#20](https://github.com/markcapitanelli/ProcioneMGR/pull/20)),
+  Optimization ([#21](https://github.com/markcapitanelli/ProcioneMGR/pull/21)),
+  Ensemble ([#22](https://github.com/markcapitanelli/ProcioneMGR/pull/22)),
+  Pipeline ([#23](https://github.com/markcapitanelli/ProcioneMGR/pull/23)) — ciascuna
+  estratta in un `*PageService` testato (stesso pattern di `TradingPageService`), tutte
+  verificate dal vivo, suite 1096/1096.
 
 Branch pushato e PR aperta: [#13](https://github.com/markcapitanelli/ProcioneMGR/pull/13)
 (o successiva se rinominata/sostituita — verificare lo stato reale su GitHub prima di
@@ -477,13 +486,17 @@ design originale, emersi durante l'esecuzione:
 - **`CloseAllPositionsCommand` non creato**: nonostante compaia nello schizzo di cartelle di
   §4.3, il suo unico chiamante reale è `LanePromoter` — che §4.2 esclude esplicitamente
   dall'adottare Mediator. Crearlo sarebbe stata superficie morta senza alcun chiamante Blazor.
-- **Gap di test preesistente segnalato, non colmato**: `FuturesPositionReconciler` (da
-  `ReconcileFuturesPositionsAsync`) resta senza un test reale dedicato — copertura solo
-  indiretta via `ProcessCandleAsync`. Scrivere un test dedicato è lavoro futuro valido, fuori
-  dallo scope di "estrarre senza cambiare comportamento" di questa fase.
-- **Audit leggero di fine fase** (§8): non eseguito come sweep separato — la verifica è
-  avvenuta incrementalmente, un collaboratore alla volta, con la suite reale su
-  `TradingEngine` (49 test) rilanciata dopo ogni singola estrazione e mai bypassata.
+- **Gap di test preesistente segnalato, poi colmato (2026-07-18, audit §8)**:
+  `FuturesPositionReconciler` (da `ReconcileFuturesPositionsAsync`) era rimasto senza un test
+  reale dedicato — copertura solo indiretta via `ProcessCandleAsync`, per giunta con il fake
+  futures che ritorna `GetPositionAsync = null` fisso, quindi i tre rami reali (chiusura forzata
+  su flat remoto, allerta-una-volta su posizione remota non tracciata, no-op su posizione
+  combaciante) non erano mai esercitati. Chiuso con `FuturesPositionReconcilerTests` (8 test): il
+  collaboratore è ora testato in isolamento con un `GetPositionAsync` controllabile e un delegato
+  di chiusura che registra le invocazioni — additivo, zero modifiche al codice di produzione.
+- **Audit leggero di fine fase** (§8): eseguito il 2026-07-18 (vedi la nota in §8). Durante la
+  Fase 1 la verifica era comunque avvenuta incrementalmente, un collaboratore alla volta, con la
+  suite reale su `TradingEngine` (49 test) rilanciata dopo ogni singola estrazione e mai bypassata.
 
 ---
 
@@ -569,7 +582,7 @@ nessuno si verifica, la voce resta non pianificata indefinitamente, e questo è 
 
 | Fase | Obiettivo | Rischio | Dipendenze | Approvazione esplicita | Stato |
 |---|---|---|---|---|---|
-| **Fase 0** | Hardening — bonifica rami secchi, `PollingTimer`, retry Postgres, estrazione orchestrazione Razor, auth gRPC, lifetimes HttpClient, fee configurabile, micro-fix, master key, paginazione gRPC | Basso | Porting del lavoro P0 dal worktree `zealous-ellis-b6357f` | No | ✅ fatta (2026-07-17), tranne 5/6 pagine Razor di P1-5 — vedi §3.6 |
+| **Fase 0** | Hardening — bonifica rami secchi, `PollingTimer`, retry Postgres, estrazione orchestrazione Razor, auth gRPC, lifetimes HttpClient, fee configurabile, micro-fix, master key, paginazione gRPC | Basso | Porting del lavoro P0 dal worktree `zealous-ellis-b6357f` | No | ✅ fatta (2026-07-17); le 5/6 pagine Razor rimanenti di P1-5 chiuse con PR #19-#23 (2026-07-18) — vedi §3.6 |
 | **Fase 1** | CQRS/MediatR — decomposizione `TradingEngine` (Intervento A: comandi/query; Intervento B: estrazione cascata privata) | **Alto** | Segue, dentro Fase 0: P2-8 (fee configurabile, fatto) ed estrazione di `Trading.razor` in `TradingPageService` (fatta) — entrambe le precondizioni sono soddisfatte | Strategica già data; gate operativo = PR verdi + smoke test a ogni merge sull'Intervento B | ✅ fatta (2026-07-18, PR #14/#15/#16) — vedi §4.8 |
 | **Fase 2** | Osservabilità distribuita — tracing (Tempo) | Basso | Nessuna tecnica; raccomandata dopo Fase 1 per priorità, non per necessità | No | ✅ fatta (2026-07-18, PR #17) — vedi §5.2 |
 | **Backlog condizionale** | Pipeline asincrone, caching generalizzato, Mimir, deploy K8s observability | N/A | Attivato solo dai trigger di §6 | N/A — non pianificato | N/A |
@@ -592,3 +605,28 @@ safety dei fondi.
 Il §6 (Backlog Condizionale) resta una sezione viva: nuove idee scartate con riserva vanno
 aggiunte lì, con un criterio di attivazione esplicito, invece di aprire un nuovo documento
 per ciascuna.
+
+### 8.1 — Audit leggero post-Fase 1 (2026-07-18) — ESEGUITO
+
+Perimetro: solo il modulo `Services/Trading/*`. Metodo: sweep stub/TODO/eccezioni-mute/RNG/
+sync-over-async sul modulo + lettura integrale dei collaboratori a soldi veri estratti
+dall'Intervento B (`PositionOpener`, `PositionCloser`, `BracketOrderManager`,
+`FuturesPositionReconciler`, i 7 command / 5 query handler, `LoggingBehavior`,
+`TradingPageService`) + analisi dei caller + build dell'intera soluzione + esecuzione del
+sottoinsieme trading della suite reale (89 test verdi su Postgres).
+
+**Conclusione: la decomposizione ha preservato la safety dei fondi, nessuna regressione.** Le
+guardie critiche del residuo `TradingEngine` sono tutte intatte (blocco Live su master key
+placeholder, cap leva/sizing all'avvio, `SafetyChecker.Evaluate` prima di ogni apertura con
+escalation `RequiresEmergencyStop`, serializzazione via `_gate`); i collaboratori ricevono
+`state`/`positions` per riferimento e mutano esattamente come il codice inline; la cascata di
+riconciliazione di rete incerta (anti-oversell, anti-posizione-fantasma) è integra. Falsi
+allarmi dello sweep verificati e archiviati: il `.Result` in `TradingPageService.RefreshAsync`
+è letto **dopo** `Task.WhenAll` (pattern corretto, non sync-over-async); `PairsSpreadAnalyzer`
+in `Services/TimeSeries` è una classe statica **viva** e testata (`RollingZScore`), diversa dal
+servizio DI morto rimosso da P0-1.
+
+**Unico rilievo → chiuso nello stesso audit**: il gap di test dedicato su
+`FuturesPositionReconciler` (già segnalato in §4.8), un percorso a soldi veri (forza la chiusura
+al miglior prezzo noto come `Liquidation/ExternalClose`). Colmato con `FuturesPositionReconcilerTests`
+(8 test, tutti i rami + guardie). Vedi §4.8.

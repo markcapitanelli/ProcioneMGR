@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Exchanges;
 
@@ -15,8 +16,33 @@ namespace ProcioneMGR.Services.Trading.Internal;
 internal sealed class PositionCloser(
     IExchangeClientFactory exchangeFactory,
     ILogger logger,
-    TradingPersistence persistence)
+    TradingPersistence persistence,
+    IOptionsMonitor<SafetyConfiguration> safety)
 {
+    /// <summary>
+    /// [B1] Fill di chiusura implausibile (vedi <see cref="FillSanityCheck"/>): la chiusura si
+    /// finalizza comunque — l'ordine è andato a buon fine e rifiutarla riaprirebbe il loop di
+    /// oversell del bug H2 — ma al prezzo di riferimento locale, MAI ai valori riportati.
+    /// Ritorna il prezzo da usare (il fill se plausibile e positivo, il riferimento altrimenti).
+    /// </summary>
+    private async Task<decimal> SanitizedExitPriceAsync(
+        OpenPosition pos, string closeClientId, decimal? reportedPrice, decimal? reportedQty,
+        decimal requestedQty, decimal referencePrice, TradingMode mode, DateTime ts, CancellationToken ct)
+    {
+        if (FillSanityCheck.IsSuspect(reportedPrice, reportedQty, requestedQty, referencePrice, safety.CurrentValue, out var reason))
+        {
+            logger.LogError(
+                "Chiusura {Pid}: fill SOSPETTO dall'exchange ({Reason}): finalizzo al prezzo di riferimento {Ref}.",
+                pos.PositionId, reason, referencePrice);
+            await persistence.AuditAsync("FillSanityRejected", new
+            {
+                pos.PositionId, closeClientId, reportedPrice, reportedQty,
+                requestedQty, referencePrice, reason,
+            }, mode, ts, ct);
+            return referencePrice;
+        }
+        return reportedPrice is decimal p && p > 0m ? p : referencePrice;
+    }
     private BracketOrderManager BracketManager(TradingMode mode) => new(
         exchangeFactory, logger,
         (action, details, ts, ct) => persistence.AuditAsync(action, details, mode, ts, ct),
@@ -58,7 +84,7 @@ internal sealed class PositionCloser(
                         pos.PositionId, outcome.FillPrice);
                     await persistence.AuditAsync("CloseReconciledFilled",
                         new { pos.PositionId, closeClientId, fillPrice = outcome.FillPrice }, state.Mode, ts, ct);
-                    if (outcome.FillPrice is decimal rp && rp > 0m) exitPrice = rp;
+                    exitPrice = await SanitizedExitPriceAsync(pos, closeClientId, outcome.FillPrice, outcome.FillQty, qty, exitPrice, state.Mode, ts, ct);
                 }
                 else
                 {
@@ -77,9 +103,9 @@ internal sealed class PositionCloser(
                 await persistence.AuditAsync("CloseRejected", new { pos.PositionId, res.Error }, state.Mode, ts, ct);
                 return;
             }
-            else if (res.FilledPrice is decimal fp && fp > 0m)
+            else if (res.FilledPrice is not null)
             {
-                exitPrice = fp;
+                exitPrice = await SanitizedExitPriceAsync(pos, closeClientId, res.FilledPrice, res.FilledQuantity, qty, exitPrice, state.Mode, ts, ct);
             }
         }
 
@@ -195,7 +221,7 @@ internal sealed class PositionCloser(
                         pos.PositionId, outcome.FillPrice);
                     await persistence.AuditAsync("CloseReconciledFilled",
                         new { pos.PositionId, closeClientId, fillPrice = outcome.FillPrice }, state.Mode, ts, ct);
-                    if (outcome.FillPrice is decimal rp && rp > 0m) exitPrice = rp;
+                    exitPrice = await SanitizedExitPriceAsync(pos, closeClientId, outcome.FillPrice, outcome.FillQty, qty, exitPrice, state.Mode, ts, ct);
                 }
                 else
                 {
@@ -213,9 +239,9 @@ internal sealed class PositionCloser(
                 await persistence.AuditAsync("CloseRejected", new { pos.PositionId, res.Error }, state.Mode, ts, ct);
                 return;
             }
-            else if (res.FilledPrice is decimal fp && fp > 0m)
+            else if (res.FilledPrice is not null)
             {
-                exitPrice = fp;
+                exitPrice = await SanitizedExitPriceAsync(pos, closeClientId, res.FilledPrice, res.FilledQuantity, qty, exitPrice, state.Mode, ts, ct);
             }
         }
 
