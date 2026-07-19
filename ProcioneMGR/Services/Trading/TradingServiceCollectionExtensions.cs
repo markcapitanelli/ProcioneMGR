@@ -62,6 +62,17 @@ public static class TradingServiceCollectionExtensions
         // sostituirla registrando prima la propria.
         services.TryAddSingleton<IExchangeCredentialReader, ExchangeCredentialReader>();
 
+        // Fase 3-C2 (PRD Autonomia): all'avvio, se la master key non decifra le credenziali
+        // esistenti lo si dichiara A VOCE ALTA (LogCritical + notifica + banner UI) invece di
+        // scoprirlo da un 500 o da un avvio Testnet fallito. Sola lettura: vive in ogni host.
+        services.TryAddSingleton<IMasterKeyProbe, MasterKeyProbe>();
+        services.AddHostedService<MasterKeyProbeWorker>();
+
+        // Quarantena corsie (Fase 0-A3): lo store serve a ENTRAMBI gli host (la UI del monolite
+        // legge/rimuove anche in modalità remota; il watchdog scrive dove gira il motore locale).
+        services.TryAddSingleton<ILaneQuarantineStore, LaneQuarantineStore>();
+        services.Configure<LaneInvariantOptions>(configuration.GetSection("Trading:LaneInvariants"));
+
         var useRemote = !isTradingServiceHost && configuration.GetValue<bool>("Trading:UseRemoteTrading");
 
         if (useRemote)
@@ -176,6 +187,21 @@ public static class TradingServiceCollectionExtensions
                     sp.GetRequiredKeyedService<IEnsembleManager>(laneId),
                     sp.GetRequiredService<ILogger<EnsembleRebalanceWorker>>()));
             }
+        }
+
+        // Watchdog degli invarianti contabili (Fase 0-A3): UNO per flotta, non per corsia, e SOLO
+        // nell'host dove il motore è locale — è uno scrittore (quarantena + StopAsync), e la regola
+        // della Fase 2b è che ogni scrittore ha esattamente un host. In modalità remota vive quindi
+        // dentro procionemgr-trading, mai nel monolite.
+        if (!useRemote)
+        {
+            services.AddSingleton<IHostedService>(sp => new LaneInvariantWatchdog(
+                sp,
+                sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
+                sp.GetRequiredService<ILaneQuarantineStore>(),
+                sp.GetRequiredService<IOptionsMonitor<LaneInvariantOptions>>(),
+                sp.GetRequiredService<ILogger<LaneInvariantWatchdog>>(),
+                sp.GetService<ProcioneMGR.Services.Notifications.INotifier>()));
         }
 
         // Fallback non-keyed: risolve sempre la corsia 0. Serve ai consumer non ancora aggiornati con

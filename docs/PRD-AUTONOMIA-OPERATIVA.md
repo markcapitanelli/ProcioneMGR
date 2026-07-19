@@ -1,8 +1,11 @@
 # PRD — Autonomia Operativa di ProcioneMGR
 
-**Stato**: Fase 0 parzialmente in corso (A1 = PR #24 aperta, A2 in lavorazione in sessione
-parallela); Fasi 1-4 progettate, non iniziate. **Creato**: 2026-07-19 · **Tipo**: documento vivo
-(aggiornare ad ogni fase completata, come il PRD di consolidamento).
+**Stato**: **TUTTE E 5 LE FASI COMPLETE** (2026-07-19, ordine 0 → 1 → 4 → 2 → 3 come
+raccomandato in §9): A1 = PR #24, A2 = PR #26, A3 + Fasi 1/4/2/3 = questo branch. Dettagli e
+scostamenti dal design nei blocchi **FATTO** di ogni sezione. Restano da esercitare dal vivo:
+prova reale Telegram (serve il bot token) e kill-test del processo durante uno smoke run (C1).
+**Creato**: 2026-07-19 · **Tipo**: documento vivo (aggiornare ad ogni fase completata, come il
+PRD di consolidamento).
 
 ## Scopo di questo documento
 
@@ -66,7 +69,7 @@ finché un umano non ha aperto la pagina. Un sistema autonomo senza questa fase 
 |---|---|---|---|
 | A1 | **Sanity check sui fill di ritorno** | **In corso — PR #24** | In `PositionOpener`/`PositionCloser`/`OrderReconciler`: quantità entro tolleranza della richiesta, prezzo > 0 ed entro banda dal prezzo corrente; fuori banda ⇒ esito INCERTO (riconciliazione/reject + audit `FillSanityRejected`), mai adottare il fill. Test con client scriptati (prezzo 0, quantità 100×). |
 | A2 | **Credenziali indecifrabili gestite con grazia** | **In corso — sessione parallela** | `/settings/exchanges` non deve andare in 500 (`AuthenticationTagMismatchException` dentro la query EF, `ExchangeSettings.razor:195`): decifratura per-riga con badge "reinserire"; `TradingEngine.LoadCredentialsAsync` fallisce con messaggio chiaro. |
-| A3 | **Watchdog di invarianti contabili + quarantena corsia** | Da fare | Nuovo `LaneInvariantWatchdog` (BackgroundService leggero o check in coda a `ProcessCandleAsync`): invarianti per corsia — `AvailableCapital ≥ -ε`, `|TotalPnl| ≤ k × TotalCapital × Leverage` (k configurabile, default 2), `posizioni aperte × nozionale ≤ esposizione massima`. Violazione ⇒ corsia in **quarantena** (stop trading, stato marcato, nessuna chiusura forzata automatica — stessa filosofia della "difesa inversa" del `FuturesPositionReconciler`) + evento di notifica (Fase 4; finché non esiste, `LogCritical` + audit). Verificato: oggi nel codebase non esiste alcun watchdog contabile (grep `invariant/watchdog/quarantine` ⇒ solo contratti anti-look-ahead nei fattori alpha). |
+| A3 | **Watchdog di invarianti contabili + quarantena corsia** | **FATTO (2026-07-19)** — `LaneInvariantWatchdog` + `LaneInvariantChecker` (puro) + tabella `LaneQuarantines` (migrazione `AddLaneQuarantine`); quarantena = stop trading SENZA chiusure forzate, riga persistita che blocca `StartAsync` finché un Admin non la rimuove in /trading (audit `LaneQuarantined`/`LaneQuarantineCleared`); config `Trading:LaneInvariants` (default ON, soglie lasche). Test: `LaneInvariantCheckerTests` + `LaneInvariantWatchdogTests` riproducono i numeri REALI della corsia 2 | Nuovo `LaneInvariantWatchdog` (BackgroundService leggero o check in coda a `ProcessCandleAsync`): invarianti per corsia — `AvailableCapital ≥ -ε`, `|TotalPnl| ≤ k × TotalCapital × Leverage` (k configurabile, default 2), `posizioni aperte × nozionale ≤ esposizione massima`. Violazione ⇒ corsia in **quarantena** (stop trading, stato marcato, nessuna chiusura forzata automatica — stessa filosofia della "difesa inversa" del `FuturesPositionReconciler`) + evento di notifica (Fase 4; finché non esiste, `LogCritical` + audit). Verificato: oggi nel codebase non esiste alcun watchdog contabile (grep `invariant/watchdog/quarantine` ⇒ solo contratti anti-look-ahead nei fattori alpha). |
 
 **Criteri di accettazione**: test di regressione che riproducono ESATTAMENTE il caso reale della
 corsia 2 (fill a prezzo 0, fill con quantità 100×) e dimostrano: fill rifiutato, capitale intatto,
@@ -109,6 +112,21 @@ end-to-end Paper con config smoke ("Smoke test BTC+ETH 1h" già esistente). **Ri
 (`Campaign:Enabled=false`), attivazione manuale per campagna. **Approvazione**: richiesta
 sull'attivazione di default, non sul codice.
 
+**FATTO (2026-07-19)** — `VettingCampaign` (tabella dedicata, migrazione `AddVettingCampaign`) +
+`CampaignPlanner`/`CampaignPlannerWorker` + pagina `/campaign` (crea/abilita/riattiva, doppio
+gate: `Campaign:Enabled` globale default OFF + flag per campagna). La catena valuta-e-applica è
+stata ESTRATTA da `PipelineSchedulerWorker` in `IRunApplyEvaluator` (stessa identica
+implementazione — supervisore con veto + isteresi + applier, un solo gate di atomicità) e
+condivisa tra ri-applica automatica e planner. Run della rotazione = trigger `"Campaign"` (🎯
+nello storico, così la ri-applica dello scheduler sui run "Scheduled" non li tocca), run da wake
+= `"Event"` (⚡). **Scostamenti dal design**: (1) su sopravvissuti NON schierati (veto del
+supervisore o isteresi "il corrente è meglio") la rotazione CONTINUA invece di fermarsi —
+fermarsi senza aver schierato nulla lascerebbe la flotta ferma per un candidato rifiutato;
+(2) avvio corsie SOLO Paper e solo se ferme (Testnet nel planner resta nel backlog §8);
+(3) config in ExecutionMode Live sempre saltate (stessa regola dello scheduler). Test:
+`CampaignPlannerTests` (12 casi: rotazione, backoff, esaurimento→WaitingForTrigger,
+wake→Event, veto→continua, slot occupato, Live saltata, quarantena non fatale).
+
 ---
 
 ## §5 — Fase 2: Trigger contestuali (event-driven, non solo cron)
@@ -134,6 +152,19 @@ scioglie**, non 12 ore dopo. L'aggancio esiste già nel modello dati (`Trigger =
 cooldown; un run Event visibile nello storico con ⚡. **Rischio**: basso (additivo, riusa
 GARCH/K-means esistenti). **Dipendenza**: Fase 1 (il trigger parla col planner, non col motore).
 
+**FATTO (2026-07-19)** — `RegimeChangeDetector` (decisione PURA `Evaluate` + realized vol come
+stddev per-periodo dei log-rendimenti, confrontabile col `ForecastVolatility24` GARCH del
+checkpoint): baseline = ultimo run COMPLETATO delle campagne abilitate, stato corrente via
+`IMarketFeatureExtractor` + `IRegimeDetector.LabelFeaturesAsync` (stesso percorso
+dell'EnsembleManager, zero calcoli nuovi). Banda vol nei DUE versi (espansione oltre k×forecast
+E compressione sotto forecast/k). `RegimeChangeTriggerWorker`: cooldown 6h in-memory, parla SOLO
+con `ICampaignPlanner.WakeAsync` (run marcati "Event" ⚡ — già visibili nello storico dalla
+Fase 1), gate a monte su `Campaign:Enabled`, notifica Fase 4 quando scatta; se nessuna campagna
+viene svegliata il cooldown NON si consuma. Config `RegimeTrigger` (Enabled default ON: inerte
+senza campagne). Lo spike di sentiment resta nel backlog §8 come da PRD. Test:
+`RegimeChangeTriggerTests` (14 casi: cluster sintetico, banda nei due versi, dati mancanti = mai
+trigger, realized vol, cooldown, gate, wake).
+
 ---
 
 ## §6 — Fase 3: Resilienza operativa ai riavvii
@@ -151,6 +182,24 @@ credenziali (B2) invece di dichiararlo a voce alta.
 
 **Rischio**: basso-medio. **Criteri**: kill del processo durante un run di smoke test → al riavvio
 il run riprende da solo e lo storico lo mostra; avvio con chiave sbagliata → banner visibile.
+
+**FATTO (2026-07-19)** — **C1**: auto-resume in `PipelineSchedulerWorker.AutoResumePausedRunsAsync`
+(ogni tick, non solo a startup): run Paused con trigger Scheduled/Event/Campaign ripresi da soli;
+Paused MANUALI mai toccati; config Live saltate; slot occupato = check saltato senza consumare
+tentativi (`GetLiveStatus` pre-check); budget di **3 tentativi** per run (marker persistenti su
+PipelineArtifacts, scostamento documentato dal "1 tentativo" del PRD: un run interrotto due volte
+da riavvii innocenti merita più di un tentativo, il tetto esiste contro i crash-loop), a
+esaurimento give-up + notifica una-tantum. **C2**: `IMasterKeyProbe`/`MasterKeyProbeWorker`
+(probe one-shot a startup con retry DB, `IExchangeCredentialReader.CountUnreadableAsync`):
+credenziali non decifrabili ⇒ LogCritical + notifica Critical + banner persistente in /trading e
+/settings/exchanges. Registrato in entrambi gli host (sola lettura). **C3**: campo
+`VettingCampaign.ObservedLanes` (stato ATTESO di flotta, scritto all'applica) +
+`RealignObservedLanesOnceAsync` nel planner: al PRIMO tick per processo di una campagna in
+osservazione confronta atteso vs reale — corsia ferma in Paper pulita ⇒ riavviata (Info); ferma
+con emergency stop / modalità non-Paper / quarantena ⇒ SOLO notifica Warning (decisione umana);
+una volta per processo per non combattere l'operatore. Test: `PipelineAutoResumeTests` (5),
+`MasterKeyProbeTests` (3), riallineamento in `CampaignPlannerTests` (3). Il criterio "kill del
+processo durante uno smoke run" resta da esercitare dal vivo alla prossima sessione operativa.
 
 ---
 
@@ -173,6 +222,21 @@ ritorno significa solo "ignorato". Serve il contrario dell'autonomia cieca: un m
 **Rischio**: basso. **Criteri**: test con notifier fake sui producer; prova manuale reale su
 Telegram.
 
+**FATTO (2026-07-19)** — `Services/Notifications/`: `INotifier` (un metodo) implementato da
+`NotificationDispatcher` (gate `Notifications:Enabled` default OFF hot-reload, rate-limit a
+finestra scorrevole con coalescing "N soppresse riportate nel messaggio successivo", MAI
+propaga eccezioni ai producer), provider `LoggingNotifier` (default) e `TelegramNotifier`
+(token SOLO da env `TELEGRAM_BOT_TOKEN`, ChatId in config). Producer cablati: quarantena
+watchdog (Critical), esiti campagna (schierato=Info, esaurita/run failed=Warning), run
+pipeline Failed (`PipelineEngine.FinalizeRunAsync`, Warning), promozione automatica del
+`PromotionWorker` (Info). Registrato in entrambi gli host (monolite e ProcioneMGR.Trading,
+dove vive il watchdog in modalità remota). Test: `NotificationDispatcherTests` (gate,
+rate-limit, coalescing, provider ignoto, errore contenuto) + `TelegramNotifierTests` (handler
+scriptato: payload, token mancante, HTTP failure) + assert sui producer in
+`CampaignPlannerTests`/`LaneInvariantWatchdogTests`. Resta da fare SOLO la prova manuale reale
+su Telegram (serve un bot token dell'operatore). Trigger Event scattato (producer della
+Fase 2) cablato nella Fase 2.
+
 ---
 
 ## §8 — Backlog condizionale
@@ -191,11 +255,11 @@ Telegram.
 
 | Fase | Obiettivo | Rischio | Dipendenze | Gate | Stato |
 |---|---|---|---|---|---|
-| **0** | Fill sanity (A1), credenziali con grazia (A2), watchdog contabile + quarantena (A3) | Medio | — | No (A1/A2 già avviate) | A1 = PR #24; A2 in corso; A3 da fare |
-| **1** | Campaign Planner: rotazione cacce, applica-su-successo, corsie per scelta | Medio-alto | Fase 0 | **Sì**: `Campaign:Enabled` default OFF | Progettata |
-| **2** | Trigger contestuali (regime/vol → "Event") | Basso | Fase 1 | No | Progettata |
-| **3** | Auto-resume, fail-fast chiavi, riallineamento corsie | Basso-medio | — (C1 utile già da sola) | No | Progettata |
-| **4** | Notifica (Telegram/logging, default off) | Basso | Massimo valore dopo 0-1 | No | Progettata |
+| **0** | Fill sanity (A1), credenziali con grazia (A2), watchdog contabile + quarantena (A3) | Medio | — | No (A1/A2 già avviate) | **COMPLETA** — A1 = PR #24; A2 = PR #26; A3 = 2026-07-19 |
+| **1** | Campaign Planner: rotazione cacce, applica-su-successo, corsie per scelta | Medio-alto | Fase 0 | **Sì**: `Campaign:Enabled` default OFF | **COMPLETA** (2026-07-19) |
+| **2** | Trigger contestuali (regime/vol → "Event") | Basso | Fase 1 | No | **COMPLETA** (2026-07-19) |
+| **3** | Auto-resume, fail-fast chiavi, riallineamento corsie | Basso-medio | — (C1 utile già da sola) | No | **COMPLETA** (2026-07-19) |
+| **4** | Notifica (Telegram/logging, default off) | Basso | Massimo valore dopo 0-1 | No | **COMPLETA** (2026-07-19; resta la prova manuale Telegram) |
 
 Ordine raccomandato: **0 → 1 → 4 → 2 → 3** (la notifica subito dopo il planner: un agente che
 decide senza riferire è peggio di uno che non decide).

@@ -1,0 +1,231 @@
+@page "/campaign"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Pipeline
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject CampaignPageService Svc
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Campagne di vaglio</PageTitle>
+<h1>Campagne di vaglio</h1>
+
+<GuidaPanel Title="Campaign Planner — cosa fare DOPO un run, deciso dalla piattaforma">
+    <p>
+        Una campagna è un elenco <strong>ordinato</strong> di configurazioni di caccia che il planner
+        ruota da solo: <em>0 sopravvissuti</em> → prossima config (con backoff, la stessa non si ripete
+        prima di N ore); <em>sopravvissuti</em> → l'ensemble passa dalla <strong>stessa catena</strong>
+        della ri-applica automatica (supervisore AI con veto + isteresi) e, se schierato, la rotazione
+        si ferma e la campagna va in <strong>osservazione</strong>; rotazione esaurita → la campagna
+        aspetta un <strong>trigger contestuale</strong> (cambio regime/volatilità) o l'operatore.
+    </p>
+    <dl class="row mb-0">
+        <dt class="col-sm-3">Doppio gate</dt>
+        <dd class="col-sm-9">Il planner agisce solo se il gate globale <code>Campaign:Enabled</code> E la singola campagna sono abilitati.</dd>
+        <dt class="col-sm-3">Limiti duri</dt>
+        <dd class="col-sm-9">Config in Live sempre saltate; corsie avviate al massimo in <strong>Paper</strong> e solo se ferme; una corsia in quarantena rifiuta da sola.</dd>
+    </dl>
+</GuidaPanel>
+
+@if (!Svc.GloballyEnabled)
+{
+    <div class="alert alert-warning">
+        ⚠️ Gate globale <code>Campaign:Enabled</code> = <strong>false</strong>: il planner è spento.
+        Le campagne si possono preparare, ma nessun run partirà finché non lo abiliti in configurazione.
+    </div>
+}
+@if (!string.IsNullOrEmpty(Svc.Message))
+{
+    <div class="alert @(Svc.IsError ? "alert-danger" : "alert-success")">@Svc.Message</div>
+}
+
+@* ============================== CAMPAGNE ============================== *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Campagne (@Svc.Campaigns.Count)</span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="TickNowAsync" disabled="@(!Svc.GloballyEnabled)">▶ Tick adesso</button>
+    </div>
+    @if (Svc.Campaigns.Count == 0)
+    {
+        <div class="card-body text-muted">Nessuna campagna. Creane una qui sotto dalle configurazioni di caccia salvate in /pipeline.</div>
+    }
+    else
+    {
+        <div class="card-body d-flex flex-column gap-3">
+            @foreach (var c in Svc.Campaigns)
+            {
+                <div class="border rounded p-3">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                        <div>
+                            <strong>@c.Name</strong>
+                            <span class="badge ms-2 @StatusBadge(c.Status)">@StatusLabel(c.Status)</span>
+                            @if (c.PendingRunId is not null)
+                            {
+                                <span class="badge bg-info ms-1">run in corso</span>
+                            }
+                            @if (!c.Enabled)
+                            {
+                                <span class="badge bg-secondary ms-1">spenta</span>
+                            }
+                        </div>
+                        <div class="d-flex gap-2">
+                            @if (c.Enabled)
+                            {
+                                <button class="btn btn-sm btn-outline-warning" @onclick="() => SetEnabledAsync(c.Id, false)">⏸ Disabilita</button>
+                            }
+                            else
+                            {
+                                <button class="btn btn-sm btn-outline-success" @onclick="() => SetEnabledAsync(c.Id, true)">▶ Abilita</button>
+                            }
+                            @if (c.Status != CampaignStatus.Rotating)
+                            {
+                                <button class="btn btn-sm btn-outline-primary" @onclick="() => WakeAsync(c.Id)">🔁 Rimetti in rotazione</button>
+                            }
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(c.Id)">🗑</button>
+                        </div>
+                    </div>
+                    <div class="small text-muted mt-1">
+                        Backoff @c.BackoffHours h · avvio corsie Paper: @(c.AutoStartPaperLanes ? "sì" : "no")
+                        @if (c.LastActionAtUtc is DateTime last)
+                        {
+                            <span> · ultima azione @last.ToString("dd/MM HH:mm") UTC</span>
+                        }
+                    </div>
+                    @if (!string.IsNullOrEmpty(c.LastOutcome))
+                    {
+                        <div class="small mt-1">@c.LastOutcome</div>
+                    }
+                    <div class="table-responsive mt-2">
+                        <table class="table table-sm mb-0">
+                            <thead><tr><th>#</th><th>Config</th><th>Ultimo esito</th><th>Ultimo run</th><th class="text-end">Tentativi</th></tr></thead>
+                            <tbody>
+                                @{ var i = 0; }
+                                @foreach (var s in CampaignPageService.StatesOf(c))
+                                {
+                                    i++;
+                                    <tr>
+                                        <td class="small">@i</td>
+                                        <td class="small">@Svc.ConfigName(s.ConfigurationId)</td>
+                                        <td class="small">@OutcomeLabel(s.LastOutcome)</td>
+                                        <td class="small">@(s.LastRunAtUtc?.ToString("dd/MM HH:mm") ?? "—")</td>
+                                        <td class="small text-end tabular-nums">@s.Attempts</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@* ============================== NUOVA CAMPAGNA ============================== *@
+<div class="card mb-3">
+    <div class="card-header">Nuova campagna</div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label small">Nome</label>
+                <input class="form-control form-control-sm" @bind="_newName" placeholder="es. Rotazione low-vol 1h-4h" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small">Backoff (ore)</label>
+                <input class="form-control form-control-sm" type="number" min="1" @bind="_newBackoffHours" />
+            </div>
+            <div class="col-md-3">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="autopaper" @bind="_newAutoStartPaper" />
+                    <label class="form-check-label small" for="autopaper">Avvia corsie in Paper dopo l'applica</label>
+                </div>
+            </div>
+        </div>
+        <label class="form-label small mt-3">Configurazioni della rotazione (nell'ordine di selezione)</label>
+        @if (Svc.Configs.Count == 0)
+        {
+            <div class="text-muted small">Nessuna configurazione salvata: creane una in /pipeline.</div>
+        }
+        else
+        {
+            <div class="d-flex flex-wrap gap-2">
+                @foreach (var cfg in Svc.Configs)
+                {
+                    var selectedIdx = _newConfigIds.IndexOf(cfg.Id);
+                    <button type="button"
+                            class="btn btn-sm @(selectedIdx >= 0 ? "btn-primary" : "btn-outline-secondary")"
+                            @onclick="() => ToggleConfig(cfg.Id)">
+                        @(selectedIdx >= 0 ? $"{selectedIdx + 1}. " : "")@cfg.Name
+                        @if (cfg.ExecutionMode == "Live")
+                        {
+                            <span class="badge bg-danger ms-1" title="Le config Live vengono saltate dal planner">Live</span>
+                        }
+                    </button>
+                }
+            </div>
+        }
+        <button class="btn btn-success btn-sm mt-3" @onclick="CreateAsync">➕ Crea campagna (nasce spenta)</button>
+    </div>
+</div>
+
+@code {
+    private string _newName = "";
+    private int _newBackoffHours = 12;
+    private bool _newAutoStartPaper = true;
+    private readonly List<int> _newConfigIds = new();
+    private string? _userId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userId = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        await Svc.RefreshAsync();
+    }
+
+    private void ToggleConfig(int id)
+    {
+        if (!_newConfigIds.Remove(id)) _newConfigIds.Add(id);
+    }
+
+    private async Task CreateAsync()
+    {
+        await Svc.CreateAsync(_newName, _newConfigIds, _newBackoffHours, _newAutoStartPaper, _userId);
+        if (!Svc.IsError)
+        {
+            _newName = "";
+            _newConfigIds.Clear();
+        }
+        StateHasChanged();
+    }
+
+    private async Task SetEnabledAsync(int id, bool enabled) { await Svc.SetEnabledAsync(id, enabled); StateHasChanged(); }
+    private async Task WakeAsync(int id) { await Svc.WakeAsync(id, _userId); StateHasChanged(); }
+    private async Task DeleteAsync(int id) { await Svc.DeleteAsync(id); StateHasChanged(); }
+    private async Task TickNowAsync() { await Svc.TickNowAsync(); StateHasChanged(); }
+
+    private static string StatusBadge(string status) => status switch
+    {
+        CampaignStatus.Rotating => "bg-primary",
+        CampaignStatus.Observing => "bg-success",
+        CampaignStatus.WaitingForTrigger => "bg-warning text-dark",
+        _ => "bg-secondary",
+    };
+
+    private static string StatusLabel(string status) => status switch
+    {
+        CampaignStatus.Rotating => "in rotazione",
+        CampaignStatus.Observing => "in osservazione",
+        CampaignStatus.WaitingForTrigger => "in attesa di trigger",
+        _ => status,
+    };
+
+    private static string OutcomeLabel(string? outcome) => outcome switch
+    {
+        null => "—",
+        "NoSurvivors" => "0 sopravvissuti",
+        "Applied" => "✅ schierato",
+        "NotApplied" => "sopravvissuti ma non schierato",
+        "Failed" => "❌ run fallito",
+        _ => outcome,
+    };
+}

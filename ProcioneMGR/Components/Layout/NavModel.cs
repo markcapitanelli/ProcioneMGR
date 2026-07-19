@@ -114,6 +114,8 @@ public static class NavModel
                 "Ricerca automatica delle combinazioni più promettenti.", ManagerAndAdmin),
             new NavItem("pipeline", "Pipeline", "bi-robot",
                 "Automazione end-to-end: da dati a strategia applicata.", ManagerAndAdmin),
+            new NavItem("campaign", "Campagne", "bi-bullseye",
+                "Rotazione automatica delle cacce: cosa fare dopo un run.", ManagerAndAdmin),
             new NavItem("alpha-mining", "Alpha Mining", "bi-gem",
                 "Generazione creativa di alpha factors (genetic miner).", ManagerAndAdmin),
             new NavItem("regimes", "Regimes", "bi-grid-3x3-gap-fill",

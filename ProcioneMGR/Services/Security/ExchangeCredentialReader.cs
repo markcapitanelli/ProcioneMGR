@@ -46,6 +46,12 @@ public interface IExchangeCredentialReader
     /// indecifrabili restituisce la prima, flaggata; null se non ce n'è nessuna.
     /// </summary>
     Task<DecryptedExchangeCredential?> FindForTradingAsync(ExchangeName exchange, bool testnet, CancellationToken ct = default);
+
+    /// <summary>
+    /// Censimento per il probe di avvio (Fase 3-C2, PRD Autonomia): quante credenziali esistono e
+    /// quante NON si decifrano con la master key corrente — di qualunque utente. Non espone dati.
+    /// </summary>
+    Task<(int Total, int Unreadable)> CountUnreadableAsync(CancellationToken ct = default);
 }
 
 /// <inheritdoc cref="IExchangeCredentialReader"/>
@@ -73,6 +79,14 @@ public sealed class ExchangeCredentialReader(
             .ToListAsync(ct);
         var decrypted = rows.Select(DecryptRow).ToList();
         return decrypted.FirstOrDefault(d => d.IsDecryptable) ?? decrypted.FirstOrDefault();
+    }
+
+    public async Task<(int Total, int Unreadable)> CountUnreadableAsync(CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var rows = await db.ExchangeCredentialCiphertexts.ToListAsync(ct);
+        var unreadable = rows.Count(r => !DecryptRow(r).IsDecryptable);
+        return (rows.Count, unreadable);
     }
 
     private DecryptedExchangeCredential DecryptRow(ExchangeCredentialCiphertext row)

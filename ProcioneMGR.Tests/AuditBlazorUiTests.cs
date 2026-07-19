@@ -169,6 +169,8 @@ public class AuditBlazorUiTests : BunitContext
             ReadyPaperLane(0), ReadyPaperLane(1), ReadyPaperLane(2),
         ]));
         Services.AddSingleton<ILanePromoter>(new ThrowingPromoter());
+        Services.AddSingleton<ILaneQuarantineStore>(new Infrastructure.FakeLaneQuarantineStore());
+        Services.AddSingleton<ProcioneMGR.Services.Security.IMasterKeyProbe>(new Infrastructure.FakeMasterKeyProbe());
         Services.AddScoped<TradingPageService>();
         return (writer, engines);
     }

@@ -12,6 +12,7 @@
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IExchangeClientFactory ExchangeFactory
 @inject IExchangeCredentialReader CredentialReader
+@inject IMasterKeyProbe KeyProbe
 @inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Le mie credenziali Exchange</PageTitle>
@@ -61,6 +62,18 @@
         </dd>
     </dl>
 </GuidaPanel>
+
+@if (KeyProbe.Result is { HasUnreadable: true } keyProbe)
+{
+    <div class="alert alert-danger">
+        <div class="fw-bold">🔑 MASTER KEY INCOERENTE: @keyProbe.Unreadable credenziali su @keyProbe.Total non decifrabili con la chiave corrente.</div>
+        <div class="small mt-1">
+            L'app è partita con una <code>Security:MasterKey</code> diversa da quella con cui queste credenziali
+            furono salvate: Testnet/Live falliranno finché non le reinserisci (o non ripristini la chiave giusta
+            via <code>PROCIONE_MGR_MASTER_KEY</code>). Verificato all'avvio (@keyProbe.CheckedAtUtc.ToString("dd/MM HH:mm") UTC).
+        </div>
+    </div>
+}
 
 <div class="row">
     <div class="col-lg-5">

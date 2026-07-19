@@ -1,5 +1,4 @@
 using Cronos;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Agents;
@@ -30,6 +29,16 @@ public static class AutoReapplyArtifactKinds
     public const string Decision = "AutoReapplyDecision";
 }
 
+/// <summary>Kind degli artifact dell'auto-resume (Fase 3-C1, PRD Autonomia): marker idempotenti per-run.</summary>
+public static class AutoResumeArtifactKinds
+{
+    /// <summary>Un tentativo di ripresa automatica (il conteggio = numero di questi artifact).</summary>
+    public const string Attempt = "AutoResumeAttempt";
+
+    /// <summary>Tentativi esauriti: notificato e mai più toccato (resta all'operatore).</summary>
+    public const string GaveUp = "AutoResumeGaveUp";
+}
+
 /// <summary>
 /// Worker schedulato: (1) valuta periodicamente le <see cref="PipelineConfiguration"/> con
 /// <see cref="PipelineConfiguration.ScheduleEnabled"/> attivo e lancia quelle dovute; (2) RI-APPLICA
@@ -43,24 +52,29 @@ public static class AutoReapplyArtifactKinds
 /// (<see cref="IPipelineSupervisorAgent"/>, che può solo porre un veto) sono d'accordo.
 ///
 /// Il motore (<see cref="IPipelineEngine"/>) è a slot singolo: niente lock per-config qui, la
-/// concorrenza dei run è già gestita da <c>PipelineEngine</c>. L'applicazione dell'ensemble è resa
-/// atomica da un <see cref="SemaphoreSlim"/> globale, così due run valutati nello stesso tick non
-/// scrivono le corsie in contemporanea.
+/// concorrenza dei run è già gestita da <c>PipelineEngine</c>. La catena valuta-e-applica
+/// (supervisore → confronto con isteresi → applier, con gate di atomicità sulle corsie) vive in
+/// <see cref="IRunApplyEvaluator"/>, CONDIVISA con il <see cref="CampaignPlanner"/> (Fase 1 PRD
+/// Autonomia): una sola implementazione, nessuna deriva tra i percorsi automatici.
 /// </summary>
 public sealed class PipelineSchedulerWorker(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IPipelineEngine engine,
-    IPipelineApplier applier,
-    IEnsembleComparator comparator,
-    IPipelineSupervisorAgent supervisor,
+    IRunApplyEvaluator applyEvaluator,
     Microsoft.Extensions.Options.IOptionsMonitor<AutoReapplyOptions> autoReapply,
     ILogger<PipelineSchedulerWorker> logger,
-    ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null) : BackgroundService
+    ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null,
+    ProcioneMGR.Services.Notifications.INotifier? notifier = null) : BackgroundService
 {
     private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(5);
 
-    /// <summary>Serializza l'applicazione dell'ensemble sulle corsie (atomicità globale tra run/tick).</summary>
-    private static readonly SemaphoreSlim ApplyGate = new(1, 1);
+    /// <summary>
+    /// Fase 3-C1: tentativi di auto-resume per run prima di arrendersi e notificare. Più di 1
+    /// (scostamento documentato dal PRD, che diceva "1 tentativo"): un run interrotto DUE volte da
+    /// riavvii innocenti merita più di un tentativo; il tetto esiste perché un run che fa crashare
+    /// il processo non deve diventare un crash-loop di riprese automatiche.
+    /// </summary>
+    public const int MaxAutoResumeAttempts = 3;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -122,6 +136,140 @@ public sealed class PipelineSchedulerWorker(
         if (autoReapply.CurrentValue.Enabled)
         {
             await ProcessCompletedRunsAsync(ct);
+        }
+
+        // Fase 3-C1: i run Paused con trigger automatico riprendono da soli (nessun gate: utile
+        // già da sola, come da PRD §6 — i Paused MANUALI restano manuali).
+        await AutoResumePausedRunsAsync(ct);
+    }
+
+    // ------------------------------------------------------------ auto-resume (Fase 3-C1)
+
+    /// <summary>
+    /// Riprende i run "Paused" con trigger AUTOMATICO (Scheduled/Event/Campaign): tipicamente gli
+    /// orfani di un riavvio, che <see cref="IPipelineEngine.RecoverOrphanedRunsAsync"/> marca
+    /// Paused e che prima restavano lì finché un umano non premeva Riprendi (evidenza della
+    /// sessione 2026-07-18: un run interrotto dallo spegnimento è rimasto Paused tutto il giorno).
+    /// I Paused MANUALI (trigger "Manual") non vengono MAI toccati. Config in modalità Live:
+    /// saltate (difesa in profondità — un run automatico su config Live non esiste per costruzione).
+    /// Massimo <see cref="MaxAutoResumeAttempts"/> tentativi per run (marker su PipelineArtifacts,
+    /// sopravvivono ai riavvii), poi notifica e stop. Pubblico per test.
+    /// </summary>
+    public async Task AutoResumePausedRunsAsync(CancellationToken ct)
+    {
+        // Slot del motore occupato: inutile (e dannoso) tentare — un run tipico dura ore e ogni
+        // tentativo consumerebbe il budget di riprese. Si riprova al primo tick a slot libero.
+        if (engine.GetLiveStatus() is not null) return;
+
+        List<PipelineRun> paused;
+        Dictionary<Guid, int> attempts;
+        HashSet<Guid> gaveUp;
+        Dictionary<int, PipelineConfiguration> configs;
+        await using (var db = await dbFactory.CreateDbContextAsync(ct))
+        {
+            var since = DateTime.UtcNow.AddDays(-7);
+            paused = await db.PipelineRuns
+                .Where(r => r.Status == "Paused"
+                            && (r.Trigger == "Scheduled" || r.Trigger == "Event" || r.Trigger == "Campaign")
+                            && r.StartedAt >= since)
+                .OrderBy(r => r.StartedAt)
+                .ToListAsync(ct);
+            if (paused.Count == 0) return;
+
+            var ids = paused.Select(r => r.Id).ToList();
+            attempts = await db.PipelineArtifacts
+                .Where(a => ids.Contains(a.RunId) && a.Kind == AutoResumeArtifactKinds.Attempt)
+                .GroupBy(a => a.RunId)
+                .Select(g => new { RunId = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.RunId, x => x.Count, ct);
+            gaveUp = (await db.PipelineArtifacts
+                .Where(a => ids.Contains(a.RunId) && a.Kind == AutoResumeArtifactKinds.GaveUp)
+                .Select(a => a.RunId)
+                .ToListAsync(ct)).ToHashSet();
+            var configIds = paused.Select(r => r.ConfigurationId).Distinct().ToList();
+            configs = await db.PipelineConfigurations.AsNoTracking()
+                .Where(c => configIds.Contains(c.Id))
+                .ToDictionaryAsync(c => c.Id, ct);
+        }
+
+        foreach (var run in paused)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (gaveUp.Contains(run.Id)) continue;
+            if (!configs.TryGetValue(run.ConfigurationId, out var config)) continue;
+            if (config.ExecutionMode == "Live") continue; // mai auto-resume verso Live, per quanto impossibile
+
+            var tried = attempts.GetValueOrDefault(run.Id);
+            if (tried >= MaxAutoResumeAttempts)
+            {
+                await RecordAutoResumeGiveUpAsync(run, tried, ct);
+                continue;
+            }
+
+            try
+            {
+                // Marker PRIMA della ripresa: se il run fa crashare il processo, il tentativo
+                // risulta comunque consumato (altrimenti sarebbe un crash-loop di riprese).
+                await RecordAutoResumeAttemptAsync(run.Id, tried + 1, ct);
+                await engine.ResumeRunAsync(run.Id, config.CreatedBy, ct);
+                logger.LogInformation("Auto-resume del run {RunId} (config '{Name}', tentativo {N}/{Max}).",
+                    run.Id, config.Name, tried + 1, MaxAutoResumeAttempts);
+                return; // slot singolo: un solo resume per tick
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("già in corso", StringComparison.Ordinal)
+                                                       || ex.Message.Contains("già in esecuzione", StringComparison.Ordinal))
+            {
+                // Race residua col pre-check GetLiveStatus (un run manuale partito nel frattempo):
+                // il marker è già scritto e il tentativo risulta consumato — raro e accettabile,
+                // il budget serve contro i crash-loop, non contro questa finestra.
+                return;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Auto-resume del run {RunId} fallito (tentativo {N}/{Max}).",
+                    run.Id, tried + 1, MaxAutoResumeAttempts);
+            }
+        }
+    }
+
+    private async Task RecordAutoResumeAttemptAsync(Guid runId, int attemptNumber, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        db.PipelineArtifacts.Add(new PipelineArtifact
+        {
+            RunId = runId,
+            StageName = "AutoResume",
+            Kind = AutoResumeArtifactKinds.Attempt,
+            PayloadJson = System.Text.Json.JsonSerializer.Serialize(new { attemptNumber, attemptedAtUtc = DateTime.UtcNow }),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
+    private async Task RecordAutoResumeGiveUpAsync(PipelineRun run, int tried, CancellationToken ct)
+    {
+        await using (var db = await dbFactory.CreateDbContextAsync(ct))
+        {
+            var exists = await db.PipelineArtifacts.AnyAsync(a => a.RunId == run.Id && a.Kind == AutoResumeArtifactKinds.GaveUp, ct);
+            if (exists) return;
+            db.PipelineArtifacts.Add(new PipelineArtifact
+            {
+                RunId = run.Id,
+                StageName = "AutoResume",
+                Kind = AutoResumeArtifactKinds.GaveUp,
+                PayloadJson = System.Text.Json.JsonSerializer.Serialize(new { attempts = tried, gaveUpAtUtc = DateTime.UtcNow }),
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
+        logger.LogWarning("Auto-resume ABBANDONATO per il run {RunId} dopo {N} tentativi: resta Paused, serve l'operatore.",
+            run.Id, tried);
+        if (notifier is not null)
+        {
+            await notifier.NotifyAsync(ProcioneMGR.Services.Notifications.NotificationSeverity.Warning,
+                "Auto-resume abbandonato",
+                $"Il run {run.Id} (trigger {run.Trigger}) resta Paused dopo {tried} riprese automatiche fallite: riprendilo o annullalo da /pipeline.", ct);
         }
     }
 
@@ -203,92 +351,9 @@ public sealed class PipelineSchedulerWorker(
         }
     }
 
-    /// <summary>Valuta un singolo run e, se giustificato, ne schiera l'ensemble. Registra sempre una decisione (idempotente).</summary>
-    public async Task EvaluateAndMaybeApplyAsync(Guid runId, CancellationToken ct)
-    {
-        PipelineRun? run;
-        await using (var db = await dbFactory.CreateDbContextAsync(ct))
-        {
-            run = await db.PipelineRuns.AsNoTracking().FirstOrDefaultAsync(r => r.Id == runId, ct);
-        }
-        if (run is null) return;
-
-        var candidate = DeserializeRecommendation(run.RecommendationJson);
-        if (candidate is null || candidate.EnsembleLegs.Count == 0)
-        {
-            await RecordDecisionAsync(runId, applied: false, "Run senza ensemble applicabile: nessuna azione.", null, null, ct);
-            return;
-        }
-
-        var candidateSummary = applier.SummarizeRecommendation(candidate);
-        var currentSummary = await applier.GetCurrentEnsembleSummaryAsync(ct);
-
-        // 1. Supervisore AI (può solo porre un veto; su errore/assenza approva → decidono le metriche).
-        var judgment = await supervisor.AnalyzeRunAsync(run, currentSummary, candidateSummary, ct);
-
-        // 2. Confronto oggettivo con hysteresis.
-        var comparison = comparator.Compare(currentSummary.IsEmpty ? null : currentSummary, candidateSummary);
-
-        var applied = false;
-        string message;
-        if (comparison.ShouldReplace && judgment.ApproveReplacement)
-        {
-            await ApplyGate.WaitAsync(ct);
-            try
-            {
-                var result = await applier.ApplyRecommendationAsync(candidate, ct);
-                applied = true;
-                message = $"Ensemble sostituito automaticamente. {comparison.Reason} {result.Message}";
-                logger.LogInformation("Ri-applica automatica ESEGUITA per il run {RunId}: {Reason}", runId, comparison.Reason);
-            }
-            finally { ApplyGate.Release(); }
-        }
-        else if (comparison.ShouldReplace && !judgment.ApproveReplacement)
-        {
-            message = $"Ensemble corrente mantenuto: VETO del supervisore AI. {judgment.Summary}";
-            logger.LogInformation("Ri-applica automatica VETATA dal supervisore per il run {RunId}.", runId);
-        }
-        else
-        {
-            message = comparison.Reason;
-            logger.LogInformation("Ri-applica automatica NON eseguita per il run {RunId}: {Reason}", runId, comparison.Reason);
-        }
-
-        await RecordDecisionAsync(runId, applied, message, comparison, judgment, ct);
-    }
-
-    /// <summary>Persiste la decisione come <see cref="PipelineArtifact"/> (marker idempotente + fonte per la UI). Nessuna nuova tabella.</summary>
-    private async Task RecordDecisionAsync(Guid runId, bool applied, string message, EnsembleComparison? comparison, SupervisorJudgment? judgment, CancellationToken ct)
-    {
-        var payload = new AutoReapplyDecisionArtifact
-        {
-            Applied = applied,
-            Message = message,
-            Comparison = comparison,
-            Judgment = judgment,
-            DecidedAtUtc = DateTime.UtcNow,
-        };
-
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var exists = await db.PipelineArtifacts.AnyAsync(a => a.RunId == runId && a.Kind == AutoReapplyArtifactKinds.Decision, ct);
-        if (exists) return; // idempotente
-        db.PipelineArtifacts.Add(new PipelineArtifact
-        {
-            RunId = runId,
-            StageName = "AutoReapply",
-            Kind = AutoReapplyArtifactKinds.Decision,
-            PayloadJson = JsonSerializer.Serialize(payload),
-            CreatedAt = DateTime.UtcNow,
-        });
-        await db.SaveChangesAsync(ct);
-    }
-
-    private static PipelineRecommendation? DeserializeRecommendation(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json) || json == "{}") return null;
-        try { return JsonSerializer.Deserialize<PipelineRecommendation>(json); }
-        catch { return null; }
-    }
+    /// <summary>Valuta un singolo run e, se giustificato, ne schiera l'ensemble (delega a <see cref="IRunApplyEvaluator"/>).</summary>
+    public Task EvaluateAndMaybeApplyAsync(Guid runId, CancellationToken ct)
+        => applyEvaluator.EvaluateAndMaybeApplyAsync(runId, ct);
 
     // ------------------------------------------------------------ pure helpers
 
