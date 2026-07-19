@@ -22,6 +22,13 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>Credenziali API degli exchange, cifrate a riposo.</summary>
     public DbSet<ExchangeCredential> ExchangeCredentials => Set<ExchangeCredential>();
 
+    /// <summary>
+    /// Stessa tabella di <see cref="ExchangeCredentials"/> ma col CIPHERTEXT grezzo (nessun
+    /// converter): per i percorsi che decifrano riga per riga in memoria e devono sopravvivere
+    /// a una riga cifrata con una master key diversa. Sola lettura (keyless).
+    /// </summary>
+    public DbSet<ExchangeCredentialCiphertext> ExchangeCredentialCiphertexts => Set<ExchangeCredentialCiphertext>();
+
     /// <summary>Watchlist globale: serie mantenute aggiornate dal worker in background.</summary>
     public DbSet<TrackedSeries> TrackedSeries => Set<TrackedSeries>();
 
@@ -131,6 +138,19 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 
             // Le credenziali si interrogano sempre per utente.
             entity.HasIndex(e => e.UserId);
+        });
+
+        // Proiezione keyless sul ciphertext della STESSA tabella (vedi doc della classe): ToView
+        // non produce né tabella né migrazione, ma le query LINQ leggono normalmente le colonne
+        // grezze — è il punto d'appoggio della decifratura per-riga in ExchangeCredentialReader.
+        builder.Entity<ExchangeCredentialCiphertext>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("ExchangeCredentials");
+
+            entity.Property(e => e.ExchangeName)
+                  .HasConversion<string>()
+                  .HasMaxLength(16);
         });
 
         builder.Entity<TrackedSeries>(entity =>
