@@ -25,6 +25,8 @@
 @inject ILlmClient LlmClient
 @inject LlmSupervisorWorker LlmWorker
 @inject FeatureDriftWorker DriftWorker
+@inject IOptionsMonitor<ProcioneMGR.Services.Sentiment.SentimentOptions> SentimentMonitor
+@inject ProcioneMGR.Services.Sentiment.SentimentSyncWorker SentimentWorker
 
 <PageTitle>Autonomia</PageTitle>
 
@@ -284,6 +286,65 @@
     </div>
 </div>
 
+@* ============================ 4c. Sentiment 2.0 (raccolta + composite) ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-emoji-neutral me-1"></i>Sentiment (mood di mercato)</span>
+        <span>@StateBadge(_sentiment.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Raccoglie Fear &amp; Greed (alternative.me) e posizionamento pubblico dai futures Binance
+            (long/short, taker, open interest, funding — API senza chiave), sincronizza le notizie e
+            calcola il composite di mood con z-score ed estremi contrarian (dashboard in
+            <a href="sentiment">/sentiment</a>). Default ON: sole letture pubbliche, e le serie
+            Binance esistono solo 30 giorni — spento significa buchi irrecuperabili nei baseline.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="se_en" @bind="_sentiment.Enabled" />
+                <label class="form-check-label" for="se_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Metriche (min) @Restart()</label>
+                <input type="number" class="form-control" @bind="_sentiment.MetricsIntervalMinutes" min="5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">News (min) @Restart()</label>
+                <input type="number" class="form-control" @bind="_sentiment.NewsIntervalMinutes" min="5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Simboli (csv) @Hot()</label>
+                <input class="form-control" @bind="_sentimentSymbolsCsv" style="width: 14rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Soglia z estremi @Hot()</label>
+                <input type="number" step="0.1" class="form-control" @bind="_sentiment.ExtremeZScore" min="0.5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">F&amp;G low/high @Hot()</label>
+                <div class="d-flex gap-1">
+                    <input type="number" class="form-control" @bind="_sentiment.FearGreedExtremeLow" min="0" max="50" style="width: 5rem;" />
+                    <input type="number" class="form-control" @bind="_sentiment.FearGreedExtremeHigh" min="50" max="100" style="width: 5rem;" />
+                </div>
+            </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="se_ml" @bind="_sentiment.EnableMlFeature" />
+                <label class="form-check-label" for="se_ml" title="Rende il fattore 'Sentiment' selezionabile come feature dei modelli ML. Scelta esplicita: cambia cosa vedono i modelli nei run successivi.">
+                    Feature ML ⚠️ @Hot()
+                </label>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary me-2" @onclick="SaveSentimentAsync" disabled="@_busy">Salva</button>
+                <button class="btn btn-outline-secondary" @onclick="RunSentimentNowAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Esegui ora
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 @* ============================ 5. Drift feature ============================ *@
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between">
@@ -414,6 +475,8 @@
     private PromotionEvaluatorOptions _promotion = new();
     private LlmOptions _llm = new();
     private SupervisorAgentOptions _supervisorAgent = new();
+    private ProcioneMGR.Services.Sentiment.SentimentOptions _sentiment = new();
+    private string _sentimentSymbolsCsv = "";
     private DriftMonitorOptions _drift = new();
     private MarketDataConfig _marketData = new();
     private MarketRegimeConfig _marketRegime = new();
@@ -452,6 +515,8 @@
         _promotion = Clone(PromotionMonitor.CurrentValue);
         _llm = Clone(LlmMonitor.CurrentValue);
         _supervisorAgent = Clone(SupervisorAgentMonitor.CurrentValue);
+        _sentiment = Clone(SentimentMonitor.CurrentValue);
+        _sentimentSymbolsCsv = string.Join(", ", _sentiment.Symbols);
         _drift = Clone(DriftMonitor.CurrentValue);
         _marketData = new MarketDataConfig
         {
@@ -505,6 +570,30 @@
                 : "Tick eseguito SENZA API key: nessuna chiamata e nessun artifact — imposta ANTHROPIC_API_KEY e il ciclo riparte da solo al prossimo tick.", false);
         }
         catch (Exception ex) { SetStatus($"Supervisione fallita: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private async Task SaveSentimentAsync()
+    {
+        _sentiment.Symbols = _sentimentSymbolsCsv
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => s.ToUpperInvariant())
+            .Distinct()
+            .ToList();
+        if (_sentiment.Symbols.Count == 0) _sentiment.Symbols = ["BTCUSDT", "ETHUSDT"];
+        _sentimentSymbolsCsv = string.Join(", ", _sentiment.Symbols);
+        await SaveAsync("Sentiment", _sentiment, "Sentiment");
+    }
+
+    private async Task RunSentimentNowAsync()
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            var (metrics, news) = await SentimentWorker.TickAsync(CancellationToken.None, forceNews: true);
+            SetStatus($"Sentiment: tick eseguito — {metrics} punti metrici e {news} notizie nuove; snapshot e salute fonti in /sentiment.", false);
+        }
+        catch (Exception ex) { SetStatus($"Sentiment: tick fallito — {ex.Message}", true); }
         finally { _busy = false; }
     }
 
