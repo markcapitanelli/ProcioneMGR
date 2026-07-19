@@ -132,7 +132,8 @@ public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
         Func<int, string, Task<Guid>> onStart,
         AutoReapplyOptions? autoReapply = null,
         IPipelineApplier? applier = null,
-        IPipelineSupervisorAgent? supervisor = null)
+        IPipelineSupervisorAgent? supervisor = null,
+        ProcioneMGR.Services.Notifications.INotifier? notifier = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
@@ -154,7 +155,9 @@ public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
             applier ?? new FakeApplier(),
             new EnsembleComparator(new EnsembleComparatorOptions()),
             supervisor ?? new LoggingSupervisorAgent(NullLogger<LoggingSupervisorAgent>.Instance),
-            NullLogger<RunApplyEvaluator>.Instance);
+            NullLogger<RunApplyEvaluator>.Instance,
+            metrics: null,
+            notifier: notifier);
         var worker = new PipelineSchedulerWorker(
             dbFactory,
             engine,
@@ -424,6 +427,37 @@ public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
         await using var db = await dbFactory.CreateDbContextAsync();
         var art = await db.PipelineArtifacts.SingleAsync(a => a.RunId == runId && a.Kind == AutoReapplyArtifactKinds.Decision);
         Assert.Contains("VETO", art.PayloadJson);
+    }
+
+    private sealed class RecordingNotifier : ProcioneMGR.Services.Notifications.INotifier
+    {
+        public List<(ProcioneMGR.Services.Notifications.NotificationSeverity Severity, string Title)> Sent { get; } = new();
+        public Task NotifyAsync(ProcioneMGR.Services.Notifications.NotificationSeverity severity, string title, string body, CancellationToken ct = default)
+        {
+            Sent.Add((severity, title));
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task ProcessCompletedRuns_SupervisorVeto_NotifiesExactlyOnce()
+    {
+        var notifier = new RecordingNotifier();
+        var (worker, _, dbFactory) = await BuildAsync(
+            (id, t) => Task.FromResult(Guid.NewGuid()),
+            new AutoReapplyOptions { Enabled = true },
+            new FakeApplier(),
+            new VetoingSupervisor(),
+            notifier);
+        await SeedCompletedScheduledRunAsync(dbFactory, sharpe: 1.5m);
+
+        await worker.ProcessCompletedRunsAsync(CancellationToken.None);
+        // Secondo giro sullo stesso run (decisione già registrata): NIENTE seconda notifica.
+        await worker.ProcessCompletedRunsAsync(CancellationToken.None);
+
+        var warning = Assert.Single(notifier.Sent);
+        Assert.Equal(ProcioneMGR.Services.Notifications.NotificationSeverity.Warning, warning.Severity);
+        Assert.Contains("VETATA", warning.Title);
     }
 
     [Fact]
