@@ -319,6 +319,67 @@ public class RecommendationStageTests
         await stage.ExecuteAsync(ctx2, new StageConfig(), CancellationToken.None);
         Assert.Equal(ctx1.Recommendation!.FullText, ctx2.Recommendation!.FullText);
     }
+
+    [Fact]
+    public async Task WithMoodSnapshot_LabelComesFromComposite_AndFieldsArePopulated()
+    {
+        var stage = new RecommendationStage(new FakeRulesProvider());
+        var ctx = ContextWithSurvivor();
+        // News legacy negative (-0.5) ma composite positivo: la label deve venire dal composite.
+        ctx.AltData!.AvgSentimentLast24h = -0.5;
+        ctx.AltData.Snapshot = new ProcioneMGR.Services.Sentiment.SentimentSnapshot
+        {
+            CompositeScore = 0.4,
+            FearGreedValue = 72,
+            FearGreedLabel = "Greed",
+            Symbols = [new ProcioneMGR.Services.Sentiment.SymbolSentiment { Symbol = "BTC", Composite = 0.5, FundingZ = 1.2 }],
+        };
+
+        await stage.ExecuteAsync(ctx, new StageConfig(), CancellationToken.None);
+
+        var rec = ctx.Recommendation!;
+        Assert.Equal("positivo", rec.SentimentLabel);
+        Assert.Equal(0.4, rec.SentimentComposite);
+        Assert.Equal(72.0, rec.FearGreedValue);
+        Assert.Contains("composite", rec.FullText);
+        Assert.Contains("Fear&Greed 72", rec.FullText);
+        Assert.Contains("BTC: mood", rec.FullText);
+    }
+
+    [Fact]
+    public async Task WithMoodExtremes_TheyBecomeAlerts_AndAppearInFullText()
+    {
+        var stage = new RecommendationStage(new FakeRulesProvider());
+        var ctx = ContextWithSurvivor();
+        ctx.AltData!.Snapshot = new ProcioneMGR.Services.Sentiment.SentimentSnapshot
+        {
+            CompositeScore = 0.9,
+            Extremes = ["Fear & Greed 85 (extreme greed): euforia, storicamente zona contrarian di rischio correzione."],
+        };
+
+        await stage.ExecuteAsync(ctx, new StageConfig(), CancellationToken.None);
+
+        var rec = ctx.Recommendation!;
+        Assert.Single(rec.SentimentExtremes);
+        Assert.Contains(rec.Alerts, a => a.StartsWith("Mood:") && a.Contains("extreme greed"));
+        Assert.Contains("extreme greed", rec.FullText);
+    }
+
+    [Fact]
+    public async Task WithoutSnapshot_LegacyPathIsUnchanged()
+    {
+        var stage = new RecommendationStage(new FakeRulesProvider());
+        var ctx = ContextWithSurvivor(); // Snapshot null, AvgSentimentLast24h 0.3
+
+        await stage.ExecuteAsync(ctx, new StageConfig(), CancellationToken.None);
+
+        var rec = ctx.Recommendation!;
+        Assert.Equal("positivo", rec.SentimentLabel);
+        Assert.Null(rec.SentimentComposite);
+        Assert.Null(rec.FearGreedValue);
+        Assert.Empty(rec.SentimentExtremes);
+        Assert.Contains("SENTIMENT: 0", rec.FullText); // riga legacy
+    }
 }
 
 public class RiskSizingStageTests

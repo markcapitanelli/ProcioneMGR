@@ -33,18 +33,43 @@ public sealed class AlphaFactorFactory : IAlphaFactorFactory
         new DistanceFromMaFactor(),
     ];
 
-    public AlphaFactorFactory()
+    private readonly IReadOnlyList<IAlphaFactor> _basePrototypes;
+    private readonly IReadOnlyList<IAlphaFactor>? _prototypesWithSentiment;
+    private readonly ProcioneMGR.Services.Sentiment.ISentimentNewsProvider? _newsProvider;
+    private readonly Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Sentiment.SentimentOptions>? _sentimentOptions;
+
+    /// <summary>
+    /// Parametri OPZIONALI di proposito: i molti call-site legacy (test, tool CLI, host Trading)
+    /// continuano a usare <c>new AlphaFactorFactory()</c> senza fattore Sentiment; nel monolite la
+    /// DI inietta provider e opzioni e il fattore "Sentiment" diventa disponibile — nei PROTOTIPI
+    /// (UI/pipeline) solo con <c>Sentiment:EnableMlFeature=true</c> (opt-in, hot), in
+    /// <see cref="Create"/> SEMPRE quando il provider c'è (round-trip dei SavedMlModel che l'hanno
+    /// selezionato: un modello salvato col flag ON deve caricarsi anche a flag OFF).
+    /// </summary>
+    public AlphaFactorFactory(
+        ProcioneMGR.Services.Sentiment.ISentimentNewsProvider? newsProvider = null,
+        Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Sentiment.SentimentOptions>? sentimentOptions = null)
     {
         // Prototipi = 8 fattori storici + intero catalogo Alpha158 agli orizzonti di default.
         // Ogni voce del catalogo è già una feature concreta (orizzonte cotto nel nome), quindi
         // compare direttamente nel selettore fattori senza modifiche ai consumatori.
-        Prototypes = [.. HandwrittenPrototypes, .. Alpha158Catalog.BuildCatalog()];
+        _basePrototypes = [.. HandwrittenPrototypes, .. Alpha158Catalog.BuildCatalog()];
+        _newsProvider = newsProvider;
+        _sentimentOptions = sentimentOptions;
+        if (newsProvider is not null)
+        {
+            _prototypesWithSentiment = [.. _basePrototypes, new ProcioneMGR.Services.Sentiment.SentimentFeatureFactor(newsProvider)];
+        }
     }
 
-    public IReadOnlyList<IAlphaFactor> Prototypes { get; }
+    public IReadOnlyList<IAlphaFactor> Prototypes =>
+        _prototypesWithSentiment is not null && _sentimentOptions?.CurrentValue.EnableMlFeature == true
+            ? _prototypesWithSentiment
+            : _basePrototypes;
 
     public IAlphaFactor Create(string factorName) => factorName switch
     {
+        "Sentiment" when _newsProvider is not null => new ProcioneMGR.Services.Sentiment.SentimentFeatureFactor(_newsProvider),
         "Momentum" => new MomentumFactor(),
         "MeanReversion" => new MeanReversionFactor(),
         "RealizedVol" => new RealizedVolatilityFactor(),
