@@ -147,12 +147,18 @@ public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
         }
 
         var engine = new ScriptedPipelineEngine(onStart);
-        var worker = new PipelineSchedulerWorker(
+        // La catena valuta-e-applica è estratta in RunApplyEvaluator (Fase 1 PRD Autonomia,
+        // condivisa col CampaignPlanner): il worker la riceve già composta.
+        var evaluator = new RunApplyEvaluator(
             dbFactory,
-            engine,
             applier ?? new FakeApplier(),
             new EnsembleComparator(new EnsembleComparatorOptions()),
             supervisor ?? new LoggingSupervisorAgent(NullLogger<LoggingSupervisorAgent>.Instance),
+            NullLogger<RunApplyEvaluator>.Instance);
+        var worker = new PipelineSchedulerWorker(
+            dbFactory,
+            engine,
+            evaluator,
             (autoReapply ?? new AutoReapplyOptions()).AsMonitor(), // Enabled=false di default: comportamento invariato
             NullLogger<PipelineSchedulerWorker>.Instance);
         return (worker, engine, dbFactory);
