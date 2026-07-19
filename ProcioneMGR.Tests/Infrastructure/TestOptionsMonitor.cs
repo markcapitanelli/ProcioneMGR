@@ -20,6 +20,24 @@ public sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
     }
 }
 
+/// <summary>
+/// Monitor con valore SOSTITUIBILE a test in corso (niente notifica di change: i consumatori del
+/// repo leggono sempre <c>CurrentValue</c> per-chiamata). Nato per il DelegatingSupervisorAgent,
+/// che deve cambiare provider Logging↔Claude senza riavvio.
+/// </summary>
+public sealed class MutableOptionsMonitor<T>(T initial) : IOptionsMonitor<T>
+{
+    public T CurrentValue { get; set; } = initial;
+    public T Get(string? name) => CurrentValue;
+    public IDisposable OnChange(Action<T, string> listener) => NullDisposable.Instance;
+
+    private sealed class NullDisposable : IDisposable
+    {
+        public static readonly NullDisposable Instance = new();
+        public void Dispose() { }
+    }
+}
+
 public static class TestOptionsExtensions
 {
     /// <summary>Avvolge un POCO di opzioni in un monitor statico: <c>new DriftMonitorOptions().AsMonitor()</c>.</summary>
