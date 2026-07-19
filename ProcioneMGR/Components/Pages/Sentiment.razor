@@ -18,6 +18,10 @@
 @inject IFactorEvaluator FactorEvaluator
 @inject INewsImpactAnalyzer ImpactAnalyzer
 @inject IEnumerable<IAltDataSource> AltDataSources
+@inject SentimentSnapshotCache MoodCache
+@inject ISentimentSnapshotService MoodService
+@inject SentimentSourceHealthRegistry SourceHealth
+@inject SentimentSyncWorker SentimentWorker
 
 <PageTitle>Sentiment</PageTitle>
 
@@ -64,6 +68,100 @@
     </dl>
 </GuidaPanel>
 
+@* ---- Market mood (Sentiment 2.0): F&G + composite + derivati per simbolo ---- *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-emoji-neutral me-1"></i>Market mood (composite)</span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="RecomputeMoodAsync" disabled="@_moodBusy">
+            @if (_moodBusy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Ricalcola
+        </button>
+    </div>
+    <div class="card-body">
+        @if (_mood is null)
+        {
+            <p class="text-muted mb-0"><em>Nessuno snapshot ancora calcolato: il worker lo produce da solo a ogni ciclo (vedi /admin/autonomy), oppure usa "Ricalcola".</em></p>
+        }
+        else
+        {
+            <div class="row g-3 mb-2">
+                <div class="col-auto">
+                    <div class="border rounded p-2 text-center" style="min-width: 9rem;">
+                        <div class="small text-muted">Fear &amp; Greed</div>
+                        <div class="fs-3 fw-bold">@(_mood.FearGreedValue is null ? "n/d" : _mood.FearGreedValue.Value.ToString("F0"))</div>
+                        <div class="small">@_mood.FearGreedLabel @(_mood.FearGreedDelta7d is null ? "" : $"(Δ7g {_mood.FearGreedDelta7d:+0;-0})")</div>
+                    </div>
+                </div>
+                <div class="col-auto">
+                    <div class="border rounded p-2 text-center" style="min-width: 9rem;">
+                        <div class="small text-muted">Mood composite</div>
+                        <div class="fs-3 fw-bold @(_mood.CompositeScore > 0.15 ? "text-success" : _mood.CompositeScore < -0.15 ? "text-danger" : "")">@_mood.CompositeScore.ToString("+0.00;-0.00")</div>
+                        <div class="small text-muted">mood della folla, [-1,+1]</div>
+                    </div>
+                </div>
+                <div class="col-auto">
+                    <div class="border rounded p-2 text-center" style="min-width: 9rem;">
+                        <div class="small text-muted">News 24h</div>
+                        <div class="fs-3 fw-bold">@(_mood.NewsScore24h is null ? "n/d" : _mood.NewsScore24h.Value.ToString("+0.00;-0.00"))</div>
+                        <div class="small text-muted">media punteggi</div>
+                    </div>
+                </div>
+                @foreach (var s in _mood.Symbols)
+                {
+                    <div class="col-auto">
+                        <div class="border rounded p-2" style="min-width: 13rem;">
+                            <div class="fw-bold">@s.Symbol <span class="@(s.Composite > 0.15 ? "text-success" : s.Composite < -0.15 ? "text-danger" : "")">@s.Composite.ToString("+0.00;-0.00")</span></div>
+                            <div class="small">
+                                funding @(s.FundingPercent is null ? "n/d" : $"{s.FundingPercent:+0.000;-0.000}%") @(s.FundingZ is null ? "" : $"(z {s.FundingZ:+0.0;-0.0})")<br />
+                                L/S @(s.GlobalLongShortRatio is null ? "n/d" : s.GlobalLongShortRatio.Value.ToString("F2")) @(s.GlobalLongShortZ is null ? "" : $"(z {s.GlobalLongShortZ:+0.0;-0.0})")
+                                · taker @(s.TakerZ is null ? "n/d" : $"z {s.TakerZ:+0.0;-0.0}")<br />
+                                OI 24h @(s.OiChange24hPercent is null ? "n/d" : $"{s.OiChange24hPercent:+0.0;-0.0}%")
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+            @if (_mood.Extremes.Count > 0)
+            {
+                <div class="alert alert-warning py-2 mb-2">
+                    <strong>Estremi (lettura contrarian):</strong>
+                    <ul class="mb-0">
+                        @foreach (var e in _mood.Extremes) { <li>@e</li> }
+                    </ul>
+                </div>
+            }
+            <p class="text-muted small mb-0">Calcolato: @_mood.ComputedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm"). Il composite è il mood della folla; agli estremi va letto al contrario (rischio squeeze/svolta), mai seguito ciecamente.</p>
+        }
+        <p class="text-muted small mb-0 mt-2">
+            Fonte indice: <a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank" rel="noopener">Fear &amp; Greed Index by alternative.me</a> ·
+            posizionamento/funding: dati pubblici Binance USDS-M Futures.
+        </p>
+    </div>
+</div>
+
+@* ---- Salute delle fonti (news + metriche) ---- *@
+<div class="card mb-3">
+    <div class="card-header"><i class="bi bi-heart-pulse me-1"></i>Salute delle fonti</div>
+    <div class="card-body py-2">
+        @if (_health.Count == 0)
+        {
+            <span class="text-muted small"><em>Nessuna sync ancora eseguita in questo processo (il registro è in-memory: si popola al primo ciclo del worker o a una sync manuale).</em></span>
+        }
+        else
+        {
+            @foreach (var h in _health)
+            {
+                var isOk = h.LastSuccessUtc is not null && (h.LastErrorUtc is null || h.LastSuccessUtc > h.LastErrorUtc);
+                <span class="badge @(isOk ? "bg-success" : "bg-danger") me-1 mb-1"
+                      title="@(isOk ? $"ultimo ok {h.LastSuccessUtc:HH:mm} UTC ({h.LastCount} elementi)" : $"errore {h.LastErrorUtc:HH:mm} UTC: {h.LastError}")">
+                    @h.Name
+                </span>
+            }
+            <span class="text-muted small ms-2">verde = ultima sync ok; rosso = ultima sync in errore (tooltip col dettaglio). Una fonte giù non ferma le altre.</span>
+        }
+    </div>
+</div>
+
 <div class="card mb-3">
     <div class="card-header">1. Sincronizza notizie</div>
     <div class="card-body">
@@ -81,7 +179,7 @@
             }
             Sincronizza ora
         </button>
-        <span class="text-muted small ms-2">On-demand: nessuno scheduler in background, per non avviare chiamate di rete periodiche senza un'azione esplicita.</span>
+        <span class="text-muted small ms-2">Il worker Sentiment sincronizza da solo notizie e metriche di mood (cadenze e toggle in /admin/autonomy); questo bottone forza una sync immediata delle sole notizie.</span>
 
         @if (!string.IsNullOrEmpty(_syncStatus))
         {
@@ -481,6 +579,11 @@
     private string? _userId;
     private ConfigPresets? _presets;
 
+    // Market mood (Sentiment 2.0)
+    private SentimentSnapshot? _mood;
+    private IReadOnlyList<SourceHealth> _health = [];
+    private bool _moodBusy;
+
     /// <summary>Memoria dell'ultima configurazione usata (modalità silenziosa: sezione valutazione IC).</summary>
     private sealed record PageConfig(
         string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
@@ -510,7 +613,20 @@
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        _mood = MoodCache.Current;
+        _health = SourceHealth.Snapshot();
         await LoadNewsAsync();
+    }
+
+    private async Task RecomputeMoodAsync()
+    {
+        _moodBusy = true;
+        try
+        {
+            _mood = await MoodService.ComputeAsync(CancellationToken.None) ?? MoodCache.Current;
+            _health = SourceHealth.Snapshot();
+        }
+        finally { _moodBusy = false; }
     }
 
     private async Task LoadNewsAsync()
@@ -550,6 +666,7 @@
         {
             var inserted = await SyncService.SyncAllAsync(CancellationToken.None);
             await LoadNewsAsync();
+            _health = SourceHealth.Snapshot();
             _syncStatus = inserted > 0
                 ? $"Sincronizzazione completata: {inserted} nuove notizie ingerite."
                 : "Sincronizzazione completata: nessuna notizia nuova (già tutte presenti o fonti senza aggiornamenti).";
