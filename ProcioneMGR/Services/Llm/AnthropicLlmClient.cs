@@ -10,6 +10,18 @@ public sealed class LlmOptions
     public string Model { get; set; } = "claude-opus-4-8";
     public int MaxTokens { get; set; } = 4096;
     public int PollIntervalMinutes { get; set; } = 5;
+
+    /// <summary>Timeout della singola chiamata Claude (il SDK da solo aspetterebbe fino a 10 minuti).</summary>
+    public int RequestTimeoutSeconds { get; set; } = 60;
+
+    /// <summary>Errori transitori consecutivi dopo i quali il breaker sospende le chiamate.</summary>
+    public int BreakerFailureThreshold { get; set; } = 3;
+
+    /// <summary>Minuti tra i probe automatici a breaker aperto (il ripristino è autonomo).</summary>
+    public int BreakerCooldownMinutes { get; set; } = 30;
+
+    /// <summary>Notifica (Info) quando un'advisory riuscita contiene decisioni per l'utente. Default off.</summary>
+    public bool NotifyDecisions { get; set; }
 }
 
 /// <summary>
