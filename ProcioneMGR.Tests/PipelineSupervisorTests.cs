@@ -284,6 +284,55 @@ public class PipelineSupervisorTests
     }
 
     [Fact]
+    public async Task UserPrompt_IncludesOperationalContext_AndBoundsRecommendationJson()
+    {
+        var (factory, sp) = MakeDb();
+        try
+        {
+            var runId = await SeedCompletedRunAsync(factory);
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                db.TradingEngineStates.Add(new ProcioneMGR.Services.Trading.TradingEngineState
+                {
+                    LaneId = 1, Mode = ProcioneMGR.Services.Trading.TradingMode.Paper, IsRunning = true,
+                    Symbol = "BTC/USDT", Timeframe = "4h", TotalCapital = 10_000m, RealizedPnl = 123.45m,
+                });
+                db.LaneQuarantines.Add(new ProcioneMGR.Services.Trading.LaneQuarantine
+                {
+                    LaneId = 2, CreatedAtUtc = new DateTime(2026, 7, 18, 0, 0, 0, DateTimeKind.Unspecified),
+                    Reason = "PnL fuori invariante", DetailsJson = "{}",
+                });
+                db.PipelineArtifacts.Add(new PipelineArtifact
+                {
+                    RunId = runId, StageName = "RegimeAnalysis", Kind = "RegimeProfile",
+                    PayloadJson = JsonSerializer.Serialize(new RegimeOutput
+                    {
+                        CurrentRegimeId = 2, CurrentRegimeLabel = "trend rialzista", SilhouetteScore = 0.41,
+                    }),
+                    CreatedAt = DateTime.UtcNow,
+                });
+                // RecommendationJson enorme: nel prompt deve arrivare troncato.
+                var run = await db.PipelineRuns.SingleAsync(r => r.Id == runId);
+                run.RecommendationJson = "{\"pad\":\"" + new string('x', 20_000) + "\"}";
+                await db.SaveChangesAsync();
+            }
+
+            var llm = new FakeLlmClient(() => """{"summary":"ok","confidence":"media"}""");
+            Assert.True(await MakeSupervisor(factory, llm).SuperviseRunAsync(runId, CancellationToken.None));
+
+            var prompt = llm.LastUserPrompt!;
+            Assert.Contains("CORSIE DI TRADING", prompt);
+            Assert.Contains("Corsia 1: Paper, in esecuzione, BTC/USDT 4h", prompt);
+            Assert.Contains("CORSIE IN QUARANTENA", prompt);
+            Assert.Contains("Corsia 2 dal 2026-07-18: PnL fuori invariante", prompt);
+            Assert.Contains("REGIME DI MERCATO del run: trend rialzista (id 2)", prompt);
+            Assert.Contains("[troncato]", prompt);
+            Assert.True(prompt.Length < 15_000, $"prompt non bounded: {prompt.Length} char");
+        }
+        finally { sp.Dispose(); }
+    }
+
+    [Fact]
     public async Task SuperviseRunAsync_NotifiesDecisions_OnlyWhenOptedIn()
     {
         var (factory, sp) = MakeDb();
