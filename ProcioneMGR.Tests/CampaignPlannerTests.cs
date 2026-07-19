@@ -64,6 +64,16 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
         }
     }
 
+    private sealed class RecordingNotifier : ProcioneMGR.Services.Notifications.INotifier
+    {
+        public List<(ProcioneMGR.Services.Notifications.NotificationSeverity Severity, string Title)> Sent { get; } = new();
+        public Task NotifyAsync(ProcioneMGR.Services.Notifications.NotificationSeverity severity, string title, string body, CancellationToken ct = default)
+        {
+            Sent.Add((severity, title));
+            return Task.CompletedTask;
+        }
+    }
+
     /// <summary>Motore corsia fake: registra l'avvio Paper, può fingersi già in esecuzione o in quarantena.</summary>
     private sealed class RecordingLaneEngine(int laneId) : ITradingEngine
     {
@@ -98,7 +108,8 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
     // --- Setup -------------------------------------------------------------------------------
 
     private async Task<(CampaignPlanner Planner, ScriptedPipelineEngine Engine, ScriptedApplyEvaluator Evaluator,
-        IDbContextFactory<ApplicationDbContext> DbFactory, RecordingLaneEngine[] Lanes)> BuildAsync(bool enabled = true)
+        IDbContextFactory<ApplicationDbContext> DbFactory, RecordingLaneEngine[] Lanes)> BuildAsync(
+        bool enabled = true, ProcioneMGR.Services.Notifications.INotifier? notifier = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
@@ -123,7 +134,8 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
         var planner = new CampaignPlanner(
             dbFactory, engine, evaluator, provider,
             new CampaignOptions { Enabled = enabled }.AsMonitor(),
-            NullLogger<CampaignPlanner>.Instance);
+            NullLogger<CampaignPlanner>.Instance,
+            notifier);
         return (planner, engine, evaluator, dbFactory, lanes);
     }
 
@@ -421,6 +433,38 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
 
         Assert.Equal(0, woken);
         Assert.Equal(CampaignStatus.Observing, (await LoadAsync(dbFactory, campaignId)).Status);
+    }
+
+    // --- Notifiche (Fase 4) ------------------------------------------------------------------
+
+    [Fact]
+    public async Task Notifications_EmittedOnApplied_AndOnExhaustion()
+    {
+        var notifier = new RecordingNotifier();
+        var (planner, engine, evaluator, dbFactory, _) = await BuildAsync(notifier: notifier);
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+
+        // Esaurimento: 2 run a 0 sopravvissuti → Warning "rotazione esaurita".
+        await planner.TickAsync();
+        await CompletePendingRunAsync(dbFactory, campaignId, survivors: 0);
+        await planner.TickAsync();
+        engine.NextRunId = Guid.NewGuid();
+        await planner.TickAsync();
+        await CompletePendingRunAsync(dbFactory, campaignId, survivors: 0);
+        await planner.TickAsync();
+        await planner.TickAsync();
+        Assert.Contains(notifier.Sent, n =>
+            n.Severity == ProcioneMGR.Services.Notifications.NotificationSeverity.Warning && n.Title.Contains("rotazione esaurita"));
+
+        // Applica riuscita: Info "ensemble schierato".
+        await planner.WakeAsync("test");
+        evaluator.Outcome = new RunApplyOutcome { HadCandidate = true, Applied = true, LanesUsed = 1, Message = "ok" };
+        engine.NextRunId = Guid.NewGuid();
+        await planner.TickAsync();
+        await CompletePendingRunAsync(dbFactory, campaignId, survivors: 2);
+        await planner.TickAsync();
+        Assert.Contains(notifier.Sent, n =>
+            n.Severity == ProcioneMGR.Services.Notifications.NotificationSeverity.Info && n.Title.Contains("ensemble schierato"));
     }
 
     // --- Difese ------------------------------------------------------------------------------

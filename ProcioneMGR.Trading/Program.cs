@@ -6,6 +6,7 @@ using ProcioneMGR.Services.Execution;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Ingestion;
 using ProcioneMGR.Services.Monitoring;
+using ProcioneMGR.Services.Notifications;
 using ProcioneMGR.Services.Observability;
 using ProcioneMGR.Services.Regime;
 using ProcioneMGR.Services.Registry;
@@ -97,6 +98,10 @@ builder.Services.Configure<LiveExecutionOptions>(builder.Configuration.GetSectio
 // del solo monolite — averlo in entrambi significherebbe due processi che ribilanciano la stessa
 // corsia. L'IEnsembleManager invece c'è (il motore lo richiede), ma qui è solo in lettura.
 builder.Services.AddTradingLanes(builder.Configuration, isTradingServiceHost: true);
+
+// Canale di notifica (Fase 4, PRD Autonomia): in questo host il producer è il
+// LaneInvariantWatchdog (quarantena corsie). Stessa sezione di config del monolite.
+builder.Services.AddProcioneNotifications(builder.Configuration);
 
 builder.Services.AddProcioneObservability(builder.Configuration);
 

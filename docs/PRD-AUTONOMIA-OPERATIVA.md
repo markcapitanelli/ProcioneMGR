@@ -190,6 +190,21 @@ ritorno significa solo "ignorato". Serve il contrario dell'autonomia cieca: un m
 **Rischio**: basso. **Criteri**: test con notifier fake sui producer; prova manuale reale su
 Telegram.
 
+**FATTO (2026-07-19)** — `Services/Notifications/`: `INotifier` (un metodo) implementato da
+`NotificationDispatcher` (gate `Notifications:Enabled` default OFF hot-reload, rate-limit a
+finestra scorrevole con coalescing "N soppresse riportate nel messaggio successivo", MAI
+propaga eccezioni ai producer), provider `LoggingNotifier` (default) e `TelegramNotifier`
+(token SOLO da env `TELEGRAM_BOT_TOKEN`, ChatId in config). Producer cablati: quarantena
+watchdog (Critical), esiti campagna (schierato=Info, esaurita/run failed=Warning), run
+pipeline Failed (`PipelineEngine.FinalizeRunAsync`, Warning), promozione automatica del
+`PromotionWorker` (Info). Registrato in entrambi gli host (monolite e ProcioneMGR.Trading,
+dove vive il watchdog in modalità remota). Test: `NotificationDispatcherTests` (gate,
+rate-limit, coalescing, provider ignoto, errore contenuto) + `TelegramNotifierTests` (handler
+scriptato: payload, token mancante, HTTP failure) + assert sui producer in
+`CampaignPlannerTests`/`LaneInvariantWatchdogTests`. Resta da fare SOLO la prova manuale reale
+su Telegram (serve un bot token dell'operatore). Trigger Event scattato (producer della
+Fase 2) cablato nella Fase 2.
+
 ---
 
 ## §8 — Backlog condizionale
@@ -212,7 +227,7 @@ Telegram.
 | **1** | Campaign Planner: rotazione cacce, applica-su-successo, corsie per scelta | Medio-alto | Fase 0 | **Sì**: `Campaign:Enabled` default OFF | **COMPLETA** (2026-07-19) |
 | **2** | Trigger contestuali (regime/vol → "Event") | Basso | Fase 1 | No | Progettata |
 | **3** | Auto-resume, fail-fast chiavi, riallineamento corsie | Basso-medio | — (C1 utile già da sola) | No | Progettata |
-| **4** | Notifica (Telegram/logging, default off) | Basso | Massimo valore dopo 0-1 | No | Progettata |
+| **4** | Notifica (Telegram/logging, default off) | Basso | Massimo valore dopo 0-1 | No | **COMPLETA** (2026-07-19; resta la prova manuale Telegram) |
 
 Ordine raccomandato: **0 → 1 → 4 → 2 → 3** (la notifica subito dopo il planner: un agente che
 decide senza riferire è peggio di uno che non decide).

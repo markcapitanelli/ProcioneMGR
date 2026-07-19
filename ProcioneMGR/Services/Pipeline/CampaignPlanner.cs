@@ -50,7 +50,8 @@ public sealed class CampaignPlanner(
     IRunApplyEvaluator applyEvaluator,
     IServiceProvider serviceProvider,
     IOptionsMonitor<CampaignOptions> options,
-    ILogger<CampaignPlanner> logger) : ICampaignPlanner
+    ILogger<CampaignPlanner> logger,
+    ProcioneMGR.Services.Notifications.INotifier? notifier = null) : ICampaignPlanner
 {
     public async Task TickAsync(CancellationToken ct = default)
     {
@@ -132,6 +133,8 @@ public sealed class CampaignPlanner(
                 campaign.PendingRunId = null;
                 SetOutcome(campaign, $"Run {run.Status} (config {run.ConfigurationId}): si passa alla prossima config della rotazione.");
                 await db.SaveChangesAsync(ct);
+                await NotifyAsync(Notifications.NotificationSeverity.Warning,
+                    $"Campagna '{campaign.Name}': run {run.Status}", campaign.LastOutcome!, ct);
                 return;
 
             case "Completed":
@@ -171,6 +174,8 @@ public sealed class CampaignPlanner(
                 "Rotazione ferma, campagna in osservazione.");
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Campagna {Id}: {Outcome}", campaign.Id, campaign.LastOutcome);
+            await NotifyAsync(Notifications.NotificationSeverity.Info,
+                $"Campagna '{campaign.Name}': ensemble schierato", campaign.LastOutcome!, ct);
 
             if (campaign.AutoStartPaperLanes)
             {
@@ -266,8 +271,9 @@ public sealed class CampaignPlanner(
             campaign.Status = CampaignStatus.WaitingForTrigger;
             SetOutcome(campaign, "Rotazione esaurita senza ensemble schierato: in attesa di un trigger contestuale (cambio regime/vol) o dell'operatore.");
             await db.SaveChangesAsync(ct);
-            // Fase 4 (notifica): per ora il canale è il log.
             logger.LogWarning("Campagna {Id} '{Name}': {Outcome}", campaign.Id, campaign.Name, campaign.LastOutcome);
+            await NotifyAsync(Notifications.NotificationSeverity.Warning,
+                $"Campagna '{campaign.Name}': rotazione esaurita", campaign.LastOutcome!, ct);
         }
     }
 
@@ -304,6 +310,12 @@ public sealed class CampaignPlanner(
     }
 
     // ------------------------------------------------------------ helpers puri
+
+    /// <summary>Notifica best-effort (Fase 4): il dispatcher non propaga mai, ma il notifier può mancare (test/host senza canale).</summary>
+    private async Task NotifyAsync(Notifications.NotificationSeverity severity, string title, string body, CancellationToken ct)
+    {
+        if (notifier is not null) await notifier.NotifyAsync(severity, title, body, ct);
+    }
 
     private static void SetOutcome(VettingCampaign campaign, string message)
     {

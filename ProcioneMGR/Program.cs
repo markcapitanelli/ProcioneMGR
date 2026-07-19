@@ -13,6 +13,7 @@ using ProcioneMGR.Services.Ensemble;
 using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Ingestion;
+using ProcioneMGR.Services.Notifications;
 using ProcioneMGR.Services.Observability;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Regime;
@@ -334,6 +335,10 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IPipelineRulesProvid
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IPipelineStageCatalog, ProcioneMGR.Services.Pipeline.PipelineStageCatalog>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IPipelineEngine, ProcioneMGR.Services.Pipeline.PipelineEngine>();
 builder.Services.AddHostedService<ProcioneMGR.Services.Pipeline.PipelineSchedulerWorker>();
+
+// Canale di notifica (Fase 4, PRD Autonomia §7): default OFF, provider Logging/Telegram.
+// Registrato PRIMA dei producer (watchdog, planner, engine, promozioni) che lo ricevono opzionale.
+builder.Services.AddProcioneNotifications(builder.Configuration);
 
 // Campaign Planner (Fase 1, PRD Autonomia): la politica di reazione agli esiti dei run.
 // Gate Campaign:Enabled default OFF — senza attivazione esplicita il worker gira a vuoto.
