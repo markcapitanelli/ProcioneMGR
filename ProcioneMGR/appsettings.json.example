@@ -32,6 +32,13 @@
     "Provider": "Claude",
     "TimeoutSeconds": 30
   },
+  "Notifications": {
+    "_comment": "Canale di notifica verso l'operatore (Fase 4, PRD Autonomia). Default OFF. Provider: 'Logging' (default, notifiche nel log strutturato) o 'Telegram' (push su mobile). Il TOKEN del bot Telegram NON va qui: SOLO env TELEGRAM_BOT_TOKEN (stesso patto di ANTHROPIC_API_KEY). ChatId non e' un segreto. Rate-limit MaxPerHour con coalescing: l'eccesso viene conteggiato e riportato nel primo messaggio successivo. Producer cablati: quarantena corsie (watchdog A3), esiti campagna, run pipeline falliti, promozioni Paper->Testnet.",
+    "Enabled": false,
+    "Provider": "Logging",
+    "ChatId": "",
+    "MaxPerHour": 20
+  },
   "Campaign": {
     "_comment": "Campaign Planner (Fase 1, PRD Autonomia): rotazione automatica delle configurazioni di caccia. DEFAULT OFF: e' IL cambio di natura da strumento ad agente, l'attivazione e' una decisione esplicita. Con Enabled=false le campagne in /campaign si preparano ma nessun run parte. L'applica passa dalla stessa catena della ri-applica (supervisore con veto + isteresi); corsie avviate al massimo in Paper, config Live sempre saltate.",
     "Enabled": false,

@@ -98,8 +98,19 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
 
     // --- Setup -------------------------------------------------------------------------------
 
+    private sealed class RecordingNotifier : ProcioneMGR.Services.Notifications.INotifier
+    {
+        public List<(ProcioneMGR.Services.Notifications.NotificationSeverity Severity, string Title)> Sent { get; } = new();
+        public Task NotifyAsync(ProcioneMGR.Services.Notifications.NotificationSeverity severity, string title, string body, CancellationToken ct = default)
+        {
+            Sent.Add((severity, title));
+            return Task.CompletedTask;
+        }
+    }
+
     private async Task<(LaneInvariantWatchdog Watchdog, IDbContextFactory<ApplicationDbContext> DbFactory,
-        LaneQuarantineStore Store, StopOnlyEngine[] Engines)> BuildAsync(LaneInvariantOptions? options = null)
+        LaneQuarantineStore Store, StopOnlyEngine[] Engines)> BuildAsync(
+        LaneInvariantOptions? options = null, ProcioneMGR.Services.Notifications.INotifier? notifier = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<ProcioneMGR.Services.Security.IEncryptionService, PassthroughEncryption>();
@@ -123,7 +134,8 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         var watchdog = new LaneInvariantWatchdog(
             provider, dbFactory, store,
             (options ?? new LaneInvariantOptions()).AsMonitor(),
-            NullLogger<LaneInvariantWatchdog>.Instance);
+            NullLogger<LaneInvariantWatchdog>.Instance,
+            notifier);
         return (watchdog, dbFactory, store, engines);
     }
 
@@ -265,6 +277,21 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         await using var check = await dbFactory.CreateDbContextAsync();
         Assert.Empty(await check.LaneQuarantines.AsNoTracking().ToListAsync());
         Assert.Equal(0, engines[1].StopCalls);
+    }
+
+    [Fact]
+    public async Task Tick_Quarantine_EmitsCriticalNotification()
+    {
+        // Fase 4 (PRD §7): la quarantena è il producer col valore più alto — deve chiamare l'umano.
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, _) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, CorruptedCorsia2State());
+
+        await watchdog.TickAsync(CancellationToken.None);
+
+        var sent = Assert.Single(notifier.Sent);
+        Assert.Equal(ProcioneMGR.Services.Notifications.NotificationSeverity.Critical, sent.Severity);
+        Assert.Contains("QUARANTENA", sent.Title);
     }
 
     // --- Test: StartAsync rifiuta una corsia in quarantena ------------------------------------

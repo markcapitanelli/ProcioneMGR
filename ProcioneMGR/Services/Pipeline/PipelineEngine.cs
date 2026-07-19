@@ -20,7 +20,8 @@ public sealed class PipelineEngine(
     IServiceScopeFactory scopeFactory,
     IPipelineStageCatalog catalog,
     ProcioneMGR.Services.Experiments.IExperimentTracker experimentTracker,
-    ILogger<PipelineEngine> logger) : IPipelineEngine
+    ILogger<PipelineEngine> logger,
+    ProcioneMGR.Services.Notifications.INotifier? notifier = null) : IPipelineEngine
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
@@ -475,6 +476,17 @@ public sealed class PipelineEngine(
 
                 await experimentTracker.SafeLogMetricsAsync(expRunId, pipelineMetrics);
                 await experimentTracker.SafeCompleteAsync(expRunId, status, errorLog);
+            }
+
+            // Fase 4 (PRD Autonomia §7): un run fallito non deve restare solo nel log — è uno dei
+            // producer con più valore ("oggi nessuno lo viene a sapere"). Best-effort: il dispatcher
+            // non propaga mai, e col canale spento (default) è un no-op.
+            if (status == "Failed" && notifier is not null)
+            {
+                var firstErrorLine = (errorLog ?? "").Split('\n').FirstOrDefault()?.Trim() ?? "errore sconosciuto";
+                await notifier.NotifyAsync(Notifications.NotificationSeverity.Warning,
+                    "Run pipeline FALLITO",
+                    $"Run {ctx.RunId}: {firstErrorLine}");
             }
         }
         catch (Exception ex)

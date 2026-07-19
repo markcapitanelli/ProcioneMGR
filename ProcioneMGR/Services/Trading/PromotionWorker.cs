@@ -15,7 +15,8 @@ public sealed class PromotionWorker(
     ILanePromoter promoter,
     Microsoft.Extensions.Options.IOptionsMonitor<PromotionEvaluatorOptions> options,
     ILogger<PromotionWorker> logger,
-    ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null) : BackgroundService
+    ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null,
+    ProcioneMGR.Services.Notifications.INotifier? notifier = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -79,6 +80,12 @@ public sealed class PromotionWorker(
         {
             await promoter.PromoteLaneAsync(laneId, newMode, reason, ct);
             metrics?.RecordLanePromotion(laneId, newMode.ToString());
+            // Fase 4 (PRD Autonomia §7): la promozione automatica è una delle azioni da riferire.
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(Notifications.NotificationSeverity.Info,
+                    $"Corsia {laneId} → {newMode}", reason, ct);
+            }
         }
         catch (Exception ex)
         {

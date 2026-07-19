@@ -194,7 +194,8 @@ public static class TradingServiceCollectionExtensions
                 sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
                 sp.GetRequiredService<ILaneQuarantineStore>(),
                 sp.GetRequiredService<IOptionsMonitor<LaneInvariantOptions>>(),
-                sp.GetRequiredService<ILogger<LaneInvariantWatchdog>>()));
+                sp.GetRequiredService<ILogger<LaneInvariantWatchdog>>(),
+                sp.GetService<ProcioneMGR.Services.Notifications.INotifier>()));
         }
 
         // Fallback non-keyed: risolve sempre la corsia 0. Serve ai consumer non ancora aggiornati con

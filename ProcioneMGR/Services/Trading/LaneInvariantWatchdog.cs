@@ -25,7 +25,8 @@ public sealed class LaneInvariantWatchdog(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     ILaneQuarantineStore quarantine,
     IOptionsMonitor<LaneInvariantOptions> options,
-    ILogger<LaneInvariantWatchdog> logger) : BackgroundService
+    ILogger<LaneInvariantWatchdog> logger,
+    ProcioneMGR.Services.Notifications.INotifier? notifier = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -105,6 +106,13 @@ public sealed class LaneInvariantWatchdog(
             "CORSIA {Lane} IN QUARANTENA ({Mode}): {Reason}. Trading fermato, posizioni LASCIATE APERTE. " +
             "Verifica e rimuovi la quarantena in /trading (solo Admin).",
             laneId, state.Mode, reason);
+
+        if (notifier is not null)
+        {
+            await notifier.NotifyAsync(Notifications.NotificationSeverity.Critical,
+                $"Corsia {laneId} in QUARANTENA ({state.Mode})",
+                $"{reason}. Trading fermato, posizioni lasciate aperte: verifica e rimuovi la quarantena in /trading.", ct);
+        }
 
         try
         {
