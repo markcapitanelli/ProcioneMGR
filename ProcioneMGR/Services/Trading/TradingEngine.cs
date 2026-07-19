@@ -51,7 +51,8 @@ public sealed class TradingEngine(
     IFactorCache? factorCache = null,
     ProcioneMGR.Services.Security.IMasterKeyStatus? masterKeyStatus = null,
     ProcioneMGR.Services.ML.IMlComparisonClient? mlComparisonClient = null,
-    IOptionsMonitor<ProcioneMGR.Services.ML.MlComparisonOptions>? mlComparisonOptions = null) : ITradingEngine
+    IOptionsMonitor<ProcioneMGR.Services.ML.MlComparisonOptions>? mlComparisonOptions = null,
+    ProcioneMGR.Services.Security.IExchangeCredentialReader? credentialReader = null) : ITradingEngine
 {
     public int LaneId => laneId;
 
@@ -232,7 +233,18 @@ public sealed class TradingEngine(
             if (mode != TradingMode.Paper)
             {
                 var testnet = mode == TradingMode.Testnet;
-                _creds = await LoadCredentialsAsync(cfg.ExchangeName, testnet, ct);
+                try
+                {
+                    _creds = await LoadCredentialsAsync(cfg.ExchangeName, testnet, ct);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Credenziale presente ma NON decifrabile (master key diversa): stesso
+                    // cleanup del caso "assente" — la corsia non parte e lo stato lo riflette.
+                    _state.IsRunning = false;
+                    await SaveStateAsync(ct);
+                    throw;
+                }
                 if (_creds is null)
                 {
                     _state.IsRunning = false;
@@ -1249,15 +1261,64 @@ public sealed class TradingEngine(
 
     private Task AuditAsync(string action, object details, DateTime ts, CancellationToken ct) => Persistence.AuditAsync(action, details, _state.Mode, ts, ct);
 
-    /// <summary>Carica le credenziali firmate dell'exchange (decifrate dal converter EF).</summary>
+    /// <summary>
+    /// Carica le credenziali firmate dell'exchange, decifrate RIGA PER RIGA (bug B2): una riga
+    /// cifrata con una master key diversa non deve abbattere l'avvio con una
+    /// AuthenticationTagMismatchException grezza, ma produrre un errore che spiega il rimedio.
+    /// Se accanto alla riga indecifrabile ne esiste una decifrabile (credenziali reinserite dopo
+    /// il cambio chiave), si usa quella.
+    /// </summary>
     private async Task<TradingCredentials?> LoadCredentialsAsync(string exchangeName, bool testnet, CancellationToken ct)
     {
         if (!Enum.TryParse<ExchangeName>(exchangeName, out var ex))
         {
             return null;
         }
+
+        if (credentialReader is not null)
+        {
+            var found = await credentialReader.FindForTradingAsync(ex, testnet, ct);
+            if (found is null)
+            {
+                return null;
+            }
+            if (!found.IsDecryptable)
+            {
+                throw CredentialsUndecryptable(exchangeName, testnet, found.Label);
+            }
+            return new TradingCredentials(found.ApiKey!, found.ApiSecret!, found.Passphrase, testnet);
+        }
+
+        // Fallback senza reader (vecchi harness di test che costruiscono il motore a mano): la
+        // decifratura avviene nel converter EF durante la materializzazione — un fallimento
+        // crypto va comunque tradotto nello stesso errore chiaro, mai propagato grezzo.
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var cred = await db.ExchangeCredentials.FirstOrDefaultAsync(c => c.ExchangeName == ex && c.IsTestnet == testnet, ct);
-        return cred is null ? null : new TradingCredentials(cred.ApiKey, cred.ApiSecret, cred.Passphrase, testnet);
+        try
+        {
+            var cred = await db.ExchangeCredentials.FirstOrDefaultAsync(c => c.ExchangeName == ex && c.IsTestnet == testnet, ct);
+            return cred is null ? null : new TradingCredentials(cred.ApiKey, cred.ApiSecret, cred.Passphrase, testnet);
+        }
+        catch (Exception e) when (IsDecryptFailure(e))
+        {
+            throw CredentialsUndecryptable(exchangeName, testnet, label: null);
+        }
     }
+
+    /// <summary>EF può propagare l'errore del converter sia diretto sia wrappato: si scorre tutta la catena.</summary>
+    private static bool IsDecryptFailure(Exception? e)
+    {
+        for (; e is not null; e = e.InnerException)
+        {
+            if (e is System.Security.Cryptography.CryptographicException or FormatException)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static InvalidOperationException CredentialsUndecryptable(string exchangeName, bool testnet, string? label) => new(
+        $"Credenziale {exchangeName} ({(testnet ? "testnet" : "live")}){(label is null ? "" : $" '{label}'")} presente ma " +
+        "NON decifrabile con la master key corrente: fu cifrata con una Security:MasterKey/PROCIONE_MGR_MASTER_KEY diversa. " +
+        "Reinserisci le credenziali in /settings/exchanges (o ripristina la chiave originale) e riavvia la corsia.");
 }
