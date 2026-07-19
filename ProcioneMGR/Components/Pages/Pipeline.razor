@@ -12,14 +12,11 @@
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 @implements IDisposable
 
-@inject IPipelineEngine Engine
 @inject IPipelineStageCatalog Catalog
 @inject IPipelineRulesProvider RulesProvider
-@inject IDbContextFactory<ApplicationDbContext> DbFactory
-@inject IEnsembleManager EnsembleMgr
 @inject AuthenticationStateProvider AuthProvider
-@inject IPipelineApplier Applier
 @inject ILogger<Pipeline> Logger
+@inject PipelinePageService Svc
 
 <PageTitle>Pipeline autonomo</PageTitle>
 <h1>Pipeline autonomo
@@ -312,7 +309,7 @@
             }
 
             <button class="btn btn-primary btn-sm" @onclick="SaveConfigAsync">💾 Salva</button>
-            <button class="btn btn-outline-secondary btn-sm" @onclick="() => _editing = null">Annulla</button>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="() => _draft = null">Annulla</button>
             <span class="text-muted small ms-2">Regole decisionali in <code>@RulesProvider.RulesFilePath</code></span>
         </div>
     </div>
@@ -396,7 +393,7 @@
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ApplyRecommendationAsync(_selectedRecommendation)">Applica al Trading</button>
                 }
                 <a class="btn btn-sm btn-outline-secondary me-1" href="@ExportHref(_selectedRun)" download="pipeline-report.md">Esporta report</a>
-                <button class="btn btn-sm btn-outline-secondary" @onclick="() => _selectedRun = null">Chiudi</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => Svc.CloseSelectedRun()">Chiudi</button>
             </span>
         </div>
         <div class="card-body">
@@ -496,24 +493,28 @@
 }
 
 @code {
-    private List<ProcioneMGR.Services.Pipeline.PipelineConfiguration> _configs = new();
-    private List<PipelineRun> _runs = new();
+    // Stato applicativo: vive in PipelinePageService (P1-5, PRD §3.3). Gli alias read-only
+    // tengono il markup invariato; la bozza dell'editor (_draft) resta nel componente perché è
+    // stato di form, con alias per i binding esistenti.
+    private List<ProcioneMGR.Services.Pipeline.PipelineConfiguration> _configs => Svc.Configs;
+    private List<PipelineRun> _runs => Svc.Runs;
     private string _runTriggerFilter = "";
     private List<PipelineRun> FilteredRuns =>
         string.IsNullOrEmpty(_runTriggerFilter) ? _runs : _runs.Where(r => r.Trigger == _runTriggerFilter).ToList();
-    private PipelineLiveStatus? _live;
-    private PipelineRun? _selectedRun;
-    private List<StageSummary> _selectedSummaries = new();
-    private List<StageSummary> _previousRunSummaries = new();
-    private PipelineRecommendation? _lastRecommendation;
-    private PipelineRun? _lastRecommendationRun;
-    private PipelineRecommendation? _selectedRecommendation;
-    private AutoReapplyDecisionArtifact? _selectedDecision;
+    private PipelineLiveStatus? _live => Svc.Live;
+    private PipelineRun? _selectedRun => Svc.SelectedRun;
+    private List<StageSummary> _selectedSummaries => Svc.SelectedSummaries;
+    private List<StageSummary> _previousRunSummaries => Svc.PreviousRunSummaries;
+    private PipelineRecommendation? _lastRecommendation => Svc.LastRecommendation;
+    private PipelineRun? _lastRecommendationRun => Svc.LastRecommendationRun;
+    private PipelineRecommendation? _selectedRecommendation => Svc.SelectedRecommendation;
+    private AutoReapplyDecisionArtifact? _selectedDecision => Svc.SelectedDecision;
 
-    private ProcioneMGR.Services.Pipeline.PipelineConfiguration? _editing;
-    private List<SeriesSpec> _editUniverse = new();
-    private PipelineDateRanges _editRanges = new();
-    private List<StageConfig> _editStages = new();
+    private PipelineConfigDraft? _draft;
+    private ProcioneMGR.Services.Pipeline.PipelineConfiguration? _editing => _draft?.Config;
+    private List<SeriesSpec> _editUniverse => _draft?.Universe ?? [];
+    private PipelineDateRanges _editRanges => _draft?.Ranges ?? new PipelineDateRanges();
+    private List<StageConfig> _editStages => _draft?.Stages ?? [];
     private string? _expandedStage;
     private List<string> _editProblems = new();
 
@@ -521,7 +522,6 @@
     private string? _message;
     private bool _isError;
     private PollingTimer? _timer;
-    private bool _wasRunning;
 
     protected override async Task OnInitializedAsync()
     {
@@ -533,30 +533,14 @@
 
     private async Task TickAsync()
     {
-        var live = Engine.GetLiveStatus();
-        var justFinished = _wasRunning && live is null;
-        _live = live;
-        _wasRunning = live is not null;
+        var justFinished = Svc.RefreshLive();
         if (justFinished) await ReloadAsync();
         StateHasChanged();
     }
 
     private async Task ReloadAsync()
     {
-        try
-        {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            _configs = await db.PipelineConfigurations.AsNoTracking().OrderByDescending(c => c.UpdatedAt).ToListAsync();
-            _runs = await db.PipelineRuns.AsNoTracking().OrderByDescending(r => r.StartedAt).Take(25).ToListAsync();
-            _live = Engine.GetLiveStatus();
-            _wasRunning = _live is not null;
-
-            var lastCompleted = _runs.FirstOrDefault(r => r.Status == "Completed" && !string.IsNullOrEmpty(r.RecommendationJson) && r.RecommendationJson != "{}");
-            _lastRecommendationRun = lastCompleted;
-            _lastRecommendation = lastCompleted is null
-                ? null
-                : JsonSerializer.Deserialize<PipelineRecommendation>(lastCompleted.RecommendationJson);
-        }
+        try { await Svc.ReloadAsync(); }
         catch { /* refresh resiliente */ }
     }
 
@@ -564,163 +548,42 @@
 
     private void NewConfig()
     {
-        _editing = new ProcioneMGR.Services.Pipeline.PipelineConfiguration
-        {
-            Name = "Nuovo pipeline",
-            ExchangeName = "Binance",
-            InitialCapital = 10_000m,
-            ExecutionMode = "Paper",
-        };
-        _editUniverse = [new SeriesSpec { Symbol = "BTC/USDT", Timeframe = "1h" }];
-        var now = DateTime.UtcNow.Date;
-        _editRanges = new PipelineDateRanges
-        {
-            SelectionFrom = now.AddMonths(-24),
-            SelectionTo = now.AddMonths(-4),
-            HoldoutFrom = now.AddMonths(-4),
-            HoldoutTo = now,
-        };
-        _editStages = Catalog.DefaultStages();
+        _draft = Svc.BuildNewConfigDraft();
         _editProblems.Clear();
         _expandedStage = null;
     }
 
     private void EditConfig(ProcioneMGR.Services.Pipeline.PipelineConfiguration config)
     {
-        _editing = new ProcioneMGR.Services.Pipeline.PipelineConfiguration
-        {
-            Id = config.Id,
-            Name = config.Name,
-            Description = config.Description,
-            CreatedBy = config.CreatedBy,
-            CreatedAt = config.CreatedAt,
-            ExchangeName = config.ExchangeName,
-            InitialCapital = config.InitialCapital,
-            Seed = config.Seed,
-            ExecutionMode = config.ExecutionMode,
-            Schedule = config.Schedule,
-            ScheduleEnabled = config.ScheduleEnabled,
-            NextRunAt = config.NextRunAt,
-        };
-        _editUniverse = JsonSerializer.Deserialize<List<SeriesSpec>>(config.UniverseJson) ?? [];
-        _editRanges = JsonSerializer.Deserialize<PipelineDateRanges>(config.DateRangesJson) ?? new PipelineDateRanges();
-        _editStages = JsonSerializer.Deserialize<List<StageConfig>>(config.StagesJson) ?? Catalog.DefaultStages();
-
-        // Fasi aggiunte alla piattaforma DOPO il salvataggio di questa configurazione: le
-        // proponiamo nell'editor (disabilitate, nessun cambio di comportamento) così le config
-        // esistenti possono adottarle senza doverle ricreare da zero.
-        foreach (var proto in Catalog.Prototypes)
-        {
-            if (!_editStages.Any(s => s.Type.Equals(proto.Name, StringComparison.OrdinalIgnoreCase)))
-            {
-                _editStages.Add(new StageConfig
-                {
-                    Type = proto.Name,
-                    Order = proto.DefaultOrder,
-                    Enabled = false,
-                    Parameters = proto.ParameterDefinitions.ToDictionary(d => d.Key, d => d.DefaultValue),
-                });
-            }
-        }
-        _editStages = _editStages.OrderBy(s => s.Order).ToList();
-
+        _draft = Svc.BuildEditDraft(config);
         _editProblems.Clear();
         _expandedStage = null;
     }
 
     private void MoveStage(int index, int delta)
     {
-        var other = index + delta;
-        if (other < 0 || other >= _editStages.Count) return;
-        (_editStages[index], _editStages[other]) = (_editStages[other], _editStages[index]);
-        for (var i = 0; i < _editStages.Count; i++) _editStages[i].Order = i + 1;
+        if (_draft is not null) PipelinePageService.MoveStage(_draft.Stages, index, delta);
     }
 
     private async Task SaveConfigAsync()
     {
-        if (_editing is null) return;
-        if (string.IsNullOrWhiteSpace(_editing.Name)) { SetMsg("Il nome è obbligatorio.", true); return; }
-        _editUniverse.RemoveAll(u => string.IsNullOrWhiteSpace(u.Symbol));
-        if (_editUniverse.Count == 0) { SetMsg("L'universo deve avere almeno una serie.", true); return; }
-        if (_editRanges.SelectionTo <= _editRanges.SelectionFrom || _editRanges.HoldoutTo <= _editRanges.HoldoutFrom)
-        { SetMsg("Range di date non validi.", true); return; }
-        if (_editRanges.HoldoutFrom < _editRanges.SelectionTo)
-        { SetMsg("L'holdout deve iniziare DOPO la fine della selezione (mai sovrapposti).", true); return; }
-
-        _editProblems = Engine.ValidateConfiguration(_editStages);
-        if (_editProblems.Count > 0) { SetMsg("Correggere i problemi delle fasi prima di salvare.", true); return; }
-
-        await using var db = await DbFactory.CreateDbContextAsync();
-        ProcioneMGR.Services.Pipeline.PipelineConfiguration row;
-        if (_editing.Id == 0)
-        {
-            row = new ProcioneMGR.Services.Pipeline.PipelineConfiguration { CreatedBy = _userId ?? "", CreatedAt = DateTime.UtcNow };
-            db.PipelineConfigurations.Add(row);
-        }
-        else
-        {
-            row = await db.PipelineConfigurations.FirstAsync(c => c.Id == _editing.Id);
-        }
-        // Se cron o l'abilitazione cambiano, NextRunAt precedente non ha più senso: azzerarlo fa
-        // sì che lo scheduler lo ricalcoli da zero (da "ora") al prossimo tick invece di tenere
-        // un'occorrenza calcolata per l'espressione VECCHIA.
-        var scheduleChanged = row.Schedule != _editing.Schedule || row.ScheduleEnabled != _editing.ScheduleEnabled;
-
-        row.Name = _editing.Name;
-        row.Description = _editing.Description;
-        row.ExchangeName = _editing.ExchangeName;
-        row.InitialCapital = _editing.InitialCapital;
-        row.Seed = _editing.Seed;
-        row.ExecutionMode = _editing.ExecutionMode;
-        row.Schedule = _editing.Schedule;
-        row.ScheduleEnabled = _editing.ScheduleEnabled;
-        if (scheduleChanged) row.NextRunAt = null;
-        row.UniverseJson = JsonSerializer.Serialize(_editUniverse);
-        row.DateRangesJson = JsonSerializer.Serialize(_editRanges);
-        row.StagesJson = JsonSerializer.Serialize(_editStages);
-        row.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync();
-
-        _editing = null;
-        SetMsg("Configurazione salvata.", false);
-        await ReloadAsync();
+        if (_draft is null) return;
+        var res = await Svc.SaveConfigAsync(_draft, _userId);
+        _editProblems = res.Problems.ToList();
+        if (!res.IsError) _draft = null;
+        SetMsg(res.Message, res.IsError);
     }
 
     private async Task CloneConfigAsync(ProcioneMGR.Services.Pipeline.PipelineConfiguration config)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        db.PipelineConfigurations.Add(new ProcioneMGR.Services.Pipeline.PipelineConfiguration
-        {
-            Name = config.Name + " (copia)",
-            Description = config.Description,
-            CreatedBy = _userId ?? "",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-            ExchangeName = config.ExchangeName,
-            UniverseJson = config.UniverseJson,
-            DateRangesJson = config.DateRangesJson,
-            StagesJson = config.StagesJson,
-            InitialCapital = config.InitialCapital,
-            Seed = config.Seed,
-            ExecutionMode = config.ExecutionMode,
-            Schedule = config.Schedule,
-        });
-        await db.SaveChangesAsync();
-        SetMsg("Configurazione clonata.", false);
-        await ReloadAsync();
+        var res = await Svc.CloneConfigAsync(config, _userId);
+        SetMsg(res.Message, res.IsError);
     }
 
     private async Task DeleteConfigAsync(int id)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var row = await db.PipelineConfigurations.FirstOrDefaultAsync(c => c.Id == id);
-        if (row is not null)
-        {
-            db.PipelineConfigurations.Remove(row);
-            await db.SaveChangesAsync();
-        }
-        SetMsg("Configurazione eliminata.", false);
-        await ReloadAsync();
+        var res = await Svc.DeleteConfigAsync(id);
+        SetMsg(res.Message, res.IsError);
     }
 
     // -------------------------------------------------------------- run control
@@ -729,10 +592,8 @@
     {
         try
         {
-            await Engine.StartRunAsync(configId, "Manual", _userId);
-            SetMsg("Run avviato.", false);
-            _live = Engine.GetLiveStatus();
-            _wasRunning = true;
+            var res = await Svc.StartRunAsync(configId, _userId);
+            SetMsg(res.Message, res.IsError);
         }
         catch (Exception ex) { SetMsg($"Avvio fallito: {ex.Message}", true); }
     }
@@ -741,112 +602,48 @@
     {
         try
         {
-            await Engine.ResumeRunAsync(runId, _userId);
-            SetMsg("Run ripreso dal checkpoint.", false);
-            _live = Engine.GetLiveStatus();
-            _wasRunning = true;
+            var res = await Svc.ResumeRunAsync(runId, _userId);
+            SetMsg(res.Message, res.IsError);
         }
         catch (Exception ex) { SetMsg($"Ripresa fallita: {ex.Message}", true); }
     }
 
     private Task PauseRunAsync()
     {
-        if (_live is not null) Engine.RequestPause(_live.RunId);
+        Svc.PauseLiveRun();
         return Task.CompletedTask;
     }
 
     private Task CancelRunAsync()
     {
-        if (_live is not null) Engine.Cancel(_live.RunId);
+        Svc.CancelLiveRun();
         return Task.CompletedTask;
     }
 
     // -------------------------------------------------------------- run detail
 
-    private async Task SelectRun(PipelineRun run)
-    {
-        _selectedRun = run;
-        _selectedSummaries = JsonSerializer.Deserialize<List<StageSummary>>(run.StageSummariesJson) ?? [];
-        _selectedRecommendation = string.IsNullOrEmpty(run.RecommendationJson) || run.RecommendationJson == "{}"
-            ? null
-            : JsonSerializer.Deserialize<PipelineRecommendation>(run.RecommendationJson);
+    private async Task SelectRun(PipelineRun run) => await Svc.SelectRunAsync(run);
 
-        var previous = _runs
-            .Where(r => r.ConfigurationId == run.ConfigurationId && r.StartedAt < run.StartedAt && r.Status == "Completed")
-            .OrderByDescending(r => r.StartedAt)
-            .FirstOrDefault();
-        _previousRunSummaries = previous is null
-            ? []
-            : JsonSerializer.Deserialize<List<StageSummary>>(previous.StageSummariesJson) ?? [];
-
-        // Decisione della ri-applica automatica (contiene anche il giudizio del supervisore AI), se presente.
-        _selectedDecision = null;
-        try
-        {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            var art = await db.PipelineArtifacts.AsNoTracking()
-                .Where(a => a.RunId == run.Id && a.Kind == AutoReapplyArtifactKinds.Decision)
-                .OrderByDescending(a => a.CreatedAt)
-                .FirstOrDefaultAsync();
-            if (art is not null)
-            {
-                _selectedDecision = JsonSerializer.Deserialize<AutoReapplyDecisionArtifact>(art.PayloadJson);
-            }
-        }
-        catch { /* la UI resta valida anche senza la decisione */ }
-    }
-
-    private IEnumerable<(string Label, decimal Prev, decimal Curr)> CompareRuns()
-    {
-        // Common metrics across the two runs' summaries, keyed "Stage.Metric".
-        var prev = _previousRunSummaries.SelectMany(s => s.Metrics.Select(m => ($"{s.DisplayName}: {m.Key}", m.Value))).ToDictionary(x => x.Item1, x => x.Value);
-        foreach (var s in _selectedSummaries)
-        {
-            foreach (var m in s.Metrics)
-            {
-                var key = $"{s.DisplayName}: {m.Key}";
-                if (prev.TryGetValue(key, out var p)) yield return (key, p, m.Value);
-            }
-        }
-    }
+    private IEnumerable<(string Label, decimal Prev, decimal Curr)> CompareRuns() => Svc.CompareRuns();
 
     // -------------------------------------------------------------- apply & export
 
-    /// <summary>
-    /// Distribuisce l'ensemble sulle corsie isolate delegando a <see cref="IPipelineApplier"/> — la
-    /// STESSA logica usata dalla ri-applica automatica dello scheduler (una sola implementazione,
-    /// nessuna divergenza). Scrive solo la configurazione: nessun trading viene avviato qui.
-    /// </summary>
     private async Task ApplyRecommendationAsync(PipelineRecommendation? recommendation)
     {
-        if (recommendation is null || recommendation.EnsembleLegs.Count == 0) return;
         try
         {
-            var result = await Applier.ApplyRecommendationAsync(recommendation);
-            SetMsg(result.Message, false);
+            var res = await Svc.ApplyRecommendationAsync(recommendation);
+            if (res is not null) SetMsg(res.Message, res.IsError);
         }
         catch (Exception ex) { SetMsg($"Applicazione fallita: {ex.Message}", true); }
     }
 
-    private static string ExportHref(PipelineRun? run)
-    {
-        if (run is null) return "#";
-        var md = $"# Pipeline run {run.Id}\n\n- Avviato: {run.StartedAt:yyyy-MM-dd HH:mm:ss} UTC\n- Stato: {run.Status}\n\n## Conclusione\n\n```\n{run.Conclusion}\n```\n\n## Fasi\n\n";
-        var summaries = JsonSerializer.Deserialize<List<StageSummary>>(run.StageSummariesJson) ?? [];
-        foreach (var s in summaries.OrderBy(s => s.Order))
-        {
-            md += $"### {s.DisplayName} — {s.Status} ({s.Duration:mm\\:ss})\n\n{s.Text}\n\n";
-        }
-        return "data:text/markdown;charset=utf-8," + Uri.EscapeDataString(md);
-    }
+    private static string ExportHref(PipelineRun? run) => PipelinePageService.ExportHref(run);
 
     // -------------------------------------------------------------- helpers
 
-    private static string UniverseSummary(ProcioneMGR.Services.Pipeline.PipelineConfiguration config)
-    {
-        var universe = JsonSerializer.Deserialize<List<SeriesSpec>>(config.UniverseJson) ?? [];
-        return universe.Count == 0 ? "—" : string.Join(", ", universe.Take(4).Select(u => $"{u.Symbol} {u.Timeframe}")) + (universe.Count > 4 ? $" +{universe.Count - 4}" : "");
-    }
+    private static string UniverseSummary(ProcioneMGR.Services.Pipeline.PipelineConfiguration config) =>
+        PipelinePageService.UniverseSummary(config);
 
     private static string ScheduleBadgeClass(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
     {

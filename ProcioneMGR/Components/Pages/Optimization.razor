@@ -13,13 +13,10 @@
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 @implements IAsyncDisposable
 
-@inject IOptimizationEngine OptEngine
 @inject IStrategyFactory StrategyFactory
-@using ProcioneMGR.Services.Experiments
-@inject ProcioneMGR.Services.Experiments.IExperimentTracker Tracker
-@inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject AuthenticationStateProvider AuthProvider
 @inject IJSRuntime JS
+@inject OptimizationPageService Svc
 
 <PageTitle>Optimization</PageTitle>
 
@@ -97,7 +94,7 @@
                 <label class="form-label">Symbol</label>
                 <input class="form-control" list="opt_symbols" @bind="_symbol" style="width: 10rem;" disabled="@_busy" />
                 <datalist id="opt_symbols">
-                    @foreach (var s in _knownSymbols) { <option value="@s"></option> }
+                    @foreach (var s in Svc.KnownSymbols) { <option value="@s"></option> }
                 </datalist>
             </div>
             <div class="col-auto">
@@ -133,7 +130,7 @@
 
         @if (_strategyName == MlStrategyName)
         {
-            var compatibleMlModels = _mlModels.Where(m => m.Symbol == _symbol.Trim() && m.Timeframe == _timeframe).ToList();
+            var compatibleMlModels = Svc.MlModels.Where(m => m.Symbol == _symbol.Trim() && m.Timeframe == _timeframe).ToList();
             <div class="row g-3 align-items-end mt-1">
                 <div class="col-auto">
                     <label class="form-label">Modello ML (@_symbol @_timeframe)</label>
@@ -276,9 +273,9 @@
     </div>
 </div>
 
-@if (_result is not null)
+@if (Svc.Result is { } result)
 {
-    @if (_result.Validation is { } v)
+    @if (result.Validation is { } v)
     {
         <div class="alert @(v.IsSignificant ? "alert-success" : "alert-warning") d-flex justify-content-between align-items-center mb-3">
             <div>
@@ -295,14 +292,14 @@
     <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center">
             <span>Top 10 — Sharpe OOS medio (selezione finestra su in-sample)</span>
-            <span class="small text-muted">@_result.TotalCombinationsTested valutazioni in @_result.ExecutionTime.TotalSeconds.ToString("F1")s · Sharpe OOS medio finestre: <strong>@_result.WalkForwardAnalysis.AverageOutOfSampleSharpe.ToString("F3")</strong></span>
+            <span class="small text-muted">@result.TotalCombinationsTested valutazioni in @result.ExecutionTime.TotalSeconds.ToString("F1")s · Sharpe OOS medio finestre: <strong>@result.WalkForwardAnalysis.AverageOutOfSampleSharpe.ToString("F3")</strong></span>
         </div>
         <div class="table-responsive">
             <table class="table table-sm table-striped mb-0">
                 <thead><tr><th>#</th><th>Parametri</th><th class="text-end">Sharpe IS</th><th class="text-end">Sharpe OOS</th><th class="text-end">Return %</th><th class="text-end">Max DD %</th><th class="text-end">Trades</th><th></th></tr></thead>
                 <tbody>
                     @{ var rank = 0; }
-                    @foreach (var s in _result.BestParameters)
+                    @foreach (var s in result.BestParameters)
                     {
                         rank++;
                         <tr class="@(rank == 1 ? "table-success" : "")">
@@ -314,9 +311,9 @@
                             <td class="text-end text-danger">@s.MaxDrawdown.ToString("F2")</td>
                             <td class="text-end">@s.TotalTrades</td>
                             <td class="text-end">
-                                @if (_resultConfig is not null && _resultConfig.StrategyName != MlStrategyName)
+                                @if (Svc.ResultConfig is { } rc && rc.StrategyName != MlStrategyName)
                                 {
-                                    <a class="btn btn-sm btn-outline-primary py-0" href="@BacktestHandoffUrl(s.Parameters)"
+                                    <a class="btn btn-sm btn-outline-primary py-0" href="@Svc.BacktestHandoffUrl(s.Parameters)"
                                        title="Apri il Backtest precompilato con questi parametri">Backtest →</a>
                                 }
                             </td>
@@ -338,7 +335,7 @@
         </div>
     </div>
 
-    @if (_ranges.Count == 2 && _result.AllResults.Count > 0)
+    @if (_ranges.Count == 2 && result.AllResults.Count > 0)
     {
         <div class="card mb-3">
             <div class="card-header">Heatmap robustezza (Sharpe OOS medio)</div>
@@ -349,9 +346,9 @@
     <div class="card mb-3">
         <div class="card-header">Equity curve Walk-Forward (out-of-sample concatenati)</div>
         <div class="card-body">
-            @if (_equitySeries.Count > 0)
+            @if (Svc.EquitySeries.Count > 0)
             {
-                <OhlcvChart ShowCandles="false" Indicators="_equitySeries" Height="300" />
+                <OhlcvChart ShowCandles="false" Indicators="Svc.EquitySeries" Height="300" />
             }
         </div>
     </div>
@@ -362,7 +359,7 @@
             <table class="table table-sm table-striped mb-0">
                 <thead><tr><th>#</th><th>In-Sample</th><th>Out-of-Sample</th><th>Best params</th><th class="text-end">Sharpe IS</th><th class="text-end">Sharpe OOS</th><th class="text-end">OOS Return %</th></tr></thead>
                 <tbody>
-                    @foreach (var win in _result.WalkForwardAnalysis.Windows)
+                    @foreach (var win in result.WalkForwardAnalysis.Windows)
                     {
                         <tr>
                             <td>@win.WindowIndex</td>
@@ -409,18 +406,13 @@
     private int _bayesInitialRandom = 8;
     private int _bayesSeed = 42;
 
-    private const string MlStrategyName = "Ml";
+    private const string MlStrategyName = OptimizationPageService.MlStrategyName;
 
     private string _strategyName = "EmaCross";
     private List<RangeInput> _ranges = new();
-    private List<string> _knownSymbols = new();
-    private List<SavedMlModel> _mlModels = new();
     private int _addMlModelId;
 
-    private OptimizationResult? _result;
-    private OptimizationConfiguration? _resultConfig; // contesto del run corrente: i link "Backtest →" restano coerenti anche se il form cambia dopo
-    private bool _savedOk;                            // mostra il testimone "Aggiungila all'Ensemble →" dopo un salvataggio riuscito
-    private List<IndicatorSeries> _equitySeries = new();
+    private bool _savedOk;   // mostra il testimone "Aggiungila all'Ensemble →" dopo un salvataggio riuscito
     private string _saveName = "";
     private string? _userId;
 
@@ -435,59 +427,41 @@
 
     private ConfigPresets? _presets;
 
-    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
-    private sealed record RangeDto(string Key, decimal Min, decimal Max, decimal Step);
-    private sealed record PageConfig(
-        string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
-        decimal InitialCapital, decimal Commission, int InSampleMonths, int OosMonths, int StepMonths,
-        string SearchStrategy, int BayesIterations, int BayesInitialRandom, int BayesSeed,
-        string StrategyName, int MlModelId, List<RangeDto> Ranges);
-
-    private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
-        _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to,
+    /// <summary>Fotografia corrente del form, passata al service per run/preset/handoff.</summary>
+    private OptimizationConfigSnapshot Snapshot() => new(
+        _exchange, _symbol, _timeframe, _from, _to,
         _initialCapital, _commission, _inSampleMonths, _oosMonths, _stepMonths,
-        _searchStrategy.ToString(), _bayesIterations, _bayesInitialRandom, _bayesSeed,
+        _searchStrategy, _bayesIterations, _bayesInitialRandom, _bayesSeed,
         _strategyName, _addMlModelId,
-        _ranges.Select(r => new RangeDto(r.Key, r.Min, r.Max, r.Step)).ToList()));
+        _ranges.Select(r => new OptRange(r.Key, r.Label, r.Min, r.Max, r.Step, r.IsInteger)).ToList());
 
-    private void ApplyConfigJson(string json)
+    /// <summary>Riallinea i campi del form a uno snapshot prodotto dal service (preset o handoff).</summary>
+    private void ApplySnapshot(OptimizationConfigSnapshot cfg)
     {
-        PageConfig? cfg;
-        try { cfg = JsonSerializer.Deserialize<PageConfig>(json); }
-        catch (JsonException) { return; } // preset malformato: il form resta com'è
-        if (cfg is null) return;
-
-        if (Enum.TryParse<ExchangeName>(cfg.Exchange, ignoreCase: true, out var ex)) _exchange = ex;
-        if (!string.IsNullOrWhiteSpace(cfg.Symbol)) _symbol = cfg.Symbol;
-        if (Timeframes.Supported.ContainsKey(cfg.Timeframe)) _timeframe = cfg.Timeframe;
-        _from = cfg.From.Date;
-        _to = cfg.To.Date;
+        _exchange = cfg.Exchange;
+        _symbol = cfg.Symbol;
+        _timeframe = cfg.Timeframe;
+        _from = cfg.From;
+        _to = cfg.To;
         _initialCapital = cfg.InitialCapital;
         _commission = cfg.Commission;
         _inSampleMonths = cfg.InSampleMonths;
         _oosMonths = cfg.OosMonths;
         _stepMonths = cfg.StepMonths;
-        if (Enum.TryParse<SearchStrategy>(cfg.SearchStrategy, out var ss)) _searchStrategy = ss;
+        _searchStrategy = cfg.SearchStrategy;
         _bayesIterations = cfg.BayesIterations;
         _bayesInitialRandom = cfg.BayesInitialRandom;
         _bayesSeed = cfg.BayesSeed;
-
-        if (cfg.StrategyName == MlStrategyName || StrategyFactory.Prototypes.Any(p => p.Name == cfg.StrategyName))
-        {
-            _strategyName = cfg.StrategyName;
-        }
-        _addMlModelId = _strategyName == MlStrategyName ? cfg.MlModelId : 0;
-
-        BuildRanges();
-        foreach (var range in _ranges)
-        {
-            var saved = cfg.Ranges.FirstOrDefault(r => r.Key == range.Key);
-            if (saved is null) continue;
-            range.Min = saved.Min;
-            range.Max = saved.Max;
-            range.Step = saved.Step;
-        }
+        _strategyName = cfg.StrategyName;
+        _addMlModelId = cfg.MlModelId;
+        _ranges = cfg.Ranges
+            .Select(r => new RangeInput { Key = r.Key, Label = r.Label, Min = r.Min, Max = r.Max, Step = r.Step, IsInteger = r.IsInteger })
+            .ToList();
     }
+
+    private string CaptureConfigJson() => Svc.SerializeConfig(Snapshot());
+
+    private void ApplyConfigJson(string json) => ApplySnapshot(Svc.ApplyConfig(json, Snapshot()));
 
     /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
     private string AdvancedSummary =>
@@ -513,220 +487,43 @@
     {
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
-        ApplyHandoffContext();
-        BuildRanges();
-        RecenterRangesOnHandoffParameters();
-        await using var db = await DbFactory.CreateDbContextAsync();
-        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
-        _mlModels = await db.SavedMlModels.OrderByDescending(m => m.CreatedAtUtc).ToListAsync();
-    }
 
-    // Applica il contesto arrivato via query string (dal Backtest). Valori assenti
-    // o malformati lasciano i default: il link è una comodità, mai un requisito.
-    private void ApplyHandoffContext()
-    {
-        if (!string.IsNullOrWhiteSpace(QuerySymbol)) _symbol = QuerySymbol.Trim();
-        if (!string.IsNullOrWhiteSpace(QueryTimeframe) && Timeframes.Supported.ContainsKey(QueryTimeframe)) _timeframe = QueryTimeframe;
-        if (Enum.TryParse<ExchangeName>(QueryExchange, ignoreCase: true, out var ex)) _exchange = ex;
-        if (DateTime.TryParse(QueryFrom, out var from)) _from = from.Date;
-        if (DateTime.TryParse(QueryTo, out var to)) _to = to.Date;
+        // Eventuale contesto dal Backtest / ML Lab (query string): valori assenti o malformati
+        // lasciano i default; i range partono dai default della strategia e vengono ricentrati
+        // sui parametri del run di provenienza.
+        var (snapshot, handoffMessage) = Svc.ApplyHandoff(
+            new OptimizationHandoffQuery(QueryExchange, QuerySymbol, QueryTimeframe, QueryStrategy, QueryFrom, QueryTo, QueryParameters, QueryModelId),
+            Snapshot());
+        ApplySnapshot(snapshot);
+        if (handoffMessage is not null) SetStatus(handoffMessage, error: false);
 
-        if (!string.IsNullOrWhiteSpace(QueryStrategy) &&
-            (QueryStrategy == MlStrategyName || StrategyFactory.Prototypes.Any(p => p.Name == QueryStrategy)))
-        {
-            _strategyName = QueryStrategy;
-        }
-
-        // Modello ML preselezionato (dal ML Lab): la select lo mostra se compatibile con symbol/timeframe.
-        if (_strategyName == MlStrategyName && QueryModelId is > 0)
-        {
-            _addMlModelId = QueryModelId.Value;
-        }
-
-        if (!string.IsNullOrWhiteSpace(QuerySymbol))
-        {
-            var source = QueryModelId is > 0 ? "dal ML Lab" : "dal Backtest";
-            _status = $"Configurazione importata {source}: {_symbol} {_timeframe}, strategia {_strategyName}.";
-            _isError = false;
-        }
-    }
-
-    // Ricentra i range di ricerca sui parametri effettivi del backtest di partenza
-    // (stessa forma dei default: min = valore, max = valore + 4 step).
-    private void RecenterRangesOnHandoffParameters()
-    {
-        if (string.IsNullOrWhiteSpace(QueryParameters)) return;
-        try
-        {
-            var values = JsonSerializer.Deserialize<Dictionary<string, decimal>>(QueryParameters);
-            if (values is null) return;
-            foreach (var range in _ranges)
-            {
-                if (!values.TryGetValue(range.Key, out var v)) continue;
-                var step = range.IsInteger ? Math.Max(1m, Math.Round(v * 0.2m)) : Math.Round(v * 0.1m, 4);
-                if (step <= 0m) step = range.IsInteger ? 1m : 0.01m;
-                range.Min = v;
-                range.Max = v + 4 * step;
-                range.Step = step;
-            }
-        }
-        catch (JsonException)
-        {
-            // Query malformata: si tengono i range di default.
-        }
+        await Svc.LoadInitialDataAsync();
     }
 
     private void OnStrategyChanged(ChangeEventArgs e)
     {
         _strategyName = e.Value?.ToString() ?? "EmaCross";
-        BuildRanges();
+        _ranges = Svc.DefaultRangesFor(_strategyName)
+            .Select(r => new RangeInput { Key = r.Key, Label = r.Label, Min = r.Min, Max = r.Max, Step = r.Step, IsInteger = r.IsInteger })
+            .ToList();
     }
 
-    private void BuildRanges()
-    {
-        if (_strategyName == MlStrategyName)
-        {
-            // Le uniche "manopole" sweepabili per un modello ML già addestrato sono le soglie
-            // Long/Short di MlStrategy; il modello stesso si sceglie a parte (non è un range).
-            _ranges =
-            [
-                new() { Key = "LongThreshold", Label = "Soglia Long", Min = 0.0005m, Max = 0.02m, Step = 0.0025m, IsInteger = false },
-                new() { Key = "ShortThreshold", Label = "Soglia Short", Min = 0.0005m, Max = 0.02m, Step = 0.0025m, IsInteger = false },
-            ];
-            return;
-        }
-
-        var proto = StrategyFactory.Prototypes.FirstOrDefault(p => p.Name == _strategyName) ?? StrategyFactory.Prototypes[0];
-        _ranges = proto.ParameterDefinitions.Select(d =>
-        {
-            var isInt = d.Key.Contains("Period") || d.Key.Contains("Lookback");
-            var step = isInt ? Math.Max(1m, Math.Round(d.Default * 0.2m)) : Math.Round(d.Default * 0.1m, 4);
-            if (step <= 0m) step = isInt ? 1m : 0.01m;
-            return new RangeInput
-            {
-                Key = d.Key,
-                Label = d.Label,
-                Min = d.Default,
-                Max = d.Default + 4 * step,
-                Step = step,
-                IsInteger = isInt,
-            };
-        }).ToList();
-    }
-
-    private int TotalCombos()
-    {
-        var total = 1;
-        foreach (var r in _ranges)
-        {
-            if (r.Step <= 0m) return 0;
-            var count = (int)Math.Floor((double)((r.Max - r.Min) / r.Step)) + 1;
-            total *= Math.Max(1, count);
-        }
-        return total;
-    }
+    private int TotalCombos() => OptimizationPageService.TotalCombinations(
+        _ranges.Select(r => new OptRange(r.Key, r.Label, r.Min, r.Max, r.Step, r.IsInteger)).ToList());
 
     private async Task StartAsync()
     {
         // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
         if (_presets is not null) await _presets.SaveLastUsedAsync();
 
-        _busy = true; _isError = false; _status = null; _result = null; _equitySeries = new();
-        _resultConfig = null; _savedOk = false;
+        _busy = true; _isError = false; _status = null; _savedOk = false;
         _progress = new(); _cts = new CancellationTokenSource();
         try
         {
-            if (_strategyName == MlStrategyName && _addMlModelId == 0)
-            {
-                SetStatus("Seleziona un modello ML salvato per questo symbol/timeframe.", error: true);
-                _busy = false;
-                return;
-            }
-
-            var ranges = _ranges.Select(r => new ParameterRange
-            {
-                Name = r.Key, Min = r.Min, Max = r.Max, Step = r.Step, IsInteger = r.IsInteger,
-            }).ToList();
-            if (_strategyName == MlStrategyName)
-            {
-                // Range "pinnato" (Min=Max) per veicolare il riferimento al modello attraverso
-                // lo stesso meccanismo di sweep dei parametri: nessun cambiamento a OptimizationEngine.
-                ranges.Add(new ParameterRange { Name = "SavedModelId", Min = _addMlModelId, Max = _addMlModelId, Step = 1, IsInteger = true });
-            }
-
-            var config = new OptimizationConfiguration
-            {
-                ExchangeName = _exchange.ToString(),
-                Symbol = _symbol.Trim(),
-                Timeframe = _timeframe,
-                From = _from.Date,
-                To = _to.Date,
-                InitialCapital = _initialCapital,
-                CommissionPercent = _commission,
-                StrategyName = _strategyName,
-                ParameterRanges = ranges,
-                WalkForward = new WalkForwardConfiguration
-                {
-                    InSampleMonths = _inSampleMonths, OutOfSampleMonths = _oosMonths, StepMonths = _stepMonths,
-                },
-                SearchStrategy = _searchStrategy,
-                BayesianIterations = _bayesIterations,
-                BayesianInitialRandom = _bayesInitialRandom,
-                BayesianSeed = _bayesSeed,
-            };
-
             var progress = new Progress<OptimizationProgress>(p => { _progress = p; InvokeAsync(StateHasChanged); });
-            _result = await OptEngine.OptimizeAsync(config, progress, _cts.Token);
-            _resultConfig = config;
-
-            _equitySeries = new()
-            {
-                new IndicatorSeries
-                {
-                    Title = "Equity WF", Color = "#2962FF", Type = IndicatorSeriesType.Line,
-                    Points = _result.WalkForwardAnalysis.CombinedEquityCurve
-                        .Select(p => new IndicatorPoint(new DateTimeOffset(DateTime.SpecifyKind(p.Timestamp, DateTimeKind.Utc)).ToUnixTimeSeconds(), (double)p.Capital))
-                        .ToList(),
-                },
-            };
-            _heatmapPending = _ranges.Count == 2 && _result.AllResults.Count > 0;
-
-            // Experiment tracking (best-effort): un run per sweep, con i parametri migliori e la
-            // dimensione dello spazio esplorato — così un grid e un futuro Bayesiano sono comparabili.
-            var best = _result.BestParameters.Count > 0 ? _result.BestParameters[0] : null;
-            var optRunId = await Tracker.SafeStartRunAsync(
-                "Optimization",
-                $"{_strategyName} · {_symbol.Trim()} · {_timeframe}",
-                new
-                {
-                    config.StrategyName,
-                    config.Symbol,
-                    config.Timeframe,
-                    config.From,
-                    config.To,
-                    SearchStrategy = config.SearchStrategy.ToString(),
-                    Ranges = config.ParameterRanges.Select(r => new { r.Name, r.Min, r.Max, r.Step }).ToList(),
-                    config.WalkForward.InSampleMonths,
-                    config.WalkForward.OutOfSampleMonths,
-                    config.WalkForward.StepMonths,
-                    BestParameters = best?.Parameters,
-                },
-                config.Symbol, config.Timeframe, _userId);
-            var optMetrics = new Dictionary<string, decimal>
-            {
-                ["CombinationsTested"] = _result.TotalCombinationsTested,
-                ["Windows"] = _result.WalkForwardAnalysis.Windows.Count,
-                ["BestOosSharpe"] = best?.OutOfSampleSharpe ?? 0m,
-            };
-            if (_result.Validation is { } val)
-            {
-                // Verdetto anti-overfitting (Fase 1) tracciato accanto alle metriche grezze.
-                foreach (var (k, mv) in val.ToMetrics()) optMetrics[k] = mv;
-            }
-            await Tracker.SafeLogMetricsAsync(optRunId, optMetrics);
-            await Tracker.SafeCompleteAsync(optRunId, "Completed");
-
-            SetStatus($"Ottimizzazione completata: {_result.WalkForwardAnalysis.Windows.Count} finestre, {_result.TotalCombinationsTested} valutazioni.", false);
+            var res = await Svc.RunAsync(Snapshot(), _userId, progress, _cts.Token);
+            SetStatus(res.Message, res.IsError);
+            _heatmapPending = !res.IsError && _ranges.Count == 2 && Svc.Result is { AllResults.Count: > 0 };
         }
         catch (OperationCanceledException) { SetStatus("Ottimizzazione annullata.", true); }
         catch (Exception ex) { SetStatus($"Errore: {ex.Message}", true); }
@@ -735,7 +532,7 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_heatmapPending && _result is not null)
+        if (_heatmapPending && Svc.Result is not null)
         {
             _heatmapPending = false;
             await RenderHeatmapAsync();
@@ -744,74 +541,28 @@
 
     private async Task RenderHeatmapAsync()
     {
-        if (_result is null || _ranges.Count != 2) return;
+        if (_ranges.Count != 2) return;
+        var matrix = Svc.BuildHeatmapMatrix(_ranges[0].Key, _ranges[1].Key);
+        if (matrix is null) return;
+
         _heatmapModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/heatmap.js");
-
-        var xName = _ranges[0].Key;
-        var yName = _ranges[1].Key;
-        // Valori distinti ordinati dalle chiavi "k1=v1,k2=v2".
-        var parsed = _result.AllResults.Select(kv =>
-        {
-            var dict = kv.Key.Split(',').Select(p => p.Split('=')).ToDictionary(a => a[0], a => decimal.Parse(a[1], System.Globalization.CultureInfo.InvariantCulture));
-            return (X: dict[xName], Y: dict[yName], Z: kv.Value);
-        }).ToList();
-
-        var xs = parsed.Select(p => p.X).Distinct().OrderBy(v => v).ToList();
-        var ys = parsed.Select(p => p.Y).Distinct().OrderBy(v => v).ToList();
-        var z = new double?[ys.Count][];
-        for (var yi = 0; yi < ys.Count; yi++)
-        {
-            z[yi] = new double?[xs.Count];
-            for (var xi = 0; xi < xs.Count; xi++)
-            {
-                var match = parsed.FirstOrDefault(p => p.X == xs[xi] && p.Y == ys[yi]);
-                z[yi][xi] = match.Z == 0m && !parsed.Any(p => p.X == xs[xi] && p.Y == ys[yi]) ? null : (double)match.Z;
-            }
-        }
-
         await _heatmapModule.InvokeVoidAsync("renderHeatmap", "opt_heatmap",
-            xs.Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray(),
-            ys.Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray(),
-            z, xName, yName);
+            matrix.Xs, matrix.Ys, matrix.Z, _ranges[0].Key, _ranges[1].Key);
     }
 
     private void Stop() => _cts?.Cancel();
 
     private async Task SaveBestAsync()
     {
-        if (_userId is null || _result is null || _result.BestParameters.Count == 0) return;
-        if (string.IsNullOrWhiteSpace(_saveName)) { SetStatus("Inserisci un nome.", true); return; }
-
-        var best = _result.BestParameters[0];
-        await using var db = await DbFactory.CreateDbContextAsync();
-        db.SavedStrategies.Add(new SavedStrategy
+        if (_userId is null) return;
+        var res = await Svc.SaveBestAsync(_saveName, _strategyName, _userId);
+        if (res is null) return;   // nessun run/risultato: silenzioso, come prima
+        SetStatus(res.Message, res.IsError);
+        if (!res.IsError)
         {
-            UserId = _userId,
-            Name = _saveName.Trim(),
-            StrategyName = _strategyName,
-            ParametersJson = JsonSerializer.Serialize(best.Parameters),
-            IsOptimized = true,
-            OptimizationDate = DateTime.UtcNow,
-            OptimizationSharpe = best.OutOfSampleSharpe,
-        });
-        await db.SaveChangesAsync();
-        SetStatus($"Configurazione ottimizzata '{_saveName}' salvata (Sharpe OOS {best.OutOfSampleSharpe:F2}).", false);
-        _saveName = "";
-        _savedOk = true; // prossimo passo del flusso: l'Ensemble la vede tra le configurazioni ottimizzate
-    }
-
-    /// <summary>Link al Backtest precompilato col contesto del run e i parametri della riga scelta.</summary>
-    private string BacktestHandoffUrl(Dictionary<string, decimal> parameters)
-    {
-        if (_resultConfig is null) return "backtest";
-        var json = JsonSerializer.Serialize(parameters);
-        return "backtest"
-             + $"?exchange={Uri.EscapeDataString(_resultConfig.ExchangeName)}"
-             + $"&symbol={Uri.EscapeDataString(_resultConfig.Symbol)}"
-             + $"&timeframe={Uri.EscapeDataString(_resultConfig.Timeframe)}"
-             + $"&strategy={Uri.EscapeDataString(_resultConfig.StrategyName)}"
-             + $"&from={_resultConfig.From:yyyy-MM-dd}&to={_resultConfig.To:yyyy-MM-dd}"
-             + $"&parameters={Uri.EscapeDataString(json)}";
+            _saveName = "";
+            _savedOk = true; // prossimo passo del flusso: l'Ensemble la vede tra le configurazioni ottimizzate
+        }
     }
 
     private static string FormatParams(Dictionary<string, decimal> p) =>
