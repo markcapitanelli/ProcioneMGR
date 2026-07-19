@@ -5,9 +5,14 @@
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Llm
+@using ProcioneMGR.Services.Pipeline
 @attribute [Authorize(Roles = $"{AppRoles.Admin},{AppRoles.Manager}")]
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ILlmClient LlmClient
+@inject ILlmCallGuard Guard
+@inject IPipelineSupervisor Supervisor
+@inject LlmSupervisorWorker LlmWorker
 
 <PageTitle>Supervisione AI</PageTitle>
 
@@ -29,8 +34,56 @@
     </p>
 </GuidaPanel>
 
-<div class="mb-3">
-    <button class="btn btn-outline-secondary" @onclick="LoadAsync" disabled="@_busy">Aggiorna</button>
+@* ---- Stato del layer (chiave, breaker, backlog) + azioni di recupero ---- *@
+<div class="card mb-3">
+    <div class="card-header"><i class="bi bi-heart-pulse me-1"></i>Stato del layer AI</div>
+    <div class="card-body">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+            @if (LlmClient.IsConfigured)
+            { <span class="badge bg-success">ANTHROPIC_API_KEY presente</span> }
+            else
+            { <span class="badge bg-danger">ANTHROPIC_API_KEY assente</span> }
+
+            @if (_guard is { BreakerOpen: true })
+            {
+                <span class="badge bg-danger">
+                    SOSPESO — @(_guard.LastFailureCause ?? "errori ripetuti")@(_guard.NextProbeUtc is not null ? $", riprovo alle {_guard.NextProbeUtc.Value.ToLocalTime():HH:mm}" : "")
+                </span>
+            }
+            else
+            {
+                <span class="badge bg-success">operativo</span>
+            }
+
+            <span class="badge bg-light text-dark">advisory ok: @_okCount</span>
+            <span class="badge @(_errorCount > 0 ? "bg-warning text-dark" : "bg-light text-dark")">in errore: @_errorCount</span>
+            <span class="badge @(_pendingRuns > 0 ? "bg-info" : "bg-light text-dark")">run in attesa (7 gg): @_pendingRuns</span>
+        </div>
+        <p class="text-muted small mb-2">
+            @if (_guard is { BreakerOpen: true })
+            {
+                <span>Ultimo errore: <em>@_guard.LastFailureMessage</em>. Il ripristino è automatico (probe periodico);
+                "Riprova adesso" forza un tentativo subito — utile appena risolta la causa (es. credito API ricaricato).</span>
+            }
+            else
+            {
+                <span>Ultimo tentativo: @FormatTs(_guard?.LastAttemptUtc) · ultimo successo: @FormatTs(_guard?.LastSuccessUtc).</span>
+            }
+        </p>
+        @if (!string.IsNullOrEmpty(_actionStatus))
+        {
+            <div class="alert @(_actionIsError ? "alert-danger" : "alert-success") py-2">@_actionStatus</div>
+        }
+        <button class="btn btn-outline-secondary me-2" @onclick="LoadAsync" disabled="@_busy">Aggiorna</button>
+        <button class="btn btn-primary me-2" @onclick="RetryNowAsync" disabled="@_busy">
+            @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Riprova adesso
+        </button>
+        <button class="btn btn-outline-warning" @onclick="ReanalyzeErrorsAsync" disabled="@(_busy || _errorCount == 0)"
+                title="Elimina gli advisory in errore dei run degli ultimi 7 giorni: verranno rianalizzati dal ciclo automatico.">
+            Rianalizza advisory in errore
+        </button>
+    </div>
 </div>
 
 @if (_items is null)
@@ -100,7 +153,13 @@ else
     private sealed record AdvisoryItem(Guid RunId, DateTime CreatedAt, SupervisorAdvisory Advisory);
 
     private List<AdvisoryItem>? _items;
+    private LlmGuardStatus? _guard;
+    private int _okCount;
+    private int _errorCount;
+    private int _pendingRuns;
     private bool _busy;
+    private bool _actionIsError;
+    private string? _actionStatus;
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -109,6 +168,8 @@ else
         _busy = true;
         try
         {
+            _guard = Guard.GetStatus();
+
             await using var db = await DbFactory.CreateDbContextAsync();
             var rows = await db.PipelineArtifacts
                 .Where(a => a.Kind == LlmArtifactKinds.Advisory)
@@ -124,12 +185,61 @@ else
                 catch { adv = new SupervisorAdvisory { IsError = true, Summary = "Advisory non leggibile." }; }
                 return new AdvisoryItem(r.RunId, r.CreatedAt, adv);
             }).ToList();
+
+            _okCount = _items.Count(i => !i.Advisory.IsError);
+            _errorCount = _items.Count(i => i.Advisory.IsError);
+
+            // Stessa anti-join del worker: run completati recenti ancora senza advisory.
+            var since = DateTime.UtcNow.AddDays(-7);
+            _pendingRuns = await db.PipelineRuns
+                .Where(r => r.Status == "Completed" && r.CompletedAt != null && r.CompletedAt >= since)
+                .Where(r => !db.PipelineArtifacts.Any(a => a.RunId == r.Id && a.Kind == LlmArtifactKinds.Advisory))
+                .CountAsync();
         }
         finally
         {
             _busy = false;
         }
     }
+
+    private async Task RetryNowAsync()
+    {
+        _busy = true; _actionIsError = false; _actionStatus = null;
+        try
+        {
+            await LlmWorker.TickAsync(CancellationToken.None, forceProbe: true);
+            _actionStatus = "Tentativo eseguito (cooldown del breaker ignorato). Stato e advisory aggiornati qui sotto.";
+        }
+        catch (Exception ex)
+        {
+            _actionIsError = true;
+            _actionStatus = $"Tentativo fallito: {ex.Message}";
+        }
+        finally { _busy = false; }
+        await LoadAsync();
+    }
+
+    private async Task ReanalyzeErrorsAsync()
+    {
+        _busy = true; _actionIsError = false; _actionStatus = null;
+        try
+        {
+            var deleted = await Supervisor.DeleteErrorAdvisoriesAsync(DateTime.UtcNow.AddDays(-7), CancellationToken.None);
+            _actionStatus = deleted == 0
+                ? "Nessun advisory in errore nella finestra di 7 giorni."
+                : $"Eliminati {deleted} advisory in errore: i run verranno rianalizzati dal ciclo automatico (≤5 per tick), o subito con \"Riprova adesso\".";
+        }
+        catch (Exception ex)
+        {
+            _actionIsError = true;
+            _actionStatus = $"Pulizia fallita: {ex.Message}";
+        }
+        finally { _busy = false; }
+        await LoadAsync();
+    }
+
+    private static string FormatTs(DateTimeOffset? ts)
+        => ts is null ? "mai" : ts.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
     private static string ConfidenceClass(string c) => c switch
     {
