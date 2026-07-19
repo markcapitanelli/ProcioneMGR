@@ -376,10 +376,21 @@ public sealed class RecommendationStage(IPipelineRulesProvider rulesProvider) : 
             EnsembleLegs = ctx.Ensemble?.Legs ?? new List<ProposedLeg>(),
         };
 
-        var sentiment = ctx.AltData?.AvgSentimentLast24h ?? 0.0;
+        // Sentiment 2.0: quando lo snapshot composite c'è, la label deriva dal composite (stesse
+        // soglie) e la recommendation porta i campi strutturati + i flag contrarian come alert.
+        // Senza snapshot: percorso legacy identico (media news 24h), run vecchi compatibili.
+        var snapshot = ctx.AltData?.Snapshot;
+        var sentiment = snapshot?.CompositeScore ?? ctx.AltData?.AvgSentimentLast24h ?? 0.0;
         rec.SentimentLabel = sentiment >= rules.SentimentPositiveThreshold ? "positivo"
                            : sentiment <= rules.SentimentNegativeThreshold ? "negativo"
                            : "neutro";
+        if (snapshot is not null)
+        {
+            rec.SentimentComposite = snapshot.CompositeScore;
+            rec.FearGreedValue = snapshot.FearGreedValue;
+            rec.SentimentExtremes.AddRange(snapshot.Extremes);
+            rec.Alerts.AddRange(snapshot.Extremes.Select(e => $"Mood: {e}"));
+        }
 
         var best = ctx.Validated.Where(v => v.Survived).OrderByDescending(v => v.HoldoutSharpe).FirstOrDefault();
         if (best is not null)
@@ -434,7 +445,25 @@ public sealed class RecommendationStage(IPipelineRulesProvider rulesProvider) : 
         var regimeProfile = ctx.Regimes?.Profiles.FirstOrDefault(p => p.RegimeId == ctx.Regimes.CurrentRegimeId);
         sb.AppendLine($"REGIME: {rec.RegimeLabel}" + (regimeProfile is null ? "" : $" (vol media {regimeProfile.MeanVolatility:F2}, trend {regimeProfile.MeanTrendDirection:+0.00;-0.00})"));
         sb.AppendLine($"VOLATILITÀ: {(ctx.Volatility is null ? "n/d" : $"forecast {ctx.Volatility.ForecastVolatility24:P2} per periodo")} — {rec.VolatilityLabel}");
-        sb.AppendLine($"SENTIMENT: {sentiment:F3} (ultime 24h) — {rec.SentimentLabel}");
+        var moodSnapshot = ctx.AltData?.Snapshot;
+        if (moodSnapshot is null)
+        {
+            sb.AppendLine($"SENTIMENT: {sentiment:F3} (ultime 24h) — {rec.SentimentLabel}");
+        }
+        else
+        {
+            sb.AppendLine($"SENTIMENT: composite {moodSnapshot.CompositeScore:+0.000;-0.000} — {rec.SentimentLabel}" +
+                (moodSnapshot.FearGreedValue is null ? "" :
+                    $"; Fear&Greed {moodSnapshot.FearGreedValue:F0} ({moodSnapshot.FearGreedLabel}" +
+                    (moodSnapshot.FearGreedDelta7d is null ? ")" : $", Δ7g {moodSnapshot.FearGreedDelta7d:+0;-0})")));
+            foreach (var s in moodSnapshot.Symbols)
+            {
+                sb.AppendLine($"  - {s.Symbol}: mood {s.Composite:+0.00;-0.00}" +
+                    (s.FundingZ is null ? "" : $", funding z {s.FundingZ:+0.0;-0.0}") +
+                    (s.GlobalLongShortZ is null ? "" : $", L/S z {s.GlobalLongShortZ:+0.0;-0.0}") +
+                    (s.OiChange24hPercent is null ? "" : $", OI 24h {s.OiChange24hPercent:+0.0;-0.0}%"));
+            }
+        }
         sb.AppendLine();
         sb.AppendLine($"CANDIDATI VALUTATI: {rec.CandidatesEvaluated}");
         sb.AppendLine($"SOPRAVVISSUTI HOLDOUT: {rec.Survivors}");

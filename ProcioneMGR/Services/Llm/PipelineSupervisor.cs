@@ -48,7 +48,8 @@ public sealed class PipelineSupervisor(
     IOptionsMonitor<LlmOptions> options,
     ILogger<PipelineSupervisor> logger,
     ProcioneMetrics? metrics = null,
-    INotifier? notifier = null) : IPipelineSupervisor
+    INotifier? notifier = null,
+    ProcioneMGR.Services.Sentiment.SentimentSnapshotCache? sentimentCache = null) : IPipelineSupervisor
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
@@ -261,6 +262,28 @@ public sealed class PipelineSupervisor(
             }
         }
         catch (Exception ex) { logger.LogDebug(ex, "Sezione regime saltata nel prompt advisory."); }
+
+        try
+        {
+            if (sentimentCache?.Current is { } mood)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"SENTIMENT DI MERCATO (mood della folla, lettura contrarian agli estremi): " +
+                              $"composite {mood.CompositeScore:+0.00;-0.00}" +
+                              (mood.FearGreedValue is null ? "" : $", Fear&Greed {mood.FearGreedValue:F0} ({mood.FearGreedLabel})"));
+                foreach (var s in mood.Symbols)
+                {
+                    sb.AppendLine($"  - {s.Symbol}: mood {s.Composite:+0.00;-0.00}" +
+                                  (s.FundingZ is null ? "" : $", funding z {s.FundingZ:+0.0;-0.0}") +
+                                  (s.GlobalLongShortZ is null ? "" : $", long/short z {s.GlobalLongShortZ:+0.0;-0.0}"));
+                }
+                foreach (var extreme in mood.Extremes.Take(6))
+                {
+                    sb.AppendLine($"  ! {extreme}");
+                }
+            }
+        }
+        catch (Exception ex) { logger.LogDebug(ex, "Sezione sentiment saltata nel prompt advisory."); }
 
         sb.AppendLine();
         sb.AppendLine("PipelineRecommendation (JSON grezzo prodotto dal motore):");

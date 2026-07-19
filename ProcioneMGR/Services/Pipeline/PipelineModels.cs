@@ -215,6 +215,13 @@ public sealed class AltDataOutput
     public int InsertedCount { get; set; }
     public int NewsLast24h { get; set; }
     public double AvgSentimentLast24h { get; set; }
+
+    /// <summary>
+    /// Snapshot composite del market mood (Sentiment 2.0): per-mercato e per-simbolo, con z-score
+    /// e flag contrarian. Nullable per compatibilità: i checkpoint dei run vecchi non ce l'hanno,
+    /// e uno snapshot assente non deve mai far fallire lo stage.
+    /// </summary>
+    public ProcioneMGR.Services.Sentiment.SentimentSnapshot? Snapshot { get; set; }
 }
 
 public sealed class FactorIcSummary
@@ -488,6 +495,15 @@ public sealed class PipelineRecommendation
     public string RegimeLabel { get; set; } = "sconosciuto";
     public string VolatilityLabel { get; set; } = "sconosciuta";
     public string SentimentLabel { get; set; } = "neutro";
+
+    /// <summary>Composite di market mood [-1,+1] (Sentiment 2.0); null nei run senza snapshot (compat).</summary>
+    public double? SentimentComposite { get; set; }
+
+    /// <summary>Fear &amp; Greed Index 0-100 al momento del run; null senza snapshot.</summary>
+    public double? FearGreedValue { get; set; }
+
+    /// <summary>Flag contrarian del mood (estremi F&amp;G, funding/posizionamento a |z|≥soglia).</summary>
+    public List<string> SentimentExtremes { get; set; } = new();
     public int CandidatesEvaluated { get; set; }
     public int Survivors { get; set; }
     public string BestCandidate { get; set; } = "nessuno";
