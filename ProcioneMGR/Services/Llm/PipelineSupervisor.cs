@@ -57,7 +57,9 @@ public sealed class PipelineSupervisor(
         Ricevi il riepilogo (PipelineRecommendation) di UN run di ricerca già concluso: regime di
         mercato, volatilità, sentiment, quanti candidati sono stati valutati e quanti sono
         sopravvissuti alla validazione, il migliore, gli alert e le azioni suggerite dal motore, e i
-        limiti di rischio proposti.
+        limiti di rischio proposti. Ricevi anche il CONTESTO OPERATIVO attuale della piattaforma
+        (stato delle corsie di trading, eventuali quarantene, regime di mercato del run): usalo per
+        ancorare il parere alla situazione reale, non solo ai numeri del run.
 
         Il tuo compito:
         1. Scrivere un riepilogo esecutivo BREVE e LEGGIBILE in italiano per l'utente.
@@ -100,7 +102,7 @@ public sealed class PipelineSupervisor(
             return false; // idempotente
         }
 
-        var userPrompt = BuildUserPrompt(run);
+        var userPrompt = await BuildUserPromptAsync(db, run, ct);
 
         var result = await guard.ExecuteAsync("advisory",
             token => llm.CompleteAsync(SystemPrompt, userPrompt, token), forceProbe: forceProbe, ct: ct);
@@ -195,16 +197,80 @@ public sealed class PipelineSupervisor(
         Confidence = "bassa",
     };
 
-    private static string BuildUserPrompt(PipelineRun run)
+    private const string RegimeProfileKind = "RegimeProfile";
+
+    /// <summary>
+    /// Prompt del run + contesto operativo compatto (corsie, quarantene, regime del run). Ogni
+    /// sezione di contesto è DIFENSIVA: se una lettura fallisce, la sezione si salta e l'advisory
+    /// si fa comunque — meglio un parere con meno contesto che nessun parere.
+    /// </summary>
+    private async Task<string> BuildUserPromptAsync(ApplicationDbContext db, PipelineRun run, CancellationToken ct)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Run: {run.Id}  Stato: {run.Status}  Trigger: {run.Trigger}");
         sb.AppendLine($"Conclusione del motore: {run.Conclusion}");
+
+        try
+        {
+            var lanes = await db.TradingEngineStates.AsNoTracking().OrderBy(s => s.LaneId).ToListAsync(ct);
+            if (lanes.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("CORSIE DI TRADING (stato attuale):");
+                foreach (var l in lanes)
+                {
+                    sb.AppendLine($"  - Corsia {l.LaneId}: {l.Mode}{(l.IsRunning ? ", in esecuzione" : ", ferma")}, " +
+                                  $"{(string.IsNullOrWhiteSpace(l.Symbol) ? "nessuna serie" : $"{l.Symbol} {l.Timeframe}")}, " +
+                                  $"capitale {l.TotalCapital:F0}, PnL realizzato {l.RealizedPnl:F2}, max drawdown {l.MaxDrawdownPercent:F1}%");
+                }
+            }
+        }
+        catch (Exception ex) { logger.LogDebug(ex, "Sezione corsie saltata nel prompt advisory."); }
+
+        try
+        {
+            var quarantines = await db.LaneQuarantines.AsNoTracking().OrderBy(q => q.LaneId).ToListAsync(ct);
+            sb.AppendLine();
+            if (quarantines.Count == 0)
+            {
+                sb.AppendLine("QUARANTENE: nessuna corsia in quarantena.");
+            }
+            else
+            {
+                sb.AppendLine("CORSIE IN QUARANTENA (bloccate finché un umano non verifica):");
+                foreach (var q in quarantines)
+                {
+                    sb.AppendLine($"  - Corsia {q.LaneId} dal {q.CreatedAtUtc:yyyy-MM-dd}: {Truncate(q.Reason, 200)}");
+                }
+            }
+        }
+        catch (Exception ex) { logger.LogDebug(ex, "Sezione quarantene saltata nel prompt advisory."); }
+
+        try
+        {
+            var regimeJson = await db.PipelineArtifacts.AsNoTracking()
+                .Where(a => a.RunId == run.Id && a.Kind == RegimeProfileKind)
+                .Select(a => a.PayloadJson)
+                .FirstOrDefaultAsync(ct);
+            if (regimeJson is not null &&
+                JsonSerializer.Deserialize<RegimeOutput>(regimeJson, JsonOpts) is { } regime)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"REGIME DI MERCATO del run: {regime.CurrentRegimeLabel} (id {regime.CurrentRegimeId}), " +
+                              $"silhouette {regime.SilhouetteScore:F2}, {regime.Profiles.Count} profili.");
+            }
+        }
+        catch (Exception ex) { logger.LogDebug(ex, "Sezione regime saltata nel prompt advisory."); }
+
         sb.AppendLine();
         sb.AppendLine("PipelineRecommendation (JSON grezzo prodotto dal motore):");
-        sb.AppendLine(string.IsNullOrWhiteSpace(run.RecommendationJson) ? "{}" : run.RecommendationJson);
+        sb.AppendLine(Truncate(string.IsNullOrWhiteSpace(run.RecommendationJson) ? "{}" : run.RecommendationJson, 8000));
         return sb.ToString();
     }
+
+    /// <summary>Il prompt deve restare bounded: il RecommendationJson può crescere coi run grossi.</summary>
+    private static string Truncate(string value, int max)
+        => value.Length <= max ? value : value[..max] + "\n... [troncato]";
 
     /// <summary>Estrae e deserializza l'oggetto JSON dalla risposta del modello, con tolleranza a testo attorno.</summary>
     public static SupervisorAdvisory ParseAdvisory(string raw)
