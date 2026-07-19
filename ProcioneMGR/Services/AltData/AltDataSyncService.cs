@@ -21,7 +21,8 @@ public sealed class AltDataSyncService(
     IEnumerable<IAltDataSource> sources,
     ISentimentScorer scorer,
     IDbContextFactory<ApplicationDbContext> dbFactory,
-    ILogger<AltDataSyncService> logger) : IAltDataSyncService
+    ILogger<AltDataSyncService> logger,
+    SentimentSourceHealthRegistry? health = null) : IAltDataSyncService
 {
     public async Task<int> SyncAllAsync(CancellationToken ct)
     {
@@ -38,6 +39,7 @@ public sealed class AltDataSyncService(
         {
             if (items is null) continue;
 
+            var freshFromSource = 0;
             foreach (var item in items)
             {
                 var dedupeKey = $"{source.Name}:{item.Url ?? item.Title}";
@@ -65,7 +67,9 @@ public sealed class AltDataSyncService(
                     DedupeKey = dedupeKey,
                 });
                 inserted++;
+                freshFromSource++;
             }
+            health?.ReportSuccess(source.Name, freshFromSource);
         }
 
         if (inserted > 0)
@@ -88,6 +92,7 @@ public sealed class AltDataSyncService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "AltData sync: fonte '{Source}' non raggiungibile, salto.", source.Name);
+            health?.ReportError(source.Name, ex.Message);
             return (source, null);
         }
     }

@@ -27,6 +27,7 @@ public sealed class ProcioneMetrics : IDisposable
     private readonly Counter<long> _llmCalls;
     private readonly Counter<long> _llmAdvisories;
     private readonly Counter<long> _llmVetoes;
+    private readonly Counter<long> _sentimentSyncs;
 
     public ProcioneMetrics()
     {
@@ -53,6 +54,8 @@ public sealed class ProcioneMetrics : IDisposable
             description: "Advisory di supervisione AI persistite, per esito.");
         _llmVetoes = _meter.CreateCounter<long>("procione.llm.vetoes", unit: "{veto}",
             description: "Veti posti dal supervisore AI sulla ri-applica.");
+        _sentimentSyncs = _meter.CreateCounter<long>("procione.sentiment.sync", unit: "{sync}",
+            description: "Sync delle fonti di sentiment (news e metriche di market mood), per fonte ed esito.");
     }
 
     public void RecordLanePromotion(int laneId, string newMode) =>
@@ -91,6 +94,10 @@ public sealed class ProcioneMetrics : IDisposable
         _llmAdvisories.Add(1, new KeyValuePair<string, object?>("esito", isError ? "error" : "ok"));
 
     public void RecordLlmVeto() => _llmVetoes.Add(1);
+
+    /// <summary>Sync di una fonte sentiment: esito ok | error.</summary>
+    public void RecordSentimentSync(string source, string esito) =>
+        _sentimentSyncs.Add(1, new KeyValuePair<string, object?>("source", source), new KeyValuePair<string, object?>("esito", esito));
 
     public void Dispose() => _meter.Dispose();
 }
