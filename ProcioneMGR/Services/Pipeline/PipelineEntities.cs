@@ -69,7 +69,7 @@ public class PipelineRun
     /// <summary>"Running" | "Completed" | "Failed" | "Cancelled" | "Paused".</summary>
     public string Status { get; set; } = "Running";
 
-    /// <summary>"Manual" | "Scheduled" | "Event".</summary>
+    /// <summary>"Manual" | "Scheduled" | "Campaign" (rotazione del Campaign Planner, Fase 1) | "Event" (trigger contestuale, Fase 2).</summary>
     public string Trigger { get; set; } = "Manual";
 
     /// <summary>JSON: the serializable part of PipelineContext (checkpoint, updated per stage).</summary>

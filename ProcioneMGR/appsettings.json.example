@@ -32,6 +32,11 @@
     "Provider": "Claude",
     "TimeoutSeconds": 30
   },
+  "Campaign": {
+    "_comment": "Campaign Planner (Fase 1, PRD Autonomia): rotazione automatica delle configurazioni di caccia. DEFAULT OFF: e' IL cambio di natura da strumento ad agente, l'attivazione e' una decisione esplicita. Con Enabled=false le campagne in /campaign si preparano ma nessun run parte. L'applica passa dalla stessa catena della ri-applica (supervisore con veto + isteresi); corsie avviate al massimo in Paper, config Live sempre saltate.",
+    "Enabled": false,
+    "TickSeconds": 60
+  },
   "PromotionEvaluator": {
     "_comment": "Auto-promozione Paper->Testnet quando una corsia performa bene abbastanza a lungo. MAI a Live (Testnet->Live resta manuale). AutoDemoteToPaper retrocede una corsia Testnet se l'edge svanisce.",
     "MinSharpeRealized": 0.8,

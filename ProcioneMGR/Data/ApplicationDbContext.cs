@@ -74,6 +74,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<ProcioneMGR.Services.Pipeline.PipelineRun> PipelineRuns => Set<ProcioneMGR.Services.Pipeline.PipelineRun>();
     public DbSet<ProcioneMGR.Services.Pipeline.PipelineArtifact> PipelineArtifacts => Set<ProcioneMGR.Services.Pipeline.PipelineArtifact>();
 
+    /// <summary>Campagne di vaglio del Campaign Planner (Fase 1, PRD Autonomia).</summary>
+    public DbSet<ProcioneMGR.Services.Pipeline.VettingCampaign> VettingCampaigns => Set<ProcioneMGR.Services.Pipeline.VettingCampaign>();
+
     // --- Experiment tracking (generalizzato: backtest/sweep/training/discovery/pipeline) ---
     public DbSet<ProcioneMGR.Services.Experiments.ExperimentRun> ExperimentRuns => Set<ProcioneMGR.Services.Experiments.ExperimentRun>();
     public DbSet<ProcioneMGR.Services.Experiments.ExperimentArtifact> ExperimentArtifacts => Set<ProcioneMGR.Services.Experiments.ExperimentArtifact>();
@@ -394,6 +397,14 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.Property(x => x.StageName).HasMaxLength(64);
             e.Property(x => x.Kind).HasMaxLength(32);
             e.HasIndex(x => x.RunId);
+        });
+
+        builder.Entity<ProcioneMGR.Services.Pipeline.VettingCampaign>(e =>
+        {
+            e.ToTable("VettingCampaigns");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(128);
+            e.Property(x => x.Status).HasMaxLength(24);
         });
 
         builder.Entity<ProcioneMGR.Services.Experiments.ExperimentRun>(e =>

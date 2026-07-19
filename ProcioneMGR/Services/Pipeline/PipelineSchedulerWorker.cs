@@ -1,5 +1,4 @@
 using Cronos;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Agents;
@@ -43,24 +42,20 @@ public static class AutoReapplyArtifactKinds
 /// (<see cref="IPipelineSupervisorAgent"/>, che può solo porre un veto) sono d'accordo.
 ///
 /// Il motore (<see cref="IPipelineEngine"/>) è a slot singolo: niente lock per-config qui, la
-/// concorrenza dei run è già gestita da <c>PipelineEngine</c>. L'applicazione dell'ensemble è resa
-/// atomica da un <see cref="SemaphoreSlim"/> globale, così due run valutati nello stesso tick non
-/// scrivono le corsie in contemporanea.
+/// concorrenza dei run è già gestita da <c>PipelineEngine</c>. La catena valuta-e-applica
+/// (supervisore → confronto con isteresi → applier, con gate di atomicità sulle corsie) vive in
+/// <see cref="IRunApplyEvaluator"/>, CONDIVISA con il <see cref="CampaignPlanner"/> (Fase 1 PRD
+/// Autonomia): una sola implementazione, nessuna deriva tra i percorsi automatici.
 /// </summary>
 public sealed class PipelineSchedulerWorker(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IPipelineEngine engine,
-    IPipelineApplier applier,
-    IEnsembleComparator comparator,
-    IPipelineSupervisorAgent supervisor,
+    IRunApplyEvaluator applyEvaluator,
     Microsoft.Extensions.Options.IOptionsMonitor<AutoReapplyOptions> autoReapply,
     ILogger<PipelineSchedulerWorker> logger,
     ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null) : BackgroundService
 {
     private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(5);
-
-    /// <summary>Serializza l'applicazione dell'ensemble sulle corsie (atomicità globale tra run/tick).</summary>
-    private static readonly SemaphoreSlim ApplyGate = new(1, 1);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -203,92 +198,9 @@ public sealed class PipelineSchedulerWorker(
         }
     }
 
-    /// <summary>Valuta un singolo run e, se giustificato, ne schiera l'ensemble. Registra sempre una decisione (idempotente).</summary>
-    public async Task EvaluateAndMaybeApplyAsync(Guid runId, CancellationToken ct)
-    {
-        PipelineRun? run;
-        await using (var db = await dbFactory.CreateDbContextAsync(ct))
-        {
-            run = await db.PipelineRuns.AsNoTracking().FirstOrDefaultAsync(r => r.Id == runId, ct);
-        }
-        if (run is null) return;
-
-        var candidate = DeserializeRecommendation(run.RecommendationJson);
-        if (candidate is null || candidate.EnsembleLegs.Count == 0)
-        {
-            await RecordDecisionAsync(runId, applied: false, "Run senza ensemble applicabile: nessuna azione.", null, null, ct);
-            return;
-        }
-
-        var candidateSummary = applier.SummarizeRecommendation(candidate);
-        var currentSummary = await applier.GetCurrentEnsembleSummaryAsync(ct);
-
-        // 1. Supervisore AI (può solo porre un veto; su errore/assenza approva → decidono le metriche).
-        var judgment = await supervisor.AnalyzeRunAsync(run, currentSummary, candidateSummary, ct);
-
-        // 2. Confronto oggettivo con hysteresis.
-        var comparison = comparator.Compare(currentSummary.IsEmpty ? null : currentSummary, candidateSummary);
-
-        var applied = false;
-        string message;
-        if (comparison.ShouldReplace && judgment.ApproveReplacement)
-        {
-            await ApplyGate.WaitAsync(ct);
-            try
-            {
-                var result = await applier.ApplyRecommendationAsync(candidate, ct);
-                applied = true;
-                message = $"Ensemble sostituito automaticamente. {comparison.Reason} {result.Message}";
-                logger.LogInformation("Ri-applica automatica ESEGUITA per il run {RunId}: {Reason}", runId, comparison.Reason);
-            }
-            finally { ApplyGate.Release(); }
-        }
-        else if (comparison.ShouldReplace && !judgment.ApproveReplacement)
-        {
-            message = $"Ensemble corrente mantenuto: VETO del supervisore AI. {judgment.Summary}";
-            logger.LogInformation("Ri-applica automatica VETATA dal supervisore per il run {RunId}.", runId);
-        }
-        else
-        {
-            message = comparison.Reason;
-            logger.LogInformation("Ri-applica automatica NON eseguita per il run {RunId}: {Reason}", runId, comparison.Reason);
-        }
-
-        await RecordDecisionAsync(runId, applied, message, comparison, judgment, ct);
-    }
-
-    /// <summary>Persiste la decisione come <see cref="PipelineArtifact"/> (marker idempotente + fonte per la UI). Nessuna nuova tabella.</summary>
-    private async Task RecordDecisionAsync(Guid runId, bool applied, string message, EnsembleComparison? comparison, SupervisorJudgment? judgment, CancellationToken ct)
-    {
-        var payload = new AutoReapplyDecisionArtifact
-        {
-            Applied = applied,
-            Message = message,
-            Comparison = comparison,
-            Judgment = judgment,
-            DecidedAtUtc = DateTime.UtcNow,
-        };
-
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var exists = await db.PipelineArtifacts.AnyAsync(a => a.RunId == runId && a.Kind == AutoReapplyArtifactKinds.Decision, ct);
-        if (exists) return; // idempotente
-        db.PipelineArtifacts.Add(new PipelineArtifact
-        {
-            RunId = runId,
-            StageName = "AutoReapply",
-            Kind = AutoReapplyArtifactKinds.Decision,
-            PayloadJson = JsonSerializer.Serialize(payload),
-            CreatedAt = DateTime.UtcNow,
-        });
-        await db.SaveChangesAsync(ct);
-    }
-
-    private static PipelineRecommendation? DeserializeRecommendation(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json) || json == "{}") return null;
-        try { return JsonSerializer.Deserialize<PipelineRecommendation>(json); }
-        catch { return null; }
-    }
+    /// <summary>Valuta un singolo run e, se giustificato, ne schiera l'ensemble (delega a <see cref="IRunApplyEvaluator"/>).</summary>
+    public Task EvaluateAndMaybeApplyAsync(Guid runId, CancellationToken ct)
+        => applyEvaluator.EvaluateAndMaybeApplyAsync(runId, ct);
 
     // ------------------------------------------------------------ pure helpers
 

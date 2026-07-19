@@ -335,6 +335,15 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IPipelineStageCatalo
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IPipelineEngine, ProcioneMGR.Services.Pipeline.PipelineEngine>();
 builder.Services.AddHostedService<ProcioneMGR.Services.Pipeline.PipelineSchedulerWorker>();
 
+// Campaign Planner (Fase 1, PRD Autonomia): la politica di reazione agli esiti dei run.
+// Gate Campaign:Enabled default OFF — senza attivazione esplicita il worker gira a vuoto.
+// L'evaluator è la catena valuta-e-applica CONDIVISA con la ri-applica dello scheduler
+// (supervisore con veto + isteresi + applier): una sola istanza, un solo gate di atomicità.
+builder.Services.Configure<ProcioneMGR.Services.Pipeline.CampaignOptions>(builder.Configuration.GetSection("Campaign"));
+builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IRunApplyEvaluator, ProcioneMGR.Services.Pipeline.RunApplyEvaluator>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.ICampaignPlanner, ProcioneMGR.Services.Pipeline.CampaignPlanner>();
+builder.Services.AddHostedService<ProcioneMGR.Services.Pipeline.CampaignPlannerWorker>();
+
 // --- Experiment tracking generalizzato (osservabilità confrontabile di ogni run di ricerca) ---
 // Singleton: usa IDbContextFactory (context a vita breve per operazione), additivo, nessuna
 // modifica agli engine. Rif. docs/ROADMAP-QLIB.md §1.3.
@@ -390,6 +399,7 @@ builder.Services.AddHostedService<PromotionWorker>();
 // testabile senza Blazor — vedi il doc-comment della classe. Scoped: uno scope Blazor Server = un
 // circuito, quindi un'istanza per sessione utente, come il componente che la consuma.
 builder.Services.AddScoped<ProcioneMGR.Services.Trading.TradingPageService>();
+builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.CampaignPageService>();
 
 // Orchestrazione di MlLab.razor estratta in un service testabile (P1-5, PRD §3.3). Scoped come sopra.
 builder.Services.AddScoped<ProcioneMGR.Services.ML.MlLabService>();

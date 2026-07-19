@@ -111,6 +111,21 @@ end-to-end Paper con config smoke ("Smoke test BTC+ETH 1h" già esistente). **Ri
 (`Campaign:Enabled=false`), attivazione manuale per campagna. **Approvazione**: richiesta
 sull'attivazione di default, non sul codice.
 
+**FATTO (2026-07-19)** — `VettingCampaign` (tabella dedicata, migrazione `AddVettingCampaign`) +
+`CampaignPlanner`/`CampaignPlannerWorker` + pagina `/campaign` (crea/abilita/riattiva, doppio
+gate: `Campaign:Enabled` globale default OFF + flag per campagna). La catena valuta-e-applica è
+stata ESTRATTA da `PipelineSchedulerWorker` in `IRunApplyEvaluator` (stessa identica
+implementazione — supervisore con veto + isteresi + applier, un solo gate di atomicità) e
+condivisa tra ri-applica automatica e planner. Run della rotazione = trigger `"Campaign"` (🎯
+nello storico, così la ri-applica dello scheduler sui run "Scheduled" non li tocca), run da wake
+= `"Event"` (⚡). **Scostamenti dal design**: (1) su sopravvissuti NON schierati (veto del
+supervisore o isteresi "il corrente è meglio") la rotazione CONTINUA invece di fermarsi —
+fermarsi senza aver schierato nulla lascerebbe la flotta ferma per un candidato rifiutato;
+(2) avvio corsie SOLO Paper e solo se ferme (Testnet nel planner resta nel backlog §8);
+(3) config in ExecutionMode Live sempre saltate (stessa regola dello scheduler). Test:
+`CampaignPlannerTests` (12 casi: rotazione, backoff, esaurimento→WaitingForTrigger,
+wake→Event, veto→continua, slot occupato, Live saltata, quarantena non fatale).
+
 ---
 
 ## §5 — Fase 2: Trigger contestuali (event-driven, non solo cron)
@@ -194,7 +209,7 @@ Telegram.
 | Fase | Obiettivo | Rischio | Dipendenze | Gate | Stato |
 |---|---|---|---|---|---|
 | **0** | Fill sanity (A1), credenziali con grazia (A2), watchdog contabile + quarantena (A3) | Medio | — | No (A1/A2 già avviate) | **COMPLETA** — A1 = PR #24; A2 = PR #26; A3 = 2026-07-19 |
-| **1** | Campaign Planner: rotazione cacce, applica-su-successo, corsie per scelta | Medio-alto | Fase 0 | **Sì**: `Campaign:Enabled` default OFF | Progettata |
+| **1** | Campaign Planner: rotazione cacce, applica-su-successo, corsie per scelta | Medio-alto | Fase 0 | **Sì**: `Campaign:Enabled` default OFF | **COMPLETA** (2026-07-19) |
 | **2** | Trigger contestuali (regime/vol → "Event") | Basso | Fase 1 | No | Progettata |
 | **3** | Auto-resume, fail-fast chiavi, riallineamento corsie | Basso-medio | — (C1 utile già da sola) | No | Progettata |
 | **4** | Notifica (Telegram/logging, default off) | Basso | Massimo valore dopo 0-1 | No | Progettata |
