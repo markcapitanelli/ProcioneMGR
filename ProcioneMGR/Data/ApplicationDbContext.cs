@@ -53,6 +53,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>Dati alternativi (notizie RSS con categoria/sentiment).</summary>
     public DbSet<AltDataPoint> AltDataPoints => Set<AltDataPoint>();
 
+    /// <summary>Serie numeriche di market mood (Fear &amp; Greed, long/short, taker, OI, funding) — Sentiment 2.0.</summary>
+    public DbSet<SentimentMetricPoint> SentimentMetricPoints => Set<SentimentMetricPoint>();
+
     /// <summary>Configurazioni di pagina per-utente: preset con nome + ultima configurazione usata.</summary>
     public DbSet<UserPageConfig> UserPageConfigs => Set<UserPageConfig>();
 
@@ -270,6 +273,21 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // Una sola volta per fonte+articolo: evita duplicati fra sync successive dello stesso feed.
             entity.HasIndex(e => e.DedupeKey).IsUnique();
             entity.HasIndex(e => e.TimestampUtc);
+        });
+
+        builder.Entity<SentimentMetricPoint>(entity =>
+        {
+            entity.ToTable("SentimentMetricPoints");
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.Source).HasMaxLength(32).IsRequired();
+            entity.Property(e => e.Metric).HasMaxLength(48).IsRequired();
+            entity.Property(e => e.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(e => e.Value).HasPrecision(28, 10);
+
+            // Dedupe delle sync sovrapposte: un punto per (fonte, metrica, simbolo, timestamp).
+            entity.HasIndex(e => new { e.Source, e.Metric, e.Symbol, e.TimestampUtc }).IsUnique();
+            entity.HasIndex(e => e.TimestampUtc); // per la purge di retention
         });
 
         builder.Entity<EnsembleRebalanceHistory>(entity =>
