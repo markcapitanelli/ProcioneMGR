@@ -71,6 +71,25 @@ public class SafetyConfiguration
     public bool UseExchangeRestingStops { get; set; }
 
     /// <summary>
+    /// [B1] Banda massima (± % dal prezzo corrente di mercato) entro cui il prezzo di fill
+    /// riportato dall'exchange è considerato plausibile. Fuori banda (o ≤ 0) il fill è SOSPETTO
+    /// e non viene mai adottato: vedi <see cref="Internal.FillSanityCheck"/> e il bug B1 in
+    /// docs/TEST-UI-2026-07-18.md (testnet che risponde "Filled @ 0"). Il default è largo
+    /// apposta: lo slippage reale di un market order è ben sotto, ma il prezzo di riferimento
+    /// è la chiusura dell'ultima candela e può ritardare il mercato fino a una candela intera.
+    /// </summary>
+    public decimal MaxFillPriceDeviationPercent { get; set; } = 20m;
+
+    /// <summary>
+    /// [B1] Tolleranza massima (± % dalla quantità RICHIESTA) entro cui la quantità di fill
+    /// riportata dall'exchange è considerata plausibile. Fuori tolleranza (es. quantità
+    /// cumulative 100x dal testnet, bug B1) il fill è SOSPETTO e non viene mai adottato.
+    /// NB deliberatamente stretta: anche un parziale GENUINO fuori tolleranza finisce in
+    /// verifica manuale — su market order è un'anomalia, meglio prudenti.
+    /// </summary>
+    public decimal MaxFillQuantityDeviationPercent { get; set; } = 5m;
+
+    /// <summary>
     /// [P2-8] Fee dell'exchange in % del nozionale, applicata sia in apertura sia in chiusura.
     /// Prima era una costante fissa in TradingEngine (stesso valore di default, 0.1%), scollegata
     /// dal fee reale e dal parametro equivalente e già configurabile del backtest

@@ -105,6 +105,25 @@ internal sealed class PositionOpener(
                 return false;
             }
 
+            // [B1] Sanity check sul fill riportato (diretto O riconciliato): quantità cumulative
+            // o prezzo 0 da un testnet non devono corrompere capitale e PnL. Fuori banda ⇒ esito
+            // INCERTO: mai adottare il fill — l'ordine potrebbe comunque esistere sull'exchange.
+            if (FillSanityCheck.IsSuspect(res.FilledPrice, res.FilledQuantity, qty, currentPrice, safety.CurrentValue, out var suspectReason))
+            {
+                order.Status = OrderStatus.Rejected;
+                order.ErrorMessage = "Fill sospetto dall'exchange, non adottato: " + suspectReason;
+                await persistence.SaveOrderAsync(order, isExisting, ct);
+                await persistence.AuditAsync("FillSanityRejected", new
+                {
+                    order.ClientOrderId, reportedPrice = res.FilledPrice, reportedQty = res.FilledQuantity,
+                    requestedQty = qty, referencePrice = currentPrice, reason = suspectReason,
+                }, state.Mode, ts, ct);
+                logger.LogCritical(
+                    "Ordine {Cid}: fill SOSPETTO dall'exchange ({Reason}): non adottato. VERIFICARE MANUALMENTE sull'exchange.",
+                    order.ClientOrderId, suspectReason);
+                return false;
+            }
+
             fillPrice = res.FilledPrice ?? currentPrice;
             fillQty = res.FilledQuantity ?? qty;
             exchangeOrderId = res.ExchangeOrderId;
@@ -246,6 +265,23 @@ internal sealed class PositionOpener(
                 order.ErrorMessage = res.Error;
                 await persistence.SaveOrderAsync(order, isExisting, ct);
                 await persistence.AuditAsync("OrderRejected", new { order.ClientOrderId, res.Error }, state.Mode, ts, ct);
+                return false;
+            }
+
+            // [B1] Stesso sanity check del ramo Spot: mai adottare un fill implausibile.
+            if (FillSanityCheck.IsSuspect(res.FilledPrice, res.FilledQuantity, qty, currentPrice, safety.CurrentValue, out var suspectReason))
+            {
+                order.Status = OrderStatus.Rejected;
+                order.ErrorMessage = "Fill sospetto dall'exchange, non adottato: " + suspectReason;
+                await persistence.SaveOrderAsync(order, isExisting, ct);
+                await persistence.AuditAsync("FillSanityRejected", new
+                {
+                    order.ClientOrderId, reportedPrice = res.FilledPrice, reportedQty = res.FilledQuantity,
+                    requestedQty = qty, referencePrice = currentPrice, reason = suspectReason,
+                }, state.Mode, ts, ct);
+                logger.LogCritical(
+                    "Ordine futures {Cid}: fill SOSPETTO dall'exchange ({Reason}): non adottato. VERIFICARE MANUALMENTE sull'exchange.",
+                    order.ClientOrderId, suspectReason);
                 return false;
             }
 
