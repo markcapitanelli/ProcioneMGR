@@ -151,6 +151,19 @@ scioglie**, non 12 ore dopo. L'aggancio esiste già nel modello dati (`Trigger =
 cooldown; un run Event visibile nello storico con ⚡. **Rischio**: basso (additivo, riusa
 GARCH/K-means esistenti). **Dipendenza**: Fase 1 (il trigger parla col planner, non col motore).
 
+**FATTO (2026-07-19)** — `RegimeChangeDetector` (decisione PURA `Evaluate` + realized vol come
+stddev per-periodo dei log-rendimenti, confrontabile col `ForecastVolatility24` GARCH del
+checkpoint): baseline = ultimo run COMPLETATO delle campagne abilitate, stato corrente via
+`IMarketFeatureExtractor` + `IRegimeDetector.LabelFeaturesAsync` (stesso percorso
+dell'EnsembleManager, zero calcoli nuovi). Banda vol nei DUE versi (espansione oltre k×forecast
+E compressione sotto forecast/k). `RegimeChangeTriggerWorker`: cooldown 6h in-memory, parla SOLO
+con `ICampaignPlanner.WakeAsync` (run marcati "Event" ⚡ — già visibili nello storico dalla
+Fase 1), gate a monte su `Campaign:Enabled`, notifica Fase 4 quando scatta; se nessuna campagna
+viene svegliata il cooldown NON si consuma. Config `RegimeTrigger` (Enabled default ON: inerte
+senza campagne). Lo spike di sentiment resta nel backlog §8 come da PRD. Test:
+`RegimeChangeTriggerTests` (14 casi: cluster sintetico, banda nei due versi, dati mancanti = mai
+trigger, realized vol, cooldown, gate, wake).
+
 ---
 
 ## §6 — Fase 3: Resilienza operativa ai riavvii
@@ -225,7 +238,7 @@ Fase 2) cablato nella Fase 2.
 |---|---|---|---|---|---|
 | **0** | Fill sanity (A1), credenziali con grazia (A2), watchdog contabile + quarantena (A3) | Medio | — | No (A1/A2 già avviate) | **COMPLETA** — A1 = PR #24; A2 = PR #26; A3 = 2026-07-19 |
 | **1** | Campaign Planner: rotazione cacce, applica-su-successo, corsie per scelta | Medio-alto | Fase 0 | **Sì**: `Campaign:Enabled` default OFF | **COMPLETA** (2026-07-19) |
-| **2** | Trigger contestuali (regime/vol → "Event") | Basso | Fase 1 | No | Progettata |
+| **2** | Trigger contestuali (regime/vol → "Event") | Basso | Fase 1 | No | **COMPLETA** (2026-07-19) |
 | **3** | Auto-resume, fail-fast chiavi, riallineamento corsie | Basso-medio | — (C1 utile già da sola) | No | Progettata |
 | **4** | Notifica (Telegram/logging, default off) | Basso | Massimo valore dopo 0-1 | No | **COMPLETA** (2026-07-19; resta la prova manuale Telegram) |
 

@@ -44,6 +44,13 @@
     "Enabled": false,
     "TickSeconds": 60
   },
+  "RegimeTrigger": {
+    "_comment": "Trigger contestuale (Fase 2, PRD Autonomia): sveglia il Campaign Planner quando il cluster K-means corrente cambia rispetto all'ultimo run della campagna o la vol realizzata esce dalla banda [forecast/k, forecast*k] del forecast GARCH di quel run. NON lancia mai run direttamente (parla solo col planner, run marcati Event). Inerte senza Campaign:Enabled. Cooldown di default 6h.",
+    "Enabled": true,
+    "CheckIntervalMinutes": 30,
+    "CooldownHours": 6,
+    "VolBandMultiple": 1.5
+  },
   "PromotionEvaluator": {
     "_comment": "Auto-promozione Paper->Testnet quando una corsia performa bene abbastanza a lungo. MAI a Live (Testnet->Live resta manuale). AutoDemoteToPaper retrocede una corsia Testnet se l'edge svanisce.",
     "MinSharpeRealized": 0.8,
