@@ -64,7 +64,8 @@ public class ExchangeCredential
     /// <summary>ApiKey mascherata per la UI (mai esporre il secret).</summary>
     public string MaskedApiKey => Mask(ApiKey);
 
-    private static string Mask(string value)
+    // Internal (non private): riusata da DecryptedExchangeCredential per la stessa resa in UI.
+    internal static string Mask(string value)
     {
         if (string.IsNullOrEmpty(value))
         {

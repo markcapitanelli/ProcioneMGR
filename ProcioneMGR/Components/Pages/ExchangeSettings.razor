@@ -6,10 +6,12 @@
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Security
 @attribute [Authorize]
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IExchangeClientFactory ExchangeFactory
+@inject IExchangeCredentialReader CredentialReader
 @inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Le mie credenziali Exchange</PageTitle>
@@ -50,6 +52,13 @@
         <dd class="col-sm-9">Verifica subito che le chiavi funzionino davvero, chiedendo all'exchange il saldo dell'account (Spot e Futures, con esito separato per lato) — senza piazzare ordini. Su Binance testnet Spot e Futures sono ambienti con chiavi diverse: è normale che una coppia valga per un lato solo.</dd>
         <dt class="col-sm-3">Elimina</dt>
         <dd class="col-sm-9">Rimuove definitivamente la credenziale salvata (non revoca la chiave lato exchange: fallo anche lì se non ti serve più).</dd>
+        <dt class="col-sm-3">🔑 Non decifrabile</dt>
+        <dd class="col-sm-9">
+            Se la master key della piattaforma (<code>Security:MasterKey</code>) cambia, le credenziali
+            salvate con la chiave precedente non sono più leggibili: la riga resta in elenco con un
+            badge di avviso ma non è utilizzabile. Rimedio: eliminala e reinserisci le chiavi (oppure
+            ripristina la chiave originale).
+        </dd>
     </dl>
 </GuidaPanel>
 
@@ -147,11 +156,23 @@
                             <tr>
                                 <td><span class="badge bg-dark">@c.ExchangeName</span></td>
                                 <td>@c.Label</td>
-                                <td><code>@c.MaskedApiKey</code></td>
+                                <td>
+                                    @if (c.IsDecryptable)
+                                    {
+                                        <code>@c.MaskedApiKey</code>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-warning text-dark text-wrap"
+                                              title="Questa riga è cifrata con una master key diversa da quella attuale (Security:MasterKey): il processo corrente non può decifrarla.">
+                                            Non decifrabile con la chiave corrente — reinserire le credenziali
+                                        </span>
+                                    }
+                                </td>
                                 <td>@(c.IsTestnet ? "Sì" : "No")</td>
                                 <td class="text-end">
                                     <button class="btn btn-sm btn-outline-secondary"
-                                            @onclick="() => TestAsync(c)" disabled="@testing">
+                                            @onclick="() => TestAsync(c)" disabled="@(testing || !c.IsDecryptable)">
                                         @if (testing) { <span class="spinner-border spinner-border-sm me-1"></span> }
                                         Test
                                     </button>
@@ -168,7 +189,7 @@
 </div>
 
 @code {
-    private List<ExchangeCredential>? credentials;
+    private IReadOnlyList<DecryptedExchangeCredential>? credentials;
     private string? userId;
     private string? message;
     private bool isError;
@@ -191,11 +212,11 @@
     private async Task LoadAsync()
     {
         if (userId is null) return;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        credentials = await db.ExchangeCredentials
-            .Where(c => c.UserId == userId)
-            .OrderByDescending(c => c.CreatedAt)
-            .ToListAsync();
+        // [B2] Lettura resiliente: NON si materializza ExchangeCredentials via converter EF (una
+        // sola riga cifrata con una master key diversa abbatteva l'intera pagina con
+        // AuthenticationTagMismatchException). Il reader decifra riga per riga e flagga le righe
+        // indecifrabili, che qui compaiono col badge "reinserire le credenziali".
+        credentials = await CredentialReader.LoadForUserAsync(userId);
     }
 
     private async Task AddAsync()
@@ -243,8 +264,15 @@
         await LoadAsync();
     }
 
-    private async Task TestAsync(ExchangeCredential c)
+    private async Task TestAsync(DecryptedExchangeCredential c)
     {
+        // [B2] Il pulsante è già disabilitato per le righe indecifrabili; guardia in profondità.
+        if (!c.IsDecryptable)
+        {
+            SetMessage($"'{c.Label}' non è decifrabile con la master key corrente: reinserisci le credenziali.", error: true);
+            return;
+        }
+
         // [U3] Test REALE delle chiavi (come promette la Guida): ping pubblico + saldo firmato su
         // Spot E Futures, con esiti SEPARATI per lato. Su Binance testnet spot e futures sono
         // domini con chiavi diverse: una coppia valida per un solo lato è normale, non un errore
@@ -263,7 +291,7 @@
             }
             catch (Exception ex) { pingOk = false; parts.Add($"ping FALLITO ({Short(ex)})"); }
 
-            var creds = new TradingCredentials(c.ApiKey, c.ApiSecret, c.Passphrase, c.IsTestnet);
+            var creds = new TradingCredentials(c.ApiKey!, c.ApiSecret!, c.Passphrase, c.IsTestnet);
 
             bool spotOk;
             try
