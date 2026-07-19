@@ -349,6 +349,12 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IRunApplyEvaluator, 
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.ICampaignPlanner, ProcioneMGR.Services.Pipeline.CampaignPlanner>();
 builder.Services.AddHostedService<ProcioneMGR.Services.Pipeline.CampaignPlannerWorker>();
 
+// Trigger contestuale (Fase 2, PRD Autonomia): regime K-means / banda vol GARCH → wake del
+// planner (mai lancio diretto di run). Inerte senza Campaign:Enabled.
+builder.Services.Configure<ProcioneMGR.Services.Pipeline.RegimeTriggerOptions>(builder.Configuration.GetSection("RegimeTrigger"));
+builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IRegimeChangeDetector, ProcioneMGR.Services.Pipeline.RegimeChangeDetector>();
+builder.Services.AddHostedService<ProcioneMGR.Services.Pipeline.RegimeChangeTriggerWorker>();
+
 // --- Experiment tracking generalizzato (osservabilità confrontabile di ogni run di ricerca) ---
 // Singleton: usa IDbContextFactory (context a vita breve per operazione), additivo, nessuna
 // modifica agli engine. Rif. docs/ROADMAP-QLIB.md §1.3.
