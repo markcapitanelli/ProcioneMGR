@@ -346,6 +346,8 @@
             <option value="">Tutti i trigger</option>
             <option value="Manual">Solo manuali</option>
             <option value="Scheduled">Solo schedulati</option>
+            <option value="Campaign">Solo campagna</option>
+            <option value="Event">Solo event</option>
         </select>
     </div>
     @if (FilteredRuns.Count == 0)
@@ -363,7 +365,7 @@
                         <tr class="@(_selectedRun?.Id == r.Id ? "table-active" : "")">
                             <td class="small">@r.StartedAt.ToString("yyyy-MM-dd HH:mm:ss")</td>
                             <td class="small">@(_configs.FirstOrDefault(c => c.Id == r.ConfigurationId)?.Name ?? $"#{r.ConfigurationId}")</td>
-                            <td class="small" title="@r.Trigger">@(r.Trigger == "Scheduled" ? "🕒" : r.Trigger == "Event" ? "⚡" : "✋")</td>
+                            <td class="small" title="@r.Trigger">@(r.Trigger == "Scheduled" ? "🕒" : r.Trigger == "Event" ? "⚡" : r.Trigger == "Campaign" ? "🎯" : "✋")</td>
                             <td class="small">@(r.CompletedAt is DateTime done ? (done - r.StartedAt).ToString(@"hh\:mm\:ss") : "—")</td>
                             <td><span class="badge @RunBadge(r.Status)">@r.Status</span></td>
                             <td class="text-end text-nowrap">

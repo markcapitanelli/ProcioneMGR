@@ -69,3 +69,27 @@ public class TradingAuditLog
 
     public TradingMode Mode { get; set; }
 }
+
+/// <summary>
+/// Quarantena di una corsia (Fase 0-A3, PRD Autonomia Operativa): riga inserita dal
+/// <see cref="LaneInvariantWatchdog"/> quando un invariante contabile risulta violato
+/// (es. il caso reale della corsia 2: PnL -1,8M su capitale 10k da fill patologici).
+/// Finché la riga esiste, <c>TradingEngine.StartAsync</c> RIFIUTA di riavviare la corsia:
+/// un nuovo StartAsync azzererebbe capitale/PnL cancellando l'evidenza da esaminare.
+/// La rimozione è un'azione umana esplicita (/trading, solo Admin) dopo verifica.
+/// Tabella separata da <see cref="TradingEngineState"/> proprio perché StartAsync
+/// RIGENERA quella riga da zero: un flag lì sopra non sopravvivrebbe.
+/// </summary>
+public class LaneQuarantine
+{
+    /// <summary>Chiave naturale: al più una quarantena attiva per corsia.</summary>
+    public int LaneId { get; set; }
+
+    public DateTime CreatedAtUtc { get; set; }
+
+    /// <summary>Invarianti violati, leggibile per l'operatore (banner in /trading).</summary>
+    public string Reason { get; set; } = string.Empty;
+
+    /// <summary>JSON con i valori osservati al momento della violazione (stato contabile + soglie).</summary>
+    public string DetailsJson { get; set; } = string.Empty;
+}

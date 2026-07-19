@@ -32,6 +32,25 @@
     "Provider": "Claude",
     "TimeoutSeconds": 30
   },
+  "Notifications": {
+    "_comment": "Canale di notifica verso l'operatore (Fase 4, PRD Autonomia). Default OFF. Provider: 'Logging' (default, notifiche nel log strutturato) o 'Telegram' (push su mobile). Il TOKEN del bot Telegram NON va qui: SOLO env TELEGRAM_BOT_TOKEN (stesso patto di ANTHROPIC_API_KEY). ChatId non e' un segreto. Rate-limit MaxPerHour con coalescing: l'eccesso viene conteggiato e riportato nel primo messaggio successivo. Producer cablati: quarantena corsie (watchdog A3), esiti campagna, run pipeline falliti, promozioni Paper->Testnet.",
+    "Enabled": false,
+    "Provider": "Logging",
+    "ChatId": "",
+    "MaxPerHour": 20
+  },
+  "Campaign": {
+    "_comment": "Campaign Planner (Fase 1, PRD Autonomia): rotazione automatica delle configurazioni di caccia. DEFAULT OFF: e' IL cambio di natura da strumento ad agente, l'attivazione e' una decisione esplicita. Con Enabled=false le campagne in /campaign si preparano ma nessun run parte. L'applica passa dalla stessa catena della ri-applica (supervisore con veto + isteresi); corsie avviate al massimo in Paper, config Live sempre saltate.",
+    "Enabled": false,
+    "TickSeconds": 60
+  },
+  "RegimeTrigger": {
+    "_comment": "Trigger contestuale (Fase 2, PRD Autonomia): sveglia il Campaign Planner quando il cluster K-means corrente cambia rispetto all'ultimo run della campagna o la vol realizzata esce dalla banda [forecast/k, forecast*k] del forecast GARCH di quel run. NON lancia mai run direttamente (parla solo col planner, run marcati Event). Inerte senza Campaign:Enabled. Cooldown di default 6h.",
+    "Enabled": true,
+    "CheckIntervalMinutes": 30,
+    "CooldownHours": 6,
+    "VolBandMultiple": 1.5
+  },
   "PromotionEvaluator": {
     "_comment": "Auto-promozione Paper->Testnet quando una corsia performa bene abbastanza a lungo. MAI a Live (Testnet->Live resta manuale). AutoDemoteToPaper retrocede una corsia Testnet se l'edge svanisce.",
     "MinSharpeRealized": 0.8,
@@ -94,6 +113,14 @@
       "DefaultWindowMinutes": 5,
       "WorkerTickSeconds": 15,
       "AbandonGraceMinutes": 5
+    },
+    "LaneInvariants": {
+      "_comment": "Watchdog invarianti contabili per corsia (Fase 0-A3, PRD Autonomia). Tripwire per stati ASSURDI (es. il PnL -1,8M su capitale 10k del bug B1), non un duplicato del SafetyChecker: soglie lasche apposta. Violazione => corsia in QUARANTENA (stop trading, posizioni lasciate aperte, riavvio bloccato finche' un Admin non rimuove la quarantena in /trading). Default ON: spegnerlo e' la scelta da motivare.",
+      "Enabled": true,
+      "CheckIntervalSeconds": 60,
+      "AvailableCapitalTolerance": 1,
+      "MaxAbsPnlCapitalMultiple": 2,
+      "MaxExposureCapitalMultiple": 2
     }
   },
   "Observability": {

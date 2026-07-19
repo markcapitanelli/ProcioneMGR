@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProcioneMGR.Data;
@@ -11,9 +12,11 @@ using ProcioneMGR.Data;
 namespace ProcioneMGR.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260719065404_AddLaneQuarantine")]
+    partial class AddLaneQuarantine
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1089,67 +1092,6 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.HasIndex("StartedAt");
 
                     b.ToTable("PipelineRuns", (string)null);
-                });
-
-            modelBuilder.Entity("ProcioneMGR.Services.Pipeline.VettingCampaign", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<bool>("AutoStartPaperLanes")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("BackoffHours")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("ConfigStatesJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<string>("CreatedBy")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<bool>("Enabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime?>("LastActionAtUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<string>("LastOutcome")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<int>("ObservedLanes")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid?>("PendingRunId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("PendingWakeReason")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(24)
-                        .HasColumnType("character varying(24)");
-
-                    b.Property<DateTime>("UpdatedAtUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("VettingCampaigns", (string)null);
                 });
 
             modelBuilder.Entity("ProcioneMGR.Services.Regime.RegimeModel", b =>

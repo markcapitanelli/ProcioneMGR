@@ -160,6 +160,22 @@ public sealed class TradingEngine(
         await _gate.WaitAsync(ct);
         try
         {
+            // Fase 0-A3 (PRD Autonomia): una corsia in quarantena NON riparte finché un umano non
+            // rimuove la quarantena in /trading (solo Admin). Il controllo sta QUI e non solo nel
+            // watchdog perché StartAsync rigenera lo stato da zero (capitale/PnL azzerati):
+            // riavviare cancellerebbe proprio l'evidenza contabile che ha fatto scattare l'allarme.
+            await using (var qdb = await dbFactory.CreateDbContextAsync(ct))
+            {
+                var quarantine = await qdb.LaneQuarantines.AsNoTracking()
+                    .FirstOrDefaultAsync(q => q.LaneId == laneId, ct);
+                if (quarantine is not null)
+                {
+                    throw new InvalidOperationException(
+                        $"Corsia {laneId} in QUARANTENA dal {quarantine.CreatedAtUtc:yyyy-MM-dd HH:mm} UTC: {quarantine.Reason}. " +
+                        "Verifica lo stato contabile (posizioni/ordini/audit) e rimuovi la quarantena in /trading (solo Admin) prima di riavviare.");
+                }
+            }
+
             // Con la master key placeholder del template (pubblica su git) le credenziali
             // exchange "cifrate" sono in chiaro di fatto: soldi veri MAI su quella base.
             // Paper/Testnet restano permessi (comodi in sviluppo).
