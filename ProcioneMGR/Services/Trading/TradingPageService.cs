@@ -29,9 +29,13 @@ public sealed class TradingPageService(
     IPromotionEvaluator promotionEval,
     ILanePromoter promoter,
     IOptionsMonitor<SafetyConfiguration> safetyMonitor,
-    ISafetyConfigWriter safetyWriter)
+    ISafetyConfigWriter safetyWriter,
+    ILaneQuarantineStore quarantineStore)
 {
     public TradingEngineStatus? Status { get; private set; }
+
+    /// <summary>Quarantena attiva della corsia visualizzata (Fase 0-A3), null se la corsia è pulita.</summary>
+    public LaneQuarantine? Quarantine { get; private set; }
     public List<OpenPosition> Positions { get; private set; } = [];
     public List<Order> Orders { get; private set; } = [];
     public List<Order> Pending { get; private set; } = [];
@@ -111,6 +115,21 @@ public sealed class TradingPageService(
             LastStaleReason = ex.StatusCode.ToString();
         }
         catch { /* refresh resiliente */ }
+
+        // Fuori dal blocco gRPC: la quarantena vive nel DB condiviso, si legge anche col servizio
+        // di trading giù (anzi, È il momento in cui l'operatore deve poterla vedere).
+        try { Quarantine = await quarantineStore.GetAsync(laneId); }
+        catch { /* refresh resiliente */ }
+    }
+
+    /// <summary>Rimozione della quarantena (solo Admin, dopo verifica): audit con lo userId di chi decide.</summary>
+    public async Task ClearQuarantineAsync(int laneId, string? userId)
+    {
+        var removed = await quarantineStore.ClearAsync(laneId, userId);
+        SetMsg(removed
+            ? $"Quarantena della corsia {laneId} rimossa. La corsia può essere riavviata."
+            : "Nessuna quarantena attiva da rimuovere.", false);
+        await RefreshAsync(laneId);
     }
 
     public async Task RefreshPromotionsAsync()

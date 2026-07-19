@@ -108,7 +108,8 @@ public class TradingPageServiceTests
 
     private static (TradingPageService Service, FakeTradingEngine Engine0) Build(
         SafetyConfiguration? safety = null, IPromotionEvaluator? promotionEval = null,
-        ILanePromoter? promoter = null, ISafetyConfigWriter? safetyWriter = null)
+        ILanePromoter? promoter = null, ISafetyConfigWriter? safetyWriter = null,
+        ILaneQuarantineStore? quarantineStore = null)
     {
         var engine0 = new FakeTradingEngine(0);
         var services = new ServiceCollection();
@@ -122,7 +123,8 @@ public class TradingPageServiceTests
             promotionEval ?? new FakePromotionEvaluator([]),
             promoter ?? new RecordingPromoter(),
             (safety ?? new SafetyConfiguration { MaxPositionSizePercent = 10m, MaxTotalExposurePercent = 50m, MaxOpenPositions = 5, MaxLeverageAllowed = 5 }).AsMonitor(),
-            safetyWriter ?? new RecordingSafetyWriter());
+            safetyWriter ?? new RecordingSafetyWriter(),
+            quarantineStore ?? new FakeLaneQuarantineStore());
         return (service, engine0);
     }
 

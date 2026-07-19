@@ -169,6 +169,7 @@ public class AuditBlazorUiTests : BunitContext
             ReadyPaperLane(0), ReadyPaperLane(1), ReadyPaperLane(2),
         ]));
         Services.AddSingleton<ILanePromoter>(new ThrowingPromoter());
+        Services.AddSingleton<ILaneQuarantineStore>(new Infrastructure.FakeLaneQuarantineStore());
         Services.AddScoped<TradingPageService>();
         return (writer, engines);
     }
