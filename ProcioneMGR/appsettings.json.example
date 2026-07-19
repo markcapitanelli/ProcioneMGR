@@ -33,7 +33,7 @@
     "TimeoutSeconds": 30
   },
   "Notifications": {
-    "_comment": "Canale di notifica verso l'operatore (Fase 4, PRD Autonomia). Default OFF. Provider: 'Logging' (default, notifiche nel log strutturato) o 'Telegram' (push su mobile). Il TOKEN del bot Telegram NON va qui: SOLO env TELEGRAM_BOT_TOKEN (stesso patto di ANTHROPIC_API_KEY). ChatId non e' un segreto. Rate-limit MaxPerHour con coalescing: l'eccesso viene conteggiato e riportato nel primo messaggio successivo. Producer cablati: quarantena corsie (watchdog A3), esiti campagna, run pipeline falliti, promozioni Paper->Testnet.",
+    "_comment": "Canale di notifica verso l'operatore (Fase 4, PRD Autonomia). Default OFF. Provider: 'Logging' (default, notifiche nel log strutturato) o 'Telegram' (push su mobile). Il TOKEN del bot Telegram NON va qui: SOLO env TELEGRAM_BOT_TOKEN (stesso patto di ANTHROPIC_API_KEY). ChatId non e' un segreto. NB: l'API Telegram mette il token nel PATH dell'URL, quindi il client HTTP 'telegram-notifier' e' senza logger HTTP a livello codice (RemoveAllLoggers) e in Logging:LogLevel c'e' il filtro corrispondente come seconda linea di difesa. Rate-limit MaxPerHour con coalescing: l'eccesso viene conteggiato e riportato nel primo messaggio successivo. Producer cablati: quarantena corsie (watchdog A3), esiti campagna, run pipeline falliti, promozioni Paper->Testnet.",
     "Enabled": false,
     "Provider": "Logging",
     "ChatId": "",
@@ -137,9 +137,11 @@
     "DisableHttpsRedirection": false
   },
   "Logging": {
+    "_comment": "telegram-notifier: l'API Telegram mette il token del bot nel path dell'URL e il logging HTTP di sviluppo stamperebbe l'URI completo. Il client e' gia' senza logger a livello codice (RemoveAllLoggers in AddProcioneNotifications); il filtro qui e' solo difesa in profondita'.",
     "LogLevel": {
       "Default": "Information",
-      "Microsoft.AspNetCore": "Warning"
+      "Microsoft.AspNetCore": "Warning",
+      "System.Net.Http.HttpClient.telegram-notifier": "Warning"
     }
   },
   "AllowedHosts": "*"
