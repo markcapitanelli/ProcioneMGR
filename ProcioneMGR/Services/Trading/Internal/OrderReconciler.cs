@@ -14,6 +14,11 @@ internal sealed record ReconcileOutcome(ReconcileStatus Status, decimal? FillPri
 /// piazzato" — posizione reale non tracciata E ordine duplicato alla candela successiva. Se l'ordine
 /// risulta ancora vivo viene CANCELLATO e ricontrollato, così non può riempirsi "alle nostre spalle"
 /// dopo che lo abbiamo dichiarato assente.
+///
+/// [B1] I valori di fill nell'<see cref="ReconcileOutcome"/> sono riportati COSÌ COME arrivano
+/// dall'exchange e quindi NON fidati: chi li adotta (PositionOpener/PositionCloser) DEVE prima
+/// passarli da <see cref="FillSanityCheck"/> — un testnet può rispondere "Filled" con quantità
+/// cumulative o prezzo 0 (docs/TEST-UI-2026-07-18.md).
 /// </summary>
 internal sealed class OrderReconciler(IExchangeClientFactory exchangeFactory)
 {

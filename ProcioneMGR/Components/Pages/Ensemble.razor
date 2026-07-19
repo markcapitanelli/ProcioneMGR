@@ -17,12 +17,9 @@
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 @implements IDisposable
 
-@inject IServiceProvider Services
 @inject IStrategyFactory StrategyFactory
-@inject IFeatureDriftMonitor DriftMonitor
-@inject IModelRegistry Registry
-@inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject ILogger<Ensemble> Logger
+@inject EnsemblePageService Svc
 
 <PageTitle>Ensemble</PageTitle>
 
@@ -588,21 +585,25 @@ else
 }
 
 @code {
-    private EnsembleConfiguration? _config;
-    private EnsembleStatus? _status;
-    private EnsemblePerformance? _performance;
-    private List<IndicatorSeries> _perfSeries = new();
-    private List<SavedStrategy> _savedStrategies = new();
-    private List<SavedMlModel> _savedMlModels = new();
-    private List<DecayReport> _decayReports = new();
+    // Stato applicativo: vive in EnsemblePageService (P1-5, PRD §3.3). Gli alias read-only tengono
+    // il markup invariato — @bind su membri di _config resta valido (assegna alla proprietà
+    // dell'oggetto restituito, non all'alias).
+    private EnsembleConfiguration? _config => Svc.Config;
+    private EnsembleStatus? _status => Svc.Status;
+    private EnsemblePerformance? _performance => Svc.Performance;
+    private List<IndicatorSeries> _perfSeries => Svc.PerfSeries;
+    private List<SavedStrategy> _savedStrategies => Svc.SavedStrategies;
+    private List<SavedMlModel> _savedMlModels => Svc.SavedMlModels;
+    private List<DecayReport> _decayReports => Svc.DecayReports;
+    private List<ProcioneMGR.Services.Trading.ExecutionJob> _executionJobs => Svc.ExecutionJobs;
+    private List<FactorDriftReport> _driftReports => Svc.DriftReports;
+    private SavedMlModel? _champion => Svc.Champion;
+
     private bool _onlyAlerts;
     private bool _decayBusy;
 
-    private List<ProcioneMGR.Services.Trading.ExecutionJob> _executionJobs = new();
-
-    private const int DriftRecentCandles = 200;
+    private const int DriftRecentCandles = EnsemblePageService.DriftRecentCandles;
     private int _driftModelId;
-    private List<FactorDriftReport> _driftReports = new();
     private bool _driftBusy;
     private bool _driftIsError;
     private string? _driftMsg;
@@ -610,7 +611,6 @@ else
     private string _addPredefined = "EmaCross";
     private int _addSavedId;
     private int _addMlModelId;
-    private SavedMlModel? _champion;
     private decimal _addChampionLong = 0.002m;
     private decimal _addChampionShort = 0.002m;
     private decimal _addMlLongThreshold = 0.005m;
@@ -621,30 +621,13 @@ else
 
     private PollingTimer? _refreshTimer;
 
-    private static readonly string[] Palette = ["#2962FF", "#E53935", "#43A047", "#FB8C00", "#8E24AA", "#00897B"];
-
     /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): fonte unica TradingLanes.Count.</summary>
     private const int LaneCount = TradingLanes.Count;
     private int _laneId;
 
-    /// <summary>Ensemble della corsia selezionata (keyed DI): risolto ad ogni accesso, mai messo in cache tra un cambio corsia e l'altro.</summary>
-    private IEnsembleManager EnsembleMgr => Services.GetRequiredKeyedService<IEnsembleManager>(_laneId);
-
     protected override async Task OnInitializedAsync()
     {
-        await using (var db = await DbFactory.CreateDbContextAsync())
-        {
-            // TUTTE le strategie salvate sono deployabili in un ensemble, non solo quelle da walk-forward:
-            // una strategia trovata via Discovery e salvata da /backtest ha parametri validi ma
-            // IsOptimized=false (nessuno Sharpe atteso), e prima restava esclusa — i suoi parametri non
-            // erano deployabili senza ripassare da Optimization. Le ottimizzate espongono lo Sharpe atteso
-            // (alimenta il decay monitor); le altre no (decay resta "in attesa", gestito con grazia).
-            _savedStrategies = await db.SavedStrategies
-                .OrderByDescending(s => s.IsOptimized)
-                .ThenByDescending(s => s.OptimizationDate ?? s.CreatedAt)
-                .ToListAsync();
-            _savedMlModels = await db.SavedMlModels.OrderByDescending(m => m.CreatedAtUtc).ToListAsync();
-        }
+        await Svc.LoadSavedCatalogsAsync();
         await LoadLaneAsync();
 
         // Auto-refresh status ogni 15s.
@@ -659,43 +642,18 @@ else
 
     private async Task LoadLaneAsync()
     {
-        _config = await EnsembleMgr.GetConfigurationAsync();
-        _champion = await Registry.GetChampionAsync(_config.Symbol, _config.Timeframe);
+        // Granulare come l'originale: un errore su un pannello non impedisce agli altri di popolarsi.
+        await Svc.LoadConfigAndChampionAsync(_laneId);
         await RefreshAsync();
         await LoadDecayReportsAsync();
         await LoadExecutionJobsAsync();
     }
 
-    private void AddChampion()
-    {
-        if (_config is null || _champion is null) return;
-        if (_config.Strategies.Any(s => s.StrategyName == TradingEngine.ChampionStrategyName)) return;   // una sola corsia-Champion
-
-        // Il Champion NON è pinnato per Id: è una sentinella risolta a runtime dal registry, così la
-        // corsia segue sempre il modello promosso corrente. Il motore rifiuta l'esecuzione su Live.
-        _config.Strategies.Add(new EnsembleStrategy
-        {
-            StrategyName = TradingEngine.ChampionStrategyName,
-            DisplayName = $"🏆 Champion ({_config.Symbol} {_config.Timeframe})",
-            Parameters = new Dictionary<string, decimal>
-            {
-                ["LongThreshold"] = _addChampionLong,
-                ["ShortThreshold"] = _addChampionShort,
-            },
-        });
-    }
+    private void AddChampion() => Svc.AddChampion(_addChampionLong, _addChampionShort);
 
     private async Task LoadExecutionJobsAsync()
     {
-        try
-        {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            _executionJobs = await db.ExecutionJobs.AsNoTracking()
-                .Where(j => j.LaneId == _laneId)
-                .OrderByDescending(j => j.CreatedAtUtc)
-                .Take(20)
-                .ToListAsync();
-        }
+        try { await Svc.LoadExecutionJobsAsync(_laneId); }
         catch (Exception ex) { SetMsg($"Errore piani esecuzione: {ex.Message}", true); }
     }
 
@@ -712,12 +670,7 @@ else
     {
         if (_busy) return;
         _busy = true;
-        try
-        {
-            _status = await EnsembleMgr.GetStatusAsync();
-            _performance = await EnsembleMgr.GetPerformanceAsync(DateTime.UtcNow.AddDays(-90));
-            BuildPerfSeries();
-        }
+        try { await Svc.RefreshAsync(_laneId); }
         catch (Exception ex) { SetMsg($"Errore status: {ex.Message}", true); }
         finally { _busy = false; StateHasChanged(); }
     }
@@ -726,10 +679,7 @@ else
     {
         if (_decayBusy) return;
         _decayBusy = true;
-        try
-        {
-            _decayReports = (await EnsembleMgr.GetDecayReportsAsync()).ToList();
-        }
+        try { await Svc.LoadDecayReportsAsync(_laneId); }
         catch (Exception ex) { SetMsg($"Errore monitor decadimento: {ex.Message}", true); }
         finally { _decayBusy = false; StateHasChanged(); }
     }
@@ -737,35 +687,12 @@ else
     private async Task EvaluateDriftAsync()
     {
         if (_driftBusy || _driftModelId == 0) return;
-        _driftBusy = true; _driftMsg = null; _driftIsError = false; _driftReports = new();
+        _driftBusy = true; _driftMsg = null; _driftIsError = false;
         try
         {
-            var model = _savedMlModels.FirstOrDefault(m => m.Id == _driftModelId);
-            if (model is null) { _driftMsg = "Modello non trovato."; _driftIsError = true; return; }
-
-            List<OhlcvData> recent;
-            await using (var db = await DbFactory.CreateDbContextAsync())
-            {
-                recent = await db.OhlcvData.AsNoTracking()
-                    .Where(c => c.Symbol == model.Symbol && c.Timeframe == model.Timeframe)
-                    .OrderByDescending(c => c.TimestampUtc)
-                    .Take(DriftRecentCandles)
-                    .ToListAsync();
-            }
-            recent.Reverse(); // ordine cronologico
-
-            if (recent.Count < 20)
-            {
-                _driftMsg = "Candele recenti insufficienti per una valutazione (servono ≥20).";
-                _driftIsError = true;
-                return;
-            }
-
-            _driftReports = (await DriftMonitor.EvaluateAsync(model, recent)).ToList();
-            var drift = _driftReports.Count(r => r.Overall != DriftSeverity.None);
-            _driftMsg = drift == 0
-                ? $"Nessun drift rilevante: {_driftReports.Count} fattori valutati sulle ultime {recent.Count} candele."
-                : $"{drift}/{_driftReports.Count} fattori in drift sulle ultime {recent.Count} candele (input cambiati: controllare il monitor di decadimento per l'effetto sul PnL).";
+            var res = await Svc.EvaluateDriftAsync(_driftModelId);
+            _driftMsg = res.Message;
+            _driftIsError = res.IsError;
         }
         catch (Exception ex) { _driftMsg = $"Errore valutazione drift: {ex.Message}"; _driftIsError = true; }
         finally { _driftBusy = false; StateHasChanged(); }
@@ -782,121 +709,29 @@ else
         ? p.ToString("F3")
         : d.Score.ToString("F2");
 
-    private void BuildPerfSeries()
-    {
-        var series = new List<IndicatorSeries>();
-        if (_performance is null) { _perfSeries = series; return; }
-
-        static long Ts(DateTime d) => new DateTimeOffset(DateTime.SpecifyKind(d, DateTimeKind.Utc)).ToUnixTimeSeconds();
-
-        if (_performance.TotalEquityCurve.Count > 0)
-        {
-            series.Add(new IndicatorSeries
-            {
-                Title = "Totale", Color = "#111827", Type = IndicatorSeriesType.Line,
-                Points = _performance.TotalEquityCurve.Select(p => new IndicatorPoint(Ts(p.Timestamp), (double)p.Capital)).ToList(),
-            });
-        }
-        var ci = 0;
-        foreach (var sc in _performance.StrategyCurves)
-        {
-            series.Add(new IndicatorSeries
-            {
-                Title = sc.DisplayName, Color = Palette[ci++ % Palette.Length], Type = IndicatorSeriesType.Line,
-                Points = sc.EquityCurve.Select(p => new IndicatorPoint(Ts(p.Timestamp), (double)p.Capital)).ToList(),
-            });
-        }
-        _perfSeries = series;
-    }
-
-    private void AddPredefined()
-    {
-        if (_config is null) return;
-        var proto = StrategyFactory.Prototypes.First(p => p.Name == _addPredefined);
-        _config.Strategies.Add(new EnsembleStrategy
-        {
-            StrategyName = proto.Name,
-            DisplayName = proto.DisplayName,
-            Parameters = proto.ParameterDefinitions.ToDictionary(d => d.Key, d => d.Default),
-        });
-    }
+    private void AddPredefined() => Svc.AddPredefined(_addPredefined);
 
     private void AddFromSaved()
     {
-        if (_config is null || _addSavedId == 0) return;
-        var saved = _savedStrategies.FirstOrDefault(s => s.Id == _addSavedId);
-        if (saved is null) return;
-        _config.Strategies.Add(new EnsembleStrategy
-        {
-            StrategyName = saved.StrategyName,
-            DisplayName = $"{saved.Name} ({(saved.IsOptimized ? "opt" : "salvata")})",
-            Parameters = JsonSerializer.Deserialize<Dictionary<string, decimal>>(saved.ParametersJson) ?? new(),
-            SavedStrategyId = saved.Id,
-            // Solo le strategie ottimizzate (walk-forward) hanno uno Sharpe atteso persistito; per le
-            // altre resta null e il decay monitor mostra "in attesa" (nessuna baseline da confrontare).
-            ExpectedSharpe = saved.OptimizationSharpe,
-        });
+        Svc.AddFromSaved(_addSavedId);
         _addSavedId = 0;
     }
 
     private void AddFromMlModel()
     {
-        if (_config is null || _addMlModelId == 0) return;
-        var model = _savedMlModels.FirstOrDefault(m => m.Id == _addMlModelId);
-        if (model is null) return;
-
-        _config.Strategies.Add(new EnsembleStrategy
-        {
-            StrategyName = "Ml",
-            DisplayName = $"{model.Name} (ML)",
-            Parameters = new Dictionary<string, decimal>
-            {
-                ["SavedModelId"] = model.Id,
-                ["LongThreshold"] = _addMlLongThreshold,
-                ["ShortThreshold"] = _addMlShortThreshold,
-            },
-            SavedMlModelId = model.Id,
-        });
+        Svc.AddFromMlModel(_addMlModelId, _addMlLongThreshold, _addMlShortThreshold);
         _addMlModelId = 0;
     }
 
-    private void Remove(string id) => _config?.Strategies.RemoveAll(s => s.StrategyId == id);
+    private void Remove(string id) => Svc.RemoveStrategy(id);
 
-    private async Task SaveAsync()
-    {
-        if (_config is null) return;
-        await EnsembleMgr.UpdateConfigurationAsync(_config);
-        SetMsg("Configurazione salvata.", false);
-        await RefreshAsync();
-    }
+    private async Task SaveAsync() => SetMsg(await Svc.SaveAsync(_laneId), false);
 
-    private async Task StartAsync()
-    {
-        if (_config is null) return;
-        await EnsembleMgr.UpdateConfigurationAsync(_config);
-        await EnsembleMgr.StartAsync();
-        _config.IsEnabled = true;
-        SetMsg("Ensemble avviato.", false);
-        await RefreshAsync();
-    }
+    private async Task StartAsync() => SetMsg(await Svc.StartEnsembleAsync(_laneId), false);
 
-    private async Task StopAsync()
-    {
-        await EnsembleMgr.StopAsync();
-        if (_config is not null) _config.IsEnabled = false;
-        SetMsg("Ensemble fermato.", false);
-        await RefreshAsync();
-    }
+    private async Task StopAsync() => SetMsg(await Svc.StopEnsembleAsync(_laneId), false);
 
-    private async Task RebalanceNowAsync()
-    {
-        if (_config is null) return;
-        await EnsembleMgr.UpdateConfigurationAsync(_config);
-        await EnsembleMgr.RebalanceAsync("Manual");
-        SetMsg("Rebalancing eseguito.", false);
-        _config = await EnsembleMgr.GetConfigurationAsync();
-        await RefreshAsync();
-    }
+    private async Task RebalanceNowAsync() => SetMsg(await Svc.RebalanceNowAsync(_laneId), false);
 
     private static string FormatParams(Dictionary<string, decimal> p) =>
         string.Join(", ", p.Select(kv => $"{kv.Key}={kv.Value}"));
