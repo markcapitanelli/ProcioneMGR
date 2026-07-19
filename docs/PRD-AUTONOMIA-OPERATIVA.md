@@ -1,8 +1,10 @@
 # PRD — Autonomia Operativa di ProcioneMGR
 
-**Stato**: Fase 0 parzialmente in corso (A1 = PR #24 aperta, A2 in lavorazione in sessione
-parallela); Fasi 1-4 progettate, non iniziate. **Creato**: 2026-07-19 · **Tipo**: documento vivo
-(aggiornare ad ogni fase completata, come il PRD di consolidamento).
+**Stato**: **Fase 0 COMPLETA** (2026-07-19): A1 = PR #24, A2 = PR #26, A3 = `LaneInvariantWatchdog`
++ quarantena corsia (questo branch — regressione sul caso reale della corsia 2, riavvio bloccato
+finché un Admin non rimuove la quarantena in /trading). Fasi 1-4 in lavorazione in questo branch.
+**Creato**: 2026-07-19 · **Tipo**: documento vivo (aggiornare ad ogni fase completata, come il
+PRD di consolidamento).
 
 ## Scopo di questo documento
 
@@ -66,7 +68,7 @@ finché un umano non ha aperto la pagina. Un sistema autonomo senza questa fase 
 |---|---|---|---|
 | A1 | **Sanity check sui fill di ritorno** | **In corso — PR #24** | In `PositionOpener`/`PositionCloser`/`OrderReconciler`: quantità entro tolleranza della richiesta, prezzo > 0 ed entro banda dal prezzo corrente; fuori banda ⇒ esito INCERTO (riconciliazione/reject + audit `FillSanityRejected`), mai adottare il fill. Test con client scriptati (prezzo 0, quantità 100×). |
 | A2 | **Credenziali indecifrabili gestite con grazia** | **In corso — sessione parallela** | `/settings/exchanges` non deve andare in 500 (`AuthenticationTagMismatchException` dentro la query EF, `ExchangeSettings.razor:195`): decifratura per-riga con badge "reinserire"; `TradingEngine.LoadCredentialsAsync` fallisce con messaggio chiaro. |
-| A3 | **Watchdog di invarianti contabili + quarantena corsia** | Da fare | Nuovo `LaneInvariantWatchdog` (BackgroundService leggero o check in coda a `ProcessCandleAsync`): invarianti per corsia — `AvailableCapital ≥ -ε`, `|TotalPnl| ≤ k × TotalCapital × Leverage` (k configurabile, default 2), `posizioni aperte × nozionale ≤ esposizione massima`. Violazione ⇒ corsia in **quarantena** (stop trading, stato marcato, nessuna chiusura forzata automatica — stessa filosofia della "difesa inversa" del `FuturesPositionReconciler`) + evento di notifica (Fase 4; finché non esiste, `LogCritical` + audit). Verificato: oggi nel codebase non esiste alcun watchdog contabile (grep `invariant/watchdog/quarantine` ⇒ solo contratti anti-look-ahead nei fattori alpha). |
+| A3 | **Watchdog di invarianti contabili + quarantena corsia** | **FATTO (2026-07-19)** — `LaneInvariantWatchdog` + `LaneInvariantChecker` (puro) + tabella `LaneQuarantines` (migrazione `AddLaneQuarantine`); quarantena = stop trading SENZA chiusure forzate, riga persistita che blocca `StartAsync` finché un Admin non la rimuove in /trading (audit `LaneQuarantined`/`LaneQuarantineCleared`); config `Trading:LaneInvariants` (default ON, soglie lasche). Test: `LaneInvariantCheckerTests` + `LaneInvariantWatchdogTests` riproducono i numeri REALI della corsia 2 | Nuovo `LaneInvariantWatchdog` (BackgroundService leggero o check in coda a `ProcessCandleAsync`): invarianti per corsia — `AvailableCapital ≥ -ε`, `|TotalPnl| ≤ k × TotalCapital × Leverage` (k configurabile, default 2), `posizioni aperte × nozionale ≤ esposizione massima`. Violazione ⇒ corsia in **quarantena** (stop trading, stato marcato, nessuna chiusura forzata automatica — stessa filosofia della "difesa inversa" del `FuturesPositionReconciler`) + evento di notifica (Fase 4; finché non esiste, `LogCritical` + audit). Verificato: oggi nel codebase non esiste alcun watchdog contabile (grep `invariant/watchdog/quarantine` ⇒ solo contratti anti-look-ahead nei fattori alpha). |
 
 **Criteri di accettazione**: test di regressione che riproducono ESATTAMENTE il caso reale della
 corsia 2 (fill a prezzo 0, fill con quantità 100×) e dimostrano: fill rifiutato, capitale intatto,
@@ -191,7 +193,7 @@ Telegram.
 
 | Fase | Obiettivo | Rischio | Dipendenze | Gate | Stato |
 |---|---|---|---|---|---|
-| **0** | Fill sanity (A1), credenziali con grazia (A2), watchdog contabile + quarantena (A3) | Medio | — | No (A1/A2 già avviate) | A1 = PR #24; A2 in corso; A3 da fare |
+| **0** | Fill sanity (A1), credenziali con grazia (A2), watchdog contabile + quarantena (A3) | Medio | — | No (A1/A2 già avviate) | **COMPLETA** — A1 = PR #24; A2 = PR #26; A3 = 2026-07-19 |
 | **1** | Campaign Planner: rotazione cacce, applica-su-successo, corsie per scelta | Medio-alto | Fase 0 | **Sì**: `Campaign:Enabled` default OFF | Progettata |
 | **2** | Trigger contestuali (regime/vol → "Event") | Basso | Fase 1 | No | Progettata |
 | **3** | Auto-resume, fail-fast chiavi, riallineamento corsie | Basso-medio | — (C1 utile già da sola) | No | Progettata |

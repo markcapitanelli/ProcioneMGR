@@ -194,6 +194,20 @@
         🛑 EMERGENCY STOP ATTIVATO: @Service.Status.EmergencyStopReason. Riavvia manualmente dopo aver verificato.
     </div>
 }
+@if (Service.Quarantine is not null)
+{
+    <div class="alert alert-danger">
+        <div class="fw-bold">⛔ CORSIA IN QUARANTENA dal @Service.Quarantine.CreatedAtUtc.ToString("dd/MM HH:mm") UTC: @Service.Quarantine.Reason</div>
+        <div class="small mt-1">
+            Il watchdog degli invarianti contabili ha fermato il trading <u>senza chiudere le posizioni</u>.
+            Verifica posizioni, ordini e audit: finché la quarantena è attiva la corsia non può essere riavviata
+            (un riavvio azzererebbe capitale e PnL, cancellando l'evidenza).
+        </div>
+        <AuthorizeView Roles="@AppRoles.Admin">
+            <button class="btn btn-outline-danger btn-sm mt-2" @onclick="ClearQuarantineAsync">Ho verificato: rimuovi la quarantena</button>
+        </AuthorizeView>
+    </div>
+}
 @if (!string.IsNullOrEmpty(Service.Message))
 {
     <div class="alert @(Service.IsError ? "alert-danger" : "alert-success")">@Service.Message</div>
@@ -532,6 +546,12 @@
     {
         _confirmEmergency = false;
         await Service.EmergencyAsync(_laneId);
+        StateHasChanged();
+    }
+
+    private async Task ClearQuarantineAsync()
+    {
+        await Service.ClearQuarantineAsync(_laneId, _userId);
         StateHasChanged();
     }
 

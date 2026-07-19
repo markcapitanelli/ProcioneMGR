@@ -94,6 +94,14 @@
       "DefaultWindowMinutes": 5,
       "WorkerTickSeconds": 15,
       "AbandonGraceMinutes": 5
+    },
+    "LaneInvariants": {
+      "_comment": "Watchdog invarianti contabili per corsia (Fase 0-A3, PRD Autonomia). Tripwire per stati ASSURDI (es. il PnL -1,8M su capitale 10k del bug B1), non un duplicato del SafetyChecker: soglie lasche apposta. Violazione => corsia in QUARANTENA (stop trading, posizioni lasciate aperte, riavvio bloccato finche' un Admin non rimuove la quarantena in /trading). Default ON: spegnerlo e' la scelta da motivare.",
+      "Enabled": true,
+      "CheckIntervalSeconds": 60,
+      "AvailableCapitalTolerance": 1,
+      "MaxAbsPnlCapitalMultiple": 2,
+      "MaxExposureCapitalMultiple": 2
     }
   },
   "Observability": {

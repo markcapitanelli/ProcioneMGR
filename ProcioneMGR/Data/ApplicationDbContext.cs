@@ -63,6 +63,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<ProcioneMGR.Services.Trading.TradingEngineState> TradingEngineStates => Set<ProcioneMGR.Services.Trading.TradingEngineState>();
     public DbSet<ProcioneMGR.Services.Trading.TradingAuditLog> TradingAuditLogs => Set<ProcioneMGR.Services.Trading.TradingAuditLog>();
 
+    /// <summary>Corsie in quarantena per violazione di invarianti contabili (Fase 0-A3, PRD Autonomia).</summary>
+    public DbSet<ProcioneMGR.Services.Trading.LaneQuarantine> LaneQuarantines => Set<ProcioneMGR.Services.Trading.LaneQuarantine>();
+
     /// <summary>Piani di esecuzione live "a fette" (TWAP/VWAP/Iceberg) in corso/storici, per corsia.</summary>
     public DbSet<ProcioneMGR.Services.Trading.ExecutionJob> ExecutionJobs => Set<ProcioneMGR.Services.Trading.ExecutionJob>();
 
@@ -333,6 +336,16 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.Property(x => x.Action).HasMaxLength(32);
             e.Property(x => x.Mode).HasConversion<string>().HasMaxLength(8);
             e.HasIndex(x => x.TimestampUtc);
+        });
+
+        builder.Entity<ProcioneMGR.Services.Trading.LaneQuarantine>(e =>
+        {
+            e.ToTable("LaneQuarantines");
+            // PK naturale = LaneId: l'unicità "al più una quarantena per corsia" la garantisce
+            // il database, non il codice (il TryQuarantineAsync del watchdog si appoggia qui).
+            e.HasKey(x => x.LaneId);
+            e.Property(x => x.LaneId).ValueGeneratedNever();
+            e.Property(x => x.Reason).HasMaxLength(1024);
         });
 
         builder.Entity<ProcioneMGR.Services.Trading.ExecutionJob>(e =>
