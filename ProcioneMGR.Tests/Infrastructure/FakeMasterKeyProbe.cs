@@ -7,6 +7,15 @@ public sealed class FakeMasterKeyProbe : IMasterKeyProbe
 {
     public MasterKeyProbeResult? Result { get; set; }
 
+    /// <summary>Quante volte la pagina ha chiesto un ri-controllo dopo una modifica alle credenziali.</summary>
+    public int RefreshCount { get; private set; }
+
     public Task<MasterKeyProbeResult> ProbeAsync(CancellationToken ct = default)
         => Task.FromResult(Result ??= new MasterKeyProbeResult(0, 0, DateTime.UtcNow));
+
+    public Task RefreshAfterCredentialChangeAsync(CancellationToken ct = default)
+    {
+        RefreshCount++;
+        return Task.CompletedTask;
+    }
 }
