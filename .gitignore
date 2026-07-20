@@ -36,3 +36,6 @@ secrets.json
 
 # ---- Misc ----
 *.log
+
+# Libri/PDF: non vanno in un repository pubblico (copyright + peso)
+docs/*.pdf
