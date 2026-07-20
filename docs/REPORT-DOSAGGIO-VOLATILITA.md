@@ -1,4 +1,16 @@
-# Dosaggio della volatilità — il primo risultato positivo
+# Dosaggio della volatilità — un risultato che NON ha replicato
+
+> **Leggi prima questo.** La prima versione di questo documento presentava il dosaggio come "il primo
+> risultato positivo" della ricerca, sulla base di un miglioramento di Sharpe da 0,12 a 0,43 su un
+> paniere di 24 monete, validato con un controllo a esposizione costante e un walk-forward.
+> **Quel risultato non ha replicato.** Ripetendo la stessa identica misura su 12 simboli — sia uno
+> per uno, sia aggregati in paniere — l'effetto sparisce e spesso si inverte. La sezione
+> "Non ha replicato" più sotto ha la prova; il resto del documento è conservato perché la sequenza
+> di come ci si è arrivati è essa stessa il contenuto utile.
+>
+> **Conclusione operativa: il dosaggio non è una fonte di rendimento corretto per il rischio.**
+> Quello che fa in modo affidabile, e che è misurato ovunque, è ridurre l'esposizione media e quindi
+> l'ampiezza delle oscillazioni. È una manopola di controllo del drawdown, niente di più.
 
 *2026-07-20. Universo: 24 alt su Binance, 1d, 2021-05-11 → 2026-07-20 (1897 giorni allineati).
 Costi: 0,10% fee + 0,05% slippage per lato, applicati su ogni unità di nozionale scambiata.*
@@ -71,6 +83,31 @@ dati.
   volatilità è persistente e correlata negativamente ai rendimenti: è un fatto stilizzato robusto,
   non una legge.
 - Il maxDD resta **48%**. È metà di 81%, ma non è un prodotto prudente.
+
+## Non ha replicato
+
+Il risultato sopra è su un paniere di **24** monete, dal 2021-05. Rifatto su un insieme diverso
+(**12** simboli maggiori, dal 2021-01), tenendo tutto il resto identico — stesso target, stessa
+finestra di stima, stesso ribilanciamento, stesso controllo:
+
+| stessi 12 simboli, aggregati | rendimento | Sharpe |
+|---|---|---|
+| buy & hold equipesato | +460,9% | **0,79** |
+| dosato (esposizione media 48%) | +113,5% | **0,57** |
+| costante equivalente al 48% | +248,2% | **0,79** |
+
+**Il dosaggio peggiora lo Sharpe (0,57 contro 0,79), invece di migliorarlo.** L'effetto non compare
+nemmeno aggregando: quindi non era un fenomeno di paniere, dipendeva da *quali* monete e da *quale*
+periodo.
+
+La spiegazione più semplice regge a entrambe le osservazioni: nell'universo a 24 il mercato è finito
+**in perdita** (−64,6%) e ridurre l'esposizione ha aiutato; nell'universo a 12 è finito **in forte
+guadagno** (+460,9%) e ridurre l'esposizione ha fatto perdere il rialzo. Il controllo a esposizione
+costante distingue le due cose solo se il campione è abbastanza lungo e vario da contenere entrambi
+i regimi — e cinque anni di un solo ciclo cripto non lo sono.
+
+**Un campione favorevole e uno sfavorevole non fanno un edge.** Il walk-forward su 6 finestre non
+bastava a proteggere da questo, perché tutte e sei venivano dallo stesso universo.
 
 ## ⚠️ Su un simbolo SOLO l'effetto non c'è — e le corsie operano su un simbolo solo
 

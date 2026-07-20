@@ -4,10 +4,15 @@ namespace ProcioneMGR.Services.Trading.Internal;
 
 /// <summary>
 /// Dosaggio della posizione sulla volatilità realizzata: quando il mercato si agita si espone meno
-/// capitale, quando si calma se ne espone di più. È l'unico risultato di ricerca sopravvissuto alle
-/// verifiche (vedi <c>docs/REPORT-DOSAGGIO-VOLATILITA.md</c>): sul paniere equipesato, a parità di
-/// esposizione MEDIA, dosare invece di tenere fisso porta lo Sharpe da 0,12 a 0,43. Non è "tenere
-/// meno mercato": conta QUANDO si è esposti.
+/// capitale, quando si calma se ne espone di più.
+///
+/// <para><b>Onestà sull'evidenza.</b> Nasce da un risultato che poi NON ha replicato: su un paniere
+/// di 24 monete portava lo Sharpe da 0,12 a 0,43 (a parità di esposizione media), ma su un insieme
+/// diverso di 12 simboli lo peggiora (0,57 contro 0,79) e su singolo simbolo batte l'esposizione
+/// costante equivalente solo in 2 casi su 12. Vedi <c>docs/REPORT-DOSAGGIO-VOLATILITA.md</c>.
+/// <b>Non è quindi una fonte di rendimento corretto per il rischio.</b> Ciò che fa in modo
+/// affidabile, misurato in ogni prova, è ridurre l'esposizione media e con essa l'ampiezza delle
+/// oscillazioni: è una manopola di controllo del drawdown, e va tenuta per quello.</para>
 ///
 /// <para><b>Proprietà di sicurezza.</b> <see cref="SafetyConfiguration.MaxExposureMultiplier"/> vale
 /// 1,0 di default, quindi il moltiplicatore può solo RIDURRE la dimensione decisa da

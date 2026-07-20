@@ -547,6 +547,76 @@ async Task VolSingleAsync()
     Console.WriteLine($"\n    Simboli in cui dosare batte l'esposizione costante equivalente: {migliora}/{tot}");
     Console.WriteLine("    Il confronto che conta e' con la COSTANTE, non con il buy&hold: battere il buy&hold");
     Console.WriteLine("    tenendo meno mercato in un periodo negativo e' automatico e non prova nulla.");
+
+    // --- CONFRONTO PULITO: gli STESSI simboli, in paniere -------------------------------------
+    // Se nessuno dei 12 mostra l'effetto ma il paniere sui 24 lo mostra fortissimo, la differenza
+    // puo' venire dal PANIERE oppure dall'aver cambiato insieme di simboli e periodo. Qui si tiene
+    // tutto fisso e si cambia una cosa sola: aggregare o no.
+    Console.WriteLine("\n--- Gli STESSI simboli, aggregati in paniere equipesato (unica variabile: aggregare) ---");
+
+    var perSymbol = new Dictionary<string, List<(DateTime T, decimal C)>>();
+    foreach (var sym in universe)
+    {
+        var rows = await db.OhlcvData.AsNoTracking()
+            .Where(o => o.Symbol == sym && o.Timeframe == tf && o.TimestampUtc >= from)
+            .OrderBy(o => o.TimestampUtc)
+            .Select(o => new { o.TimestampUtc, o.Close }).ToListAsync();
+        if (rows.Count >= 400) perSymbol[sym] = rows.Select(r => (r.TimestampUtc.Date, r.Close)).ToList();
+    }
+    var syms = perSymbol.Keys.OrderBy(s => s).ToList();
+    var maps = syms.ToDictionary(s => s, s => perSymbol[s].ToDictionary(v => v.T, v => v.C));
+    var common = maps[syms[0]].Keys.ToHashSet();
+    foreach (var s in syms) common.IntersectWith(maps[s].Keys);
+    var days = common.OrderBy(d => d).ToList();
+
+    var basket = new List<double>();
+    for (var i = 1; i < days.Count; i++)
+    {
+        var r = 0m;
+        foreach (var s in syms) r += (maps[s][days[i]] / maps[s][days[i - 1]] - 1m) / syms.Count;
+        basket.Add((double)r);
+    }
+
+    (double Ret, double Sh, double AvgExp) Sim(Func<int, double> expo)
+    {
+        double eq = 1, expSum = 0, prev = 0;
+        var rets = new List<double>();
+        for (var i = 0; i < basket.Count; i++)
+        {
+            var e = expo(i);
+            if (e != prev) { eq *= 1 - Math.Abs(e - prev) * (double)CostPerSide; prev = e; }
+            var r = e * basket[i];
+            eq *= 1 + r; rets.Add(r); expSum += e;
+        }
+        var m = rets.Average();
+        var sd = Math.Sqrt(rets.Sum(v => (v - m) * (v - m)) / (rets.Count - 1));
+        return ((eq - 1) * 100, sd > 1e-12 ? m / sd * Math.Sqrt(365.0) : 0, expSum / rets.Count);
+    }
+
+    var bpath = new double[basket.Count];
+    double bcur = 0;
+    for (var i = 0; i < basket.Count; i++)
+    {
+        if (i >= Lookback && (i - Lookback) % Rebal == 0)
+        {
+            var win = basket.Skip(i - Lookback).Take(Lookback).ToList();
+            var m3 = win.Average();
+            var sd3 = Math.Sqrt(win.Sum(v => (v - m3) * (v - m3)) / (win.Count - 1)) * Math.Sqrt(365.0);
+            bcur = sd3 > 1e-9 ? Math.Clamp(TargetVol / sd3, 0.25, 1.0) : 0.0;
+        }
+        bpath[i] = bcur;
+    }
+
+    var bBh = Sim(_ => 1.0);
+    var bVt = Sim(i => bpath[i]);
+    var bCt = Sim(_ => bVt.AvgExp);
+    Console.WriteLine($"    {"paniere " + syms.Count + " simboli",-24} rend {bBh.Ret,9:F1}%  Sharpe {bBh.Sh,5:F2}");
+    Console.WriteLine($"    {"  dosato",-24} rend {bVt.Ret,9:F1}%  Sharpe {bVt.Sh,5:F2}  (esposizione media {bVt.AvgExp:P0})");
+    Console.WriteLine($"    {"  costante equivalente",-24} rend {bCt.Ret,9:F1}%  Sharpe {bCt.Sh,5:F2}");
+    Console.WriteLine(bVt.Sh > bCt.Sh + 0.05
+        ? "    -> sugli stessi simboli, AGGREGARE fa comparire l'effetto: e' un fenomeno di paniere"
+        : "    -> sugli stessi simboli l'effetto NON compare nemmeno in paniere: il risultato sui 24\n"
+        + "       dipendeva dall'insieme di simboli o dal periodo, non dall'aggregazione");
 }
 
 // ------------------------------------------------------------------ VOLOVERLAY (il dosaggio salva le strategie?)
