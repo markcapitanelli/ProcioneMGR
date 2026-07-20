@@ -31,6 +31,21 @@ public class EnsembleConfiguration
     public bool IsEnabled { get; set; }
 
     /// <summary>
+    /// [R3] Nome del profilo di rischio della Modalità Semplice (vedi
+    /// <c>Services.Risk.RiskProfiles</c>). Quando è valorizzato, le soglie di sicurezza EFFETTIVE
+    /// della corsia sono quelle del profilo sovrapposte a quelle globali
+    /// (<see cref="Trading.LaneSafetyMonitor"/>).
+    ///
+    /// <c>null</c> o vuoto = la corsia NON usa la Modalità Semplice e resta sulle soglie globali,
+    /// cioè il comportamento di ogni corsia esistente prima di R3. Vive qui, dentro la
+    /// configurazione già serializzata come JSON per corsia, così non serve alcuna migrazione: le
+    /// righe scritte prima di R3 deserializzano con il campo a null, che è esattamente il
+    /// significato voluto. Campo primitivo (string) e non il record RiskProfile, per la stessa
+    /// ragione di <see cref="IsFutures"/>: nessuna dipendenza incrociata Ensemble→Risk.
+    /// </summary>
+    public string? RiskProfileName { get; set; }
+
+    /// <summary>
     /// True per operare su Futures perpetui a leva invece che Spot. Campo primitivo (non
     /// l'enum MarketType di Services.Trading) per evitare una dipendenza incrociata
     /// Ensemble→Trading, dato che Trading già dipende da Ensemble (IEnsembleManager).

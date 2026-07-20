@@ -157,6 +157,20 @@ public sealed class RemoteTradingEngineClient(
             "(Trading:UseRemoteTrading=true); il worker non è registrato nel monolite in questa " +
             "modalità, quindi ProcessCandleAsync non deve essere invocato sul client remoto.");
 
+    /// <summary>
+    /// [R1] I tick di prezzo NON attraversano mai il confine gRPC: sarebbe una chiamata di rete per
+    /// ogni tick, e la latenza che si vorrebbe eliminare tornerebbe dentro dal lato sbagliato. Il
+    /// feed real-time è registrato nello STESSO host del motore (vedi AddTradingLanes, ramo
+    /// !useRemote) e chiama l'engine locale in-process — stessa regola "un scrittore, un host" già
+    /// applicata a LaneInvariantWatchdog e all'EnsembleRebalanceWorker.
+    /// </summary>
+    public Task ProcessPriceTickAsync(decimal price, DateTime tsUtc, CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "I tick real-time sono elaborati dal feed del servizio di trading remoto " +
+            "(Trading:UseRemoteTrading=true): il feed è co-locato col motore e non è registrato nel " +
+            "monolite in questa modalità, quindi ProcessPriceTickAsync non deve essere invocato sul " +
+            "client remoto.");
+
     public Task ProcessDueExecutionSlicesAsync(CancellationToken ct = default) =>
         throw new NotSupportedException(
             "Le fette di esecuzione sono avanzate dall'ExecutionWorker del servizio di trading " +
