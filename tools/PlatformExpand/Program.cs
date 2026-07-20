@@ -317,11 +317,18 @@ async Task CostFrontierAsync()
     // (etichetta, fee per lato %, slippage per fill %) — scenari di esecuzione realmente disponibili.
     var scenarios = new (string Label, decimal Fee, decimal Slip)[]
     {
-        ("taker Binance (base)",   0.100m, 0.050m),
-        ("taker Bitget",           0.060m, 0.050m),
-        ("maker Binance +BNB",     0.0225m, 0.020m),
-        ("maker Bitget",           0.020m, 0.020m),
-        ("costo zero (limite)",    0.000m, 0.000m),
+        ("taker Binance (base)",       0.100m, 0.050m),
+        ("taker Bitget",               0.060m, 0.050m),
+        // TETTO DELLO SLICING. Gli algoritmi TWAP/VWAP/Iceberg/Adaptive riducono l'impatto di
+        // mercato, cioe' lo SLIPPAGE — non la commissione, che dipende dall'essere maker o taker.
+        // E oggi l'intero percorso live piazza solo ordini MARKET (SignalOrderBuilder,
+        // PositionOpener, PositionCloser), quindi e' sempre taker. Questi due scenari sono il
+        // limite teorico dello slicing: slippage azzerato, commissione taker invariata.
+        ("taker + slicing perfetto",   0.100m, 0.000m),
+        ("taker Bitget + slicing",     0.060m, 0.000m),
+        ("maker Binance +BNB",         0.0225m, 0.020m),
+        ("maker Bitget",               0.020m, 0.020m),
+        ("costo zero (limite)",        0.000m, 0.000m),
     };
 
     Console.WriteLine($"=== FRONTIERA DEI COSTI — holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");

@@ -6,8 +6,8 @@ Costi applicati ovunque: fee 0,1%/lato + slippage 0,05%/fill ⇒ **round-turn 0,
 **Esito in una riga:** su questo universo e questi dati non è emerso alcun edge che sopravviva
 ai costi e alla correzione per test multiplo — e l'esperimento di controllo dimostra che è una
 proprietà del mercato, non un difetto degli strumenti. **Ma la frontiera dei costi mostra che
-almeno un candidato fallisce per l'esecuzione, non per il segnale**: diventa profittevole a
-round-turn ≤ 0,085%, cioè con ordini maker.
+almeno un candidato fallisce per l'esecuzione, non per il segnale**: il pareggio cade fra 0,120% e
+0,200% di round-turn, cioè in un intervallo raggiungibile.
 
 Questo documento esiste perché un risultato negativo ben misurato vale quanto uno positivo:
 serve a non rifare la stessa strada fra sei mesi.
@@ -181,13 +181,18 @@ netti sembrava identico.
 
 | scenario | round-turn | netto |
 |---|---|---|
-| taker Binance | 0,300% | −5,09% |
-| taker Bitget | 0,220% | −1,77% |
-| maker Binance +BNB | 0,085% | **+4,08%** |
-| maker Bitget | 0,080% | **+4,31%** |
-| costo zero (limite) | 0,000% | +7,94% |
+| taker Binance | 0,300% | −5,67% |
+| taker Bitget | 0,220% | −2,37% |
+| taker + slicing perfetto | 0,200% | −1,54% |
+| taker Bitget + slicing perfetto | 0,120% | **+1,90%** |
+| maker Binance +BNB | 0,085% | **+3,45%** |
+| maker Bitget | 0,080% | **+3,67%** |
+| costo zero (limite) | 0,000% | +7,28% |
 
-→ profittevole a **round-turn ≤ 0,085%**.
+→ il pareggio cade **fra 0,120% e 0,200%** di round-turn.
+
+*(I valori si spostano di qualche decimo fra un'esecuzione e l'altra perché la finestra di holdout
+arriva fino a "oggi" e quindi si allunga. Le soglie restano stabili.)*
 
 **VwapReversion BCH/USDT 4h** → in perdita **anche a costo zero** (−6,14%).
 
@@ -205,10 +210,23 @@ Comando: `dotnet run --project tools/PlatformExpand -- costfrontier`
 
 ## Cosa avrebbe senso provare
 
-- **Lavorare sull'esecuzione**, non sui segnali: è la leva misurata qui sopra, e la piattaforma ha
-  già la macchina per provarci — TWAP/VWAP/Iceberg e l'algoritmo Adaptive in `Services/Execution`
-  (QLIB-5), oggi usati solo in apertura su Testnet/Live e default-off. Il requisito da centrare è
-  un round-turn attorno allo 0,08%.
+- **Lavorare sull'esecuzione**, non sui segnali. È la leva misurata qui sopra, con un bersaglio
+  numerico: portare il round-turn sotto lo **0,12%**. Due strade, e conviene sapere cosa può dare
+  ciascuna:
+
+  **Slicing** (TWAP/VWAP/Iceberg/Adaptive in `Services/Execution`, QLIB-5, oggi solo in apertura su
+  Testnet/Live e default-off). Riduce l'**impatto di mercato**, cioè lo slippage — non la
+  commissione. Il suo tetto teorico è slippage zero: su Binance porta a 0,200% (ancora in perdita),
+  su Bitget a 0,120% (appena in pareggio, +1,90%). È un limite ideale che lo slicing avvicina ma non
+  raggiunge, quindi da solo è al margine.
+
+  **Ordini maker.** Dà il margine vero (0,080%, +3,67%), ma richiede una capacità che oggi **non
+  esiste**: l'intero percorso live piazza esclusivamente ordini `MARKET` — `SignalOrderBuilder`,
+  `PositionOpener`, `PositionCloser` — quindi è sempre taker per costruzione. I client exchange
+  supportano già `LIMIT` (Binance e Bitget), quindi manca il percorso nel motore, non
+  l'integrazione. Attenzione però: un ordine limite può non essere riempito, e una strategia che
+  insegue il prezzo — una crossover lo fa — non può fare il maker senza cambiare natura. È lavoro
+  di progettazione, non una configurazione da accendere.
 - **Portafoglio di coppie**: i drawdown a 2–5% sono l'unico risultato strutturalmente favorevole
   emerso. Un paniere di coppie poco correlate merita una misura, anche se le singole non guadagnano.
 - **Orizzonti più lunghi del giornaliero**, dove il rapporto fra ampiezza del movimento e costo
