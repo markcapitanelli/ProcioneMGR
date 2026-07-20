@@ -99,6 +99,10 @@ public static class NavModel
         // 🚀 TRADING — l'operatività vera e propria.
         new NavSection("trading", "Trading", "#f97316", Collapsible: false,
         [
+            // [R3] Modalità Semplice: prima del control center, perché è il punto di ingresso
+            // per chi non vuole (o non sa) toccare le dodici soglie della pagina Trading.
+            new NavItem("bot", "Bot", "bi-robot",
+                "Modalità semplice: capitale, profilo di rischio, un pulsante.", ManagerAndAdmin),
             new NavItem("trading", "Trading", "bi-currency-exchange",
                 "Control center: Paper, Testnet e Live.", ManagerAndAdmin),
             new NavItem("strategies", "Le mie Strategie", "bi-collection-fill",

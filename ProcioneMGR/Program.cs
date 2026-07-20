@@ -433,6 +433,9 @@ builder.Services.AddHostedService<PromotionWorker>();
 // testabile senza Blazor — vedi il doc-comment della classe. Scoped: uno scope Blazor Server = un
 // circuito, quindi un'istanza per sessione utente, come il componente che la consuma.
 builder.Services.AddScoped<ProcioneMGR.Services.Trading.TradingPageService>();
+
+// [R3] Modalità Semplice (/bot): stessa granularità Scoped delle altre page service.
+builder.Services.AddScoped<ProcioneMGR.Services.Risk.BotPageService>();
 builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.CampaignPageService>();
 
 // Orchestrazione di MlLab.razor estratta in un service testabile (P1-5, PRD §3.3). Scoped come sopra.
