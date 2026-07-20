@@ -99,6 +99,25 @@ public class BacktestConfiguration
     /// la seconda rinuncia al trade.
     /// </summary>
     public bool MakerFallbackToTaker { get; set; }
+
+    /// <summary>Dosaggio della posizione sulla volatilità (spento di default: comportamento invariato).</summary>
+    public VolatilityTargetingOptions VolatilityTargeting { get; set; } = new();
+}
+
+/// <summary>
+/// Dosaggio della posizione sulla volatilità realizzata, con la stessa semantica e gli stessi
+/// default del trading dal vivo (<c>SafetyConfiguration</c>): serve a poter MISURARE l'effetto sui
+/// propri dati prima di accenderlo. Spento di default = comportamento invariato.
+/// </summary>
+public class VolatilityTargetingOptions
+{
+    public bool Enabled { get; set; }
+    public decimal TargetAnnualVolatilityPercent { get; set; } = 30m;
+    public int LookbackBars { get; set; } = 30;
+    public decimal MinExposureMultiplier { get; set; } = 0.25m;
+
+    /// <summary>1,0 = il dosaggio può solo ridurre la size, mai aumentarla. Vedi <c>VolatilityScaler</c>.</summary>
+    public decimal MaxExposureMultiplier { get; set; } = 1.0m;
 }
 
 /// <summary>Come viene piazzato l'ordine di INGRESSO nel backtest.</summary>

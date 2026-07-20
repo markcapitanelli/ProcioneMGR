@@ -200,6 +200,17 @@ public sealed class BacktestEngine(
         int makerAttempted = 0, makerFilled = 0, makerFallback = 0, makerMissed = 0;
         var prevSignal = Signal.Hold;
 
+        // Dosaggio sulla volatilità: stessa funzione pura usata dal trading dal vivo
+        // (ProcioneMGR.Services.Trading.Internal.VolatilityScaler), così backtest e live non possono
+        // divergere. Usa SOLO le chiusure fino alla barra corrente: nessuno sguardo in avanti.
+        var vtCfg = config.VolatilityTargeting ?? new VolatilityTargetingOptions();
+        decimal SizeMultiplierAt(int i) => vtCfg.Enabled
+            ? ProcioneMGR.Services.Trading.Internal.VolatilityScaler.Compute(
+                closeArr.AsSpan(0, i + 1).ToArray(), config.Timeframe,
+                vtCfg.TargetAnnualVolatilityPercent, vtCfg.LookbackBars,
+                vtCfg.MinExposureMultiplier, vtCfg.MaxExposureMultiplier)
+            : 1m;
+
         for (var i = 0; i < n; i++)
         {
             if (i % 1000 == 0)
@@ -302,8 +313,8 @@ public sealed class BacktestEngine(
                 var touched = pendingSide == 1 ? candles[i].Low <= pendingLimit : candles[i].High >= pendingLimit;
                 if (touched && book.IsFlat)
                 {
-                    if (pendingSide == 1) book.OpenLong(pendingLimit, ts, makerFeeFrac, chargeSlippage: false);
-                    else book.OpenShort(pendingLimit, ts, makerFeeFrac, chargeSlippage: false);
+                    if (pendingSide == 1) book.OpenLong(pendingLimit, ts, makerFeeFrac, chargeSlippage: false, sizeMultiplier: SizeMultiplierAt(i));
+                    else book.OpenShort(pendingLimit, ts, makerFeeFrac, chargeSlippage: false, sizeMultiplier: SizeMultiplierAt(i));
                     entryIndex = i;
                     entryPrice = pendingLimit;
                     bestSinceEntry = pendingLimit;
@@ -316,7 +327,8 @@ public sealed class BacktestEngine(
                     if (!touched && config.MakerFallbackToTaker && book.IsFlat)
                     {
                         var lateFill = pendingSide == 1 ? Buy(price) : Sell(price);
-                        if (pendingSide == 1) book.OpenLong(lateFill, ts); else book.OpenShort(lateFill, ts);
+                        if (pendingSide == 1) book.OpenLong(lateFill, ts, sizeMultiplier: SizeMultiplierAt(i));
+                        else book.OpenShort(lateFill, ts, sizeMultiplier: SizeMultiplierAt(i));
                         entryIndex = i;
                         entryPrice = lateFill;
                         bestSinceEntry = lateFill;
@@ -356,7 +368,7 @@ public sealed class BacktestEngine(
                     else if (book.IsFlat)
                     {
                         var fill = Buy(price);
-                        book.OpenLong(fill, ts);
+                        book.OpenLong(fill, ts, sizeMultiplier: SizeMultiplierAt(i));
                         entryIndex = i;
                         entryPrice = fill;
                         bestSinceEntry = fill;
@@ -377,7 +389,7 @@ public sealed class BacktestEngine(
                     else if (book.IsFlat)
                     {
                         var fill = Sell(price);
-                        book.OpenShort(fill, ts);
+                        book.OpenShort(fill, ts, sizeMultiplier: SizeMultiplierAt(i));
                         entryIndex = i;
                         entryPrice = fill;
                         bestSinceEntry = fill;
@@ -560,11 +572,11 @@ public sealed class BacktestEngine(
             TotalFunding += amount;
         }
 
-        public void OpenLong(decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true)
-            => Open(1, price, ts, feeFracOverride, chargeSlippage);
+        public void OpenLong(decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true, decimal sizeMultiplier = 1m)
+            => Open(1, price, ts, feeFracOverride, chargeSlippage, sizeMultiplier);
 
-        public void OpenShort(decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true)
-            => Open(-1, price, ts, feeFracOverride, chargeSlippage);
+        public void OpenShort(decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true, decimal sizeMultiplier = 1m)
+            => Open(-1, price, ts, feeFracOverride, chargeSlippage, sizeMultiplier);
 
         /// <summary>
         /// <paramref name="feeFracOverride"/> e <paramref name="chargeSlippage"/> servono al fill
@@ -572,9 +584,11 @@ public sealed class BacktestEngine(
         /// book, se viene riempito, è riempito ESATTAMENTE al suo prezzo. È il rovescio della
         /// medaglia di non avere la certezza del fill.
         /// </summary>
-        private void Open(int side, decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true)
+        private void Open(int side, decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true, decimal sizeMultiplier = 1m)
         {
-            var margin = Equity(price) * _marginFrac;
+            // sizeMultiplier: dosaggio sulla volatilità (1 = invariato). Moltiplica il MARGINE, cioè
+            // la stessa grandezza che PositionSizePercent governa dal vivo.
+            var margin = Equity(price) * _marginFrac * sizeMultiplier;
             if (margin <= 0m || price <= 0m) return;
             var notional = margin * _leverage;
             _qty = notional / price;

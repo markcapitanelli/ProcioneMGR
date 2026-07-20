@@ -99,6 +99,7 @@ switch (phase)
     case "costfrontier": await CostFrontierAsync(); break;
     case "makerfill": await MakerFillAsync(); break;
     case "xsection": await CrossSectionAsync(); break;
+    case "voloverlay": await VolOverlayAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -459,6 +460,76 @@ async Task CostFrontierAsync()
             ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
             : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
     }
+}
+
+// ------------------------------------------------------------------ VOLOVERLAY (il dosaggio salva le strategie?)
+// Il dosaggio sulla volatilita' funziona sul PANIERE equipesato (docs/REPORT-DOSAGGIO-VOLATILITA.md).
+// Domanda diversa e legittima: applicato SOPRA le strategie del catalogo — che l'holdout ha bocciato
+// tutte — le recupera? La risposta onesta va misurata, non intuita: il dosaggio riduce l'esposizione,
+// quindi riduce anche le PERDITE, ma non trasforma un segnale sbagliato in uno giusto.
+async Task VolOverlayAsync()
+{
+    var huntPath = Path.Combine(AppContext.BaseDirectory, "hunt-results.json");
+    if (!File.Exists(huntPath))
+    {
+        Console.WriteLine("Nessun risultato di caccia. Lancia prima 'hunt'.");
+        return;
+    }
+
+    var candidates = JsonSerializer.Deserialize<List<DiscoveryCandidate>>(File.ReadAllText(huntPath))!
+        .OrderByDescending(c => c.OutOfSampleSharpe).Take(6).ToList();
+
+    Console.WriteLine($"=== IL DOSAGGIO RECUPERA LE STRATEGIE DEL CATALOGO? — holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");
+    Console.WriteLine("    Stessa strategia, stessi costi: cambia solo se la size e' dosata sulla volatilita'.\n");
+    Console.WriteLine($"    {"strategia",-18} {"coppia",-11} {"senza",9} {"dosata",9} {"b&h",9}  esito");
+
+    using var scope = provider.CreateScope();
+    var backtest = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+    var factory = scope.ServiceProvider.GetRequiredService<IStrategyFactory>();
+    int rescued = 0, tested = 0;
+
+    foreach (var c in candidates)
+    {
+        List<OhlcvData> candles;
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            candles = await db.OhlcvData.AsNoTracking()
+                .Where(o => o.Symbol == c.Symbol && o.Timeframe == c.Timeframe && o.TimestampUtc >= holdoutFrom)
+                .OrderBy(o => o.TimestampUtc).ToListAsync();
+        }
+        if (candles.Count < 200) continue;
+
+        BacktestConfiguration Cfg(bool dosata) => new()
+        {
+            ExchangeName = "Binance", Symbol = c.Symbol, Timeframe = c.Timeframe,
+            From = holdoutFrom, To = DateTime.UtcNow,
+            InitialCapital = 10_000m, PositionSizePercent = 100m,
+            FeePercent = PipelineCosts.DefaultFeePercent, SlippagePercent = PipelineCosts.DefaultSlippagePercent,
+            StrategyName = c.StrategyName, StrategyParameters = new(c.Parameters),
+            VolatilityTargeting = new VolatilityTargetingOptions
+            {
+                Enabled = dosata, TargetAnnualVolatilityPercent = 30m, LookbackBars = 30,
+                MinExposureMultiplier = 0.25m, MaxExposureMultiplier = 1.0m,
+            },
+        };
+
+        var plain = await backtest.RunBacktestAsync(Cfg(false), candles, factory.Create(c.StrategyName), CancellationToken.None);
+        var scaled = await backtest.RunBacktestAsync(Cfg(true), candles, factory.Create(c.StrategyName), CancellationToken.None);
+        var bh = candles[^1].Close / candles[0].Close - 1m;
+
+        tested++;
+        var ok = scaled.TotalReturnPercent > 0m && scaled.TotalReturnPercent > bh * 100m;
+        if (ok) rescued++;
+        var verdict = ok ? "RECUPERATA" : (scaled.TotalReturnPercent > plain.TotalReturnPercent ? "perde meno, ma perde" : "nessun miglioramento");
+        Console.WriteLine($"    {c.StrategyName,-18} {c.Symbol,-11} {plain.TotalReturnPercent,8:F1}% {scaled.TotalReturnPercent,8:F1}% {bh * 100m,8:F1}%  {verdict}");
+    }
+
+    Console.WriteLine($"\n    Recuperate: {rescued}/{tested}");
+    Console.WriteLine(rescued == 0
+        ? "    Il dosaggio NON crea un edge dove non c'e': riduce l'esposizione, quindi riduce le\n"
+        + "    perdite, ma un segnale sbagliato dosato resta un segnale sbagliato. E' gestione del\n"
+        + "    rischio, non una fonte di rendimento — esattamente come dichiarato nel report."
+        : "    Attenzione: un recupero va verificato fuori campione prima di crederci.");
 }
 
 // ------------------------------------------------------------------ XSECTION (momentum trasversale)

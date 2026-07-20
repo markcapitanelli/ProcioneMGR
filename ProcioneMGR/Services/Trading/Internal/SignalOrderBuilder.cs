@@ -19,10 +19,15 @@ internal sealed class SignalOrderBuilder(
     TradingPersistence persistence,
     IOptionsMonitor<SafetyConfiguration> safety)
 {
+    /// <param name="recentCloses">
+    /// Chiusure recenti della corsia (solo passato e presente), usate dal dosaggio sulla volatilità.
+    /// Null o troppo corte = moltiplicatore 1, cioè comportamento invariato.
+    /// </param>
     public async Task TryOpenAsync(
         TradingEngineState state, SymbolFilters? filters,
         Func<Order, EnsembleStrategy?, string, decimal, DateTime, CancellationToken, bool, Task> tryBuildAndStartExecutionPlanAsync,
-        EnsembleStrategy strat, OrderSide side, decimal price, DateTime ts, CancellationToken ct)
+        EnsembleStrategy strat, OrderSide side, decimal price, DateTime ts, CancellationToken ct,
+        IReadOnlyList<decimal>? recentCloses = null)
     {
         if (price <= 0m) return;
 
@@ -42,9 +47,20 @@ internal sealed class SignalOrderBuilder(
         // Futures: PositionSizePercent è il MARGINE isolato; il nozionale (e quindi
         // l'esposizione reale) è margine × leva — stessa logica del motore di backtest.
         // La coerenza con MaxPositionSizePercent/MaxTotalExposurePercent è validata a StartAsync.
-        var margin = state.TotalCapital * safety.CurrentValue.PositionSizePercent / 100m;
+        //
+        // Sopra a questo, il DOSAGGIO sulla volatilità: col default (tetto 1,0) può solo ridurre la
+        // dimensione, quindi non può far superare i cap validati a StartAsync. Spento di default.
+        var cfg = safety.CurrentValue;
+        var volMultiplier = VolatilityScaler.Compute(recentCloses ?? [], state.Timeframe, cfg);
+        var margin = state.TotalCapital * cfg.PositionSizePercent / 100m * volMultiplier;
         var notional = state.MarketType == MarketType.Futures ? margin * state.Leverage : margin;
         var qty = notional / price;
+
+        if (volMultiplier != 1m)
+        {
+            logger.LogDebug("Dosaggio volatilità: dimensione × {Mult:F2} per {Strategy} su {Symbol}.",
+                volMultiplier, strat.StrategyName, state.Symbol);
+        }
 
         // Arrotonda al LOT_SIZE reale del simbolo (da exchangeInfo) per Testnet/Live;
         // in Paper usa una precisione fissa ragionevole.

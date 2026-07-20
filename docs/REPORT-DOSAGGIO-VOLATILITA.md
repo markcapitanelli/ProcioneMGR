@@ -72,6 +72,28 @@ dati.
   non una legge.
 - Il maxDD resta **48%**. È metà di 81%, ma non è un prodotto prudente.
 
+## Il dosaggio NON recupera le strategie del catalogo
+
+Domanda naturale una volta implementato: applicato sopra le 6 strategie che la caccia aveva
+selezionato — e che l'holdout ha bocciato tutte — le salva? Misurato (`voloverlay`), stesso holdout,
+stessi costi, cambia solo il dosaggio:
+
+| strategia | coppia | senza | dosata | b&h |
+|---|---|---|---|---|
+| Supertrend | DOGE/USDT | −44,9% | −34,2% | −22,7% |
+| Supertrend | STX/USDT | −85,7% | −56,1% | −35,7% |
+| EmaCross | WIF/USDT | −38,7% | −21,7% | −20,6% |
+| Supertrend | SUI/USDT | −23,8% | −7,6% | −14,3% |
+| DonchianBreakout | DOGE/USDT | −49,9% | −34,9% | −22,7% |
+| DonchianBreakout | ARB/USDT | −36,8% | −21,4% | −9,3% |
+
+**Recuperate: 0/6.** Il dosaggio dimezza quasi le perdite in ogni riga — e in un caso (SUI) porta la
+strategia sopra il buy&hold — ma nessuna torna in positivo. È la conferma misurata di ciò che era
+già dichiarato prima di misurarlo: **riduce l'esposizione, quindi riduce le perdite, ma un segnale
+sbagliato dosato resta un segnale sbagliato.** È gestione del rischio, non una fonte di rendimento.
+
+Comando: `dotnet run --project tools/PlatformExpand -- voloverlay`
+
 ## Momentum trasversale: negativo, con una lezione
 
 Provato nello stesso giro (`xsection`): ordinare l'universo per forza relativa e tenere i primi K.
@@ -91,10 +113,33 @@ composto no** — ed è il modo più facile di vendersi una strategia perdente.
 dotnet run --project tools/PlatformExpand -- xsection
 ```
 
-## Conseguenza per la piattaforma
+## Implementato in piattaforma (2026-07-20)
 
 Il dosaggio non è una delle 13 strategie del catalogo: è un **livello sopra**, che moltiplica la
-dimensione delle posizioni decise dalle strategie. La piattaforma ha già i pezzi per implementarlo —
-la previsione GARCH in `/volatility` e `PositionSizePercent` in `SafetyConfiguration` — ma oggi non
-sono collegati: la dimensione della posizione è una costante di configurazione, non una funzione
-della volatilità corrente. Collegarli è la proposta che questi numeri giustificano.
+dimensione decisa dalle strategie. Prima `PositionSizePercent` era una costante di configurazione;
+ora può essere una funzione della volatilità corrente.
+
+- `VolatilityScaler` (funzione pura) calcola il moltiplicatore dalla volatilità **realizzata** sulle
+  ultime N barre, annualizzata con il timeframe corretto.
+- Applicato in `SignalOrderBuilder` al margine, cioè esattamente la grandezza che
+  `PositionSizePercent` governava da solo.
+- **Lo stesso calcolo è usato dal motore di backtest** (`VolatilityTargetingOptions` in
+  `BacktestConfiguration`). Senza questo, accendere la funzione dal vivo avrebbe aperto un divario
+  backtest/live: non si sarebbe potuto misurare l'effetto sulle proprie strategie prima di schierarlo.
+- Configurabile dal pannello sicurezza di `/trading` (solo Admin).
+
+### La proprietà di sicurezza
+
+`MaxExposureMultiplier` vale **1,0** di default: il fattore può solo **ridurre** la dimensione, mai
+aumentarla. Ne segue che accendere il dosaggio **non può** far superare `MaxPositionSizePercent` né
+`MaxTotalExposurePercent` — al più li rende più stringenti. Il test
+`WithDefaults_CanOnlyReduceExposure_NeverIncrease` presidia questa proprietà, e la UI avvisa in
+giallo se si alza il tetto sopra 1,0, perché lì la garanzia decade.
+
+### Perché la volatilità realizzata e non il GARCH
+
+Il GARCH(1,1) è già in piattaforma (`/volatility`) ed è una *previsione*, quindi plausibilmente
+migliore di una misura retrospettiva. Ma **per questo uso non lo ha misurato nessuno**: i numeri di
+questo report vengono dalla volatilità realizzata a 30 barre. Usare il GARCH significherebbe
+schierare qualcosa di non verificato — sostituirlo è un esperimento legittimo, ma va misurato prima,
+con lo stesso controllo a esposizione media costante.

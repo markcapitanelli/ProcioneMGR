@@ -720,8 +720,14 @@ public sealed class TradingEngine(
 
     private SignalOrderBuilder SignalOrderBuilder => new(logger, Persistence, safety);
 
+    /// <summary>
+    /// Le chiusure passate a <see cref="SignalOrderBuilder"/> vengono dal buffer del motore, cioè
+    /// dalle STESSE candele che la strategia ha già visto: il dosaggio sulla volatilità non può
+    /// quindi guardare avanti più di quanto guardi il segnale che sta dimensionando.
+    /// </summary>
     private Task TryOpenAsync(EnsembleStrategy strat, OrderSide side, decimal price, DateTime ts, CancellationToken ct) =>
-        SignalOrderBuilder.TryOpenAsync(_state, _filters, TryBuildAndStartExecutionPlanAsync, strat, side, price, ts, ct);
+        SignalOrderBuilder.TryOpenAsync(_state, _filters, TryBuildAndStartExecutionPlanAsync, strat, side, price, ts, ct,
+            _buffer.Select(c => c.Close).ToList());
 
     /// <summary>
     /// Applica automaticamente lo stop-loss/take-profit/trailing validati nel backtest (se
