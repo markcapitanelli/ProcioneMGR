@@ -92,6 +92,7 @@ switch (phase)
     case "expand2": await Expand2Async(); break;
     case "hunt": await HuntAsync(); break;
     case "deploy": await DeployAsync(); break;
+    case "holdout": await HoldoutAsync(); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
 }
@@ -284,6 +285,70 @@ async Task Ingest1mAsync()
     }
 
     Console.WriteLine($"\n=== INGEST 1m completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+}
+
+// ------------------------------------------------------------------ HOLDOUT (test davvero fuori campione)
+// Le due cacce condividono lo stesso periodo di selezione (fino a selectionTo = 2026-03-01), quindi
+// il fatto che trovino lo stesso candidato dimostra robustezza allo split walk-forward, NON conferma
+// out-of-sample. Qui si usa la finestra di holdout — dal 2026-03-01 in avanti — che nessuna delle
+// due cacce ha mai visto: e' l'unico dato realmente vergine gia' disponibile.
+//
+// Il confronto e' contro un BUY-AND-HOLD sulla stessa finestra: uno Sharpe positivo non dice nulla
+// se nello stesso periodo bastava comprare e stare fermi.
+async Task HoldoutAsync()
+{
+    var candidates = new (string Strategy, string Symbol, string Tf, Dictionary<string, decimal> P)[]
+    {
+        ("Supertrend", "DOGE/USDT", "1h", new() { ["AtrPeriod"] = 14m, ["Multiplier"] = 3m, ["AllowShort"] = 1m }),
+        ("DonchianBreakout", "DOGE/USDT", "1h", new() { ["EntryPeriod"] = 10m, ["ExitPeriod"] = 10m, ["Direction"] = 2m }),
+    };
+
+    var from = holdoutFrom;
+    var to = DateTime.UtcNow;
+    Console.WriteLine($"=== HOLDOUT {from:yyyy-MM-dd} -> {to:yyyy-MM-dd} (mai usato in selezione) ===");
+    Console.WriteLine($"    Costi: fee {PipelineCosts.DefaultFeePercent}%/lato + slippage {PipelineCosts.DefaultSlippagePercent}%/fill\n");
+
+    using var scope = provider.CreateScope();
+    var backtest = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+    var factory = scope.ServiceProvider.GetRequiredService<IStrategyFactory>();
+
+    foreach (var c in candidates)
+    {
+        List<OhlcvData> candles;
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            candles = await db.OhlcvData.AsNoTracking()
+                .Where(o => o.Symbol == c.Symbol && o.Timeframe == c.Tf && o.TimestampUtc >= from && o.TimestampUtc <= to)
+                .OrderBy(o => o.TimestampUtc)
+                .ToListAsync();
+        }
+        if (candles.Count < 200)
+        {
+            Console.WriteLine($"  {c.Strategy,-18} {c.Symbol,-11} SALTATO: solo {candles.Count} candele.");
+            continue;
+        }
+
+        var cfg = new PipelineCosts(
+            PipelineCosts.DefaultSlippagePercent, PipelineCosts.DefaultFeePercent, PipelineCosts.DefaultFundingRatePercentPer8h)
+            .ApplyTo(new BacktestConfiguration
+            {
+                ExchangeName = "Binance", Symbol = c.Symbol, Timeframe = c.Tf, From = from, To = to,
+                InitialCapital = 10_000m, PositionSizePercent = 100m,
+                StrategyName = c.Strategy, StrategyParameters = c.P,
+            });
+
+        var r = await backtest.RunBacktestAsync(cfg, candles, factory.Create(c.Strategy), CancellationToken.None);
+        var ppy = ProcioneMGR.Services.Optimization.Statistics.PeriodsPerYear(c.Tf);
+        var sharpe = ProcioneMGR.Services.Optimization.Statistics.SharpeRatio(r.EquityCurve, ppy);
+
+        // Riferimento: comprare alla prima candela e non fare piu' nulla.
+        var hold = (candles[^1].Close - candles[0].Close) / candles[0].Close * 100m;
+
+        Console.WriteLine($"  {c.Strategy,-18} {c.Symbol,-11} {c.Tf}  su {candles.Count} candele");
+        Console.WriteLine($"      Sharpe {sharpe,6:F2}   netto {r.TotalReturnPercent,7:F2}%   lordo {r.GrossReturnPercent,7:F2}%   " +
+                          $"costi {r.CostDragPercent,6:F2}%   trade {r.TotalTrades,4}   maxDD {r.MaxDrawdownPercent,5:F1}%");
+        Console.WriteLine($"      Buy & hold sullo stesso periodo: {hold,7:F2}%   ->  {(r.TotalReturnPercent > hold ? "BATTE" : "NON batte")} il comprare e stare fermi\n");
+    }
 }
 
 // ------------------------------------------------------------------ DEPLOY (candidato -> corsia)
