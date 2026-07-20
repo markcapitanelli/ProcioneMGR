@@ -97,6 +97,7 @@ switch (phase)
     case "pairs": await PairsAsync(); break;
     case "control": await ControlAsync(); break;
     case "costfrontier": await CostFrontierAsync(); break;
+    case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
 }
@@ -289,6 +290,68 @@ async Task Ingest1mAsync()
     }
 
     Console.WriteLine($"\n=== INGEST 1m completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+}
+
+// ------------------------------------------------------------------ LANES (ispeziona e, su richiesta, svuota)
+// `lanes`        -> sola LETTURA: cosa c'e' su ogni corsia.
+// `lanes clean`  -> svuota le corsie SPERIMENTALI, cioe' solo quelle su cui questa sessione ha
+//                   schierato qualcosa. La 0 (storico dell'utente) e la 2 (Testnet) non si toccano:
+//                   il permesso a "svuotare le corsie" riguarda il disordine lasciato dagli
+//                   esperimenti, non i dati di chi la piattaforma la usa davvero.
+async Task LanesAsync(bool clean)
+{
+    // Corsie che questa sessione ha usato per gli esperimenti. Tenerlo esplicito, e non "tutte",
+    // e' cio' che rende l'operazione reversibile nella pratica: si sa esattamente cosa sparisce.
+    int[] experimental = [1];
+
+    var json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    Console.WriteLine(clean ? "=== CORSIE — svuotamento delle sole sperimentali ===\n" : "=== CORSIE — stato attuale ===\n");
+
+    await using var db = await dbFactory.CreateDbContextAsync();
+    for (var lane = 0; lane < 3; lane++)
+    {
+        var st = await db.TradingEngineStates.AsNoTracking().FirstOrDefaultAsync(s => s.LaneId == lane);
+        var row = await db.EnsembleStates.AsNoTracking().Where(e => e.LaneId == lane).OrderBy(e => e.Id).FirstOrDefaultAsync();
+        var cfg = row is null || string.IsNullOrWhiteSpace(row.ConfigurationJson)
+            ? new EnsembleConfiguration()
+            : JsonSerializer.Deserialize<EnsembleConfiguration>(row.ConfigurationJson, json) ?? new();
+
+        var trades = await db.TradeRecords.CountAsync(t => t.LaneId == lane);
+        var orders = await db.Orders.CountAsync(o => o.LaneId == lane);
+        var positions = await db.OpenPositions.CountAsync(p => p.LaneId == lane);
+        var tag = experimental.Contains(lane) ? "SPERIMENTALE" : "dell'utente";
+
+        Console.WriteLine($"  Corsia {lane} ({tag})");
+        Console.WriteLine($"    config:   {(string.IsNullOrEmpty(cfg.Symbol) ? "(vuota)" : cfg.Symbol)} {cfg.Timeframe}, " +
+                          $"{cfg.Strategies.Count} strategie, profilo '{cfg.RiskProfileName ?? "-"}'");
+        Console.WriteLine($"    motore:   {(st is null ? "mai avviato" : $"{st.Mode}, running={st.IsRunning}, emergency={st.IsEmergencyStopped}")}");
+        Console.WriteLine($"    dati:     {trades} trade, {orders} ordini, {positions} posizioni aperte");
+
+        if (!clean || !experimental.Contains(lane)) { Console.WriteLine(); continue; }
+
+        // Si ferma il motore PRIMA di togliergli i dati sotto i piedi.
+        if (st is not null)
+        {
+            var live = await db.TradingEngineStates.FirstAsync(s => s.LaneId == lane);
+            live.IsRunning = false;
+            live.IsEmergencyStopped = false;
+        }
+        var delPos = await db.OpenPositions.Where(p => p.LaneId == lane).ExecuteDeleteAsync();
+        var delOrd = await db.Orders.Where(o => o.LaneId == lane).ExecuteDeleteAsync();
+        var delTrd = await db.TradeRecords.Where(t => t.LaneId == lane).ExecuteDeleteAsync();
+
+        var empty = JsonSerializer.Serialize(new EnsembleConfiguration(), json);
+        var ens = await db.EnsembleStates.Where(e => e.LaneId == lane).OrderBy(e => e.Id).FirstOrDefaultAsync();
+        if (ens is not null) { ens.ConfigurationJson = empty; ens.StatusJson = "{}"; ens.LastUpdatedUtc = DateTime.UtcNow; }
+        await db.SaveChangesAsync();
+
+        Console.WriteLine($"    -> SVUOTATA: {delPos} posizioni, {delOrd} ordini, {delTrd} trade rimossi; config azzerata; motore fermo.\n");
+    }
+
+    if (!clean)
+    {
+        Console.WriteLine("  (sola lettura — usa `lanes clean` per svuotare le sole corsie sperimentali)");
+    }
 }
 
 // ------------------------------------------------------------------ COST FRONTIER (quanto deve costare eseguire)
