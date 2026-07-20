@@ -78,7 +78,7 @@ docs/                           Report e roadmap (ML4T, Qlib, autonomia, pipelin
    ./scripts/run-postgres.ps1   # oppure: dotnet run --project ProcioneMGR
    ```
 
-L'app crea/applica automaticamente le migrazioni al primo avvio.
+Le migrazioni NON vengono applicate automaticamente all'avvio: vanno eseguite manualmente come al punto 2 (pattern migrate-on-deploy). All'avvio l'app crea solo i ruoli Identity (Admin/Manager/User).
 
 ## Test
 

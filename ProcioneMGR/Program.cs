@@ -444,8 +444,9 @@ app.MapRazorComponents<App>()
 // Add additional endpoints required by the Identity /Account Razor components.
 app.MapAdditionalIdentityEndpoints();
 
-// Applica le migrazioni pendenti e crea i ruoli (Admin/Manager/User) all'avvio.
-// Saltato sotto i tool di design-time (dotnet ef): non deve tentare di connettersi/migrare il DB
+// Crea i ruoli Identity (Admin/Manager/User) all'avvio. Non applica migrazioni EF:
+// lo schema si applica come passo separato (dotnet ef database update), pattern migrate-on-deploy.
+// Saltato sotto i tool di design-time (dotnet ef): non deve tentare di connettersi al DB
 // mentre si generano migrazioni (es. verso un PostgreSQL non ancora creato).
 if (!EF.IsDesignTime)
 {
