@@ -87,8 +87,10 @@ switch (phase)
     case "ingest": await IngestAsync(); break;
     case "ingest1m": await Ingest1mAsync(); break;
     case "costprofile": await CostProfileAsync(); break;
+    case "expand2": await Expand2Async(); break;
+    case "hunt": await HuntAsync(); break;
     case "discover": await DiscoverAsync(); break;
-    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | discover"); break;
+    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
 }
 
 // ------------------------------------------------------------------ STATS (read-only)
@@ -279,6 +281,201 @@ async Task Ingest1mAsync()
     }
 
     Console.WriteLine($"\n=== INGEST 1m completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+}
+
+// ------------------------------------------------------------------ HUNT (nuove + vecchie coppie)
+// Caccia su TUTTO l'universo tracciato, letto dalla watchlist invece che da una lista fissa: le
+// coppie appena aggiunte da expand2 entrano da sole, senza che nessuno si ricordi di aggiornare
+// un array.
+//
+// Timeframe: 1d, 4h, 1h. Il 15m è escluso dalla caccia principale non per pigrizia ma perché R2
+// ha misurato lì un cost drag del 9% contro il 3,4% di 1h, con un tetto strutturale doppio da
+// superare — su un universo di 45 coppie conviene spendere le ore di calcolo dove l'edge netto ha
+// più probabilità di sopravvivere. I dati 15m restano ingeriti e disponibili.
+//
+// Le candidature passano un doppio filtro: i gate anti-rumore del Report Caccia (Sharpe OOS e
+// numero minimo di trade) e il Deflated Sharpe, che chiede se il migliore di N tentativi sia
+// significativo DOPO aver corretto per il test multiplo. Con i costi ora onesti anche in
+// selezione (R2), uno Sharpe che sopravvive qui è più credibile di quelli trovati prima.
+async Task HuntAsync()
+{
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    List<string> symbols;
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        symbols = await db.TrackedSeries.AsNoTracking()
+            .Where(t => t.Enabled)
+            .Select(t => t.Symbol)
+            .Distinct()
+            .OrderBy(s => s)
+            .ToListAsync();
+    }
+
+    Console.WriteLine($"=== CACCIA su {symbols.Count} coppie (nuove + vecchie) ===");
+    Console.WriteLine($"    Costi in SELEZIONE: fee {PipelineCosts.DefaultFeePercent}%/lato + slippage {PipelineCosts.DefaultSlippagePercent}%/fill\n");
+
+    using var scope = provider.CreateScope();
+    var discovery = scope.ServiceProvider.GetRequiredService<IStrategyDiscovery>();
+    var all = new List<DiscoveryCandidate>();
+
+    // Ogni ondata ha la propria finestra e il proprio walk-forward: più lento è il timeframe, più
+    // lunga dev'essere la storia perché una finestra out-of-sample contenga abbastanza barre.
+    var waves = new (string Tf, DateTime From, int Is, int Oos, int Step)[]
+    {
+        ("1d", new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc), 12, 3, 3),
+        ("4h", new DateTime(2022, 6, 1, 0, 0, 0, DateTimeKind.Utc), 8, 2, 2),
+        ("1h", new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), 6, 2, 2),
+    };
+
+    foreach (var w in waves)
+    {
+        var waveSw = System.Diagnostics.Stopwatch.StartNew();
+        Console.WriteLine($"\n  -- Ondata {w.Tf}: da {w.From:yyyy-MM-dd}, walk-forward {w.Is}/{w.Oos}/{w.Step} mesi");
+        var config = new StrategyDiscoveryConfiguration
+        {
+            ExchangeName = "Binance",
+            Symbols = symbols,
+            Timeframes = [w.Tf],
+            Strategies = [],                       // vuoto = tutte le strategie disponibili
+            From = w.From,
+            To = selectionTo,
+            TopN = 60,
+            WalkForward = new WalkForwardConfiguration { InSampleMonths = w.Is, OutOfSampleMonths = w.Oos, StepMonths = w.Step },
+            // CommissionPercent e SlippagePercent restano ai default onesti di R2.
+        };
+
+        var progress = new Progress<DiscoveryProgress>(p =>
+        {
+            if (p.Completed % 50 == 0) Console.WriteLine($"     ... {p.Completed}/{p.Total} job, miglior OOS finora {p.BestSharpeSoFar:F2}");
+        });
+
+        try
+        {
+            var result = await discovery.DiscoverAsync(config, progress, CancellationToken.None);
+            all.AddRange(result.Candidates);
+            Console.WriteLine($"     Ondata {w.Tf}: {result.CombinationsTested:N0} combinazioni, {result.Candidates.Count} candidati in {waveSw.Elapsed.TotalMinutes:F1} min");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"     Ondata {w.Tf} FALLITA: {ex.Message}");
+        }
+    }
+
+    // Gate anti-rumore: uno Sharpe alto con pochi trade è rumore, non edge.
+    const decimal minOosSharpe = 0.5m;
+    const int minTrades = 20;
+    var kept = all
+        .Where(c => c.OutOfSampleSharpe >= minOosSharpe && c.TotalTrades >= minTrades)
+        .OrderByDescending(c => c.OutOfSampleSharpe)
+        .ToList();
+
+    Console.WriteLine($"\n=== ESITO: {all.Count} candidati grezzi -> {kept.Count} oltre i gate " +
+                      $"(Sharpe OOS >= {minOosSharpe}, trade >= {minTrades}) in {sw.Elapsed.TotalMinutes:F1} min ===\n");
+
+    if (kept.Count == 0)
+    {
+        Console.WriteLine("  Nessun candidato ha superato i gate. Con i costi onesti in selezione è un esito");
+        Console.WriteLine("  possibile e informativo: significa che su questo universo e queste finestre non");
+        Console.WriteLine("  c'è un edge che sopravviva alle commissioni.");
+        return;
+    }
+
+    Console.WriteLine($"  {"#",-3} {"Strategia",-24} {"Coppia",-13} {"TF",-4} {"OOS",6} {"IS",6} {"Trade",6} {"DSR",6}");
+    foreach (var (c, i) in kept.Take(40).Select((c, i) => (c, i)))
+    {
+        var dsr = c.Validation is null ? "—" : c.Validation.DeflatedSharpe.ToString("F2");
+        Console.WriteLine($"  {i + 1,-3} {c.StrategyName,-24} {c.Symbol,-13} {c.Timeframe,-4} " +
+                          $"{c.OutOfSampleSharpe,6:F2} {c.InSampleSharpe,6:F2} {c.TotalTrades,6} {dsr,6}");
+    }
+
+    // Quanti sopravvivono anche al Deflated Sharpe: è il conteggio che dice se abbiamo trovato
+    // qualcosa o se abbiamo solo pescato il massimo di una distribuzione di rumore.
+    var significant = kept.Where(c => c.Validation?.IsSignificant == true).ToList();
+    Console.WriteLine($"\n  Significativi al Deflated Sharpe (DSR > 0.95): {significant.Count}/{kept.Count}");
+
+    var outPath = Path.Combine(AppContext.BaseDirectory, "hunt-results.json");
+    File.WriteAllText(outPath, JsonSerializer.Serialize(kept, new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"\n  Dettaglio: {outPath}");
+}
+
+// ------------------------------------------------------------------ EXPAND2 (nuove coppie)
+// Seconda espansione dell'universo: 15 coppie liquide non ancora tracciate, sui timeframe che R2
+// ha indicato come economicamente sostenibili.
+//
+// NIENTE 5m e NIENTE 1m di proposito. R2 ha misurato un cost drag del 24% a 5m e del 77% a 1m
+// contro il 3,4% a 1h sulla stessa finestra: allargare l'universo proprio dove i costi divorano
+// l'edge significherebbe moltiplicare i dati e le ore di ricerca per esplorare la parte dello
+// spazio che sappiamo già essere la peggiore. Si scende a 15m come estremo veloce, non oltre.
+async Task Expand2Async()
+{
+    // Coppie liquide su Binance non presenti nell'universo attuale di 30.
+    string[] wave2 =
+    [
+        "BCH/USDT", "ETC/USDT", "XLM/USDT", "VET/USDT", "RUNE/USDT",
+        "LDO/USDT", "CRV/USDT", "MKR/USDT", "IMX/USDT", "STX/USDT",
+        "FET/USDT", "RENDER/USDT", "ONDO/USDT", "JUP/USDT", "WIF/USDT",
+    ];
+
+    var plan = new List<(string Tf, DateTime From)>
+    {
+        ("1d", new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc)),
+        ("4h", new DateTime(2022, 1, 1, 0, 0, 0, DateTimeKind.Utc)),
+        ("1h", new DateTime(2023, 7, 1, 0, 0, 0, DateTimeKind.Utc)),
+        ("15m", new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)),
+    };
+
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    long total = 0;
+    var alive = new List<string>();
+
+    foreach (var (tf, from) in plan)
+    {
+        Console.WriteLine($"\n=== EXPAND2 {tf} da {from:yyyy-MM-dd} ===");
+        foreach (var symbol in wave2)
+        {
+            using var scope = provider.CreateScope();
+            var ingestion = scope.ServiceProvider.GetRequiredService<IOhlcvIngestionService>();
+            try
+            {
+                var result = await ingestion.IngestHistoricalDataAsync(
+                    "Binance", symbol, tf, from, DateTime.UtcNow, null, CancellationToken.None);
+                total += result.CandlesProcessed;
+                Console.WriteLine($"  {symbol,-13} {tf,-4} -> {result.CandlesProcessed,8:N0} candele");
+                if (result.CandlesProcessed > 0 && !alive.Contains(symbol)) alive.Add(symbol);
+            }
+            catch (Exception ex)
+            {
+                // Un simbolo inesistente o delistato non deve fermare l'espansione: si annota e si prosegue.
+                Console.WriteLine($"  {symbol,-13} {tf,-4} -> ERRORE: {ex.Message.Split('\n')[0]}");
+            }
+        }
+    }
+
+    // Watchlist: solo le coppie che hanno DAVVERO restituito dati. Registrare un simbolo che non
+    // esiste significherebbe un errore ogni 5 minuti nel worker di sincronizzazione, per sempre.
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        var added = 0;
+        foreach (var symbol in alive)
+        {
+            foreach (var (tf, _) in plan)
+            {
+                var exists = await db.TrackedSeries.AnyAsync(t =>
+                    t.Exchange == ExchangeName.Binance && t.Symbol == symbol && t.Timeframe == tf);
+                if (!exists)
+                {
+                    db.TrackedSeries.Add(new TrackedSeries { Exchange = ExchangeName.Binance, Symbol = symbol, Timeframe = tf, Enabled = true });
+                    added++;
+                }
+            }
+        }
+        await db.SaveChangesAsync();
+        Console.WriteLine($"\n  Watchlist: {added} nuove serie tracciate su {alive.Count} coppie vive.");
+    }
+
+    Console.WriteLine($"\n=== EXPAND2 completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+    Console.WriteLine($"    Coppie vive: {string.Join(", ", alive)}");
 }
 
 // ------------------------------------------------------------------ COST PROFILE (app ferma)
