@@ -9,11 +9,37 @@ namespace ProcioneMGR.Services.TimeSeries;
 /// troppo permissivi per uno spread stimato: accetterebbero troppe coppie NON cointegrate (falsi
 /// positivi → divergenze → perdite nel pairs trading). Inoltre il numero di lag dell'ADF è scelto per
 /// <b>AIC</b> (non più fisso a 1), su un campione comune così che i modelli siano confrontabili.
+///
+/// <para><b>Perché sui LOG dei prezzi.</b> Sui prezzi grezzi β ha le unità di "prezzo di Y per
+/// prezzo di X", quindi il suo ordine di grandezza dice soprattutto quanto costa una moneta rispetto
+/// all'altra: AAVE/XLM è stata accettata con β = 575 solo perché AAVE vale ~1000× XLM. Un tetto su
+/// |β| grezzo sarebbe quindi arbitrario — boccerebbe coppie sane fra monete di prezzo diverso e
+/// lascerebbe passare quelle rotte fra monete di prezzo simile.</para>
+///
+/// <para>Sui log, β è un'<b>elasticità adimensionale</b> e il suo valore di riferimento è 1 per
+/// qualunque coppia, indipendentemente dalla scala dei prezzi. Non è solo comodo: log Y − β·log X
+/// stazionario equivale a Y/X^β costante, e per β = 1 quel portafoglio è ESATTAMENTE quello a
+/// controvalore uguale sulle due gambe — cioè quello che <c>PairsBacktestEngine</c> apre davvero
+/// (dollar-neutral). Con i prezzi grezzi il segnale sorvegliava una combinazione β-pesata mentre
+/// l'esecuzione ne apriva un'altra; sui log le due cose coincidono in β = 1, e lo scostamento di β
+/// da 1 misura di quanto l'esecuzione dollar-neutral si discosta dalla copertura vera.</para>
 /// </summary>
 public sealed class EngleGrangerCointegrationTest : ICointegrationTest
 {
     /// <summary>Livello di significatività del giudizio di cointegrazione (%).</summary>
     private const double SignificancePercent = 5.0;
+
+    /// <summary>
+    /// Banda di plausibilità dell'elasticità. È un filtro di SANITÀ, volutamente largo: β = 0,5
+    /// (o 2) descrive una coppia in cui la copertura corretta è il doppio/la metà del controvalore
+    /// che le gambe aprono davvero, e oltre quella soglia il portafoglio negoziato non è più
+    /// ragionevolmente quello di cui si è testata la stazionarietà. Non pretende di selezionare le
+    /// coppie buone: serve a escludere quelle in cui la specificazione stessa non regge.
+    /// </summary>
+    public const double MinPlausibleElasticity = 0.5;
+
+    /// <inheritdoc cref="MinPlausibleElasticity"/>
+    public const double MaxPlausibleElasticity = 2.0;
 
     public CointegrationResult Test(IReadOnlyList<decimal> seriesY, IReadOnlyList<decimal> seriesX)
     {
@@ -29,10 +55,12 @@ public sealed class EngleGrangerCointegrationTest : ICointegrationTest
             throw new ArgumentException("Servono almeno 30 osservazioni per un test di cointegrazione affidabile.", nameof(seriesY));
         }
 
-        var y = Vector<double>.Build.Dense(n, i => (double)seriesY[i]);
-        var x = Vector<double>.Build.Dense(n, i => (double)seriesX[i]);
+        // I log richiedono prezzi strettamente positivi: un solo zero produrrebbe -Infinity e
+        // avvelenerebbe silenziosamente l'intera regressione, che è il modo peggiore di fallire.
+        var y = Vector<double>.Build.Dense(n, i => Log(seriesY[i], nameof(seriesY)));
+        var x = Vector<double>.Build.Dense(n, i => Log(seriesX[i], nameof(seriesX)));
 
-        // Passo 1: regressione Y = alpha + beta*X + spread (stima dell'hedge ratio).
+        // Passo 1: regressione log Y = alpha + beta*log X + spread (stima dell'elasticità).
         var design = Matrix<double>.Build.Dense(n, 2, (row, col) => col == 0 ? 1.0 : x[row]);
         var ols = OlsRegression.Fit(design, y);
         var intercept = ols.Coefficients[0];
@@ -53,8 +81,15 @@ public sealed class EngleGrangerCointegrationTest : ICointegrationTest
             SignificanceLevelPercent = SignificancePercent,
             AdfLags = chosenLags,
             IsCointegrated = adfStatistic < criticalValue,
+            IsHedgeRatioPlausible = hedgeRatio is >= MinPlausibleElasticity and <= MaxPlausibleElasticity,
         };
     }
+
+    private static double Log(decimal price, string paramName)
+        => price > 0m
+            ? Math.Log((double)price)
+            : throw new ArgumentException(
+                $"La cointegrazione gira sui log dei prezzi: servono valori strettamente positivi, trovato {price}.", paramName);
 
     /// <summary>
     /// Valori critici di MacKinnon (2010) per il test di cointegrazione Engle-Granger, caso "con

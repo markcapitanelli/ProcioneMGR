@@ -299,15 +299,31 @@ public sealed class PairScreenResult
     public string SymbolX { get; set; } = string.Empty;
     public string Timeframe { get; set; } = string.Empty;
     public double AdfStatistic { get; set; }
+
+    /// <summary>Verdetto puramente statistico dell'ADF sullo spread.</summary>
     public bool IsCointegrated { get; set; }
+
+    /// <summary>Elasticità log-log fra le due gambe (β ≈ 1 = si muovono in proporzione).</summary>
     public double HedgeRatio { get; set; }
+
+    /// <summary>Elasticità dentro la banda di sanità economica (vedi <c>EngleGrangerCointegrationTest</c>).</summary>
+    public bool IsHedgeRatioPlausible { get; set; }
+
     public int AlignedCandles { get; set; }
+
+    /// <summary>Operabile solo se regge sia la statistica sia la plausibilità dell'elasticità.</summary>
+    public bool IsTradeable => IsCointegrated && IsHedgeRatioPlausible;
 }
 
 public sealed class PairsOutput
 {
     public List<PairScreenResult> Pairs { get; set; } = new();
+
+    /// <summary>Quante coppie superano l'ADF (metrica statistica, storicamente riportata).</summary>
     public int CointegratedCount { get; set; }
+
+    /// <summary>Quante ne superano ANCHE la banda di elasticità: è questo il numero operativo.</summary>
+    public int TradeableCount { get; set; }
 }
 
 public sealed class MlTrainingOutput

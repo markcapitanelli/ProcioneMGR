@@ -24,6 +24,12 @@ public sealed class RollingPairsAnalysis
 /// le <paramref name="lookbackWindow"/> osservazioni PASSATE (mai quelle future) — il risultato è
 /// anti-look-ahead corretto ed è quello che rende <see cref="IPairsBacktestEngine"/> un backtest
 /// vero, non solo uno screening statistico.
+///
+/// Come <see cref="EngleGrangerCointegrationTest"/>, la regressione gira sui LOG dei prezzi: le due
+/// DEVONO usare la stessa specificazione, altrimenti lo screening dichiara cointegrata una
+/// combinazione e il backtest ne negozia un'altra. Di conseguenza lo spread qui è un
+/// <b>log-spread</b> — adimensionale, e confrontabile fra coppie con prezzi di scala diversa, cosa
+/// che lo spread in unità di prezzo non era (il suo z-score dipendeva dal livello del prezzo di X).
 /// </summary>
 public sealed class RollingPairsSpreadAnalyzer
 {
@@ -68,7 +74,7 @@ public sealed class RollingPairsSpreadAnalyzer
             if (beta is not null)
             {
                 hedgeRatio[i] = beta;
-                spread[i] = (double)seriesY[i] - (alpha!.Value + beta.Value * (double)seriesX[i]);
+                spread[i] = Log(seriesY[i]) - (alpha!.Value + beta.Value * Log(seriesX[i]));
             }
         }
 
@@ -79,11 +85,17 @@ public sealed class RollingPairsSpreadAnalyzer
     private static (double Alpha, double Beta) FitHedgeRatio(IReadOnlyList<decimal> seriesY, IReadOnlyList<decimal> seriesX, int start, int endInclusive)
     {
         var count = endInclusive - start + 1;
-        var y = Vector<double>.Build.Dense(count, k => (double)seriesY[start + k]);
-        var design = Matrix<double>.Build.Dense(count, 2, (row, col) => col == 0 ? 1.0 : (double)seriesX[start + row]);
+        var y = Vector<double>.Build.Dense(count, k => Log(seriesY[start + k]));
+        var design = Matrix<double>.Build.Dense(count, 2, (row, col) => col == 0 ? 1.0 : Log(seriesX[start + row]));
         var ols = OlsRegression.Fit(design, y);
         return (ols.Coefficients[0], ols.Coefficients[1]);
     }
+
+    /// <summary>Log del prezzo. Un prezzo non positivo non esiste in un OHLCV sano: meglio fermarsi che propagare -Infinity.</summary>
+    private static double Log(decimal price)
+        => price > 0m
+            ? Math.Log((double)price)
+            : throw new ArgumentException($"Prezzo non positivo ({price}): il log-spread richiede prezzi strettamente positivi.");
 
     /// <summary>Z-score rolling causale su uno spread con warm-up (null iniziale): riusa la stessa finestra di <see cref="PairsSpreadAnalyzer.RollingZScore"/> sulla parte densa.</summary>
     private static IReadOnlyList<double?> ComputeCausalZScore(double?[] spread, int lookback)

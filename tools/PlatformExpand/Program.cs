@@ -630,12 +630,14 @@ async Task PairsAsync()
             if (ay.Count < 500) continue;
 
             var r = coint.Test([.. ay.Select(c => c.Close)], [.. ax.Select(c => c.Close)]);
-            if (r.IsCointegrated) found.Add((y, x, r.AdfStatistic, r.CriticalValue, r.HedgeRatio));
+            // IsTradeable, non IsCointegrated: scarta anche le coppie il cui spread e' stazionario
+            // ma la cui elasticita' e' fuori banda (il caso AAVE/XLM).
+            if (r.IsTradeable) found.Add((y, x, r.AdfStatistic, r.CriticalValue, r.HedgeRatio));
         }
     }
 
     var total = universe.Length * (universe.Length - 1) / 2;
-    Console.WriteLine($"  Coppie cointegrate in selezione: {found.Count}/{total} ({(decimal)found.Count / total:P0})");
+    Console.WriteLine($"  Coppie operabili in selezione: {found.Count}/{total} ({(decimal)found.Count / total:P0})");
     if (found.Count > total * 0.25)
     {
         Console.WriteLine("  ATTENZIONE: una frazione cosi' alta di coppie 'cointegrate' e' sospetta. Su asset");

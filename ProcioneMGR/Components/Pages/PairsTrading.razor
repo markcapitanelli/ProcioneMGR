@@ -160,10 +160,20 @@
 @if (_cointegration is not null)
 {
     <div class="row g-3 mb-3">
+        <div class="col-auto">@MetricCard("Operabile?", _cointegration.IsTradeable ? "Sì" : "No", _cointegration.IsTradeable)</div>
         <div class="col-auto">@MetricCard("Cointegrate?", _cointegration.IsCointegrated ? "Sì" : "No", _cointegration.IsCointegrated)</div>
         <div class="col-auto">@MetricCard("ADF stat", _cointegration.AdfStatistic.ToString("F3"))</div>
-        <div class="col-auto">@MetricCard("Hedge ratio (full-sample)", _cointegration.HedgeRatio.ToString("F3"))</div>
+        <div class="col-auto">@MetricCard("Elasticità β (full-sample)", _cointegration.HedgeRatio.ToString("F3"), _cointegration.IsHedgeRatioPlausible)</div>
     </div>
+    @if (_cointegration.IsCointegrated && !_cointegration.IsHedgeRatioPlausible)
+    {
+        <div class="alert alert-warning py-2">
+            Lo spread è statisticamente stazionario, ma l'elasticità β = @_cointegration.HedgeRatio.ToString("F2")
+            è fuori dalla banda di sanità [@EngleGrangerCointegrationTest.MinPlausibleElasticity–@EngleGrangerCointegrationTest.MaxPlausibleElasticity]:
+            le due gambe non si muovono in proporzione, quindi il portafoglio a controvalore uguale che il backtest
+            apre davvero non è quello di cui è stata testata la stazionarietà. Coppia da non schierare.
+        </div>
+    }
 }
 
 @if (_result is not null)

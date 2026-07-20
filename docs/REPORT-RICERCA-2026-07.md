@@ -147,21 +147,53 @@ lordo sia piccolo, e sui dati reali lo è sempre.
 
 ---
 
-## Due difetti trovati, non ancora corretti
+## Due difetti trovati — entrambi corretti (2026-07-20)
 
-**1. `PositionCloser` blocca il rientro inverso.** Righe 168 e 307 impostano `state.LastOrderUtc`,
-che è lo stesso timestamp usato dal `SafetyChecker` per l'anti-spam **sugli ingressi**. Su
-un'inversione di segnale: si chiude → `LastOrderUtc = T` → si tenta l'ingresso opposto sulla stessa
-candela → `elapsed = 0` → **rifiutato**. Tocca **tutte e 12 le strategie** del catalogo (tutte
-possono emettere `Signal.Short`). Con le soglie globali il ritardo è di una candela; con un profilo
-di rischio R3 diventa di ore o un giorno. Osservato dal vivo: 430 ordini rifiutati su 500.
-Fix proposto: rimuovere quelle due righe — `LastOrderUtc` serve solo a limitare la frequenza degli
-*ingressi*. Nessuna migrazione.
+**1. `PositionCloser` bloccava il rientro inverso. CORRETTO.** Le righe 168 e 307 impostavano
+`state.LastOrderUtc`, che è lo stesso timestamp usato dal `SafetyChecker` per l'anti-spam **sugli
+ingressi**. Su un'inversione di segnale: si chiude → `LastOrderUtc = T` → si tenta l'ingresso
+opposto sulla stessa candela → `elapsed = 0` → **rifiutato**. Toccava **tutte e 12 le strategie**
+del catalogo (tutte possono emettere `Signal.Short`). Con le soglie globali il ritardo era di una
+candela; con un profilo di rischio R3 di ore. Osservato dal vivo: 430 ordini rifiutati su 500.
 
-**2. Nessun limite di sanità sull'hedge ratio nel pairs.** AAVE/XLM è stata accettata con
-**β = 575,29**: a quel livello lo spread `Y − 575·X` è dominato dall'errore di stima moltiplicato
-per il prezzo di X — il regime della regressione spuria. Empiricamente **la peggiore delle otto**
-(−14,14%, maxDD 15,1%, tre volte le altre).
+Le due righe sono state rimosse: le chiusure non passano dal `SafetyChecker` (gira solo in
+`ExecuteOpenAsync` e nello slicing), quindi quel timestamp serviva soltanto a frenare l'apertura
+successiva. Copertura in `SignalReversalThrottleTests`, due test in coppia — uno verifica che
+l'inversione passi, il gemello che il freno sugli ingressi ravvicinati sia ancora attivo — e si è
+verificato che rimettendo le righe il primo fallisce e il secondo no. Nessuna migrazione.
+
+**2. Cointegrazione sui prezzi grezzi. CORRETTA passando ai log-prezzi.** AAVE/XLM era stata
+accettata con **β = 575,29**, ed era **la peggiore delle otto** candidate (−14,14%, maxDD 15,1%,
+tre volte le altre).
+
+La correzione inizialmente ipotizzata — un tetto su |β| — era la diagnosi sbagliata: β sui prezzi
+grezzi ha le unità di "prezzo di Y per prezzo di X", quindi 575 misura soprattutto che AAVE vale
+~1000× XLM. Un tetto su |β| avrebbe bocciato coppie sane fra monete di prezzo diverso e lasciato
+passare quelle rotte fra monete di prezzo simile. La regressione ora gira sui **log**, dove β è
+un'elasticità adimensionale con valore di riferimento 1 per qualunque coppia. Non è solo più
+comodo: `log Y − β·log X` stazionario equivale a `Y/X^β` costante, e per β = 1 quel portafoglio è
+esattamente quello a controvalore uguale sulle due gambe — cioè quello che `PairsBacktestEngine`
+apre davvero. Prima il segnale sorvegliava una combinazione β-pesata mentre l'esecuzione ne apriva
+un'altra.
+
+**Il risultato della verifica sui dati reali è però diverso da quello atteso**, e vale la pena
+registrarlo (`CointegrationOnRealDataTests`, finestra 2024-01→2026-03, 4h, 4740 candele):
+
+| | AAVE/XLM |
+|---|---|
+| elasticità log β | **0,687** — *dentro* la banda di sanità [0,5–2,0] |
+| ADF sui log | **−2,981** contro CV MacKinnon −3,337 (11 lag) |
+| esito | **non cointegrata** → non operabile |
+
+A bocciarla non è il filtro sull'elasticità: è l'**ADF stesso**, una volta che gira sui log. La
+stazionarietà dello spread era un artefatto della regressione in unità di prezzo. La banda di
+plausibilità resta come rete di sicurezza, ma su questi dati non vincola nessuna coppia.
+
+L'effetto è ampio e va guardato con sospetto quanto il difetto che corregge: sulle **91 coppie**
+dell'universo a 4h, sui log ne risulta cointegrata **1 sola**. Al 5% di significatività il puro
+caso ne darebbe ~4–5, quindi la nuova specificazione è se mai *conservativa*. Chiude il rilievo
+"cointegrazione troppo liberale" dell'audit 2026-07 — ma conferma anche, dall'ennesimo angolo, che
+sui dati veri non c'è un edge di pairs da schierare.
 
 ---
 
