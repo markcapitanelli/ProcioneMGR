@@ -34,16 +34,11 @@ public sealed class SafetyConfigWriter(IHostEnvironment env, ILogger<SafetyConfi
                 root["Trading"] = trading;
             }
 
-            trading["Safety"] = new JsonObject
-            {
-                ["MaxPositionSizePercent"] = cfg.MaxPositionSizePercent,
-                ["MaxTotalExposurePercent"] = cfg.MaxTotalExposurePercent,
-                ["MaxDailyLossPercent"] = cfg.MaxDailyLossPercent,
-                ["MaxDrawdownPercent"] = cfg.MaxDrawdownPercent,
-                ["MaxOpenPositions"] = cfg.MaxOpenPositions,
-                ["MinOrderIntervalSeconds"] = cfg.MinOrderIntervalSeconds,
-                ["RequireManualConfirmationForLive"] = cfg.RequireManualConfirmationForLive,
-            };
+            // Serializzazione dell'INTERO oggetto, non un elenco di chiavi scritto a mano: la
+            // versione manuale aveva già perso per strada MaxLeverageAllowed/MaintenanceMarginPercent/
+            // UseExchangeRestingStops — ogni salvataggio dal pannello li riportava ai default
+            // silenziosamente. Così una proprietà nuova non può più essere dimenticata.
+            trading["Safety"] = JsonSerializer.SerializeToNode(cfg);
 
             var output = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(path, output, ct);

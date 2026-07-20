@@ -92,6 +92,13 @@ public interface IFuturesExchangeClient
 
     Task<List<OpenOrder>> GetOpenFuturesOrdersAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default);
 
+    /// <summary>
+    /// Stato di un ordine futures per client order id, INCLUSI gli ordini già eseguiti/terminati
+    /// (a differenza di <see cref="GetOpenFuturesOrdersAsync"/>). Lookup autorevole per la
+    /// riconciliazione dopo un <see cref="PlaceOrderResult.NetworkUncertain"/>.
+    /// </summary>
+    Task<OrderStatusResult> GetFuturesOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default);
+
     /// <summary>Saldo del conto futures (margine disponibile, equity totale).</summary>
     Task<FuturesBalance> GetFuturesBalanceAsync(TradingCredentials credentials, CancellationToken ct = default);
 

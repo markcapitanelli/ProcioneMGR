@@ -391,6 +391,11 @@
                         <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxPositionSizePercent" />
                     </div>
                     <div class="col-md-4">
+                        <label class="form-label small">Size per apertura (% capitale; margine sui Futures)</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.PositionSizePercent" />
+                        <div class="form-text">Sui Futures il nozionale è size × leva: deve stare sotto la max size per posizione.</div>
+                    </div>
+                    <div class="col-md-4">
                         <label class="form-label small">Max esposizione totale (%)</label>
                         <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="_safety.MaxTotalExposurePercent" />
                     </div>
@@ -651,6 +656,8 @@
             RequireManualConfirmationForLive = c.RequireManualConfirmationForLive,
             MaxLeverageAllowed = c.MaxLeverageAllowed,
             MaintenanceMarginPercent = c.MaintenanceMarginPercent,
+            PositionSizePercent = c.PositionSizePercent,
+            UseExchangeRestingStops = c.UseExchangeRestingStops,
         };
     }
 
