@@ -57,7 +57,7 @@
 
             <span class="badge bg-light text-dark">advisory ok: @_okCount</span>
             <span class="badge @(_errorCount > 0 ? "bg-warning text-dark" : "bg-light text-dark")">in errore: @_errorCount</span>
-            <span class="badge @(_pendingRuns > 0 ? "bg-info" : "bg-light text-dark")">run in attesa (7 gg): @_pendingRuns</span>
+            <span class="badge @(_pendingRuns > 0 ? "text-bg-info" : "bg-light text-dark")">run in attesa (7 gg): @_pendingRuns</span>
         </div>
         <p class="text-muted small mb-2">
             @if (_guard is { BreakerOpen: true })

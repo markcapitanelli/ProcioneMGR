@@ -83,6 +83,21 @@ html, body {
     color: #e6edf3 !important;
 }
 
+/* Stessa trappola, altra famiglia di utility: le varianti `bg-*-subtle` sul tema scuro diventano
+   superfici SCURE (Bootstrap le ridefinisce via variabile), ma `text-dark` resta `!important` e
+   vince lo stesso. In /sentiment i badge `bg-primary-subtle text-dark` avevano un rapporto di
+   contrasto di 1,17 — praticamente invisibili — su 145 elementi.
+   Il primo fix copriva solo `.bg-light`: era troppo stretto, e questa regola chiude la famiglia.
+   Trovato misurando il contrasto calcolato pagina per pagina, non a occhio. */
+[data-bs-theme="dark"] .bg-primary-subtle.text-dark,
+[data-bs-theme="dark"] .bg-secondary-subtle.text-dark,
+[data-bs-theme="dark"] .bg-success-subtle.text-dark,
+[data-bs-theme="dark"] .bg-danger-subtle.text-dark,
+[data-bs-theme="dark"] .bg-warning-subtle.text-dark,
+[data-bs-theme="dark"] .bg-info-subtle.text-dark {
+    color: #e6edf3 !important;
+}
+
 [data-bs-theme="dark"] .table-light {
     --bs-table-bg: #21262d;
     --bs-table-color: #e6edf3;
