@@ -11,6 +11,8 @@ using Microsoft.Extensions.Logging;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Discovery;
+using ProcioneMGR.Services.Ensemble;
+using ProcioneMGR.Services.Trading;
 using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Ingestion;
@@ -89,6 +91,7 @@ switch (phase)
     case "costprofile": await CostProfileAsync(); break;
     case "expand2": await Expand2Async(); break;
     case "hunt": await HuntAsync(); break;
+    case "deploy": await DeployAsync(); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
 }
@@ -281,6 +284,107 @@ async Task Ingest1mAsync()
     }
 
     Console.WriteLine($"\n=== INGEST 1m completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+}
+
+// ------------------------------------------------------------------ DEPLOY (candidato -> corsia)
+// Schiera UN candidato sulla corsia 1 in configurazione, senza avviare nulla: l'avvio resta
+// un'azione esplicita dalla UI, come per PipelineApplier.
+//
+// PERCHÉ LA CORSIA 1 E NON LA 0 O LA 2: la 0 ha 159 operazioni di storico ed è quella che la
+// pagina /bot governa; la 2 è in modalità Testnet. La 1 porta un esperimento fermo e senza trade
+// (LTC/USDT, Sharpe -2,15), quindi è quella che si può sovrascrivere senza distruggere nulla.
+//
+// COSA QUESTO SCHIERAMENTO NON È: una validazione. Il candidato NON ha superato il Deflated Sharpe
+// (0,69-0,81 contro una soglia di 0,95). Va in Paper come OSSERVAZIONE, per generare dati
+// realmente nuovi in avanti nel tempo — l'unica cosa che può sciogliere l'ambiguità, visto che le
+// due cacce che l'hanno trovato condividono lo stesso periodo storico e quindi non si confermano
+// a vicenda quanto sembrerebbe. Il passaggio a Testnet resta comunque dietro settimane di
+// evidenza in Paper (PromotionEvaluator), e quello a Live è sempre manuale.
+async Task DeployAsync()
+{
+    const int laneId = 1;
+    const string symbol = "DOGE/USDT";
+    const string timeframe = "1h";
+
+    // Lettura/scrittura diretta di EnsembleState: questo tool non compone le corsie keyed
+    // (AddTradingLanes vive nell'app), e tirarsi dietro l'intero cono di dipendenze di
+    // EnsembleManager per due campi non varrebbe la pena. Le opzioni JSON DEVONO combaciare con
+    // quelle del manager (camelCase), altrimenti l'app rileggerebbe una configurazione vuota.
+    var json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    EnsembleConfiguration cfg;
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        var row = await db.EnsembleStates.Where(e => e.LaneId == laneId).OrderBy(e => e.Id).FirstOrDefaultAsync();
+        cfg = row is null || string.IsNullOrWhiteSpace(row.ConfigurationJson)
+            ? new EnsembleConfiguration()
+            : JsonSerializer.Deserialize<EnsembleConfiguration>(row.ConfigurationJson, json) ?? new EnsembleConfiguration();
+    }
+
+    Console.WriteLine($"=== DEPLOY su corsia {laneId} ===");
+    Console.WriteLine($"    Prima:  {cfg.Symbol} {cfg.Timeframe}, {cfg.Strategies.Count} strategie, profilo '{cfg.RiskProfileName ?? "(nessuno)"}'");
+
+    // NESSUN bracket automatico e NESSUN profilo di rischio, e sono due scelte deliberate corrette
+    // dopo un primo tentativo sbagliato (2026-07-20).
+    //
+    // Il primo deploy applicava, come fa PipelineApplier, uno stop/target dai percentili di
+    // escursione (SL 0,68% / TP 1,98%) e il profilo Prudente. Osservato dal vivo: 430 ordini
+    // RIFIUTATI su 500. Due cause che si sommavano, entrambe dovute allo scarto fra ciò che era
+    // stato validato e ciò che era stato schierato:
+    //
+    //  1. lo stop allo 0,68% e' strettissimo per DOGE su candele orarie: la posizione veniva
+    //     chiusa quasi subito, ma il segnale Supertrend restava valido e il motore ritentava
+    //     l'ingresso alla candela successiva, all'infinito;
+    //  2. il tetto di turnover del profilo Prudente (86.400s fra ingressi) rifiutava quei
+    //     rientri, uno dopo l'altro.
+    //
+    // Il risultato era una strategia mutilata all'86%: qualunque cosa avesse fatto in Paper non
+    // avrebbe detto NULLA sul candidato che la caccia aveva selezionato. La caccia ha validato
+    // Supertrend con le SUE uscite e senza cap di frequenza: per osservarlo bisogna schierarlo
+    // cosi', altrimenti si osserva un'altra cosa.
+    //
+    // Le protezioni non spariscono: restano le soglie globali (drawdown, perdita giornaliera,
+    // esposizione) e l'emergency stop. Ed e' Paper, quindi denaro finto.
+    cfg.ExchangeName = "Binance";
+    cfg.Symbol = symbol;
+    cfg.Timeframe = timeframe;
+    cfg.IsFutures = false;
+    cfg.Leverage = 1;
+    cfg.TotalCapital = 10_000m;
+    cfg.RiskProfileName = null;
+    cfg.Strategies =
+    [
+        new EnsembleStrategy
+        {
+            StrategyName = "Supertrend",
+            DisplayName = "Supertrend DOGE 1h (osservazione, non validato)",
+            IsActive = true,
+            CurrentAllocation = 100m,
+            Parameters = new() { ["AtrPeriod"] = 14m, ["Multiplier"] = 3m, ["AllowShort"] = 1m },
+            ExpectedSharpe = 1.58m,   // media delle due cacce: alimenta il monitor di decadimento
+        },
+    ];
+
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        var row = await db.EnsembleStates.Where(e => e.LaneId == laneId).OrderBy(e => e.Id).FirstOrDefaultAsync();
+        var payload = JsonSerializer.Serialize(cfg, json);
+        if (row is null)
+        {
+            db.EnsembleStates.Add(new EnsembleState { LaneId = laneId, ConfigurationJson = payload, StatusJson = "{}", LastUpdatedUtc = DateTime.UtcNow });
+        }
+        else
+        {
+            row.ConfigurationJson = payload;
+            row.LastUpdatedUtc = DateTime.UtcNow;
+        }
+        await db.SaveChangesAsync();
+    }
+
+    Console.WriteLine($"    Dopo:   {cfg.Symbol} {cfg.Timeframe}, 1 strategia (Supertrend 14/3/short), profilo '{cfg.RiskProfileName}'");
+    Console.WriteLine("    Uscite: quelle della strategia (nessun bracket aggiunto), nessun cap di turnover per corsia");
+    Console.WriteLine("            -> in Paper gira COME e' stata validata dalla caccia. Restano soglie globali ed emergency stop.");
+    Console.WriteLine("    NESSUN trading avviato: l'avvio in Paper e' un'azione esplicita dalla UI.");
 }
 
 // ------------------------------------------------------------------ HUNT (nuove + vecchie coppie)
