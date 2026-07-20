@@ -329,12 +329,28 @@ async Task LanesAsync(bool clean)
 
         if (!clean || !experimental.Contains(lane)) { Console.WriteLine(); continue; }
 
-        // Si ferma il motore PRIMA di togliergli i dati sotto i piedi.
+        // Si ferma il motore PRIMA di togliergli i dati sotto i piedi, e si azzera anche la sua
+        // CONTABILITA'.
+        //
+        // Non farlo e' stato un errore vero, visto solo guardando la pagina: cancellando trade e
+        // ordini ma lasciando AvailableCapital/RealizedPnl/PeakEquity, la corsia mostrava
+        // "0 operazioni" accanto a "+710,02 di PnL" e un drawdown del 6,37%. Cioe' proprio quel
+        // tipo di stato contabile incoerente che LaneInvariantWatchdog esiste per intercettare e
+        // che, trovato dal vivo, manderebbe una corsia in quarantena.
         if (st is not null)
         {
             var live = await db.TradingEngineStates.FirstAsync(s => s.LaneId == lane);
             live.IsRunning = false;
             live.IsEmergencyStopped = false;
+            live.EmergencyStopReason = null;
+            live.AvailableCapital = live.TotalCapital;
+            live.RealizedPnl = 0m;
+            live.PeakEquity = live.TotalCapital;
+            live.MaxDrawdownPercent = 0m;
+            live.DailyPnl = 0m;
+            live.DailyAnchorUtc = DateTime.UtcNow;
+            live.StartedAtUtc = null;
+            live.LastOrderUtc = null;
         }
         var delPos = await db.OpenPositions.Where(p => p.LaneId == lane).ExecuteDeleteAsync();
         var delOrd = await db.Orders.Where(o => o.LaneId == lane).ExecuteDeleteAsync();
