@@ -5,7 +5,9 @@ Costi applicati ovunque: fee 0,1%/lato + slippage 0,05%/fill ⇒ **round-turn 0,
 
 **Esito in una riga:** su questo universo e questi dati non è emerso alcun edge che sopravviva
 ai costi e alla correzione per test multiplo — e l'esperimento di controllo dimostra che è una
-proprietà del mercato, non un difetto degli strumenti.
+proprietà del mercato, non un difetto degli strumenti. **Ma la frontiera dei costi mostra che
+almeno un candidato fallisce per l'esecuzione, non per il segnale**: diventa profittevole a
+round-turn ≤ 0,085%, cioè con ordini maker.
 
 Questo documento esiste perché un risultato negativo ben misurato vale quanto uno positivo:
 serve a non rifare la stessa strada fra sei mesi.
@@ -170,10 +172,43 @@ per il prezzo di X — il regime della regressione spuria. Empiricamente **la pe
 - Timeframe sotto i 15m: R2 ha già misurato che i costi li rendono inoperabili.
 - Fidarsi di uno Sharpe alto senza guardare il numero di operazioni.
 
+## La frontiera dei costi: due modi di fallire, non uno
+
+Rigirando i candidati sull'holdout a livelli di costo diversi si separa qualcosa che nei numeri
+netti sembrava identico.
+
+**PriceSmaCross DOGE/USDT 4h**
+
+| scenario | round-turn | netto |
+|---|---|---|
+| taker Binance | 0,300% | −5,09% |
+| taker Bitget | 0,220% | −1,77% |
+| maker Binance +BNB | 0,085% | **+4,08%** |
+| maker Bitget | 0,080% | **+4,31%** |
+| costo zero (limite) | 0,000% | +7,94% |
+
+→ profittevole a **round-turn ≤ 0,085%**.
+
+**VwapReversion BCH/USDT 4h** → in perdita **anche a costo zero** (−6,14%).
+
+Il primo ha un segnale reale che la struttura di costo taker distrugge; il secondo semplicemente
+non funziona. La distinzione cambia cosa è sensato fare: sul primo ha senso lavorare
+sull'esecuzione, sul secondo no.
+
+> **Cautela.** Il maker non è gratis in senso pratico: un ordine limite può non essere eseguito, e
+> una strategia che *insegue* il prezzo — una crossover lo fa — non può fare il maker per
+> definizione. Il +4,31% assume che ogni limite venga riempito al prezzo maker, il che è
+> ottimistico. Questi numeri dicono qual è il **requisito** di esecuzione e se cada in un intervallo
+> raggiungibile — cade — non che sia gratuito ottenerlo.
+
+Comando: `dotnet run --project tools/PlatformExpand -- costfrontier`
+
 ## Cosa avrebbe senso provare
 
-- **Ridurre i costi** invece di cercare segnali migliori: ordini maker invece che taker
-  dimezzerebbe la fee, ed è la leva più diretta viste le misure qui sopra.
+- **Lavorare sull'esecuzione**, non sui segnali: è la leva misurata qui sopra, e la piattaforma ha
+  già la macchina per provarci — TWAP/VWAP/Iceberg e l'algoritmo Adaptive in `Services/Execution`
+  (QLIB-5), oggi usati solo in apertura su Testnet/Live e default-off. Il requisito da centrare è
+  un round-turn attorno allo 0,08%.
 - **Portafoglio di coppie**: i drawdown a 2–5% sono l'unico risultato strutturalmente favorevole
   emerso. Un paniere di coppie poco correlate merita una misura, anche se le singole non guadagnano.
 - **Orizzonti più lunghi del giornaliero**, dove il rapporto fra ampiezza del movimento e costo
@@ -187,4 +222,5 @@ dotnet run --project tools/PlatformExpand -- hunt slow   # solo timeframe lenti
 dotnet run --project tools/PlatformExpand -- holdout     # valida l'ultima caccia fuori campione
 dotnet run --project tools/PlatformExpand -- pairs       # angolo market-neutral
 dotnet run --project tools/PlatformExpand -- control     # l'esperimento di controllo
+dotnet run --project tools/PlatformExpand -- costfrontier # a quale costo i candidati diventano profittevoli
 ```
