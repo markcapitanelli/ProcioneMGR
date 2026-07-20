@@ -240,6 +240,53 @@ sull'esecuzione, sul secondo no.
 
 Comando: `dotnet run --project tools/PlatformExpand -- costfrontier`
 
+### La cautela, misurata (2026-07-20)
+
+La colonna maker è stata rimisurata con un **modello di fill** vero nel backtest
+(`EntryExecutionStyle.Maker`): il limite viene appoggiato a una distanza data dalla close del
+segnale, si riempie solo se l'escursione di una candela successiva lo tocca, e scade dopo N candele.
+Le uscite restano taker in ogni scenario — uno stop protettivo è un ordine a mercato per natura.
+
+**PriceSmaCross DOGE/USDT 4h**, commissioni Bitget, holdout 2026-03-01 → oggi:
+
+| scenario | netto | trade | fill |
+|---|---|---|---|
+| taker (base) | −1,69% | 43 | — |
+| **maker ideale** (fill garantito, come lo contava la frontiera) | **+4,39%** | 43 | — |
+| maker reale, offset 0,05%, segnale perso se non riempito | +2,08% | 42 | 98% |
+| maker reale, offset 0,10%, idem | +4,66% | 41 | 95% |
+| maker reale, offset 0,25%, idem | **−4,90%** | 39 | 91% |
+| maker reale, offset 0,05%, fallback a mercato | +0,26% | 43 | 98% |
+| maker reale, offset 0,10%, fallback a mercato | +0,66% | 43 | 95% |
+| maker reale, offset 0,25%, fallback a mercato | +1,09% | 43 | 91% |
+
+Tre cose da leggere insieme:
+
+1. **Con il fallback il guadagno quasi sparisce.** Un bot che non vuole perdere segnali attraversa
+   lo spread quando il limite non prende, e il +4,39% promesso si riduce a **+0,3%…+1,1%**. Paga il
+   taker proprio nei casi in cui il prezzo è scappato, cioè quando il segnale aveva ragione.
+2. **Senza fallback il risultato non è robusto.** Passa da +4,66% a −4,90% muovendo l'offset da
+   0,10% a 0,25%: un parametro di esecuzione, non di strategia. Un edge che dipende così tanto da
+   quanto passivo si mette il limite non è un edge, è una scelta fortunata.
+3. **VwapReversion BCH/USDT resta negativa ovunque** (da −7,63% a −17,69%), coerente con l'esito
+   "perde anche a costo zero".
+
+> **Limite del modello, dichiarato.** Il fill è deciso sul minimo/massimo della candela: se il
+> prezzo *tocca* il limite si assume riempito. È a sua volta **ottimistico** — ignora la posizione
+> in coda e assume che l'ordine resti appoggiato per tutta la candela. A 4h i tassi di riempimento
+> risultano infatti altissimi (91–98%), perché l'escursione di una candela da quattro ore supera
+> quasi sempre uno scarto di frazioni di punto. La selezione avversa vera è quindi **più severa** di
+> quanto misurato qui, non meno: i numeri sopra vanno letti come un altro limite superiore, seppure
+> molto più stretto del "fill garantito".
+
+Comando: `dotnet run --project tools/PlatformExpand -- makerfill`
+
+**Conseguenza per la roadmap.** Il percorso ordini LIMIT/maker nel motore live non è giustificato da
+questi numeri: nella variante che un bot userebbe davvero (con fallback) porta meno di un punto
+percentuale, dentro il rumore, e nella variante senza fallback cambia segno al variare di un
+parametro di esecuzione. Prima di scrivere quel percorso servirebbe un modello di fill a livello di
+book (coda, tick), non di candela.
+
 ## Cosa avrebbe senso provare
 
 - **Lavorare sull'esecuzione**, non sui segnali. È la leva misurata qui sopra, con un bersaglio
@@ -252,13 +299,14 @@ Comando: `dotnet run --project tools/PlatformExpand -- costfrontier`
   su Bitget a 0,120% (appena in pareggio, +1,90%). È un limite ideale che lo slicing avvicina ma non
   raggiunge, quindi da solo è al margine.
 
-  **Ordini maker.** Dà il margine vero (0,080%, +3,67%), ma richiede una capacità che oggi **non
-  esiste**: l'intero percorso live piazza esclusivamente ordini `MARKET` — `SignalOrderBuilder`,
-  `PositionOpener`, `PositionCloser` — quindi è sempre taker per costruzione. I client exchange
-  supportano già `LIMIT` (Binance e Bitget), quindi manca il percorso nel motore, non
-  l'integrazione. Attenzione però: un ordine limite può non essere riempito, e una strategia che
-  insegue il prezzo — una crossover lo fa — non può fare il maker senza cambiare natura. È lavoro
-  di progettazione, non una configurazione da accendere.
+  **Ordini maker.** Sulla carta dava il margine vero (0,080%, +3,67%). ~~Vale la pena costruirlo~~
+  — **misurato il 2026-07-20 con un modello di fill, e il margine non regge**: vedi
+  "La cautela, misurata" qui sopra. Con il fallback a mercato (la variante che un bot userebbe
+  davvero) resta sotto il punto percentuale; senza fallback cambia segno al variare dell'offset del
+  limite. L'intero percorso live piazza tuttora solo ordini `MARKET` — `SignalOrderBuilder`,
+  `PositionOpener`, `PositionCloser` — e i client exchange supportano già `LIMIT`, quindi mancherebbe
+  solo il percorso nel motore: **ma non c'è un numero che lo giustifichi**. Prima servirebbe un
+  modello di fill a livello di book, non di candela.
 - **Portafoglio di coppie**: i drawdown a 2–5% sono l'unico risultato strutturalmente favorevole
   emerso. Un paniere di coppie poco correlate merita una misura, anche se le singole non guadagnano.
 - **Orizzonti più lunghi del giornaliero**, dove il rapporto fra ampiezza del movimento e costo
@@ -273,4 +321,5 @@ dotnet run --project tools/PlatformExpand -- holdout     # valida l'ultima cacci
 dotnet run --project tools/PlatformExpand -- pairs       # angolo market-neutral
 dotnet run --project tools/PlatformExpand -- control     # l'esperimento di controllo
 dotnet run --project tools/PlatformExpand -- costfrontier # a quale costo i candidati diventano profittevoli
+dotnet run --project tools/PlatformExpand -- makerfill    # quanto del maker sopravvive al mancato riempimento
 ```

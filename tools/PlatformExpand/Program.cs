@@ -97,6 +97,7 @@ switch (phase)
     case "pairs": await PairsAsync(); break;
     case "control": await ControlAsync(); break;
     case "costfrontier": await CostFrontierAsync(); break;
+    case "makerfill": await MakerFillAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -456,6 +457,101 @@ async Task CostFrontierAsync()
         Console.WriteLine(breakEvenRt is decimal be
             ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
             : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
+    }
+}
+
+// ------------------------------------------------------------------ MAKERFILL (il maker, ma davvero)
+// La frontiera dei costi diceva che a commissioni maker alcuni candidati passano in positivo. Quel
+// numero pero' assume che ogni ordine limite venga riempito al suo prezzo, che e' l'assunzione
+// ottimistica per eccellenza: un limite passivo si riempie SOLO quando il mercato viene a
+// prenderlo. Per un long appoggiato sotto il prezzo vuol dire riempirsi quando il prezzo scende —
+// cioe' sproporzionatamente quando il segnale stava sbagliando. E' la selezione avversa.
+//
+// Questa fase rimisura gli stessi candidati con il modello di fill vero (EntryExecutionStyle.Maker)
+// e mette le due colonne accanto: quanto prometteva il maker ideale, quanto ne resta.
+async Task MakerFillAsync()
+{
+    var huntPath = Path.Combine(AppContext.BaseDirectory, "hunt-results.json");
+    if (!File.Exists(huntPath))
+    {
+        Console.WriteLine("Nessun risultato di caccia da analizzare. Lancia prima 'hunt'.");
+        return;
+    }
+
+    var candidates = JsonSerializer.Deserialize<List<DiscoveryCandidate>>(File.ReadAllText(huntPath))!
+        .OrderByDescending(c => c.OutOfSampleSharpe).Take(6).ToList();
+
+    // Commissioni Bitget, lo scenario piu' favorevole al maker fra quelli della frontiera.
+    const decimal TakerFee = 0.060m, MakerFee = 0.020m, Slip = 0.050m;
+
+    Console.WriteLine($"=== MAKER CON MODELLO DI FILL — holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");
+    Console.WriteLine("    Il maker ideale assume fill garantito al prezzo limite. Qui il limite puo' NON");
+    Console.WriteLine("    essere riempito: si misura quanto dell'edge promesso sopravvive.\n");
+    Console.WriteLine("    NB: le USCITE restano taker in ogni scenario. Uno stop protettivo e' un ordine a");
+    Console.WriteLine("    mercato per natura: non lo si puo' appoggiare al book e sperare che prenda.\n");
+
+    using var scope = provider.CreateScope();
+    var backtest = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+    var factory = scope.ServiceProvider.GetRequiredService<IStrategyFactory>();
+
+    foreach (var c in candidates)
+    {
+        List<OhlcvData> candles;
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            candles = await db.OhlcvData.AsNoTracking()
+                .Where(o => o.Symbol == c.Symbol && o.Timeframe == c.Timeframe && o.TimestampUtc >= holdoutFrom)
+                .OrderBy(o => o.TimestampUtc).ToListAsync();
+        }
+        if (candles.Count < 200) continue;
+
+        BacktestConfiguration Cfg() => new()
+        {
+            ExchangeName = "Binance", Symbol = c.Symbol, Timeframe = c.Timeframe,
+            From = holdoutFrom, To = DateTime.UtcNow,
+            InitialCapital = 10_000m, PositionSizePercent = 100m,
+            StrategyName = c.StrategyName, StrategyParameters = new(c.Parameters),
+        };
+
+        // (a) taker puro: la linea di base.
+        var takerCfg = Cfg();
+        takerCfg.FeePercent = TakerFee;
+        takerCfg.SlippagePercent = Slip;
+        var taker = await backtest.RunBacktestAsync(takerCfg, candles, factory.Create(c.StrategyName), CancellationToken.None);
+
+        // (b) maker IDEALE: come lo contava la frontiera — commissione maker su tutto, fill certo.
+        var idealCfg = Cfg();
+        idealCfg.FeePercent = MakerFee;
+        idealCfg.SlippagePercent = 0.020m;
+        var ideal = await backtest.RunBacktestAsync(idealCfg, candles, factory.Create(c.StrategyName), CancellationToken.None);
+
+        Console.WriteLine($"  {c.StrategyName} {c.Symbol} {c.Timeframe}");
+        Console.WriteLine($"    {"scenario",-34} {"netto",9} {"trade",7} {"fill",8}");
+        Console.WriteLine($"    {"taker Bitget (base)",-34} {taker.TotalReturnPercent,8:F2}% {taker.TotalTrades,6}        -");
+        Console.WriteLine($"    {"maker IDEALE (fill garantito)",-34} {ideal.TotalReturnPercent,8:F2}% {ideal.TotalTrades,6}        -");
+
+        // (c) maker REALE, al variare di quanto passivo si mette il limite. Piu' e' passivo, meglio
+        //     si entra quando si entra — e piu' spesso non si entra affatto.
+        foreach (var offset in new[] { 0.05m, 0.10m, 0.25m })
+        {
+            foreach (var fallback in new[] { false, true })
+            {
+                var cfg = Cfg();
+                cfg.FeePercent = TakerFee;          // le uscite (e l'eventuale fallback) restano taker
+                cfg.MakerFeePercent = MakerFee;
+                cfg.SlippagePercent = Slip;
+                cfg.EntryExecution = EntryExecutionStyle.Maker;
+                cfg.MakerOffsetPercent = offset;
+                cfg.MakerMaxWaitBars = 3;
+                cfg.MakerFallbackToTaker = fallback;
+
+                var r = await backtest.RunBacktestAsync(cfg, candles, factory.Create(c.StrategyName), CancellationToken.None);
+                var label = $"maker reale offset {offset:F2}% {(fallback ? "+fallback" : "no fallback")}";
+                Console.WriteLine($"    {label,-34} {r.TotalReturnPercent,8:F2}% {r.TotalTrades,6} {r.MakerFillRate,7:F0}%"
+                                + $"   (tentati {r.MakerEntriesAttempted}, presi {r.MakerEntriesFilled}, persi {r.MakerEntriesMissed})");
+            }
+        }
+        Console.WriteLine();
     }
 }
 

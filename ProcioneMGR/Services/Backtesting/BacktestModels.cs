@@ -72,6 +72,46 @@ public class BacktestConfiguration
     /// liquidazione). 0 = fill teorici (default, comportamento invariato).
     /// </summary>
     public decimal SlippagePercent { get; set; }
+
+    /// <summary>
+    /// Come viene eseguito l'INGRESSO. <see cref="EntryExecutionStyle.Taker"/> è il default e
+    /// lascia il comportamento invariato. Le uscite restano sempre taker: uno stop protettivo è
+    /// un ordine a mercato per natura — non lo si può appoggiare passivamente al book e sperare.
+    /// </summary>
+    public EntryExecutionStyle EntryExecution { get; set; } = EntryExecutionStyle.Taker;
+
+    /// <summary>
+    /// Quanto passivo si mette il limite, in % sotto (long) o sopra (short) la close del segnale.
+    /// Più è passivo, meglio si compra QUANDO si viene riempiti — e meno spesso si viene riempiti.
+    /// </summary>
+    public decimal MakerOffsetPercent { get; set; } = 0.05m;
+
+    /// <summary>Per quante candele il limite resta appoggiato prima di scadere.</summary>
+    public int MakerMaxWaitBars { get; set; } = 3;
+
+    /// <summary>Commissione per lato di un eseguito MAKER, in % del nozionale (tipicamente &lt; <see cref="FeePercent"/>).</summary>
+    public decimal MakerFeePercent { get; set; } = 0.02m;
+
+    /// <summary>
+    /// Alla scadenza del limite non riempito: true = si attraversa lo spread e si entra comunque
+    /// a mercato (taker), false = il segnale si perde. Sono due strategie diverse, non due
+    /// sfumature della stessa: la prima paga il taker proprio sui casi in cui il prezzo è scappato,
+    /// la seconda rinuncia al trade.
+    /// </summary>
+    public bool MakerFallbackToTaker { get; set; }
+}
+
+/// <summary>Come viene piazzato l'ordine di INGRESSO nel backtest.</summary>
+public enum EntryExecutionStyle
+{
+    /// <summary>Attraversa lo spread: fill certo alla close del segnale, commissione taker.</summary>
+    Taker,
+
+    /// <summary>
+    /// Limite passivo: commissione maker e prezzo migliore, ma il fill NON è garantito e avviene
+    /// solo se il mercato viene a prendere l'ordine — cioè, per un long, solo se il prezzo scende.
+    /// </summary>
+    Maker,
 }
 
 public class BacktestResult
@@ -96,6 +136,27 @@ public class BacktestResult
 
     /// <summary>[R2] Funding perpetual addebitato in valuta (0 senza leva/derivati).</summary>
     public decimal TotalFundingPaid { get; set; }
+
+    /// <summary>[R3] Ingressi tentati come limite maker (0 in modalità Taker).</summary>
+    public int MakerEntriesAttempted { get; set; }
+
+    /// <summary>[R3] Di quelli, quanti sono stati effettivamente riempiti al prezzo limite.</summary>
+    public int MakerEntriesFilled { get; set; }
+
+    /// <summary>[R3] Limiti scaduti senza fill e poi entrati comunque a mercato (fallback taker).</summary>
+    public int MakerEntriesFallbackTaker { get; set; }
+
+    /// <summary>[R3] Segnali PERSI perché il limite non è stato riempito e non c'era fallback.</summary>
+    public int MakerEntriesMissed { get; set; }
+
+    /// <summary>
+    /// [R3] Frazione di limiti riempiti. È il numero che smonta o conferma l'ipotesi ottimistica
+    /// "maker = commissione più bassa": un tasso di riempimento alto su una strategia che insegue
+    /// il prezzo sarebbe sospetto, uno basso dice quanti segnali il maker semplicemente non prende.
+    /// </summary>
+    public decimal MakerFillRate => MakerEntriesAttempted == 0
+        ? 0m
+        : (decimal)MakerEntriesFilled / MakerEntriesAttempted * 100m;
 
     /// <summary>Capitale iniziale, ripetuto qui perché i rapporti sotto siano leggibili da soli.</summary>
     public decimal InitialCapital { get; set; }

@@ -186,6 +186,20 @@ public sealed class BacktestEngine(
         decimal Buy(decimal level) => level * (1m + slipFrac);
         decimal Sell(decimal level) => level * (1m - slipFrac);
 
+        // [R3] Ingresso MAKER: un limite passivo che puo' non essere riempito. Serve a misurare la
+        // SELEZIONE AVVERSA — un long appoggiato sotto il mercato si riempie solo quando il prezzo
+        // scende, cioe' sproporzionatamente quando il segnale stava sbagliando. Senza modellarla,
+        // "commissione maker invece di taker" e' un risparmio contabile che non esiste.
+        var makerMode = config.EntryExecution == EntryExecutionStyle.Maker;
+        var makerOffsetFrac = config.MakerOffsetPercent > 0m ? config.MakerOffsetPercent / 100m : 0m;
+        var makerFeeFrac = config.MakerFeePercent > 0m ? config.MakerFeePercent / 100m : 0m;
+        var makerWait = Math.Max(1, config.MakerMaxWaitBars);
+        int pendingSide = 0;          // 0 nessun limite appoggiato, +1 long, -1 short
+        var pendingLimit = 0m;
+        var pendingExpiryIndex = -1;
+        int makerAttempted = 0, makerFilled = 0, makerFallback = 0, makerMissed = 0;
+        var prevSignal = Signal.Hold;
+
         for (var i = 0; i < n; i++)
         {
             if (i % 1000 == 0)
@@ -279,13 +293,67 @@ public sealed class BacktestEngine(
                 book.ChargeFunding(book.OpenNotional * fundingFrac * candleHours / 8m);
             }
 
+            // [R3] Risoluzione del limite maker appoggiato in una candela precedente. Il fill si
+            // giudica sull'escursione della candela: un long limite si riempie se il minimo lo
+            // raggiunge, uno short se lo raggiunge il massimo. Riempito = prezzo ESATTO del limite,
+            // senza slippage, con commissione maker.
+            if (pendingSide != 0)
+            {
+                var touched = pendingSide == 1 ? candles[i].Low <= pendingLimit : candles[i].High >= pendingLimit;
+                if (touched && book.IsFlat)
+                {
+                    if (pendingSide == 1) book.OpenLong(pendingLimit, ts, makerFeeFrac, chargeSlippage: false);
+                    else book.OpenShort(pendingLimit, ts, makerFeeFrac, chargeSlippage: false);
+                    entryIndex = i;
+                    entryPrice = pendingLimit;
+                    bestSinceEntry = pendingLimit;
+                    makerFilled++;
+                    pendingSide = 0;
+                }
+                else if (touched || i >= pendingExpiryIndex)
+                {
+                    // Scaduto senza fill (o riempibile ma con la posizione ormai non più flat).
+                    if (!touched && config.MakerFallbackToTaker && book.IsFlat)
+                    {
+                        var lateFill = pendingSide == 1 ? Buy(price) : Sell(price);
+                        if (pendingSide == 1) book.OpenLong(lateFill, ts); else book.OpenShort(lateFill, ts);
+                        entryIndex = i;
+                        entryPrice = lateFill;
+                        bestSinceEntry = lateFill;
+                        makerFallback++;
+                    }
+                    else if (!touched)
+                    {
+                        makerMissed++;
+                    }
+                    pendingSide = 0;
+                }
+            }
+
             var signal = strategy.EvaluateSignal(i, price, ts);
+
+            // [R3] In modalità maker si appoggia UN limite per ogni nuova occasione di ingresso,
+            // cioè quando il segnale CAMBIA — non a ogni candela in cui persiste. Senza questo,
+            // una strategia che tiene il segnale acceso ripiazzerebbe il limite all'infinito e il
+            // tasso di riempimento misurerebbe la pazienza del ciclo invece della selezione avversa.
+            var isNewOpportunity = signal != prevSignal;
+            prevSignal = signal;
 
             switch (signal)
             {
                 case Signal.Long:
                     if (book.IsShort) book.Close(Buy(price), ts);
-                    if (book.IsFlat)
+                    if (book.IsFlat && makerMode)
+                    {
+                        if (isNewOpportunity && pendingSide == 0)
+                        {
+                            pendingSide = 1;
+                            pendingLimit = price * (1m - makerOffsetFrac);
+                            pendingExpiryIndex = i + makerWait;
+                            makerAttempted++;
+                        }
+                    }
+                    else if (book.IsFlat)
                     {
                         var fill = Buy(price);
                         book.OpenLong(fill, ts);
@@ -296,7 +364,17 @@ public sealed class BacktestEngine(
                     break;
                 case Signal.Short:
                     if (book.IsLong) book.Close(Sell(price), ts);
-                    if (book.IsFlat)
+                    if (book.IsFlat && makerMode)
+                    {
+                        if (isNewOpportunity && pendingSide == 0)
+                        {
+                            pendingSide = -1;
+                            pendingLimit = price * (1m + makerOffsetFrac);
+                            pendingExpiryIndex = i + makerWait;
+                            makerAttempted++;
+                        }
+                    }
+                    else if (book.IsFlat)
                     {
                         var fill = Sell(price);
                         book.OpenShort(fill, ts);
@@ -328,8 +406,12 @@ public sealed class BacktestEngine(
             }
         }
 
-        return BuildResult(config, book, equity, n);
+        return BuildResult(config, book, equity, n,
+            new MakerFillStats(makerAttempted, makerFilled, makerFallback, makerMissed));
     }
+
+    /// <summary>[R3] Esito degli ingressi tentati come limite maker, per la diagnostica del risultato.</summary>
+    private readonly record struct MakerFillStats(int Attempted, int Filled, int FallbackTaker, int Missed);
 
     /// <summary>Durata di una candela in ore (per il funding pro-rata).</summary>
     private static decimal TimeframeHours(string timeframe) => timeframe switch
@@ -344,7 +426,8 @@ public sealed class BacktestEngine(
         _ => 1m,
     };
 
-    private static BacktestResult BuildResult(BacktestConfiguration config, Portfolio book, List<EquityPoint> equity, int candlesEvaluated)
+    private static BacktestResult BuildResult(BacktestConfiguration config, Portfolio book, List<EquityPoint> equity, int candlesEvaluated,
+        MakerFillStats maker)
     {
         var trades = book.Trades;
         var winning = 0;
@@ -372,6 +455,11 @@ public sealed class BacktestEngine(
             TotalFeesPaid = book.TotalFees,
             TotalSlippagePaid = book.TotalSlippage,
             TotalFundingPaid = book.TotalFunding,
+            // [R3] Diagnostica del fill maker: quanti limiti si è tentato, quanti hanno preso.
+            MakerEntriesAttempted = maker.Attempted,
+            MakerEntriesFilled = maker.Filled,
+            MakerEntriesFallbackTaker = maker.FallbackTaker,
+            MakerEntriesMissed = maker.Missed,
             InitialCapital = config.InitialCapital,
             Trades = trades,
             EquityCurve = equity,
@@ -472,18 +560,27 @@ public sealed class BacktestEngine(
             TotalFunding += amount;
         }
 
-        public void OpenLong(decimal price, DateTime ts) => Open(1, price, ts);
-        public void OpenShort(decimal price, DateTime ts) => Open(-1, price, ts);
+        public void OpenLong(decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true)
+            => Open(1, price, ts, feeFracOverride, chargeSlippage);
 
-        private void Open(int side, decimal price, DateTime ts)
+        public void OpenShort(decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true)
+            => Open(-1, price, ts, feeFracOverride, chargeSlippage);
+
+        /// <summary>
+        /// <paramref name="feeFracOverride"/> e <paramref name="chargeSlippage"/> servono al fill
+        /// MAKER: commissione maker invece di taker, e nessuno slippage — un limite appoggiato al
+        /// book, se viene riempito, è riempito ESATTAMENTE al suo prezzo. È il rovescio della
+        /// medaglia di non avere la certezza del fill.
+        /// </summary>
+        private void Open(int side, decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true)
         {
             var margin = Equity(price) * _marginFrac;
             if (margin <= 0m || price <= 0m) return;
             var notional = margin * _leverage;
             _qty = notional / price;
-            _entryFee = notional * _feeFrac;
+            _entryFee = notional * (feeFracOverride ?? _feeFrac);
             TotalFees += _entryFee;
-            TotalSlippage += notional * _slipFrac;
+            if (chargeSlippage) TotalSlippage += notional * _slipFrac;
             Cash -= margin + _entryFee;
             _margin = margin;
             _notionalEntry = notional;
