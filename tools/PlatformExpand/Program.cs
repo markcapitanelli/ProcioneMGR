@@ -17,6 +17,7 @@ using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Ingestion;
 using ProcioneMGR.Services.Optimization;
+using ProcioneMGR.Services.PairsTrading;
 using ProcioneMGR.Services.Pipeline;
 using ProcioneMGR.Services.Risk;
 
@@ -93,6 +94,7 @@ switch (phase)
     case "hunt": await HuntAsync(); break;
     case "deploy": await DeployAsync(); break;
     case "holdout": await HoldoutAsync(); break;
+    case "pairs": await PairsAsync(); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
 }
@@ -285,6 +287,110 @@ async Task Ingest1mAsync()
     }
 
     Console.WriteLine($"\n=== INGEST 1m completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+}
+
+// ------------------------------------------------------------------ PAIRS (angolo market-neutral)
+// Angolo di ricerca NUOVO, dopo tre cacce a strategia singola tutte finite a zero.
+//
+// La motivazione non e' "proviamo qualcos'altro" ma una lettura dei risultati: nell'holdout ogni
+// candidato perdeva, e nello stesso periodo DOGE faceva -25% e BCH -54%. Perdere in un mercato che
+// crolla non distingue una strategia rotta da una strategia lunga: il pairs trading e' invece
+// market-neutral per costruzione (lungo una gamba, corto l'altra), quindi risponde a una domanda
+// diversa da quella che ha gia' avuto tre volte risposta negativa.
+//
+// Disciplina identica al resto: la cointegrazione si stima SOLO sulla finestra di selezione (fino a
+// selectionTo) e il backtest si valuta SOLO sull'holdout, che quella selezione non ha mai visto.
+// Cercare le coppie cointegrate sull'intero periodo e poi "validarle" al suo interno sarebbe
+// esattamente l'errore che il Deflated Sharpe esiste per smascherare.
+async Task PairsAsync()
+{
+    string[] universe =
+    [
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT",
+        "LINK/USDT", "AVAX/USDT", "LTC/USDT", "DOT/USDT", "ATOM/USDT", "BCH/USDT", "ETC/USDT",
+        "XLM/USDT", "UNI/USDT", "AAVE/USDT", "ALGO/USDT", "ICP/USDT", "FIL/USDT",
+    ];
+    const string tf = "4h";
+    var selFrom = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    Console.WriteLine($"=== PAIRS su {universe.Length} simboli, {tf} ===");
+    Console.WriteLine($"    Selezione (cointegrazione): {selFrom:yyyy-MM-dd} -> {selectionTo:yyyy-MM-dd}");
+    Console.WriteLine($"    Holdout   (backtest):       {holdoutFrom:yyyy-MM-dd} -> oggi\n");
+
+    // Serie della sola finestra di SELEZIONE, per stimare la cointegrazione.
+    var sel = new Dictionary<string, List<OhlcvData>>();
+    var hold = new Dictionary<string, List<OhlcvData>>();
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        foreach (var s in universe)
+        {
+            sel[s] = await db.OhlcvData.AsNoTracking()
+                .Where(c => c.Symbol == s && c.Timeframe == tf && c.TimestampUtc >= selFrom && c.TimestampUtc < selectionTo)
+                .OrderBy(c => c.TimestampUtc).ToListAsync();
+            hold[s] = await db.OhlcvData.AsNoTracking()
+                .Where(c => c.Symbol == s && c.Timeframe == tf && c.TimestampUtc >= holdoutFrom)
+                .OrderBy(c => c.TimestampUtc).ToListAsync();
+        }
+    }
+
+    var coint = new ProcioneMGR.Services.TimeSeries.EngleGrangerCointegrationTest();
+    var found = new List<(string Y, string X, double Adf, double Crit, double Hedge)>();
+
+    foreach (var y in universe)
+    {
+        foreach (var x in universe)
+        {
+            if (string.CompareOrdinal(y, x) >= 0) continue;              // ogni coppia una volta sola
+            if (sel[y].Count < 500 || sel[x].Count < 500) continue;
+
+            var (ay, ax) = PairsCandleAligner.Align(sel[y], sel[x]);
+            if (ay.Count < 500) continue;
+
+            var r = coint.Test([.. ay.Select(c => c.Close)], [.. ax.Select(c => c.Close)]);
+            if (r.IsCointegrated) found.Add((y, x, r.AdfStatistic, r.CriticalValue, r.HedgeRatio));
+        }
+    }
+
+    var total = universe.Length * (universe.Length - 1) / 2;
+    Console.WriteLine($"  Coppie cointegrate in selezione: {found.Count}/{total} ({(decimal)found.Count / total:P0})");
+    if (found.Count > total * 0.25)
+    {
+        Console.WriteLine("  ATTENZIONE: una frazione cosi' alta di coppie 'cointegrate' e' sospetta. Su asset");
+        Console.WriteLine("  cripto, che si muovono quasi tutti insieme, l'ADF tende a rifiutare la radice");
+        Console.WriteLine("  unitaria per semplice co-movimento di mercato: e' il rilievo 'cointegrazione troppo");
+        Console.WriteLine("  liberale' dell'audit 2026-07, e qui si vede in numeri.");
+    }
+    Console.WriteLine();
+
+    // Le piu' fortemente cointegrate per margine sul valore critico (piu' negativo = piu' severo).
+    var top = found.OrderBy(f => f.Adf - f.Crit).Take(8).ToList();
+    var engine = new PairsBacktestEngine();
+    var survivors = 0;
+
+    foreach (var p in top)
+    {
+        if (hold[p.Y].Count < 100 || hold[p.X].Count < 100)
+        {
+            Console.WriteLine($"  {p.Y,-11}/{p.X,-11} SALTATA: holdout insufficiente.");
+            continue;
+        }
+
+        var cfg = new PairsBacktestConfiguration
+        {
+            SymbolY = p.Y, SymbolX = p.X,
+            InitialCapital = 10_000m, PositionSizePercent = 10m,
+            FeePercent = PipelineCosts.DefaultFeePercent,
+            SlippagePercent = PipelineCosts.DefaultSlippagePercent,
+        };
+        var r = engine.RunBacktest(hold[p.Y], hold[p.X], cfg);
+
+        var ok = r.TotalReturnPercent > 0m && r.TotalTrades >= 5;
+        if (ok) survivors++;
+        Console.WriteLine($"  {(ok ? "OK " : "-- ")}{p.Y,-11}/{p.X,-11}  ADF {p.Adf,6:F2} (crit {p.Crit,6:F2})  hedge {p.Hedge,6:F2}");
+        Console.WriteLine($"      HOLDOUT: netto {r.TotalReturnPercent,7:F2}%   trade {r.TotalTrades,3}   maxDD {r.MaxDrawdownPercent,5:F1}%");
+    }
+
+    Console.WriteLine($"\n=== SOPRAVVISSUTI: {survivors}/{top.Count} (netto > 0 e almeno 5 operazioni) ===");
 }
 
 // ------------------------------------------------------------------ HOLDOUT (test davvero fuori campione)
