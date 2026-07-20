@@ -96,6 +96,7 @@ switch (phase)
     case "holdout": await HoldoutAsync(); break;
     case "pairs": await PairsAsync(); break;
     case "control": await ControlAsync(); break;
+    case "costfrontier": await CostFrontierAsync(); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
 }
@@ -288,6 +289,88 @@ async Task Ingest1mAsync()
     }
 
     Console.WriteLine($"\n=== INGEST 1m completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+}
+
+// ------------------------------------------------------------------ COST FRONTIER (quanto deve costare eseguire)
+// La ricerca di segnali migliori e' esaurita (docs/REPORT-RICERCA-2026-07.md). Ma il report indica
+// una leva che non e' stata ancora misurata, e che agisce sull'altro lato dell'equazione: il COSTO
+// di esecuzione. Il caso PriceSmaCross DOGE 4h e' emblematico — fuori campione faceva lordo +7,74%
+// e netto -7,57%: il segnale funzionava, l'hanno ucciso le commissioni.
+//
+// Domanda precisa a cui questa fase risponde: a quale livello di costo ciascun candidato passerebbe
+// da perdente a vincente? Il numero che ne esce non e' un'opinione su quale exchange usare, e' il
+// requisito di esecuzione che la strategia impone — e dice se sia raggiungibile o fantascienza.
+//
+// I livelli non sono inventati: corrispondono a modi reali di eseguire.
+async Task CostFrontierAsync()
+{
+    var huntPath = Path.Combine(AppContext.BaseDirectory, "hunt-results.json");
+    if (!File.Exists(huntPath))
+    {
+        Console.WriteLine("Nessun risultato di caccia da analizzare. Lancia prima 'hunt'.");
+        return;
+    }
+
+    var candidates = JsonSerializer.Deserialize<List<DiscoveryCandidate>>(File.ReadAllText(huntPath))!
+        .OrderByDescending(c => c.OutOfSampleSharpe).Take(6).ToList();
+
+    // (etichetta, fee per lato %, slippage per fill %) — scenari di esecuzione realmente disponibili.
+    var scenarios = new (string Label, decimal Fee, decimal Slip)[]
+    {
+        ("taker Binance (base)",   0.100m, 0.050m),
+        ("taker Bitget",           0.060m, 0.050m),
+        ("maker Binance +BNB",     0.0225m, 0.020m),
+        ("maker Bitget",           0.020m, 0.020m),
+        ("costo zero (limite)",    0.000m, 0.000m),
+    };
+
+    Console.WriteLine($"=== FRONTIERA DEI COSTI — holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");
+    Console.WriteLine("    Quanto dovrebbe costare eseguire perche' questi candidati smettano di perdere?\n");
+    Console.WriteLine("    NB: il maker non e' gratis in senso pratico — un ordine limite puo' non essere");
+    Console.WriteLine("    eseguito, e una strategia che INSEGUE il prezzo non puo' fare il maker per");
+    Console.WriteLine("    definizione. Questi numeri dicono cosa servirebbe, non che sia gratuito ottenerlo.\n");
+
+    using var scope = provider.CreateScope();
+    var backtest = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+    var factory = scope.ServiceProvider.GetRequiredService<IStrategyFactory>();
+
+    foreach (var c in candidates)
+    {
+        List<OhlcvData> candles;
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            candles = await db.OhlcvData.AsNoTracking()
+                .Where(o => o.Symbol == c.Symbol && o.Timeframe == c.Timeframe && o.TimestampUtc >= holdoutFrom)
+                .OrderBy(o => o.TimestampUtc).ToListAsync();
+        }
+        if (candles.Count < 200) continue;
+
+        Console.WriteLine($"  {c.StrategyName} {c.Symbol} {c.Timeframe}");
+        Console.WriteLine($"    {"scenario",-22} {"round-turn",11} {"netto",9} {"costi",8}");
+
+        decimal? breakEvenRt = null;
+        foreach (var s in scenarios)
+        {
+            var cfg = new BacktestConfiguration
+            {
+                ExchangeName = "Binance", Symbol = c.Symbol, Timeframe = c.Timeframe,
+                From = holdoutFrom, To = DateTime.UtcNow,
+                InitialCapital = 10_000m, PositionSizePercent = 100m,
+                FeePercent = s.Fee, SlippagePercent = s.Slip,
+                StrategyName = c.StrategyName, StrategyParameters = new(c.Parameters),
+            };
+            var r = await backtest.RunBacktestAsync(cfg, candles, factory.Create(c.StrategyName), CancellationToken.None);
+            var rt = 2m * (s.Fee + s.Slip);
+            if (r.TotalReturnPercent > 0m && breakEvenRt is null) breakEvenRt = rt;
+
+            var mark = r.TotalReturnPercent > 0m ? "+" : " ";
+            Console.WriteLine($"  {mark} {s.Label,-22} {rt,10:F3}% {r.TotalReturnPercent,8:F2}% {r.CostDragPercent,7:F2}%");
+        }
+
+        Console.WriteLine(breakEvenRt is decimal be
+            ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
+            : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
+    }
 }
 
 // ------------------------------------------------------------------ CONTROL (l'esperimento che mancava)
