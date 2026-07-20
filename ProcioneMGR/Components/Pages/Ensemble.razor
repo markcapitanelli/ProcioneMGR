@@ -263,12 +263,22 @@ else
                 @if (_savedStrategies.Count > 0)
                 {
                     <div class="col-auto ms-3">
-                        <label class="form-label small">Aggiungi salvata</label>
+                        @* Lo Sharpe accanto al nome e' quello della SELEZIONE, non una previsione. La ricerca
+                           del 2026-07-20 lo ha reso esplicito: i sei migliori candidati su 445.280 combinazioni
+                           avevano Sharpe di selezione 1,28-1,61 e sono finiti tutti fra -0,79 e -4,75 su dati
+                           mai visti. Etichettarlo "Sharpe" e basta invitava a leggerlo come una stima. *@
+                        <label class="form-label small">
+                            Aggiungi salvata
+                            <span class="text-muted" style="cursor:help"
+                                  title="Il numero accanto al nome è lo Sharpe della SELEZIONE: quanto quella configurazione ha reso sui dati con cui è stata scelta. Non è una previsione. Nella ricerca del 2026-07-20 i sei migliori candidati su 445.280 combinazioni avevano selezione 1,28–1,61 e su dati mai visti sono finiti fra −0,79 e −4,75, nessuno battendo il comprare e stare fermi.">
+                                — sel. ⓘ
+                            </span>
+                        </label>
                         <select class="form-select form-select-sm" @bind="_addSavedId">
                             <option value="0">—</option>
                             @foreach (var so in _savedStrategies)
                             {
-                                <option value="@so.Id">@so.Name@(so.OptimizationSharpe is decimal sh ? $" (Sharpe {sh:F2})" : "")</option>
+                                <option value="@so.Id">@so.Name@(so.OptimizationSharpe is decimal sh ? $" (sel. {sh:F2})" : "")</option>
                             }
                         </select>
                     </div>

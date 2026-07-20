@@ -40,6 +40,18 @@
     <div class="alert alert-success" style="max-width: 900px;">@_status</div>
 }
 
+@* Molti nomi salvati portano nel titolo lo Sharpe con cui la strategia fu selezionata. Senza
+   contesto quel numero si legge come una promessa di rendimento: la ricerca del 2026-07-20 mostra
+   che non lo è. L'avviso sta qui, e non nei nomi, per non riscrivere i dati dell'utente. *@
+<div class="alert alert-secondary" style="max-width: 900px;">
+    <strong>Come leggere questi nomi.</strong> Molti contengono lo Sharpe con cui la strategia è stata
+    <em>selezionata</em> — quanto ha reso sui dati usati per sceglierla. Non è una previsione.
+    Nella ricerca del 2026-07-20 i sei migliori candidati su <strong>445.280 combinazioni</strong> avevano
+    Sharpe di selezione fra 1,28 e 1,61, e su dati mai visti sono finiti fra <strong>−0,79 e −4,75</strong>:
+    nessuno ha battuto il comprare e stare fermi, e nessuno era significativo al Deflated Sharpe.
+    Prima di schierarne una, validala fuori campione — vedi <code>docs/REPORT-RICERCA-2026-07.md</code>.
+</div>
+
 <div class="card" style="max-width: 900px;">
     <div class="card-header">Strategie salvate</div>
     @if (_items is null)
