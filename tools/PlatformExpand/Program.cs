@@ -95,6 +95,7 @@ switch (phase)
     case "deploy": await DeployAsync(); break;
     case "holdout": await HoldoutAsync(); break;
     case "pairs": await PairsAsync(); break;
+    case "control": await ControlAsync(); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
 }
@@ -287,6 +288,119 @@ async Task Ingest1mAsync()
     }
 
     Console.WriteLine($"\n=== INGEST 1m completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+}
+
+// ------------------------------------------------------------------ CONTROL (l'esperimento che mancava)
+// Cinque angoli di ricerca, cinque esiti negativi. Ma "non abbiamo trovato niente" ammette DUE
+// spiegazioni molto diverse, e finora non le avevo distinte:
+//   (a) su questi dati non c'e' un edge sfruttabile al netto dei costi;
+//   (b) la macchina che cerca e valida e' rotta, e non troverebbe un edge nemmeno se ci fosse.
+//
+// Questo e' l'esperimento di controllo. Si costruisce una serie sintetica con dentro un edge
+// PIANTATO e conosciuto — un processo a ritorno verso la media, con ampiezza molto superiore ai
+// costi — e si chiede alla stessa pipeline di trovarlo. Se lo trova, i cinque esiti negativi
+// parlano del mercato; se non lo trova, parlavano dei nostri strumenti e vanno buttati.
+//
+// La serie e' generata con seme fisso: l'esito e' riproducibile.
+async Task ControlAsync()
+{
+    const string symbol = "SYNTH/TEST";
+    const string tf = "4h";
+    var from = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    Console.WriteLine("=== CONTROLLO: la pipeline sa trovare un edge che ci abbiamo messo noi? ===\n");
+
+    // Ornstein-Uhlenbeck attorno a una media lentamente crescente: il prezzo oscilla di circa
+    // +/-4,6% attorno al proprio livello con emivita di poche barre. Un ritorno verso la media di
+    // questa ampiezza e' enormemente sopra il round-turn dello 0,30%: se la pipeline funziona,
+    // le strategie mean-reversion DEVONO trovarlo.
+    var rng = new Random(20260720);
+    var candles = new List<OhlcvData>();
+    var x = 0.0;
+    var mean = 100.0;
+    var t = from;
+    for (var i = 0; i < 4400; i++)
+    {
+        x = x * 0.90 + (rng.NextDouble() - 0.5) * 2 * 0.02;   // rumore uniforme, phi 0.90
+        mean *= 1.00002;                                       // deriva lenta, non domina
+        var close = mean * Math.Exp(x);
+        var open = i == 0 ? close : (double)candles[^1].Close;
+        var high = Math.Max(open, close) * 1.001;
+        var low = Math.Min(open, close) * 0.999;
+        candles.Add(new OhlcvData
+        {
+            Symbol = symbol, Timeframe = tf, TimestampUtc = t,
+            Open = (decimal)open, High = (decimal)high, Low = (decimal)low, Close = (decimal)close,
+            Volume = 1000m,
+        });
+        t = t.AddHours(4);
+    }
+    Console.WriteLine($"  Serie sintetica: {candles.Count} candele {tf} da {from:yyyy-MM-dd}, " +
+                      $"oscillazione tipica +/-{Math.Sqrt(0.02 * 0.02 / 3 / (1 - 0.81)) * 100:F1}% attorno alla media");
+
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        // Idempotente: si riparte sempre da zero, cosi' due esecuzioni non si sommano.
+        await db.OhlcvData.Where(c => c.Symbol == symbol).ExecuteDeleteAsync();
+        db.OhlcvData.AddRange(candles);
+        await db.SaveChangesAsync();
+    }
+
+    try
+    {
+        using var scope = provider.CreateScope();
+        var discovery = scope.ServiceProvider.GetRequiredService<IStrategyDiscovery>();
+        var result = await discovery.DiscoverAsync(new StrategyDiscoveryConfiguration
+        {
+            ExchangeName = "Binance",
+            Symbols = [symbol],
+            Timeframes = [tf],
+            Strategies = [],
+            From = from,
+            To = from.AddHours(4 * 4400),
+            TopN = 10,
+            WalkForward = new WalkForwardConfiguration { InSampleMonths = 8, OutOfSampleMonths = 2, StepMonths = 2 },
+            // Costi ONESTI, gli stessi delle cacce reali: il controllo deve passare dalla stessa porta.
+        }, null, CancellationToken.None);
+
+        var ranked = result.Candidates.OrderByDescending(c => c.OutOfSampleSharpe).Take(6).ToList();
+        Console.WriteLine($"\n  {result.CombinationsTested:N0} combinazioni provate, {result.Candidates.Count} candidati\n");
+        Console.WriteLine($"  {"Strategia",-24} {"OOS",6} {"IS",6} {"Trade",6} {"DSR",6}");
+        foreach (var c in ranked)
+        {
+            var dsr = c.Validation is null ? "—" : c.Validation.DeflatedSharpe.ToString("F2");
+            Console.WriteLine($"  {c.StrategyName,-24} {c.OutOfSampleSharpe,6:F2} {c.InSampleSharpe,6:F2} {c.TotalTrades,6} {dsr,6}");
+        }
+
+        var best = ranked.FirstOrDefault();
+        var significant = ranked.Count(c => c.Validation?.IsSignificant == true);
+        Console.WriteLine();
+        if (best is not null && best.OutOfSampleSharpe > 1.0m && significant > 0)
+        {
+            Console.WriteLine("  ESITO: la pipeline TROVA l'edge piantato, e il Deflated Sharpe lo dichiara");
+            Console.WriteLine($"  significativo ({significant} candidati sopra 0,95). Gli strumenti funzionano:");
+            Console.WriteLine("  i cinque esiti negativi sui dati reali parlano del MERCATO, non di un difetto.");
+        }
+        else if (best is not null && best.OutOfSampleSharpe > 1.0m)
+        {
+            Console.WriteLine($"  ESITO PARZIALE: l'edge viene trovato (Sharpe OOS {best.OutOfSampleSharpe:F2}) ma NESSUN");
+            Console.WriteLine("  candidato supera il Deflated Sharpe. Il gate e' piu' severo del necessario: rischia di");
+            Console.WriteLine("  scartare edge reali, e i risultati negativi precedenti vanno riletti con prudenza.");
+        }
+        else
+        {
+            Console.WriteLine("  ESITO NEGATIVO: la pipeline NON trova un edge che sappiamo esserci per costruzione.");
+            Console.WriteLine("  Prima di qualunque altra ricerca va capito perche': tutti i risultati precedenti");
+            Console.WriteLine("  sarebbero privi di valore informativo.");
+        }
+    }
+    finally
+    {
+        // La serie sintetica non deve restare nel database di produzione, nemmeno se qualcosa lancia.
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var removed = await db.OhlcvData.Where(c => c.Symbol == symbol).ExecuteDeleteAsync();
+        Console.WriteLine($"\n  Pulizia: {removed:N0} candele sintetiche rimosse dal database.");
+    }
 }
 
 // ------------------------------------------------------------------ PAIRS (angolo market-neutral)
