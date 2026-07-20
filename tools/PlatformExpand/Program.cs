@@ -98,6 +98,7 @@ switch (phase)
     case "control": await ControlAsync(); break;
     case "costfrontier": await CostFrontierAsync(); break;
     case "makerfill": await MakerFillAsync(); break;
+    case "xsection": await CrossSectionAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -458,6 +459,275 @@ async Task CostFrontierAsync()
             ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
             : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
     }
+}
+
+// ------------------------------------------------------------------ XSECTION (momentum trasversale)
+// Le cinque ricerche precedenti hanno provato tutte la stessa COSA: prevedere il singolo simbolo nel
+// tempo (timing). Tutte negative, e il filo conduttore misurato in R2 e' che a ucciderle e' il
+// TURNOVER, non la qualita' del segnale.
+//
+// Questo angolo e' strutturalmente diverso: non prevede se BTC sale, ma ordina l'universo per forza
+// relativa e tiene i primi K. E' l'anomalia piu' documentata in letteratura (cross-sectional
+// momentum), e soprattutto ha turnover BASSO per costruzione — si ribilancia ogni R giorni, non ad
+// ogni segnale. Attacca cioe' esattamente la variabile che ha affossato tutto il resto.
+//
+// Disciplina anti-overfitting: i parametri (lookback, K, ribilanciamento) si scelgono SOLO sulla
+// finestra di selezione; l'holdout viene calcolato una volta sola alla fine, sul parametro scelto.
+async Task CrossSectionAsync()
+{
+    string[] universe =
+    [
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT",
+        "LINK/USDT", "AVAX/USDT", "LTC/USDT", "DOT/USDT", "ATOM/USDT", "BCH/USDT", "ETC/USDT",
+        "XLM/USDT", "UNI/USDT", "AAVE/USDT", "ALGO/USDT", "ICP/USDT", "FIL/USDT",
+        "NEAR/USDT", "TRX/USDT", "SHIB/USDT", "CRV/USDT",
+    ];
+    const string tf = "1d";
+    var from = new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    // Costo per LATO su ogni unita' di nozionale scambiata: fee taker + slippage.
+    const decimal CostPerSide = 0.0015m;   // 0,10% fee + 0,05% slippage
+
+    Console.WriteLine("=== MOMENTUM TRASVERSALE (cross-sectional) ===");
+    Console.WriteLine($"    Universo {universe.Length} simboli, {tf}, da {from:yyyy-MM-dd}");
+    Console.WriteLine($"    Selezione fino al {selectionTo:yyyy-MM-dd}, holdout dopo\n");
+    Console.WriteLine("    Non prevede la direzione di un simbolo: ordina l'universo per forza relativa");
+    Console.WriteLine("    e tiene i primi K. Turnover basso per costruzione — che e' il punto.\n");
+
+    // --- Carico e allineo le serie su un calendario comune -----------------------------------
+    var series = new Dictionary<string, Dictionary<DateTime, decimal>>();
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        foreach (var s in universe)
+        {
+            var rows = await db.OhlcvData.AsNoTracking()
+                .Where(o => o.Symbol == s && o.Timeframe == tf && o.TimestampUtc >= from)
+                .OrderBy(o => o.TimestampUtc)
+                .Select(o => new { o.TimestampUtc, o.Close })
+                .ToListAsync();
+            if (rows.Count > 0) series[s] = rows.ToDictionary(r => r.TimestampUtc.Date, r => r.Close);
+        }
+    }
+
+    // Calendario = date presenti in TUTTI i simboli (evita che l'ingresso tardivo di una moneta
+    // cambi la composizione dell'universo a meta' strada, che sarebbe survivorship mascherato).
+    var symbols = series.Keys.OrderBy(s => s).ToList();
+    var calendar = series[symbols[0]].Keys.ToHashSet();
+    foreach (var s in symbols) calendar.IntersectWith(series[s].Keys);
+    var dates = calendar.OrderBy(d => d).ToList();
+
+    Console.WriteLine($"    {symbols.Count} simboli con storia comune, {dates.Count} giorni allineati");
+    Console.WriteLine($"    {dates[0]:yyyy-MM-dd} -> {dates[^1]:yyyy-MM-dd}\n");
+    if (dates.Count < 400) { Console.WriteLine("    Storia comune insufficiente."); return; }
+
+    // --- Il motore: una singola configurazione, valutata su un intervallo di date --------------
+    // Ritorna (rendimento totale %, Sharpe annualizzato, maxDD %, turnover medio per ribilanciamento,
+    //          costo totale in % del capitale, numero di ribilanciamenti)
+    (decimal Ret, double Sharpe, decimal MaxDd, decimal Turn, decimal Cost, int Rebals) Run(
+        int lookback, int topK, int rebalDays, bool marketNeutral, DateTime rFrom, DateTime rTo)
+    {
+        var idx = dates.Select((d, i) => (d, i)).Where(x => x.d >= rFrom && x.d <= rTo).ToList();
+        if (idx.Count < lookback + rebalDays * 3) return (0m, 0d, 0m, 0m, 0m, 0);
+
+        var equity = 1m;
+        var peak = 1m;
+        var maxDd = 0m;
+        var daily = new List<double>();
+        Dictionary<string, decimal> weights = new();   // pesi correnti (somma |w| <= 1)
+        decimal totalCost = 0m, totalTurn = 0m;
+        var rebals = 0;
+
+        for (var k = 0; k < idx.Count; k++)
+        {
+            var (date, gi) = idx[k];
+            if (gi < lookback) continue;
+
+            // Ribilanciamento
+            if (k % rebalDays == 0)
+            {
+                var scores = new List<(string S, decimal R)>();
+                foreach (var s in symbols)
+                {
+                    var pNow = series[s][dates[gi]];
+                    var pPast = series[s][dates[gi - lookback]];
+                    if (pPast > 0m) scores.Add((s, pNow / pPast - 1m));
+                }
+                if (scores.Count >= topK * 2)
+                {
+                    var ranked = scores.OrderByDescending(x => x.R).ToList();
+                    var target = new Dictionary<string, decimal>();
+                    var wLong = 1m / topK * (marketNeutral ? 0.5m : 1m);
+                    foreach (var t in ranked.Take(topK)) target[t.S] = wLong;
+                    if (marketNeutral)
+                        foreach (var b in ranked.TakeLast(topK)) target[b.S] = -wLong;
+
+                    // Turnover = somma delle variazioni assolute di peso; il costo si paga su quello.
+                    var turn = 0m;
+                    foreach (var s in symbols)
+                    {
+                        var oldW = weights.TryGetValue(s, out var ow) ? ow : 0m;
+                        var newW = target.TryGetValue(s, out var nw) ? nw : 0m;
+                        turn += Math.Abs(newW - oldW);
+                    }
+                    var cost = turn * CostPerSide;
+                    equity *= 1m - cost;
+                    totalCost += cost;
+                    totalTurn += turn;
+                    rebals++;
+                    weights = target;
+                }
+            }
+
+            // Rendimento del giorno successivo sui pesi correnti
+            if (k + 1 < idx.Count && weights.Count > 0)
+            {
+                var gNext = idx[k + 1].i;
+                var r = 0m;
+                foreach (var (s, w) in weights)
+                {
+                    var p0 = series[s][dates[gi]];
+                    var p1 = series[s][dates[gNext]];
+                    if (p0 > 0m) r += w * (p1 / p0 - 1m);
+                }
+                equity *= 1m + r;
+                daily.Add((double)r);
+                if (equity > peak) peak = equity;
+                var dd = peak > 0m ? (peak - equity) / peak * 100m : 0m;
+                if (dd > maxDd) maxDd = dd;
+            }
+        }
+
+        var sharpe = 0d;
+        if (daily.Count > 2)
+        {
+            var mean = daily.Average();
+            var sd = Math.Sqrt(daily.Sum(v => (v - mean) * (v - mean)) / (daily.Count - 1));
+            if (sd > 1e-12) sharpe = mean / sd * Math.Sqrt(365.0);
+        }
+        return ((equity - 1m) * 100m, sharpe, maxDd, rebals > 0 ? totalTurn / rebals : 0m, totalCost * 100m, rebals);
+    }
+
+    // --- FASE 1: scelta dei parametri, SOLO in selezione ---------------------------------------
+    Console.WriteLine("--- Selezione (i parametri si scelgono qui, l'holdout non e' ancora toccato) ---");
+    Console.WriteLine($"    {"lookback",8} {"topK",5} {"rebal",6} {"tipo",-8} {"rend",9} {"Sharpe",7} {"maxDD",7} {"turn",6} {"costi",7}");
+
+    var grid = new List<(int L, int K, int R, bool MN, decimal Ret, double Sh, decimal Dd, decimal Tu, decimal Co)>();
+    foreach (var L in new[] { 20, 30, 60, 90, 120 })
+        foreach (var K in new[] { 3, 5, 8 })
+            foreach (var R in new[] { 7, 14, 30 })
+                foreach (var MN in new[] { false, true })
+                {
+                    var r = Run(L, K, R, MN, dates[0], selectionTo);
+                    if (r.Rebals < 8) continue;
+                    grid.Add((L, K, R, MN, r.Ret, r.Sharpe, r.MaxDd, r.Turn, r.Cost));
+                }
+
+    foreach (var g in grid.OrderByDescending(g => g.Sh).Take(12))
+        Console.WriteLine($"    {g.L,8} {g.K,5} {g.R,6} {(g.MN ? "neutrale" : "long"),-8} {g.Ret,8:F1}% {g.Sh,7:F2} {g.Dd,6:F1}% {g.Tu,6:F2} {g.Co,6:F1}%");
+
+    if (grid.Count == 0) { Console.WriteLine("    Nessuna configurazione valutabile."); return; }
+
+    // --- FASE 2: UNA sola configurazione va all'holdout ----------------------------------------
+    var best = grid.OrderByDescending(g => g.Sh).First();
+    Console.WriteLine($"\n--- Holdout {selectionTo:yyyy-MM-dd} -> {dates[^1]:yyyy-MM-dd} (mai visto in selezione) ---");
+    Console.WriteLine($"    Configurazione scelta: lookback {best.L}g, top {best.K}, ribilancio {best.R}g, {(best.MN ? "market neutral" : "solo long")}");
+
+    var hold = Run(best.L, best.K, best.R, best.MN, selectionTo, dates[^1]);
+    Console.WriteLine($"    selezione : rend {best.Ret,7:F1}%  Sharpe {best.Sh,5:F2}  maxDD {best.Dd,5:F1}%");
+    Console.WriteLine($"    HOLDOUT   : rend {hold.Ret,7:F1}%  Sharpe {hold.Sharpe,5:F2}  maxDD {hold.MaxDd,5:F1}%  ({hold.Rebals} ribilanciamenti)");
+    Console.WriteLine($"    costi totali in holdout: {hold.Cost:F2}% del capitale, turnover medio {hold.Turn:F2}x per ribilanciamento");
+
+    // --- Riferimento: comprare e tenere l'universo equipesato ----------------------------------
+    var bhStart = dates.FindIndex(d => d >= selectionTo);
+    if (bhStart > 0)
+    {
+        var bh = 0m;
+        foreach (var s in symbols) bh += (series[s][dates[^1]] / series[s][dates[bhStart]] - 1m) / symbols.Count;
+        Console.WriteLine($"\n    Riferimento buy&hold equipesato sullo stesso holdout: {bh * 100m:F1}%");
+        Console.WriteLine(hold.Ret > bh * 100m
+            ? "    -> la strategia BATTE il riferimento passivo"
+            : "    -> la strategia NON batte il semplice comprare e tenere: nessun motivo di usarla");
+    }
+
+    // ----------------------------------------------------------------- DOSAGGIO DELLA VOLATILITA'
+    // Angolo diverso da tutti i precedenti: non prevede NIENTE. Tiene il paniere equipesato e regola
+    // quanto capitale esporre per puntare a una volatilita' costante. Vedi docs/REPORT-DOSAGGIO-VOLATILITA.md
+    Console.WriteLine("\n=== DOSAGGIO DELLA VOLATILITA' sul paniere equipesato ===");
+
+    var bhDaily = new List<double>();
+    for (var i = 1; i < dates.Count; i++)
+    {
+        var r = 0m;
+        foreach (var s in symbols) r += (series[s][dates[i]] / series[s][dates[i - 1]] - 1m) / symbols.Count;
+        bhDaily.Add((double)r);
+    }
+
+    (double Ret, double Sharpe, double MaxDd, double Cost, double AvgExp) VolTarget(double targetVol, int lookback, int rebal)
+    {
+        double eq = 1, peak = 1, maxDd = 0, cost = 0, exposure = 0, expSum = 0;
+        var rets = new List<double>();
+        for (var i = lookback; i < bhDaily.Count; i++)
+        {
+            if ((i - lookback) % rebal == 0)
+            {
+                var win = bhDaily.Skip(i - lookback).Take(lookback).ToList();
+                var m = win.Average();
+                var sd = Math.Sqrt(win.Sum(v => (v - m) * (v - m)) / (win.Count - 1)) * Math.Sqrt(365.0);
+                var t = sd > 1e-9 ? Math.Clamp(targetVol / sd, 0.0, 1.0) : 0.0;
+                var c = Math.Abs(t - exposure) * (double)CostPerSide;
+                eq *= 1 - c; cost += c; exposure = t;
+            }
+            expSum += exposure;
+            var r = exposure * bhDaily[i];
+            eq *= 1 + r; rets.Add(r);
+            if (eq > peak) peak = eq;
+            var dd = (peak - eq) / peak * 100; if (dd > maxDd) maxDd = dd;
+        }
+        var mean = rets.Average();
+        var s2 = Math.Sqrt(rets.Sum(v => (v - mean) * (v - mean)) / (rets.Count - 1));
+        return ((eq - 1) * 100, s2 > 1e-12 ? mean / s2 * Math.Sqrt(365.0) : 0, maxDd, cost * 100, expSum / rets.Count);
+    }
+
+    (double Ret, double Sharpe, double MaxDd) Constant(double exposure)
+    {
+        double eq = 1, peak = 1, maxDd = 0;
+        var rets = new List<double>();
+        foreach (var d in bhDaily)
+        {
+            var r = exposure * d;
+            eq *= 1 + r; rets.Add(r);
+            if (eq > peak) peak = eq;
+            var dd = (peak - eq) / peak * 100; if (dd > maxDd) maxDd = dd;
+        }
+        var m = rets.Average();
+        var sd = Math.Sqrt(rets.Sum(v => (v - m) * (v - m)) / (rets.Count - 1));
+        return ((eq - 1) * 100, sd > 1e-12 ? m / sd * Math.Sqrt(365.0) : 0, maxDd);
+    }
+
+    {
+        double eq = 1, peak = 1, maxDd = 0;
+        foreach (var r in bhDaily) { eq *= 1 + r; if (eq > peak) peak = eq; var dd = (peak - eq) / peak * 100; if (dd > maxDd) maxDd = dd; }
+        var m = bhDaily.Average();
+        var sd = Math.Sqrt(bhDaily.Sum(v => (v - m) * (v - m)) / (bhDaily.Count - 1));
+        Console.WriteLine($"    {"riferimento b&h equipesato",-32} rend {(eq - 1) * 100,8:F1}%  Sharpe {(sd > 1e-12 ? m / sd * Math.Sqrt(365.0) : 0),5:F2}  maxDD {maxDd,5:F1}%");
+    }
+
+    foreach (var tv in new[] { 0.30, 0.50, 0.70 })
+    {
+        var v = VolTarget(tv, 30, 30);
+        Console.WriteLine($"    target {tv:P0} lookback 30g rebal 30g       rend {v.Ret,8:F1}%  Sharpe {v.Sharpe,5:F2}  maxDD {v.MaxDd,5:F1}%  costi {v.Cost,4:F1}%  espos.media {v.AvgExp:P0}");
+    }
+
+    // IL CONTROLLO: a parita' di esposizione MEDIA, il dosaggio aggiunge qualcosa o e' solo
+    // "tenere meno mercato mentre scende"? Senza questo confronto il risultato non e' credibile.
+    var vt = VolTarget(0.30, 30, 30);
+    var ct = Constant(vt.AvgExp);
+    Console.WriteLine("\n--- CONTROLLO: esposizione COSTANTE alla stessa media ---");
+    Console.WriteLine($"    dosata  (media {vt.AvgExp:P0})   rend {vt.Ret,8:F1}%  Sharpe {vt.Sharpe,5:F2}  maxDD {vt.MaxDd,5:F1}%");
+    Console.WriteLine($"    COSTANTE alla stessa media {vt.AvgExp:P0}   rend {ct.Ret,8:F1}%  Sharpe {ct.Sharpe,5:F2}  maxDD {ct.MaxDd,5:F1}%");
+    Console.WriteLine(vt.Sharpe > ct.Sharpe + 0.05
+        ? $"    -> lo Sharpe migliora a parita' di mercato tenuto ({ct.Sharpe:F2} -> {vt.Sharpe:F2}): conta QUANDO si e' esposti"
+        : "    -> nessun guadagno oltre il tenere meno mercato: il dosaggio non aggiunge nulla");
 }
 
 // ------------------------------------------------------------------ MAKERFILL (il maker, ma davvero)
