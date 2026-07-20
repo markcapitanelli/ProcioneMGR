@@ -297,11 +297,23 @@ async Task Ingest1mAsync()
 // se nello stesso periodo bastava comprare e stare fermi.
 async Task HoldoutAsync()
 {
-    var candidates = new (string Strategy, string Symbol, string Tf, Dictionary<string, decimal> P)[]
+    // I candidati arrivano dall'ULTIMA caccia, non da una lista scritta a mano: cosi' il ciclo
+    // caccia -> holdout si chiude da solo e nessuno puo' dimenticarsi di aggiornare un array.
+    var huntPath = Path.Combine(AppContext.BaseDirectory, "hunt-results.json");
+    if (!File.Exists(huntPath))
     {
-        ("Supertrend", "DOGE/USDT", "1h", new() { ["AtrPeriod"] = 14m, ["Multiplier"] = 3m, ["AllowShort"] = 1m }),
-        ("DonchianBreakout", "DOGE/USDT", "1h", new() { ["EntryPeriod"] = 10m, ["ExitPeriod"] = 10m, ["Direction"] = 2m }),
-    };
+        Console.WriteLine($"Nessun risultato di caccia da validare ({huntPath} assente). Lancia prima la fase 'hunt'.");
+        return;
+    }
+
+    var candidates = JsonSerializer.Deserialize<List<DiscoveryCandidate>>(File.ReadAllText(huntPath))!
+        .OrderByDescending(c => c.OutOfSampleSharpe)
+        .Take(12)
+        .Select(c => (Strategy: c.StrategyName, Symbol: c.Symbol, Tf: c.Timeframe,
+                      P: new Dictionary<string, decimal>(c.Parameters),
+                      SelectionSharpe: c.OutOfSampleSharpe,
+                      Dsr: c.Validation?.DeflatedSharpe ?? double.NaN))
+        .ToArray();
 
     var from = holdoutFrom;
     var to = DateTime.UtcNow;
@@ -311,6 +323,7 @@ async Task HoldoutAsync()
     using var scope = provider.CreateScope();
     var backtest = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
     var factory = scope.ServiceProvider.GetRequiredService<IStrategyFactory>();
+    var survivors = 0;
 
     foreach (var c in candidates)
     {
@@ -344,10 +357,24 @@ async Task HoldoutAsync()
         // Riferimento: comprare alla prima candela e non fare piu' nulla.
         var hold = (candles[^1].Close - candles[0].Close) / candles[0].Close * 100m;
 
-        Console.WriteLine($"  {c.Strategy,-18} {c.Symbol,-11} {c.Tf}  su {candles.Count} candele");
-        Console.WriteLine($"      Sharpe {sharpe,6:F2}   netto {r.TotalReturnPercent,7:F2}%   lordo {r.GrossReturnPercent,7:F2}%   " +
-                          $"costi {r.CostDragPercent,6:F2}%   trade {r.TotalTrades,4}   maxDD {r.MaxDrawdownPercent,5:F1}%");
-        Console.WriteLine($"      Buy & hold sullo stesso periodo: {hold,7:F2}%   ->  {(r.TotalReturnPercent > hold ? "BATTE" : "NON batte")} il comprare e stare fermi\n");
+        var beatsHold = r.TotalReturnPercent > hold;
+        var survives = sharpe > 0.5m && beatsHold;
+        if (survives) survivors++;
+
+        Console.WriteLine($"  {(survives ? "OK " : "-- ")}{c.Strategy,-18} {c.Symbol,-11} {c.Tf}  su {candles.Count} candele");
+        Console.WriteLine($"      selezione: Sharpe {c.SelectionSharpe,5:F2}  DSR {c.Dsr,5:F2}   ->   HOLDOUT: Sharpe {sharpe,6:F2}");
+        Console.WriteLine($"      netto {r.TotalReturnPercent,7:F2}%   lordo {r.GrossReturnPercent,7:F2}%   costi {r.CostDragPercent,6:F2}%   " +
+                          $"trade {r.TotalTrades,4}   maxDD {r.MaxDrawdownPercent,5:F1}%");
+        Console.WriteLine($"      buy & hold {hold,7:F2}%  ->  {(beatsHold ? "BATTE" : "NON batte")} il comprare e stare fermi\n");
+    }
+
+    Console.WriteLine($"=== SOPRAVVISSUTI ALL'HOLDOUT: {survivors}/{candidates.Length} ===");
+    Console.WriteLine("    (criterio: Sharpe fuori campione > 0,5 E meglio del buy-and-hold)");
+    if (survivors == 0)
+    {
+        Console.WriteLine("    Nessuno. E' un esito informativo, non un fallimento: significa che cio' che la");
+        Console.WriteLine("    selezione premiava non sopravvive a dati mai visti — esattamente cio' che il");
+        Console.WriteLine("    Deflated Sharpe aveva gia' segnalato rifiutandoli.");
     }
 }
 
@@ -490,12 +517,28 @@ async Task HuntAsync()
 
     // Ogni ondata ha la propria finestra e il proprio walk-forward: più lento è il timeframe, più
     // lunga dev'essere la storia perché una finestra out-of-sample contenga abbastanza barre.
-    var waves = new (string Tf, DateTime From, int Is, int Oos, int Step)[]
-    {
-        ("1d", new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc), 12, 3, 3),
-        ("4h", new DateTime(2022, 6, 1, 0, 0, 0, DateTimeKind.Utc), 8, 2, 2),
-        ("1h", new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), 6, 2, 2),
-    };
+    // Variante "slow": solo 1d e 4h, con storia piu' profonda e finestre piu' lunghe. R2 ha
+    // misurato li' il cost drag piu' basso (3,4% a 1h contro 24% a 5m e 77% a 1m), e i timeframe
+    // lenti danno anche piu' anni di storia per lo stesso numero di barre — cioe' piu' regimi di
+    // mercato diversi attraversati, che e' cio' che rende un edge credibile.
+    //
+    // Il primo giro (1d/4h/1h) e' finito con 6 candidati e ZERO significativi al Deflated Sharpe,
+    // e i due migliori sono poi crollati nell'holdout (Sharpe -2,37 e -3,21, peggio del
+    // buy-and-hold). Qui si cambia deliberatamente il PERIODO oltre che i timeframe: non serve
+    // rifare la stessa domanda sugli stessi dati.
+    var slowOnly = args.Length > 1 && args[1].Equals("slow", StringComparison.OrdinalIgnoreCase);
+    var waves = slowOnly
+        ? new (string Tf, DateTime From, int Is, int Oos, int Step)[]
+          {
+              ("1d", new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc), 18, 6, 6),
+              ("4h", new DateTime(2022, 1, 1, 0, 0, 0, DateTimeKind.Utc), 12, 4, 4),
+          }
+        : new (string Tf, DateTime From, int Is, int Oos, int Step)[]
+          {
+              ("1d", new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc), 12, 3, 3),
+              ("4h", new DateTime(2022, 6, 1, 0, 0, 0, DateTimeKind.Utc), 8, 2, 2),
+              ("1h", new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), 6, 2, 2),
+          };
 
     foreach (var w in waves)
     {
