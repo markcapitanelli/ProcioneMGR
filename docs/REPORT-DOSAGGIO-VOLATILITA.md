@@ -8,9 +8,15 @@
 > "Non ha replicato" più sotto ha la prova; il resto del documento è conservato perché la sequenza
 > di come ci si è arrivati è essa stessa il contenuto utile.
 >
-> **Conclusione operativa: il dosaggio non è una fonte di rendimento corretto per il rischio.**
-> Quello che fa in modo affidabile, e che è misurato ovunque, è ridurre l'esposizione media e quindi
-> l'ampiezza delle oscillazioni. È una manopola di controllo del drawdown, niente di più.
+> **Conclusione operativa: il dosaggio non è una fonte affidabile di rendimento corretto per il
+> rischio.** Le misure si contraddicono a seconda del periodo e della composizione (+0,31 / −0,22 /
+> +0,33 su 4 finestre su 5 / positivo in 2 simboli su 12): è un effetto che dipende dal regime, non
+> una proprietà stabile. Quello che fa in modo affidabile, misurato ovunque, è ridurre l'esposizione
+> media e quindi l'ampiezza delle oscillazioni. È una manopola di controllo del drawdown.
+>
+> Il documento contiene anche un **errore di disegno sperimentale commesso e poi corretto** (400
+> panieri correlati che producevano una t di 141 priva di significato): vale la pena leggerlo, perché
+> è il modo più facile di fabbricare una certezza falsa.
 
 *2026-07-20. Universo: 24 alt su Binance, 1d, 2021-05-11 → 2026-07-20 (1897 giorni allineati).
 Costi: 0,10% fee + 0,05% slippage per lato, applicati su ogni unità di nozionale scambiata.*
@@ -108,6 +114,51 @@ i regimi — e cinque anni di un solo ciclo cripto non lo sono.
 
 **Un campione favorevole e uno sfavorevole non fanno un edge.** Il walk-forward su 6 finestre non
 bastava a proteggere da questo, perché tutte e sei venivano dallo stesso universo.
+
+## La randomizzazione, e un errore di disegno da non ripetere
+
+Con due panieri che dicevano il contrario, ho provato a randomizzare: 400 panieri casuali estratti
+dall'universo, ciascuno col suo controllo. Risultato: **399/399 positivi, differenza media +0,353,
+statistica t = 141,6.**
+
+**Quel numero non vale niente, e il difetto è nel disegno.** Le cripto si muovono quasi tutte
+insieme: 400 panieri estratti dallo **stesso periodo** non sono 400 esperimenti indipendenti, sono
+un esperimento solo ripetuto 400 volte. La t di 141 misura quante volte ho ripetuto la stessa cosa,
+non quanto l'effetto sia solido. È la stessa classe di errore del multiple testing che il Deflated
+Sharpe esiste per correggere, in una forma che il DSR non copre — e ci sono cascato dentro
+producendo il numero più impressionante e più vuoto di tutta la ricerca.
+
+La regola che ne resta: **randomizzare su asset correlati dentro una finestra fabbrica significatività
+finta.** L'unica randomizzazione che dice qualcosa è quella sulla dimensione lungo cui i dati sono
+davvero indipendenti — qui, il tempo.
+
+### La prova rifatta come andava fatta
+
+Universo fisso, finestre temporali **non sovrapposte**:
+
+| finestra | dosato | costante | differenza |
+|---|---|---|---|
+| 2023-03 → 2023-09 | −0,75 | −0,67 | **−0,08** |
+| 2023-09 → 2024-03 | 5,14 | 4,51 | +0,63 |
+| 2024-03 → 2024-09 | −0,61 | −1,12 | +0,51 |
+| 2024-09 → 2025-03 | 0,99 | 0,58 | +0,42 |
+| 2025-03 → 2025-09 | 1,29 | 1,15 | +0,15 |
+
+4 su 5 positive, media +0,33, deviazione standard 0,29 — e una che cambia segno.
+
+**Il quadro complessivo resta contraddittorio**, ed è giusto lasciarlo scritto così invece di
+sceglierne il pezzo che piace:
+
+- paniere 24 monete, 2021-2026 → **+0,31** di Sharpe;
+- paniere 12 monete, 2021-2026 → **−0,22**;
+- 5 sotto-finestre 2023-2025, universo 37 → **+0,33 in media, 4 su 5 positive**;
+- 12 simboli presi uno per uno, 2021-2026 → positivo in **2 su 12**.
+
+Non è "l'effetto non esiste" e non è "l'effetto c'è": è **un effetto che dipende dal regime**, con
+misure che si contraddicono a seconda di finestra e composizione. Su una base così non si schiera
+capitale, e soprattutto non si promette un miglioramento del rapporto rendimento/rischio.
+
+Comando: `dotnet run --project tools/PlatformExpand -- volrobust`
 
 ## ⚠️ Su un simbolo SOLO l'effetto non c'è — e le corsie operano su un simbolo solo
 

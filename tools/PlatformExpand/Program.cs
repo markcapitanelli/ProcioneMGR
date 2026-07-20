@@ -101,6 +101,7 @@ switch (phase)
     case "xsection": await CrossSectionAsync(); break;
     case "voloverlay": await VolOverlayAsync(); break;
     case "volsingle": await VolSingleAsync(); break;
+    case "volrobust": await VolRobustAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -460,6 +461,199 @@ async Task CostFrontierAsync()
         Console.WriteLine(breakEvenRt is decimal be
             ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
             : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
+    }
+}
+
+// ------------------------------------------------------------------ VOLROBUST (era rumore?)
+// Due panieri hanno dato due risposte opposte sul dosaggio: +0,31 di Sharpe su 24 monete, -0,22 su
+// 12. Con due campioni non si decide niente. Qui se ne generano CENTINAIA per randomizzazione:
+// panieri casuali estratti dallo stesso universo, ognuno con il suo controllo a esposizione
+// costante. Se l'effetto e' reale la distribuzione delle differenze e' spostata sopra lo zero; se
+// era rumore e' centrata sullo zero, e i due risultati di partenza sono semplicemente le due code.
+//
+// E' la domanda "quel 0,43 era rumore?" posta in modo che i dati possano rispondere no.
+async Task VolRobustAsync()
+{
+    const string tf = "1d";
+    var from = new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    const decimal CostPerSide = 0.0015m;
+    const double TargetVol = 0.30;
+    const int Lookback = 30, Rebal = 30;
+    const int Trials = 400;
+
+    Console.WriteLine("=== IL DOSAGGIO E' UN EFFETTO O ERA RUMORE? (randomizzazione sui panieri) ===");
+    Console.WriteLine($"    {Trials} panieri casuali, {tf}, da {from:yyyy-MM-dd}, target {TargetVol:P0}");
+    Console.WriteLine("    Per ogni paniere: Sharpe dosato meno Sharpe dell'esposizione COSTANTE equivalente.\n");
+
+    // Tutti i simboli con storia 1d sufficiente.
+    List<string> all;
+    await using (var db0 = await dbFactory.CreateDbContextAsync())
+    {
+        all = await db0.OhlcvData.AsNoTracking()
+            .Where(o => o.Timeframe == tf && o.TimestampUtc >= from)
+            .GroupBy(o => o.Symbol)
+            .Where(g => g.Count() >= 1200)
+            .Select(g => g.Key)
+            .ToListAsync();
+    }
+    all.Sort();
+    Console.WriteLine($"    Simboli disponibili con >= 1200 candele giornaliere: {all.Count}");
+    if (all.Count < 15) { Console.WriteLine("    Universo troppo piccolo per randomizzare."); return; }
+
+    var closes = new Dictionary<string, Dictionary<DateTime, decimal>>();
+    await using (var db1 = await dbFactory.CreateDbContextAsync())
+    {
+        foreach (var s in all)
+        {
+            var rows = await db1.OhlcvData.AsNoTracking()
+                .Where(o => o.Symbol == s && o.Timeframe == tf && o.TimestampUtc >= from)
+                .OrderBy(o => o.TimestampUtc)
+                .Select(o => new { o.TimestampUtc, o.Close }).ToListAsync();
+            closes[s] = rows.ToDictionary(r => r.TimestampUtc.Date, r => r.Close);
+        }
+    }
+
+    // Calendario comune a TUTTI: cosi' ogni paniere casuale gira sulle stesse date e i risultati
+    // sono confrontabili fra loro.
+    var cal = closes[all[0]].Keys.ToHashSet();
+    foreach (var s in all) cal.IntersectWith(closes[s].Keys);
+    var days = cal.OrderBy(d => d).ToList();
+    Console.WriteLine($"    Giorni comuni a tutti: {days.Count} ({days[0]:yyyy-MM-dd} -> {days[^1]:yyyy-MM-dd})\n");
+    if (days.Count < 400) { Console.WriteLine("    Storia comune insufficiente."); return; }
+
+    double SharpeOf(List<double> rets)
+    {
+        if (rets.Count < 3) return 0;
+        var m = rets.Average();
+        var sd = Math.Sqrt(rets.Sum(v => (v - m) * (v - m)) / (rets.Count - 1));
+        return sd > 1e-12 ? m / sd * Math.Sqrt(365.0) : 0;
+    }
+
+    (double Diff, double VtSh, double CtSh) Evaluate(List<string> basketSymbols)
+    {
+        var daily = new List<double>(days.Count);
+        for (var i = 1; i < days.Count; i++)
+        {
+            var r = 0m;
+            foreach (var s in basketSymbols) r += (closes[s][days[i]] / closes[s][days[i - 1]] - 1m) / basketSymbols.Count;
+            daily.Add((double)r);
+        }
+
+        var path = new double[daily.Count];
+        double cur = 0;
+        for (var i = 0; i < daily.Count; i++)
+        {
+            if (i >= Lookback && (i - Lookback) % Rebal == 0)
+            {
+                var win = daily.Skip(i - Lookback).Take(Lookback).ToList();
+                var m = win.Average();
+                var sd = Math.Sqrt(win.Sum(v => (v - m) * (v - m)) / (win.Count - 1)) * Math.Sqrt(365.0);
+                cur = sd > 1e-9 ? Math.Clamp(TargetVol / sd, 0.25, 1.0) : 0.0;
+            }
+            path[i] = cur;
+        }
+
+        var vtRets = new List<double>(daily.Count);
+        double expSum = 0;
+        for (var i = 0; i < daily.Count; i++) { vtRets.Add(path[i] * daily[i]); expSum += path[i]; }
+        var avgExp = expSum / daily.Count;
+        var ctRets = daily.Select(d => avgExp * d).ToList();
+
+        var vtSh = SharpeOf(vtRets);
+        var ctSh = SharpeOf(ctRets);
+        return (vtSh - ctSh, vtSh, ctSh);
+    }
+
+    var rnd = new Random(20260720);   // seme fisso: l'esperimento e' riproducibile
+    var diffs = new List<double>(Trials);
+    foreach (var size in new[] { 8, 12, 20 })
+    {
+        var sub = new List<double>();
+        for (var t = 0; t < Trials / 3; t++)
+        {
+            var pick = all.OrderBy(_ => rnd.Next()).Take(size).ToList();
+            var e = Evaluate(pick);
+            sub.Add(e.Diff); diffs.Add(e.Diff);
+        }
+        var pos = sub.Count(d => d > 0);
+        Console.WriteLine($"    panieri da {size,2} simboli: differenza media {sub.Average(),7:F3}   positivi {pos,3}/{sub.Count}   " +
+                          $"min {sub.Min(),6:F2}  max {sub.Max(),5:F2}");
+    }
+
+    var mean = diffs.Average();
+    var positive = diffs.Count(d => d > 0);
+
+    Console.WriteLine($"\n    --- Sensibilita' alla COMPOSIZIONE, su {diffs.Count} panieri ---");
+    Console.WriteLine($"    differenza media di Sharpe (dosato - costante): {mean:F4}");
+    Console.WriteLine($"    panieri con effetto POSITIVO                  : {positive}/{diffs.Count} ({(double)positive / diffs.Count:P0})");
+    Console.WriteLine();
+    Console.WriteLine("    ATTENZIONE a come si legge questo numero: NON e' una prova di robustezza, e");
+    Console.WriteLine("    NON va accompagnato da una statistica t. Le cripto si muovono quasi tutte");
+    Console.WriteLine("    insieme, quindi centinaia di panieri estratti dallo STESSO periodo non sono");
+    Console.WriteLine("    centinaia di esperimenti indipendenti: sono un esperimento solo, ripetuto.");
+    Console.WriteLine("    Dice soltanto che, dentro questa finestra, il risultato non dipende da QUALI");
+    Console.WriteLine("    monete si scelgono. La domanda vera e' se dipenda dal PERIODO — qui sotto.");
+
+    // --- La prova che conta: finestre TEMPORALI separate --------------------------------------
+    // I risultati opposti ottenuti finora venivano da finestre diverse, non da universi diversi.
+    // Qui l'universo resta fisso e si cambia solo il periodo, in blocchi non sovrapposti.
+    Console.WriteLine("\n    --- Sensibilita' al PERIODO (universo fisso, finestre non sovrapposte) ---");
+    Console.WriteLine($"    {"finestra",-26} {"giorni",7} {"dosato",8} {"costante",9} {"differenza",11}");
+
+    (double VtSh, double CtSh) EvaluateRange(List<string> syms2, int i0, int i1)
+    {
+        var daily = new List<double>();
+        for (var i = i0 + 1; i <= i1; i++)
+        {
+            var r = 0m;
+            foreach (var s in syms2) r += (closes[s][days[i]] / closes[s][days[i - 1]] - 1m) / syms2.Count;
+            daily.Add((double)r);
+        }
+        if (daily.Count < Lookback + Rebal * 2) return (0, 0);
+
+        var path = new double[daily.Count];
+        double cur = 0;
+        for (var i = 0; i < daily.Count; i++)
+        {
+            if (i >= Lookback && (i - Lookback) % Rebal == 0)
+            {
+                var win = daily.Skip(i - Lookback).Take(Lookback).ToList();
+                var m = win.Average();
+                var sd = Math.Sqrt(win.Sum(v => (v - m) * (v - m)) / (win.Count - 1)) * Math.Sqrt(365.0);
+                cur = sd > 1e-9 ? Math.Clamp(TargetVol / sd, 0.25, 1.0) : 0.0;
+            }
+            path[i] = cur;
+        }
+        var vt = new List<double>(); double expSum = 0;
+        for (var i = 0; i < daily.Count; i++) { vt.Add(path[i] * daily[i]); expSum += path[i]; }
+        var avg = expSum / daily.Count;
+        return (SharpeOf(vt), SharpeOf(daily.Select(d => avg * d).ToList()));
+    }
+
+    var windowDays = 180;
+    var perPeriod = new List<double>();
+    for (var start = 0; start + windowDays < days.Count; start += windowDays)
+    {
+        var end = Math.Min(start + windowDays, days.Count - 1);
+        var e = EvaluateRange(all, start, end);
+        if (e.VtSh == 0 && e.CtSh == 0) continue;
+        var d = e.VtSh - e.CtSh;
+        perPeriod.Add(d);
+        Console.WriteLine($"    {days[start]:yyyy-MM-dd} -> {days[end]:yyyy-MM-dd} {end - start,7} {e.VtSh,8:F2} {e.CtSh,9:F2} {d,11:F2}");
+    }
+
+    if (perPeriod.Count >= 2)
+    {
+        var pm = perPeriod.Average();
+        var psd = Math.Sqrt(perPeriod.Sum(d => (d - pm) * (d - pm)) / (perPeriod.Count - 1));
+        var pPos = perPeriod.Count(d => d > 0);
+        Console.WriteLine($"\n    finestre temporali: {perPeriod.Count} | positive {pPos}/{perPeriod.Count} | media {pm:F3} | dev.std {psd:F3}");
+        Console.WriteLine(pPos == perPeriod.Count
+            ? "    -> l'effetto c'e' in OGNI periodo: e' la firma di un fenomeno statistico, non di un caso."
+            : $"    -> l'effetto cambia segno da un periodo all'altro ({perPeriod.Count - pPos} negative su {perPeriod.Count}):\n"
+            + "       dipende dal regime di mercato, non e' una proprieta' stabile su cui contare.");
+        Console.WriteLine($"\n    NB: {perPeriod.Count} finestre da {windowDays} giorni su un solo ciclo cripto restano poche.");
+        Console.WriteLine("    Servirebbe un mercato diverso (azionario, o un ciclo precedente) per decidere.");
     }
 }
 
