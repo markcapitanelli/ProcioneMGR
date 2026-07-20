@@ -164,7 +164,7 @@ public sealed class BacktestEngine(
         await strategy.InitializeAsync(closes, candles, config.StrategyParameters ?? new(), indicators, ct);
 
         // 3) Loop event-driven.
-        var book = new Portfolio(config.InitialCapital, config.FeePercent, config.PositionSizePercent, config.Leverage);
+        var book = new Portfolio(config.InitialCapital, config.FeePercent, config.PositionSizePercent, config.Leverage, config.SlippagePercent);
         var equity = new List<EquityPoint>(n);
 
         // Overlay stop/target a livello di motore (0 = disattivi, comportamento invariato).
@@ -367,6 +367,12 @@ public sealed class BacktestEngine(
             MaxDrawdownPercent = MaxDrawdown(equity),
             CandlesEvaluated = candlesEvaluated,
             LiquidationCount = book.LiquidationCount,
+            // [R2] Contabilità dei costi: puramente diagnostica, non tocca nessuno dei numeri sopra
+            // (fee e slippage erano già dentro il PnL). Serve a rispondere "quanto ha eroso l'attrito".
+            TotalFeesPaid = book.TotalFees,
+            TotalSlippagePaid = book.TotalSlippage,
+            TotalFundingPaid = book.TotalFunding,
+            InitialCapital = config.InitialCapital,
             Trades = trades,
             EquityCurve = equity,
         };
@@ -396,11 +402,20 @@ public sealed class BacktestEngine(
     /// Con leva &gt; 1 espone il prezzo di liquidazione (margine eroso fino al mantenimento)
     /// e accumula gli eventuali costi di funding nel PnL del trade.
     /// </summary>
-    private sealed class Portfolio(decimal initialCapital, decimal feePercent, decimal sizePercent, decimal leverage)
+    private sealed class Portfolio(
+        decimal initialCapital, decimal feePercent, decimal sizePercent, decimal leverage, decimal slippagePercent = 0m)
     {
         private readonly decimal _feeFrac = feePercent / 100m;
         private readonly decimal _marginFrac = sizePercent / 100m;
         private readonly decimal _leverage = Math.Max(1m, leverage);
+
+        /// <summary>
+        /// [R2] Attrito modellato per lato. NON influenza il PnL — lo slippage è già dentro i prezzi
+        /// di fill che il motore passa a <see cref="Open"/>/<see cref="Close"/> (vedi Buy/Sell nel
+        /// loop). Serve SOLO a contabilizzare quanto è costato, perché la domanda "a 1m l'edge
+        /// sopravvive ai costi?" non è rispondibile senza sapere quanto pesano.
+        /// </summary>
+        private readonly decimal _slipFrac = slippagePercent > 0m ? slippagePercent / 100m : 0m;
 
         private int _side; // 0 flat, +1 long, -1 short
         private decimal _qty;
@@ -414,6 +429,15 @@ public sealed class BacktestEngine(
         public decimal Cash { get; private set; } = initialCapital;
         public List<BacktestTrade> Trades { get; } = new();
         public int LiquidationCount { get; private set; }
+
+        /// <summary>[R2] Commissioni pagate, cumulate su entrambi i lati di ogni trade.</summary>
+        public decimal TotalFees { get; private set; }
+
+        /// <summary>[R2] Attrito di slippage stimato sul nozionale di ogni fill. Diagnostico: vedi <see cref="_slipFrac"/>.</summary>
+        public decimal TotalSlippage { get; private set; }
+
+        /// <summary>[R2] Funding perpetual addebitato (0 senza leva/derivati).</summary>
+        public decimal TotalFunding { get; private set; }
 
         public bool IsFlat => _side == 0;
         public bool IsLong => _side == 1;
@@ -445,6 +469,7 @@ public sealed class BacktestEngine(
             if (_side == 0 || amount <= 0m) return;
             Cash -= amount;
             _fundingAccrued += amount;
+            TotalFunding += amount;
         }
 
         public void OpenLong(decimal price, DateTime ts) => Open(1, price, ts);
@@ -457,6 +482,8 @@ public sealed class BacktestEngine(
             var notional = margin * _leverage;
             _qty = notional / price;
             _entryFee = notional * _feeFrac;
+            TotalFees += _entryFee;
+            TotalSlippage += notional * _slipFrac;
             Cash -= margin + _entryFee;
             _margin = margin;
             _notionalEntry = notional;
@@ -472,6 +499,8 @@ public sealed class BacktestEngine(
 
             var pnlRaw = UnrealizedPnl(price);
             var exitFee = _qty * price * _feeFrac;
+            TotalFees += exitFee;
+            TotalSlippage += _qty * price * _slipFrac;
             Cash += _margin + pnlRaw - exitFee;
 
             var pnl = pnlRaw - _entryFee - exitFee - _fundingAccrued;

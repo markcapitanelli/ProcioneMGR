@@ -15,7 +15,15 @@ using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.Ingestion;
 using ProcioneMGR.Services.Optimization;
+using ProcioneMGR.Services.Pipeline;
 using ProcioneMGR.Services.Risk;
+
+// Npgsql "legacy timestamp behavior": stessa impostazione dell'app (vedi ProcioneMGR/Program.cs).
+// Le colonne sono 'timestamp without time zone' e il codice usa DateTime con Kind=Utc: senza questo
+// switch Npgsql RIFIUTA la scrittura e ogni fase che tocca l'OHLCV muore con
+// "Cannot write DateTime with Kind=UTC to PostgreSQL type 'timestamp without time zone'".
+// Va impostato PRIMA di costruire qualunque data source Npgsql.
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
 var pgConn = Environment.GetEnvironmentVariable("ConnectionStrings__PostgresConnection")
     ?? "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure";
@@ -77,8 +85,10 @@ switch (phase)
 {
     case "stats": await StatsAsync(); break;
     case "ingest": await IngestAsync(); break;
+    case "ingest1m": await Ingest1mAsync(); break;
+    case "costprofile": await CostProfileAsync(); break;
     case "discover": await DiscoverAsync(); break;
-    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | discover"); break;
+    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | discover"); break;
 }
 
 // ------------------------------------------------------------------ STATS (read-only)
@@ -202,6 +212,257 @@ async Task IngestAsync()
     }
 
     Console.WriteLine($"\n=== INGEST completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+}
+
+// ------------------------------------------------------------------ INGEST 1m (app ferma)
+// [R2] Timeframe 1m, DELIBERATAMENTE limitato.
+//
+// Perché non tutte le coppie: a 1m un anno vale ~525.000 candele per coppia. Sulle 30 coppie della
+// watchlist sarebbero ~15,8 milioni di righe contro i ~7,7 milioni dell'INTERO database attuale —
+// più che raddoppiarlo per rispondere a una domanda che si può rispondere su sei coppie.
+//
+// Perché proprio queste sei: sono le più liquide, cioè quelle dove lo slippage reale è più basso e
+// quindi dove 1m ha la MIGLIORE probabilità di funzionare. Se l'edge netto non sopravvive qui, non
+// sopravvive da nessuna parte, e la risposta di R2 è chiusa senza scaricare altri 20 milioni di righe.
+async Task Ingest1mAsync()
+{
+    string[] liquidSymbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"];
+    var from1m = DateTime.UtcNow.Date.AddMonths(-12);
+
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    long total = 0;
+
+    Console.WriteLine($"=== INGEST 1m: {liquidSymbols.Length} coppie da {from1m:yyyy-MM-dd} ===");
+    Console.WriteLine($"    Attesi ~{525_600L * liquidSymbols.Length:N0} candele. Richiede parecchi minuti.\n");
+
+    foreach (var symbol in liquidSymbols)
+    {
+        using var scope = provider.CreateScope();
+        var ingestion = scope.ServiceProvider.GetRequiredService<IOhlcvIngestionService>();
+        var symSw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var result = await ingestion.IngestHistoricalDataAsync(
+                "Binance", symbol, "1m", from1m, DateTime.UtcNow, null, CancellationToken.None);
+            total += result.CandlesProcessed;
+            Console.WriteLine($"  {symbol,-11} -> {result.CandlesProcessed,9:N0} candele in {symSw.Elapsed.TotalMinutes:F1} min");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  {symbol,-11} -> ERRORE: {ex.Message}");
+        }
+    }
+
+    // Watchlist: idempotente come nella fase ingest.
+    //
+    // Enabled=FALSE di proposito. Sei serie 1m in più nel ciclo di sincronizzazione periodico
+    // significano sei richieste REST ogni 5 minuti per dati che, finché la misura di R2 non ha
+    // detto se 1m è operabile, nessuno consuma. Si abilitano quando (e se) servono davvero.
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        var added = 0;
+        foreach (var symbol in liquidSymbols)
+        {
+            var exists = await db.TrackedSeries.AnyAsync(t =>
+                t.Exchange == ExchangeName.Binance && t.Symbol == symbol && t.Timeframe == "1m");
+            if (!exists)
+            {
+                db.TrackedSeries.Add(new TrackedSeries
+                {
+                    Exchange = ExchangeName.Binance, Symbol = symbol, Timeframe = "1m", Enabled = false,
+                });
+                added++;
+            }
+        }
+        await db.SaveChangesAsync();
+        Console.WriteLine($"\n  Watchlist: {added} serie 1m registrate (DISABILITATE: si accendono solo se 1m si dimostra operabile).");
+    }
+
+    Console.WriteLine($"\n=== INGEST 1m completata: {total:N0} candele in {sw.Elapsed.TotalMinutes:F1} min ===");
+}
+
+// ------------------------------------------------------------------ COST PROFILE (app ferma)
+// [R2] Risponde alla domanda "1m è operabile?" nel modo più diretto possibile: prende le STESSE
+// strategie, sulle STESSE coppie, nella STESSA finestra di calendario, e le fa girare su timeframe
+// diversi con i costi onesti. Poi confronta quanto dell'edge LORDO se lo mangia l'attrito.
+//
+// Non è un sweep di ottimizzazione: usa i parametri di default. È voluto. La domanda qui non è
+// "quali parametri vanno bene a 1m" ma "a 1m resta qualcosa da ottimizzare, dopo i costi?". Se il
+// cost drag divora il lordo a parametri ragionevoli, ottimizzare significa solo cercare più a fondo
+// nel rumore — e conviene saperlo prima di bruciare ore di sweep.
+async Task CostProfileAsync()
+{
+    string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"];
+    string[] timeframes = ["1m", "5m", "15m", "1h"];
+
+    // Finestra comune a tutti i timeframe: gli ultimi 6 mesi, che l'ingestione 1m copre di sicuro.
+    var to = DateTime.UtcNow.Date;
+    var from = to.AddMonths(-6);
+
+    var costs = new PipelineCosts(
+        PipelineCosts.DefaultSlippagePercent,
+        PipelineCosts.DefaultFeePercent,
+        PipelineCosts.DefaultFundingRatePercentPer8h);
+
+    Console.WriteLine($"=== PROFILO DI COSTO per timeframe — {from:yyyy-MM-dd} → {to:yyyy-MM-dd} ===");
+    Console.WriteLine($"    {symbols.Length} coppie, costi: fee {costs.FeePercent}%/lato, slippage {costs.SlippagePercent}%/fill\n");
+
+    // ---- Parte 1: il TETTO STRUTTURALE, indipendente da qualunque strategia ----
+    //
+    // Questa è la misura più forte del profilo, perché non si può obiettare che "dipende dai
+    // parametri": confronta l'ampiezza TIPICA di una candela con il costo di un giro completo.
+    // Se il movimento mediano di una barra a 1m è 0,03% e un round-turn costa 0,30%, allora QUALUNQUE
+    // strategia a 1m deve catturare un movimento pari a ~10 barre tipiche solo per andare in pari.
+    // Non dice che è impossibile: dice quanto deve essere brava, e quante barre deve tenere.
+    var roundTurnPercent = 2m * (costs.FeePercent + costs.SlippagePercent);
+    Console.WriteLine($"=== TETTO STRUTTURALE (round-turn = {roundTurnPercent:F2}%) ===");
+    Console.WriteLine($"  {"TF",-5} {"barre",10} {"|mossa| mediana",16} {"barre per pareggiare",22}");
+
+    foreach (var tf in timeframes)
+    {
+        var moves = new List<decimal>();
+        var bars = 0L;
+        foreach (var symbol in symbols)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync();
+            var closes = await db.OhlcvData.AsNoTracking()
+                .Where(c => c.Symbol == symbol && c.Timeframe == tf
+                         && c.TimestampUtc >= from && c.TimestampUtc <= to)
+                .OrderBy(c => c.TimestampUtc)
+                .Select(c => c.Close)
+                .ToListAsync();
+            bars += closes.Count;
+            for (var i = 1; i < closes.Count; i++)
+            {
+                if (closes[i - 1] > 0m) moves.Add(Math.Abs(closes[i] - closes[i - 1]) / closes[i - 1] * 100m);
+            }
+        }
+
+        if (moves.Count == 0) { Console.WriteLine($"  {tf,-5} — nessun dato"); continue; }
+        moves.Sort();
+        var medianMove = moves[moves.Count / 2];
+        var barsToBreakEven = medianMove > 0m ? roundTurnPercent / medianMove : 0m;
+        Console.WriteLine($"  {tf,-5} {bars,10:N0} {medianMove,15:F4}% {barsToBreakEven,21:F1}");
+    }
+
+    Console.WriteLine();
+
+    // ---- Parte 2: cosa succede davvero alle strategie della piattaforma ----
+    using var scope = provider.CreateScope();
+    var backtest = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+    var strategyFactory = scope.ServiceProvider.GetRequiredService<IStrategyFactory>();
+
+    // Strategie a parametri di default, escluse quelle che richiedono un modello ML addestrato.
+    var strategyNames = strategyFactory.Prototypes
+        .Where(p => !p.Name.Contains("Ml", StringComparison.OrdinalIgnoreCase))
+        .Select(p => p.Name)
+        .ToList();
+
+    var rows = new List<(string Tf, string Symbol, string Strategy, BacktestResult R)>();
+
+    foreach (var tf in timeframes)
+    {
+        foreach (var symbol in symbols)
+        {
+            List<OhlcvData> candles;
+            await using (var db = await dbFactory.CreateDbContextAsync())
+            {
+                candles = await db.OhlcvData.AsNoTracking()
+                    .Where(c => c.Symbol == symbol && c.Timeframe == tf
+                             && c.TimestampUtc >= from && c.TimestampUtc <= to)
+                    .OrderBy(c => c.TimestampUtc)
+                    .ToListAsync();
+            }
+            if (candles.Count < 500)
+            {
+                Console.WriteLine($"  {tf,-4} {symbol,-11} SALTATA: solo {candles.Count} candele nella finestra.");
+                continue;
+            }
+
+            foreach (var name in strategyNames)
+            {
+                var cfg = costs.ApplyTo(new BacktestConfiguration
+                {
+                    ExchangeName = "Binance",
+                    Symbol = symbol,
+                    Timeframe = tf,
+                    From = from,
+                    To = to,
+                    InitialCapital = 10_000m,
+                    // Dimensione REALISTICA, non 100%. Col capitale intero su ogni trade e migliaia
+                    // di giri, l'attrito compone fino ad azzerare il conto e tutte le mediane
+                    // saturano a -100%: un numero vero ma inutile, perché non distingue più i
+                    // timeframe fra loro. Al 10% (l'ordine di grandezza di SafetyConfiguration)
+                    // le differenze restano leggibili.
+                    PositionSizePercent = 10m,
+                    StrategyName = name,
+                });
+                try
+                {
+                    var strategy = strategyFactory.Create(name);
+                    var r = await backtest.RunBacktestAsync(cfg, candles, strategy, CancellationToken.None);
+                    if (r.TotalTrades > 0) rows.Add((tf, symbol, name, r));
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  {tf,-4} {symbol,-11} {name,-22} ERRORE: {ex.Message}");
+                }
+            }
+            Console.WriteLine($"  {tf,-4} {symbol,-11} {candles.Count,9:N0} candele, {strategyNames.Count} strategie valutate");
+        }
+    }
+
+    Console.WriteLine($"\n=== SINTESI (mediane su {rows.Count} backtest con almeno un trade, size 10%) ===");
+    Console.WriteLine($"  {"TF",-5} {"n",5} {"trade",8} {"lordo%",9} {"costi%",9} {"netto%",9} {"costi/lordo",12}");
+
+    static decimal Median(IEnumerable<decimal> xs)
+    {
+        var s = xs.OrderBy(x => x).ToList();
+        return s.Count == 0 ? 0m : s.Count % 2 == 1 ? s[s.Count / 2] : (s[s.Count / 2 - 1] + s[s.Count / 2]) / 2m;
+    }
+
+    foreach (var tf in timeframes)
+    {
+        var g = rows.Where(r => r.Tf == tf).ToList();
+        if (g.Count == 0) { Console.WriteLine($"  {tf,-5} — nessun dato"); continue; }
+
+        var trades = Median(g.Select(r => (decimal)r.R.TotalTrades));
+        var gross = Median(g.Select(r => r.R.GrossReturnPercent));
+        var drag = Median(g.Select(r => r.R.CostDragPercent));
+        var net = Median(g.Select(r => r.R.TotalReturnPercent));
+
+        // Rapporto costi/lordo: quanto dell'edge lordo se ne va in attrito. Calcolato solo sui casi
+        // con lordo POSITIVO — su un lordo negativo il rapporto non significa niente (la strategia
+        // perdeva già prima dei costi, e il problema non sono i costi).
+        var positive = g.Where(r => r.R.GrossReturnPercent > 0m).ToList();
+        var ratio = positive.Count == 0
+            ? "n/d"
+            : $"{Median(positive.Select(r => r.R.CostDragPercent / r.R.GrossReturnPercent)) * 100m:F0}%";
+
+        Console.WriteLine($"  {tf,-5} {g.Count,5} {trades,8:F0} {gross,9:F2} {drag,9:F2} {net,9:F2} {ratio,12}");
+    }
+
+    // Quante combinazioni restano profittevoli AL NETTO: è il conto che decide.
+    Console.WriteLine($"\n=== Sopravvissuti al netto dei costi ===");
+    foreach (var tf in timeframes)
+    {
+        var g = rows.Where(r => r.Tf == tf).ToList();
+        if (g.Count == 0) continue;
+        var grossOk = g.Count(r => r.R.GrossReturnPercent > 0m);
+        var netOk = g.Count(r => r.R.TotalReturnPercent > 0m);
+        Console.WriteLine($"  {tf,-5} lordo>0: {grossOk,4}/{g.Count,-4} ({(decimal)grossOk / g.Count:P0})   " +
+                          $"netto>0: {netOk,4}/{g.Count,-4} ({(decimal)netOk / g.Count:P0})");
+    }
+
+    var outPath = Path.Combine(AppContext.BaseDirectory, "cost-profile.json");
+    File.WriteAllText(outPath, JsonSerializer.Serialize(
+        rows.Select(r => new
+        {
+            r.Tf, r.Symbol, r.Strategy,
+            r.R.TotalTrades, r.R.TotalReturnPercent, r.R.GrossReturnPercent,
+            r.R.CostDragPercent, r.R.TotalFeesPaid, r.R.TotalSlippagePaid, r.R.MaxDrawdownPercent,
+        }), new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"\nDettaglio completo: {outPath}");
 }
 
 // ------------------------------------------------------------------ DISCOVER (app ferma)

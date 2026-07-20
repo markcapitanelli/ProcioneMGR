@@ -331,6 +331,9 @@ public sealed class OptimizationEngine(
         InitialCapital = config.InitialCapital,
         PositionSizePercent = config.PositionSizePercent,
         FeePercent = config.CommissionPercent,
+        // [R2] Prima mancava: la selezione dei parametri girava senza attrito mentre la validazione
+        // holdout lo applicava. Vedi OptimizationConfiguration.SlippagePercent.
+        SlippagePercent = config.SlippagePercent,
         StrategyName = config.StrategyName,
         StrategyParameters = new Dictionary<string, decimal>(combo),
     };

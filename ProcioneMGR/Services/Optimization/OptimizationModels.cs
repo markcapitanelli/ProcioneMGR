@@ -35,6 +35,23 @@ public class OptimizationConfiguration
     public decimal InitialCapital { get; set; } = 10000m;
     public decimal CommissionPercent { get; set; } = 0.1m;
 
+    /// <summary>
+    /// [R2] Attrito sfavorevole applicato a OGNI fill, in % del prezzo. Prima non esisteva su questo
+    /// modello e <c>BuildBacktestConfig</c> non lo impostava: l'intera SELEZIONE dei parametri (e,
+    /// a cascata, quella dei candidati di Discovery) girava a sole commissioni, mentre la successiva
+    /// validazione holdout della pipeline applicava i costi pieni.
+    ///
+    /// L'asimmetria non è solo contabile, è di SELEZIONE: ottimizzando senza attrito si premiano i
+    /// parametri ad alto turnover, il cui vantaggio apparente è proprio il costo che non si sta
+    /// pagando. Sui timeframe lenti è un'ottimismo modesto; a 1m, dove una strategia può girare
+    /// decine di volte al giorno, lo slippage pesa quanto la commissione e la classifica dei
+    /// candidati si riempie di strategie che perdono denaro.
+    ///
+    /// Default = <see cref="Pipeline.PipelineCosts.DefaultSlippagePercent"/>: il default ONESTO,
+    /// non zero. Chi vuole il comportamento storico senza attrito deve chiederlo esplicitamente.
+    /// </summary>
+    public decimal SlippagePercent { get; set; } = Pipeline.PipelineCosts.DefaultSlippagePercent;
+
     /// <summary>% del capitale impegnata per trade durante l'ottimizzazione.</summary>
     public decimal PositionSizePercent { get; set; } = 100m;
 

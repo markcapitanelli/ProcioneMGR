@@ -88,6 +88,34 @@ public class BacktestResult
     /// <summary>Numero di posizioni chiuse per liquidazione forzata (solo con leva &gt; 1).</summary>
     public int LiquidationCount { get; set; }
 
+    /// <summary>[R2] Commissioni pagate in valuta, su entrambi i lati di ogni trade.</summary>
+    public decimal TotalFeesPaid { get; set; }
+
+    /// <summary>[R2] Attrito di slippage in valuta, stimato sul nozionale di ogni fill.</summary>
+    public decimal TotalSlippagePaid { get; set; }
+
+    /// <summary>[R2] Funding perpetual addebitato in valuta (0 senza leva/derivati).</summary>
+    public decimal TotalFundingPaid { get; set; }
+
+    /// <summary>Capitale iniziale, ripetuto qui perché i rapporti sotto siano leggibili da soli.</summary>
+    public decimal InitialCapital { get; set; }
+
+    /// <summary>[R2] Attrito totale: commissioni + slippage + funding.</summary>
+    public decimal TotalCosts => TotalFeesPaid + TotalSlippagePaid + TotalFundingPaid;
+
+    /// <summary>
+    /// [R2] Costi in % del capitale iniziale. È il numero che decide se un timeframe è operabile:
+    /// un rendimento netto del 3% con un cost drag del 40% non è una strategia mediocre, è una
+    /// strategia che regala all'exchange tredici volte quello che tiene.
+    /// </summary>
+    public decimal CostDragPercent => InitialCapital > 0m ? TotalCosts / InitialCapital * 100m : 0m;
+
+    /// <summary>
+    /// [R2] Rendimento che ci sarebbe stato SENZA attrito. Il divario con
+    /// <see cref="TotalReturnPercent"/> è esattamente ciò che i costi hanno eroso.
+    /// </summary>
+    public decimal GrossReturnPercent => TotalReturnPercent + CostDragPercent;
+
     public List<BacktestTrade> Trades { get; set; } = new();
     public List<EquityPoint> EquityCurve { get; set; } = new();
 }

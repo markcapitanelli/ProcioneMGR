@@ -234,6 +234,9 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
         new("stepMonths", "Passo walk-forward (mesi)", "3", ""),
         new("minOosSharpe", "Sharpe OOS minimo", "0.3", "gate anti-rumore del Report Caccia"),
         new("minTrades", "Trade minimi", "12", "candidati con meno trade sono rumore statistico"),
+        // [R2] I costi erano dichiarati solo sugli stage di validazione: la discovery, che è dove i
+        // candidati vengono SCELTI, girava a sole commissioni di default e senza attrito.
+        .. PipelineCosts.ParameterDefinitions,
     ];
 
     public string? ValidateInput(PipelineContext ctx)
@@ -241,6 +244,11 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
 
     public async Task ExecuteAsync(PipelineContext ctx, StageConfig config, CancellationToken ct)
     {
+        // [R2] Stessi costi degli stage di validazione: senza, la discovery sceglierebbe i candidati
+        // sotto un modello di costo più generoso di quello con cui verranno poi giudicati — e la
+        // classifica sarebbe già inquinata prima che il gate onesto la veda.
+        var costs = PipelineCosts.FromConfig(config);
+
         var discoveryConfig = new StrategyDiscoveryConfiguration
         {
             ExchangeName = ctx.ExchangeName,
@@ -250,6 +258,8 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
             From = ctx.Ranges.SelectionFrom,
             To = ctx.Ranges.SelectionTo,
             InitialCapital = ctx.InitialCapital,
+            CommissionPercent = costs.FeePercent,
+            SlippagePercent = costs.SlippagePercent,
             TopN = config.GetInt("topN", 15),
             WalkForward = new WalkForwardConfiguration
             {
