@@ -100,6 +100,7 @@ switch (phase)
     case "makerfill": await MakerFillAsync(); break;
     case "xsection": await CrossSectionAsync(); break;
     case "voloverlay": await VolOverlayAsync(); break;
+    case "volsingle": await VolSingleAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -460,6 +461,92 @@ async Task CostFrontierAsync()
             ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
             : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
     }
+}
+
+// ------------------------------------------------------------------ VOLSINGLE (il dosaggio su un simbolo solo)
+// Sul PANIERE equipesato il dosaggio funziona, ma una parte del merito potrebbe essere la
+// diversificazione: mediando 24 monete la volatilita' del paniere e' piu' stabile e piu' prevedibile
+// di quella di una singola. Su un simbolo solo quella stampella non c'e', quindi l'effetto deve
+// venire tutto dal dosaggio. E' il test che distingue "funziona" da "funziona perche' e' un paniere".
+//
+// Per ogni simbolo si confrontano TRE cose, non due: comprare e tenere, dosare, e — controllo
+// decisivo — tenere un'esposizione COSTANTE pari a quella media del dosaggio.
+async Task VolSingleAsync()
+{
+    string[] universe =
+    [
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT",
+        "LINK/USDT", "AVAX/USDT", "LTC/USDT", "DOT/USDT", "ATOM/USDT",
+    ];
+    const string tf = "1d";
+    var from = new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    const decimal CostPerSide = 0.0015m;
+    const double TargetVol = 0.30;
+    const int Lookback = 30, Rebal = 30;
+
+    Console.WriteLine("=== DOSAGGIO SU SINGOLO SIMBOLO (senza la stampella della diversificazione) ===");
+    Console.WriteLine($"    {tf}, da {from:yyyy-MM-dd}, target {TargetVol:P0}, stima su {Lookback} barre, ribilancio {Rebal}g\n");
+    Console.WriteLine($"    {"simbolo",-11} {"b&h rend",9} {"b&h Sh",7} | {"dosata",9} {"Sh",6} {"espos.",7} | {"costante",9} {"Sh",6}  esito");
+
+    int migliora = 0, tot = 0;
+    await using var db = await dbFactory.CreateDbContextAsync();
+
+    foreach (var sym in universe)
+    {
+        var closes = await db.OhlcvData.AsNoTracking()
+            .Where(o => o.Symbol == sym && o.Timeframe == tf && o.TimestampUtc >= from)
+            .OrderBy(o => o.TimestampUtc).Select(o => o.Close).ToListAsync();
+        if (closes.Count < 400) continue;
+
+        var daily = new List<double>();
+        for (var i = 1; i < closes.Count; i++)
+            daily.Add(closes[i - 1] > 0m ? (double)(closes[i] / closes[i - 1] - 1m) : 0d);
+
+        (double Ret, double Sh, double AvgExp) Simulate(Func<int, double> expo)
+        {
+            double eq = 1, expSum = 0, prev = 0;
+            var rets = new List<double>();
+            for (var i = 0; i < daily.Count; i++)
+            {
+                var e = expo(i);
+                if (e != prev) { eq *= 1 - Math.Abs(e - prev) * (double)CostPerSide; prev = e; }
+                var r = e * daily[i];
+                eq *= 1 + r; rets.Add(r); expSum += e;
+            }
+            var m = rets.Average();
+            var sd = Math.Sqrt(rets.Sum(v => (v - m) * (v - m)) / (rets.Count - 1));
+            return ((eq - 1) * 100, sd > 1e-12 ? m / sd * Math.Sqrt(365.0) : 0, expSum / rets.Count);
+        }
+
+        // Esposizione dosata, causale: usa solo le barre passate.
+        var path = new double[daily.Count];
+        double cur = 0;
+        for (var i = 0; i < daily.Count; i++)
+        {
+            if (i >= Lookback && (i - Lookback) % Rebal == 0)
+            {
+                var win = daily.Skip(i - Lookback).Take(Lookback).ToList();
+                var m2 = win.Average();
+                var sd2 = Math.Sqrt(win.Sum(v => (v - m2) * (v - m2)) / (win.Count - 1)) * Math.Sqrt(365.0);
+                cur = sd2 > 1e-9 ? Math.Clamp(TargetVol / sd2, 0.25, 1.0) : 0.0;
+            }
+            path[i] = cur;
+        }
+
+        var bh = Simulate(_ => 1.0);
+        var vt = Simulate(i => path[i]);
+        var ct = Simulate(_ => vt.AvgExp);        // controllo a esposizione media pari
+
+        tot++;
+        var ok = vt.Sh > ct.Sh + 0.05;
+        if (ok) migliora++;
+        var verdict = ok ? "dosare aggiunge" : "nessun guadagno oltre l'esposizione ridotta";
+        Console.WriteLine($"    {sym,-11} {bh.Ret,8:F1}% {bh.Sh,7:F2} | {vt.Ret,8:F1}% {vt.Sh,6:F2} {vt.AvgExp,6:P0} | {ct.Ret,8:F1}% {ct.Sh,6:F2}  {verdict}");
+    }
+
+    Console.WriteLine($"\n    Simboli in cui dosare batte l'esposizione costante equivalente: {migliora}/{tot}");
+    Console.WriteLine("    Il confronto che conta e' con la COSTANTE, non con il buy&hold: battere il buy&hold");
+    Console.WriteLine("    tenendo meno mercato in un periodo negativo e' automatico e non prova nulla.");
 }
 
 // ------------------------------------------------------------------ VOLOVERLAY (il dosaggio salva le strategie?)

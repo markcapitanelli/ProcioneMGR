@@ -486,9 +486,18 @@
                             meno capitale esposto quando il mercato si agita, di più quando si calma.
                             Col tetto a 1,0 il fattore può <strong>solo ridurre</strong> la size, mai aumentarla —
                             quindi accenderlo non può far superare i limiti qui sopra.
-                            Misurato su un paniere equipesato: a parità di esposizione media lo Sharpe passa da 0,12 a 0,43
-                            (<code>docs/REPORT-DOSAGGIO-VOLATILITA.md</code>).
-                            <strong>Non</strong> migliora un segnale sbagliato: se la strategia perde, dosarla fa perdere più lentamente.
+                        </div>
+                        <div class="alert alert-secondary py-2 mt-2 mb-0 small">
+                            <strong>Cosa aspettarsi, misurato.</strong>
+                            Su un <em>paniere</em> di 24 monete il dosaggio migliora molto il rapporto rendimento/rischio
+                            (Sharpe da 0,12 a 0,43 a parità di esposizione media). Ma
+                            <strong>una corsia opera su un simbolo solo</strong>, e lì la stessa misura dice altro:
+                            su 12 simboli il dosaggio batte l'esposizione costante equivalente solo in 2 casi,
+                            e negli altri lo Sharpe peggiora.
+                            Quello che fa in modo affidabile è <strong>ridurre l'ampiezza delle oscillazioni</strong>
+                            (esposizione media 36–62%, drawdown compressi), non aumentare il rendimento corretto per il rischio.
+                            Accendilo se vuoi oscillare meno accettando di guadagnare meno; non aspettarti che migliori una strategia.
+                            Dettagli e tabelle in <code>docs/REPORT-DOSAGGIO-VOLATILITA.md</code>.
                         </div>
                     </div>
                     <div class="col-md-3">

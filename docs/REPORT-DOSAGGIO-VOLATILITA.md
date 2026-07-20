@@ -72,6 +72,46 @@ dati.
   non una legge.
 - Il maxDD resta **48%**. È metà di 81%, ma non è un prodotto prudente.
 
+## ⚠️ Su un simbolo SOLO l'effetto non c'è — e le corsie operano su un simbolo solo
+
+Il risultato sopra è su un **paniere** di 24 monete. Ripetuto su singoli simboli (`volsingle`), con lo
+stesso controllo a esposizione media costante:
+
+| simbolo | b&h Sharpe | dosata Sharpe | costante Sharpe | esposiz. media |
+|---|---|---|---|---|
+| BTC/USDT | 0,54 | **0,43** | 0,54 | 62% |
+| ETH/USDT | 0,61 | **0,33** | 0,61 | 47% |
+| SOL/USDT | 1,16 | **0,75** | 1,16 | 36% |
+| BNB/USDT | 0,99 | **0,87** | 0,99 | 57% |
+| XRP/USDT | 0,75 | **0,83** | 0,75 | 45% |
+| DOGE/USDT | 0,76 | 0,76 | 0,76 | 39% |
+| ADA/USDT | 0,46 | **0,41** | 0,46 | 41% |
+| LINK/USDT | 0,44 | **0,31** | 0,44 | 37% |
+| AVAX/USDT | 0,65 | **0,31** | 0,65 | 36% |
+| LTC/USDT | 0,22 | **0,30** | 0,22 | 45% |
+| DOT/USDT | 0,06 | **−0,00** | 0,06 | 41% |
+| ATOM/USDT | 0,27 | **0,12** | 0,27 | 40% |
+
+**Dosare batte l'esposizione costante equivalente in 2 casi su 12.** Negli altri dieci lo Sharpe
+peggiora, a volte molto (AVAX 0,65 → 0,31).
+
+Nota di lettura: la colonna "costante" coincide sempre con lo Sharpe del buy&hold, ed è un'identità
+matematica — moltiplicare l'esposizione per una costante scala rendimento e volatilità nella stessa
+misura. È proprio per questo che il confronto con la costante, e non con il buy&hold, è l'unico che
+dice qualcosa.
+
+**Conseguenza onesta sull'implementazione.** Una corsia di trading opera su **un simbolo solo**:
+il dosaggio è quindi implementato esattamente nel contesto in cui questa misura dice che perlopiù
+*non* migliora il rendimento corretto per il rischio. Quello che continua a fare, e che è misurato
+sia qui sia in `voloverlay`, è **ridurre l'ampiezza delle perdite**: l'esposizione media scende al
+36–62% e i drawdown si comprimono di conseguenza. È una scelta di gestione del rischio legittima —
+"voglio oscillare meno, accettando di guadagnare meno" — ma **non** è un miglioramento del rapporto
+rendimento/rischio su singolo simbolo, e non va venduta come tale.
+
+Perché sul paniere funziona e sul singolo no, resta una domanda aperta. L'ipotesi più naturale è che
+la volatilità di un paniere sia più persistente e quindi più prevedibile di quella di una singola
+moneta, che è dominata da salti idiosincratici; ma è un'ipotesi, non l'ho misurata.
+
 ## Il dosaggio NON recupera le strategie del catalogo
 
 Domanda naturale una volta implementato: applicato sopra le 6 strategie che la caccia aveva

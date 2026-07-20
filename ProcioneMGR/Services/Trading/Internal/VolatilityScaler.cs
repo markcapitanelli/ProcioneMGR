@@ -16,9 +16,16 @@ namespace ProcioneMGR.Services.Trading.Internal;
 /// (MaxPositionSizePercent, MaxTotalExposurePercent): al più li rende più stringenti. Alzare il
 /// tetto sopra 1,0 è possibile ma toglie questa garanzia, ed è per questo che non è il default.</para>
 ///
-/// <para><b>Cosa NON fa.</b> Non prevede i rendimenti e non migliora un segnale sbagliato: se la
-/// strategia sottostante perde, dosarla fa perdere più lentamente, non guadagnare. La ricerca ha
-/// misurato l'effetto su un paniere equipesato, non sopra le strategie del catalogo.</para>
+/// <para><b>Cosa NON fa, misurato e non supposto.</b> Non prevede i rendimenti e non migliora un
+/// segnale sbagliato: applicato alle 6 strategie selezionate dalla caccia ne recupera 0 su 6 (fase
+/// <c>voloverlay</c>) — dimezza le perdite, non le inverte.</para>
+///
+/// <para><b>Limite importante del contesto.</b> Il miglioramento di Sharpe (0,12 → 0,43) è misurato
+/// su un PANIERE di 24 monete. Su SINGOLI simboli — che è il caso di una corsia di trading, la quale
+/// opera su un simbolo solo — il dosaggio batte l'esposizione costante equivalente in appena 2 casi
+/// su 12 (fase <c>volsingle</c>), e negli altri peggiora lo Sharpe. Quello che fa in modo affidabile
+/// anche sul singolo è ridurre l'ampiezza delle oscillazioni. Va quindi acceso per contenere il
+/// drawdown, non per migliorare il rendimento corretto per il rischio.</para>
 ///
 /// <para>La volatilità è quella REALIZZATA sulle ultime barre — la stessa misura validata dalla
 /// ricerca. La piattaforma ha anche un GARCH(1,1) in <c>/volatility</c>, che è una previsione e
