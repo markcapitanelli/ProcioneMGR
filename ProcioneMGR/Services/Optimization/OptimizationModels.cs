@@ -102,6 +102,59 @@ public class WalkForwardConfiguration
     public int EmbargoBars { get; set; }
 }
 
+/// <summary>
+/// [T1.6 roadmap macchina-ricerca] Configurazione della validazione CPCV per il percorso strategie:
+/// invece di UN solo percorso out-of-sample (walk-forward + holdout), C(gruppi, gruppiTest)
+/// combinazioni di gruppi contigui → una DISTRIBUZIONE di Sharpe fuori campione per candidato.
+/// </summary>
+public sealed class CpcvConfiguration
+{
+    /// <summary>Gruppi temporali contigui in cui dividere la serie.</summary>
+    public int Groups { get; set; } = 8;
+
+    /// <summary>Gruppi usati come test in ogni combinazione: C(Groups, TestGroups) percorsi.</summary>
+    public int TestGroups { get; set; } = 2;
+
+    /// <summary>Barre rimosse dal train PRIMA di ogni gruppo di test (stessa semantica di CombinatorialPurgedCv).</summary>
+    public int PurgeBars { get; set; }
+
+    /// <summary>Barre rimosse dal train DOPO ogni gruppo di test.</summary>
+    public int EmbargoBars { get; set; }
+}
+
+/// <summary>Un percorso CPCV: la combinazione, i parametri scelti sul train e l'esito sul test mai visto.</summary>
+public sealed class CpcvPathResult
+{
+    public int Combination { get; set; }
+    public IReadOnlyList<int> TestGroups { get; set; } = [];
+    public Dictionary<string, decimal> BestParameters { get; set; } = new();
+    public decimal TrainSharpe { get; set; }
+    public decimal OosSharpe { get; set; }
+}
+
+/// <summary>
+/// Esito CPCV: la distribuzione degli Sharpe out-of-sample sui percorsi è il prodotto — non un
+/// numero solo ma quanti percorsi reggono, con che mediana e con che code. Il PBO è calcolato sul
+/// pannello dei rendimenti full-period dei candidati (CSCV, riusa BacktestOverfitting).
+/// </summary>
+public sealed class CpcvResult
+{
+    public List<CpcvPathResult> Paths { get; set; } = [];
+    public decimal MedianOosSharpe { get; set; }
+    public decimal P05OosSharpe { get; set; }
+    public decimal P95OosSharpe { get; set; }
+    public int PositivePaths { get; set; }
+    public int TotalPaths { get; set; }
+    public double? Pbo { get; set; }
+    public int CombinationsTested { get; set; }
+
+    /// <summary>Parametri più spesso scelti sui train dei percorsi (moda): il candidato "stabile".</summary>
+    public Dictionary<string, decimal> ModalParameters { get; set; } = new();
+
+    /// <summary>Quota di percorsi in cui la scelta del train coincide con la moda: stabilità della selezione.</summary>
+    public decimal SelectionStability { get; set; }
+}
+
 public class OptimizationResult
 {
     /// <summary>Top 10 combinazioni per Sharpe out-of-sample medio sulle finestre.</summary>

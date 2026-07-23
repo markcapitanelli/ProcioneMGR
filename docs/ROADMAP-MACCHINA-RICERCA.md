@@ -217,19 +217,26 @@ i drawdown profondi. Nessun permutation test.
 10%); determinismo a parità di seme; sul gate, con soglia attiva il rumore muore e l'edge piantato
 sopravvive.
 
-#### T1.6 — CPCV esteso al percorso strategie — **M**
+#### T1.6 — CPCV esteso al percorso strategie — **M** ✅ FATTO (2026-07-23)
 
-**Oggi**: `Services/Validation/CombinatorialPurgedCv.cs` esiste (C(N,k) split con purge/embargo,
-AFML cap. 12) ma è usato solo nei gate ML. Il percorso strategie ha un solo train/test walk-forward
-+ un solo holdout: **un** percorso out-of-sample per candidato.
+**Era**: `CombinatorialPurgedCv` esisteva ma era usato solo nei gate ML; il percorso strategie
+aveva UN solo percorso out-of-sample per candidato (walk-forward + holdout).
 
-**Aggancio**: generatore di finestre alternativo in `OptimizationEngine` che riusa
-`CombinatorialPurgedCv` → *distribuzione* di Sharpe OOS multi-percorso per candidato + PBO via
-`BacktestOverfitting` già esistente. Risponde esattamente alla richiesta del proprietario: più
-out-of-sample **dagli stessi dati**.
+**Fatto**: `OptimizationEngine.OptimizeCpcvAsync` — la serie è divisa in gruppi temporali contigui;
+per ognuna delle C(gruppi, gruppiTest) combinazioni i parametri si scelgono sui gruppi di train
+(media degli Sharpe sui gruppi INTERI: i gruppi mutilati dalle bande di purge/embargo vengono
+scartati, conservativo) e si giudicano sui gruppi di test mai visti da quella scelta. Output:
+**distribuzione** di Sharpe OOS (mediana, P05, P95, percorsi positivi), PBO sul pannello dei
+candidati, e due metriche di stabilità — i parametri modali e la quota di percorsi che li sceglie
+(`SelectionStability`): un candidato scelto dal 100% dei train è strutturale, uno scelto dal 30% è
+figlio del periodo. Risponde esattamente alla richiesta del proprietario: più out-of-sample
+**dagli stessi dati**.
 
-**Validazione**: edge piantato sopravvive su tutti i percorsi; configurazione volutamente
-overfittata → PBO alto.
+**Validazione fatta**: edge piantato (picco a X=7 coerente sui gruppi) scelto su **tutti i 28
+percorsi** C(8,2) con stabilità 100% e distribuzione OOS interamente positiva; con purge/embargo
+larghi un gruppo intero i percorsi si risolvono comunque; deterministico; serie troppo corta →
+errore esplicito invece di misurare rumore. Fase 2: esporre in `/optimization` accanto al
+walk-forward.
 
 #### T1.V — La volatilità come TARGET di predizione — **S/M** ⭐ — FASE 1 ✅ FATTA (2026-07-23)
 
@@ -359,9 +366,9 @@ edge validato moltiplica zero. Finché la precondizione non si verifica, questo 
 | 0.0 Audit dati | T0 | S | — | ✅ fatto: §2 |
 | 0.1 Purge/embargo WF | T0 | S | — | ✅ fatto (delta OOS storico ancora da misurare) |
 | 0.2 Funding storico | T0 | S/M | — | ✅ fatto, backfill dal 2019 (A/B short da misurare) |
-| 0.3 Campi klines | T0 | M | — | invarianti post-reingest |
+| 0.3 Campi klines | T0 | M | — | ✅ fatto: schema+parsing+merge; reingest in corso |
 | 1.5 Bootstrap+permutation | T1 | M | — | ✅ fatto, calibrazione su 200 serie superata |
-| 1.6 CPCV strategie | T1 | M | 1.5 utile | distribuzione OOS; PBO su overfit noto |
+| 1.6 CPCV strategie | T1 | M | 1.5 utile | ✅ fatto: 28/28 percorsi sull'edge piantato |
 | 1.V Vol come target | T1 | S/M | — | ✅ fase 1 (Lab + guardia); fase 2: consumo + EWMA |
 | 1.4 Triple-barrier+meta | T1 | L | 1.5, (weights) | edge asimmetrico recuperato; precision ↑ a DSR pari |
 | 2.7 Event-study | T2 | M | 1.5 (placebo) | placebo nullo; controllo positivo FOMC |
