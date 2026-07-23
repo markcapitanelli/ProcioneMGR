@@ -103,6 +103,17 @@ public class WalkForwardConfiguration
 }
 
 /// <summary>
+/// [T1.6 fase 2] Come giudicare i parametri in /optimization: il walk-forward storico (UN percorso
+/// out-of-sample) o il CPCV (C(gruppi, gruppiTest) percorsi → una distribuzione). Il CPCV richiede
+/// GridSearch: i backtest per (combinazione × gruppo) sono pre-calcolati sull'intera griglia.
+/// </summary>
+public enum OptimizationValidationMethod
+{
+    WalkForward,
+    Cpcv,
+}
+
+/// <summary>
 /// [T1.6 roadmap macchina-ricerca] Configurazione della validazione CPCV per il percorso strategie:
 /// invece di UN solo percorso out-of-sample (walk-forward + holdout), C(gruppi, gruppiTest)
 /// combinazioni di gruppi contigui → una DISTRIBUZIONE di Sharpe fuori campione per candidato.

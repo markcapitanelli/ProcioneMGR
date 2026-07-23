@@ -81,6 +81,13 @@ public sealed class CostPropagationTests : IAsyncDisposable
             Seen.Add(config);
             return Task.FromResult(new OptimizationResult());
         }
+
+        public Task<CpcvResult> OptimizeCpcvAsync(
+            OptimizationConfiguration config, CpcvConfiguration cpcv, IProgress<OptimizationProgress>? progress, CancellationToken ct)
+        {
+            Seen.Add(config);
+            return Task.FromResult(new CpcvResult());
+        }
     }
 
     private async Task<OptimizationEngine> BuildOptimizerAsync(RecordingBacktest backtest)

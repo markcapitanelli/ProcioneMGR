@@ -73,6 +73,14 @@
         <dd class="col-sm-9">Il dettaglio finestra per finestra: se lo Sharpe in-sample è molto più alto di quello out-of-sample, è un segnale di overfitting in quella finestra.</dd>
         <dt class="col-sm-3">Save Best Configuration</dt>
         <dd class="col-sm-9">Salva la combinazione migliore in <a href="strategies">Le mie strategie</a>, taggata come "ottimizzata".</dd>
+        <dt class="col-sm-3">Validazione CPCV</dt>
+        <dd class="col-sm-9">
+            Alternativa al walk-forward: la serie è divisa in gruppi temporali e ogni combinazione
+            di gruppi di test produce un percorso out-of-sample indipendente. Invece di UN numero
+            ottieni una <strong>distribuzione</strong> (mediana, code, % percorsi positivi), il PBO
+            (probabilità che il migliore sia un artefatto della selezione) e la stabilità della
+            selezione (quanti percorsi scelgono gli stessi parametri: 100% = struttura, 30% = caso).
+        </dd>
     </dl>
 </GuidaPanel>
 
@@ -130,7 +138,8 @@
 
         @if (_strategyName == MlStrategyName)
         {
-            var compatibleMlModels = Svc.MlModels.Where(m => m.Symbol == _symbol.Trim() && m.Timeframe == _timeframe).ToList();
+            @* [1.V fase 2] Solo modelli DIREZIONALI: qui si sweeppano soglie long/short, prive di senso su un modello di rischio. *@
+            var compatibleMlModels = Svc.MlModels.Where(m => m.Symbol == _symbol.Trim() && m.Timeframe == _timeframe && m.IsDirectional).ToList();
             <div class="row g-3 align-items-end mt-1">
                 <div class="col-auto">
                     <label class="form-label">Modello ML (@_symbol @_timeframe)</label>
@@ -155,12 +164,41 @@
         <hr />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
+                <label class="form-label">Validazione</label>
+                <select class="form-select" value="@_validation" @onchange="OnValidationChanged" disabled="@_busy">
+                    <option value="@OptimizationValidationMethod.WalkForward">Walk-Forward (un percorso OOS)</option>
+                    <option value="@OptimizationValidationMethod.Cpcv">CPCV (distribuzione di percorsi)</option>
+                </select>
+            </div>
+            <div class="col-auto">
                 <label class="form-label">Metodo di ricerca</label>
-                <select class="form-select" @bind="_searchStrategy" disabled="@_busy">
+                <select class="form-select" @bind="_searchStrategy" disabled="@(_busy || _validation == OptimizationValidationMethod.Cpcv)">
                     <option value="@SearchStrategy.GridSearch">Grid Search (esaustivo)</option>
                     <option value="@SearchStrategy.Bayesian">Bayesian (guidato)</option>
                 </select>
             </div>
+            @if (_validation == OptimizationValidationMethod.Cpcv)
+            {
+                <div class="col-auto">
+                    <label class="form-label">Gruppi</label>
+                    <input type="number" min="2" class="form-control" style="width:6rem" @bind="_cpcvGroups" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Gruppi test</label>
+                    <input type="number" min="1" class="form-control" style="width:6rem" @bind="_cpcvTestGroups" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Purge (barre)</label>
+                    <input type="number" min="0" class="form-control" style="width:6rem" @bind="_cpcvPurgeBars" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Embargo (barre)</label>
+                    <input type="number" min="0" class="form-control" style="width:6rem" @bind="_cpcvEmbargoBars" disabled="@_busy" />
+                </div>
+                <div class="col-auto align-self-center">
+                    <span class="badge bg-info text-dark">@CpcvPathCount percorsi C(@_cpcvGroups, @_cpcvTestGroups)</span>
+                </div>
+            }
             @if (_searchStrategy == SearchStrategy.Bayesian)
             {
                 <div class="col-auto">
@@ -187,6 +225,17 @@
                 invece del prodotto cartesiano: i range sotto definiscono solo i confini e la granularità
                 (step/intero) dello spazio. Lo Sharpe guida la ricerca; il Deflated Sharpe resta il verdetto
                 finale su tutti i punti visitati. Deterministico a parità di seme.
+            </div>
+        }
+        @if (_validation == OptimizationValidationMethod.Cpcv)
+        {
+            <div class="form-text mt-1">
+                La serie è divisa in gruppi temporali contigui; per ogni combinazione di gruppi di test
+                i parametri si scelgono sui gruppi di train (con purge/embargo attorno ai test) e si
+                giudicano su dati mai visti da quella scelta. Il risultato è una <strong>distribuzione</strong>
+                di Sharpe out-of-sample — quanti percorsi reggono, con che mediana e con che code — più il
+                PBO e la stabilità della selezione. Le finestre In-Sample/Out-of-Sample/Step non si usano
+                in questa modalità.
             </div>
         }
 
@@ -281,6 +330,56 @@
         }
     </div>
 </div>
+
+@if (Svc.CpcvResult is { } cpcv)
+{
+    <div class="alert @(cpcv.PositivePaths * 2 >= cpcv.TotalPaths && cpcv.MedianOosSharpe > 0m ? "alert-success" : "alert-warning") d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <strong>CPCV: @cpcv.PositivePaths/@cpcv.Paths.Count percorsi positivi · Sharpe OOS mediano @cpcv.MedianOosSharpe.ToString("F2")</strong>
+            — la distribuzione è il verdetto: un candidato che regge solo su una minoranza di percorsi è figlio del periodo, non della regola.
+        </div>
+        <span class="small text-muted">
+            P05: @cpcv.P05OosSharpe.ToString("F2") · P95: @cpcv.P95OosSharpe.ToString("F2")
+            @(cpcv.Pbo is { } pbo ? $" · PBO: {pbo:P0}" : "")
+            · stabilità selezione: @cpcv.SelectionStability.ToString("P0")
+        </span>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Percorsi CPCV — parametri scelti sul train, giudicati sul test mai visto</span>
+            <span class="small text-muted">@cpcv.CombinationsTested combinazioni · parametri modali: <strong>@FormatParams(cpcv.ModalParameters)</strong></span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+                <thead><tr><th>#</th><th>Gruppi test</th><th>Parametri scelti</th><th class="text-end">Sharpe train (media)</th><th class="text-end">Sharpe OOS</th></tr></thead>
+                <tbody>
+                    @foreach (var path in cpcv.Paths)
+                    {
+                        <tr>
+                            <td>@path.Combination</td>
+                            <td>@string.Join(", ", path.TestGroups)</td>
+                            <td>@FormatParams(path.BestParameters)</td>
+                            <td class="text-end">@path.TrainSharpe.ToString("F2")</td>
+                            <td class="text-end fw-semibold @(path.OosSharpe >= 0 ? "text-success" : "text-danger")">@path.OosSharpe.ToString("F2")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer d-flex align-items-center gap-2 flex-wrap">
+            <div class="input-group" style="max-width: 520px;">
+                <input class="form-control" placeholder="nome configurazione (parametri modali)" @bind="_saveName" />
+                <button class="btn btn-success" @onclick="SaveBestAsync">💾 Salva parametri modali</button>
+            </div>
+            @if (_savedOk)
+            {
+                <a class="btn btn-outline-primary" href="ensemble"
+                   title="Le configurazioni ottimizzate salvate sono selezionabili nell'Ensemble">Aggiungila all'Ensemble →</a>
+            }
+        </div>
+    </div>
+}
 
 @if (Svc.Result is { } result)
 {
@@ -416,6 +515,13 @@
     private int _bayesInitialRandom = 8;
     private int _bayesSeed = 42;
 
+    // [T1.6 fase 2] Validazione: walk-forward storico o CPCV (distribuzione di percorsi OOS).
+    private OptimizationValidationMethod _validation = OptimizationValidationMethod.WalkForward;
+    private int _cpcvGroups = 8;
+    private int _cpcvTestGroups = 2;
+    private int _cpcvPurgeBars;
+    private int _cpcvEmbargoBars;
+
     private const string MlStrategyName = OptimizationPageService.MlStrategyName;
 
     private string _strategyName = "EmaCross";
@@ -444,7 +550,8 @@
         _searchStrategy, _bayesIterations, _bayesInitialRandom, _bayesSeed,
         _strategyName, _addMlModelId,
         _ranges.Select(r => new OptRange(r.Key, r.Label, r.Min, r.Max, r.Step, r.IsInteger)).ToList(),
-        _embargoBars);
+        _embargoBars,
+        _validation, _cpcvGroups, _cpcvTestGroups, _cpcvPurgeBars, _cpcvEmbargoBars);
 
     /// <summary>Riallinea i campi del form a uno snapshot prodotto dal service (preset o handoff).</summary>
     private void ApplySnapshot(OptimizationConfigSnapshot cfg)
@@ -460,6 +567,11 @@
         _oosMonths = cfg.OosMonths;
         _stepMonths = cfg.StepMonths;
         _embargoBars = cfg.EmbargoBars;
+        _validation = cfg.Validation;
+        _cpcvGroups = cfg.CpcvGroups;
+        _cpcvTestGroups = cfg.CpcvTestGroups;
+        _cpcvPurgeBars = cfg.CpcvPurgeBars;
+        _cpcvEmbargoBars = cfg.CpcvEmbargoBars;
         _searchStrategy = cfg.SearchStrategy;
         _bayesIterations = cfg.BayesIterations;
         _bayesInitialRandom = cfg.BayesInitialRandom;
@@ -478,8 +590,10 @@
     /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
     private string AdvancedSummary =>
         $"Capitale {_initialCapital:N0} · Commissione {_commission:0.##}%"
-        + $" · Walk-forward {_inSampleMonths}/{_oosMonths}/{_stepMonths} mesi (IS/OOS/Step)"
-        + (_embargoBars > 0 ? $" · Embargo {_embargoBars} barre" : "");
+        + (_validation == OptimizationValidationMethod.Cpcv
+            ? $" · CPCV {_cpcvGroups} gruppi / {_cpcvTestGroups} test"
+            : $" · Walk-forward {_inSampleMonths}/{_oosMonths}/{_stepMonths} mesi (IS/OOS/Step)"
+              + (_embargoBars > 0 ? $" · Embargo {_embargoBars} barre" : ""));
 
     private IJSObjectReference? _heatmapModule;
     private bool _heatmapPending;
@@ -511,6 +625,30 @@
         if (handoffMessage is not null) SetStatus(handoffMessage, error: false);
 
         await Svc.LoadInitialDataAsync();
+    }
+
+    /// <summary>Con CPCV la ricerca è per costruzione sull'intera griglia: Bayesian non è compatibile.</summary>
+    private void OnValidationChanged(ChangeEventArgs e)
+    {
+        _validation = Enum.TryParse<OptimizationValidationMethod>(e.Value?.ToString(), out var v)
+            ? v : OptimizationValidationMethod.WalkForward;
+        if (_validation == OptimizationValidationMethod.Cpcv)
+        {
+            _searchStrategy = SearchStrategy.GridSearch;
+        }
+    }
+
+    /// <summary>C(n, k) dei percorsi CPCV mostrato accanto ai campi (solo informativo).</summary>
+    private long CpcvPathCount
+    {
+        get
+        {
+            var n = Math.Max(2, _cpcvGroups);
+            var k = Math.Clamp(_cpcvTestGroups, 1, n - 1);
+            long result = 1;
+            for (var i = 1; i <= k; i++) result = result * (n - k + i) / i;
+            return result;
+        }
     }
 
     private void OnStrategyChanged(ChangeEventArgs e)
