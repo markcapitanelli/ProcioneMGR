@@ -106,6 +106,7 @@ switch (phase)
     case "fundingbackfill": await FundingBackfillAsync(); break;
     case "reingestx": await ReingestExtendedAsync(args.Length > 1 ? args[1] : "1d,4h,1h"); break;
     case "orderflow": await OrderFlowIcAsync(); break;
+    case "eventstudy": await EventStudyAsync(args.Length > 1 ? args[1] : "BTC/USDT", args.Length > 2 ? args[2] : "1d"); break;
     case "relative": await RelativeMarketsAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
@@ -526,6 +527,56 @@ async Task RelativeMarketsAsync()
     Console.WriteLine("\n    Fatto: le coppie relative sono serie di prima classe — backtest, pairs (gia' sui");
     Console.WriteLine("    log), discovery e fattori le vedono senza altro codice. La breadth interna come");
     Console.WriteLine("    feature di regime resta un item aperto (cambia le etichette del K-means).");
+}
+
+// ------------------------------------------------------------------ EVENTSTUDY (T2.7: eventi + rigore)
+// Rileva gli eventi di MERCATO (crash/surge/vol spike/volume blowout) dai prezzi stessi su tutta la
+// profondita' OHLCV e li sottopone all'event-study rigoroso: abnormal return vs baseline per-evento,
+// finestra pre-evento (anticipazione), p-value placebo su date casuali. Se in DB ci sono eventi del
+// calendario economico (ForexFactory), fa da CONTROLLO POSITIVO anche su quelli.
+async Task EventStudyAsync(string symbol, string timeframe)
+{
+    await using var db = await dbFactory.CreateDbContextAsync();
+    var candles = await db.OhlcvData
+        .Where(c => c.Symbol == symbol && c.Timeframe == timeframe)
+        .OrderBy(c => c.TimestampUtc)
+        .ToListAsync();
+    Console.WriteLine($"=== EVENT-STUDY {symbol} {timeframe}: {candles.Count} candele ===");
+    if (candles.Count < 500) { Console.WriteLine("Troppe poche candele (<500)."); return; }
+
+    var events = ProcioneMGR.Services.Analysis.MarketEventDetector.Detect(candles);
+    var studyCfg = new ProcioneMGR.Services.Analysis.EventStudyConfig(
+        EstimationBars: 60, GapBars: 5, PreBars: 5, PostBars: 10, PlaceboSamples: 500, Seed: 42);
+
+    Console.WriteLine($"\n{"Tipo evento",-16}{"N",5}{"CAAR pre",12}{"CAAR post",12}{"t post",9}{"p placebo",11}");
+    foreach (var kind in Enum.GetValues<ProcioneMGR.Services.Analysis.MarketEventKind>())
+    {
+        var times = events.Where(e => e.Kind == kind).Select(e => e.TimestampUtc).ToList();
+        if (times.Count == 0) { Console.WriteLine($"{kind,-16}{0,5}  (nessun evento)"); continue; }
+        var r = ProcioneMGR.Services.Analysis.EventStudy.Run(candles, times, studyCfg);
+        Console.WriteLine($"{kind,-16}{r.EventsUsable,5}{r.CaarPre,12:P2}{r.CaarPost,12:P2}{r.TStatPost,9:F2}{r.PlaceboPValue,11:F3}");
+    }
+
+    // Controllo positivo: eventi del calendario economico (se ingeriti). Su 1h il timestamp e'
+    // abbastanza fine da avere senso; su 1d la finestra e' comunque leggibile come sanity check.
+    var calendar = await db.AltDataPoints
+        .Where(p => p.Category == nameof(ProcioneMGR.Services.AltData.NewsCategory.EconomicCalendar))
+        .OrderBy(p => p.TimestampUtc)
+        .ToListAsync();
+    if (calendar.Count > 0)
+    {
+        var r = ProcioneMGR.Services.Analysis.EventStudy.Run(
+            candles, calendar.Select(p => p.TimestampUtc).ToList(), studyCfg);
+        Console.WriteLine($"\nCalendario economico ({calendar.Count} eventi, {r.EventsUsable} usabili): " +
+                          $"CAAR pre {r.CaarPre:P2} · CAAR post {r.CaarPost:P2} · t {r.TStatPost:F2} · p placebo {r.PlaceboPValue:F3}");
+    }
+    else
+    {
+        Console.WriteLine("\nNessun evento di calendario economico in DB (fase altdata mai eseguita di recente).");
+    }
+
+    Console.WriteLine("\nLettura onesta: CAAR pre lontana da zero = anticipazione/leakage del timestamp;");
+    Console.WriteLine("p placebo alto = le date a caso 'reagiscono' quanto le vere, quindi niente segnale.");
 }
 
 // ------------------------------------------------------------------ ORDERFLOW (3.8b: l'IC dei fattori nuovi)
