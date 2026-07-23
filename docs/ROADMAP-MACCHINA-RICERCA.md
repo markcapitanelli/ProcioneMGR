@@ -194,20 +194,28 @@ ancora rifetchate restano valide.
 
 *(L'ordine è deliberato: 1.5 e 1.6 rafforzano il metro con cui giudicheremo 1.V e 1.4.)*
 
-#### T1.5 — Block/stationary bootstrap + permutation test — **M**
+#### T1.5 — Block/stationary bootstrap + permutation test — **M** ✅ FATTO (2026-07-23)
 
-**Oggi**: `MonteCarloAnalyzer` e `LeverageAdvisor` fanno solo resampling **iid** dei trade — che
-distrugge l'autocorrelazione, cioè proprio la struttura che rende pericolosi i drawdown. Nessun
-permutation test.
+**Era**: `MonteCarloAnalyzer` e `LeverageAdvisor` facevano solo resampling **iid** dei trade — che
+distrugge l'autocorrelazione, cioè proprio la struttura (serie di perdite consecutive) che produce
+i drawdown profondi. Nessun permutation test.
 
-**Aggancio**: modalità *stationary block bootstrap* (Politis-Romano) in `MonteCarloAnalyzer`
-(lunghezza media di blocco parametrica), riusata da `LeverageAdvisor`; nuovo
-`Services/Validation/PermutationTest` (permutazione dei rendimenti lungo il tempo → distribuzione
-nulla dello Sharpe) integrato come colonna aggiuntiva nell'`OverfittingGate`. È la codifica
-**diretta** della lezione t=141: la randomizzazione valida è temporale.
+**Fatto**:
+- `MonteCarloSamplingMode.StationaryBlock` (Politis–Romano: blocchi geometrici con reinserimento e
+  wrap-around, `MeanBlockLength` parametrico) accanto allo shuffle iid, che resta il default con
+  test di invarianza; sul PnL "a strisce" il modo a blocchi vede code di drawdown peggiori — il
+  motivo per cui esiste;
+- `Services/Validation/PermutationTest`: p-value per lo Sharpe con capovolgimenti di segno a
+  BLOCCHI lungo il tempo — la codifica diretta della lezione t=141 (l'unica randomizzazione onesta
+  è temporale, e a blocchi per non distruggere l'autocorrelazione);
+- `ValidatedCandidate.PermutationPValue` popolato dall'`OverfittingGate`: **informativo di default**
+  (`maxPermutationPValue = 1.0`), diventa bloccante quando gli si passa una soglia — la stessa
+  strada di rodaggio fatta dal DSR.
 
-**Validazione**: calibrazione — p-value uniforme su rumore bianco; p basso sull'edge piantato del
-controllo.
+**Validazione fatta**: edge piantato → p &lt; 0,05; rumore simmetrico → p non estremo;
+**calibrazione su 200 serie di rumore** (frazione con p&lt;0,10 nei limiti binomiali attorno al
+10%); determinismo a parità di seme; sul gate, con soglia attiva il rumore muore e l'edge piantato
+sopravvive.
 
 #### T1.6 — CPCV esteso al percorso strategie — **M**
 
@@ -344,10 +352,10 @@ edge validato moltiplica zero. Finché la precondizione non si verifica, questo 
 | Item | Tier | Effort | Dipende da | Criterio di validazione |
 |---|---|---|---|---|
 | 0.0 Audit dati | T0 | S | — | ✅ fatto: §2 |
-| 0.1 Purge/embargo WF | T0 | S | — | delta OOS con/senza; edge piantato passa |
-| 0.2 Funding storico | T0 | S/M | — | addebito firmato esatto; A/B short |
+| 0.1 Purge/embargo WF | T0 | S | — | ✅ fatto (delta OOS storico ancora da misurare) |
+| 0.2 Funding storico | T0 | S/M | — | ✅ fatto, backfill dal 2019 (A/B short da misurare) |
 | 0.3 Campi klines | T0 | M | — | invarianti post-reingest |
-| 1.5 Bootstrap+permutation | T1 | M | — | p uniforme su rumore, basso su edge |
+| 1.5 Bootstrap+permutation | T1 | M | — | ✅ fatto, calibrazione su 200 serie superata |
 | 1.6 CPCV strategie | T1 | M | 1.5 utile | distribuzione OOS; PBO su overfit noto |
 | 1.V Vol come target | T1 | S/M | — | batte EWMA su QLIKE; test economico |
 | 1.4 Triple-barrier+meta | T1 | L | 1.5, (weights) | edge asimmetrico recuperato; precision ↑ a DSR pari |

@@ -376,6 +376,15 @@ public sealed class ValidatedCandidate
     /// <summary>Probability of Backtest Overfitting del PANNELLO di candidati (comune a tutti). null = non calcolabile.</summary>
     public double? PanelPbo { get; set; }
 
+    /// <summary>
+    /// [T1.5] P-value del test di permutazione a blocchi di segno sui rendimenti holdout
+    /// (<see cref="Validation.PermutationTest"/>): probabilità di uno Sharpe almeno così alto se la
+    /// strategia non avesse alcuna deriva. INFORMATIVO di default (blocca solo se il gate riceve
+    /// una soglia &lt; 1): prima si calibra sul campo, poi si decide se farlo mordere. null = serie
+    /// troppo corta.
+    /// </summary>
+    public double? PermutationPValue { get; set; }
+
     // Robustness (filled by RobustnessProbeStage on survivors)
     public decimal MonteCarloRiskFactor95 { get; set; }
     public decimal MonteCarloDrawdown95 { get; set; }

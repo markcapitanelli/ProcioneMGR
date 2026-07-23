@@ -435,7 +435,7 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     /// </summary>
     private void ApplyOverfittingGate(PipelineContext ctx, List<double[]> holdoutReturns, double minDeflatedSharpe, double maxPbo, double trialCorrelationThreshold)
     {
-        var result = OverfittingGate.Apply(ctx.Validated, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrelationThreshold, m => ctx.LogLine($"[{Name}] {m}"));
+        var result = OverfittingGate.Apply(ctx.Validated, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrelationThreshold, log: m => ctx.LogLine($"[{Name}] {m}"));
         ctx.LogLine($"[{Name}] Gate DSR/PBO: {result.Survivors}/{ctx.Validated.Count} sopravvissuti"
                   + (result.PanelPbo is double pp ? $"; PBO pannello {pp:P0}" : "; PBO n/d")
                   + $" (soglie DSR>{minDeflatedSharpe:F2}, PBO<{maxPbo:P0}).");
@@ -694,6 +694,9 @@ public static class OverfittingGate
     /// <param name="trialCorrelationThreshold">Soglia ρ per il conteggio EFFETTIVO dei tentativi nel DSR:
     /// candidati con correlazione dei rendimenti holdout ≥ soglia contano come un solo test (R1.4). 1 =
     /// disattivo (usa N nominale). Default 0.5.</param>
+    /// <param name="maxPermutationPValue">[T1.5] Soglia sul p-value del test di permutazione a blocchi:
+    /// candidati con p ≥ soglia vengono scartati. Default 1.0 = NON blocca (solo informativo): il
+    /// p-value va prima osservato sul campo, poi promosso a gate — la stessa strada fatta dal DSR.</param>
     /// <param name="log">Callback opzionale di logging (una riga per evento).</param>
     public static Result Apply(
         IReadOnlyList<ValidatedCandidate> validated,
@@ -701,6 +704,7 @@ public static class OverfittingGate
         double minDeflatedSharpe,
         double maxPbo,
         double trialCorrelationThreshold = 0.5,
+        double maxPermutationPValue = 1.0,
         Action<string>? log = null)
     {
         ArgumentNullException.ThrowIfNull(validated);
@@ -743,10 +747,27 @@ public static class OverfittingGate
             var validation = SelectionValidator.Validate(trialSharpes, rets, ppy, trials);
             v.DeflatedSharpe = double.IsNaN(validation.DeflatedSharpe) ? null : validation.DeflatedSharpe;
 
+            // [T1.5] Permutation test a BLOCCHI DI SEGNO lungo il tempo (l'unica randomizzazione
+            // onesta su questi dati): p = probabilità di uno Sharpe holdout almeno così alto senza
+            // alcuna deriva. Complementare al DSR (che corregge per il test multiplo, non per la
+            // struttura temporale). Riportato sempre; blocca solo se maxPermutationPValue < 1.
+            if (rets.Length >= 20)
+            {
+                var perm = Validation.PermutationTest.SharpeSignificance(rets);
+                v.PermutationPValue = perm.PValue;
+            }
+
             if (v.DeflatedSharpe is double dsr && dsr <= minDeflatedSharpe)
             {
                 v.Survived = false;
                 v.RejectReason = $"DSR {dsr:F3} ≤ {minDeflatedSharpe:F2} (probabile overfitting da selezione)";
+                log?.Invoke($"{v.Key}: scartato dal gate — {v.RejectReason}.");
+            }
+
+            if (v.Survived && v.PermutationPValue is double pperm && pperm >= maxPermutationPValue)
+            {
+                v.Survived = false;
+                v.RejectReason = $"permutation p {pperm:F3} ≥ {maxPermutationPValue:F2} (Sharpe holdout compatibile col rumore)";
                 log?.Invoke($"{v.Key}: scartato dal gate — {v.RejectReason}.");
             }
         }
