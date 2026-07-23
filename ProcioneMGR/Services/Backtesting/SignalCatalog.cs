@@ -33,7 +33,7 @@ namespace ProcioneMGR.Services.Backtesting;
 /// </summary>
 public static class SignalCatalog
 {
-    public const int SignalCount = 9;
+    public const int SignalCount = 10;
     public const int PercentileWindow = 250;
 
     /// <summary>Display names, index-aligned to the signal ids (for UI/log readability).</summary>
@@ -41,6 +41,9 @@ public static class SignalCatalog
     [
         "RSI", "Stoch %D", "Bollinger %B", "Supertrend dir",
         "Volume ratio pct", "VWAP dev pct", "Momentum pct", "MACD hist pct", "Dist SMA50 pct",
+        // [2.S] Ora UTC scalata 0-100: stagionalità oraria cacciabile. Id 9, APPESO in coda: gli id
+        // 0-8 delle strategie Composite già salvate restano validi.
+        "Ora UTC",
     ];
 
     private static readonly ConditionalWeakTable<object, Task<decimal?[][]>> Cache = new();
@@ -176,6 +179,21 @@ public static class SignalCatalog
             }
         }
         matrix[8] = CausalPercentile(dist, PercentileWindow, ct);
+
+        // 9) [2.S roadmap macchina-ricerca] Ora UTC scalata 0-100 (hour/23·100). Rende la
+        //    STAGIONALITÀ ORARIA cacciabile dalla stessa combinatoria degli altri segnali:
+        //    "RSI < 20 AND OraUtc >= 30 AND OraUtc <= 60" = ipotesi «solo nelle ore X-Y», che
+        //    CyclicalAnalyzer misura da tempo senza che nessuna strategia potesse usarla.
+        //    Nessun warm-up e nessuna storia: il valore alla barra i dipende solo dal suo
+        //    timestamp (anti-look-ahead per costruzione). ATTENZIONE dichiarata nel catalogo:
+        //    i bias orari sono notoriamente instabili — le composizioni che usano questo segnale
+        //    vanno giudicate con enfasi sulla replica su finestre temporali disgiunte.
+        var hourOfDay = new decimal?[n];
+        for (var i = 0; i < n; i++)
+        {
+            hourOfDay[i] = candles[i].TimestampUtc.Hour * 100m / 23m;
+        }
+        matrix[9] = hourOfDay;
 
         return matrix;
     }

@@ -177,18 +177,21 @@ pro-rata; serie che parte a metà run (costante prima, storico dopo); default in
 Resta da fare l'A/B costante-vs-storico su una strategia short del catalogo (dipende da una caccia
 nuova).
 
-#### T0.3 — Stop allo scarto dei campi klines — **M**
+#### T0.3 — Stop allo scarto dei campi klines — **M** ✅ FATTO, reingest incluso (2026-07-23)
 
-**Oggi**: `OhlcvData` ha solo OHLCV (verificato anche nello snapshot delle migration); il parsing
-Binance scarta `k[7..10]`; Bitget scarta il quoteVolume.
+**Era**: `OhlcvData` aveva solo OHLCV; il parsing Binance scartava `k[7..10]`; Bitget scartava il
+quoteVolume.
 
-**Aggancio**: 4 colonne **nullable** su `OhlcvData` (`QuoteVolume`, `TradeCount`, `TakerBuyVolume`,
-`TakerBuyQuoteVolume`) + estensione del record `Ohlcv` + parsing + migration additiva + fase di
-reingest idempotente (upsert sull'indice unico esistente). Nullable = le candele storiche non
-ancora rifetchate restano valide.
+**Fatto**: 4 colonne **nullable** su `OhlcvData` (`QuoteVolume`, `TradeCount`, `TakerBuyVolume`,
+`TakerBuyQuoteVolume` — null distingue "non raccolto" da "zero"); record `Ohlcv` esteso con
+opzionali in coda; parsing Binance `k[7..10]` con guardia sui payload corti; Bitget raccoglie il
+quoteVolume; **regola di merge** nell'upsert (una fonte povera non azzera i campi della ricca);
+migration `AddKlineExtendedFields` **applicata al DB reale**; fase `reingestx <tfs>`.
 
-**Validazione**: invarianti post-reingest (`TakerBuyVolume ≤ Volume`,
-`QuoteVolume ≈ Volume × prezzo tipico`), % righe popolate per serie.
+**Reingest eseguito** su 1d/4h/1h: **1.700.270/1.700.270 candele popolate (100,0%)** su 138 serie,
+invariante `TakerBuyVolume ≤ Volume` verificata su tutte. L'order flow storico completo (dal 2020
+sul giornaliero) è ora nel database. 5m/15m/1m: lancio separato quando serve
+(`reingestx "5m,15m"`).
 
 ### T1 — Prima il giudice, poi il labeling
 
@@ -293,18 +296,20 @@ degli episodi della §2 (tutti coperti a 1d, dal 2024 a 1h).
 coperti; output = libreria di flag-evento usabili come filtri di strategia, che passano il gate
 standard.
 
-#### T2.S — Wiring della stagionalità — **S**
+#### T2.S — Wiring della stagionalità — **S** ✅ FATTO (2026-07-23)
 
-**Oggi**: `Services/Analysis/CyclicalAnalyzer.cs` calcola **già** bias orario, giorno-settimana e
-stagionalità annuale (con robustezza percentuale-concordi) — ma è consumato solo dalla pagina
-`/market-analysis`. Nessuna strategia può dire "opera solo nelle ore X".
+**Era**: `CyclicalAnalyzer` calcolava già bias orario/giorno-settimana/stagionalità ma solo per la
+pagina `/market-analysis`: nessuna strategia poteva dire "opera solo nelle ore X".
 
-**Aggancio**: filtro orario/sessione parametrico nelle strategie (via `SignalCatalog`/parametri
-strategia), alimentato dai bias di `CyclicalAnalyzer`; i 525k candele/simbolo a 1m rendono la stima
-oraria statisticamente affrontabile.
+**Fatto**: decimo segnale **"Ora UTC"** (id 9, scala 0-100 = hour/23·100) nel `SignalCatalog`.
+La stagionalità oraria diventa così **cacciabile dalla stessa combinatoria degli altri segnali**:
+il `StrategyComposer` può proporre "RSI < 20 AND OraUtc ∈ [X,Y]" e il Composite la esprime senza
+sottosistemi nuovi. Appeso in coda: gli id 0-8 delle strategie salvate restano validi. Nessun
+warm-up, anti-look-ahead per costruzione (il valore dipende solo dal timestamp della barra).
 
-**Validazione**: gate standard con enfasi sulla replica su finestre disgiunte — i bias orari sono
-notoriamente instabili, e il documento lo dice.
+**Avvertenza incorporata nel codice**: i bias orari sono notoriamente instabili — le composizioni
+che usano questo segnale vanno giudicate con enfasi sulla replica su finestre temporali disgiunte
+(il gate T1.6/T1.5 esiste apposta).
 
 ### T3 — Volumi e order flow
 
@@ -366,13 +371,13 @@ edge validato moltiplica zero. Finché la precondizione non si verifica, questo 
 | 0.0 Audit dati | T0 | S | — | ✅ fatto: §2 |
 | 0.1 Purge/embargo WF | T0 | S | — | ✅ fatto (delta OOS storico ancora da misurare) |
 | 0.2 Funding storico | T0 | S/M | — | ✅ fatto, backfill dal 2019 (A/B short da misurare) |
-| 0.3 Campi klines | T0 | M | — | ✅ fatto: schema+parsing+merge; reingest in corso |
+| 0.3 Campi klines | T0 | M | — | ✅ fatto: reingest 1,7M candele al 100%, invarianti OK |
 | 1.5 Bootstrap+permutation | T1 | M | — | ✅ fatto, calibrazione su 200 serie superata |
 | 1.6 CPCV strategie | T1 | M | 1.5 utile | ✅ fatto: 28/28 percorsi sull'edge piantato |
 | 1.V Vol come target | T1 | S/M | — | ✅ fase 1 (Lab + guardia); fase 2: consumo + EWMA |
 | 1.4 Triple-barrier+meta | T1 | L | 1.5, (weights) | edge asimmetrico recuperato; precision ↑ a DSR pari |
 | 2.7 Event-study | T2 | M | 1.5 (placebo) | placebo nullo; controllo positivo FOMC |
-| 2.S Stagionalità | T2 | S | — | replica su finestre disgiunte |
+| 2.S Stagionalità | T2 | S | — | ✅ fatto: segnale "Ora UTC" nel catalogo (id 9) |
 | 3.8a OBV/MFI/VWAP+regimi | T3 | M | — | IC incrementale, bassa correlazione |
 | 3.8b Order-flow | T3 | M | **0.3** | idem |
 | 3.8c Barre→backtest | T3 | L | 0.3 | opzionale dichiarato |
