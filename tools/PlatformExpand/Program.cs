@@ -107,6 +107,16 @@ switch (phase)
     case "reingestx": await ReingestExtendedAsync(args.Length > 1 ? args[1] : "1d,4h,1h"); break;
     case "orderflow": await OrderFlowIcAsync(); break;
     case "eventstudy": await EventStudyAsync(args.Length > 1 ? args[1] : "BTC/USDT", args.Length > 2 ? args[2] : "1d"); break;
+    case "minuteprofile": await MinuteProfileAsync(); break;
+    case "liquidationsverify": await LiquidationsVerifyAsync(); break;
+    case "nulltwin": await NullTwinAsync(
+        args.Length > 1 ? args[1] : "BTC/USDT",
+        args.Length > 2 ? args[2] : "4h",
+        args.Length > 3 && int.TryParse(args[3], out var nt) ? nt : 20,
+        planted: args.Contains("--planted")); break;
+    case "carry": await CarryAsync(
+        args.Length > 1 ? double.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture) : 5.0,
+        args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 0.0); break;
     case "relative": await RelativeMarketsAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
@@ -577,6 +587,315 @@ async Task EventStudyAsync(string symbol, string timeframe)
 
     Console.WriteLine("\nLettura onesta: CAAR pre lontana da zero = anticipazione/leakage del timestamp;");
     Console.WriteLine("p placebo alto = le date a caso 'reagiscono' quanto le vere, quindi niente segnale.");
+}
+
+// ------------------------------------------------------------------ LIQUIDATIONSVERIFY (F4: verifica dal vivo)
+// Connessione REALE allo stream !forceOrder@arr per ~60s: dimostra che endpoint, payload e parsing
+// combaciano col mercato vero PRIMA di fidarsi dell'accumulo in produzione.
+async Task LiquidationsVerifyAsync()
+{
+    Console.WriteLine($"Connessione a {ProcioneMGR.Services.MarketData.BinanceLiquidationMapper.StreamUri} (60s)...");
+    await using var transport = new ProcioneMGR.Services.MarketData.ClientWebSocketTransport();
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+    try
+    {
+        await transport.ConnectAsync(new Uri(ProcioneMGR.Services.MarketData.BinanceLiquidationMapper.StreamUri), cts.Token);
+        Console.WriteLine("Connesso. In ascolto...");
+        int received = 0, parsed = 0;
+        while (!cts.IsCancellationRequested && received < 30)
+        {
+            var msg = await transport.ReceiveAsync(cts.Token);
+            if (msg is null) { Console.WriteLine("Canale chiuso dal server."); break; }
+            received++;
+            var e = ProcioneMGR.Services.MarketData.BinanceLiquidationMapper.Parse(msg);
+            if (e is not null)
+            {
+                parsed++;
+                Console.WriteLine($"  {e.TimestampUtc:HH:mm:ss} {e.BaseTicker,-8} {(e.LongLiquidated ? "LONG liq." : "SHORT liq.")}  {e.Notional,12:N0} USDT");
+            }
+        }
+        Console.WriteLine($"\nMessaggi: {received} ricevuti, {parsed} parsati (i non-USDT vengono scartati per contratto).");
+    }
+    catch (OperationCanceledException)
+    {
+        Console.WriteLine("Timeout 60s raggiunto (mercato calmo = poche liquidazioni: e' normale).");
+    }
+}
+
+// ------------------------------------------------------------------ NULLTWIN (I2: il gemello sintetico)
+// La stessa identica selezione (miglior Sharpe su un piccolo spazio strategie x parametri) gira sui
+// dati VERI e su N gemelli NULLI (block bootstrap dei rendimenti + segno i.i.d.: vol clustering
+// conservato, direzionalita' annientata). Il verdetto e' il RANGO del reale nella distribuzione
+// nulla: se le serie senza struttura producono "migliori" altrettanto belli, il migliore vero e'
+// selezione, non segnale. --planted inietta un edge AR(1)-sign noto: il selfcheck DEVE risultare
+// estremo (e' il controllo positivo, reso ripetibile).
+async Task NullTwinAsync(string symbol, string timeframe, int twins, bool planted)
+{
+    await using var db0 = await dbFactory.CreateDbContextAsync();
+    var real = await db0.OhlcvData.AsNoTracking()
+        .Where(c => c.Symbol == symbol && c.Timeframe == timeframe)
+        .OrderBy(c => c.TimestampUtc)
+        .ToListAsync();
+    if (real.Count < 1000) { Console.WriteLine($"Servono >=1000 candele ({symbol} {timeframe}: {real.Count})."); return; }
+
+    if (planted)
+    {
+        // Edge piantato: persistenza del segno (r'_i = r_i + 30bp * sign(r_{i-1})) — la classe di
+        // struttura che le strategie trend del catalogo DEVONO saper trovare.
+        var closes = real.Select(c => c.Close).ToArray();
+        var price = closes[0];
+        for (var i = 1; i < real.Count; i++)
+        {
+            var r = closes[i - 1] > 0m ? (double)(closes[i] / closes[i - 1] - 1m) : 0;
+            var boost = i >= 2 && closes[i - 1] != closes[i - 2] ? (closes[i - 1] > closes[i - 2] ? 0.003 : -0.003) : 0;
+            price *= (decimal)Math.Max(0.01, 1 + r + boost);
+            var scale = real[i].Close > 0m ? price / real[i].Close : 1m;
+            var c = real[i];
+            c.Open *= scale; c.High *= scale; c.Low *= scale; c.Close = price;
+        }
+        Console.WriteLine("[SELFCHECK] Edge piantato: +30bp nella direzione della barra precedente.");
+    }
+
+    var ppy = ProcioneMGR.Services.Optimization.Statistics.PeriodsPerYear(timeframe);
+    var protos = provider.GetRequiredService<IStrategyFactory>().Prototypes;
+
+    // La SELEZIONE, identica per ogni serie: per ogni strategia, default x {1; 1,5} sui primi due
+    // parametri interi -> miglior Sharpe full-period. E' la "caccia in miniatura" di cui vogliamo
+    // la distribuzione nulla; il costo resta contenuto (13 strategie x <=4 combo).
+    async Task<double> BestSharpeAsync(List<OhlcvData> candles)
+    {
+        var best = double.MinValue;
+        using var scope = provider.CreateScope();
+        var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+        foreach (var proto in protos)
+        {
+            var defaults = proto.ParameterDefinitions.ToDictionary(d => d.Key, d => d.Default);
+            var intKeys = proto.ParameterDefinitions
+                .Where(d => d.Key.Contains("Period") || d.Key.Contains("Lookback"))
+                .Select(d => d.Key).Take(2).ToList();
+            var variants = new List<Dictionary<string, decimal>> { defaults };
+            foreach (var key in intKeys)
+            {
+                var v = new Dictionary<string, decimal>(defaults);
+                v[key] = Math.Max(2m, Math.Round(defaults[key] * 1.5m));
+                variants.Add(v);
+            }
+            foreach (var pars in variants)
+            {
+                try
+                {
+                    var cfg = new BacktestConfiguration
+                    {
+                        ExchangeName = "Binance", Symbol = symbol, Timeframe = timeframe,
+                        From = candles[0].TimestampUtc, To = candles[^1].TimestampUtc,
+                        InitialCapital = 10_000m, PositionSizePercent = 100m,
+                        FeePercent = 0.1m, SlippagePercent = 0.03m,
+                        StrategyName = proto.Name, StrategyParameters = pars,
+                    };
+                    var res = await engine.RunBacktestAsync(cfg, candles, CancellationToken.None);
+                    if (res.TotalTrades < 5) continue; // Sharpe su 2 trade non e' informazione
+                    var sharpe = (double)ProcioneMGR.Services.Optimization.Statistics.SharpeRatio(res.EquityCurve, ppy);
+                    if (sharpe > best) best = sharpe;
+                }
+                catch { /* combinazione invalida: si ignora */ }
+            }
+        }
+        return best == double.MinValue ? 0 : best;
+    }
+
+    Console.WriteLine($"=== GEMELLO SINTETICO — {symbol} {timeframe}, {real.Count} candele, {twins} gemelli nulli ===");
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var realBest = await BestSharpeAsync(real);
+    Console.WriteLine($"Migliore sui dati REALI: Sharpe {realBest:F2}  ({sw.Elapsed.TotalSeconds:F0}s)");
+
+    var nullBests = new double[twins];
+    for (var t = 0; t < twins; t++)
+    {
+        var twin = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(real, seed: 1000 + t);
+        nullBests[t] = await BestSharpeAsync(twin);
+        Console.Write($"\r  gemelli valutati: {t + 1}/{twins} (ultimo: {nullBests[t]:F2})   ");
+    }
+    Console.WriteLine();
+
+    Array.Sort(nullBests);
+    var beaten = nullBests.Count(b => b < realBest);
+    var p95 = nullBests[(int)Math.Min(twins - 1, Math.Ceiling(0.95 * twins) - 1)];
+    Console.WriteLine($"\nDistribuzione NULLA del 'migliore': min {nullBests[0]:F2} · mediana {nullBests[twins / 2]:F2} · P95 {p95:F2} · max {nullBests[^1]:F2}");
+    Console.WriteLine($"Il reale batte {beaten}/{twins} gemelli.");
+    Console.WriteLine(realBest > p95
+        ? "VERDETTO: il migliore reale e' OLTRE il 95° percentile nullo — c'e' piu' che selezione. (Il gate DSR/holdout resta il giudice finale.)"
+        : "VERDETTO: serie senza alcuna struttura producono 'migliori' cosi' belli — il candidato reale e' SELEZIONE, non segnale.");
+}
+
+// ------------------------------------------------------------------ CARRY (F1.b: il funding come flusso)
+// Cash-and-carry delta-neutro simulato sul funding STORICO VERO (dal 2019, gia' in casa): long spot
+// + short perp quando il funding annualizzato (media mobile su K eventi) supera la soglia d'entrata,
+// chiusura sotto la soglia d'uscita. Delta-neutro ⇒ il PnL prezzo si elide; resta: funding incassato
+// (firmato: lo short RICEVE quando positivo, PAGA quando negativo) − costi delle due gambe.
+// NON e' un backtest del motore: e' la MISURA che la roadmap chiede prima di costruire qualsiasi
+// consumo (quanto carry lordo esiste, quanto ne mangiano i costi, quanti giri servono).
+async Task CarryAsync(double enterAnnualPct, double exitAnnualPct)
+{
+    string[] symbols = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+    const int TrailingEvents = 9;             // ~3 giorni (3 eventi/giorno): smussa gli spike singoli
+    const double SpotFeePct = 0.10, FutFeePct = 0.05, SlipPct = 0.03; // per fill, in %
+    var episodeCostPct = 2 * (SpotFeePct + SlipPct) + 2 * (FutFeePct + SlipPct); // 4 fill, due gambe
+
+    Console.WriteLine($"=== CARRY DELTA-NEUTRO SUL FUNDING STORICO — F1.b ===");
+    Console.WriteLine($"Entra: media {TrailingEvents} eventi annualizzata > {enterAnnualPct:F1}% · Esce: < {exitAnnualPct:F1}%");
+    Console.WriteLine($"Costo per episodio (4 fill, spot {SpotFeePct}% + fut {FutFeePct}% + slip {SlipPct}%): {episodeCostPct:F2}%\n");
+    Console.WriteLine($"{"Sym",-5}{"eventi",8}{"dal",12}{"episodi",9}{"tempo in pos",14}{"lordo %",9}{"costi %",9}{"netto %",9}{"netto %/anno*",14}");
+
+    double totGross = 0, totCost = 0; var totYears = 0.0; var totEpisodes = 0;
+    foreach (var sym in symbols)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var events = await db.SentimentMetricPoints.AsNoTracking()
+            .Where(p => p.Metric == SentimentMetrics.FundingRate && p.Symbol == sym)
+            .OrderBy(p => p.TimestampUtc)
+            .Select(p => new { p.TimestampUtc, p.Value })
+            .ToListAsync();
+        if (events.Count < TrailingEvents + 10) { Console.WriteLine($"{sym,-5} serie funding assente/corta ({events.Count})."); continue; }
+
+        var inPosition = false;
+        double gross = 0, cost = 0;
+        var episodes = 0; long eventsInPos = 0;
+        var window = new Queue<double>(TrailingEvents);
+        double windowSum = 0;
+
+        foreach (var e in events)
+        {
+            var ratePct = (double)e.Value;             // % per evento 8h, firmato
+            // Il flusso dell'evento CORRENTE si incassa se si era in posizione PRIMA dell'evento:
+            // prima il PnL, poi l'aggiornamento della decisione (nessun look-ahead sull'evento stesso).
+            if (inPosition) { gross += ratePct; eventsInPos++; }
+
+            window.Enqueue(ratePct); windowSum += ratePct;
+            if (window.Count > TrailingEvents) windowSum -= window.Dequeue();
+            if (window.Count < TrailingEvents) continue;
+
+            var annualized = windowSum / window.Count * 3 * 365;  // 3 eventi/giorno
+            if (!inPosition && annualized > enterAnnualPct)
+            {
+                inPosition = true; episodes++; cost += episodeCostPct;
+            }
+            else if (inPosition && annualized < exitAnnualPct)
+            {
+                inPosition = false;
+            }
+        }
+
+        var years = (events[^1].TimestampUtc - events[0].TimestampUtc).TotalDays / 365.25;
+        var posShare = (double)eventsInPos / events.Count;
+        var net = gross - cost;
+        Console.WriteLine($"{sym,-5}{events.Count,8}{events[0].TimestampUtc,12:yyyy-MM}{episodes,9}{posShare,13:P0} {gross,8:F1}{cost,9:F1}{net,9:F1}{net / Math.Max(0.25, years),14:F2}");
+        totGross += gross; totCost += cost; totYears = Math.Max(totYears, years); totEpisodes += episodes;
+    }
+
+    Console.WriteLine($"\nTOTALE (capitale su UN simbolo alla volta, media): lordo {totGross:F1}% · costi {totCost:F1}% · netto {totGross - totCost:F1}% su ~{totYears:F1} anni × 6 simboli");
+    Console.WriteLine("* netto/anno = sul periodo INTERO della serie (capitale sempre allocato), non sul solo tempo in posizione.");
+    Console.WriteLine("\nLetture oneste:");
+    Console.WriteLine(" - il lordo e' un LIMITE SUPERIORE: ignora il rischio di base spot/perp all'entrata/uscita e");
+    Console.WriteLine("   assume che si possa sempre entrare al funding osservato (capacita' e code non modellate);");
+    Console.WriteLine(" - A/B implicito: a funding zero il lordo e' 0 e il netto = -costi (episodi x 0,42%);");
+    Console.WriteLine(" - vincolo esecuzione dichiarato in roadmap: futures live limitati (MiCA) => Paper/Testnet.");
+}
+
+// ------------------------------------------------------------------ MINUTEPROFILE (F8: i minuti, non le ore)
+// Profilo per minuto-dell'ora sui 6 simboli con dati 1m: rendimento medio firmato (con t-stat),
+// volume relativo e range relativo. NON e' una strategia (R2 ha chiuso quella porta: cost drag 77%
+// a 1m): e' un OVERLAY DI ESECUZIONE — se certi minuti hanno sistematicamente piu' pressione/range,
+// lo slicing (TWAP/VWAP) puo' scegliere QUANDO dentro l'ora. Soglia onesta per il drift: 60 test
+// per simbolo ⇒ Bonferroni 5% ⇒ |t| > 3,5.
+async Task MinuteProfileAsync()
+{
+    string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"];
+    Console.WriteLine("=== PROFILO DEL MINUTO-DELL'ORA (1m) — F8 ===");
+    Console.WriteLine("Drift: media rendimenti firmati per minuto (bp), t-stat. Vol/Range: relativi alla media del simbolo.\n");
+
+    // Aggregato cross-simbolo per il verdetto finale.
+    var crossReturnSum = new double[60];
+    var crossReturnCount = new long[60];
+    var crossVolRel = new double[60];
+    var crossRangeRel = new double[60];
+    var significantCells = new List<string>();
+
+    foreach (var symbol in symbols)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var rows = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == symbol && c.Timeframe == "1m")
+            .OrderBy(c => c.TimestampUtc)
+            .Select(c => new { c.TimestampUtc, c.Close, c.High, c.Low, c.Volume })
+            .ToListAsync();
+        if (rows.Count < 10_000) { Console.WriteLine($"{symbol}: dati 1m insufficienti ({rows.Count})."); continue; }
+
+        // Statistiche per minuto: somma/somma-quadrati dei rendimenti, volume, range.
+        var n = new long[60];
+        var sum = new double[60];
+        var sumSq = new double[60];
+        var vol = new double[60];
+        var range = new double[60];
+        double volTotal = 0, rangeTotal = 0;
+        long total = 0;
+
+        for (var i = 1; i < rows.Count; i++)
+        {
+            var prev = rows[i - 1].Close;
+            if (prev <= 0m) continue;
+            // Solo barre consecutive (1 minuto esatto): i buchi non producono "rendimenti" finti.
+            if ((rows[i].TimestampUtc - rows[i - 1].TimestampUtc) != TimeSpan.FromMinutes(1)) continue;
+
+            var m = rows[i].TimestampUtc.Minute;
+            var r = (double)(rows[i].Close / prev - 1m);
+            var rg = rows[i].Close > 0m ? (double)((rows[i].High - rows[i].Low) / rows[i].Close) : 0;
+            var v = (double)rows[i].Volume;
+
+            n[m]++; sum[m] += r; sumSq[m] += r * r;
+            vol[m] += v; range[m] += rg;
+            volTotal += v; rangeTotal += rg; total++;
+        }
+        if (total == 0) continue;
+
+        var avgVol = volTotal / total;
+        var avgRange = rangeTotal / total;
+
+        Console.WriteLine($"--- {symbol} ({total:N0} barre 1m consecutive) — minuti con |t|>3,5 o vol/range >1,5x ---");
+        for (var m = 0; m < 60; m++)
+        {
+            if (n[m] < 100) continue;
+            var mean = sum[m] / n[m];
+            var variance = sumSq[m] / n[m] - mean * mean;
+            var t = variance > 0 ? mean / Math.Sqrt(variance / n[m]) : 0;
+            var vRel = vol[m] / n[m] / avgVol;
+            var rgRel = range[m] / n[m] / avgRange;
+
+            crossReturnSum[m] += mean; crossReturnCount[m]++;
+            crossVolRel[m] += vRel; crossRangeRel[m] += rgRel;
+
+            if (Math.Abs(t) > 3.5 || vRel > 1.5 || rgRel > 1.5)
+            {
+                Console.WriteLine($"  :{m:00}  drift {mean * 10_000,7:F2} bp  t {t,6:F2}  vol {vRel,5:F2}x  range {rgRel,5:F2}x");
+                if (Math.Abs(t) > 3.5) significantCells.Add($"{symbol} :{m:00} (t={t:F1})");
+            }
+        }
+        Console.WriteLine();
+    }
+
+    Console.WriteLine("--- PROFILO MEDIO CROSS-SIMBOLO (minuti canonici) ---");
+    Console.WriteLine($"{"min",5}{"drift bp",10}{"vol x",8}{"range x",9}");
+    foreach (var m in new[] { 0, 1, 14, 15, 16, 29, 30, 31, 44, 45, 46, 58, 59 })
+    {
+        if (crossReturnCount[m] == 0) continue;
+        var k = crossReturnCount[m];
+        Console.WriteLine($"  :{m:00}{crossReturnSum[m] / k * 10_000,10:F2}{crossVolRel[m] / k,8:F2}{crossRangeRel[m] / k,9:F2}");
+    }
+
+    Console.WriteLine($"\nCelle con drift significativo (Bonferroni |t|>3,5): {significantCells.Count}");
+    foreach (var c in significantCells) Console.WriteLine($"  {c}");
+    Console.WriteLine("\nLettura: il DRIFT per minuto e' quasi certamente rumore (e comunque non tradabile a 1m, vedi R2).");
+    Console.WriteLine("Cio' che conta per lo slicing e' VOLUME e RANGE: minuti sistematicamente piu' liquidi = fill migliori;");
+    Console.WriteLine("minuti con range alto = slippage atteso peggiore. L'offset dello slicing si decide su quelle colonne.");
 }
 
 // ------------------------------------------------------------------ ORDERFLOW (3.8b: l'IC dei fattori nuovi)
