@@ -104,6 +104,7 @@ switch (phase)
     case "volrobust": await VolRobustAsync(); break;
     case "coverage": await CoverageAsync(); break;
     case "fundingbackfill": await FundingBackfillAsync(); break;
+    case "reingestx": await ReingestExtendedAsync(args.Length > 1 ? args[1] : "1d,4h,1h"); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -463,6 +464,66 @@ async Task CostFrontierAsync()
         Console.WriteLine(breakEvenRt is decimal be
             ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
             : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
+    }
+}
+
+// ------------------------------------------------------------------ REINGESTX (T0.3)
+// Ri-scarica le candele Binance GIA' presenti per popolare i campi estesi (quote volume, numero di
+// trade, volume taker) che il parsing scartava. L'upsert dell'ingestione aggiorna le righe
+// esistenti: idempotente, si puo' interrompere e rilanciare. Timeframes come argomento
+// (default "1d,4h,1h": i piu' leggeri e piu' usati; 5m/15m/1m sono lanci separati e lunghi).
+async Task ReingestExtendedAsync(string tfCsv)
+{
+    var tfs = tfCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    Console.WriteLine($"=== T0.3 REINGEST CAMPI ESTESI — timeframes: {string.Join(", ", tfs)} ===\n");
+
+    List<(string Symbol, string Tf, DateTime From, DateTime To)> series;
+    await using (var db0 = await dbFactory.CreateDbContextAsync())
+    {
+        series = (await db0.OhlcvData.AsNoTracking()
+            .Where(o => tfs.Contains(o.Timeframe))
+            .GroupBy(o => new { o.Symbol, o.Timeframe })
+            .Select(g => new { g.Key.Symbol, g.Key.Timeframe, From = g.Min(o => o.TimestampUtc), To = g.Max(o => o.TimestampUtc) })
+            .ToListAsync())
+            .Select(x => (x.Symbol, x.Timeframe, x.From, x.To))
+            .OrderBy(x => x.Timeframe).ThenBy(x => x.Symbol).ToList();
+    }
+    Console.WriteLine($"    {series.Count} serie da ri-scaricare.\n");
+
+    var done = 0;
+    long candles = 0;
+    foreach (var (symbol, tf, from, to) in series)
+    {
+        using var scope = provider.CreateScope();
+        var ingestion = scope.ServiceProvider.GetRequiredService<IOhlcvIngestionService>();
+        try
+        {
+            var r = await ingestion.IngestHistoricalDataAsync("Binance", symbol, tf, from, to.AddMinutes(1), null, CancellationToken.None);
+            candles += r.CandlesProcessed;
+            done++;
+            if (done % 10 == 0 || done == series.Count)
+                Console.WriteLine($"    {done}/{series.Count} serie ({candles:N0} candele aggiornate)");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"    {symbol} {tf}: ERRORE {ex.Message} — proseguo con la prossima.");
+        }
+    }
+
+    // Invarianti sui dati appena scritti: un taker buy oltre il volume totale e' un dato rotto.
+    await using (var db1 = await dbFactory.CreateDbContextAsync())
+    {
+        var withTaker = await db1.OhlcvData.AsNoTracking()
+            .Where(o => tfs.Contains(o.Timeframe) && o.TakerBuyVolume != null)
+            .CountAsync();
+        var broken = await db1.OhlcvData.AsNoTracking()
+            .Where(o => tfs.Contains(o.Timeframe) && o.TakerBuyVolume != null && o.TakerBuyVolume > o.Volume)
+            .CountAsync();
+        var total = await db1.OhlcvData.AsNoTracking().Where(o => tfs.Contains(o.Timeframe)).CountAsync();
+        Console.WriteLine($"\n    Popolamento: {withTaker:N0}/{total:N0} candele con taker volume ({(double)withTaker / Math.Max(1, total):P1})");
+        Console.WriteLine(broken == 0
+            ? "    Invariante TakerBuyVolume <= Volume: OK su tutte."
+            : $"    ATTENZIONE: {broken} candele violano TakerBuyVolume <= Volume — da investigare.");
     }
 }
 

@@ -141,6 +141,13 @@ public sealed class OhlcvIngestionService(
                 row.Low = candle.Low;
                 row.Close = candle.Close;
                 row.Volume = candle.Volume;
+                // [T0.3] I campi estesi si aggiornano solo se il client li ha forniti: un update da
+                // una fonte che non li espone (Bitget: niente taker) non deve CANCELLARE quelli
+                // gia' raccolti da una fonte che li espone.
+                if (candle.QuoteVolume.HasValue) row.QuoteVolume = candle.QuoteVolume;
+                if (candle.TradeCount.HasValue) row.TradeCount = candle.TradeCount;
+                if (candle.TakerBuyVolume.HasValue) row.TakerBuyVolume = candle.TakerBuyVolume;
+                if (candle.TakerBuyQuoteVolume.HasValue) row.TakerBuyQuoteVolume = candle.TakerBuyQuoteVolume;
             }
             else
             {
@@ -155,6 +162,10 @@ public sealed class OhlcvIngestionService(
                     Low = candle.Low,
                     Close = candle.Close,
                     Volume = candle.Volume,
+                    QuoteVolume = candle.QuoteVolume,
+                    TradeCount = candle.TradeCount,
+                    TakerBuyVolume = candle.TakerBuyVolume,
+                    TakerBuyQuoteVolume = candle.TakerBuyQuoteVolume,
                 });
             }
         }

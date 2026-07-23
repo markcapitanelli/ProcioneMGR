@@ -43,15 +43,24 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
         var result = new List<Ohlcv>(doc.RootElement.GetArrayLength());
         foreach (var k in doc.RootElement.EnumerateArray())
         {
-            // [ openTime, open, high, low, close, volume, closeTime, ... ]
+            // [ openTime, open, high, low, close, volume, closeTime, quoteVolume, trades,
+            //   takerBuyBase, takerBuyQuote, ignore ]
+            // [T0.3] I campi 7-10 arrivano gratis in ogni kline e venivano scartati: quoteVolume,
+            // numero di trade e volume TAKER (l'order flow aggressivo). Difensivo sulla lunghezza:
+            // se un payload anomalo ne ha meno, i campi estesi restano null e la candela e' valida.
             var openTime = k[0].GetInt64();
+            var len = k.GetArrayLength();
             result.Add(new Ohlcv(
                 DateTimeOffset.FromUnixTimeMilliseconds(openTime).UtcDateTime,
                 ParseDecimal(k[1]),
                 ParseDecimal(k[2]),
                 ParseDecimal(k[3]),
                 ParseDecimal(k[4]),
-                ParseDecimal(k[5])));
+                ParseDecimal(k[5]),
+                QuoteVolume: len > 7 ? ParseDecimal(k[7]) : null,
+                TradeCount: len > 8 ? k[8].GetInt64() : null,
+                TakerBuyVolume: len > 9 ? ParseDecimal(k[9]) : null,
+                TakerBuyQuoteVolume: len > 10 ? ParseDecimal(k[10]) : null));
         }
 
         return result;

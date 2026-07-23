@@ -66,6 +66,7 @@ public sealed class BitgetClient(
         foreach (var k in data.EnumerateArray())
         {
             // [ ts(string ms), open, high, low, close, baseVolume, quoteVolume ]
+            // [T0.3] Bitget non espone trades/taker, ma il quoteVolume c'e' e veniva scartato.
             var ts = long.Parse(k[0].GetString() ?? "0", CultureInfo.InvariantCulture);
             result.Add(new Ohlcv(
                 DateTimeOffset.FromUnixTimeMilliseconds(ts).UtcDateTime,
@@ -73,7 +74,8 @@ public sealed class BitgetClient(
                 ParseDecimal(k[2]),
                 ParseDecimal(k[3]),
                 ParseDecimal(k[4]),
-                ParseDecimal(k[5])));
+                ParseDecimal(k[5]),
+                QuoteVolume: k.GetArrayLength() > 6 ? ParseDecimal(k[6]) : null));
         }
 
         // Bitget puo' restituire le candele non ordinate: normalizziamo in ordine cronologico.

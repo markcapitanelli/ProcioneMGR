@@ -40,4 +40,24 @@ public class OhlcvData
 
     /// <summary>Volume scambiato nel periodo.</summary>
     public decimal Volume { get; set; }
+
+    // [T0.3 roadmap macchina-ricerca] I campi che le klines Binance consegnano GRATIS in ogni
+    // download e che il parsing scartava. Nullable di proposito: le candele storiche non ancora
+    // ri-scaricate restano valide, e null distingue "non disponibile" da "zero" — un imbalance
+    // calcolato su uno zero finto sarebbe un segnale inventato.
+
+    /// <summary>Controvalore scambiato (quote asset, es. USDT). Binance k[7], Bitget k[6]. Null = non raccolto.</summary>
+    public decimal? QuoteVolume { get; set; }
+
+    /// <summary>Numero di trade nella candela (Binance k[8]). Abilita dimensione media del trade e trade-bars. Null = non raccolto.</summary>
+    public long? TradeCount { get; set; }
+
+    /// <summary>
+    /// Volume base comprato da TAKER (Binance k[9]): l'order flow aggressivo — chi attraversa lo
+    /// spread. L'imbalance TakerBuyVolume/Volume è la feature order-flow di T3.8b. Null = non raccolto.
+    /// </summary>
+    public decimal? TakerBuyVolume { get; set; }
+
+    /// <summary>Controvalore comprato da taker (Binance k[10]). Null = non raccolto.</summary>
+    public decimal? TakerBuyQuoteVolume { get; set; }
 }
