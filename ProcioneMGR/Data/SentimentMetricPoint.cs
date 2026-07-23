@@ -47,6 +47,9 @@ public static class SentimentMetricSources
 {
     public const string FearGreed = "FearGreed";
     public const string BinanceFutures = "BinanceFutures";
+
+    /// <summary>[F4] Liquidazioni dal WebSocket futures Binance (!forceOrder@arr), aggregate per ora.</summary>
+    public const string BinanceLiquidations = "BinanceLiquidations";
 }
 
 /// <summary>Nomi delle metriche sentiment (colonna Metric).</summary>
@@ -72,4 +75,18 @@ public static class SentimentMetrics
 
     /// <summary>Funding rate in percento (×100), come il resto della piattaforma.</summary>
     public const string FundingRate = "FundingRate";
+
+    // --- [F4] Liquidazioni per (simbolo, ora UTC): side SELL = long liquidati, BUY = short. ---
+
+    /// <summary>Nozionale (USDT) dei LONG liquidati nell'ora.</summary>
+    public const string LongLiquidationNotional = "LongLiquidationNotional";
+
+    /// <summary>Nozionale (USDT) degli SHORT liquidati nell'ora.</summary>
+    public const string ShortLiquidationNotional = "ShortLiquidationNotional";
+
+    /// <summary>Numero di ordini di liquidazione LONG nell'ora.</summary>
+    public const string LongLiquidationCount = "LongLiquidationCount";
+
+    /// <summary>Numero di ordini di liquidazione SHORT nell'ora.</summary>
+    public const string ShortLiquidationCount = "ShortLiquidationCount";
 }

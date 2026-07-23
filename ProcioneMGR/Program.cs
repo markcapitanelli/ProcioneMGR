@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using ProcioneMGR.Components;
 using ProcioneMGR.Components.Account;
@@ -251,6 +252,13 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentNewsProvi
 // Worker anche singleton risolvibile: "Esegui ora" dalla UI usa la stessa istanza del hosted service.
 builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>());
+
+// --- [F4] Accumulo liquidazioni (stream pubblico Binance futures, keyless) ---
+// Default ON: il dato non è ricostruibile a posteriori, ogni giorno spento è storia persa.
+// TryAdd: la factory WebSocket è la stessa del feed real-time R1 (registrata lì quando attivo).
+builder.Services.Configure<ProcioneMGR.Services.MarketData.LiquidationsOptions>(builder.Configuration.GetSection("Liquidations"));
+builder.Services.TryAddSingleton<ProcioneMGR.Services.MarketData.IWebSocketTransportFactory, ProcioneMGR.Services.MarketData.ClientWebSocketTransportFactory>();
+builder.Services.AddHostedService<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>();
 
 // --- Portfolio optimization (Mean-Variance, Risk Parity, HRP) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.MeanVarianceOptimizer>();

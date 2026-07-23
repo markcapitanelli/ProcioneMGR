@@ -92,9 +92,15 @@ public sealed class SentimentSyncWorker(
     }
 
     /// <summary>
-    /// Retention: notizie oltre NewsRetentionDays, metriche oltre MetricRetentionDays — ESCLUSA la
-    /// fonte FearGreed, che è il baseline lungo (~2500 righe totali, un punto al giorno: tenerla
-    /// tutta costa nulla e conserva i cicli interi per i confronti storici).
+    /// Retention: notizie oltre NewsRetentionDays, metriche oltre MetricRetentionDays — ESCLUSE le
+    /// serie che sono PATRIMONIO STORICO e non cache di sentiment:
+    ///  - FearGreed: il baseline lungo (~2500 righe, un punto/giorno, cicli interi);
+    ///  - FundingRate: il backfill profondo dal 2019 (T0.2) che alimenta il BACKTEST e il carry —
+    ///    senza questa esenzione il primo tick dopo il backfill lo avrebbe raso a 30 giorni
+    ///    (bug latente trovato il 2026-07-24 costruendo F4: il tool scriveva la storia,
+    ///    il worker dell'app l'avrebbe cancellata);
+    ///  - BinanceLiquidations (F4): il dato NON è ricostruibile a posteriori — l'accumulo è
+    ///    l'intero valore della fonte.
     /// </summary>
     private static async Task PurgeAsync(IServiceProvider services, SentimentOptions opt, CancellationToken ct)
     {
@@ -106,7 +112,10 @@ public sealed class SentimentSyncWorker(
 
         var metricCutoff = DateTime.UtcNow.AddDays(-Math.Max(30, opt.MetricRetentionDays));
         await db.SentimentMetricPoints
-            .Where(p => p.TimestampUtc < metricCutoff && p.Source != SentimentMetricSources.FearGreed)
+            .Where(p => p.TimestampUtc < metricCutoff
+                        && p.Source != SentimentMetricSources.FearGreed
+                        && p.Source != SentimentMetricSources.BinanceLiquidations
+                        && p.Metric != SentimentMetrics.FundingRate)
             .ExecuteDeleteAsync(ct);
     }
 
