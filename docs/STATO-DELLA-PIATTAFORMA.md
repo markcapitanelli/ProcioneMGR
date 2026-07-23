@@ -56,6 +56,13 @@ Accendilo se vuoi oscillare meno accettando di guadagnare meno. Non per far funz
 
 ## Se vuoi continuare la ricerca
 
+> **Aggiornamento 2026-07-20**: esiste ora una roadmap dedicata —
+> **[ROADMAP-MACCHINA-RICERCA.md](ROADMAP-MACCHINA-RICERCA.md)** — nata dall'obiezione del
+> proprietario alla conclusione "servono dati di un altro mercato". Il censimento del codice gli ha
+> dato ragione: molti dati preziosi sono già raccolti ma scollegati dal motore (funding storico,
+> order flow scartato al parsing, purged CV esistente ma non usata dal walk-forward). La roadmap
+> collega l'esistente prima di inventare. I punti qui sotto restano validi e sono assorbiti lì.
+
 Quello che **non** vale la pena rifare (già esaurito): altre cacce a strategia singola sugli stessi
 dati variando finestre; timeframe sotto i 15m (i costi li rendono inoperabili); fidarsi di uno Sharpe
 alto senza guardare il numero di operazioni.

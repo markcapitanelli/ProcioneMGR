@@ -102,6 +102,7 @@ switch (phase)
     case "voloverlay": await VolOverlayAsync(); break;
     case "volsingle": await VolSingleAsync(); break;
     case "volrobust": await VolRobustAsync(); break;
+    case "coverage": await CoverageAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -462,6 +463,126 @@ async Task CostFrontierAsync()
             ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
             : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
     }
+}
+
+// ------------------------------------------------------------------ COVERAGE (T0.0 roadmap macchina-ricerca)
+// L'audit che viene PRIMA di qualunque "spremiamo i dati": cosa c'e' davvero in casa, con quali
+// buchi, e quali episodi storici nominabili sono coperti. Read-only, sicuro con l'app accesa.
+// L'output alimenta la sezione "Inventario" di docs/ROADMAP-MACCHINA-RICERCA.md.
+async Task CoverageAsync()
+{
+    await using var db = await dbFactory.CreateDbContextAsync();
+
+    static int TfMinutes(string tf) => tf switch
+    {
+        "1m" => 1, "5m" => 5, "15m" => 15, "30m" => 30, "1h" => 60, "4h" => 240, "1d" => 1440, _ => 0,
+    };
+
+    Console.WriteLine("=== T0.0 AUDIT DI COPERTURA DATI ===\n");
+
+    // --- OHLCV -------------------------------------------------------------------------------
+    var ohlcv = await db.OhlcvData.AsNoTracking()
+        .GroupBy(o => new { o.Symbol, o.Timeframe })
+        .Select(g => new
+        {
+            g.Key.Symbol,
+            g.Key.Timeframe,
+            N = g.Count(),
+            From = g.Min(o => o.TimestampUtc),
+            To = g.Max(o => o.TimestampUtc),
+            ZeroVol = g.Count(o => o.Volume == 0m),
+        })
+        .ToListAsync();
+
+    Console.WriteLine($"--- OHLCV: {ohlcv.Count} serie, {ohlcv.Sum(x => (long)x.N):N0} candele totali ---");
+    Console.WriteLine("    Copertura = candele presenti / attese sull'intervallo [from, to]. Sotto il 99% c'e' un buco.\n");
+
+    var perTf = ohlcv.GroupBy(x => x.Timeframe).OrderBy(g => TfMinutes(g.Key));
+    foreach (var g in perTf)
+    {
+        var syms = g.Count();
+        var candles = g.Sum(x => (long)x.N);
+        var minFrom = g.Min(x => x.From);
+        var maxTo = g.Max(x => x.To);
+        Console.WriteLine($"  {g.Key,-4} {syms,4} simboli {candles,12:N0} candele   {minFrom:yyyy-MM-dd} -> {maxTo:yyyy-MM-dd}");
+    }
+
+    Console.WriteLine("\n    Serie con copertura < 99% o volume-zero anomalo:");
+    var flagged = 0;
+    foreach (var x in ohlcv.OrderBy(x => x.Symbol).ThenBy(x => TfMinutes(x.Timeframe)))
+    {
+        var mins = TfMinutes(x.Timeframe);
+        if (mins == 0) continue;
+        var expected = (x.To - x.From).TotalMinutes / mins + 1;
+        var cov = expected > 0 ? x.N / expected : 0;
+        var zeroPct = x.N > 0 ? (double)x.ZeroVol / x.N : 0;
+        if (cov < 0.99 || zeroPct > 0.01)
+        {
+            Console.WriteLine($"      {x.Symbol,-11} {x.Timeframe,-4} copertura {cov,7:P1}  vol=0 {zeroPct,6:P1}  ({x.N:N0} candele, {x.From:yyyy-MM-dd} -> {x.To:yyyy-MM-dd})");
+            flagged++;
+        }
+    }
+    if (flagged == 0) Console.WriteLine("      nessuna: tutte le serie sono dense.");
+
+    // --- Metriche sentiment ------------------------------------------------------------------
+    var sm = await db.SentimentMetricPoints.AsNoTracking()
+        .GroupBy(s => s.Metric)
+        .Select(g => new
+        {
+            Metric = g.Key,
+            N = g.Count(),
+            Symbols = g.Select(s => s.Symbol).Distinct().Count(),
+            From = g.Min(s => s.TimestampUtc),
+            To = g.Max(s => s.TimestampUtc),
+        })
+        .ToListAsync();
+
+    Console.WriteLine($"\n--- SentimentMetricPoints: {sm.Sum(x => (long)x.N):N0} punti ---");
+    foreach (var x in sm.OrderBy(x => x.Metric))
+    {
+        var days = (x.To - x.From).TotalDays;
+        Console.WriteLine($"  {x.Metric,-24} {x.N,8:N0} punti {x.Symbols,3} simboli   {x.From:yyyy-MM-dd} -> {x.To:yyyy-MM-dd}  (~{days:F0}gg)");
+    }
+
+    // --- Alt-data (eventi/notizie) -----------------------------------------------------------
+    var alt = await db.AltDataPoints.AsNoTracking()
+        .GroupBy(a => a.Category)
+        .Select(g => new { Category = g.Key, N = g.Count(), From = g.Min(a => a.TimestampUtc), To = g.Max(a => a.TimestampUtc) })
+        .ToListAsync();
+
+    Console.WriteLine($"\n--- AltDataPoints (eventi/notizie): {alt.Sum(x => (long)x.N):N0} ---");
+    foreach (var x in alt.OrderBy(x => x.Category))
+        Console.WriteLine($"  {x.Category,-14} {x.N,7:N0}   {x.From:yyyy-MM-dd} -> {x.To:yyyy-MM-dd}");
+
+    // --- Episodi storici nominabili ----------------------------------------------------------
+    // Serve a T2 (event-study): quali episodi noti cadono DENTRO la storia OHLCV disponibile?
+    // Elenco fermo a inizio 2025 (eventi ampiamente documentati); estendibile a mano.
+    (string Label, DateTime When)[] episodes =
+    [
+        ("Crash COVID (Black Thursday)", new DateTime(2020, 3, 12)),
+        ("Crash maggio 2021 (Cina/leva)", new DateTime(2021, 5, 19)),
+        ("ATH di ciclo 2021", new DateTime(2021, 11, 10)),
+        ("Collasso LUNA/UST", new DateTime(2022, 5, 9)),
+        ("Collasso FTX", new DateTime(2022, 11, 8)),
+        ("Crisi SVB / depeg USDC", new DateTime(2023, 3, 10)),
+        ("Approvazione ETF spot BTC", new DateTime(2024, 1, 10)),
+        ("Halving Bitcoin 2024", new DateTime(2024, 4, 20)),
+        ("Crash yen carry-trade", new DateTime(2024, 8, 5)),
+        ("Elezioni USA 2024", new DateTime(2024, 11, 5)),
+    ];
+
+    Console.WriteLine("\n--- Episodi nominabili coperti dall'OHLCV (riferimento BTC/USDT) ---");
+    var btc = ohlcv.Where(x => x.Symbol == "BTC/USDT").ToList();
+    foreach (var (label, when) in episodes)
+    {
+        var tfs = btc.Where(x => x.From <= when && when <= x.To).Select(x => x.Timeframe)
+                     .OrderBy(TfMinutes).ToList();
+        Console.WriteLine($"  {label,-34} {when:yyyy-MM-dd}  {(tfs.Count > 0 ? string.Join(",", tfs) : "NON coperto")}");
+    }
+
+    Console.WriteLine("\n    NB: la profondita' varia per timeframe (1d dal 2020, 4h dal 2022, 1h dal 2023,");
+    Console.WriteLine("    5m/15m dal 2025, 1m da luglio 2025): gli event-study intraday sono possibili solo");
+    Console.WriteLine("    per gli episodi recenti; quelli storici solo su 1d/4h.");
 }
 
 // ------------------------------------------------------------------ VOLROBUST (era rumore?)
