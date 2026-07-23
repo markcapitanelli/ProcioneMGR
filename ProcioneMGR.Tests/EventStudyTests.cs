@@ -184,6 +184,39 @@ public class EventStudyTests
         Assert.Contains(blowouts, e => e.TimestampUtc == candles[200].TimestampUtc);
     }
 
+    // ------------------------------------------------------------------ Segnali F3 (catalogo 12-13)
+
+    [Fact]
+    public async Task PostCrashSignal_Is100AtTheEvent_DecaysLinearly_AndZeroWithoutEvents()
+    {
+        var candles = RandomWalk(400, seed: 8, vol: 0.005);
+        // Stesso crash piantato del test del detector (cluster a 300-302 → UN evento a 300).
+        foreach (var i in new[] { 300, 301, 302 })
+        {
+            var factor = 0.90m;
+            var c = candles[i];
+            c.Close = candles[i - 1].Close * factor;
+            c.Open = c.Close; c.High = c.Close; c.Low = c.Close;
+            for (var j = i + 1; j < candles.Count; j++)
+            {
+                var cj = candles[j];
+                cj.Close *= factor; cj.Open *= factor; cj.High *= factor; cj.Low *= factor;
+            }
+        }
+
+        var matrix = await ProcioneMGR.Services.Backtesting.SignalCatalog.GetMatrixAsync(
+            candles, new ProcioneMGR.Services.Indicators.TechnicalIndicatorsService(), CancellationToken.None);
+
+        var postCrash = matrix[12];
+        Assert.Null(postCrash[10]);                 // warm-up del rilevatore
+        Assert.Equal(0m, postCrash[200]);           // nessun evento recente = 0, non null
+        Assert.Equal(100m, postCrash[300]);         // barra dell'evento
+        Assert.Equal(95m, postCrash[301]);          // decadimento lineare su 20 barre
+        Assert.Equal(0m, postCrash[300 + ProcioneMGR.Services.Backtesting.SignalCatalog.EventDecayBars]);
+        // E il segnale gemello (Surge) resta a zero: il crash non lo accende.
+        Assert.Equal(0m, matrix[13][301]);
+    }
+
     [Fact]
     public void Detector_IsCausal_FutureBarsDoNotChangePastEvents()
     {

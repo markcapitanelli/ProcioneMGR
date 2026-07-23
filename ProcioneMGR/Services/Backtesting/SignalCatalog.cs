@@ -33,8 +33,11 @@ namespace ProcioneMGR.Services.Backtesting;
 /// </summary>
 public static class SignalCatalog
 {
-    public const int SignalCount = 12;
+    public const int SignalCount = 14;
     public const int PercentileWindow = 250;
+
+    /// <summary>[F3] Barre di decadimento lineare dei segnali post-evento (12/13): 100 alla barra evento → 0 dopo N barre.</summary>
+    public const int EventDecayBars = 20;
 
     /// <summary>Display names, index-aligned to the signal ids (for UI/log readability).</summary>
     public static readonly IReadOnlyList<string> SignalNames =
@@ -48,6 +51,11 @@ public static class SignalCatalog
         // invariati). Il VWAP non ha un id nuovo: la deviazione dal VWAP di sessione è già l'id 5.
         "MFI",
         "OBV slope pct",
+        // [F3] Promossi a segnale SOLO dopo il run eventstudy sul campo (2026-07-24): continuazione
+        // post-Crash e post-Surge con p placebo 0,002 replicata su BTC/ETH/SOL 1d e BTC/ETH 1h.
+        // VolSpike (segno incoerente fra simboli) e VolumeBlowout (p>0,4) NON promossi.
+        "Post-Crash",
+        "Post-Surge",
     ];
 
     private static readonly ConditionalWeakTable<object, Task<decimal?[][]>> Cache = new();
@@ -216,7 +224,49 @@ public static class SignalCatalog
         }
         matrix[11] = CausalPercentile(obvSlope, PercentileWindow, ct);
 
+        // 12-13) [F3] Post-Crash / Post-Surge: 100 alla barra dell'evento, decadimento lineare a 0
+        //     in EventDecayBars barre. Il rilevatore è CAUSALE (la barra giudicata non contribuisce
+        //     alla propria soglia) quindi il segnale eredita l'anti-look-ahead. Soglie tipiche:
+        //     "Post-Surge > 50" = surge nelle ultime 10 barre. La continuazione post-evento è stata
+        //     MISURATA (event-study con placebo) prima di promuovere questi id; resta al gate il
+        //     giudizio sulle composizioni che li usano.
+        var events = Analysis.MarketEventDetector.Detect(candles);
+        matrix[12] = EventDecaySignal(candles, events, Analysis.MarketEventKind.Crash);
+        matrix[13] = EventDecaySignal(candles, events, Analysis.MarketEventKind.Surge);
+
         return matrix;
+    }
+
+    /// <summary>
+    /// Segnale di decadimento post-evento: null nel warm-up del rilevatore (prima soglia possibile),
+    /// poi 0 = nessun evento recente, 100→0 lineare dall'evento in EventDecayBars barre.
+    /// </summary>
+    private static decimal?[] EventDecaySignal(
+        IReadOnlyList<OhlcvData> candles, IReadOnlyList<Analysis.MarketEvent> events, Analysis.MarketEventKind kind)
+    {
+        var n = candles.Count;
+        var result = new decimal?[n];
+        var eventTimes = new HashSet<DateTime>(events.Where(e => e.Kind == kind).Select(e => e.TimestampUtc));
+
+        // Il rilevatore giudica Crash/Surge solo da VolWindow+1 in poi: prima è warm-up (null).
+        var warmup = new Analysis.MarketEventDetectorConfig().VolWindow + 1;
+        var barsSince = int.MaxValue;
+        for (var i = 0; i < n; i++)
+        {
+            if (eventTimes.Contains(candles[i].TimestampUtc))
+            {
+                barsSince = 0;
+            }
+            else if (barsSince != int.MaxValue)
+            {
+                barsSince++;
+            }
+            if (i < warmup) continue;
+            result[i] = barsSince >= EventDecayBars
+                ? 0m
+                : 100m * (EventDecayBars - barsSince) / EventDecayBars;
+        }
+        return result;
     }
 
     /// <summary>
