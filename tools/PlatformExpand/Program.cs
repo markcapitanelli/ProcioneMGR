@@ -1,4 +1,4 @@
-// PlatformExpand: harness per espandere dati e stressare la piattaforma end-to-end.
+﻿// PlatformExpand: harness per espandere dati e stressare la piattaforma end-to-end.
 // Fasi: stats | ingest | analyze | altdata
 //   stats   -> inventario READ-ONLY (sicuro anche con l'app in esecuzione, WAL)
 //   ingest  -> nuove coppie, timeframe 5m, storia piu' profonda (app FERMA)
@@ -105,6 +105,7 @@ switch (phase)
     case "coverage": await CoverageAsync(); break;
     case "fundingbackfill": await FundingBackfillAsync(); break;
     case "reingestx": await ReingestExtendedAsync(args.Length > 1 ? args[1] : "1d,4h,1h"); break;
+    case "orderflow": await OrderFlowIcAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -154,7 +155,7 @@ async Task StatsAsync()
     var present = rows.Select(r => (r.Symbol, r.Timeframe)).ToHashSet();
     foreach (var s in allSymbols)
     {
-        var marks = tfs.Select(t => (present.Contains((s, t)) ? "S" : "·").PadLeft(4));
+        var marks = tfs.Select(t => (present.Contains((s, t)) ? "S" : "Â·").PadLeft(4));
         var isNew = newSymbols.Contains(s) ? " (NUOVA)" : "";
         Console.WriteLine($"  {s,-11} {string.Join(" ", marks)}{isNew}");
     }
@@ -236,13 +237,13 @@ async Task IngestAsync()
 // ------------------------------------------------------------------ INGEST 1m (app ferma)
 // [R2] Timeframe 1m, DELIBERATAMENTE limitato.
 //
-// Perché non tutte le coppie: a 1m un anno vale ~525.000 candele per coppia. Sulle 30 coppie della
-// watchlist sarebbero ~15,8 milioni di righe contro i ~7,7 milioni dell'INTERO database attuale —
-// più che raddoppiarlo per rispondere a una domanda che si può rispondere su sei coppie.
+// PerchÃ© non tutte le coppie: a 1m un anno vale ~525.000 candele per coppia. Sulle 30 coppie della
+// watchlist sarebbero ~15,8 milioni di righe contro i ~7,7 milioni dell'INTERO database attuale â€”
+// piÃ¹ che raddoppiarlo per rispondere a una domanda che si puÃ² rispondere su sei coppie.
 //
-// Perché proprio queste sei: sono le più liquide, cioè quelle dove lo slippage reale è più basso e
-// quindi dove 1m ha la MIGLIORE probabilità di funzionare. Se l'edge netto non sopravvive qui, non
-// sopravvive da nessuna parte, e la risposta di R2 è chiusa senza scaricare altri 20 milioni di righe.
+// PerchÃ© proprio queste sei: sono le piÃ¹ liquide, cioÃ¨ quelle dove lo slippage reale Ã¨ piÃ¹ basso e
+// quindi dove 1m ha la MIGLIORE probabilitÃ  di funzionare. Se l'edge netto non sopravvive qui, non
+// sopravvive da nessuna parte, e la risposta di R2 Ã¨ chiusa senza scaricare altri 20 milioni di righe.
 async Task Ingest1mAsync()
 {
     string[] liquidSymbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"];
@@ -274,9 +275,9 @@ async Task Ingest1mAsync()
 
     // Watchlist: idempotente come nella fase ingest.
     //
-    // Enabled=FALSE di proposito. Sei serie 1m in più nel ciclo di sincronizzazione periodico
-    // significano sei richieste REST ogni 5 minuti per dati che, finché la misura di R2 non ha
-    // detto se 1m è operabile, nessuno consuma. Si abilitano quando (e se) servono davvero.
+    // Enabled=FALSE di proposito. Sei serie 1m in piÃ¹ nel ciclo di sincronizzazione periodico
+    // significano sei richieste REST ogni 5 minuti per dati che, finchÃ© la misura di R2 non ha
+    // detto se 1m Ã¨ operabile, nessuno consuma. Si abilitano quando (e se) servono davvero.
     await using (var db = await dbFactory.CreateDbContextAsync())
     {
         var added = 0;
@@ -313,7 +314,7 @@ async Task LanesAsync(bool clean)
     int[] experimental = [1];
 
     var json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-    Console.WriteLine(clean ? "=== CORSIE — svuotamento delle sole sperimentali ===\n" : "=== CORSIE — stato attuale ===\n");
+    Console.WriteLine(clean ? "=== CORSIE â€” svuotamento delle sole sperimentali ===\n" : "=== CORSIE â€” stato attuale ===\n");
 
     await using var db = await dbFactory.CreateDbContextAsync();
     for (var lane = 0; lane < 3; lane++)
@@ -374,19 +375,19 @@ async Task LanesAsync(bool clean)
 
     if (!clean)
     {
-        Console.WriteLine("  (sola lettura — usa `lanes clean` per svuotare le sole corsie sperimentali)");
+        Console.WriteLine("  (sola lettura â€” usa `lanes clean` per svuotare le sole corsie sperimentali)");
     }
 }
 
 // ------------------------------------------------------------------ COST FRONTIER (quanto deve costare eseguire)
 // La ricerca di segnali migliori e' esaurita (docs/REPORT-RICERCA-2026-07.md). Ma il report indica
 // una leva che non e' stata ancora misurata, e che agisce sull'altro lato dell'equazione: il COSTO
-// di esecuzione. Il caso PriceSmaCross DOGE 4h e' emblematico — fuori campione faceva lordo +7,74%
+// di esecuzione. Il caso PriceSmaCross DOGE 4h e' emblematico â€” fuori campione faceva lordo +7,74%
 // e netto -7,57%: il segnale funzionava, l'hanno ucciso le commissioni.
 //
 // Domanda precisa a cui questa fase risponde: a quale livello di costo ciascun candidato passerebbe
 // da perdente a vincente? Il numero che ne esce non e' un'opinione su quale exchange usare, e' il
-// requisito di esecuzione che la strategia impone — e dice se sia raggiungibile o fantascienza.
+// requisito di esecuzione che la strategia impone â€” e dice se sia raggiungibile o fantascienza.
 //
 // I livelli non sono inventati: corrispondono a modi reali di eseguire.
 async Task CostFrontierAsync()
@@ -401,13 +402,13 @@ async Task CostFrontierAsync()
     var candidates = JsonSerializer.Deserialize<List<DiscoveryCandidate>>(File.ReadAllText(huntPath))!
         .OrderByDescending(c => c.OutOfSampleSharpe).Take(6).ToList();
 
-    // (etichetta, fee per lato %, slippage per fill %) — scenari di esecuzione realmente disponibili.
+    // (etichetta, fee per lato %, slippage per fill %) â€” scenari di esecuzione realmente disponibili.
     var scenarios = new (string Label, decimal Fee, decimal Slip)[]
     {
         ("taker Binance (base)",       0.100m, 0.050m),
         ("taker Bitget",               0.060m, 0.050m),
         // TETTO DELLO SLICING. Gli algoritmi TWAP/VWAP/Iceberg/Adaptive riducono l'impatto di
-        // mercato, cioe' lo SLIPPAGE — non la commissione, che dipende dall'essere maker o taker.
+        // mercato, cioe' lo SLIPPAGE â€” non la commissione, che dipende dall'essere maker o taker.
         // E oggi l'intero percorso live piazza solo ordini MARKET (SignalOrderBuilder,
         // PositionOpener, PositionCloser), quindi e' sempre taker. Questi due scenari sono il
         // limite teorico dello slicing: slippage azzerato, commissione taker invariata.
@@ -418,9 +419,9 @@ async Task CostFrontierAsync()
         ("costo zero (limite)",        0.000m, 0.000m),
     };
 
-    Console.WriteLine($"=== FRONTIERA DEI COSTI — holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");
+    Console.WriteLine($"=== FRONTIERA DEI COSTI â€” holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");
     Console.WriteLine("    Quanto dovrebbe costare eseguire perche' questi candidati smettano di perdere?\n");
-    Console.WriteLine("    NB: il maker non e' gratis in senso pratico — un ordine limite puo' non essere");
+    Console.WriteLine("    NB: il maker non e' gratis in senso pratico â€” un ordine limite puo' non essere");
     Console.WriteLine("    eseguito, e una strategia che INSEGUE il prezzo non puo' fare il maker per");
     Console.WriteLine("    definizione. Questi numeri dicono cosa servirebbe, non che sia gratuito ottenerlo.\n");
 
@@ -467,6 +468,67 @@ async Task CostFrontierAsync()
     }
 }
 
+// ------------------------------------------------------------------ ORDERFLOW (3.8b: l'IC dei fattori nuovi)
+// Il criterio di validazione dell'item: i fattori order-flow portano INFORMAZIONE NUOVA?
+// Misura: (a) IC di Spearman contro il rendimento forward (FactorEvaluator, gia' esistente);
+// (b) correlazione col fattore volume storico (RelativeVolume) â€” se fosse alta, sarebbe la stessa
+// informazione con un altro nome, non un guadagno.
+async Task OrderFlowIcAsync()
+{
+    string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"];
+    string[] tfs = ["1h", "4h", "1d"];
+    var from = new DateTime(2023, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    Console.WriteLine("=== 3.8b IC DEI FATTORI ORDER-FLOW (dati reingeriti T0.3) ===");
+    Console.WriteLine("    IC = Spearman(fattore[i], rendimento[i -> i+orizzonte]); |IC| > 0,03 su migliaia di");
+    Console.WriteLine("    barre e' gia' interessante in cripto. rho(RelVol) = correlazione col fattore volume");
+    Console.WriteLine("    storico: bassa = informazione NUOVA.\n");
+
+    var evaluator = new ProcioneMGR.Services.Alpha.FactorEvaluator();
+    var taker = new ProcioneMGR.Services.Alpha.TakerImbalanceFactor();
+    var avgSize = new ProcioneMGR.Services.Alpha.AvgTradeSizeFactor();
+    var relVol = new ProcioneMGR.Services.Alpha.RelativeVolumeFactor();
+    var noParams = new Dictionary<string, decimal>();
+
+    Console.WriteLine($"    {"simbolo",-10} {"tf",-4} {"barre",7} {"IC taker",9} {"IC avgSize",11} {"rho(taker,RelVol)",18}");
+
+    foreach (var tf in tfs)
+    {
+        foreach (var sym in symbols)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync();
+            var candles = await db.OhlcvData.AsNoTracking()
+                .Where(o => o.Symbol == sym && o.Timeframe == tf && o.TimestampUtc >= from)
+                .OrderBy(o => o.TimestampUtc).ToListAsync();
+            if (candles.Count < 500) continue;
+
+            var horizon = tf == "1d" ? 5 : tf == "4h" ? 6 : 24;   // ~1 giorno-lavoro di forward per tf
+
+            var icTaker = evaluator.Evaluate(taker, candles, noParams,
+                new ProcioneMGR.Services.Alpha.FactorEvaluationConfig { ForwardHorizon = horizon });
+            var icSize = evaluator.Evaluate(avgSize, candles, noParams,
+                new ProcioneMGR.Services.Alpha.FactorEvaluationConfig { ForwardHorizon = horizon });
+
+            // Correlazione fra taker imbalance e RelativeVolume sulle barre dove entrambi esistono.
+            var a = taker.Compute(candles, noParams);
+            var b = relVol.Compute(candles, noParams);
+            var xs = new List<double>();
+            var ys = new List<double>();
+            for (var i = 0; i < candles.Count; i++)
+            {
+                if (a[i].HasValue && b[i].HasValue) { xs.Add((double)a[i]!.Value); ys.Add((double)b[i]!.Value); }
+            }
+            var rho = xs.Count >= 30 ? ProcioneMGR.Services.Alpha.Correlation.Spearman(xs, ys) : double.NaN;
+
+            Console.WriteLine($"    {sym,-10} {tf,-4} {icTaker.Observations,7:N0} {icTaker.InformationCoefficient,9:F4} {icSize.InformationCoefficient,11:F4} {rho,18:F3}");
+        }
+        Console.WriteLine();
+    }
+
+    Console.WriteLine("    Lettura onesta: l'IC va poi confermato dal gate (DSR/holdout/permutation) prima di");
+    Console.WriteLine("    diventare una feature di produzione â€” questo e' il primo sguardo, non un verdetto.");
+}
+
 // ------------------------------------------------------------------ REINGESTX (T0.3)
 // Ri-scarica le candele Binance GIA' presenti per popolare i campi estesi (quote volume, numero di
 // trade, volume taker) che il parsing scartava. L'upsert dell'ingestione aggiorna le righe
@@ -475,7 +537,7 @@ async Task CostFrontierAsync()
 async Task ReingestExtendedAsync(string tfCsv)
 {
     var tfs = tfCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-    Console.WriteLine($"=== T0.3 REINGEST CAMPI ESTESI — timeframes: {string.Join(", ", tfs)} ===\n");
+    Console.WriteLine($"=== T0.3 REINGEST CAMPI ESTESI â€” timeframes: {string.Join(", ", tfs)} ===\n");
 
     List<(string Symbol, string Tf, DateTime From, DateTime To)> series;
     await using (var db0 = await dbFactory.CreateDbContextAsync())
@@ -506,7 +568,7 @@ async Task ReingestExtendedAsync(string tfCsv)
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"    {symbol} {tf}: ERRORE {ex.Message} — proseguo con la prossima.");
+            Console.WriteLine($"    {symbol} {tf}: ERRORE {ex.Message} â€” proseguo con la prossima.");
         }
     }
 
@@ -523,7 +585,7 @@ async Task ReingestExtendedAsync(string tfCsv)
         Console.WriteLine($"\n    Popolamento: {withTaker:N0}/{total:N0} candele con taker volume ({(double)withTaker / Math.Max(1, total):P1})");
         Console.WriteLine(broken == 0
             ? "    Invariante TakerBuyVolume <= Volume: OK su tutte."
-            : $"    ATTENZIONE: {broken} candele violano TakerBuyVolume <= Volume — da investigare.");
+            : $"    ATTENZIONE: {broken} candele violano TakerBuyVolume <= Volume â€” da investigare.");
     }
 }
 
@@ -568,7 +630,7 @@ async Task FundingBackfillAsync()
             }
             catch (HttpRequestException ex)
             {
-                Console.WriteLine($"  {market}: HTTP fallita ({ex.Message}) — mi fermo qui, il gia' scaricato resta.");
+                Console.WriteLine($"  {market}: HTTP fallita ({ex.Message}) â€” mi fermo qui, il gia' scaricato resta.");
                 break;
             }
 
@@ -855,7 +917,7 @@ async Task VolRobustAsync()
     Console.WriteLine("    insieme, quindi centinaia di panieri estratti dallo STESSO periodo non sono");
     Console.WriteLine("    centinaia di esperimenti indipendenti: sono un esperimento solo, ripetuto.");
     Console.WriteLine("    Dice soltanto che, dentro questa finestra, il risultato non dipende da QUALI");
-    Console.WriteLine("    monete si scelgono. La domanda vera e' se dipenda dal PERIODO — qui sotto.");
+    Console.WriteLine("    monete si scelgono. La domanda vera e' se dipenda dal PERIODO â€” qui sotto.");
 
     // --- La prova che conta: finestre TEMPORALI separate --------------------------------------
     // I risultati opposti ottenuti finora venivano da finestre diverse, non da universi diversi.
@@ -926,8 +988,8 @@ async Task VolRobustAsync()
 // di quella di una singola. Su un simbolo solo quella stampella non c'e', quindi l'effetto deve
 // venire tutto dal dosaggio. E' il test che distingue "funziona" da "funziona perche' e' un paniere".
 //
-// Per ogni simbolo si confrontano TRE cose, non due: comprare e tenere, dosare, e — controllo
-// decisivo — tenere un'esposizione COSTANTE pari a quella media del dosaggio.
+// Per ogni simbolo si confrontano TRE cose, non due: comprare e tenere, dosare, e â€” controllo
+// decisivo â€” tenere un'esposizione COSTANTE pari a quella media del dosaggio.
 async Task VolSingleAsync()
 {
     string[] universe =
@@ -1078,8 +1140,8 @@ async Task VolSingleAsync()
 
 // ------------------------------------------------------------------ VOLOVERLAY (il dosaggio salva le strategie?)
 // Il dosaggio sulla volatilita' funziona sul PANIERE equipesato (docs/REPORT-DOSAGGIO-VOLATILITA.md).
-// Domanda diversa e legittima: applicato SOPRA le strategie del catalogo — che l'holdout ha bocciato
-// tutte — le recupera? La risposta onesta va misurata, non intuita: il dosaggio riduce l'esposizione,
+// Domanda diversa e legittima: applicato SOPRA le strategie del catalogo â€” che l'holdout ha bocciato
+// tutte â€” le recupera? La risposta onesta va misurata, non intuita: il dosaggio riduce l'esposizione,
 // quindi riduce anche le PERDITE, ma non trasforma un segnale sbagliato in uno giusto.
 async Task VolOverlayAsync()
 {
@@ -1093,7 +1155,7 @@ async Task VolOverlayAsync()
     var candidates = JsonSerializer.Deserialize<List<DiscoveryCandidate>>(File.ReadAllText(huntPath))!
         .OrderByDescending(c => c.OutOfSampleSharpe).Take(6).ToList();
 
-    Console.WriteLine($"=== IL DOSAGGIO RECUPERA LE STRATEGIE DEL CATALOGO? — holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");
+    Console.WriteLine($"=== IL DOSAGGIO RECUPERA LE STRATEGIE DEL CATALOGO? â€” holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");
     Console.WriteLine("    Stessa strategia, stessi costi: cambia solo se la size e' dosata sulla volatilita'.\n");
     Console.WriteLine($"    {"strategia",-18} {"coppia",-11} {"senza",9} {"dosata",9} {"b&h",9}  esito");
 
@@ -1142,7 +1204,7 @@ async Task VolOverlayAsync()
     Console.WriteLine(rescued == 0
         ? "    Il dosaggio NON crea un edge dove non c'e': riduce l'esposizione, quindi riduce le\n"
         + "    perdite, ma un segnale sbagliato dosato resta un segnale sbagliato. E' gestione del\n"
-        + "    rischio, non una fonte di rendimento — esattamente come dichiarato nel report."
+        + "    rischio, non una fonte di rendimento â€” esattamente come dichiarato nel report."
         : "    Attenzione: un recupero va verificato fuori campione prima di crederci.");
 }
 
@@ -1153,7 +1215,7 @@ async Task VolOverlayAsync()
 //
 // Questo angolo e' strutturalmente diverso: non prevede se BTC sale, ma ordina l'universo per forza
 // relativa e tiene i primi K. E' l'anomalia piu' documentata in letteratura (cross-sectional
-// momentum), e soprattutto ha turnover BASSO per costruzione — si ribilancia ogni R giorni, non ad
+// momentum), e soprattutto ha turnover BASSO per costruzione â€” si ribilancia ogni R giorni, non ad
 // ogni segnale. Attacca cioe' esattamente la variabile che ha affossato tutto il resto.
 //
 // Disciplina anti-overfitting: i parametri (lookback, K, ribilanciamento) si scelgono SOLO sulla
@@ -1177,7 +1239,7 @@ async Task CrossSectionAsync()
     Console.WriteLine($"    Universo {universe.Length} simboli, {tf}, da {from:yyyy-MM-dd}");
     Console.WriteLine($"    Selezione fino al {selectionTo:yyyy-MM-dd}, holdout dopo\n");
     Console.WriteLine("    Non prevede la direzione di un simbolo: ordina l'universo per forza relativa");
-    Console.WriteLine("    e tiene i primi K. Turnover basso per costruzione — che e' il punto.\n");
+    Console.WriteLine("    e tiene i primi K. Turnover basso per costruzione â€” che e' il punto.\n");
 
     // --- Carico e allineo le serie su un calendario comune -----------------------------------
     var series = new Dictionary<string, Dictionary<DateTime, decimal>>();
@@ -1419,7 +1481,7 @@ async Task CrossSectionAsync()
 // La frontiera dei costi diceva che a commissioni maker alcuni candidati passano in positivo. Quel
 // numero pero' assume che ogni ordine limite venga riempito al suo prezzo, che e' l'assunzione
 // ottimistica per eccellenza: un limite passivo si riempie SOLO quando il mercato viene a
-// prenderlo. Per un long appoggiato sotto il prezzo vuol dire riempirsi quando il prezzo scende —
+// prenderlo. Per un long appoggiato sotto il prezzo vuol dire riempirsi quando il prezzo scende â€”
 // cioe' sproporzionatamente quando il segnale stava sbagliando. E' la selezione avversa.
 //
 // Questa fase rimisura gli stessi candidati con il modello di fill vero (EntryExecutionStyle.Maker)
@@ -1439,7 +1501,7 @@ async Task MakerFillAsync()
     // Commissioni Bitget, lo scenario piu' favorevole al maker fra quelli della frontiera.
     const decimal TakerFee = 0.060m, MakerFee = 0.020m, Slip = 0.050m;
 
-    Console.WriteLine($"=== MAKER CON MODELLO DI FILL — holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");
+    Console.WriteLine($"=== MAKER CON MODELLO DI FILL â€” holdout {holdoutFrom:yyyy-MM-dd} -> oggi ===");
     Console.WriteLine("    Il maker ideale assume fill garantito al prezzo limite. Qui il limite puo' NON");
     Console.WriteLine("    essere riempito: si misura quanto dell'edge promesso sopravvive.\n");
     Console.WriteLine("    NB: le USCITE restano taker in ogni scenario. Uno stop protettivo e' un ordine a");
@@ -1474,7 +1536,7 @@ async Task MakerFillAsync()
         takerCfg.SlippagePercent = Slip;
         var taker = await backtest.RunBacktestAsync(takerCfg, candles, factory.Create(c.StrategyName), CancellationToken.None);
 
-        // (b) maker IDEALE: come lo contava la frontiera — commissione maker su tutto, fill certo.
+        // (b) maker IDEALE: come lo contava la frontiera â€” commissione maker su tutto, fill certo.
         var idealCfg = Cfg();
         idealCfg.FeePercent = MakerFee;
         idealCfg.SlippagePercent = 0.020m;
@@ -1486,7 +1548,7 @@ async Task MakerFillAsync()
         Console.WriteLine($"    {"maker IDEALE (fill garantito)",-34} {ideal.TotalReturnPercent,8:F2}% {ideal.TotalTrades,6}        -");
 
         // (c) maker REALE, al variare di quanto passivo si mette il limite. Piu' e' passivo, meglio
-        //     si entra quando si entra — e piu' spesso non si entra affatto.
+        //     si entra quando si entra â€” e piu' spesso non si entra affatto.
         foreach (var offset in new[] { 0.05m, 0.10m, 0.25m })
         {
             foreach (var fallback in new[] { false, true })
@@ -1517,8 +1579,8 @@ async Task MakerFillAsync()
 //   (b) la macchina che cerca e valida e' rotta, e non troverebbe un edge nemmeno se ci fosse.
 //
 // Questo e' l'esperimento di controllo. Si costruisce una serie sintetica con dentro un edge
-// PIANTATO e conosciuto — un processo a ritorno verso la media, con ampiezza molto superiore ai
-// costi — e si chiede alla stessa pipeline di trovarlo. Se lo trova, i cinque esiti negativi
+// PIANTATO e conosciuto â€” un processo a ritorno verso la media, con ampiezza molto superiore ai
+// costi â€” e si chiede alla stessa pipeline di trovarlo. Se lo trova, i cinque esiti negativi
 // parlano del mercato; se non lo trova, parlavano dei nostri strumenti e vanno buttati.
 //
 // La serie e' generata con seme fisso: l'esito e' riproducibile.
@@ -1588,7 +1650,7 @@ async Task ControlAsync()
         Console.WriteLine($"  {"Strategia",-24} {"OOS",6} {"IS",6} {"Trade",6} {"DSR",6}");
         foreach (var c in ranked)
         {
-            var dsr = c.Validation is null ? "—" : c.Validation.DeflatedSharpe.ToString("F2");
+            var dsr = c.Validation is null ? "â€”" : c.Validation.DeflatedSharpe.ToString("F2");
             Console.WriteLine($"  {c.StrategyName,-24} {c.OutOfSampleSharpe,6:F2} {c.InSampleSharpe,6:F2} {c.TotalTrades,6} {dsr,6}");
         }
 
@@ -1732,7 +1794,7 @@ async Task PairsAsync()
 // ------------------------------------------------------------------ HOLDOUT (test davvero fuori campione)
 // Le due cacce condividono lo stesso periodo di selezione (fino a selectionTo = 2026-03-01), quindi
 // il fatto che trovino lo stesso candidato dimostra robustezza allo split walk-forward, NON conferma
-// out-of-sample. Qui si usa la finestra di holdout — dal 2026-03-01 in avanti — che nessuna delle
+// out-of-sample. Qui si usa la finestra di holdout â€” dal 2026-03-01 in avanti â€” che nessuna delle
 // due cacce ha mai visto: e' l'unico dato realmente vergine gia' disponibile.
 //
 // Il confronto e' contro un BUY-AND-HOLD sulla stessa finestra: uno Sharpe positivo non dice nulla
@@ -1815,7 +1877,7 @@ async Task HoldoutAsync()
     if (survivors == 0)
     {
         Console.WriteLine("    Nessuno. E' un esito informativo, non un fallimento: significa che cio' che la");
-        Console.WriteLine("    selezione premiava non sopravvive a dati mai visti — esattamente cio' che il");
+        Console.WriteLine("    selezione premiava non sopravvive a dati mai visti â€” esattamente cio' che il");
         Console.WriteLine("    Deflated Sharpe aveva gia' segnalato rifiutandoli.");
     }
 }
@@ -1824,16 +1886,16 @@ async Task HoldoutAsync()
 // Schiera UN candidato sulla corsia 1 in configurazione, senza avviare nulla: l'avvio resta
 // un'azione esplicita dalla UI, come per PipelineApplier.
 //
-// PERCHÉ LA CORSIA 1 E NON LA 0 O LA 2: la 0 ha 159 operazioni di storico ed è quella che la
-// pagina /bot governa; la 2 è in modalità Testnet. La 1 porta un esperimento fermo e senza trade
-// (LTC/USDT, Sharpe -2,15), quindi è quella che si può sovrascrivere senza distruggere nulla.
+// PERCHÃ‰ LA CORSIA 1 E NON LA 0 O LA 2: la 0 ha 159 operazioni di storico ed Ã¨ quella che la
+// pagina /bot governa; la 2 Ã¨ in modalitÃ  Testnet. La 1 porta un esperimento fermo e senza trade
+// (LTC/USDT, Sharpe -2,15), quindi Ã¨ quella che si puÃ² sovrascrivere senza distruggere nulla.
 //
-// COSA QUESTO SCHIERAMENTO NON È: una validazione. Il candidato NON ha superato il Deflated Sharpe
+// COSA QUESTO SCHIERAMENTO NON Ãˆ: una validazione. Il candidato NON ha superato il Deflated Sharpe
 // (0,69-0,81 contro una soglia di 0,95). Va in Paper come OSSERVAZIONE, per generare dati
-// realmente nuovi in avanti nel tempo — l'unica cosa che può sciogliere l'ambiguità, visto che le
+// realmente nuovi in avanti nel tempo â€” l'unica cosa che puÃ² sciogliere l'ambiguitÃ , visto che le
 // due cacce che l'hanno trovato condividono lo stesso periodo storico e quindi non si confermano
 // a vicenda quanto sembrerebbe. Il passaggio a Testnet resta comunque dietro settimane di
-// evidenza in Paper (PromotionEvaluator), e quello a Live è sempre manuale.
+// evidenza in Paper (PromotionEvaluator), e quello a Live Ã¨ sempre manuale.
 async Task DeployAsync()
 {
     const int laneId = 1;
@@ -1863,8 +1925,8 @@ async Task DeployAsync()
     //
     // Il primo deploy applicava, come fa PipelineApplier, uno stop/target dai percentili di
     // escursione (SL 0,68% / TP 1,98%) e il profilo Prudente. Osservato dal vivo: 430 ordini
-    // RIFIUTATI su 500. Due cause che si sommavano, entrambe dovute allo scarto fra ciò che era
-    // stato validato e ciò che era stato schierato:
+    // RIFIUTATI su 500. Due cause che si sommavano, entrambe dovute allo scarto fra ciÃ² che era
+    // stato validato e ciÃ² che era stato schierato:
     //
     //  1. lo stop allo 0,68% e' strettissimo per DOGE su candele orarie: la posizione veniva
     //     chiusa quasi subito, ma il segnale Supertrend restava valido e il motore ritentava
@@ -1926,15 +1988,15 @@ async Task DeployAsync()
 // coppie appena aggiunte da expand2 entrano da sole, senza che nessuno si ricordi di aggiornare
 // un array.
 //
-// Timeframe: 1d, 4h, 1h. Il 15m è escluso dalla caccia principale non per pigrizia ma perché R2
-// ha misurato lì un cost drag del 9% contro il 3,4% di 1h, con un tetto strutturale doppio da
-// superare — su un universo di 45 coppie conviene spendere le ore di calcolo dove l'edge netto ha
-// più probabilità di sopravvivere. I dati 15m restano ingeriti e disponibili.
+// Timeframe: 1d, 4h, 1h. Il 15m Ã¨ escluso dalla caccia principale non per pigrizia ma perchÃ© R2
+// ha misurato lÃ¬ un cost drag del 9% contro il 3,4% di 1h, con un tetto strutturale doppio da
+// superare â€” su un universo di 45 coppie conviene spendere le ore di calcolo dove l'edge netto ha
+// piÃ¹ probabilitÃ  di sopravvivere. I dati 15m restano ingeriti e disponibili.
 //
 // Le candidature passano un doppio filtro: i gate anti-rumore del Report Caccia (Sharpe OOS e
 // numero minimo di trade) e il Deflated Sharpe, che chiede se il migliore di N tentativi sia
 // significativo DOPO aver corretto per il test multiplo. Con i costi ora onesti anche in
-// selezione (R2), uno Sharpe che sopravvive qui è più credibile di quelli trovati prima.
+// selezione (R2), uno Sharpe che sopravvive qui Ã¨ piÃ¹ credibile di quelli trovati prima.
 async Task HuntAsync()
 {
     var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -1957,11 +2019,11 @@ async Task HuntAsync()
     var discovery = scope.ServiceProvider.GetRequiredService<IStrategyDiscovery>();
     var all = new List<DiscoveryCandidate>();
 
-    // Ogni ondata ha la propria finestra e il proprio walk-forward: più lento è il timeframe, più
-    // lunga dev'essere la storia perché una finestra out-of-sample contenga abbastanza barre.
+    // Ogni ondata ha la propria finestra e il proprio walk-forward: piÃ¹ lento Ã¨ il timeframe, piÃ¹
+    // lunga dev'essere la storia perchÃ© una finestra out-of-sample contenga abbastanza barre.
     // Variante "slow": solo 1d e 4h, con storia piu' profonda e finestre piu' lunghe. R2 ha
     // misurato li' il cost drag piu' basso (3,4% a 1h contro 24% a 5m e 77% a 1m), e i timeframe
-    // lenti danno anche piu' anni di storia per lo stesso numero di barre — cioe' piu' regimi di
+    // lenti danno anche piu' anni di storia per lo stesso numero di barre â€” cioe' piu' regimi di
     // mercato diversi attraversati, che e' cio' che rende un edge credibile.
     //
     // Il primo giro (1d/4h/1h) e' finito con 6 candidati e ZERO significativi al Deflated Sharpe,
@@ -2016,7 +2078,7 @@ async Task HuntAsync()
         }
     }
 
-    // Gate anti-rumore: uno Sharpe alto con pochi trade è rumore, non edge.
+    // Gate anti-rumore: uno Sharpe alto con pochi trade Ã¨ rumore, non edge.
     const decimal minOosSharpe = 0.5m;
     const int minTrades = 20;
     var kept = all
@@ -2029,21 +2091,21 @@ async Task HuntAsync()
 
     if (kept.Count == 0)
     {
-        Console.WriteLine("  Nessun candidato ha superato i gate. Con i costi onesti in selezione è un esito");
+        Console.WriteLine("  Nessun candidato ha superato i gate. Con i costi onesti in selezione Ã¨ un esito");
         Console.WriteLine("  possibile e informativo: significa che su questo universo e queste finestre non");
-        Console.WriteLine("  c'è un edge che sopravviva alle commissioni.");
+        Console.WriteLine("  c'Ã¨ un edge che sopravviva alle commissioni.");
         return;
     }
 
     Console.WriteLine($"  {"#",-3} {"Strategia",-24} {"Coppia",-13} {"TF",-4} {"OOS",6} {"IS",6} {"Trade",6} {"DSR",6}");
     foreach (var (c, i) in kept.Take(40).Select((c, i) => (c, i)))
     {
-        var dsr = c.Validation is null ? "—" : c.Validation.DeflatedSharpe.ToString("F2");
+        var dsr = c.Validation is null ? "â€”" : c.Validation.DeflatedSharpe.ToString("F2");
         Console.WriteLine($"  {i + 1,-3} {c.StrategyName,-24} {c.Symbol,-13} {c.Timeframe,-4} " +
                           $"{c.OutOfSampleSharpe,6:F2} {c.InSampleSharpe,6:F2} {c.TotalTrades,6} {dsr,6}");
     }
 
-    // Quanti sopravvivono anche al Deflated Sharpe: è il conteggio che dice se abbiamo trovato
+    // Quanti sopravvivono anche al Deflated Sharpe: Ã¨ il conteggio che dice se abbiamo trovato
     // qualcosa o se abbiamo solo pescato il massimo di una distribuzione di rumore.
     var significant = kept.Where(c => c.Validation?.IsSignificant == true).ToList();
     Console.WriteLine($"\n  Significativi al Deflated Sharpe (DSR > 0.95): {significant.Count}/{kept.Count}");
@@ -2060,7 +2122,7 @@ async Task HuntAsync()
 // NIENTE 5m e NIENTE 1m di proposito. R2 ha misurato un cost drag del 24% a 5m e del 77% a 1m
 // contro il 3,4% a 1h sulla stessa finestra: allargare l'universo proprio dove i costi divorano
 // l'edge significherebbe moltiplicare i dati e le ore di ricerca per esplorare la parte dello
-// spazio che sappiamo già essere la peggiore. Si scende a 15m come estremo veloce, non oltre.
+// spazio che sappiamo giÃ  essere la peggiore. Si scende a 15m come estremo veloce, non oltre.
 async Task Expand2Async()
 {
     // Coppie liquide su Binance non presenti nell'universo attuale di 30.
@@ -2133,14 +2195,14 @@ async Task Expand2Async()
 }
 
 // ------------------------------------------------------------------ COST PROFILE (app ferma)
-// [R2] Risponde alla domanda "1m è operabile?" nel modo più diretto possibile: prende le STESSE
+// [R2] Risponde alla domanda "1m Ã¨ operabile?" nel modo piÃ¹ diretto possibile: prende le STESSE
 // strategie, sulle STESSE coppie, nella STESSA finestra di calendario, e le fa girare su timeframe
 // diversi con i costi onesti. Poi confronta quanto dell'edge LORDO se lo mangia l'attrito.
 //
-// Non è un sweep di ottimizzazione: usa i parametri di default. È voluto. La domanda qui non è
+// Non Ã¨ un sweep di ottimizzazione: usa i parametri di default. Ãˆ voluto. La domanda qui non Ã¨
 // "quali parametri vanno bene a 1m" ma "a 1m resta qualcosa da ottimizzare, dopo i costi?". Se il
-// cost drag divora il lordo a parametri ragionevoli, ottimizzare significa solo cercare più a fondo
-// nel rumore — e conviene saperlo prima di bruciare ore di sweep.
+// cost drag divora il lordo a parametri ragionevoli, ottimizzare significa solo cercare piÃ¹ a fondo
+// nel rumore â€” e conviene saperlo prima di bruciare ore di sweep.
 async Task CostProfileAsync()
 {
     string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"];
@@ -2155,16 +2217,16 @@ async Task CostProfileAsync()
         PipelineCosts.DefaultFeePercent,
         PipelineCosts.DefaultFundingRatePercentPer8h);
 
-    Console.WriteLine($"=== PROFILO DI COSTO per timeframe — {from:yyyy-MM-dd} → {to:yyyy-MM-dd} ===");
+    Console.WriteLine($"=== PROFILO DI COSTO per timeframe â€” {from:yyyy-MM-dd} â†’ {to:yyyy-MM-dd} ===");
     Console.WriteLine($"    {symbols.Length} coppie, costi: fee {costs.FeePercent}%/lato, slippage {costs.SlippagePercent}%/fill\n");
 
     // ---- Parte 1: il TETTO STRUTTURALE, indipendente da qualunque strategia ----
     //
-    // Questa è la misura più forte del profilo, perché non si può obiettare che "dipende dai
+    // Questa Ã¨ la misura piÃ¹ forte del profilo, perchÃ© non si puÃ² obiettare che "dipende dai
     // parametri": confronta l'ampiezza TIPICA di una candela con il costo di un giro completo.
-    // Se il movimento mediano di una barra a 1m è 0,03% e un round-turn costa 0,30%, allora QUALUNQUE
+    // Se il movimento mediano di una barra a 1m Ã¨ 0,03% e un round-turn costa 0,30%, allora QUALUNQUE
     // strategia a 1m deve catturare un movimento pari a ~10 barre tipiche solo per andare in pari.
-    // Non dice che è impossibile: dice quanto deve essere brava, e quante barre deve tenere.
+    // Non dice che Ã¨ impossibile: dice quanto deve essere brava, e quante barre deve tenere.
     var roundTurnPercent = 2m * (costs.FeePercent + costs.SlippagePercent);
     Console.WriteLine($"=== TETTO STRUTTURALE (round-turn = {roundTurnPercent:F2}%) ===");
     Console.WriteLine($"  {"TF",-5} {"barre",10} {"|mossa| mediana",16} {"barre per pareggiare",22}");
@@ -2189,7 +2251,7 @@ async Task CostProfileAsync()
             }
         }
 
-        if (moves.Count == 0) { Console.WriteLine($"  {tf,-5} — nessun dato"); continue; }
+        if (moves.Count == 0) { Console.WriteLine($"  {tf,-5} â€” nessun dato"); continue; }
         moves.Sort();
         var medianMove = moves[moves.Count / 2];
         var barsToBreakEven = medianMove > 0m ? roundTurnPercent / medianMove : 0m;
@@ -2242,7 +2304,7 @@ async Task CostProfileAsync()
                     InitialCapital = 10_000m,
                     // Dimensione REALISTICA, non 100%. Col capitale intero su ogni trade e migliaia
                     // di giri, l'attrito compone fino ad azzerare il conto e tutte le mediane
-                    // saturano a -100%: un numero vero ma inutile, perché non distingue più i
+                    // saturano a -100%: un numero vero ma inutile, perchÃ© non distingue piÃ¹ i
                     // timeframe fra loro. Al 10% (l'ordine di grandezza di SafetyConfiguration)
                     // le differenze restano leggibili.
                     PositionSizePercent = 10m,
@@ -2275,7 +2337,7 @@ async Task CostProfileAsync()
     foreach (var tf in timeframes)
     {
         var g = rows.Where(r => r.Tf == tf).ToList();
-        if (g.Count == 0) { Console.WriteLine($"  {tf,-5} — nessun dato"); continue; }
+        if (g.Count == 0) { Console.WriteLine($"  {tf,-5} â€” nessun dato"); continue; }
 
         var trades = Median(g.Select(r => (decimal)r.R.TotalTrades));
         var gross = Median(g.Select(r => r.R.GrossReturnPercent));
@@ -2283,8 +2345,8 @@ async Task CostProfileAsync()
         var net = Median(g.Select(r => r.R.TotalReturnPercent));
 
         // Rapporto costi/lordo: quanto dell'edge lordo se ne va in attrito. Calcolato solo sui casi
-        // con lordo POSITIVO — su un lordo negativo il rapporto non significa niente (la strategia
-        // perdeva già prima dei costi, e il problema non sono i costi).
+        // con lordo POSITIVO â€” su un lordo negativo il rapporto non significa niente (la strategia
+        // perdeva giÃ  prima dei costi, e il problema non sono i costi).
         var positive = g.Where(r => r.R.GrossReturnPercent > 0m).ToList();
         var ratio = positive.Count == 0
             ? "n/d"
@@ -2293,7 +2355,7 @@ async Task CostProfileAsync()
         Console.WriteLine($"  {tf,-5} {g.Count,5} {trades,8:F0} {gross,9:F2} {drag,9:F2} {net,9:F2} {ratio,12}");
     }
 
-    // Quante combinazioni restano profittevoli AL NETTO: è il conto che decide.
+    // Quante combinazioni restano profittevoli AL NETTO: Ã¨ il conto che decide.
     Console.WriteLine($"\n=== Sopravvissuti al netto dei costi ===");
     foreach (var tf in timeframes)
     {
@@ -2397,3 +2459,4 @@ sealed class PassthroughEncryption : ProcioneMGR.Services.Security.IEncryptionSe
     public string Encrypt(string plaintext) => plaintext;
     public string Decrypt(string ciphertext) => ciphertext;
 }
+

@@ -327,10 +327,30 @@ esplicita: cambia le etichette dei regimi, impatto su `RegimeConditionalStrategy
 già esistenti (= informazione nuova, non duplicata); per i regimi: stabilità dei cluster e holdout
 della strategia regime-aware.
 
-#### T3.8b — Feature order-flow dai campi recuperati — **M** *(dipende da T0.3)*
+#### T3.8b — Feature order-flow dai campi recuperati — **M** ✅ FATTO (2026-07-23)
 
-**Aggancio**: nuovi `IAlphaFactor` — imbalance taker (`TakerBuyVolume/Volume`), dimensione media
-del trade (`Volume/TradeCount`), e loro derivate rolling. Gate: stesso di 3.8a.
+**Fatto**: due nuovi `IAlphaFactor` registrati in factory (prototipi + round-trip per nome):
+- `TakerImbalance` — media rolling di (2·TakerBuyVolume/Volume − 1) ∈ [−1,+1]: la pressione
+  aggressiva netta, chi paga lo spread pur di eseguire subito;
+- `AvgTradeSize` — (Volume/TradeCount) relativo alla propria media rolling: trade grossi vs
+  frammentazione.
+
+Proprietà chiave testata: **null dove i campi estesi mancano** — un imbalance letto su uno zero
+finto (candela non reingerita) sarebbe un artefatto della migrazione spacciato per segnale.
+
+**Prima misura sull'IC** (fase `orderflow`, dati reingeriti, orizzonte ~1 giorno):
+
+| | IC taker (1h, 26.749 barre) | IC taker (4h) | ρ con RelativeVolume |
+|---|---|---|---|
+| DOGE | **0,036** | 0,018 | ≈ 0 |
+| SOL | 0,020 | 0,025 | ≈ 0 |
+| BTC | 0,014 | 0,017 | ≈ 0 |
+| ETH | 0,006 | **0,036** | ≈ 0 |
+
+IC positivo su 5/6 simboli a 1h e 4h, con **correlazione ~zero** col fattore volume esistente:
+informazione genuinamente nuova, non un rinominare. `AvgTradeSize` più rumoroso. **Non è un
+verdetto**: la conferma spetta al gate (DSR/holdout/permutation) quando i fattori entreranno in un
+modello o in una composizione.
 
 #### T3.8c — Barre informative → backtest — **L, OPZIONALE dichiarato**
 
@@ -379,7 +399,7 @@ edge validato moltiplica zero. Finché la precondizione non si verifica, questo 
 | 2.7 Event-study | T2 | M | 1.5 (placebo) | placebo nullo; controllo positivo FOMC |
 | 2.S Stagionalità | T2 | S | — | ✅ fatto: segnale "Ora UTC" nel catalogo (id 9) |
 | 3.8a OBV/MFI/VWAP+regimi | T3 | M | — | IC incrementale, bassa correlazione |
-| 3.8b Order-flow | T3 | M | **0.3** | idem |
+| 3.8b Order-flow | T3 | M | **0.3** | ✅ fatto: IC>0 su 5/6 simboli, ρ≈0 con RelVolume |
 | 3.8c Barre→backtest | T3 | L | 0.3 | opzionale dichiarato |
 | 4.9 Mercati relativi | T4 | S/M | — | feature importance; gate standard |
 | 5.10 Confidenza→Kelly | T5 | M | **modello oltre il gate** | crescita > sizing fisso in Paper |
