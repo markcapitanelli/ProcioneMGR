@@ -220,7 +220,7 @@ i drawdown profondi. Nessun permutation test.
 10%); determinismo a parità di seme; sul gate, con soglia attiva il rumore muore e l'edge piantato
 sopravvive.
 
-#### T1.6 — CPCV esteso al percorso strategie — **M** ✅ FATTO (2026-07-23)
+#### T1.6 — CPCV esteso al percorso strategie — **M** ✅ FATTO, fase 2 inclusa (2026-07-23)
 
 **Era**: `CombinatorialPurgedCv` esisteva ma era usato solo nei gate ML; il percorso strategie
 aveva UN solo percorso out-of-sample per candidato (walk-forward + holdout).
@@ -238,10 +238,17 @@ figlio del periodo. Risponde esattamente alla richiesta del proprietario: più o
 **Validazione fatta**: edge piantato (picco a X=7 coerente sui gruppi) scelto su **tutti i 28
 percorsi** C(8,2) con stabilità 100% e distribuzione OOS interamente positiva; con purge/embargo
 larghi un gruppo intero i percorsi si risolvono comunque; deterministico; serie troppo corta →
-errore esplicito invece di misurare rumore. Fase 2: esporre in `/optimization` accanto al
-walk-forward.
+errore esplicito invece di misurare rumore.
 
-#### T1.V — La volatilità come TARGET di predizione — **S/M** ⭐ — FASE 1 ✅ FATTA (2026-07-23)
+**Fase 2 ✅ (2026-07-23)**: esposto in `/optimization` — select "Validazione: Walk-Forward | CPCV"
+(gruppi/gruppi-test/purge/embargo nel form, C(n,k) mostrato in tempo reale), card risultato con
+distribuzione (mediana/P05/P95/percorsi positivi), PBO, parametri MODALI e stabilità della
+selezione, tabella dei percorsi; "Salva parametri modali" persiste il candidato STABILE con lo
+Sharpe OOS mediano (non il più fortunato); experiment tracking `OptimizationCpcv`; preset
+retro-compatibili (i vecchi deserializzano a Walk-Forward). Bayesian+CPCV rifiutato con motivo
+(il CPCV pre-calcola l'intera griglia). Test sull'orchestrazione in `OptimizationPageServiceTests`.
+
+#### T1.V — La volatilità come TARGET di predizione — **S/M** ⭐ ✅ FATTO, fase 2 inclusa (2026-07-23)
 
 **Oggi**: tutti i target ML erano rendimenti futuri. 0 sopravvissuti su 445.280 dice che la
 **direzione** non è prevedibile su questi dati con questi strumenti; il **rischio** invece è
@@ -257,9 +264,18 @@ persistente (stesso fatto stilizzato dietro il GARCH già in piattaforma).
   rendimento atteso e la confronterebbe con le soglie long/short (vol alta ≠ compra). Prima
   verifica di `SaveModelAsync`, indipendente dallo stato di addestramento, con test.
 
-**Fase 2 (aperta)**: il consumo dedicato — `TargetKind` persistito su `SavedMlModel` (migration) e
-predizione di vol instradata a `LeverageAdvisor`/vol-targeting; benchmark contro baseline EWMA su
-QLIKE/MSE out-of-sample. *Onestà: migliora la gestione del rischio, non promette rendimento.*
+**Fase 2 ✅ (2026-07-23)** — la guardia si è SPOSTATA dal salvataggio al consumo:
+- `SavedMlModel.TargetKind` persistito (migration `AddSavedMlModelTargetKind`, backfill
+  "ForwardReturn" per i modelli storici) + `IsDirectional`;
+- guardie sul consumo direzionale: `MlModelLoader.LoadAsync` (punto UNICO batch+stream) rifiuta i
+  modelli non-rendimento con messaggio di semantica; `ModelRegistry` Gate 0 (mai Champion);
+  Optimization ed Ensemble offrono solo modelli direzionali; il backtest del Lab su una sessione
+  vol viene rifiutato indirizzando alla valutazione giusta;
+- il consumo giusto: **"Valuta previsione di vol"** nel Lab — QLIKE/MSE out-of-sample contro
+  baseline EWMA (RiskMetrics λ=0,94) e naive (vol passata), `VolForecastEvaluator` puro con test.
+  Il verdetto onesto è scritto nella UI: finché il modello non batte l'EWMA, il vol-targeting resta
+  sulla misura semplice — battere l'EWMA qui è la precondizione per instradare la predizione nel
+  sizing. *Onestà: migliora la gestione del rischio, non promette rendimento.*
 
 #### T1.4 — Triple-barrier labeling + meta-labeling — **L**
 
@@ -280,21 +296,34 @@ migliora la precision a DSR pari o superiore sull'holdout.
 
 ### T2 — Episodi ed eventi
 
-#### T2.7 — Event-study rigoroso — **M**
+#### T2.7 — Event-study rigoroso — **M** ✅ FATTO (2026-07-23)
 
-**Oggi**: `NewsImpactAnalyzer` calcola medie post-evento semplici (1h/4h/24h) sugli eventi
-alt-data. Manca: abnormal return vs baseline, finestra pre-evento (leakage/anticipazione), test
-placebo, e soprattutto un rilevatore di **eventi di mercato** che funzioni su tutta la profondità
-OHLCV (l'alt-data ha 20 giorni di storia, l'OHLCV sei anni).
+**Era**: `NewsImpactAnalyzer` calcolava medie post-evento semplici (1h/4h/24h) sugli eventi
+alt-data — nessuna baseline, nessuna finestra pre-evento, nessun placebo, e nessun rilevatore di
+eventi di MERCATO sull'OHLCV profondo.
 
-**Aggancio**: estendere `NewsImpactAnalyzer` (abnormal return, pre-evento, placebo con date casuali
-— riusa T1.5); nuovo `MarketEventDetector` (crash oltre soglia, vol spike, volume blowout) che
-genera eventi dai prezzi stessi; "finestre nominate" → replay del `BacktestEngine` sulle finestre
-degli episodi della §2 (tutti coperti a 1d, dal 2024 a 1h).
+**Fatto**:
+- `Services/Analysis/EventStudy` (puro, deterministico a parità di seme): **abnormal return** vs
+  baseline per-evento (finestra di stima separata da un gap), **finestra pre-evento** (una CAAR già
+  positiva prima dell'evento = anticipazione o leakage del timestamp), **placebo temporale** —
+  la stessa statistica su insiemi di date casuali (la lezione T1.5 codificata: la randomizzazione
+  onesta è lungo il tempo), p-value con correzione add-one. Il placebo, non la t, è il verdetto;
+- `Services/Analysis/MarketEventDetector` (causale: la barra giudicata non contribuisce mai alla
+  propria soglia): Crash/Surge (|z| oltre k·σ rolling), VolSpike (σ breve / σ lunga su finestre
+  disgiunte), VolumeBlowout (multiplo della mediana rolling), cooldown per tipo (un cluster = UN
+  episodio) — funziona su tutti i sei anni di OHLCV;
+- `INewsImpactAnalyzer.StudyRigorous(...)`: gli stessi eventi alt-data passano dallo studio
+  rigoroso (filtra per categoria a monte);
+- fase `eventstudy [symbol] [tf]` in PlatformExpand: rileva gli eventi, stampa CAAR pre/post, t,
+  p placebo per tipo, e usa il **calendario economico** (ForexFactory) come controllo positivo
+  quando presente in DB.
 
-**Validazione**: placebo (date casuali → effetto nullo); controllo positivo sui giorni FOMC/CPI se
-coperti; output = libreria di flag-evento usabili come filtri di strategia, che passano il gate
-standard.
+**Validazione fatta (criterio dichiarato)**: effetto piantato (+50bp × 11 barre su 25 eventi)
+recuperato con p&lt;0,05 e CAAR pre ~0; su rumore puro con date casuali il placebo NON è
+significativo; drift di baseline sottratto esattamente (la differenza vs medie semplici); eventi
+troppo vicini ai bordi esclusi, non mutilati; detector causale per troncamento e dedup del cluster.
+Aperto (misura, non codice): il run sul campo `eventstudy` per gli episodi nominati e il controllo
+FOMC/CPI, e l'eventuale promozione dei flag-evento a filtri di strategia (passerebbero dal gate).
 
 #### T2.S — Wiring della stagionalità — **S** ✅ FATTO (2026-07-23)
 
@@ -313,19 +342,34 @@ che usano questo segnale vanno giudicate con enfasi sulla replica su finestre te
 
 ### T3 — Volumi e order flow
 
-#### T3.8a — OBV/MFI/VWAP riusabili + volume nei regimi — **M** *(non dipende da T0.3)*
+#### T3.8a — OBV/MFI/VWAP riusabili + volume/breadth nei regimi — **M** ✅ FATTO (2026-07-23)
 
-**Oggi**: Alpha158 ha già fattori volume (CORR, CORD, VMA, VSTD, WVMA, VSUMP/N/D) ma
-OBV/MFI/VWAP non esistono come indicatori riusabili (il VWAP vive incastonato in una strategia);
-il K-means dei regimi usa 4 feature e **esclude deliberatamente il volume**.
+**Era**: OBV/MFI/VWAP non esistevano come indicatori riusabili (il VWAP viveva incastonato in una
+strategia); il K-means dei regimi usava 4 feature ed escludeva deliberatamente il volume; la
+breadth interna (aperto di T4) non esisteva.
 
-**Aggancio**: OBV/MFI/VWAP in `TechnicalIndicatorsService` + voci in `SignalCatalog` (li rende
-"cacciabili" dal `StrategyComposer`); quinta feature (volume ratio) nel `RegimeDetector` — con nota
-esplicita: cambia le etichette dei regimi, impatto su `RegimeConditionalStrategy` da misurare.
+**Fatto**:
+- `TechnicalIndicatorsService`: `CalculateObvAsync` (cumulata firmata), `CalculateMfiAsync`
+  (RSI pesato per volume, nativo 0-100, O(n) a finestra scorrevole), `CalculateRollingVwapAsync`
+  (VWAP rolling senza ancora — quello di sessione UTC resta nel catalogo, id 5) — riusabili
+  ovunque, con test contro conti a mano;
+- `SignalCatalog`: id **10 "MFI"** (nativo) e **11 "OBV slope pct"** (variazione a 10 barre
+  dell'OBV, percentile causale), APPESI in coda — gli id 0-9 delle Composite salvate restano
+  validi; il VWAP non ha un id nuovo (la deviazione dal VWAP di sessione È già l'id 5, un
+  duplicato violerebbe il criterio "informazione nuova"). Ora la combinatoria del
+  `StrategyComposer` può proporre "RSI &lt; 20 AND MFI &lt; 20" (divergenza prezzo/flusso);
+- `RegimeDetector`: quinta feature **VolumeRatio** e sesta **MarketBreadth** (frazione dei simboli
+  /USDT sopra la propria SMA50 — nuovo `IMarketBreadthCalculator`, causale, warm-up dichiarato),
+  entrambe **OPT-IN** (`TrainingConfiguration.IncludeVolumeFeature/IncludeBreadthFeature`, default
+  OFF = etichette storiche bit-identiche). La scelta VIAGGIA COL MODELLO (`FeatureScaling.Names`
+  persistito nel FeatureScalingJson): l'inference ricostruisce da sola il vettore giusto, i modelli
+  pre-3.8a deserializzano alle 4 feature storiche. Checkbox in `/regimes` con l'avvertenza.
 
-**Validazione**: IC incrementale via `FactorEvaluator` e **bassa correlazione** coi fattori volume
-già esistenti (= informazione nuova, non duplicata); per i regimi: stabilità dei cluster e holdout
-della strategia regime-aware.
+**Validazione fatta**: indicatori contro conti a mano (OBV cumulata, MFI estremi/warm-up/peso del
+volume, VWAP rolling); segnali 10-11 causali per troncamento; vettore di clustering default
+invariato e opt-in append-only; `FeatureScaling` legacy senza `Names` → 4 storiche. Aperto (misura):
+IC incrementale dei segnali nuovi nelle composizioni e stabilità dei cluster col volume/breadth
+accesi — si misura riaddestrando, il gate T1.5/T1.6 esiste apposta.
 
 #### T3.8b — Feature order-flow dai campi recuperati — **M** ✅ FATTO (2026-07-23)
 
@@ -367,9 +411,8 @@ order-flow. Sono serie di prima classe: backtest, pairs (già sui log), discover
 vedono senza altro codice — "un mercato diverso" in miniatura, con dinamiche proprie rispetto
 alle coppie USDT.
 
-**Aperto di questo item**: la breadth interna (% simboli sopra la propria MA50) come feature del
-`RegimeDetector` — accorpata al lavoro sul K-means di 3.8a perché entrambe cambiano le etichette
-dei regimi (impatto su `RegimeConditionalStrategy` da misurare insieme).
+**Aperto di questo item — CHIUSO con 3.8a (2026-07-23)**: la breadth interna (% simboli sopra la
+propria MA50) è ora la sesta feature opt-in del `RegimeDetector` (`IMarketBreadthCalculator`).
 
 ### T5 — Sizing dal modello — **M, CONDIZIONATO**
 
@@ -393,19 +436,25 @@ edge validato moltiplica zero. Finché la precondizione non si verifica, questo 
 | 0.2 Funding storico | T0 | S/M | — | ✅ fatto, backfill dal 2019 (A/B short da misurare) |
 | 0.3 Campi klines | T0 | M | — | ✅ fatto: reingest 1,7M candele al 100%, invarianti OK |
 | 1.5 Bootstrap+permutation | T1 | M | — | ✅ fatto, calibrazione su 200 serie superata |
-| 1.6 CPCV strategie | T1 | M | 1.5 utile | ✅ fatto: 28/28 percorsi sull'edge piantato |
-| 1.V Vol come target | T1 | S/M | — | ✅ fase 1 (Lab + guardia); fase 2: consumo + EWMA |
+| 1.6 CPCV strategie | T1 | M | 1.5 utile | ✅ fatto + fase 2: CPCV in /optimization |
+| 1.V Vol come target | T1 | S/M | — | ✅ fatto + fase 2: TargetKind persistito, QLIKE vs EWMA |
 | 1.4 Triple-barrier+meta | T1 | L | 1.5, (weights) | edge asimmetrico recuperato; precision ↑ a DSR pari |
-| 2.7 Event-study | T2 | M | 1.5 (placebo) | placebo nullo; controllo positivo FOMC |
+| 2.7 Event-study | T2 | M | 1.5 (placebo) | ✅ fatto: effetto piantato recuperato, placebo pulito |
 | 2.S Stagionalità | T2 | S | — | ✅ fatto: segnale "Ora UTC" nel catalogo (id 9) |
-| 3.8a OBV/MFI/VWAP+regimi | T3 | M | — | IC incrementale, bassa correlazione |
+| 3.8a OBV/MFI/VWAP+regimi | T3 | M | — | ✅ fatto: id 10-11, volume/breadth opt-in nei regimi |
 | 3.8b Order-flow | T3 | M | **0.3** | ✅ fatto: IC>0 su 5/6 simboli, ρ≈0 con RelVolume |
-| 3.8c Barre→backtest | T3 | L | 0.3 | opzionale dichiarato |
-| 4.9 Mercati relativi | T4 | S/M | — | ✅ fatto (dati): 15 serie /BTC, 217k candele; breadth→3.8a |
-| 5.10 Confidenza→Kelly | T5 | M | **modello oltre il gate** | crescita > sizing fisso in Paper |
+| 3.8c Barre→backtest | T3 | L | 0.3 | opzionale dichiarato — RESTA rimandato (§7) |
+| 4.9 Mercati relativi | T4 | S/M | — | ✅ fatto: 15 serie /BTC + breadth (chiusa con 3.8a) |
+| 5.10 Confidenza→Kelly | T5 | M | **modello oltre il gate** | CONDIZIONATO — la precondizione non si è verificata |
 
-**Percorso consigliato**: T0.1 → T0.2 → 1.5 → 1.V → T0.3 → 1.6 → 2.7 → 3.8a → … (T0.0 fatto;
-3.8a e 2.S parallelizzabili in qualunque momento; 1.4 quando c'è spazio per un item L).
+**Stato 2026-07-23: la roadmap è CHIUSA.** Restano fuori, per scelta dichiarata e non per
+dimenticanza: **1.4** (triple-barrier, l'unico item L "vero" rimasto — da riprendere quando c'è
+spazio per un item lungo), **3.8c** (opzionale: il costo di adattare il motore a barre non
+equispaziate resta superiore al beneficio) e **5.10** (condizionato a un modello oltre il gate:
+il sizing moltiplica un edge, e senza edge validato moltiplica zero). Le misure "aperte" dei
+singoli item (ri-run sweep con/senza embargo, A/B funding short, run `eventstudy` sul campo,
+IC dei segnali 10-11, cluster con volume/breadth) sono lavoro di ESERCIZIO della macchina, non
+di costruzione — appartengono alla prossima caccia, non a questa roadmap.
 
 ---
 
@@ -434,6 +483,11 @@ edge validato moltiplica zero. Finché la precondizione non si verifica, questo 
 
 ## 8. Prossimo passo operativo
 
-T0.1 + T0.2 (+ 1.5 se c'è tempo): un pomeriggio di lavoro, e da lì in poi ogni numero che la
-piattaforma produce è più onesto di quello di ieri — che è l'unico modo sensato di "spremere i dati
-già in casa".
+*(aggiornato 2026-07-23, a roadmap chiusa)*
+
+Rilanciare una **caccia completa (hunt + holdout) col motore di oggi**: embargo attivo, funding
+firmato, slippage onesto, segnale Ora-UTC e MFI/OBV nel pool del Composer, validazione CPCV e
+permutation test sui candidati. È la stessa domanda del 2026-07-20, ma posta a una macchina che
+nel frattempo è diventata onesta su ogni punto in cui si stava ingannando — e con più informazione
+(order flow, eventi, breadth) nel pool. Per le idee NUOVE oltre questa roadmap, vedi
+`docs/ROADMAP-FRONTIERE-PROFITTO.md`.
