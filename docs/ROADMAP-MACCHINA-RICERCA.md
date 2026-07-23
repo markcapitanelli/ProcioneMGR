@@ -231,20 +231,25 @@ out-of-sample **dagli stessi dati**.
 **Validazione**: edge piantato sopravvive su tutti i percorsi; configurazione volutamente
 overfittata → PBO alto.
 
-#### T1.V — La volatilità come TARGET di predizione — **S/M** ⭐ *(rapporto valore/effort migliore del tier)*
+#### T1.V — La volatilità come TARGET di predizione — **S/M** ⭐ — FASE 1 ✅ FATTA (2026-07-23)
 
-**Oggi**: tutti i target ML sono rendimenti futuri (`DatasetBuilder`, label = forward return). 0
-sopravvissuti su 445.280 dice che la **direzione** non è prevedibile su questi dati con questi
-strumenti. Ma la mossa quant classica è: il **rischio** è prevedibile quasi sempre (la volatilità è
-persistente — lo stesso fatto stilizzato dietro il GARCH già in piattaforma).
+**Oggi**: tutti i target ML erano rendimenti futuri. 0 sopravvissuti su 445.280 dice che la
+**direzione** non è prevedibile su questi dati con questi strumenti; il **rischio** invece è
+persistente (stesso fatto stilizzato dietro il GARCH già in piattaforma).
 
-**Aggancio**: `TargetKind` in `DatasetBuilder` (`ForwardReturn` | `ForwardAbsReturn` |
-`ForwardRealizedVol`); consumatori già pronti: `LeverageAdvisor` (input di rischio previsto),
-vol-targeting del motore (già implementato, oggi alimentato dalla realizzata), regime detector.
+**Fatto (fase 1 — il target esiste e si misura nel Lab)**:
+- `MlTargetKind` (`ForwardReturn` default invariato | `ForwardAbsReturn` | `ForwardRealizedVol`) +
+  `ForwardTargets` (vol realizzata = deviazione standard dei rendimenti per-barra dentro
+  l'orizzonte; orizzonte 1 rifiutato con errore chiaro invece di uno zero silenzioso);
+- parametro opzionale su `IDatasetBuilder`/`DatasetBuilder`; select nel ML Lab;
+- **GUARDIA DI SEMANTICA**: un modello con target non-rendimento **non si può salvare** — tutto ciò
+  che consuma un `SavedMlModel` (MlStrategy, registry, Champion) interpreta la predizione come
+  rendimento atteso e la confronterebbe con le soglie long/short (vol alta ≠ compra). Prima
+  verifica di `SaveModelAsync`, indipendente dallo stato di addestramento, con test.
 
-**Validazione**: il forecast batte la baseline EWMA su QLIKE/MSE out-of-sample; test economico:
-versione vol-targeted di una strategia esistente vs raw su holdout. *Onestà: migliora la gestione
-del rischio, non promette rendimento — coerente con quanto già misurato sul dosaggio.*
+**Fase 2 (aperta)**: il consumo dedicato — `TargetKind` persistito su `SavedMlModel` (migration) e
+predizione di vol instradata a `LeverageAdvisor`/vol-targeting; benchmark contro baseline EWMA su
+QLIKE/MSE out-of-sample. *Onestà: migliora la gestione del rischio, non promette rendimento.*
 
 #### T1.4 — Triple-barrier labeling + meta-labeling — **L**
 
@@ -357,7 +362,7 @@ edge validato moltiplica zero. Finché la precondizione non si verifica, questo 
 | 0.3 Campi klines | T0 | M | — | invarianti post-reingest |
 | 1.5 Bootstrap+permutation | T1 | M | — | ✅ fatto, calibrazione su 200 serie superata |
 | 1.6 CPCV strategie | T1 | M | 1.5 utile | distribuzione OOS; PBO su overfit noto |
-| 1.V Vol come target | T1 | S/M | — | batte EWMA su QLIKE; test economico |
+| 1.V Vol come target | T1 | S/M | — | ✅ fase 1 (Lab + guardia); fase 2: consumo + EWMA |
 | 1.4 Triple-barrier+meta | T1 | L | 1.5, (weights) | edge asimmetrico recuperato; precision ↑ a DSR pari |
 | 2.7 Event-study | T2 | M | 1.5 (placebo) | placebo nullo; controllo positivo FOMC |
 | 2.S Stagionalità | T2 | S | — | replica su finestre disgiunte |
