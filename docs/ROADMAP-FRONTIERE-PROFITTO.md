@@ -296,19 +296,19 @@ e troncata — l'invariante già usata per Ora-UTC e MFI/OBV.
 
 ## 5. Tabella riassuntiva e percorso
 
-| Item | Effort | Dati | Dipende da | Criterio di validazione |
+| Item | Effort | Dati | Dipende da | Criterio di validazione / **esito** |
 |---|---|---|---|---|
 | F1.a Funding come segnale | M | ✅ in casa (2019+) | contesto §4 | IC + composizioni al gate |
-| F1.b Carry delta-neutro | M/L | ✅ in casa | — | backtest funding vero; A/B a funding 0; costi two-leg |
+| F1.b Carry delta-neutro | M/L | ✅ in casa | — | ✅ **MISURATO 2026-07-24**: netto 5-12%/anno sul funding vero, robusto alle soglie (REPORT-FRONTIERE) |
 | F2 Rotazione /BTC | M | ✅ in casa (+universo) | — | gate su finestre disgiunte, mai panieri correlati |
-| F3 Eventi come filtri | S/M | ✅ in casa | run `eventstudy` | placebo p<0,05 PRIMA di scrivere il segnale |
-| F4 Stream liquidazioni | M | ⏳ da accumulare | — | igiene dato ora; consumo nel 2027 |
+| F3 Eventi come filtri | S/M | ✅ in casa | run `eventstudy` | ✅ **CHIUSO 2026-07-24**: continuazione post-Crash/Surge p=0,002 replicata → segnali 12-13; VolSpike/VolumeBlowout bocciati dal placebo |
+| F4 Stream liquidazioni | M | ⏳ da accumulare | — | ✅ **COSTRUITO 2026-07-24**: worker ON di default, purge esente, canale verificato dal vivo |
 | F5 Stablecoin/on-chain | M | ⏳ keyless da verificare | — | IC a 1h-1d prima di ogni consumo |
 | F6 VRP via DVOL | M | ⏳ keyless (Deribit) | — | correlazioni misurate; nessuna promessa direzionale |
 | F7 Lead-lag BTC→alt | M/L | ✅ in casa | contesto §4 | IC 1-6 barre, ρ bassa col momentum proprio |
-| F8 Minuti di esecuzione | S | ✅ in casa (1m×6) | — | profilo + placebo; beneficio in bp di esecuzione |
+| F8 Minuti di esecuzione | S | ✅ in casa (1m×6) | — | ✅ **MISURATO 2026-07-24**: drift nullo; range −30/40% nei minuti tardo-quarto → offset di slicing documentato, wiring rimandato |
 | **I1 Crowding Index** | M+M | ✅ 3/4 in casa | (stadio 2: §4) | stadio 1 su metriche di RISCHIO; 2-3 gate pieno |
-| **I2 Gemello sintetico** | M | ✅ in casa | — | edge piantato estremo, nullo no (controllo reso organo) |
+| **I2 Gemello sintetico** | M | ✅ in casa | — | ✅ **COSTRUITO 2026-07-24**: selfcheck con edge piantato oltre P95; run vero BTC 4h DENTRO il nullo (conferma indipendente dei negativi) |
 
 **Percorso consigliato** (tre mosse, ciascuna autosufficiente):
 
