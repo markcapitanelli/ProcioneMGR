@@ -358,18 +358,18 @@ modello o in una composizione.
 (annualizzazione dello Sharpe, funding pro-rata via `candleHours`). Adattarlo è il pezzo più
 costoso e rischioso del tier: dichiarato opzionale perché non blocchi i quick win.
 
-### T4 — Mercati relativi interni — **S/M**
+### T4 — Mercati relativi interni — **S/M** ✅ FATTO (dati) (2026-07-23)
 
-**Oggi**: nessuna coppia non-USDT tracciata, ma l'ingestione è già agnostica (verificato: nessun
-hardcoding USDT nel percorso OHLCV). "Un mercato diverso" in miniatura è già a portata: i prezzi
-**relativi** (ETH/BTC, alt/BTC) hanno dinamiche proprie, e la breadth interna (% dei simboli sopra
-la propria MA50) è una feature di regime calcolabile con zero dati nuovi.
+**Fatto**: fase `relative` — **5 coppie /BTC tracciate** (ETH, SOL, BNB, XRP, DOGE × 1h/4h/1d,
+15 serie in `TrackedSeries`: l'app le tiene aggiornate da sola) e **~217.000 candele** di storico
+ingerite (1d/4h dal 2020, 1h dal 2023). Passando dal parser post-T0.3, hanno già i campi
+order-flow. Sono serie di prima classe: backtest, pairs (già sui log), discovery e fattori le
+vedono senza altro codice — "un mercato diverso" in miniatura, con dinamiche proprie rispetto
+alle coppie USDT.
 
-**Aggancio**: tracciare ETH/BTC e 3-4 alt/BTC (`TrackedSeries`, funziona oggi); estendere
-`RollingPairsSpreadAnalyzer` (già sui log) ai ratio; breadth nel `RegimeDetector`. La
-BTC-dominance vera richiederebbe market cap esterni: sostituita dalla breadth, 100% in casa.
-
-**Validazione**: feature importance nel regime + gate standard per ogni strategia sui ratio.
+**Aperto di questo item**: la breadth interna (% simboli sopra la propria MA50) come feature del
+`RegimeDetector` — accorpata al lavoro sul K-means di 3.8a perché entrambe cambiano le etichette
+dei regimi (impatto su `RegimeConditionalStrategy` da misurare insieme).
 
 ### T5 — Sizing dal modello — **M, CONDIZIONATO**
 
@@ -401,7 +401,7 @@ edge validato moltiplica zero. Finché la precondizione non si verifica, questo 
 | 3.8a OBV/MFI/VWAP+regimi | T3 | M | — | IC incrementale, bassa correlazione |
 | 3.8b Order-flow | T3 | M | **0.3** | ✅ fatto: IC>0 su 5/6 simboli, ρ≈0 con RelVolume |
 | 3.8c Barre→backtest | T3 | L | 0.3 | opzionale dichiarato |
-| 4.9 Mercati relativi | T4 | S/M | — | feature importance; gate standard |
+| 4.9 Mercati relativi | T4 | S/M | — | ✅ fatto (dati): 15 serie /BTC, 217k candele; breadth→3.8a |
 | 5.10 Confidenza→Kelly | T5 | M | **modello oltre il gate** | crescita > sizing fisso in Paper |
 
 **Percorso consigliato**: T0.1 → T0.2 → 1.5 → 1.V → T0.3 → 1.6 → 2.7 → 3.8a → … (T0.0 fatto;

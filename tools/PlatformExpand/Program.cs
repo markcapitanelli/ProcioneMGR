@@ -106,6 +106,7 @@ switch (phase)
     case "fundingbackfill": await FundingBackfillAsync(); break;
     case "reingestx": await ReingestExtendedAsync(args.Length > 1 ? args[1] : "1d,4h,1h"); break;
     case "orderflow": await OrderFlowIcAsync(); break;
+    case "relative": await RelativeMarketsAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -466,6 +467,65 @@ async Task CostFrontierAsync()
             ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
             : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
     }
+}
+
+// ------------------------------------------------------------------ RELATIVE (4.9: mercati relativi interni)
+// "Un mercato diverso" in miniatura, senza fonti nuove: i prezzi RELATIVI (ETH/BTC, alt/BTC) sono
+// simboli Binance veri con dinamiche proprie — l'ingestione e' gia' agnostica al quote asset.
+// Traccia le coppie (cosi' l'app le tiene aggiornate da sola) e scarica lo storico. Tutti gli
+// strumenti esistenti (backtest, pairs, discovery, fattori) le vedono come qualunque altra serie.
+async Task RelativeMarketsAsync()
+{
+    string[] ratios = ["ETH/BTC", "SOL/BTC", "BNB/BTC", "XRP/BTC", "DOGE/BTC"];
+    var deepFrom = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    var hourlyFrom = new DateTime(2023, 7, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    Console.WriteLine("=== 4.9 MERCATI RELATIVI INTERNI (coppie /BTC) ===\n");
+
+    // 1) TrackedSeries: l'app le mantiene aggiornate col sync ordinario.
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        foreach (var sym in ratios)
+        {
+            foreach (var tf in new[] { "1h", "4h", "1d" })
+            {
+                var exists = await db.TrackedSeries.AnyAsync(t =>
+                    t.Exchange == ExchangeName.Binance && t.Symbol == sym && t.Timeframe == tf);
+                if (!exists)
+                {
+                    db.TrackedSeries.Add(new TrackedSeries
+                    {
+                        Exchange = ExchangeName.Binance, Symbol = sym, Timeframe = tf, Enabled = true,
+                    });
+                }
+            }
+        }
+        var added = await db.SaveChangesAsync();
+        Console.WriteLine($"    TrackedSeries: +{added} serie tracciate (l'app le terra' aggiornate).\n");
+    }
+
+    // 2) Storico: 1d/4h profondi, 1h dal 2023 (stesse profondita' delle coppie USDT).
+    foreach (var sym in ratios)
+    {
+        foreach (var (tf, from) in new[] { ("1d", deepFrom), ("4h", deepFrom), ("1h", hourlyFrom) })
+        {
+            using var scope = provider.CreateScope();
+            var ingestion = scope.ServiceProvider.GetRequiredService<IOhlcvIngestionService>();
+            try
+            {
+                var r = await ingestion.IngestHistoricalDataAsync("Binance", sym, tf, from, DateTime.UtcNow, null, CancellationToken.None);
+                Console.WriteLine($"    {sym,-9} {tf,-3} -> {r.CandlesProcessed,7:N0} candele");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"    {sym,-9} {tf,-3} -> ERRORE: {ex.Message}");
+            }
+        }
+    }
+
+    Console.WriteLine("\n    Fatto: le coppie relative sono serie di prima classe — backtest, pairs (gia' sui");
+    Console.WriteLine("    log), discovery e fattori le vedono senza altro codice. La breadth interna come");
+    Console.WriteLine("    feature di regime resta un item aperto (cambia le etichette del K-means).");
 }
 
 // ------------------------------------------------------------------ ORDERFLOW (3.8b: l'IC dei fattori nuovi)
