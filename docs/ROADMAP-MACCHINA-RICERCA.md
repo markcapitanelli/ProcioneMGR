@@ -95,7 +95,7 @@ Riproducibile: `dotnet run --project tools/PlatformExpand -- coverage`
 | OHLCV 1m | 6 simboli, ~525k candele/simbolo | `OhlcvData` | analisi costi R2 | stagionalità, event-study fini |
 | **Densità: 219 serie, 12,15M candele, NESSUN buco** (tutte ≥99%) | | | | |
 | Fear & Greed | **dal 2018-02, 3.088 punti** | `SentimentMetricPoints` | z-score sentiment | feature di regime con 8,5 anni di storia |
-| Funding rate | **17 giorni**, 2 simboli | `SentimentMetricPoints` | z-score sentiment | costo/ricavo REALE nel backtest (T0.2) |
+| Funding rate | ~~17 giorni~~ → **dal 2019-09, ~7.400 eventi/simbolo su 6 simboli** (backfill T0.2 eseguito) | `SentimentMetricPoints` | backtest via `FundingHistoryProvider` | ✅ collegato |
 | Open interest, long/short, taker ratio | **3 giorni**, 2 simboli | `SentimentMetricPoints` | z-score sentiment | feature — ma serve accumulare storia |
 | Notizie + calendario economico | dal 2026-01/07, 3.876 eventi | `AltDataPoint` | NewsImpactAnalyzer (medie semplici) | event-study rigoroso (T2.7) |
 | Volume taker, n. trade, quote volume | **SCARTATI al parsing** | — | nessuno | order flow storico completo (T0.3) |
@@ -136,7 +136,7 @@ Formato: cosa c'è oggi / cosa manca / aggancio / effort (S/M/L) / come si valid
 Fase `coverage` in `tools/PlatformExpand` (read-only). I numeri sono la §2. Da rilanciare dopo ogni
 ingestione importante.
 
-#### T0.1 — Purge/embargo nel walk-forward dell'ottimizzatore — **S**
+#### T0.1 — Purge/embargo nel walk-forward dell'ottimizzatore — **S** ✅ FATTO (2026-07-20)
 
 **Oggi**: `OptimizationEngine.GenerateWindows` (`:246-263`, verificato) produce finestre IS/OOS
 **contigue**: `oosStart = isEnd`. Una strategia che tiene posizioni aperte a cavallo del confine, o
@@ -144,29 +144,38 @@ indicatori con lookback, fanno filtrare informazione dall'IS all'OOS. Intanto
 `Services/ML/PurgedTimeSeriesCv.cs` (purge+embargo, López de Prado) esiste ed è usato **solo**
 nello stacking ML: la piattaforma possiede lo strumento giusto e non lo usa dove conta di più.
 
-**Aggancio**: campo `EmbargoBars` in `WalkForwardConfig` (default 0 = comportamento invariato);
-`GenerateWindows`/`Slice` escludono le prime `EmbargoBars` barre dell'OOS. Stessa semantica di
-`PurgedTimeSeriesCv`, documentata incrociata.
+**Fatto**: campo `EmbargoBars` in `WalkForwardConfiguration` (default 0 = comportamento invariato,
+con test a guardia); l'OOS di ogni finestra perde le prime N barre, il report riflette l'inizio
+EFFETTIVO; finestre degenerate dall'embargo vengono saltate con warning invece di misurare rumore
+su due barre. Esposto in `/optimization` (campo "Embargo (barre)"), nei preset (compatibili
+all'indietro) e nello stage Discovery della pipeline (`embargoBars`).
 
-**Validazione**: ri-run di uno sweep noto con/senza embargo — il delta OOS *quantifica* il leakage
-storico; l'edge piantato del controllo deve continuare a passare (sensibilità intatta).
+**Validazione fatta**: contiguità bit-identica a embargo 0; trimming esatto di N barre per
+finestra; finestra degenerata saltata senza backtest eseguiti; embargo negativo rifiutato.
+Resta da fare: il ri-run di uno sweep storico con/senza per QUANTIFICARE il leakage (item di
+misura, non di codice).
 
-#### T0.2 — Funding storico nel motore di backtest — **S/M**
+#### T0.2 — Funding storico nel motore di backtest — **S/M** ✅ FATTO (2026-07-20)
 
-**Oggi**: serie raccolta (`SentimentMetricPoints`, `FundingRate`, convenzione % ×100) ma con 17
-giorni di storia; il motore usa la costante `config.FundingRatePercentPer8h`
-(`BacktestEngine.cs:182`, addebito pro-rata per candela). Il segno viene ignorato: chi è short
-*paga* la costante invece di *incassare* il funding positivo.
+**Era**: serie raccolta ma con 17 giorni di storia; il motore usava la costante
+`config.FundingRatePercentPer8h` senza segno — chi era short *pagava* la costante invece di
+*incassare* il funding positivo.
 
-**Aggancio**: provider opzionale `IFundingRateSeries` (lettura da `SentimentMetricPoints`, fallback
-alla costante quando la serie non copre il periodo); `BacktestEngine` addebita/accredita il rate
-**firmato** al timestamp, rispettando il lato della posizione. In parallelo: il sync client va
-esteso per il **backfill profondo** — `/fapi/v1/fundingRate` di Binance serve storia ben oltre i 30
-giorni (da verificare la profondità reale in implementazione); e l'accumulo locale deve superare la
-retention di 30 giorni delle altre metriche.
+**Fatto**:
+- `FundingRateLookup` (gradini: ultimo evento ≤ ts, fallback dichiarato alla costante prima del
+  primo evento) + `BacktestConfiguration.FundingHistory`;
+- il motore applica il rate **firmato per lato**: funding positivo → il long paga, lo short
+  incassa. Vale anche per la costante (fix documentato: la vecchia semantica addebitava il funding
+  anche a chi lo avrebbe ricevuto);
+- `FundingHistoryProvider` (DI) legge la serie da `SentimentMetricPoints`;
+- **backfill profondo eseguito** (fase `fundingbackfill`): la verifica sul campo ha dato molto più
+  dei 30 giorni temuti — `/fapi/v1/fundingRate` serve l'INTERA storia: BTC dal **2019-09-10**,
+  ~7.400 eventi/simbolo su 6 simboli (BTC, ETH, SOL, BNB, XRP, DOGE), ~42.000 punti.
 
-**Validazione**: test con serie sintetica → addebito/accredito esatto per lato; A/B su una
-strategia short-capable: delta PnL costante-vs-storico riportato nel report.
+**Validazione fatta**: simmetria esatta long/short a parità di serie; conto a mano dell'addebito
+pro-rata; serie che parte a metà run (costante prima, storico dopo); default invariato a funding 0.
+Resta da fare l'A/B costante-vs-storico su una strategia short del catalogo (dipende da una caccia
+nuova).
 
 #### T0.3 — Stop allo scarto dei campi klines — **M**
 

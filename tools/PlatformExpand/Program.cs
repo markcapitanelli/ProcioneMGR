@@ -103,6 +103,7 @@ switch (phase)
     case "volsingle": await VolSingleAsync(); break;
     case "volrobust": await VolRobustAsync(); break;
     case "coverage": await CoverageAsync(); break;
+    case "fundingbackfill": await FundingBackfillAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
     default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
@@ -463,6 +464,86 @@ async Task CostFrontierAsync()
             ? $"    -> diventa profittevole a round-turn <= {be:F3}%\n"
             : "    -> resta in perdita anche a COSTO ZERO: non e' un problema di esecuzione, il segnale non funziona\n");
     }
+}
+
+// ------------------------------------------------------------------ FUNDINGBACKFILL (T0.2)
+// L'audit T0.0 ha mostrato 17 GIORNI di storia funding: quasi niente. Ma /fapi/v1/fundingRate di
+// Binance serve la storia PROFONDA (startTime + limit 1000, un evento ogni 8h => ~333 giorni per
+// pagina): questa fase la scarica tutta e la mette in SentimentMetricPoints, dove il
+// FundingHistoryProvider del backtest la legge. Endpoint pubblico, nessuna chiave, sola lettura.
+async Task FundingBackfillAsync()
+{
+    string[] markets = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"];
+    var fromUtc = new DateTime(2019, 9, 1, 0, 0, 0, DateTimeKind.Utc);   // lancio dei futures USDS-M
+
+    Console.WriteLine("=== T0.2 BACKFILL STORICO FUNDING RATE (Binance /fapi/v1/fundingRate) ===\n");
+    using var http = new HttpClient();
+    http.DefaultRequestHeaders.UserAgent.ParseAdd("ProcioneMGR/1.0");
+
+    foreach (var market in markets)
+    {
+        var baseTicker = ProcioneMGR.Services.Sentiment.Metrics.BinanceFuturesSentimentClient.ToBaseTicker(market);
+
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var existing = (await db.SentimentMetricPoints.AsNoTracking()
+            .Where(p => p.Source == SentimentMetricSources.BinanceFutures
+                        && p.Metric == SentimentMetrics.FundingRate
+                        && p.Symbol == baseTicker)
+            .Select(p => p.TimestampUtc)
+            .ToListAsync()).ToHashSet();
+
+        var added = 0;
+        var cursor = fromUtc;
+        DateTime? firstSeen = null, lastSeen = null;
+
+        while (cursor < DateTime.UtcNow)
+        {
+            var startMs = new DateTimeOffset(cursor).ToUnixTimeMilliseconds();
+            string json;
+            try
+            {
+                json = await http.GetStringAsync(
+                    $"https://fapi.binance.com/fapi/v1/fundingRate?symbol={market}&startTime={startMs}&limit=1000");
+            }
+            catch (HttpRequestException ex)
+            {
+                Console.WriteLine($"  {market}: HTTP fallita ({ex.Message}) — mi fermo qui, il gia' scaricato resta.");
+                break;
+            }
+
+            var samples = ProcioneMGR.Services.Sentiment.Metrics.BinanceFuturesSentimentClient
+                .ParseFundingRates(json, baseTicker);
+            if (samples.Count == 0) break;
+
+            foreach (var s in samples)
+            {
+                firstSeen ??= s.TimestampUtc;
+                lastSeen = s.TimestampUtc;
+                if (existing.Add(s.TimestampUtc))
+                {
+                    db.SentimentMetricPoints.Add(new SentimentMetricPoint
+                    {
+                        Source = SentimentMetricSources.BinanceFutures,
+                        Metric = SentimentMetrics.FundingRate,
+                        Symbol = baseTicker,
+                        TimestampUtc = s.TimestampUtc,
+                        Value = s.Value,
+                    });
+                    added++;
+                }
+            }
+            await db.SaveChangesAsync();
+
+            var maxTs = samples.Max(s => s.TimestampUtc);
+            if (maxTs <= cursor) break;      // nessun avanzamento: fine della storia
+            cursor = maxTs.AddMilliseconds(1);
+            await Task.Delay(250);           // gentilezza col rate limit pubblico
+        }
+
+        Console.WriteLine($"  {market,-9} +{added,6:N0} punti nuovi   storia {firstSeen:yyyy-MM-dd} -> {lastSeen:yyyy-MM-dd}");
+    }
+
+    Console.WriteLine("\n    Fatto. Il FundingHistoryProvider ora ha la storia profonda; rilancia 'coverage' per il quadro.");
 }
 
 // ------------------------------------------------------------------ COVERAGE (T0.0 roadmap macchina-ricerca)

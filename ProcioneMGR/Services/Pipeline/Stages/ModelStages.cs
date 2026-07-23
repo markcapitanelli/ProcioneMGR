@@ -232,6 +232,7 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
         new("inSampleMonths", "Finestra in-sample (mesi)", "12", ""),
         new("outOfSampleMonths", "Finestra out-of-sample (mesi)", "3", ""),
         new("stepMonths", "Passo walk-forward (mesi)", "3", ""),
+        new("embargoBars", "Embargo (barre)", "0", "[T0.1] barre saltate a inizio OOS: blocca il leakage al confine IS/OOS"),
         new("minOosSharpe", "Sharpe OOS minimo", "0.3", "gate anti-rumore del Report Caccia"),
         new("minTrades", "Trade minimi", "12", "candidati con meno trade sono rumore statistico"),
         // [R2] I costi erano dichiarati solo sugli stage di validazione: la discovery, che è dove i
@@ -266,6 +267,7 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
                 InSampleMonths = config.GetInt("inSampleMonths", 12),
                 OutOfSampleMonths = config.GetInt("outOfSampleMonths", 3),
                 StepMonths = config.GetInt("stepMonths", 3),
+                EmbargoBars = Math.Max(0, config.GetInt("embargoBars", 0)),
             },
         };
 

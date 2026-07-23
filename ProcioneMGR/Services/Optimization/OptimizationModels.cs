@@ -89,6 +89,17 @@ public class WalkForwardConfiguration
     public int InSampleMonths { get; set; } = 12;
     public int OutOfSampleMonths { get; set; } = 3;
     public int StepMonths { get; set; } = 3;
+
+    /// <summary>
+    /// [T0.1 roadmap macchina-ricerca] Barre di cuscinetto SALTATE all'inizio di ogni finestra
+    /// out-of-sample. Senza, IS e OOS sono contigui (<c>oosStart = isEnd</c>) e l'informazione
+    /// filtra attraverso il confine: una posizione aperta a fine IS prosegue nell'OOS, un
+    /// indicatore con lookback L vede fino a L barre di IS. Stessa semantica dell'embargo di
+    /// <c>PurgedTimeSeriesCv</c>, che finora la piattaforma usava solo nel percorso ML.
+    /// Default 0 = comportamento storico invariato. Valore sensato: il lookback massimo degli
+    /// indicatori della strategia (es. 200 per una SMA200).
+    /// </summary>
+    public int EmbargoBars { get; set; }
 }
 
 public class OptimizationResult

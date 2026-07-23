@@ -138,6 +138,8 @@ builder.Services.Configure<LiveExecutionOptions>(builder.Configuration.GetSectio
 // --- Backtesting ---
 builder.Services.AddSingleton<IStrategyFactory, StrategyFactory>();
 builder.Services.AddScoped<IBacktestEngine, BacktestEngine>();
+// [T0.2] Serie storica dei funding per i backtest futures (da SentimentMetricPoints).
+builder.Services.AddScoped<IFundingHistoryProvider, FundingHistoryProvider>();
 
 // Preset di configurazione pagina + memoria dell'ultima configurazione usata (per utente).
 builder.Services.AddScoped<ProcioneMGR.Services.Preferences.IPageConfigStore, ProcioneMGR.Services.Preferences.PageConfigStore>();

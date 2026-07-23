@@ -95,6 +95,24 @@ public sealed class OptimizationEngine(
             var inSlice = Slice(allCandles, win.IsStart, win.IsEnd);
             var outSlice = Slice(allCandles, win.OosStart, win.OosEnd);
 
+            // [T0.1] Embargo: salta le prime EmbargoBars barre dell'OOS, così l'informazione a
+            // cavallo del confine (posizioni aperte a fine IS, lookback degli indicatori) non
+            // contamina la misura fuori campione. Default 0 = comportamento storico invariato.
+            var embargo = config.WalkForward.EmbargoBars;
+            var oosStartEffective = win.OosStart;
+            if (embargo > 0)
+            {
+                if (outSlice.Count - embargo < 2)
+                {
+                    logger.LogWarning(
+                        "Finestra {W}: l'embargo di {Embargo} barre consuma quasi tutto l'out-of-sample ({N} barre): finestra saltata.",
+                        w, embargo, outSlice.Count);
+                    continue;
+                }
+                outSlice = outSlice.Skip(embargo).ToList();
+                oosStartEffective = outSlice[0].TimestampUtc;
+            }
+
             var comboResults = new ConcurrentBag<ComboResult>();
             var currentWindow = w;
 
@@ -109,7 +127,7 @@ public sealed class OptimizationEngine(
                     var isRes = await backtestEngine.RunBacktestAsync(isCfg, inSlice, ct2);
                     var isSharpe = Statistics.SharpeRatio(isRes.EquityCurve, periodsPerYear);
 
-                    var oosCfg = BuildBacktestConfig(config, combo, win.OosStart, win.OosEnd);
+                    var oosCfg = BuildBacktestConfig(config, combo, oosStartEffective, win.OosEnd);
                     var oosRes = await backtestEngine.RunBacktestAsync(oosCfg, outSlice, ct2);
                     var oosSharpe = Statistics.SharpeRatio(oosRes.EquityCurve, periodsPerYear);
 
@@ -186,7 +204,9 @@ public sealed class OptimizationEngine(
                 WindowIndex = w,
                 InSampleStart = win.IsStart,
                 InSampleEnd = win.IsEnd,
-                OutOfSampleStart = win.OosStart,
+                // Con embargo attivo l'OOS effettivo inizia DOPO il cuscinetto: il report riflette
+                // quello che è stato misurato davvero, non la finestra nominale.
+                OutOfSampleStart = oosStartEffective,
                 OutOfSampleEnd = win.OosEnd,
                 BestParameters = new Dictionary<string, decimal>(best.Parameters),
                 InSampleSharpe = best.IsSharpe,
@@ -213,6 +233,8 @@ public sealed class OptimizationEngine(
             throw new ArgumentException("OutOfSampleMonths deve essere > 0.");
         if (config.WalkForward.StepMonths <= 0)
             throw new ArgumentException("StepMonths deve essere > 0.");
+        if (config.WalkForward.EmbargoBars < 0)
+            throw new ArgumentException("EmbargoBars non può essere negativo.");
         if (config.ParameterRanges is null || config.ParameterRanges.Count == 0)
             throw new ArgumentException("Serve almeno un ParameterRange.");
         if (config.To <= config.From)

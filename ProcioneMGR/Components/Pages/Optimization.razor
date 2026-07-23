@@ -243,6 +243,15 @@
                     <label class="form-label">Step (mesi)</label>
                     <input type="number" class="form-control" style="width:7rem" @bind="_stepMonths" disabled="@_busy" />
                 </div>
+                <div class="col-auto">
+                    <label class="form-label">Embargo (barre)</label>
+                    <input type="number" min="0" class="form-control" style="width:7rem" @bind="_embargoBars" disabled="@_busy" />
+                    <div class="form-text" style="max-width: 16rem;">
+                        Barre saltate all'inizio di ogni out-of-sample: evita che posizioni aperte e
+                        lookback degli indicatori filtrino informazione dall'in-sample. Valore sensato:
+                        il lookback massimo della strategia (es. 200 per una SMA200). 0 = nessun embargo.
+                    </div>
+                </div>
             </div>
         </AdvancedPanel>
 
@@ -400,6 +409,7 @@
     private int _inSampleMonths = 12;
     private int _oosMonths = 3;
     private int _stepMonths = 3;
+    private int _embargoBars;
 
     private SearchStrategy _searchStrategy = SearchStrategy.GridSearch;
     private int _bayesIterations = 40;
@@ -433,7 +443,8 @@
         _initialCapital, _commission, _inSampleMonths, _oosMonths, _stepMonths,
         _searchStrategy, _bayesIterations, _bayesInitialRandom, _bayesSeed,
         _strategyName, _addMlModelId,
-        _ranges.Select(r => new OptRange(r.Key, r.Label, r.Min, r.Max, r.Step, r.IsInteger)).ToList());
+        _ranges.Select(r => new OptRange(r.Key, r.Label, r.Min, r.Max, r.Step, r.IsInteger)).ToList(),
+        _embargoBars);
 
     /// <summary>Riallinea i campi del form a uno snapshot prodotto dal service (preset o handoff).</summary>
     private void ApplySnapshot(OptimizationConfigSnapshot cfg)
@@ -448,6 +459,7 @@
         _inSampleMonths = cfg.InSampleMonths;
         _oosMonths = cfg.OosMonths;
         _stepMonths = cfg.StepMonths;
+        _embargoBars = cfg.EmbargoBars;
         _searchStrategy = cfg.SearchStrategy;
         _bayesIterations = cfg.BayesIterations;
         _bayesInitialRandom = cfg.BayesInitialRandom;
@@ -466,7 +478,8 @@
     /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
     private string AdvancedSummary =>
         $"Capitale {_initialCapital:N0} · Commissione {_commission:0.##}%"
-        + $" · Walk-forward {_inSampleMonths}/{_oosMonths}/{_stepMonths} mesi (IS/OOS/Step)";
+        + $" · Walk-forward {_inSampleMonths}/{_oosMonths}/{_stepMonths} mesi (IS/OOS/Step)"
+        + (_embargoBars > 0 ? $" · Embargo {_embargoBars} barre" : "");
 
     private IJSObjectReference? _heatmapModule;
     private bool _heatmapPending;

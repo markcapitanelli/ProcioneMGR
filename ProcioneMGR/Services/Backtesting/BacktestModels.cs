@@ -102,6 +102,16 @@ public class BacktestConfiguration
 
     /// <summary>Dosaggio della posizione sulla volatilità (spento di default: comportamento invariato).</summary>
     public VolatilityTargetingOptions VolatilityTargeting { get; set; } = new();
+
+    /// <summary>
+    /// [T0.2] Serie STORICA dei funding rate (percento per 8h, FIRMATA). Null o vuota = si usa la
+    /// costante <see cref="FundingRatePercentPer8h"/> come sempre. Quando presente, il motore
+    /// applica il rate dell'ultimo evento ≤ timestamp della candela, rispettando il LATO: con
+    /// funding positivo il long paga e lo short incassa — la costante senza segno penalizzava
+    /// sistematicamente gli short. La storia vive in SentimentMetricPoints (Metric="FundingRate")
+    /// e si carica con <see cref="FundingHistoryProvider"/>.
+    /// </summary>
+    public List<FundingRatePoint>? FundingHistory { get; set; }
 }
 
 /// <summary>
@@ -153,7 +163,11 @@ public class BacktestResult
     /// <summary>[R2] Attrito di slippage in valuta, stimato sul nozionale di ogni fill.</summary>
     public decimal TotalSlippagePaid { get; set; }
 
-    /// <summary>[R2] Funding perpetual addebitato in valuta (0 senza leva/derivati).</summary>
+    /// <summary>
+    /// [R2] Funding perpetual NETTO in valuta: positivo = pagato, negativo = incassato.
+    /// [T0.2] Con il funding firmato uno short in regime di funding positivo lo INCASSA,
+    /// quindi il valore può legittimamente essere negativo.
+    /// </summary>
     public decimal TotalFundingPaid { get; set; }
 
     /// <summary>[R3] Ingressi tentati come limite maker (0 in modalità Taker).</summary>

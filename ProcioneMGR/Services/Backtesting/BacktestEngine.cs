@@ -179,7 +179,9 @@ public sealed class BacktestEngine(
         var slipFrac = config.SlippagePercent > 0m ? config.SlippagePercent / 100m : 0m;
         var maintFrac = config.MaintenanceMarginPercent > 0m ? config.MaintenanceMarginPercent / 100m : 0m;
         var leveraged = config.Leverage > 1m;
-        var fundingFrac = config.FundingRatePercentPer8h > 0m ? config.FundingRatePercentPer8h / 100m : 0m;
+        // [T0.2] Il funding è FIRMATO: niente azzeramento dei negativi. 0 resta "disattivo".
+        var fundingFrac = config.FundingRatePercentPer8h / 100m;
+        var fundingLookup = FundingRateLookup.BuildOrNull(config.FundingHistory);
         var candleHours = TimeframeHours(config.Timeframe);
 
         // Fill con slippage: chi compra paga di piu', chi vende incassa di meno.
@@ -298,10 +300,19 @@ public sealed class BacktestEngine(
                 }
             }
 
-            // Funding dei perpetual: addebito pro-rata per candela con posizione aperta.
-            if (fundingFrac > 0m && !book.IsFlat)
+            // [T0.2] Funding dei perpetual: pro-rata per candela con posizione aperta, con il rate
+            // STORICO quando la serie c'è (ultimo evento <= ts) e comunque FIRMATO per lato: con
+            // funding positivo il long paga e lo short INCASSA. La vecchia costante senza segno
+            // addebitava il funding anche agli short — che nella realtà lo avrebbero ricevuto —
+            // penalizzando sistematicamente meta' del catalogo.
+            if (!book.IsFlat)
             {
-                book.ChargeFunding(book.OpenNotional * fundingFrac * candleHours / 8m);
+                var rateFrac = fundingLookup?.RateFracAt(ts, fundingFrac) ?? fundingFrac;
+                if (rateFrac != 0m)
+                {
+                    var side = book.IsLong ? 1m : -1m;
+                    book.ChargeFunding(book.OpenNotional * rateFrac * candleHours / 8m * side);
+                }
             }
 
             // [R3] Risoluzione del limite maker appoggiato in una candela precedente. Il fill si
@@ -563,10 +574,14 @@ public sealed class BacktestEngine(
             return MarginMath.LiquidationPrice(_entryPrice, _qty, _margin, _notionalEntry, isLong: _side == 1, maintenanceFrac);
         }
 
-        /// <summary>Addebita il funding pro-rata sul nozionale aperto (entra nel PnL del trade).</summary>
+        /// <summary>
+        /// Addebita (o ACCREDITA, amount negativo) il funding pro-rata sul nozionale aperto: entra
+        /// nel PnL del trade. [T0.2] Il segno arriva dal chiamante (rate firmato × lato): uno short
+        /// con funding positivo riceve un amount negativo, cioè un accredito.
+        /// </summary>
         public void ChargeFunding(decimal amount)
         {
-            if (_side == 0 || amount <= 0m) return;
+            if (_side == 0 || amount == 0m) return;
             Cash -= amount;
             _fundingAccrued += amount;
             TotalFunding += amount;
