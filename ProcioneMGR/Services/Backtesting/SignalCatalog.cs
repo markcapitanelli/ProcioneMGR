@@ -33,7 +33,7 @@ namespace ProcioneMGR.Services.Backtesting;
 /// </summary>
 public static class SignalCatalog
 {
-    public const int SignalCount = 10;
+    public const int SignalCount = 12;
     public const int PercentileWindow = 250;
 
     /// <summary>Display names, index-aligned to the signal ids (for UI/log readability).</summary>
@@ -44,6 +44,10 @@ public static class SignalCatalog
         // [2.S] Ora UTC scalata 0-100: stagionalità oraria cacciabile. Id 9, APPESO in coda: gli id
         // 0-8 delle strategie Composite già salvate restano validi.
         "Ora UTC",
+        // [3.8a] Volume come INFORMAZIONE, non solo conferma. Id 10-11 appesi in coda (id storici
+        // invariati). Il VWAP non ha un id nuovo: la deviazione dal VWAP di sessione è già l'id 5.
+        "MFI",
+        "OBV slope pct",
     ];
 
     private static readonly ConditionalWeakTable<object, Task<decimal?[][]>> Cache = new();
@@ -194,6 +198,23 @@ public static class SignalCatalog
             hourOfDay[i] = candles[i].TimestampUtc.Hour * 100m / 23m;
         }
         matrix[9] = hourOfDay;
+
+        // 10) [3.8a] MFI(14): RSI pesato per volume, nativo 0-100. Rispetto all'id 4 (solo
+        //     intensità del volume) porta la DIREZIONE del flusso di denaro.
+        matrix[10] = [.. await indicators.CalculateMfiAsync(highs, lows, closes, volumes, 14, ct)];
+
+        // 11) [3.8a] OBV slope: variazione a 10 barre dell'On-Balance Volume, normalizzata col
+        //     percentile causale (l'OBV assoluto ha scala arbitraria: conta la variazione).
+        var obv = await indicators.CalculateObvAsync(closes, volumes, ct);
+        var obvSlope = new decimal?[n];
+        for (var i = 10; i < n; i++)
+        {
+            if (obv[i] is decimal now && obv[i - 10] is decimal past)
+            {
+                obvSlope[i] = now - past;
+            }
+        }
+        matrix[11] = CausalPercentile(obvSlope, PercentileWindow, ct);
 
         return matrix;
     }

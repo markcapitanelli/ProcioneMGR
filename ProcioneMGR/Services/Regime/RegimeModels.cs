@@ -22,6 +22,21 @@ public class TrainingConfiguration
 
     /// <summary>Estremo superiore del range di K per l'auto-selezione. Usato solo se <see cref="AutoSelectK"/>.</summary>
     public int MaxRegimes { get; set; } = 6;
+
+    /// <summary>
+    /// [3.8a] Quinta feature di clustering: VolumeRatio (volume / media 20 periodi). Default OFF =
+    /// comportamento storico bit-identico. ATTENZIONE dichiarata: accenderla CAMBIA le etichette dei
+    /// regimi del modello riaddestrato — l'impatto sull'allocazione regime-aware va misurato, non
+    /// assunto. La scelta viaggia col modello (FeatureScaling.Names), l'inference si adegua da sola.
+    /// </summary>
+    public bool IncludeVolumeFeature { get; set; }
+
+    /// <summary>
+    /// [3.8a/4.9] Sesta feature di clustering: breadth interna (% dei simboli /USDT sopra la propria
+    /// SMA50 — "quanti partecipano al movimento"). Default OFF; stessa avvertenza del volume.
+    /// Richiede dati multi-simbolo sullo stesso timeframe (il calcolo è di IMarketBreadthCalculator).
+    /// </summary>
+    public bool IncludeBreadthFeature { get; set; }
 }
 
 /// <summary>

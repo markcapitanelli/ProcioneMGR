@@ -36,6 +36,17 @@ public sealed class TechnicalIndicatorsService : ITechnicalIndicatorsService
         List<decimal> highs, List<decimal> lows, List<decimal> closes, int period = 14, CancellationToken ct = default)
         => Task.FromResult(Atr(highs, lows, closes, period, ct));
 
+    public Task<List<decimal?>> CalculateObvAsync(List<decimal> closes, List<decimal> volumes, CancellationToken ct = default)
+        => Task.FromResult(Obv(closes, volumes, ct));
+
+    public Task<List<decimal?>> CalculateMfiAsync(
+        List<decimal> highs, List<decimal> lows, List<decimal> closes, List<decimal> volumes, int period = 14, CancellationToken ct = default)
+        => Task.FromResult(Mfi(highs, lows, closes, volumes, period, ct));
+
+    public Task<List<decimal?>> CalculateRollingVwapAsync(
+        List<decimal> highs, List<decimal> lows, List<decimal> closes, List<decimal> volumes, int period = 20, CancellationToken ct = default)
+        => Task.FromResult(RollingVwap(highs, lows, closes, volumes, period, ct));
+
     // ----------------------------------------------------------------- EMA
 
     internal static List<decimal?> Ema(IReadOnlyList<decimal> values, int period, CancellationToken ct = default)
@@ -343,6 +354,137 @@ public sealed class TechnicalIndicatorsService : ITechnicalIndicatorsService
             result[i] = atr;
         }
 
+        return result;
+    }
+
+    // ----------------------------------------------------------------- OBV / MFI / VWAP (3.8a)
+
+    /// <summary>
+    /// On-Balance Volume: somma cumulata del volume col segno della variazione di prezzo.
+    /// Non-null da indice 0 (OBV[0]=0). Scala arbitraria: chi lo consuma guardi la VARIAZIONE.
+    /// </summary>
+    internal static List<decimal?> Obv(IReadOnlyList<decimal> closes, IReadOnlyList<decimal> volumes, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(closes);
+        ArgumentNullException.ThrowIfNull(volumes);
+        if (closes.Count != volumes.Count)
+        {
+            throw new ArgumentException("Le serie closes/volumes devono avere la stessa lunghezza.");
+        }
+
+        var n = closes.Count;
+        var result = NullList(n);
+        if (n == 0) return result;
+
+        decimal obv = 0m;
+        result[0] = 0m;
+        for (var i = 1; i < n; i++)
+        {
+            ThrottleCancel(i, ct);
+            if (closes[i] > closes[i - 1]) obv += volumes[i];
+            else if (closes[i] < closes[i - 1]) obv -= volumes[i];
+            result[i] = obv;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Money Flow Index: RSI pesato per volume sul typical price (H+L+C)/3, nativo 0-100.
+    /// Primo valore all'indice <paramref name="period"/> (servono `period` variazioni di typical price).
+    /// </summary>
+    internal static List<decimal?> Mfi(
+        IReadOnlyList<decimal> highs, IReadOnlyList<decimal> lows, IReadOnlyList<decimal> closes,
+        IReadOnlyList<decimal> volumes, int period = 14, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(highs);
+        ArgumentNullException.ThrowIfNull(lows);
+        ArgumentNullException.ThrowIfNull(closes);
+        ArgumentNullException.ThrowIfNull(volumes);
+        ArgumentOutOfRangeException.ThrowIfLessThan(period, 1);
+        if (highs.Count != lows.Count || highs.Count != closes.Count || highs.Count != volumes.Count)
+        {
+            throw new ArgumentException("Le serie highs/lows/closes/volumes devono avere la stessa lunghezza.");
+        }
+
+        var n = closes.Count;
+        var result = NullList(n);
+        if (n <= period) return result;
+
+        // Flussi firmati per barra (da indice 1: serve il typical price precedente).
+        var flow = new decimal[n]; // >0 = flusso positivo, <0 = negativo, 0 = typical invariato
+        var prevTp = (highs[0] + lows[0] + closes[0]) / 3m;
+        for (var i = 1; i < n; i++)
+        {
+            var tp = (highs[i] + lows[i] + closes[i]) / 3m;
+            var raw = tp * volumes[i];
+            flow[i] = tp > prevTp ? raw : tp < prevTp ? -raw : 0m;
+            prevTp = tp;
+        }
+
+        // Finestra scorrevole di somme positive/negative su `period` barre.
+        decimal pos = 0m, neg = 0m;
+        for (var i = 1; i <= period; i++)
+        {
+            if (flow[i] > 0m) pos += flow[i]; else neg -= flow[i];
+        }
+        result[period] = ToMfi(pos, neg);
+        for (var i = period + 1; i < n; i++)
+        {
+            ThrottleCancel(i, ct);
+            var leaving = flow[i - period];
+            if (leaving > 0m) pos -= leaving; else neg += leaving;
+            if (flow[i] > 0m) pos += flow[i]; else neg -= flow[i];
+            result[i] = ToMfi(pos, neg);
+        }
+        return result;
+    }
+
+    private static decimal ToMfi(decimal positiveFlow, decimal negativeFlow)
+    {
+        if (negativeFlow <= 0m) return 100m;
+        if (positiveFlow <= 0m) return 0m;
+        return 100m - 100m / (1m + positiveFlow / negativeFlow);
+    }
+
+    /// <summary>
+    /// VWAP ROLLING sulle ultime <paramref name="period"/> barre: Σ(typical·vol)/Σ(vol) a finestra
+    /// scorrevole. Complementare al VWAP ancorato alla sessione UTC che vive nel SignalCatalog (id 5):
+    /// questo è il riusabile senza ancora. Null nel warm-up o quando il volume della finestra è 0.
+    /// </summary>
+    internal static List<decimal?> RollingVwap(
+        IReadOnlyList<decimal> highs, IReadOnlyList<decimal> lows, IReadOnlyList<decimal> closes,
+        IReadOnlyList<decimal> volumes, int period = 20, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(highs);
+        ArgumentNullException.ThrowIfNull(lows);
+        ArgumentNullException.ThrowIfNull(closes);
+        ArgumentNullException.ThrowIfNull(volumes);
+        ArgumentOutOfRangeException.ThrowIfLessThan(period, 1);
+        if (highs.Count != lows.Count || highs.Count != closes.Count || highs.Count != volumes.Count)
+        {
+            throw new ArgumentException("Le serie highs/lows/closes/volumes devono avere la stessa lunghezza.");
+        }
+
+        var n = closes.Count;
+        var result = NullList(n);
+        decimal pvSum = 0m, vSum = 0m;
+        for (var i = 0; i < n; i++)
+        {
+            ThrottleCancel(i, ct);
+            var tp = (highs[i] + lows[i] + closes[i]) / 3m;
+            pvSum += tp * volumes[i];
+            vSum += volumes[i];
+            if (i >= period)
+            {
+                var tpOut = (highs[i - period] + lows[i - period] + closes[i - period]) / 3m;
+                pvSum -= tpOut * volumes[i - period];
+                vSum -= volumes[i - period];
+            }
+            if (i >= period - 1 && vSum > 0m)
+            {
+                result[i] = pvSum / vSum;
+            }
+        }
         return result;
     }
 

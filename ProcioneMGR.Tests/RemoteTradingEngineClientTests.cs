@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,15 +21,15 @@ namespace ProcioneMGR.Tests;
 
 /// <summary>
 /// Test di <see cref="RemoteTradingEngineClient"/> (Fase 2b microservizi), sui due aspetti che NON
-/// passano da gRPC (quello è coperto da <see cref="TradingGrpcRoundTripTests"/>):
+/// passano da gRPC (quello Ã¨ coperto da <see cref="TradingGrpcRoundTripTests"/>):
 ///
 /// 1. Le due letture di ordini che bypassano il servizio e interrogano Postgres direttamente,
 ///    confrontate CONTRO IL MOTORE VERO sullo stesso database. Nate come prova dell'affermazione
 ///    "identiche riga per riga" quando il client portava una COPIA delle query; oggi entrambi i
-///    lati compongono da TradingOrderQueries e la deriva è impossibile per costruzione — il
+///    lati compongono da TradingOrderQueries e la deriva Ã¨ impossibile per costruzione â€” il
 ///    confronto resta come cintura: fallirebbe se qualcuno reintroducesse una query locale
-///    scavalcando l'helper. (Nota onesta sul suo limite, ed è parte del perché l'helper esiste:
-///    il confronto vede solo le dimensioni presenti nei dati seminati — un filtro aggiunto su una
+///    scavalcando l'helper. (Nota onesta sul suo limite, ed Ã¨ parte del perchÃ© l'helper esiste:
+///    il confronto vede solo le dimensioni presenti nei dati seminati â€” un filtro aggiunto su una
 ///    colonna che qui non varia produrrebbe risultati identici comunque.)
 /// 2. I due metodi del ciclo worker, che devono lanciare invece di fingere un no-op.
 /// </summary>
@@ -42,7 +42,7 @@ public class RemoteTradingEngineClientTests(PostgresFixture pg)
     }
 
     /// <summary>
-    /// Un provider col cono completo del motore su un DB reale isolato, così da poter mettere a
+    /// Un provider col cono completo del motore su un DB reale isolato, cosÃ¬ da poter mettere a
     /// confronto il TradingEngine vero e il client remoto sugli stessi dati.
     /// </summary>
     private ServiceProvider BuildProvider(out string connectionString)
@@ -64,6 +64,7 @@ public class RemoteTradingEngineClientTests(PostgresFixture pg)
         services.AddExchangeClients();
         services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
         services.AddSingleton<IMarketFeatureExtractor, MarketFeatureExtractor>();
+        services.AddSingleton<IMarketBreadthCalculator, MarketBreadthCalculator>();
         services.AddSingleton<IRegimeDetector, RegimeDetector>();
         services.AddSingleton<IStrategyFactory, StrategyFactory>();
         services.AddSingleton<IAlphaFactorFactory, AlphaFactorFactory>();
@@ -131,7 +132,7 @@ public class RemoteTradingEngineClientTests(PostgresFixture pg)
         Assert.Equal(
             fromEngine.Select(o => o.OrderId).ToList(),
             fromRemote.Select(o => o.OrderId).ToList());
-        // Ordinamento (più recenti prima) e isolamento di corsia, esplicitati per non dipendere solo
+        // Ordinamento (piÃ¹ recenti prima) e isolamento di corsia, esplicitati per non dipendere solo
         // dal confronto: se entrambe le implementazioni sbagliassero allo stesso modo, l'uguaglianza
         // passerebbe comunque.
         Assert.Equal(new[] { "b", "c", "a" }, fromRemote.Select(o => o.OrderId));

@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -21,10 +21,10 @@ namespace ProcioneMGR.Tests;
 
 /// <summary>
 /// LA GARANZIA DI SICUREZZA CENTRALE DELLA FASE 2b. Il vincolo "mai due esecuzioni simultanee sulla
-/// stessa corsia" non è retto da un lock distribuito, ma dal fatto che monolite e servizio remoto
+/// stessa corsia" non Ã¨ retto da un lock distribuito, ma dal fatto che monolite e servizio remoto
 /// non registrano MAI entrambi un motore attivo per la stessa lane. Qui lo si verifica per
 /// COSTRUZIONE (composizione DI, deterministica e istantanea) invece che a runtime con due processi
-/// vivi — un test del genere sarebbe lento, e soprattutto fallirebbe a intermittenza proprio nello
+/// vivi â€” un test del genere sarebbe lento, e soprattutto fallirebbe a intermittenza proprio nello
 /// scenario che deve escludere con certezza.
 ///
 /// Si RISOLVONO davvero le istanze invece di ispezionare i ServiceDescriptor: le registrazioni sono
@@ -65,6 +65,7 @@ public class TradingServiceCollectionExtensionsTests
 
         services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
         services.AddSingleton<IMarketFeatureExtractor, MarketFeatureExtractor>();
+        services.AddSingleton<IMarketBreadthCalculator, MarketBreadthCalculator>();
         services.AddSingleton<IRegimeDetector, RegimeDetector>();
         services.AddSingleton<IStrategyFactory, StrategyFactory>();
         services.AddSingleton<IAlphaFactorFactory, AlphaFactorFactory>();
@@ -118,7 +119,7 @@ public class TradingServiceCollectionExtensionsTests
     public void ToggleOn_RegistersNoLocalTradingWorkers()
     {
         // IL CUORE DEL TEST: se un TradingWorker o un ExecutionWorker sopravvivesse qui, il monolite
-        // elaborerebbe candele e fette di esecuzione in parallelo al servizio remoto — due processi
+        // elaborerebbe candele e fette di esecuzione in parallelo al servizio remoto â€” due processi
         // che aprono ordini sulla stessa corsia, con soldi veri in Live. Deve essere l'insieme vuoto.
         using var sp = BuildProvider(useRemoteTrading: true);
 
@@ -133,7 +134,7 @@ public class TradingServiceCollectionExtensionsTests
     {
         // L'ensemble non segue mai il trading nel servizio remoto: il motore lo legge una tantum a
         // StartAsync, quindi due istanze non possono produrre doppie scritture, e tenerlo qui lascia
-        // Ensemble.razor e il ribilanciamento funzionanti anche in modalità remota.
+        // Ensemble.razor e il ribilanciamento funzionanti anche in modalitÃ  remota.
         foreach (var useRemote in new[] { false, true })
         {
             using var sp = BuildProvider(useRemote);
@@ -149,10 +150,10 @@ public class TradingServiceCollectionExtensionsTests
     [Fact]
     public void TradingServiceHost_RegistersNoEnsembleRebalanceWorker()
     {
-        // L'ALTRA METÀ DELLA GARANZIA ANTI-DOPPIO-SCRITTORE, accanto ai TradingWorker. A differenza
-        // dell'IEnsembleManager (che il motore usa in SOLA LETTURA, e che quindi può esistere in
+        // L'ALTRA METÃ€ DELLA GARANZIA ANTI-DOPPIO-SCRITTORE, accanto ai TradingWorker. A differenza
+        // dell'IEnsembleManager (che il motore usa in SOLA LETTURA, e che quindi puÃ² esistere in
         // entrambi gli host), EnsembleRebalanceWorker SCRIVE: RebalanceAsync ricalcola e salva i pesi
-        // delle strategie. Se fosse registrato anche qui, in modalità remota monolite e servizio
+        // delle strategie. Se fosse registrato anche qui, in modalitÃ  remota monolite e servizio
         // ribilancerebbero la stessa corsia sullo stesso Postgres, in race fra loro.
         using var sp = BuildProvider(useRemoteTrading: false, isTradingServiceHost: true);
 
@@ -185,12 +186,12 @@ public class TradingServiceCollectionExtensionsTests
     [Fact]
     public void RealtimeFeed_LivesOnlyWhereTheEngineIsLocal()
     {
-        // [R1] Stessa regola "un scrittore, un host" degli altri componenti attivi. Il feed non può
-        // stare nel monolite quando il trading è remoto per DUE motivi, entrambi sufficienti:
+        // [R1] Stessa regola "un scrittore, un host" degli altri componenti attivi. Il feed non puÃ²
+        // stare nel monolite quando il trading Ã¨ remoto per DUE motivi, entrambi sufficienti:
         //  - i tick dovrebbero attraversare gRPC, reintroducendo dal lato sbagliato proprio la
         //    latenza che il feed serve a togliere;
         //  - RemoteTradingEngineClient.ProcessPriceTickAsync LANCIA di proposito, quindi un feed
-        //    registrato lì produrrebbe un fiume di eccezioni invece di chiudere posizioni.
+        //    registrato lÃ¬ produrrebbe un fiume di eccezioni invece di chiudere posizioni.
         using (var remote = BuildProvider(useRemoteTrading: true))
         {
             Assert.Empty(remote.GetServices<IHostedService>().OfType<ProcioneMGR.Services.MarketData.RealtimePriceWorker>());
@@ -201,7 +202,7 @@ public class TradingServiceCollectionExtensionsTests
             Assert.Single(local.GetServices<IHostedService>().OfType<ProcioneMGR.Services.MarketData.RealtimePriceWorker>());
         }
 
-        // Il servizio di trading standalone È l'host locale: lì il feed deve esserci.
+        // Il servizio di trading standalone Ãˆ l'host locale: lÃ¬ il feed deve esserci.
         using (var tradingHost = BuildProvider(useRemoteTrading: true, isTradingServiceHost: true))
         {
             Assert.Single(tradingHost.GetServices<IHostedService>().OfType<ProcioneMGR.Services.MarketData.RealtimePriceWorker>());
@@ -223,9 +224,9 @@ public class TradingServiceCollectionExtensionsTests
     [Fact]
     public void ToggleOff_StartsWorkersInTheHistoricalOrder()
     {
-        // Gli IHostedService partono in ordine di registrazione. Il ramo locale è un'estrazione a
+        // Gli IHostedService partono in ordine di registrazione. Il ramo locale Ã¨ un'estrazione a
         // comportamento invariato del vecchio loop di Program.cs: l'ordine per corsia era
-        // TradingWorker → ExecutionWorker → EnsembleRebalanceWorker, e deve restare tale.
+        // TradingWorker â†’ ExecutionWorker â†’ EnsembleRebalanceWorker, e deve restare tale.
         using var sp = BuildProvider(useRemoteTrading: false);
 
         var order = sp.GetServices<IHostedService>()
@@ -244,7 +245,7 @@ public class TradingServiceCollectionExtensionsTests
     public void NonKeyedFallback_ResolvesLaneZero_InBothModes()
     {
         // Consumer storici senza selettore di corsia (dashboard, pipeline) risolvono ITradingEngine
-        // non-keyed: deve restare la corsia 0 in entrambe le modalità.
+        // non-keyed: deve restare la corsia 0 in entrambe le modalitÃ .
         using var local = BuildProvider(useRemoteTrading: false);
         Assert.Equal(0, local.GetRequiredService<ITradingEngine>().LaneId);
         Assert.Same(local.GetRequiredKeyedService<ITradingEngine>(0), local.GetRequiredService<ITradingEngine>());
@@ -273,7 +274,7 @@ public class TradingServiceCollectionExtensionsTests
     {
         // P1-6: stesso principio fail-fast di RemoteUrl. Senza il segreto il client remoto
         // partirebbe e ogni chiamata fallirebbe solo al primo uso, rifiutata dal
-        // SharedSecretAuthInterceptor lato servizio — meglio non partire.
+        // SharedSecretAuthInterceptor lato servizio â€” meglio non partire.
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Trading:UseRemoteTrading"] = "true",

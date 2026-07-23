@@ -23,10 +23,13 @@ public class HourOfDaySignalTests
     }
 
     [Fact]
-    public async Task Catalog_HasTenSignals_AndTheTenthIsUtcHour()
+    public async Task Catalog_SignalIdsAreAppendOnly_AndTheTenthIsUtcHour()
     {
-        Assert.Equal(10, SignalCatalog.SignalCount);
+        // Append-only: gli id storici restano validi. 9 = Ora UTC (2.S), 10-11 = MFI/OBV (3.8a).
+        Assert.Equal(12, SignalCatalog.SignalCount);
         Assert.Equal("Ora UTC", SignalCatalog.SignalNames[9]);
+        Assert.Equal("MFI", SignalCatalog.SignalNames[10]);
+        Assert.Equal("OBV slope pct", SignalCatalog.SignalNames[11]);
         Assert.Equal(SignalCatalog.SignalCount, SignalCatalog.SignalNames.Count);
 
         var candles = HourlyCandles(48);

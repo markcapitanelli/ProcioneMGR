@@ -117,6 +117,7 @@ builder.Services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsSe
 
 // --- Market regime detection (Fase 7): feature extraction + clustering ---
 builder.Services.AddSingleton<IMarketFeatureExtractor, MarketFeatureExtractor>();
+builder.Services.AddSingleton<IMarketBreadthCalculator, MarketBreadthCalculator>(); // [3.8a] breadth interna per i regimi
 builder.Services.AddSingleton<IRegimeDetector, RegimeDetector>();
 builder.Services.AddHostedService<RegimeRetrainingWorker>();
 

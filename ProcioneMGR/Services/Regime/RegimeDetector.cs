@@ -30,6 +30,7 @@ public sealed class RegimeDetector(
     IServiceScopeFactory scopeFactory,
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IStrategyFactory strategyFactory,
+    IMarketBreadthCalculator breadthCalculator,
     ILogger<RegimeDetector> logger) : IRegimeDetector
 {
     private readonly MLContext _ml = new(seed: 1); // deterministico
@@ -54,7 +55,14 @@ public sealed class RegimeDetector(
             throw new InvalidOperationException($"Dati insufficienti per il training ({features.Count} feature). Servono più candele.");
         }
 
-        var (matrix, scaling) = FeatureNormalizer.NormalizeFeatures(features);
+        // [3.8a] Feature opzionali: il volume è già sulle feature estratte; la breadth interna va
+        // calcolata sul mercato multi-simbolo e agganciata per timestamp PRIMA della normalizzazione.
+        if (config.IncludeBreadthFeature)
+        {
+            await PopulateBreadthAsync(features, config.Timeframe, ct);
+        }
+        var (matrix, scaling) = FeatureNormalizer.NormalizeFeatures(
+            features, config.IncludeVolumeFeature, config.IncludeBreadthFeature);
 
         // --- K-means (Microsoft.ML): K fisso, oppure auto-selezione per Silhouette ---
         int chosenK;
@@ -139,7 +147,16 @@ public sealed class RegimeDetector(
             return features;
         }
 
-        var matrix = features.Select(f => loaded.Value.Scaling.Transform(f.ToClusteringVector())).ToArray();
+        // [3.8a] Il modello sa quali feature usa (Scaling.Names): l'inference ricostruisce lo
+        // STESSO vettore del training — un modello storico resta a 4 feature, uno nuovo può
+        // averne 5 (volume) o 6 (breadth, che qui va ricalcolata per i timestamp richiesti).
+        var useVolume = loaded.Value.Scaling.Uses("VolumeRatio");
+        var useBreadth = loaded.Value.Scaling.Uses("MarketBreadth");
+        if (useBreadth)
+        {
+            await PopulateBreadthAsync(features, _cached?.Timeframe ?? "1h", ct);
+        }
+        var matrix = features.Select(f => loaded.Value.Scaling.Transform(f.ToClusteringVector(useVolume, useBreadth))).ToArray();
         var raw = RegimeAssignment.AssignRaw(matrix, loaded.Value.Centroids);
         var smoothed = RegimeAssignment.SmoothRolling(raw, SmoothWindow(_cached?.Timeframe ?? "1h"), confirmFrames: 3, loaded.Value.Centroids.Length);
 
@@ -161,6 +178,28 @@ public sealed class RegimeDetector(
             .FirstOrDefaultAsync(ct);
     }
 
+    /// <summary>
+    /// [3.8a/4.9] Aggancia la breadth interna alle feature per timestamp. I timestamp senza breadth
+    /// (warm-up delle SMA50, serie povere) restano al neutro 0,5: meglio un valore dichiaratamente
+    /// neutro che buttare la barra.
+    /// </summary>
+    private async Task PopulateBreadthAsync(List<MarketFeatures> features, string timeframe, CancellationToken ct)
+    {
+        if (features.Count == 0) return;
+        var breadth = await breadthCalculator.ComputeAsync(
+            timeframe, features[0].Timestamp, features[^1].Timestamp, ct);
+        var hit = 0;
+        foreach (var f in features)
+        {
+            if (breadth.TryGetValue(f.Timestamp, out var b))
+            {
+                f.MarketBreadth = b;
+                hit++;
+            }
+        }
+        logger.LogInformation("Breadth interna: {Hit}/{Total} barre agganciate ({Tf}).", hit, features.Count, timeframe);
+    }
+
     // ---------------------------------------------------------------- K-means + auto-selezione di K
 
     /// <summary>
@@ -171,7 +210,12 @@ public sealed class RegimeDetector(
     internal static (float[][] Centroids, double Silhouette) FitKMeans(MLContext ml, float[][] matrix, int k, int maxIterations)
     {
         var rows = matrix.Select(m => new FeatureRow { Features = m }).ToList();
-        var dv = ml.Data.LoadFromEnumerable(rows);
+        // [3.8a] Dimensione del vettore decisa a RUNTIME (4 storiche, 5 col volume, 6 con la
+        // breadth): lo schema ML.NET si costruisce dalla matrice, non da un attributo fisso.
+        var dim = matrix.Length > 0 ? matrix[0].Length : FeatureScaling.FeatureCount;
+        var schema = SchemaDefinition.Create(typeof(FeatureRow));
+        schema[nameof(FeatureRow.Features)].ColumnType = new VectorDataViewType(NumberDataViewType.Single, dim);
+        var dv = ml.Data.LoadFromEnumerable(rows, schema);
         var options = new KMeansTrainer.Options
         {
             NumberOfClusters = k,
@@ -429,10 +473,10 @@ public sealed class RegimeDetector(
         _cachedProfiles = profiles;
     }
 
-    // ML.NET schema row.
+    // ML.NET schema row. La dimensione del vettore è impostata a runtime via SchemaDefinition
+    // (vedi FitKMeans): nessun attributo fisso, i modelli possono avere 4/5/6 feature.
     private sealed class FeatureRow
     {
-        [VectorType(FeatureScaling.FeatureCount)]
         public float[] Features { get; set; } = [];
     }
 }
