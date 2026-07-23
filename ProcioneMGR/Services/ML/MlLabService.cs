@@ -33,7 +33,9 @@ public sealed record MlActionResult(string Message, bool IsError)
 }
 
 /// <summary>Esito del caricamento di un modello salvato: oltre al messaggio, i campi form che la UI deve riallineare.</summary>
-public sealed record MlLoadResult(string Message, bool IsError, string? Symbol, string? Timeframe, string? ModelType);
+public sealed record MlLoadResult(string Message, bool IsError, string? Symbol, string? Timeframe, string? ModelType,
+    // [1.V fase 2] In coda e opzionale: la UI riallinea anche il target del modello caricato.
+    MlTargetKind TargetKind = MlTargetKind.ForwardReturn);
 
 /// <summary>
 /// Orchestrazione estratta da <c>Components/Pages/MlLab.razor</c> (P1-5, PRD-CONSOLIDAMENTO-
@@ -69,9 +71,22 @@ public sealed class MlLabService(
     public double TrainCorrelation { get; private set; }
     public List<FeatureImportance> FeatureImportance { get; private set; } = [];
 
+    /// <summary>
+    /// [1.V fase 2] Il target del modello IN SESSIONE (addestrato o caricato): è questo — non lo
+    /// stato del form, che può cambiare dopo — a decidere cosa ha senso farci (backtest direzionale
+    /// vs valutazione della previsione di vol) e cosa viene persistito al salvataggio.
+    /// </summary>
+    public MlTargetKind SessionTargetKind { get; private set; } = MlTargetKind.ForwardReturn;
+
+    /// <summary>Orizzonte forward del modello in sessione (allineato a <see cref="SessionTargetKind"/>).</summary>
+    public int SessionForwardHorizon { get; private set; }
+
     public BacktestResult? Result { get; private set; }
     public TearsheetMetrics? Tearsheet { get; private set; }
     public List<IndicatorSeries> EquitySeries { get; private set; } = [];
+
+    /// <summary>[1.V fase 2] Esito della valutazione vol (QLIKE/MSE vs EWMA/naive) del modello in sessione.</summary>
+    public VolForecastEvaluation? VolEvaluation { get; private set; }
 
     // --- Caricamento iniziale ------------------------------------------------------------------
 
@@ -188,6 +203,8 @@ public sealed class MlLabService(
             TrainRowCount = mlData.RowCount;
             TrainCorrelation = Correlation.Pearson(predicted, actual);
             FeatureImportance = predictor.ComputeFeatureImportance(mlContext, trainDataView, mlData.FeatureNames).ToList();
+            SessionTargetKind = cfg.TargetKind;
+            SessionForwardHorizon = cfg.ForwardHorizon;
         }
         catch
         {
@@ -239,6 +256,13 @@ public sealed class MlLabService(
     /// <summary>Backtesta il modello addestrato sul periodo di test mai visto. Popola Result/Tearsheet/EquitySeries.</summary>
     public async Task<MlActionResult> BacktestAsync(MlConfigSnapshot cfg, CancellationToken ct = default)
     {
+        // [1.V fase 2] La semantica del MODELLO IN SESSIONE (non del form) decide: un modello di
+        // rischio confrontato con soglie long/short darebbe segnali privi di senso (vol alta ≠ compra).
+        if (SessionTargetKind != MlTargetKind.ForwardReturn)
+            return MlActionResult.Error(
+                $"Il modello in sessione predice '{SessionTargetKind}', non un rendimento: il backtest direzionale " +
+                "non ha senso. Usa 'Valuta previsione di vol' per il confronto QLIKE/MSE con la baseline EWMA.");
+
         if (_predictor is null || TrainedFactors is null || TestCandles is null)
             return MlActionResult.Error("Nessun modello addestrato da backtestare.");
 
@@ -282,22 +306,76 @@ public sealed class MlLabService(
         return MlActionResult.Ok($"Backtest out-of-sample completato su {result.CandlesEvaluated} candele mai viste in training.");
     }
 
+    // --- Valutazione previsione di volatilità (1.V fase 2) --------------------------------------
+
+    /// <summary>
+    /// Valuta il modello di volatilità in sessione sul periodo di test MAI visto in addestramento,
+    /// contro le due baseline senza ML (EWMA λ=0,94 e naive "vol passata"). QLIKE è il verdetto:
+    /// se il modello non batte l'EWMA out-of-sample, il vol-targeting deve continuare a usare la
+    /// misura semplice — questo confronto è esattamente la precondizione dichiarata dall'item 1.V
+    /// per instradare la previsione ML nel sizing.
+    /// </summary>
+    public Task<MlActionResult> EvaluateVolForecastAsync(CancellationToken ct = default)
+    {
+        VolEvaluation = null;
+
+        if (_predictor is null || TrainedFactors is null || TestCandles is null)
+            return Task.FromResult(MlActionResult.Error("Nessun modello in sessione da valutare."));
+        if (SessionTargetKind != MlTargetKind.ForwardRealizedVol)
+            return Task.FromResult(MlActionResult.Error(
+                "La valutazione confronta la vol PER-BARRA prevista con EWMA e vol passata: serve il target " +
+                "'Volatilità realizzata forward' (ForwardRealizedVol)."));
+
+        // Dataset sul test: stesse feature e stesso target del training, su candele mai viste.
+        var dataset = datasetBuilder.Build(TestCandles, TrainedFactors, SessionForwardHorizon, targetKind: SessionTargetKind);
+        var mlData = _predictor is ISequencePredictor seq ? SequenceWindowing.Build(dataset, seq.WindowLength) : dataset;
+        if (mlData.RowCount < 10)
+            return Task.FromResult(MlActionResult.Error("Troppo poche righe di test per una valutazione sensata (servono almeno 10)."));
+
+        // Baseline allineate per timestamp: EWMA e naive calcolate CAUSALMENTE su tutte le candele
+        // di test, poi campionate sulle righe del dataset.
+        var ewmaSeries = VolForecastEvaluator.EwmaPerBarVol(TestCandles);
+        var naiveSeries = VolForecastEvaluator.PastRealizedVol(TestCandles, SessionForwardHorizon);
+        var indexByTs = new Dictionary<DateTime, int>(TestCandles.Count);
+        for (var i = 0; i < TestCandles.Count; i++) indexByTs[TestCandles[i].TimestampUtc] = i;
+
+        var model = new List<double?>(mlData.RowCount);
+        var ewma = new List<double?>(mlData.RowCount);
+        var naive = new List<double?>(mlData.RowCount);
+        var actual = new List<double?>(mlData.RowCount);
+        for (var r = 0; r < mlData.RowCount; r++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!indexByTs.TryGetValue(mlData.Timestamps[r], out var i)) continue;
+            // Riga inclusa solo se TUTTE le previsioni esistono: stesso campione per i tre contendenti.
+            if (ewmaSeries[i] is not { } e || naiveSeries[i] is not { } nv) continue;
+            model.Add(_predictor.Predict(mlData.Rows[r].Features));
+            ewma.Add(e);
+            naive.Add(nv);
+            actual.Add(mlData.Rows[r].Label);
+        }
+
+        var (mQ, mMse, rows) = VolForecastEvaluator.Score(model, actual);
+        if (rows < 10)
+            return Task.FromResult(MlActionResult.Error("Troppo poche righe confrontabili (baseline in warm-up o vol realizzata nulla)."));
+        var (eQ, eMse, _) = VolForecastEvaluator.Score(ewma, actual);
+        var (nQ, nMse, _) = VolForecastEvaluator.Score(naive, actual);
+
+        VolEvaluation = new VolForecastEvaluation(rows, mQ, eQ, nQ, mMse, eMse, nMse);
+        var verdict = VolEvaluation.ModelBeatsEwma
+            ? "il modello batte l'EWMA out-of-sample: l'instradamento nel vol-targeting è giustificabile."
+            : "il modello NON batte l'EWMA: il vol-targeting deve restare sulla misura semplice.";
+        return Task.FromResult(MlActionResult.Ok($"Valutazione su {rows} barre di test: {verdict}"));
+    }
+
     // --- Persistenza modelli -------------------------------------------------------------------
 
     public async Task<MlActionResult> SaveModelAsync(MlConfigSnapshot cfg, string modelName, string? userId, CancellationToken ct = default)
     {
-        // [1.V] GUARDIA DI SEMANTICA, per prima e indipendente dallo stato di addestramento: tutto
-        // ciò che consuma un SavedMlModel (MlStrategy, registry, Champion) interpreta la predizione
-        // come RENDIMENTO ATTESO e la confronta con le soglie long/short. Un modello che predice la
-        // volatilità darebbe segnali privi di senso (vol alta ≠ compra). Finché non esiste il
-        // consumo dedicato (LeverageAdvisor/vol-targeting, fase 2 dell'item 1.V), un modello
-        // non-direzionale resta nel Lab: si misura, non si salva.
-        if (cfg.TargetKind != MlTargetKind.ForwardReturn)
-            return MlActionResult.Error(
-                $"Il target '{cfg.TargetKind}' non è un rendimento: salvarlo lo farebbe interpretare come segnale " +
-                "direzionale dal trading. Usalo nel Lab per misurare la prevedibilità del rischio; il consumo dedicato " +
-                "(sizing/vol-targeting) è la fase 2 dell'item 1.V della roadmap.");
-
+        // [1.V fase 2] La guardia di semantica si è SPOSTATA dal salvataggio al consumo: il
+        // TargetKind viene persistito sul modello e fatto rispettare nei punti direzionali
+        // (MlModelLoader.LoadAsync, ModelRegistry Gate 0). Un modello di rischio si può quindi
+        // salvare e riusare, ma non potrà mai alimentare segnali long/short né diventare Champion.
         if (_predictor is null || TrainedFactors is null || userId is null)
             return MlActionResult.Error("Nessun modello addestrato da salvare.");
         if (string.IsNullOrWhiteSpace(modelName))
@@ -315,7 +393,11 @@ public sealed class MlLabService(
 
             // Deflated Sharpe del modello dal backtest sul range di test (se disponibile): è ciò che
             // il ModelRegistry richiede per la promozione a Champion. Singolo track ⇒ un solo trial.
-            var deflatedSharpe = Statistics.DeflatedSharpeSingleTrack(Result?.EquityCurve, Statistics.PeriodsPerYear(cfg.Timeframe));
+            // [1.V fase 2] Solo per i modelli direzionali: per un modello di rischio non esiste un
+            // backtest direzionale, e un DSR nullo lo tiene fuori dal Champion per costruzione.
+            var deflatedSharpe = SessionTargetKind == MlTargetKind.ForwardReturn
+                ? Statistics.DeflatedSharpeSingleTrack(Result?.EquityCurve, Statistics.PeriodsPerYear(cfg.Timeframe))
+                : null;
 
             await using var db = await dbFactory.CreateDbContextAsync(ct);
             db.SavedMlModels.Add(new SavedMlModel
@@ -327,7 +409,8 @@ public sealed class MlLabService(
                 Timeframe = cfg.Timeframe,
                 TrainingDataFrom = cfg.From,
                 TrainingDataTo = cfg.To,
-                ForwardHorizon = cfg.ForwardHorizon,
+                ForwardHorizon = SessionForwardHorizon > 0 ? SessionForwardHorizon : cfg.ForwardHorizon,
+                TargetKind = SessionTargetKind.ToString(),
                 FactorsJson = JsonSerializer.Serialize(factorsDto),
                 ModelBytes = bytes,
                 TrainRowCount = TrainRowCount,
@@ -406,11 +489,19 @@ public sealed class MlLabService(
         TrainCorrelation = saved.TrainCorrelation;
         FeatureImportance = []; // non ricalcolata: servirebbe il dataset di training originale
 
+        // [1.V fase 2] La semantica viaggia col modello: un TargetKind non riconosciuto (versione
+        // futura?) degrada a ForwardReturn SOLO se dichiarato tale, mai in silenzio.
+        SessionTargetKind = Enum.TryParse<MlTargetKind>(saved.TargetKind, out var tk) ? tk : MlTargetKind.ForwardReturn;
+        SessionForwardHorizon = saved.ForwardHorizon;
+
         var warn = candles.Count == 0 ? " ATTENZIONE: nessuna candela nell'intervallo Da/A selezionato." : "";
+        var usage = SessionTargetKind == MlTargetKind.ForwardReturn
+            ? "verrà usato per il backtest"
+            : "verrà usato per la valutazione della previsione di vol (QLIKE/MSE vs EWMA)";
         var message = $"Modello '{saved.Name}' caricato (addestrato su {saved.TrainingDataFrom:yyyy-MM-dd}→{saved.TrainingDataTo:yyyy-MM-dd}). " +
-                      $"L'intervallo Da/A sopra ({from:yyyy-MM-dd}→{to:yyyy-MM-dd}, {candles.Count} candele) verrà usato per il backtest: " +
+                      $"L'intervallo Da/A sopra ({from:yyyy-MM-dd}→{to:yyyy-MM-dd}, {candles.Count} candele) {usage}: " +
                       $"assicurati che sia successivo al periodo di addestramento originale.{warn}";
-        return new MlLoadResult(message, IsError: candles.Count == 0, saved.Symbol, saved.Timeframe, saved.ModelType);
+        return new MlLoadResult(message, IsError: candles.Count == 0, saved.Symbol, saved.Timeframe, saved.ModelType, SessionTargetKind);
     }
 
     public async Task DeleteSavedModelAsync(int id, string? userId, CancellationToken ct = default)
@@ -513,6 +604,8 @@ public sealed class MlLabService(
         TrainRowCount = 0;
         TrainCorrelation = 0;
         FeatureImportance = [];
+        SessionTargetKind = MlTargetKind.ForwardReturn;
+        SessionForwardHorizon = 0;
     }
 
     private void ResetBacktest()
@@ -520,6 +613,7 @@ public sealed class MlLabService(
         Result = null;
         Tearsheet = null;
         EquitySeries = [];
+        VolEvaluation = null;
     }
 
     public void Dispose() => _predictor?.Dispose();

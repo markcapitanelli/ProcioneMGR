@@ -223,8 +223,9 @@
                     </select>
                     <div class="form-text" style="max-width: 20rem;">
                         Dopo 445.280 combinazioni direzionali a zero sopravvissuti, predire il <em>rischio</em> è la
-                        domanda con più probabilità di risposta. I target non-rendimento si misurano nel Lab ma
-                        <strong>non si salvano</strong> come modelli: il trading li leggerebbe come segnali direzionali.
+                        domanda con più probabilità di risposta. I modelli non-rendimento si salvano col loro
+                        <strong>TargetKind</strong> e non possono mai alimentare segnali long/short né diventare
+                        Champion: il consumo è la valutazione QLIKE/MSE contro l'EWMA (e, se la battono, il vol-targeting).
                     </div>
                 </div>
             </div>
@@ -339,13 +340,32 @@
                     <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
                 </div>
                 <div class="col-auto">
-                    <button class="btn btn-success" @onclick="BacktestAsync" disabled="@_busy">
-                        @if (_busy && _stage == Stage.Backtesting)
-                        {
-                            <span class="spinner-border spinner-border-sm me-1"></span>
-                        }
-                        3. Esegui backtest (out-of-sample)
-                    </button>
+                    @if (Svc.SessionTargetKind == MlTargetKind.ForwardReturn)
+                    {
+                        <button class="btn btn-success" @onclick="BacktestAsync" disabled="@_busy">
+                            @if (_busy && _stage == Stage.Backtesting)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            3. Esegui backtest (out-of-sample)
+                        </button>
+                    }
+                    else if (Svc.SessionTargetKind == MlTargetKind.ForwardRealizedVol)
+                    {
+                        @* [1.V fase 2] Il consumo di un modello di RISCHIO non è un backtest direzionale
+                           ma il confronto con la baseline: batte l'EWMA out-of-sample sì o no? *@
+                        <button class="btn btn-success" @onclick="EvaluateVolAsync" disabled="@_busy">
+                            @if (_busy && _stage == Stage.Backtesting)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            3. Valuta previsione di vol (QLIKE/MSE vs EWMA)
+                        </button>
+                    }
+                    else
+                    {
+                        <span class="form-text">Il target |rendimento| si misura in addestramento (correlazione); per il confronto con l'EWMA usa "Volatilità realizzata".</span>
+                    }
                 </div>
             </div>
 
@@ -359,6 +379,45 @@
                 <div class="col-auto">
                     <button class="btn btn-outline-secondary" @onclick="SaveModelAsync" disabled="@_busy">Salva modello</button>
                 </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (Svc.VolEvaluation is { } vol)
+{
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Previsione di volatilità — modello vs baseline (out-of-sample, @vol.Rows barre)</span>
+            <span class="badge @(vol.ModelBeatsEwma ? "bg-success" : "bg-warning text-dark")">
+                @(vol.ModelBeatsEwma ? "batte l'EWMA" : "NON batte l'EWMA")
+            </span>
+        </div>
+        <div class="card-body">
+            <table class="table table-sm mb-2" style="max-width: 560px;">
+                <thead><tr><th></th><th class="text-end">QLIKE (↓ meglio)</th><th class="text-end">MSE vol (↓ meglio)</th></tr></thead>
+                <tbody>
+                    <tr class="@(vol.ModelBeatsEwma ? "table-success" : "")">
+                        <td>Modello ML</td>
+                        <td class="text-end">@vol.ModelQlike.ToString("F4")</td>
+                        <td class="text-end">@vol.ModelMse.ToString("E2")</td>
+                    </tr>
+                    <tr>
+                        <td>EWMA (λ=0,94)</td>
+                        <td class="text-end">@vol.EwmaQlike.ToString("F4")</td>
+                        <td class="text-end">@vol.EwmaMse.ToString("E2")</td>
+                    </tr>
+                    <tr>
+                        <td>Naive (vol passata)</td>
+                        <td class="text-end">@vol.NaiveQlike.ToString("F4")</td>
+                        <td class="text-end">@vol.NaiveMse.ToString("E2")</td>
+                    </tr>
+                </tbody>
+            </table>
+            <div class="form-text">
+                QLIKE è la loss standard per le previsioni di varianza (penalizza le sottostime, l'errore
+                costoso per il risk management). Verdetto onesto: finché il modello non batte l'EWMA qui,
+                il vol-targeting della piattaforma continua a usare la volatilità realizzata semplice.
             </div>
         </div>
     </div>
@@ -597,6 +656,28 @@
         }
     }
 
+    /// <summary>[1.V fase 2] Valuta la previsione di vol del modello in sessione contro EWMA/naive.</summary>
+    private async Task EvaluateVolAsync()
+    {
+        _busy = true;
+        _stage = Stage.Backtesting;
+        _isError = false;
+        try
+        {
+            var res = await Svc.EvaluateVolForecastAsync();
+            SetStatus(res.Message, res.IsError);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore nella valutazione: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+            _stage = Stage.Idle;
+        }
+    }
+
     private async Task SaveModelAsync()
     {
         _busy = true;
@@ -626,6 +707,7 @@
             if (res.Symbol is not null) _symbol = res.Symbol;
             if (res.Timeframe is not null) _timeframe = res.Timeframe;
             if (res.ModelType is not null) _modelType = res.ModelType;
+            _targetKind = res.TargetKind;   // [1.V fase 2] la semantica viaggia col modello
             SetStatus(res.Message, res.IsError);
         }
         catch (Exception ex)

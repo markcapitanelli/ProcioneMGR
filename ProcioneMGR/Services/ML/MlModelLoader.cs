@@ -62,6 +62,17 @@ public static class MlModelLoader
         ArgumentNullException.ThrowIfNull(saved);
         ArgumentNullException.ThrowIfNull(alphaFactorFactory);
 
+        // [1.V fase 2] Guardia di semantica nel punto UNICO di materializzazione direzionale:
+        // MlStrategy confronta la predizione con soglie long/short, quindi un modello che predice
+        // il RISCHIO (vol) qui produrrebbe segnali privi di senso (vol alta ≠ compra). Vale per
+        // costruzione sia per il backtest (batch) sia per il TradingEngine (Champion streaming).
+        if (!saved.IsDirectional)
+        {
+            throw new InvalidOperationException(
+                $"Il modello '{saved.Name}' predice '{saved.TargetKind}', non un rendimento atteso: " +
+                "non può alimentare segnali long/short. Consumo consentito: valutazione del rischio (sizing/vol-targeting).");
+        }
+
         var predictor = await LoadPredictorAsync(saved, ct);
 
         var factorsDto = JsonSerializer.Deserialize<List<SavedFactorSpecDto>>(saved.FactorsJson) ?? [];

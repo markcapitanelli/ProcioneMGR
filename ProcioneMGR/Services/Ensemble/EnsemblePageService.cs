@@ -73,7 +73,13 @@ public sealed class EnsemblePageService(
             .OrderByDescending(s => s.IsOptimized)
             .ThenByDescending(s => s.OptimizationDate ?? s.CreatedAt)
             .ToListAsync(ct);
-        SavedMlModels = await db.SavedMlModels.OrderByDescending(m => m.CreatedAtUtc).ToListAsync(ct);
+        // [1.V fase 2] Solo modelli DIREZIONALI: un membro ML dell'ensemble produce segnali
+        // long/short via MlStrategy — un modello di rischio (vol) qui non ha senso e il loader
+        // lo rifiuterebbe comunque a runtime.
+        SavedMlModels = await db.SavedMlModels
+            .Where(m => m.TargetKind == "ForwardReturn")
+            .OrderByDescending(m => m.CreatedAtUtc)
+            .ToListAsync(ct);
     }
 
     /// <summary>

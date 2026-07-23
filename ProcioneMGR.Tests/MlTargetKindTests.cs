@@ -111,11 +111,11 @@ public class MlTargetKindTests
     }
 
     [Fact]
-    public async Task SaveModel_WithNonReturnTarget_IsRefused_BeforeAnythingElse()
+    public async Task SaveModel_WithNonReturnTarget_IsNoLongerBlockedAtSave_GuardMovedToConsumers()
     {
-        // La guardia è la PRIMA verifica di SaveModelAsync, indipendente dallo stato di
-        // addestramento: con un target non-rendimento il rifiuto deve nominare la semantica
-        // ("segnale direzionale"), non un generico "nessun modello addestrato".
+        // [1.V fase 2] La guardia si è SPOSTATA dal salvataggio al consumo: senza modello
+        // addestrato l'errore è quello storico ("nessun modello"), NON un rifiuto di semantica.
+        // La semantica è fatta rispettare da MlModelLoader/ModelRegistry (test sotto).
         var svc = new MlLabService(null!, null!, null!, null!, null!);
         var cfg = new MlConfigSnapshot(
             ExchangeName.Binance, "BTC/USDT", "1d", DateTime.UtcNow.AddDays(-30), DateTime.UtcNow,
@@ -126,11 +126,103 @@ public class MlTargetKindTests
         var result = await svc.SaveModelAsync(cfg, "vol-model", "user1");
 
         Assert.True(result.IsError);
-        Assert.Contains("direzionale", result.Message);
+        Assert.Contains("Nessun modello addestrato", result.Message);
+    }
 
-        // E con il default (rendimento) la guardia NON scatta: l'errore torna quello storico.
-        var okCfg = cfg with { TargetKind = MlTargetKind.ForwardReturn };
-        var historic = await svc.SaveModelAsync(okCfg, "ret-model", "user1");
-        Assert.Contains("Nessun modello addestrato", historic.Message);
+    // --- [1.V fase 2] Guardie sul CONSUMO direzionale --------------------------------------------
+
+    [Fact]
+    public void SavedMlModel_IsDirectional_OnlyForForwardReturn_DefaultIncluded()
+    {
+        Assert.True(new SavedMlModel().IsDirectional);   // default retro-compatibile
+        Assert.True(new SavedMlModel { TargetKind = "ForwardReturn" }.IsDirectional);
+        Assert.False(new SavedMlModel { TargetKind = "ForwardRealizedVol" }.IsDirectional);
+        Assert.False(new SavedMlModel { TargetKind = "ForwardAbsReturn" }.IsDirectional);
+    }
+
+    [Fact]
+    public async Task MlModelLoader_LoadAsync_RefusesNonDirectionalModel_WithSemanticMessage()
+    {
+        // Il punto UNICO di materializzazione direzionale (backtest batch + Champion streaming):
+        // un modello di rischio qui deve morire con un messaggio che nomina la semantica, non
+        // fallire dopo con segnali privi di senso.
+        var saved = new SavedMlModel { Name = "vol-btc", TargetKind = "ForwardRealizedVol", ModelType = "Linear" };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => MlModelLoader.LoadAsync(saved, new AlphaFactorFactory(), factorCache: null, CancellationToken.None));
+
+        Assert.Contains("ForwardRealizedVol", ex.Message);
+        Assert.Contains("long/short", ex.Message);
+    }
+
+    [Fact]
+    public async Task BacktestAsync_OnVolSession_IsRefused_PointingToVolEvaluation()
+    {
+        // Il target del MODELLO IN SESSIONE decide, non il form: senza sessione la guardia non può
+        // scattare (SessionTargetKind default = ForwardReturn), quindi qui si verifica il default...
+        var svc = new MlLabService(null!, null!, null!, null!, null!);
+        Assert.Equal(MlTargetKind.ForwardReturn, svc.SessionTargetKind);
+
+        // ...e il messaggio storico per l'assenza di modello.
+        var cfg = new MlConfigSnapshot(
+            ExchangeName.Binance, "BTC/USDT", "1d", DateTime.UtcNow.AddDays(-30), DateTime.UtcNow,
+            70, 5, ["Momentum"], [], "Linear", [], StackingMode.Average, 16, 8,
+            0.005m, -0.005m, 10_000m, 100m, 0.1m);
+        var res = await svc.BacktestAsync(cfg);
+        Assert.True(res.IsError);
+        Assert.Contains("Nessun modello addestrato", res.Message);
+    }
+
+    // --- [1.V fase 2] Valutatore vol: QLIKE/MSE e baseline ---------------------------------------
+
+    [Fact]
+    public void Qlike_IsZeroForPerfectForecast_AndPositiveOtherwise()
+    {
+        Assert.Equal(0d, VolForecastEvaluator.Qlike(0.02, 0.02), 12);
+        Assert.True(VolForecastEvaluator.Qlike(0.01, 0.02) > 0);   // sottostima
+        Assert.True(VolForecastEvaluator.Qlike(0.04, 0.02) > 0);   // sovrastima
+        // Asimmetria QLIKE: sottostimare della metà costa più che sovrastimare del doppio.
+        Assert.True(VolForecastEvaluator.Qlike(0.01, 0.02) > VolForecastEvaluator.Qlike(0.04, 0.02));
+    }
+
+    [Fact]
+    public void EwmaPerBarVol_OnConstantReturns_ConvergesToThatVol()
+    {
+        // Rendimenti costanti +1%: r² = 1e-4 sempre ⇒ la varianza EWMA resta 1e-4, vol = 1%.
+        var closes = new List<decimal> { 100m };
+        for (var i = 0; i < 60; i++) closes.Add(closes[^1] * 1.01m);
+        var candles = CandlesFromCloses([.. closes]);
+
+        var ewma = VolForecastEvaluator.EwmaPerBarVol(candles);
+
+        Assert.Null(ewma[0]);                       // nessun rendimento ancora
+        Assert.Equal(0.01, ewma[^1]!.Value, 6);     // converge alla vol vera
+    }
+
+    [Fact]
+    public void PastRealizedVol_MatchesHandComputedWindow()
+    {
+        // Chiusure 100, 110, 99: all'indice 2 la finestra (0,2] ha rendimenti +10% e −10%
+        // ⇒ σ campionaria = √0,02 (stesso conto di ForwardRealizedVol, ma all'INDIETRO).
+        var candles = CandlesFromCloses(100m, 110m, 99m);
+        var naive = VolForecastEvaluator.PastRealizedVol(candles, 2);
+
+        Assert.Null(naive[0]);
+        Assert.Null(naive[1]);
+        Assert.Equal(Math.Sqrt(0.02), naive[2]!.Value, 6);
+    }
+
+    [Fact]
+    public void Score_SkipsRowsWithZeroRealizedVol_AndMisalignedSeriesThrow()
+    {
+        var pred = new double?[] { 0.02, 0.02, null };
+        var act = new double?[] { 0.02, 0.0, 0.02 };   // la riga con realizzato 0 non informa
+
+        var (qlike, mse, rows) = VolForecastEvaluator.Score(pred, act);
+
+        Assert.Equal(1, rows);          // solo la prima riga è valida
+        Assert.Equal(0d, qlike, 12);
+        Assert.Equal(0d, mse, 12);
+        Assert.Throws<ArgumentException>(() => VolForecastEvaluator.Score(new double?[] { 1 }, new double?[] { 1, 2 }));
     }
 }

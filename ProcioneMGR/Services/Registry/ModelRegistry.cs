@@ -94,6 +94,13 @@ public sealed class ModelRegistry(
         if (model.Stage == ModelStage.Champion) return new PromotionOutcome(true, "Già Champion.");
         if (model.Stage == ModelStage.Retired) return new PromotionOutcome(false, "Modello ritirato: va prima ri-portato a Challenger.");
 
+        // [1.V fase 2] Gate 0: la semantica prima delle metriche — il Champion alimenta MlStrategy
+        // (segnali long/short), quindi un modello che non predice rendimenti non è MAI promuovibile,
+        // qualunque metrica abbia. (I modelli vol hanno comunque DSR null, ma il motivo giusto
+        // merita il messaggio giusto.)
+        if (!model.IsDirectional)
+            return new PromotionOutcome(false, $"Il modello predice '{model.TargetKind}', non un rendimento: mai promuovibile a Champion.");
+
         // Gate 1: nessuna promozione alla cieca — serve un DSR misurato.
         if (model.DeflatedSharpe is not { } dsr)
             return new PromotionOutcome(false, "Nessun Deflated Sharpe misurato: non promuovibile a Champion.");

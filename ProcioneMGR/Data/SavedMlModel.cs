@@ -42,6 +42,23 @@ public class SavedMlModel
     public DateTime TrainingDataTo { get; set; }
     public int ForwardHorizon { get; set; }
 
+    /// <summary>
+    /// [1.V fase 2] Cosa predice il modello: "ForwardReturn" | "ForwardAbsReturn" |
+    /// "ForwardRealizedVol". Persistito perché la semantica della predizione È il contratto:
+    /// un modello di volatilità non può alimentare segnali long/short. Default retro-compatibile:
+    /// tutti i modelli salvati prima del campo predicevano rendimenti.
+    /// </summary>
+    [Required]
+    [MaxLength(32)]
+    public string TargetKind { get; set; } = "ForwardReturn";
+
+    /// <summary>
+    /// True se la predizione è un rendimento atteso e può alimentare segnali long/short
+    /// (MlStrategy, Champion). I modelli di rischio (vol) sono consumabili SOLO da sizing/
+    /// vol-targeting. Non mappato da EF (sola lettura).
+    /// </summary>
+    public bool IsDirectional => TargetKind == "ForwardReturn";
+
     /// <summary>JSON: List&lt;SavedFactorSpecDto&gt; — nome fattore + parametri, per ricreare i FactorSpec al Load.</summary>
     [Required]
     public string FactorsJson { get; set; } = "[]";
