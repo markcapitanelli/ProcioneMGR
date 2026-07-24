@@ -156,6 +156,22 @@ public sealed class LiquidationAccumulationTests : IAsyncDisposable
         }
     }
 
+    // ------------------------------------------------------------------ endpoint bloccato (EEA/MiCA)
+
+    [Theory]
+    // Feed genuinamente RARO: nessun blocco anche con qualche connessione muta, PURCHÉ sia arrivato
+    // almeno un messaggio nella vita del worker, o non si siano incatenate 3 connessioni mute.
+    [InlineData(5, 10, false)]   // 5 messaggi ricevuti in totale: mai bloccato, per quanti silenzi
+    [InlineData(1, 99, false)]   // un solo messaggio mai ricevuto conta: non bloccato
+    [InlineData(0, 2, false)]    // 2 connessioni mute: potrebbe essere solo mercato calmo
+    // Endpoint BLOCCATO (il caso EEA/MiCA trovato dal vivo): MAI un messaggio E 3+ connessioni mute.
+    [InlineData(0, 3, true)]
+    [InlineData(0, 7, true)]
+    public void IsEndpointLikelyBlocked_DistinguishesRareFromBlocked(long totalMessages, int silentConnects, bool expected)
+    {
+        Assert.Equal(expected, LiquidationSyncWorker.IsEndpointLikelyBlocked(totalMessages, silentConnects));
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();

@@ -114,6 +114,7 @@ switch (phase)
     case "eventstudy": await EventStudyAsync(args.Length > 1 ? args[1] : "BTC/USDT", args.Length > 2 ? args[2] : "1d"); break;
     case "minuteprofile": await MinuteProfileAsync(); break;
     case "liquidationsverify": await LiquidationsVerifyAsync(); break;
+    case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
     case "nightsetup": await NightSetupAsync(args.Length > 1 ? args[1] : "claude-notte@local", args.Length > 2 ? args[2] : throw new ArgumentException("serve la password: nightsetup <email> <password>")); break;
@@ -975,6 +976,56 @@ async Task LiquidationsVerifyAsync()
     {
         Console.WriteLine("Timeout 60s raggiunto (mercato calmo = poche liquidazioni: e' normale).");
     }
+}
+
+// ------------------------------------------------------------------ STREAMDIAG (diagnostica trasporto WS)
+// Confronto definitivo: aggTrade di BTC (che DEVE inondare) vs !forceOrder@arr sulla STESSA classe di
+// trasporto. Se aggTrade riceve e forceOrder no -> forceOrder e' solo raro (mercato calmo, accettabile).
+// Se tacciono entrambi -> bug di trasporto. 45s per stream.
+async Task StreamDiagAsync()
+{
+    async Task<int> CountAsync(string url, int seconds)
+    {
+        var t = new ProcioneMGR.Services.MarketData.ClientWebSocketTransport();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+        var n = 0;
+        try
+        {
+            await t.ConnectAsync(new Uri(url), cts.Token);
+            Console.WriteLine($"  connesso: {url}");
+            while (!cts.IsCancellationRequested)
+            {
+                var m = await t.ReceiveAsync(cts.Token);
+                if (m is null) { Console.WriteLine("  canale chiuso"); break; }
+                n++;
+                if (n <= 2) Console.WriteLine($"    msg#{n}: {m.Substring(0, Math.Min(120, m.Length))}");
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Console.WriteLine($"  errore: {ex.Message}"); }
+        finally { await t.DisposeAsync(); }
+        return n;
+    }
+
+    Console.WriteLine("=== DIAGNOSTICA TRASPORTO WEBSOCKET ===\n");
+    Console.WriteLine("[1] FUTURES BTC aggTrade (fstream):");
+    var aggFut = await CountAsync("wss://fstream.binance.com/ws/btcusdt@aggTrade", 15);
+    Console.WriteLine($"  -> {aggFut} messaggi in 15s\n");
+    Console.WriteLine("[2] SPOT BTC aggTrade (stream.binance.com):");
+    var aggSpot = await CountAsync("wss://stream.binance.com:9443/ws/btcusdt@aggTrade", 15);
+    Console.WriteLine($"  -> {aggSpot} messaggi in 15s\n");
+    Console.WriteLine("[3] FUTURES !forceOrder@arr (liquidazioni):");
+    var liq = await CountAsync("wss://fstream.binance.com/ws/!forceOrder@arr", 30);
+    Console.WriteLine($"  -> {liq} messaggi in 30s\n");
+    Console.WriteLine("=== VERDETTO ===");
+    if (aggSpot > 10 && aggFut == 0)
+        Console.WriteLine("SPOT inonda, FUTURES tace -> gli stream FUTURES (fstream) sono BLOCCATI da qui\n(coerente con la restrizione MiCA/EEA su Binance derivati). F4 liquidazioni via Binance futures\nNON puo' accumulare da questa postazione: va disattivato o instradato altrove (es. Bitget).");
+    else if (aggSpot == 0 && aggFut == 0)
+        Console.WriteLine("Tacciono entrambi -> problema di rete generale (firewall/proxy), non specifico dei futures.");
+    else if (aggFut > 10)
+        Console.WriteLine($"FUTURES riceve ({aggFut} agg, {liq} liq) -> il feed funziona, forceOrder solo raro.");
+    else
+        Console.WriteLine($"Esito misto: futAgg={aggFut}, spotAgg={aggSpot}, liq={liq} — indagare.");
 }
 
 // ------------------------------------------------------------------ NULLTWIN (I2: il gemello sintetico)

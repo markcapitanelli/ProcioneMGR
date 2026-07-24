@@ -27,6 +27,13 @@ public sealed class LiquidationsOptions
     /// questa soglia è solo un backstop per il raro half-open che l'OS keepalive non intercetta.
     /// </summary>
     public int StaleSeconds { get; set; } = 900;
+
+    /// <summary>
+    /// [2026-07-24] Minuti di pausa quando l'endpoint futures risulta bloccato (connesso ma muto —
+    /// vedi il ramo endpointLikelyBlocked). Lungo di proposito: evita il churn di riconnessione a
+    /// vuoto quando i dati non arriveranno mai da questa postazione. Testabile piccolo.
+    /// </summary>
+    public int BlockedRetryMinutes { get; set; } = 60;
 }
 
 /// <summary>
@@ -61,8 +68,12 @@ public sealed class LiquidationSyncWorker(
         }
 
         var backoff = TimeSpan.FromSeconds(5);
+        var totalMessagesEver = 0L;
+        var consecutiveSilentConnects = 0;
+        var blockAnnounced = false;
         while (!ct.IsCancellationRequested)
         {
+            var messagesThisConnection = 0;
             try
             {
                 await using var transport = transportFactory.Create();
@@ -90,6 +101,8 @@ public sealed class LiquidationSyncWorker(
                     }
                     if (message is null) break; // canale chiuso: si riconnette
 
+                    messagesThisConnection++;
+                    totalMessagesEver++;
                     ProcessMessage(message);
 
                     if (DateTime.UtcNow - lastFlush >= TimeSpan.FromMinutes(Math.Max(1, opt.FlushMinutes)))
@@ -109,6 +122,34 @@ public sealed class LiquidationSyncWorker(
             }
 
             if (ct.IsCancellationRequested) break;
+
+            // [2026-07-24, trovato dal vivo] Connesso ma PERENNEMENTE MUTO: gli stream futures Binance
+            // (fstream) NON consegnano dati da alcune postazioni EEA — la restrizione MiCA sui derivati
+            // vale anche per il market-data futures (handshake OK, zero frame; lo SPOT invece inonda).
+            // Diagnosticato con `streamdiag`. Senza questo ramo il worker riconnetterebbe a vuoto ogni
+            // ~15 min all'infinito, sporcando i log. Dopo 3 connessioni consecutive a zero messaggi e
+            // MAI un messaggio ricevuto, lo si dichiara UNA volta e si passa a una pausa lunga (il feed
+            // si auto-ripristina se l'app gira da una postazione non bloccata).
+            if (messagesThisConnection == 0) consecutiveSilentConnects++;
+            else consecutiveSilentConnects = 0;
+
+            var endpointLikelyBlocked = IsEndpointLikelyBlocked(totalMessagesEver, consecutiveSilentConnects);
+            if (endpointLikelyBlocked)
+            {
+                if (!blockAnnounced)
+                {
+                    logger.LogWarning(
+                        "Accumulo liquidazioni INATTIVO: lo stream futures Binance ({Uri}) si connette ma non consegna " +
+                        "alcun dato (0 messaggi in {N} connessioni). Causa probabile: blocco EEA/MiCA del market-data " +
+                        "derivati Binance da questa postazione (verificabile con `streamdiag`: lo SPOT funziona, i FUTURES no). " +
+                        "Passo a retry orario; l'accumulo riparte da solo se l'app gira da una postazione non bloccata.",
+                        BinanceLiquidationMapper.StreamUri, consecutiveSilentConnects);
+                    blockAnnounced = true;
+                }
+                try { await Task.Delay(TimeSpan.FromMinutes(Math.Max(1, opt.BlockedRetryMinutes)), ct); } catch (OperationCanceledException) { break; }
+                continue;
+            }
+
             try { await Task.Delay(backoff, ct); } catch (OperationCanceledException) { break; }
             backoff = TimeSpan.FromSeconds(Math.Min(60, backoff.TotalSeconds * 2));
         }
@@ -123,6 +164,15 @@ public sealed class LiquidationSyncWorker(
         var e = BinanceLiquidationMapper.Parse(json);
         if (e is not null) Aggregator.Add(e);
     }
+
+    /// <summary>
+    /// [2026-07-24] L'endpoint è "probabilmente bloccato" (connesso ma muto) quando NON è mai arrivato
+    /// un solo messaggio E si sono incatenate ≥3 connessioni chiuse a zero messaggi. Le DUE condizioni
+    /// insieme: un feed genuinamente raro può avere una connessione muta, ma non 3 di fila senza aver
+    /// MAI ricevuto nulla. Puro e testabile — è la regola che decide fra "raro" e "bloccato".
+    /// </summary>
+    internal static bool IsEndpointLikelyBlocked(long totalMessagesEver, int consecutiveSilentConnects)
+        => totalMessagesEver == 0 && consecutiveSilentConnects >= 3;
 
     /// <summary>
     /// Upsert dei secchi correnti: la riga (Source, Metric, Symbol, ora) riceve il TOTALE del
