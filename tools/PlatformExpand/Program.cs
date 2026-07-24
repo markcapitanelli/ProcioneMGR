@@ -73,6 +73,11 @@ services.AddSingleton<ProcioneMGR.Services.Alpha.IAlphaFactorFactory, ProcioneMG
 services.AddScoped<IBacktestEngine, BacktestEngine>();
 services.AddScoped<IOptimizationEngine, OptimizationEngine>();
 services.AddScoped<IStrategyDiscovery, StrategyDiscoveryEngine>();
+// [huntedge] Caccia creativa: composer + i tre generatori (stessa registrazione dell'app).
+services.AddSingleton<ICompositeSignalGenerator, CompositeSignalGenerator>();
+services.AddSingleton<IEventTriggerGenerator, EventTriggerGenerator>();
+services.AddSingleton<IRegimeMapGenerator, RegimeMapGenerator>();
+services.AddScoped<IStrategyComposer, StrategyComposer>();
 await using var provider = services.BuildServiceProvider();
 
 var dbFactory = provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
@@ -110,6 +115,7 @@ switch (phase)
     case "minuteprofile": await MinuteProfileAsync(); break;
     case "liquidationsverify": await LiquidationsVerifyAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
+    case "huntedge": await HuntEdgeAsync(); break;
     case "nightsetup": await NightSetupAsync(args.Length > 1 ? args[1] : "claude-notte@local", args.Length > 2 ? args[2] : throw new ArgumentException("serve la password: nightsetup <email> <password>")); break;
     case "nulltwin": await NullTwinAsync(
         args.Length > 1 ? args[1] : "BTC/USDT",
@@ -657,6 +663,148 @@ async Task NightSetupAsync(string email, string password)
     }
     await db.SaveChangesAsync();
     Console.WriteLine("Night setup completato.");
+}
+
+// ------------------------------------------------------------------ HUNTEDGE (caccia col motore onesto di oggi)
+// Caccia CREATIVA (Composite/Composer) sulle majors 1h/4h col pool COMPLETO di segnali — che ora
+// include Post-Crash/Post-Surge (12/13), MFI (10), OBV slope (11), Ora UTC (9) oltre ai classici.
+// Costi onesti (fee+slippage), funding, walk-forward con EMBARGO. I sopravvissuti al gate di
+// selezione passano poi due giudici indipendenti: (a) HOLDOUT su un periodo mai visto, (b) il
+// GEMELLO SINTETICO (I2) — lo Sharpe reale deve battere il 95° percentile di 15 mercati nulli.
+// Solo chi passa entrambi è "nuovo ed efficace"; il resto è selezione, e lo scriviamo.
+async Task HuntEdgeAsync()
+{
+    string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "LINK/USDT", "AVAX/USDT", "LTC/USDT"];
+    string[] tfs = ["1h", "4h"];
+    var selFrom = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    var selTo = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);   // holdout = 2026-03 -> 2026-07
+    var holdFrom = selTo;
+    var holdTo = new DateTime(2026, 7, 2, 0, 0, 0, DateTimeKind.Utc);
+
+    using var scope = provider.CreateScope();
+    var composer = scope.ServiceProvider.GetRequiredService<IStrategyComposer>();
+    var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+
+    Console.WriteLine("=== HUNTEDGE — caccia creativa col motore onesto (embargo, costi, funding, nulltwin) ===");
+    Console.WriteLine($"Selezione {selFrom:yyyy-MM} -> {selTo:yyyy-MM} · holdout {holdFrom:yyyy-MM} -> {holdTo:yyyy-MM} · pool COMPLETO ({ProcioneMGR.Services.Backtesting.SignalCatalog.SignalCount} segnali)\n");
+
+    var survivors = new List<(DiscoveryCandidate Cand, decimal HoldSharpe, decimal HoldRet, int HoldTrades)>();
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    foreach (var tf in tfs)
+    {
+        foreach (var sym in symbols)
+        {
+            var composerCfg = new ComposerConfiguration
+            {
+                MaxCandidates = 300, Seed = 42,
+                EnableComposite = true, EnableEvent = true, EnableRegime = false,
+                SignalPool = [],   // vuoto = intero catalogo, inclusi i segnali nuovi
+            };
+            var screening = new ComposerScreeningConfiguration
+            {
+                ExchangeName = "Binance", Symbol = sym, Timeframe = tf,
+                From = selFrom, To = selTo, InitialCapital = 10_000m,
+                SlippagePercent = 0.05m, FeePercent = 0.1m, FundingRatePercentPer8h = 0.01m,
+                MinScreenSharpe = 0.4m, MinTrades = 15, ConfirmTopN = 4,
+                OosWindowMonths = 2, MinOosSharpe = 0.4m,
+            };
+            List<DiscoveryCandidate> cands;
+            try { cands = await composer.ComposeAndScreenAsync(composerCfg, screening, null, CancellationToken.None); }
+            catch (Exception ex) { Console.WriteLine($"  {sym} {tf}: errore composer {ex.Message}"); continue; }
+
+            foreach (var c in cands.Where(c => c.OutOfSampleSharpe >= 0.4m && c.TotalTrades >= 15))
+            {
+                // Giudice 1: holdout su periodo mai visto.
+                try
+                {
+                    var hold = await engine.RunBacktestAsync(new BacktestConfiguration
+                    {
+                        ExchangeName = "Binance", Symbol = sym, Timeframe = tf,
+                        From = holdFrom, To = holdTo, InitialCapital = 10_000m,
+                        PositionSizePercent = 20m, FeePercent = 0.1m, SlippagePercent = 0.05m,
+                        StrategyName = c.StrategyName, StrategyParameters = new Dictionary<string, decimal>(c.Parameters),
+                    }, CancellationToken.None);
+                    var hs = Statistics.SharpeRatio(hold.EquityCurve, Statistics.PeriodsPerYear(tf));
+                    if (hs > 0.3m && hold.TotalTrades >= 5)
+                        survivors.Add((c, hs, hold.TotalReturnPercent, hold.TotalTrades));
+                }
+                catch { /* candidato invalido sull'holdout: scartato */ }
+            }
+            Console.WriteLine($"  {sym,-10} {tf}: {cands.Count} candidati, {survivors.Count(s => s.Cand.Symbol == sym && s.Cand.Timeframe == tf)} oltre selezione+holdout   ({sw.Elapsed.TotalMinutes:F1} min)");
+        }
+    }
+
+    Console.WriteLine($"\n=== {survivors.Count} candidati oltre selezione E holdout ===");
+    var ranked = survivors.OrderByDescending(s => s.HoldSharpe).Take(20).ToList();
+    Console.WriteLine($"  {"Symbol",-10}{"TF",-4}{"selOOS",8}{"holdSh",8}{"holdRet",9}{"trd",5}  parametri");
+    foreach (var s in ranked)
+        Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}{s.Cand.OutOfSampleSharpe,8:F2}{s.HoldSharpe,8:F2}{s.HoldRet,8:F1}%{s.HoldTrades,5}  {DescribeComposite(s.Cand.Parameters)}");
+
+    // Giudice 2: il GEMELLO SINTETICO sui top-8. Il reale deve battere il 95° percentile nullo.
+    Console.WriteLine($"\n=== NULLTWIN sui top-{Math.Min(8, ranked.Count)} (holdSh reale vs P95 di 15 mercati nulli) ===");
+    Console.WriteLine($"  {"Symbol",-10}{"TF",-4}{"reale",7}{"P95null",9}{"batte",7}  verdetto");
+    var confirmed = new List<object>();
+    foreach (var s in ranked.Take(8))
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var candles = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == s.Cand.Symbol && c.Timeframe == s.Cand.Timeframe
+                        && c.TimestampUtc >= holdFrom && c.TimestampUtc <= holdTo)
+            .OrderBy(c => c.TimestampUtc).ToListAsync();
+        if (candles.Count < 200) { Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}  holdout troppo corto"); continue; }
+
+        var pars = new Dictionary<string, decimal>(s.Cand.Parameters);
+        decimal RealSharpe(List<OhlcvData> series) => Statistics.SharpeRatio(
+            engine.RunBacktestAsync(new BacktestConfiguration
+            {
+                ExchangeName = "Binance", Symbol = s.Cand.Symbol, Timeframe = s.Cand.Timeframe,
+                From = series[0].TimestampUtc, To = series[^1].TimestampUtc, InitialCapital = 10_000m,
+                PositionSizePercent = 20m, FeePercent = 0.1m, SlippagePercent = 0.05m,
+                StrategyName = s.Cand.StrategyName, StrategyParameters = pars,
+            }, series, CancellationToken.None).GetAwaiter().GetResult().EquityCurve,
+            Statistics.PeriodsPerYear(s.Cand.Timeframe));
+
+        var real = s.HoldSharpe;
+        var nulls = new List<decimal>();
+        for (var t = 0; t < 15; t++)
+        {
+            var twin = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(candles, seed: 2000 + t);
+            try { nulls.Add(RealSharpe(twin)); } catch { }
+        }
+        if (nulls.Count < 10) { Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}  gemelli insufficienti"); continue; }
+        nulls.Sort();
+        var p95 = nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(0.95 * nulls.Count) - 1)];
+        var beats = real > p95;
+        Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}{real,7:F2}{p95,9:F2}{(beats ? "  SI" : "  no"),7}  {(beats ? "OLTRE il nullo: candidato vero" : "dentro il nullo: selezione")}");
+        if (beats) confirmed.Add(new { s.Cand.Symbol, s.Cand.Timeframe, s.Cand.StrategyName, s.Cand.Parameters, HoldSharpe = real, s.HoldRet, P95Null = p95 });
+    }
+
+    var outPath = Path.Combine(AppContext.BaseDirectory, "huntedge-confirmed.json");
+    File.WriteAllText(outPath, JsonSerializer.Serialize(confirmed, new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"\n=== {confirmed.Count} candidati CONFERMATI (selezione + holdout + nulltwin) -> {outPath} ===");
+    Console.WriteLine("Onesto: 'confermato' = ha passato tre giudici indipendenti su dati storici. Il vero out-of-sample");
+    Console.WriteLine("resta il forward sulle corsie Paper — nessun backtest è una promessa di rendimento futuro.");
+}
+
+// Riassunto leggibile di una spec Composite dai suoi parametri decimali.
+static string DescribeComposite(IReadOnlyDictionary<string, decimal> p)
+{
+    if (!p.ContainsKey("EntrySig1")) return string.Join(",", p.Select(kv => $"{kv.Key}={kv.Value:0.##}"));
+    var names = ProcioneMGR.Services.Backtesting.SignalCatalog.SignalNames;
+    var dir = p.GetValueOrDefault("Direction", 0m) >= 0.5m ? "SHORT" : "LONG";
+    var logic = p.GetValueOrDefault("Logic", 0m) >= 0.5m ? " OR " : " AND ";
+    var n = (int)p.GetValueOrDefault("EntryCount", 1m);
+    var conds = new List<string>();
+    for (var i = 1; i <= n; i++)
+    {
+        var sig = (int)p.GetValueOrDefault($"EntrySig{i}", 0m);
+        var op = p.GetValueOrDefault($"EntryOp{i}", 0m) >= 0.5m ? ">" : "<";
+        var thr = p.GetValueOrDefault($"EntryThr{i}", 50m);
+        var name = sig >= 0 && sig < names.Count ? names[sig] : $"sig{sig}";
+        conds.Add($"{name}{op}{thr:0}");
+    }
+    return $"{dir}: {string.Join(logic, conds)}";
 }
 
 // ------------------------------------------------------------------ EVENTEDGE (F3: la continuazione e' TRADABILE?)
