@@ -84,8 +84,12 @@ public sealed class CarryWorker(
             scope.ServiceProvider.GetRequiredService<ILogger<CarryEngine>>());
         var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
 
+        // Dedupe: il binding delle liste .NET APPENDE al default invece di sostituirlo (default 6 +
+        // config 6 = 12 con duplicati). Distinct rende l'insieme corretto qualunque sia la config.
+        var symbols = opt.Symbols.Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).Distinct().ToList();
+
         logger.LogInformation("Carry forward-test AVVIATO ({Mode}) su {N} simboli, valutazione ogni {Min} min.",
-            mode, opt.Symbols.Count, opt.EvaluationMinutes);
+            mode, symbols.Count, opt.EvaluationMinutes);
 
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(Math.Max(5, opt.EvaluationMinutes)));
         do
@@ -93,7 +97,7 @@ public sealed class CarryWorker(
             try
             {
                 await using var db = await dbFactory.CreateDbContextAsync(ct);
-                foreach (var sym in opt.Symbols)
+                foreach (var sym in symbols)
                 {
                     // Ultimi funding del simbolo (più recente in coda), per la finestra di decisione.
                     var recent = await db.SentimentMetricPoints.AsNoTracking()
