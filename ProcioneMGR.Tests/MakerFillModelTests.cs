@@ -124,6 +124,73 @@ public class MakerFillModelTests
     }
 
     [Fact]
+    public async Task QueuePenetration_WickThatOnlyKissesTheLimit_DoesNotFill()
+    {
+        // [F-queue] Segnale long alla candela 2, close 100 -> limite a 99. La candela 3 SFIORA 99
+        // (Low = 99 esatto) e rimbalza. Con penetrazione richiesta 0,1%, un touch esatto NON basta:
+        // servirebbe Low <= 99·(1−0,001) = 98,901. È il proxy della posizione in coda — il prezzo
+        // bacia il tuo livello ma passa senza riempirti.
+        var candles = new List<OhlcvData>
+        {
+            Candle(0, 100, 100, 100, 100),
+            Candle(1, 100, 100, 100, 100),
+            Candle(2, 100, 100, 100, 100),        // segnale: limite a 99
+            Candle(3, 100, 100, 99m, 99.8m),      // Low = 99 esatto: SOLO sfiorato
+            Candle(4, 100, 100, 100, 100),
+        };
+
+        var cfg = MakerConfig();
+        cfg.MakerQueuePenetrationPercent = 0.1m;   // richiede penetrazione 0,1% oltre il limite
+        var result = await RunAsync(i => i == 2 ? Signal.Long : Signal.Hold, cfg, candles);
+
+        Assert.Equal(1, result.MakerEntriesAttempted);
+        Assert.Equal(0, result.MakerEntriesFilled);   // sfiorato ≠ riempito
+        Assert.Equal(0, result.TotalTrades);
+    }
+
+    [Fact]
+    public async Task QueuePenetration_DecisiveMoveThroughTheLimit_Fills()
+    {
+        // Stessa penetrazione richiesta, ma la candela 3 ATTRAVERSA deciso (Low = 98,5 < 98,901):
+        // il prezzo è passato oltre il tuo livello con margine -> riempito, ancora al prezzo del limite.
+        var candles = new List<OhlcvData>
+        {
+            Candle(0, 100, 100, 100, 100),
+            Candle(1, 100, 100, 100, 100),
+            Candle(2, 100, 100, 100, 100),        // segnale: limite a 99
+            Candle(3, 100, 100, 98.5m, 99.2m),    // Low = 98,5: attraversato oltre la soglia di coda
+            Candle(4, 100, 100, 100, 100),
+        };
+
+        var cfg = MakerConfig();
+        cfg.MakerQueuePenetrationPercent = 0.1m;
+        var result = await RunAsync(i => i == 2 ? Signal.Long : Signal.Hold, cfg, candles);
+
+        Assert.Equal(1, result.MakerEntriesFilled);
+        var trade = Assert.Single(result.Trades);
+        Assert.Equal(99m, trade.EntryPrice);   // fill al prezzo del LIMITE (sei maker), non al Low
+    }
+
+    [Fact]
+    public async Task QueuePenetration_Zero_IsBitIdenticalToTouchFill()
+    {
+        // Con penetrazione 0 il comportamento è quello storico (touch = fill): il touch esatto riempie.
+        var candles = new List<OhlcvData>
+        {
+            Candle(0, 100, 100, 100, 100),
+            Candle(1, 100, 100, 100, 100),
+            Candle(2, 100, 100, 100, 100),
+            Candle(3, 100, 100, 99m, 99.8m),      // Low = 99 esatto
+            Candle(4, 100, 100, 100, 100),
+        };
+
+        var cfg = MakerConfig();   // MakerQueuePenetrationPercent = 0 di default
+        var result = await RunAsync(i => i == 2 ? Signal.Long : Signal.Hold, cfg, candles);
+
+        Assert.Equal(1, result.MakerEntriesFilled);   // touch=fill storico
+    }
+
+    [Fact]
     public async Task LimitExpiresUnfilled_WithFallback_EntersAtMarketInstead()
     {
         var candles = new List<OhlcvData>

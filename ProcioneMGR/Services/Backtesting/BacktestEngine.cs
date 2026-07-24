@@ -196,6 +196,8 @@ public sealed class BacktestEngine(
         var makerOffsetFrac = config.MakerOffsetPercent > 0m ? config.MakerOffsetPercent / 100m : 0m;
         var makerFeeFrac = config.MakerFeePercent > 0m ? config.MakerFeePercent / 100m : 0m;
         var makerWait = Math.Max(1, config.MakerMaxWaitBars);
+        // [F-queue] Proxy di coda: il fill richiede PENETRAZIONE oltre il livello, non solo touch.
+        var queuePenFrac = config.MakerQueuePenetrationPercent > 0m ? config.MakerQueuePenetrationPercent / 100m : 0m;
         int pendingSide = 0;          // 0 nessun limite appoggiato, +1 long, -1 short
         var pendingLimit = 0m;
         var pendingExpiryIndex = -1;
@@ -321,7 +323,11 @@ public sealed class BacktestEngine(
             // senza slippage, con commissione maker.
             if (pendingSide != 0)
             {
-                var touched = pendingSide == 1 ? candles[i].Low <= pendingLimit : candles[i].High >= pendingLimit;
+                // [F-queue] "Riempito" = il prezzo PENETRA il livello oltre queuePenFrac, non lo sfiora.
+                // Con queuePenFrac=0 degrada al touch storico. Il fill resta al prezzo del limite.
+                var fillLevelLong = pendingLimit * (1m - queuePenFrac);
+                var fillLevelShort = pendingLimit * (1m + queuePenFrac);
+                var touched = pendingSide == 1 ? candles[i].Low <= fillLevelLong : candles[i].High >= fillLevelShort;
                 if (touched && book.IsFlat)
                 {
                     if (pendingSide == 1) book.OpenLong(pendingLimit, ts, makerFeeFrac, chargeSlippage: false, sizeMultiplier: SizeMultiplierAt(i));

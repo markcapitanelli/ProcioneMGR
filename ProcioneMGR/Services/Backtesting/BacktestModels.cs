@@ -93,6 +93,18 @@ public class BacktestConfiguration
     public decimal MakerFeePercent { get; set; } = 0.02m;
 
     /// <summary>
+    /// [F-queue, roadmap profitto-intraday] PROXY DI CODA. Il limite si considera riempito solo se il
+    /// prezzo PENETRA oltre il livello di questa % (long: Low ≤ limite·(1−q); short: High ≥
+    /// limite·(1+q)), non se lo SFIORA soltanto. Modella deterministicamente la posizione in coda: un
+    /// wick che bacia il tuo livello e rimbalza NON ti esegue (sei in fondo alla coda, il prezzo passa
+    /// senza riempirti); un movimento che attraversa deciso sì. Senza questo, il modello maker
+    /// assumeva "toccato = riempito", l'ottimismo classico che gonfia i backtest ad alta frequenza —
+    /// esattamente ciò che rende i numeri a 5m non affidabili. 0 = comportamento storico (touch=fill).
+    /// Il fill resta al prezzo del limite (sei un maker); qui cambia solo QUANDO scatta.
+    /// </summary>
+    public decimal MakerQueuePenetrationPercent { get; set; }
+
+    /// <summary>
     /// Alla scadenza del limite non riempito: true = si attraversa lo spread e si entra comunque
     /// a mercato (taker), false = il segnale si perde. Sono due strategie diverse, non due
     /// sfumature della stessa: la prima paga il taker proprio sui casi in cui il prezzo è scappato,
