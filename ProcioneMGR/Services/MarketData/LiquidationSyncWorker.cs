@@ -17,8 +17,16 @@ public sealed class LiquidationsOptions
     /// <summary>Minuti fra due flush su DB.</summary>
     public int FlushMinutes { get; set; } = 5;
 
-    /// <summary>Secondi senza messaggi oltre i quali il canale si considera guasto (riconnessione).</summary>
-    public int StaleSeconds { get; set; } = 120;
+    /// <summary>
+    /// Secondi senza messaggi oltre i quali il canale si considera guasto. 900s (15 min), NON 120:
+    /// trovato girando dal vivo la prima notte — <c>!forceOrder@arr</c> è un feed di EVENTI sparsi
+    /// (le liquidazioni di TUTTO il listino), e in mercato calmo i vuoti di 120s sono NORMALI, non
+    /// un guasto. Con 120s il worker riconnetteva di continuo, e ogni riconnessione è una finestra
+    /// in cui una raffica va persa. La liveness VERA la garantisce già il ping/pong del protocollo
+    /// (ClientWebSocket.KeepAliveInterval 20s) più il ReceiveAsync che ritorna null su socket chiuso;
+    /// questa soglia è solo un backstop per il raro half-open che l'OS keepalive non intercetta.
+    /// </summary>
+    public int StaleSeconds { get; set; } = 900;
 }
 
 /// <summary>
@@ -65,8 +73,9 @@ public sealed class LiquidationSyncWorker(
                 var lastFlush = DateTime.UtcNow;
                 while (!ct.IsCancellationRequested)
                 {
-                    // Staleness: un mercato futures intero senza NESSUNA liquidazione per minuti è
-                    // molto più plausibilmente un socket morto che un mercato calmo.
+                    // Staleness = BACKSTOP, non liveness primaria: la liveness vera è il ping/pong del
+                    // protocollo. Soglia larga (15 min di default) perché su questo feed di eventi
+                    // sparsi i silenzi di minuti sono legittimi — vedi StaleSeconds.
                     using var staleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     staleCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, opt.StaleSeconds)));
                     string? message;

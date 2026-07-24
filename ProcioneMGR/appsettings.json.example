@@ -47,7 +47,7 @@
     "_comment": "[F4] Accumulo liquidazioni dal WebSocket pubblico Binance futures (!forceOrder@arr, keyless, sola lettura). Default ON: il dato NON e' ricostruibile a posteriori - ogni giorno spento e' storia persa. Nessun consumo decisionale: solo accumulo in SentimentMetricPoints (esente dalla retention del sentiment).",
     "Enabled": true,
     "FlushMinutes": 5,
-    "StaleSeconds": 120
+    "StaleSeconds": 900
   },
   "Sentiment": {
     "_comment": "Sentiment 2.0: worker di raccolta del market mood (Fear & Greed di alternative.me + derivati pubblici Binance futures: long/short, taker, open interest, funding — API senza chiave). Default ON: sole GET pubbliche a cadenza modesta, e le serie Binance esistono solo per 30 giorni (i buchi sono irrecuperabili). Enabled e soglie/pesi sono hot-reload da /admin/autonomy; gli intervalli richiedono riavvio. Il composite [-1,+1] e' il mood della folla; la lettura contrarian sta nei flag degli estremi (F&G <=Low/>=High, |z|>=ExtremeZScore). EnableMlFeature=false: il fattore 'Sentiment' NON entra nelle feature ML senza opt-in esplicito. La retention esenta la fonte FearGreed (baseline lungo, ~2500 righe totali).",
