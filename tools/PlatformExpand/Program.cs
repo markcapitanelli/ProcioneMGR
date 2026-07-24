@@ -109,6 +109,8 @@ switch (phase)
     case "eventstudy": await EventStudyAsync(args.Length > 1 ? args[1] : "BTC/USDT", args.Length > 2 ? args[2] : "1d"); break;
     case "minuteprofile": await MinuteProfileAsync(); break;
     case "liquidationsverify": await LiquidationsVerifyAsync(); break;
+    case "eventedge": await EventEdgeAsync(); break;
+    case "nightsetup": await NightSetupAsync(args.Length > 1 ? args[1] : "claude-notte@local", args.Length > 2 ? args[2] : throw new ArgumentException("serve la password: nightsetup <email> <password>")); break;
     case "nulltwin": await NullTwinAsync(
         args.Length > 1 ? args[1] : "BTC/USDT",
         args.Length > 2 ? args[2] : "4h",
@@ -558,13 +560,16 @@ async Task EventStudyAsync(string symbol, string timeframe)
     var studyCfg = new ProcioneMGR.Services.Analysis.EventStudyConfig(
         EstimationBars: 60, GapBars: 5, PreBars: 5, PostBars: 10, PlaceboSamples: 500, Seed: 42);
 
-    Console.WriteLine($"\n{"Tipo evento",-16}{"N",5}{"CAAR pre",12}{"CAAR post",12}{"t post",9}{"p placebo",11}");
+    Console.WriteLine($"\n{"Tipo evento",-16}{"N",5}{"CAAR pre",12}{"CAAR post",12}{"post SENZA barra-evento",25}{"t post",9}{"p placebo",11}");
     foreach (var kind in Enum.GetValues<ProcioneMGR.Services.Analysis.MarketEventKind>())
     {
         var times = events.Where(e => e.Kind == kind).Select(e => e.TimestampUtc).ToList();
         if (times.Count == 0) { Console.WriteLine($"{kind,-16}{0,5}  (nessun evento)"); continue; }
         var r = ProcioneMGR.Services.Analysis.EventStudy.Run(candles, times, studyCfg);
-        Console.WriteLine($"{kind,-16}{r.EventsUsable,5}{r.CaarPre,12:P2}{r.CaarPost,12:P2}{r.TStatPost,9:F2}{r.PlaceboPValue,11:F3}");
+        // La parte TRADABILE: una strategia entra alla CHIUSURA della barra-evento, quindi
+        // cattura solo gli offset >= 1. AAR[PreBars] e' l'offset 0 (la barra dell'evento stessa).
+        var tradable = r.CaarPost - r.Aar[studyCfg.PreBars];
+        Console.WriteLine($"{kind,-16}{r.EventsUsable,5}{r.CaarPre,12:P2}{r.CaarPost,12:P2}{tradable,25:P2}{r.TStatPost,9:F2}{r.PlaceboPValue,11:F3}");
     }
 
     // Controllo positivo: eventi del calendario economico (se ingeriti). Su 1h il timestamp e'
@@ -587,6 +592,208 @@ async Task EventStudyAsync(string symbol, string timeframe)
 
     Console.WriteLine("\nLettura onesta: CAAR pre lontana da zero = anticipazione/leakage del timestamp;");
     Console.WriteLine("p placebo alto = le date a caso 'reagiscono' quanto le vere, quindi niente segnale.");
+}
+
+// ------------------------------------------------------------------ NIGHTSETUP (turno di notte: account di servizio + strategie)
+// Crea (idempotente) un account di SERVIZIO locale con ruolo Admin per operare la piattaforma via
+// browser durante il turno autonomo, e salva le SavedStrategy "PostSurge 1h" (la spec validata dal
+// controllo timing di eventedge) pronte per l'ensemble. La password NON viene stampata ne'
+// committata: la fornisce il chiamante e va custodita fuori dal repo (es. %USERPROFILE%\.procione).
+async Task NightSetupAsync(string email, string password)
+{
+    await using var db = await dbFactory.CreateDbContextAsync();
+
+    var normalized = email.ToUpperInvariant();
+    var user = await db.Users.FirstOrDefaultAsync(u => u.NormalizedEmail == normalized);
+    if (user is null)
+    {
+        user = new ProcioneMGR.Data.ApplicationUser
+        {
+            UserName = email, NormalizedUserName = normalized,
+            Email = email, NormalizedEmail = normalized,
+            EmailConfirmed = true,
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString(),
+        };
+        user.PasswordHash = new Microsoft.AspNetCore.Identity.PasswordHasher<ProcioneMGR.Data.ApplicationUser>()
+            .HashPassword(user, password);
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+        Console.WriteLine($"Utente di servizio creato: {email}");
+    }
+    else
+    {
+        Console.WriteLine($"Utente {email} gia' presente: password INVARIATA (idempotente).");
+    }
+
+    var adminRole = await db.Roles.FirstOrDefaultAsync(r => r.Name == ProcioneMGR.Data.AppRoles.Admin)
+        ?? throw new InvalidOperationException("Ruolo Admin assente: avviare prima l'app una volta (seeder ruoli).");
+    if (!await db.UserRoles.AnyAsync(ur => ur.UserId == user.Id && ur.RoleId == adminRole.Id))
+    {
+        db.UserRoles.Add(new Microsoft.AspNetCore.Identity.IdentityUserRole<string> { UserId = user.Id, RoleId = adminRole.Id });
+        await db.SaveChangesAsync();
+        Console.WriteLine("Ruolo Admin assegnato.");
+    }
+
+    // SavedStrategy: la spec LONG su Post-Surge (id 13 > 50, esci < 50) — quella passata dal
+    // controllo a entrate casuali. Una per simbolo di corsia, cosi' l'ensemble le vede subito.
+    var spec = new Dictionary<string, decimal>
+    {
+        ["Logic"] = 0m, ["Direction"] = 0m, ["EntryCount"] = 1m,
+        ["EntrySig1"] = 13m, ["EntryOp1"] = 1m, ["EntryThr1"] = 50m,
+        ["ExitCount"] = 1m, ["ExitSig1"] = 13m, ["ExitOp1"] = 0m, ["ExitThr1"] = 50m,
+    };
+    var specJson = System.Text.Json.JsonSerializer.Serialize(spec);
+    foreach (var sym in new[] { "BTC/USDT", "ETH/USDT", "DOGE/USDT" })
+    {
+        var name = $"PostSurge 1h ({sym})";
+        if (await db.SavedStrategies.AnyAsync(s => s.Name == name)) { Console.WriteLine($"'{name}' gia' presente."); continue; }
+        db.SavedStrategies.Add(new ProcioneMGR.Data.SavedStrategy
+        {
+            UserId = user.Id, Name = name, StrategyName = "Composite",
+            ParametersJson = specJson, IsOptimized = false,
+        });
+        Console.WriteLine($"SavedStrategy '{name}' creata.");
+    }
+    await db.SaveChangesAsync();
+    Console.WriteLine("Night setup completato.");
+}
+
+// ------------------------------------------------------------------ EVENTEDGE (F3: la continuazione e' TRADABILE?)
+// La decomposizione dell'event-study ha mostrato che gran parte della CAAR post sta nella
+// barra-evento stessa (non catturabile: si entra alla sua chiusura). Questa fase da' il verdetto
+// OPERATIVO: backtest con costi pieni delle due regole naive (long su Post-Surge>50, short su
+// Post-Crash>50, uscita al decadere sotto 50) su piu' simboli e timeframe. Se il netto e' ~zero
+// o negativo, il segnale resta un FILTRO per composizioni (il suo ruolo dichiarato), non una
+// strategia autonoma — e lo si scrive.
+async Task EventEdgeAsync()
+{
+    string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "LINK/USDT", "AVAX/USDT", "LTC/USDT"];
+    string[] tfs = ["1h", "1d"];
+    var specs = new (string Name, Dictionary<string, decimal> Pars)[]
+    {
+        ("LONG su Post-Surge", new()
+        {
+            ["Logic"] = 0m, ["Direction"] = 0m, ["EntryCount"] = 1m,
+            ["EntrySig1"] = 13m, ["EntryOp1"] = 1m, ["EntryThr1"] = 50m,
+            ["ExitCount"] = 1m, ["ExitSig1"] = 13m, ["ExitOp1"] = 0m, ["ExitThr1"] = 50m,
+        }),
+        ("SHORT su Post-Crash", new()
+        {
+            ["Logic"] = 0m, ["Direction"] = 1m, ["EntryCount"] = 1m,
+            ["EntrySig1"] = 12m, ["EntryOp1"] = 1m, ["EntryThr1"] = 50m,
+            ["ExitCount"] = 1m, ["ExitSig1"] = 12m, ["ExitOp1"] = 0m, ["ExitThr1"] = 50m,
+        }),
+    };
+
+    foreach (var tf in tfs)
+    {
+        var ppy = ProcioneMGR.Services.Optimization.Statistics.PeriodsPerYear(tf);
+        foreach (var (name, pars) in specs)
+        {
+            Console.WriteLine($"\n=== {name} — {tf} (fee 0,1% + slip 0,03% per fill) ===");
+            Console.WriteLine($"{"Sym",-10}{"trades",8}{"win%",7}{"netto %",10}{"Sharpe",8}{"maxDD %",9}");
+            double sumNet = 0; var count = 0; var positives = 0;
+            foreach (var sym in symbols)
+            {
+                await using var db = await dbFactory.CreateDbContextAsync();
+                var candles = await db.OhlcvData.AsNoTracking()
+                    .Where(c => c.Symbol == sym && c.Timeframe == tf)
+                    .OrderBy(c => c.TimestampUtc).ToListAsync();
+                if (candles.Count < 1000) continue;
+
+                using var scope = provider.CreateScope();
+                var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+                var cfg = new BacktestConfiguration
+                {
+                    ExchangeName = "Binance", Symbol = sym, Timeframe = tf,
+                    From = candles[0].TimestampUtc, To = candles[^1].TimestampUtc,
+                    InitialCapital = 10_000m, PositionSizePercent = 100m,
+                    FeePercent = 0.1m, SlippagePercent = 0.03m,
+                    StrategyName = "Composite", StrategyParameters = pars,
+                };
+                try
+                {
+                    var res = await engine.RunBacktestAsync(cfg, candles, CancellationToken.None);
+                    var sharpe = ProcioneMGR.Services.Optimization.Statistics.SharpeRatio(res.EquityCurve, ppy);
+                    var win = res.TotalTrades > 0 ? (double)res.WinningTrades / res.TotalTrades * 100 : 0;
+                    Console.WriteLine($"{sym,-10}{res.TotalTrades,8}{win,7:F0}{res.TotalReturnPercent,10:F2}{sharpe,8:F2}{res.MaxDrawdownPercent,9:F2}");
+                    sumNet += (double)res.TotalReturnPercent; count++;
+                    if (res.TotalReturnPercent > 0m) positives++;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"{sym,-10} errore: {ex.Message}");
+                    Console.WriteLine("  " + string.Join("\n  ", ex.ToString().Split('\n').Take(8)));
+                }
+            }
+            if (count > 0)
+            {
+                Console.WriteLine($"--> media netto {sumNet / count:F2}% · positivi {positives}/{count}");
+            }
+        }
+    }
+
+    // --- Controllo del TIMING (solo LONG su Post-Surge, 1h): batte entrate CASUALI a parita'
+    //     di esposizione? Un long-only guadagna il drift del mercato comunque: l'edge di timing
+    //     esiste solo se il reale sta oltre il P95 della distribuzione a entrate casuali
+    //     (stesso numero di trade, stessa durata, stessi costi, randomizzazione TEMPORALE).
+    Console.WriteLine("\n=== CONTROLLO TIMING — LONG Post-Surge 1h vs 200 simulazioni a entrate casuali ===");
+    Console.WriteLine($"{"Sym",-10}{"reale %",10}{"P50 rnd %",11}{"P95 rnd %",11}{"percentile",12}");
+    var surgePars = specs[0].Pars;
+    foreach (var sym in symbols)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var candles = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == sym && c.Timeframe == "1h")
+            .OrderBy(c => c.TimestampUtc).ToListAsync();
+        if (candles.Count < 1000) continue;
+
+        using var scope = provider.CreateScope();
+        var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+        var cfg = new BacktestConfiguration
+        {
+            ExchangeName = "Binance", Symbol = sym, Timeframe = "1h",
+            From = candles[0].TimestampUtc, To = candles[^1].TimestampUtc,
+            InitialCapital = 10_000m, PositionSizePercent = 100m,
+            FeePercent = 0.1m, SlippagePercent = 0.03m,
+            StrategyName = "Composite", StrategyParameters = surgePars,
+        };
+        double realNet;
+        int nTrades;
+        try
+        {
+            var res = await engine.RunBacktestAsync(cfg, candles, CancellationToken.None);
+            realNet = (double)res.TotalReturnPercent;
+            nTrades = res.TotalTrades;
+        }
+        catch { continue; }
+        if (nTrades < 5) continue;
+
+        const int HoldBars = 10;
+        const double RoundTripCost = 0.0026; // 2 fill x (0,1% + 0,03%)
+        var rng = new Random(42);
+        var sims = new double[200];
+        for (var s = 0; s < sims.Length; s++)
+        {
+            var equity = 1.0;
+            for (var t = 0; t < nTrades; t++)
+            {
+                var i = rng.Next(1, candles.Count - HoldBars - 1);
+                var entry = (double)candles[i].Close;
+                var exit = (double)candles[i + HoldBars].Close;
+                if (entry <= 0) continue;
+                equity *= exit / entry * (1.0 - RoundTripCost);
+            }
+            sims[s] = (equity - 1.0) * 100.0;
+        }
+        Array.Sort(sims);
+        var below = sims.Count(v => v < realNet);
+        Console.WriteLine($"{sym,-10}{realNet,10:F1}{sims[100],11:F1}{sims[189],11:F1}{(double)below / sims.Length,12:P0}");
+    }
+
+    Console.WriteLine("\nLettura onesta: la significativita' statistica dell'event-study includeva la barra-evento;");
+    Console.WriteLine("qui si misura SOLO cio' che una strategia puo' catturare. Verdetto sotto i numeri, non sopra.");
 }
 
 // ------------------------------------------------------------------ LIQUIDATIONSVERIFY (F4: verifica dal vivo)

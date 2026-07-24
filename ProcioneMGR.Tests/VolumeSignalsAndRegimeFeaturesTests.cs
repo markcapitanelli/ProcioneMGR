@@ -48,6 +48,28 @@ public class VolumeSignalsAndRegimeFeaturesTests
     }
 
     [Fact]
+    public async Task Mfi_PathologicalFlowRatio_DoesNotOverflow()
+    {
+        // Regressione del bug trovato DAL VIVO su BNB 1h: flusso positivo enorme e negativo
+        // microscopico ⇒ pos/neg oltre il range di Decimal ⇒ OverflowException in VarDecDiv.
+        // La forma 100·pos/(pos+neg) rende l'overflow impossibile per costruzione.
+        var svc = new TechnicalIndicatorsService();
+        var closes = new List<decimal> { 100m };
+        var volumes = new List<decimal> { 1m };
+        for (var i = 0; i < 14; i++)
+        {
+            var up = i != 7;
+            closes.Add(closes[^1] + (up ? 1m : -0.0000001m));
+            volumes.Add(up ? 79_000_000_000_000_000_000_000m : 0.0000000001m);
+        }
+
+        var mfi = await svc.CalculateMfiAsync(closes, closes, closes, volumes, 14);
+
+        Assert.NotNull(mfi[^1]);
+        Assert.InRange(mfi[^1]!.Value, 99m, 100m);   // dominato dal flusso positivo, senza esplodere
+    }
+
+    [Fact]
     public async Task Mfi_WeighsByVolume_NotJustDirection()
     {
         var svc = new TechnicalIndicatorsService();

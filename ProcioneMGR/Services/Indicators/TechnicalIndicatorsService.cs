@@ -441,9 +441,13 @@ public sealed class TechnicalIndicatorsService : ITechnicalIndicatorsService
 
     private static decimal ToMfi(decimal positiveFlow, decimal negativeFlow)
     {
-        if (negativeFlow <= 0m) return 100m;
-        if (positiveFlow <= 0m) return 0m;
-        return 100m - 100m / (1m + positiveFlow / negativeFlow);
+        // Forma 100·pos/(pos+neg), matematicamente identica a 100 − 100/(1 + pos/neg) ma senza il
+        // rapporto pos/neg: con neg microscopico (BNB 1h, barra da volume quasi nullo) quel
+        // rapporto supera il range di Decimal e VarDecDiv lancia OverflowException — trovato dal
+        // vivo, non dai test. Qui il quoziente è ≤ 1 per costruzione: l'overflow è impossibile.
+        var total = positiveFlow + negativeFlow;
+        if (total <= 0m) return 50m; // nessun flusso nella finestra (prezzi piatti): neutro dichiarato
+        return 100m * positiveFlow / total;
     }
 
     /// <summary>
