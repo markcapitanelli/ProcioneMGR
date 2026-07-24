@@ -55,15 +55,11 @@ builder.Services.AddAuthentication(options =>
 // memoria, quindi OGNI riavvio del pod invalida tutti i cookie e disconnette gli utenti. Non è il
 // caso di un deploy pianificato (raro, scelto): basta un OOM-kill o una liveness probe fallita, ed
 // è silenzioso. In K8s si monta una PVC e si punta qui (vedi infra/k8s/ui/deployment.yaml).
-var keyRingPath = builder.Configuration["DataProtection:KeyRingPath"];
-if (!string.IsNullOrWhiteSpace(keyRingPath))
-{
-    builder.Services.AddDataProtection()
-        // Nome esplicito e stabile: il default deriva dal ContentRootPath, che cambiando fra host
-        // (sviluppo vs /app nel container) renderebbe indecifrabili le chiavi già scritte.
-        .SetApplicationName("ProcioneMGR")
-        .PersistKeysToFileSystem(new DirectoryInfo(keyRingPath));
-}
+// --- Data Protection: nome applicativo fisso + keyring persistito ---
+// Estratto in DataProtectionSetup per essere verificabile da test: il nome applicativo decide
+// quali chiavi firmano i cookie, e prima veniva impostato solo quando era configurato un keyring
+// su file — cioè mai in sviluppo locale. Vedi il commento della classe.
+builder.Services.AddProcioneDataProtection(builder.Configuration);
 
 // Servizio di cifratura (AES-256-GCM) per i segreti a riposo. Singleton: la chiave
 // master viene derivata una sola volta. Va registrato PRIMA del DbContext perche'
@@ -142,6 +138,8 @@ builder.Services.Configure<LiveExecutionOptions>(builder.Configuration.GetSectio
 // --- Backtesting ---
 builder.Services.AddSingleton<IStrategyFactory, StrategyFactory>();
 builder.Services.AddScoped<IBacktestEngine, BacktestEngine>();
+// [T0.2] Serie storica dei funding per i backtest futures (da SentimentMetricPoints).
+builder.Services.AddScoped<IFundingHistoryProvider, FundingHistoryProvider>();
 
 // Preset di configurazione pagina + memoria dell'ultima configurazione usata (per utente).
 builder.Services.AddScoped<ProcioneMGR.Services.Preferences.IPageConfigStore, ProcioneMGR.Services.Preferences.PageConfigStore>();
@@ -433,6 +431,9 @@ builder.Services.AddHostedService<PromotionWorker>();
 // testabile senza Blazor — vedi il doc-comment della classe. Scoped: uno scope Blazor Server = un
 // circuito, quindi un'istanza per sessione utente, come il componente che la consuma.
 builder.Services.AddScoped<ProcioneMGR.Services.Trading.TradingPageService>();
+
+// [R3] Modalità Semplice (/bot): stessa granularità Scoped delle altre page service.
+builder.Services.AddScoped<ProcioneMGR.Services.Risk.BotPageService>();
 builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.CampaignPageService>();
 
 // Orchestrazione di MlLab.razor estratta in un service testabile (P1-5, PRD §3.3). Scoped come sopra.

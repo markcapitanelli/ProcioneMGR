@@ -19,6 +19,13 @@ public class StrategyDiscoveryConfiguration
     public DateTime To { get; set; }
     public decimal InitialCapital { get; set; } = 10000m;
     public decimal CommissionPercent { get; set; } = 0.1m;
+
+    /// <summary>
+    /// [R2] Attrito per fill propagato all'ottimizzatore. Vedi
+    /// <see cref="Optimization.OptimizationConfiguration.SlippagePercent"/> per il motivo per cui
+    /// il default è onesto e non zero.
+    /// </summary>
+    public decimal SlippagePercent { get; set; } = Pipeline.PipelineCosts.DefaultSlippagePercent;
     public WalkForwardConfiguration WalkForward { get; set; } = new();
 
     /// <summary>Quante candidate restituire (ordinate per Sharpe out-of-sample).</summary>

@@ -16,6 +16,17 @@
         "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ConnectionStrings__PostgresConnection='Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure'; $env:MarketData__DefaultBackfillDays='2200'; $env:ASPNETCORE_URLS='http://localhost:5256'; $env:PROCIONE_MGR_MASTER_KEY='__CHANGE_ME_BASE64_32_BYTES__'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-build --no-launch-profile"
       ],
       "port": 5256
+    },
+    {
+      "_comment": "Profilo per i test automatici, su porta 5257 e NON 5256. Il 2026-07-20 un'istanza di questo worktree occupava la 5256 e ha intercettato l'utente, che credeva di usare la propria app: le credenziali che ha salvato sono finite cifrate con la master key placeholder (pubblica nel template) e il login non funzionava per via della discriminante Data Protection. Porta separata = i due ambienti non si toccano piu'. La master key resta il placeholder: su questa istanza NON vanno inserite credenziali reali.",
+      "name": "procione-test",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ConnectionStrings__PostgresConnection='Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure'; $env:ASPNETCORE_URLS='http://localhost:5257'; $env:PROCIONE_MGR_MASTER_KEY='__CHANGE_ME_BASE64_32_BYTES__'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-build --no-launch-profile"
+      ],
+      "port": 5257
     }
   ]
 }

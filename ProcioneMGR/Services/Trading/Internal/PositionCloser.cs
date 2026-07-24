@@ -10,8 +10,14 @@ namespace ProcioneMGR.Services.Trading.Internal;
 /// chiamate exchange, stessa gestione della riconciliazione di rete incerta, stesso calcolo di PnL/
 /// capitale disponibile. Riceve <paramref name="state"/> e <paramref name="positions"/> come
 /// riferimenti diretti (non copie): le mutazioni (AvailableCapital, RealizedPnl, DailyPnl,
-/// LastOrderUtc, rimozione da positions) sono visibili a <see cref="TradingEngine"/> esattamente
+/// rimozione da positions) sono visibili a <see cref="TradingEngine"/> esattamente
 /// come quando il codice viveva inline.
+///
+/// NON tocca <see cref="TradingEngineState.LastOrderUtc"/>, di proposito: quel timestamp alimenta
+/// SOLO l'anti-spam n.6 del <see cref="SafetyChecker"/>, che gira esclusivamente sul percorso di
+/// APERTURA. Segnarlo anche in chiusura faceva pagare alla successiva apertura il throttle di una
+/// chiusura appena avvenuta, e su un'inversione di segnale (chiudi long → apri short sulla stessa
+/// candela) l'apertura opposta veniva rifiutata con elapsed = 0. Vedi docs/REPORT-RICERCA-2026-07.md.
 /// </summary>
 internal sealed class PositionCloser(
     IExchangeClientFactory exchangeFactory,
@@ -165,7 +171,6 @@ internal sealed class PositionCloser(
         };
 
         positions.Remove(pos);
-        state.LastOrderUtc = ts;
 
         await persistence.PersistOrderAsync(closeOrder, ct);
         await persistence.RemovePositionAsync(pos, ct);
@@ -304,7 +309,6 @@ internal sealed class PositionCloser(
         };
 
         positions.Remove(pos);
-        state.LastOrderUtc = ts;
 
         await persistence.PersistOrderAsync(closeOrder, ct);
         await persistence.RemovePositionAsync(pos, ct);

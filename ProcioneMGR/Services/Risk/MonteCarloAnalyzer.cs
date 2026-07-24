@@ -60,7 +60,9 @@ public sealed class MonteCarloAnalyzer
 
         for (var s = 0; s < config.NumberOfShuffles; s++)
         {
-            var shuffled = SampleWithoutReplacement(baseline, sampleSize, rng);
+            var shuffled = config.SamplingMode == MonteCarloSamplingMode.StationaryBlock
+                ? StationaryBlockSample(baseline, sampleSize, Math.Max(1, config.MeanBlockLength), rng)
+                : SampleWithoutReplacement(baseline, sampleSize, rng);
             var equity = CumulativeEquity(shuffled);
             var dd = MaxDrawdown(equity);
             maxDrawdowns.Add(dd);
@@ -84,6 +86,24 @@ public sealed class MonteCarloAnalyzer
             RiskFactorWorst = originalMaxDd == 0m ? 0m : worstDd / originalMaxDd,
             SortedMaxDrawdowns = maxDrawdowns,
         };
+    }
+
+    /// <summary>
+    /// [T1.5] Stationary block bootstrap: campiona CON reinserimento blocchi contigui di lunghezza
+    /// geometrica media <paramref name="meanBlockLength"/>, con wrap-around a fine serie. A ogni
+    /// passo il blocco prosegue con probabilità 1-1/L o ne inizia uno nuovo in un punto casuale.
+    /// </summary>
+    private static decimal[] StationaryBlockSample(decimal[] source, int size, int meanBlockLength, Random rng)
+    {
+        var result = new decimal[size];
+        var pNewBlock = 1.0 / meanBlockLength;
+        var idx = rng.Next(source.Length);
+        for (var i = 0; i < size; i++)
+        {
+            result[i] = source[idx];
+            idx = rng.NextDouble() < pNewBlock ? rng.Next(source.Length) : (idx + 1) % source.Length;
+        }
+        return result;
     }
 
     private static decimal[] SampleWithoutReplacement(decimal[] source, int size, Random rng)
@@ -128,6 +148,21 @@ public sealed class MonteCarloAnalyzer
     }
 }
 
+/// <summary>Come vengono ricombinati i trade a ogni shuffle.</summary>
+public enum MonteCarloSamplingMode
+{
+    /// <summary>Permutazione iid (storico): ogni trade è indipendente. DISTRUGGE l'autocorrelazione.</summary>
+    IidShuffle,
+
+    /// <summary>
+    /// [T1.5] Stationary block bootstrap (Politis–Romano): blocchi contigui di lunghezza geometrica
+    /// media <see cref="MonteCarloConfig.MeanBlockLength"/>, con reinserimento e wrap-around.
+    /// Preserva le SEQUENZE di trade (serie vincenti/perdenti consecutive) — cioè esattamente la
+    /// struttura che produce i drawdown profondi e che lo shuffle iid spezza, sottostimandoli.
+    /// </summary>
+    StationaryBlock,
+}
+
 /// <summary>Parametri della Montecarlo Analysis evoluta.</summary>
 public sealed record MonteCarloConfig
 {
@@ -144,6 +179,12 @@ public sealed record MonteCarloConfig
 
     /// <summary>Seed per risultati riproducibili (null = casuale).</summary>
     public int? Seed { get; init; }
+
+    /// <summary>Default <see cref="MonteCarloSamplingMode.IidShuffle"/> = comportamento storico invariato.</summary>
+    public MonteCarloSamplingMode SamplingMode { get; init; } = MonteCarloSamplingMode.IidShuffle;
+
+    /// <summary>Lunghezza media dei blocchi nel modo <see cref="MonteCarloSamplingMode.StationaryBlock"/>.</summary>
+    public int MeanBlockLength { get; init; } = 10;
 }
 
 /// <summary>Esito della Montecarlo Analysis evoluta.</summary>

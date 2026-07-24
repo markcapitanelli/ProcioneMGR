@@ -37,6 +37,34 @@ public class SafetyConfiguration
     /// <summary>Se true, ogni ordine in modalità Live richiede conferma manuale dell'operatore.</summary>
     public bool RequireManualConfirmationForLive { get; set; } = true;
 
+    // --- Dosaggio della posizione sulla volatilità (vedi VolatilityScaler e
+    //     docs/REPORT-DOSAGGIO-VOLATILITA.md). Default SPENTO: comportamento invariato.
+
+    /// <summary>
+    /// Se true, <see cref="PositionSizePercent"/> viene moltiplicato per un fattore che punta a una
+    /// volatilità costante: meno capitale esposto quando il mercato si agita, di più quando si calma.
+    /// È l'unico risultato di ricerca sopravvissuto al controllo a esposizione media costante.
+    /// Default FALSE.
+    /// </summary>
+    public bool VolatilityTargetingEnabled { get; set; }
+
+    /// <summary>Volatilità annualizzata a cui puntare (%). Sotto questo valore si espone di più, sopra di meno.</summary>
+    public decimal TargetAnnualVolatilityPercent { get; set; } = 30m;
+
+    /// <summary>Barre usate per stimare la volatilità realizzata. 30 è il valore validato dalla ricerca.</summary>
+    public int VolatilityLookbackBars { get; set; } = 30;
+
+    /// <summary>Pavimento del moltiplicatore: sotto questo non si scende, per non annullare del tutto l'operatività.</summary>
+    public decimal MinExposureMultiplier { get; set; } = 0.25m;
+
+    /// <summary>
+    /// Tetto del moltiplicatore. Default 1,0 di proposito: così il dosaggio può solo RIDURRE la
+    /// dimensione rispetto a <see cref="PositionSizePercent"/>, mai aumentarla, e accendere la
+    /// funzione non può violare <see cref="MaxPositionSizePercent"/> né
+    /// <see cref="MaxTotalExposurePercent"/>. Alzarlo sopra 1,0 toglie questa garanzia.
+    /// </summary>
+    public decimal MaxExposureMultiplier { get; set; } = 1.0m;
+
     /// <summary>
     /// Leva massima consentita per il trading Futures (default CONSERVATIVO: con un capitale
     /// piccolo la leva alta è attraente ma la crescita del rischio non è lineare — vedi

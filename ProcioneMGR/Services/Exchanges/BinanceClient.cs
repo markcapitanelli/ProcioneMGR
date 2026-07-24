@@ -8,9 +8,16 @@ namespace ProcioneMGR.Services.Exchanges;
 /// Client Binance Spot via REST pubblica (nessuna firma necessaria per i dati di mercato).
 /// Endpoint klines: GET /api/v3/klines, max 1000 candele per richiesta.
 /// </summary>
-public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger) : IExchangeClient, IFuturesExchangeClient
+public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger, IExchangeClock? clock = null) : IExchangeClient, IFuturesExchangeClient
 {
     public ExchangeName Exchange => ExchangeName.Binance;
+
+    /// <summary>
+    /// Timestamp per le richieste FIRMATE, corretto per l'offset misurato verso il server Binance
+    /// (vedi <see cref="IExchangeClock"/>). Il clock e' opzionale: se non iniettato si ricade
+    /// sull'orologio locale, cioe' esattamente il comportamento precedente.
+    /// </summary>
+    private long SignedTimestamp() => clock?.TimestampMillis(Exchange) ?? ExchangeSigning.UnixMillis(DateTime.UtcNow);
 
     // Binance Spot consente fino a 1000 candele per richiesta klines.
     public int MaxCandlesPerRequest => 1000;
@@ -36,15 +43,24 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
         var result = new List<Ohlcv>(doc.RootElement.GetArrayLength());
         foreach (var k in doc.RootElement.EnumerateArray())
         {
-            // [ openTime, open, high, low, close, volume, closeTime, ... ]
+            // [ openTime, open, high, low, close, volume, closeTime, quoteVolume, trades,
+            //   takerBuyBase, takerBuyQuote, ignore ]
+            // [T0.3] I campi 7-10 arrivano gratis in ogni kline e venivano scartati: quoteVolume,
+            // numero di trade e volume TAKER (l'order flow aggressivo). Difensivo sulla lunghezza:
+            // se un payload anomalo ne ha meno, i campi estesi restano null e la candela e' valida.
             var openTime = k[0].GetInt64();
+            var len = k.GetArrayLength();
             result.Add(new Ohlcv(
                 DateTimeOffset.FromUnixTimeMilliseconds(openTime).UtcDateTime,
                 ParseDecimal(k[1]),
                 ParseDecimal(k[2]),
                 ParseDecimal(k[3]),
                 ParseDecimal(k[4]),
-                ParseDecimal(k[5])));
+                ParseDecimal(k[5]),
+                QuoteVolume: len > 7 ? ParseDecimal(k[7]) : null,
+                TradeCount: len > 8 ? k[8].GetInt64() : null,
+                TakerBuyVolume: len > 9 ? ParseDecimal(k[9]) : null,
+                TakerBuyQuoteVolume: len > 10 ? ParseDecimal(k[10]) : null));
         }
 
         return result;
@@ -127,7 +143,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<PlaceOrderResult> PlaceOrderAsync(PlaceOrderRequest request, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(request.Symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var parts = new List<string>
         {
             $"symbol={market}",
@@ -180,7 +196,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<CancelOrderResult> CancelOrderAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = $"symbol={market}&origClientOrderId={clientOrderId}&recvWindow=5000&timestamp={ts}";
         var (ok, _, _, error) = await SignedAsync(HttpMethod.Delete, "/api/v3/order", query, creds, ct);
         return new CancelOrderResult { Success = ok, Error = error };
@@ -189,7 +205,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<List<OpenOrder>> GetOpenOrdersAsync(string symbol, TradingCredentials creds, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = $"symbol={market}&recvWindow=5000&timestamp={ts}";
         var (ok, body, _, _) = await SignedAsync(HttpMethod.Get, "/api/v3/openOrders", query, creds, ct);
         var list = new List<OpenOrder>();
@@ -215,7 +231,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<OrderStatusResult> GetOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials creds, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = $"symbol={market}&origClientOrderId={clientOrderId}&recvWindow=5000&timestamp={ts}";
         var (ok, body, uncertain, error) = await SignedAsync(HttpMethod.Get, "/api/v3/order", query, creds, ct);
         if (!ok)
@@ -287,7 +303,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
 
     public async Task<AccountBalance> GetBalanceAsync(TradingCredentials creds, CancellationToken ct = default)
     {
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = $"recvWindow=5000&timestamp={ts}";
         var (ok, body, _, _) = await SignedAsync(HttpMethod.Get, "/api/v3/account", query, creds, ct);
         var bal = new AccountBalance();
@@ -384,14 +400,14 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<SetLeverageResult> SetLeverageAsync(string symbol, int leverage, TradingCredentials credentials, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
 
         // Margine ISOLATO esplicito (non CROSSED): ogni posizione rischia solo il proprio
         // margine. Ignora l'errore "no need to change margin type" (già isolato).
         var marginQuery = $"symbol={market}&marginType=ISOLATED&timestamp={ts}";
         await SignedAsync(HttpMethod.Post, "/fapi/v1/marginType", marginQuery, credentials, ct, FuturesProdBase, FuturesTestnetBase);
 
-        var levQuery = $"symbol={market}&leverage={leverage}&timestamp={ExchangeSigning.UnixMillis(DateTime.UtcNow)}";
+        var levQuery = $"symbol={market}&leverage={leverage}&timestamp={SignedTimestamp()}";
         var (ok, body, _, error) = await SignedAsync(HttpMethod.Post, "/fapi/v1/leverage", levQuery, credentials, ct, FuturesProdBase, FuturesTestnetBase);
         if (!ok)
         {
@@ -405,7 +421,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<PlaceOrderResult> PlaceFuturesOrderAsync(PlaceOrderRequest request, bool reduceOnly, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(request.Symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var parts = new List<string>
         {
             $"symbol={market}",
@@ -463,7 +479,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
             return new PlaceOrderResult { Success = false, Error = "TriggerPrice mancante o non valido per l'ordine trigger Binance." };
         }
 
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = BuildTriggerQuery(ToExchangeSymbol(request.Symbol), request.Side, isStopLoss, request.Quantity, trigger, request.ClientOrderId, ts);
 
         var (ok, body, uncertain, error) = await SignedAsync(HttpMethod.Post, "/fapi/v1/order", query, request.Credentials, ct, FuturesProdBase, FuturesTestnetBase);
@@ -509,7 +525,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = $"symbol={market}&timestamp={ts}";
         var (ok, body, _, _) = await SignedAsync(HttpMethod.Get, "/fapi/v2/positionRisk", query, credentials, ct, FuturesProdBase, FuturesTestnetBase);
         if (!ok) return null;
@@ -541,7 +557,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<CancelOrderResult> CancelFuturesOrderAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = $"symbol={market}&origClientOrderId={clientOrderId}&recvWindow=5000&timestamp={ts}";
         var (ok, _, _, error) = await SignedAsync(HttpMethod.Delete, "/fapi/v1/order", query, credentials, ct, FuturesProdBase, FuturesTestnetBase);
         return new CancelOrderResult { Success = ok, Error = error };
@@ -550,7 +566,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<List<OpenOrder>> GetOpenFuturesOrdersAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = $"symbol={market}&recvWindow=5000&timestamp={ts}";
         var (ok, body, _, _) = await SignedAsync(HttpMethod.Get, "/fapi/v1/openOrders", query, credentials, ct, FuturesProdBase, FuturesTestnetBase);
         var list = new List<OpenOrder>();
@@ -576,7 +592,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
     public async Task<OrderStatusResult> GetFuturesOrderStatusAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = $"symbol={market}&origClientOrderId={clientOrderId}&recvWindow=5000&timestamp={ts}";
         var (ok, body, uncertain, error) = await SignedAsync(HttpMethod.Get, "/fapi/v1/order", query, credentials, ct, FuturesProdBase, FuturesTestnetBase);
         if (!ok)
@@ -602,7 +618,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
 
     public async Task<FuturesBalance> GetFuturesBalanceAsync(TradingCredentials credentials, CancellationToken ct = default)
     {
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow);
+        var ts = SignedTimestamp();
         var query = $"recvWindow=5000&timestamp={ts}";
         var (ok, body, _, _) = await SignedAsync(HttpMethod.Get, "/fapi/v2/account", query, credentials, ct, FuturesProdBase, FuturesTestnetBase);
         if (!ok) return new FuturesBalance();

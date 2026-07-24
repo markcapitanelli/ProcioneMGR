@@ -100,7 +100,18 @@
     "DefaultBackfillDays": 7,
     "_comment_RemoteIngestionUrl": "Monolite sull'host + servizio in kind: usa il port-forward (kubectl port-forward -n procionemgr-ingestion svc/procionemgr-ingestion 18080:8080) => http://localhost:18080. Il DNS cluster-interno (http://procionemgr-ingestion.procionemgr-ingestion.svc.cluster.local:8080) vale solo quando ANCHE il chiamante gira nel cluster (Fase 2+). Servizio lanciato localmente con dotnet run: usa il suo URL locale.",
     "UseRemoteIngestion": false,
-    "RemoteIngestionUrl": "http://localhost:18080"
+    "RemoteIngestionUrl": "http://localhost:18080",
+    "Realtime": {
+      "_comment": "[R1] Feed di prezzo WebSocket (market data PUBBLICO: nessuna API key, nessun vincolo MiCA). Serve a far reagire le USCITE protettive (stop loss, take profit, trailing, liquidazione) in ~1s invece che alla chiusura della candela successiva, che col solo ciclo REST puo' significare minuti. E' ADDITIVO: MarketDataSyncWorker e TradingWorker restano attivi, quindi Enabled=false riporta esattamente al comportamento precedente. I tick non aprono MAI posizioni: gli ingressi restano governati dalle candele chiuse, l'unico percorso che il backtest valida. Vive nello stesso host del motore (mai nel monolite con Trading:UseRemoteTrading=true).",
+      "_comment_DriveProtectiveExits": "false = feed acceso in sola OSSERVAZIONE (log e metriche, nessuna decisione): utile per verificare che i prezzi arrivino sani prima di dargli potere di chiudere posizioni. Confronta le metriche procione.trading.protective_exits con source=tick vs source=candle.",
+      "Enabled": false,
+      "DriveProtectiveExits": true,
+      "SubscriptionRefreshSeconds": 30,
+      "StaleAfterSeconds": 60,
+      "ReconnectInitialDelayMs": 1000,
+      "ReconnectMaxDelayMs": 60000,
+      "MaxSpreadPercent": 2
+    }
   },
   "MarketRegime": {
     "Enabled": true,

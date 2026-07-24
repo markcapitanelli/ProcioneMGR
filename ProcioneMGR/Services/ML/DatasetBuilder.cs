@@ -14,7 +14,8 @@ public sealed class DatasetBuilder : IDatasetBuilder
         => _factorCache = factorCache ?? new Alpha.FactorCache();
 
     public MlDataset Build(IReadOnlyList<OhlcvData> candles, IReadOnlyList<FactorSpec> factors, int forwardHorizon,
-        IReadOnlyList<int>? regimeIds = null, int regimeCount = 0)
+        IReadOnlyList<int>? regimeIds = null, int regimeCount = 0,
+        MlTargetKind targetKind = MlTargetKind.ForwardReturn)
     {
         ArgumentNullException.ThrowIfNull(candles);
         ArgumentNullException.ThrowIfNull(factors);
@@ -35,7 +36,9 @@ public sealed class DatasetBuilder : IDatasetBuilder
             featureSeries[f] = _factorCache.GetOrCompute(factors[f].Factor, factors[f].Parameters, candles);
         }
 
-        var forward = new FactorEvaluator().ForwardReturns(candles, forwardHorizon);
+        // [1.V] Il target dipende da cosa si vuole predire: rendimento (storico), |rendimento| o
+        // volatilità realizzata forward. Con il default il percorso è identico a prima.
+        var forward = ForwardTargets.Compute(candles, forwardHorizon, targetKind);
 
         var rows = new List<FeatureRow>();
         var timestamps = new List<DateTime>();

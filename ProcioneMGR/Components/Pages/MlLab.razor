@@ -214,6 +214,19 @@
                     <label class="form-label">Orizzonte forward</label>
                     <input type="number" step="1" min="1" class="form-control" style="width: 8rem;" @bind="_forwardHorizon" disabled="@_busy" />
                 </div>
+                <div class="col-auto">
+                    <label class="form-label">Target</label>
+                    <select class="form-select" style="width: 14rem;" @bind="_targetKind" disabled="@_busy">
+                        <option value="@MlTargetKind.ForwardReturn">Rendimento (default)</option>
+                        <option value="@MlTargetKind.ForwardAbsReturn">|Rendimento| (rischio)</option>
+                        <option value="@MlTargetKind.ForwardRealizedVol">Volatilità realizzata</option>
+                    </select>
+                    <div class="form-text" style="max-width: 20rem;">
+                        Dopo 445.280 combinazioni direzionali a zero sopravvissuti, predire il <em>rischio</em> è la
+                        domanda con più probabilità di risposta. I target non-rendimento si misurano nel Lab ma
+                        <strong>non si salvano</strong> come modelli: il trading li leggerebbe come segnali direzionali.
+                    </div>
+                </div>
             </div>
         </AdvancedPanel>
 
@@ -437,6 +450,7 @@
     private DateTime _to = DateTime.UtcNow.Date;
     private int _trainSplitPercent = 70;
     private int _forwardHorizon = 1;
+    private MlTargetKind _targetKind = MlTargetKind.ForwardReturn;
 
     private readonly HashSet<string> _selectedFactors = new() { "Momentum", "RsiFactor", "MacdFactor" };
 
@@ -482,7 +496,8 @@
         _exchange, _symbol, _timeframe, _from, _to, _trainSplitPercent, _forwardHorizon,
         _selectedFactors.ToList(), _selectedSavedFactorIds.ToList(),
         _modelType, _stackBaseModels.ToList(), _stackMode, _attnWindow, _attnEmbed,
-        _longThreshold, _shortThreshold, _initialCapital, _positionSizePercent, _feePercent);
+        _longThreshold, _shortThreshold, _initialCapital, _positionSizePercent, _feePercent,
+        _targetKind);
 
     private string CaptureConfigJson() => Svc.SerializeConfig(Snapshot());
 

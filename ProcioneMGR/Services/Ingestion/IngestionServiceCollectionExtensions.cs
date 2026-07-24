@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using ProcioneMGR.Services.Exchanges;
 
 namespace ProcioneMGR.Services.Ingestion;
@@ -23,17 +24,30 @@ public static class IngestionServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddExchangeClients(this IServiceCollection services)
     {
+        // [R1] Orologio allineato ai server degli exchange: evita che una deriva dell'orologio
+        // locale faccia rifiutare richieste firmate valide (Binance -1021, "timestamp outside of
+        // recvWindow"). Parte a offset zero, quindi finché il worker non ha misurato il
+        // comportamento è quello storico.
+        services.TryAddSingleton<IExchangeClock, ExchangeClock>();
+        services.AddHttpClient();   // IHttpClientFactory per la sonda di ora del server
+        services.AddHostedService<ExchangeClockSyncWorker>();
+
+        // [R1] Disciplina di rate-limit su OGNI chiamata REST: token bucket proattivo + ritiro su
+        // 429/418 rispettando Retry-After. Come DelegatingHandler vale per tutti i punti di
+        // chiamata senza doverli toccare uno per uno.
+        services.AddTransient<ExchangeRateLimitHandler>();
+
         // I client sono typed HttpClient: base address e User-Agent centralizzati qui.
         services.AddHttpClient<BinanceClient>(client =>
         {
             client.BaseAddress = new Uri("https://api.binance.com");
             client.DefaultRequestHeaders.UserAgent.ParseAdd("ProcioneMGR/1.0");
-        });
+        }).AddHttpMessageHandler<ExchangeRateLimitHandler>();
         services.AddHttpClient<BitgetClient>(client =>
         {
             client.BaseAddress = new Uri("https://api.bitget.com");
             client.DefaultRequestHeaders.UserAgent.ParseAdd("ProcioneMGR/1.0");
-        });
+        }).AddHttpMessageHandler<ExchangeRateLimitHandler>();
         services.AddSingleton<IExchangeClientFactory, ExchangeClientFactory>();
 
         return services;

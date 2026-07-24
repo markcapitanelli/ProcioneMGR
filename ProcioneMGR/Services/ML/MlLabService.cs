@@ -21,7 +21,9 @@ public sealed record MlConfigSnapshot(
     int TrainSplitPercent, int ForwardHorizon,
     IReadOnlyList<string> Factors, IReadOnlyList<int> SavedFactorIds,
     string ModelType, IReadOnlyList<string> StackBaseModels, StackingMode StackMode, int AttnWindow, int AttnEmbed,
-    decimal LongThreshold, decimal ShortThreshold, decimal InitialCapital, decimal PositionSizePercent, decimal FeePercent);
+    decimal LongThreshold, decimal ShortThreshold, decimal InitialCapital, decimal PositionSizePercent, decimal FeePercent,
+    // [1.V] In coda e con default per compatibilità con i preset salvati prima del campo.
+    MlTargetKind TargetKind = MlTargetKind.ForwardReturn);
 
 /// <summary>Esito di un'azione con messaggio per l'operatore.</summary>
 public sealed record MlActionResult(string Message, bool IsError)
@@ -147,7 +149,7 @@ public sealed class MlLabService(
         if (factors.Count == 0)
             return MlActionResult.Error("Seleziona almeno un fattore (alpha o minato).");
 
-        var dataset = datasetBuilder.Build(trainCandles, factors, cfg.ForwardHorizon);
+        var dataset = datasetBuilder.Build(trainCandles, factors, cfg.ForwardHorizon, targetKind: cfg.TargetKind);
         if (dataset.RowCount < 20)
             return MlActionResult.Error("Troppo poche righe utilizzabili dopo il warm-up dei fattori: allarga il periodo di train.");
 
@@ -284,6 +286,18 @@ public sealed class MlLabService(
 
     public async Task<MlActionResult> SaveModelAsync(MlConfigSnapshot cfg, string modelName, string? userId, CancellationToken ct = default)
     {
+        // [1.V] GUARDIA DI SEMANTICA, per prima e indipendente dallo stato di addestramento: tutto
+        // ciò che consuma un SavedMlModel (MlStrategy, registry, Champion) interpreta la predizione
+        // come RENDIMENTO ATTESO e la confronta con le soglie long/short. Un modello che predice la
+        // volatilità darebbe segnali privi di senso (vol alta ≠ compra). Finché non esiste il
+        // consumo dedicato (LeverageAdvisor/vol-targeting, fase 2 dell'item 1.V), un modello
+        // non-direzionale resta nel Lab: si misura, non si salva.
+        if (cfg.TargetKind != MlTargetKind.ForwardReturn)
+            return MlActionResult.Error(
+                $"Il target '{cfg.TargetKind}' non è un rendimento: salvarlo lo farebbe interpretare come segnale " +
+                "direzionale dal trading. Usalo nel Lab per misurare la prevedibilità del rischio; il consumo dedicato " +
+                "(sizing/vol-targeting) è la fase 2 dell'item 1.V della roadmap.");
+
         if (_predictor is null || TrainedFactors is null || userId is null)
             return MlActionResult.Error("Nessun modello addestrato da salvare.");
         if (string.IsNullOrWhiteSpace(modelName))

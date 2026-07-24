@@ -471,6 +471,61 @@
                             </label>
                         </div>
                     </div>
+
+                    <div class="col-12"><hr class="my-2" /></div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="volTarget" @bind="Service.Safety.VolatilityTargetingEnabled" />
+                            <label class="form-check-label" for="volTarget">
+                                <strong>Dosa la posizione sulla volatilità</strong>
+                                <span class="text-muted">(spento di default)</span>
+                            </label>
+                        </div>
+                        <div class="form-text">
+                            La size per apertura viene moltiplicata per un fattore che punta a una volatilità costante:
+                            meno capitale esposto quando il mercato si agita, di più quando si calma.
+                            Col tetto a 1,0 il fattore può <strong>solo ridurre</strong> la size, mai aumentarla —
+                            quindi accenderlo non può far superare i limiti qui sopra.
+                        </div>
+                        <div class="alert alert-secondary py-2 mt-2 mb-0 small">
+                            <strong>Cosa aspettarsi, misurato — e cosa no.</strong>
+                            Questa funzione nasce da un risultato di ricerca che poi <strong>non ha replicato</strong>:
+                            su un paniere di 24 monete migliorava lo Sharpe da 0,12 a 0,43, ma su un insieme diverso di
+                            12 simboli lo peggiora (0,57 contro 0,79), e su singolo simbolo batte l'esposizione costante
+                            equivalente solo in 2 casi su 12. Un campione favorevole e uno sfavorevole non fanno un edge.
+                            <br />
+                            Quello che fa in modo affidabile, misurato ovunque, è
+                            <strong>ridurre l'esposizione media e quindi l'ampiezza delle oscillazioni</strong>
+                            (36–62% di esposizione, drawdown compressi; sulle strategie del catalogo dimezza le perdite
+                            senza recuperarne nessuna).
+                            Accendilo se vuoi <em>oscillare meno accettando di guadagnare meno</em>.
+                            Non aspettarti che migliori il rendimento corretto per il rischio, né che sistemi una strategia
+                            che perde. Tabelle complete in <code>docs/REPORT-DOSAGGIO-VOLATILITA.md</code>.
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Volatilità annua obiettivo (%)</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.TargetAnnualVolatilityPercent" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Barre per la stima</label>
+                        <input type="number" step="1" min="2" class="form-control form-control-sm" @bind="Service.Safety.VolatilityLookbackBars" />
+                        <div class="form-text">30 è il valore validato.</div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Fattore minimo</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MinExposureMultiplier" />
+                        <div class="form-text">Pavimento: sotto non si scende.</div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Fattore massimo</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MaxExposureMultiplier" />
+                        <div class="form-text @(Service.Safety.MaxExposureMultiplier > 1m ? "text-warning" : "")">
+                            @(Service.Safety.MaxExposureMultiplier > 1m
+                                ? "Sopra 1,0 il dosaggio può INGRANDIRE la posizione: la garanzia di non superare i limiti qui sopra non vale più."
+                                : "A 1,0 il dosaggio può solo ridurre.")
+                        </div>
+                    </div>
                 </div>
                 <div class="mt-3">
                     <button class="btn btn-warning btn-sm" @onclick="SaveSafetyAsync">Salva configurazione</button>

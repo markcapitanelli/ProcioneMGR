@@ -19,7 +19,10 @@ public sealed record OptimizationConfigSnapshot(
     ExchangeName Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
     decimal InitialCapital, decimal Commission, int InSampleMonths, int OosMonths, int StepMonths,
     SearchStrategy SearchStrategy, int BayesIterations, int BayesInitialRandom, int BayesSeed,
-    string StrategyName, int MlModelId, IReadOnlyList<OptRange> Ranges);
+    string StrategyName, int MlModelId, IReadOnlyList<OptRange> Ranges,
+    // [T0.1] In coda e con default per compatibilità: i preset salvati prima del campo
+    // deserializzano a 0 (= nessun embargo, comportamento storico).
+    int EmbargoBars = 0);
 
 /// <summary>Esito di un'azione con messaggio per l'operatore.</summary>
 public sealed record OptActionResult(string Message, bool IsError)
@@ -127,14 +130,15 @@ public sealed class OptimizationPageService(
         string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
         decimal InitialCapital, decimal Commission, int InSampleMonths, int OosMonths, int StepMonths,
         string SearchStrategy, int BayesIterations, int BayesInitialRandom, int BayesSeed,
-        string StrategyName, int MlModelId, List<RangeDto> Ranges);
+        string StrategyName, int MlModelId, List<RangeDto> Ranges, int EmbargoBars = 0);
 
     public string SerializeConfig(OptimizationConfigSnapshot cfg) => JsonSerializer.Serialize(new ConfigDto(
         cfg.Exchange.ToString(), cfg.Symbol.Trim(), cfg.Timeframe, cfg.From, cfg.To,
         cfg.InitialCapital, cfg.Commission, cfg.InSampleMonths, cfg.OosMonths, cfg.StepMonths,
         cfg.SearchStrategy.ToString(), cfg.BayesIterations, cfg.BayesInitialRandom, cfg.BayesSeed,
         cfg.StrategyName, cfg.MlModelId,
-        cfg.Ranges.Select(r => new RangeDto(r.Key, r.Min, r.Max, r.Step)).ToList()));
+        cfg.Ranges.Select(r => new RangeDto(r.Key, r.Min, r.Max, r.Step)).ToList(),
+        cfg.EmbargoBars));
 
     /// <summary>
     /// Applica un preset a <paramref name="current"/>: exchange/timeframe/strategia presi dal preset
@@ -175,6 +179,7 @@ public sealed class OptimizationPageService(
             InSampleMonths = dto.InSampleMonths,
             OosMonths = dto.OosMonths,
             StepMonths = dto.StepMonths,
+            EmbargoBars = Math.Max(0, dto.EmbargoBars),
             SearchStrategy = search,
             BayesIterations = dto.BayesIterations,
             BayesInitialRandom = dto.BayesInitialRandom,
@@ -304,6 +309,7 @@ public sealed class OptimizationPageService(
             WalkForward = new WalkForwardConfiguration
             {
                 InSampleMonths = cfg.InSampleMonths, OutOfSampleMonths = cfg.OosMonths, StepMonths = cfg.StepMonths,
+                EmbargoBars = cfg.EmbargoBars,
             },
             SearchStrategy = cfg.SearchStrategy,
             BayesianIterations = cfg.BayesIterations,

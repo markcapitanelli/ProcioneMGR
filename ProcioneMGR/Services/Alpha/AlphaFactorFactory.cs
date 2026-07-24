@@ -20,7 +20,7 @@ public interface IAlphaFactorFactory
 
 public sealed class AlphaFactorFactory : IAlphaFactorFactory
 {
-    // Gli 8 fattori scritti a mano (rif. Jansen cap. 24): prototipi con parametri regolabili.
+    // I fattori scritti a mano (rif. Jansen cap. 24): prototipi con parametri regolabili.
     private static readonly IAlphaFactor[] HandwrittenPrototypes =
     [
         new MomentumFactor(),
@@ -31,6 +31,10 @@ public sealed class AlphaFactorFactory : IAlphaFactorFactory
         new RsiFactor(),
         new MacdFactor(),
         new DistanceFromMaFactor(),
+        // [3.8b] Order flow dai campi klines recuperati (T0.3): null sulle candele non reingerite,
+        // quindi innocui sulle serie che non hanno ancora i campi estesi.
+        new TakerImbalanceFactor(),
+        new AvgTradeSizeFactor(),
     ];
 
     private readonly IReadOnlyList<IAlphaFactor> _basePrototypes;
@@ -75,6 +79,8 @@ public sealed class AlphaFactorFactory : IAlphaFactorFactory
         "RealizedVol" => new RealizedVolatilityFactor(),
         "ParkinsonVol" => new ParkinsonVolatilityFactor(),
         "RelativeVolume" => new RelativeVolumeFactor(),
+        "TakerImbalance" => new TakerImbalanceFactor(),
+        "AvgTradeSize" => new AvgTradeSizeFactor(),
         "RsiFactor" => new RsiFactor(),
         "MacdFactor" => new MacdFactor(),
         "DistanceFromMa" => new DistanceFromMaFactor(),

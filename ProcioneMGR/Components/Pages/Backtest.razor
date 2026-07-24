@@ -192,6 +192,19 @@
                     <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_fundingPercent" disabled="@_busy" />
                 </div>
             </div>
+            @* Il default del campo e' onesto, ma la pagina ripristina l'ultima configurazione usata:
+               chi aveva salvato 0 continuerebbe a misurare senza attrito senza accorgersene.
+               Riscrivergli la configurazione in silenzio sarebbe peggio — meglio renderlo visibile. *@
+            @if (_slippagePercent <= 0m)
+            {
+                <div class="alert alert-warning py-2 mt-2 mb-0 small">
+                    <strong>Stai misurando senza slippage.</strong> I fill saranno teorici, al prezzo di chiusura esatto.
+                    Sui dati di questa piattaforma i costi sono la variabile che decide: un candidato con
+                    lordo +7,7% è risultato −7,6% netto, e i sei migliori su 445.280 combinazioni hanno perso
+                    fra il 17% e il 27% del capitale in commissioni e slippage in 4,5 mesi.
+                    Valore realistico per queste coppie: <strong>@ProcioneMGR.Services.Pipeline.PipelineCosts.DefaultSlippagePercent.ToString("0.##")%</strong> per fill.
+                </div>
+            }
         </AdvancedPanel>
 
         <div class="mt-3 d-flex gap-2 align-items-center">
@@ -464,7 +477,16 @@
     private decimal _takeProfitPercent;
     private decimal _trailingStopPercent;
     private decimal _leverage = 1m;
-    private decimal _slippagePercent;
+
+    /// <summary>
+    /// Slippage ONESTO di default, non zero. Il Backtest è il primo strumento che il percorso della
+    /// piattaforma propone: se la prima misura che un utente fa è senza attrito, si porta dietro un
+    /// ottimismo che l'Ottimizzazione — che dal 2026-07 parte con lo stesso default — poi smentisce.
+    /// La ricerca ha misurato che i costi sono la variabile che decide: un candidato con lordo
+    /// +7,7% diventa −7,6% netto. Chi vuole i fill teorici deve chiedere esplicitamente 0.
+    /// </summary>
+    private decimal _slippagePercent = ProcioneMGR.Services.Pipeline.PipelineCosts.DefaultSlippagePercent;
+
     private decimal _fundingPercent;
 
     private string _strategyName = "EmaCross";

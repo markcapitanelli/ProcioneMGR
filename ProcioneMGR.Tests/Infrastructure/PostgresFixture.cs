@@ -45,14 +45,13 @@ public sealed class PostgresFixture : IAsyncLifetime
             _container = new PostgreSqlBuilder().WithImage("postgres:16-alpine")
                 // max_connections: il default (100) è un tetto GLOBALE del server, non per database.
                 // Ogni classe di test apre pool Npgsql propri (connection string unica per il DB
-                // isolato) e le connessioni idle restano vive ben oltre il singolo test: attorno ai
-                // ~910 test la suite era già al limite, e l'aggiunta di 2 test ha iniziato a far
-                // fallire vittime INCOLPEVOLI (chiunque apra la connessione dopo) con
-                // "53300: sorry, too many clients already" — riproducibile in suite piena, verde in
-                // isolamento. 300 dà margine per anni di test additivi; il costo è solo RAM del
-                // container effimero. NB: vale solo per il container; su un server esterno
-                // (POSTGRES_TEST_ADMIN) il limite lo decide chi lo amministra.
-                .WithCommand("-c", "max_connections=300")
+                // isolato): a ~910 test il tetto 100 è caduto, alzato a 300 "per anni"… e a ~1477
+                // test è caduto anche quello (CI PR #32, "53300: sorry, too many clients already",
+                // vittime incolpevoli = chi apre DOPO il limite). La cura VERA non è il tetto ma la
+                // potatura: vedi ConnectionIdleLifetime in CreateDatabase — le connessioni idle delle
+                // classi già finite ora muoiono in ~10s invece che in 300s (quasi l'intera durata
+                // della suite). Il 500 resta come cintura: RAM del container effimero, nient'altro.
+                .WithCommand("-c", "max_connections=500")
                 .Build();
         }
         else
@@ -108,7 +107,18 @@ public sealed class PostgresFixture : IAsyncLifetime
             cmd.ExecuteNonQuery();
         }
         _createdDatabases.Add(name);
-        return new NpgsqlConnectionStringBuilder(_adminConnectionString) { Database = name }.ConnectionString;
+        return new NpgsqlConnectionStringBuilder(_adminConnectionString)
+        {
+            Database = name,
+            // LA cura del "53300: too many clients": ogni DB di test ha una connection string unica
+            // ⇒ un pool Npgsql GLOBALE tutto suo, che sopravvive alla dispose del ServiceProvider
+            // della classe. Coi default (idle lifetime 300s) le connessioni delle classi già finite
+            // restavano vive quasi quanto l'intera suite, accumulandosi fino al tetto del server.
+            // Con potatura a 10s il conteggio si autolimita alle classi ATTIVE; il costo è qualche
+            // riapertura fisica nei test lunghi, irrilevante.
+            ConnectionIdleLifetime = 10,
+            ConnectionPruningInterval = 5,
+        }.ConnectionString;
     }
 }
 

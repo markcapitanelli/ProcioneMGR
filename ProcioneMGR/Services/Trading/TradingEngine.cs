@@ -52,7 +52,11 @@ public sealed class TradingEngine(
     ProcioneMGR.Services.Security.IMasterKeyStatus? masterKeyStatus = null,
     ProcioneMGR.Services.ML.IMlComparisonClient? mlComparisonClient = null,
     IOptionsMonitor<ProcioneMGR.Services.ML.MlComparisonOptions>? mlComparisonOptions = null,
-    ProcioneMGR.Services.Security.IExchangeCredentialReader? credentialReader = null) : ITradingEngine
+    ProcioneMGR.Services.Security.IExchangeCredentialReader? credentialReader = null,
+    // [R3] Destinatario del profilo di rischio della corsia (tipicamente lo STESSO oggetto passato
+    // come `safety`, cioè un LaneSafetyMonitor). Opzionale: se assente, la corsia resta sulle
+    // soglie globali — il comportamento di prima di R3.
+    ILaneRiskProfileSink? riskProfileSink = null) : ITradingEngine
 {
     public int LaneId => laneId;
 
@@ -187,6 +191,19 @@ public sealed class TradingEngine(
             }
 
             var cfg = await ensemble.GetConfigurationAsync(ct);
+
+            // [R3] Il profilo di rischio della corsia entra in vigore QUI, prima di ogni controllo
+            // sottostante: leva massima e coerenza del sizing devono essere validate contro le
+            // soglie EFFETTIVE della corsia, non contro quelle globali. Nome sconosciuto o assente
+            // ⇒ null ⇒ soglie globali, cioè il comportamento di prima di R3.
+            var laneProfile = Risk.RiskProfiles.Find(cfg.RiskProfileName);
+            riskProfileSink?.SetProfile(laneProfile);
+            if (laneProfile is not null)
+            {
+                logger.LogInformation("Lane {Lane}: profilo di rischio '{Profile}' attivo (≤{Trades:F0} operazioni/giorno).",
+                    laneId, laneProfile.DisplayName, laneProfile.MaxTradesPerDay);
+            }
+
             var capital = cfg.TotalCapital > 0 ? cfg.TotalCapital : 10_000m;
             var marketType = cfg.IsFutures ? MarketType.Futures : MarketType.Spot;
             var requestedLeverage = marketType == MarketType.Futures ? Math.Max(1, cfg.Leverage) : 1;
@@ -445,69 +462,15 @@ public sealed class TradingEngine(
             await ReconcileFuturesPositionsAsync(price, ts, ct);
 
             // Mark-to-market + liquidazione (solo Futures) + stop loss / take profit.
-            foreach (var pos in _positions.ToList())
-            {
-                MarkToMarket(pos, price);
-
-                // Liquidazione: controllata su High/Low della candela (un wick intrabar può
-                // toccare il prezzo di liquidazione anche se la Close resta al sicuro) — a
-                // differenza di stop loss/take profit sotto, dove la semplificazione "solo
-                // Close" è preesistente e qui non viene toccata.
-                if (_state.MarketType == MarketType.Futures && pos.LiquidationPrice is decimal liq && liq > 0m)
-                {
-                    var hit = pos.Side == OrderSide.Buy ? candle.Low <= liq : candle.High >= liq;
-                    if (hit)
-                    {
-                        await ClosePositionAsync(pos, liq, "Liquidation", ts, ct);
-                        continue;
-                    }
-                }
-
-                // Stop/target INTRABAR su High/Low della candela chiusa (come la liquidazione sopra e
-                // come il motore di backtest), NON solo sulla Close: un wick può bucare lo stop anche
-                // se la candela chiude al di là — prima questa asimmetria rendeva il live più ottimista
-                // del backtest. Esecuzione al LIVELLO dello stop/target (o all'open se la candela apre
-                // già oltre, per un gap), esito peggiore per la posizione.
-                var high = candle.High;
-                var low = candle.Low;
-
-                // Trailing: livello calcolato sul best-since-entry delle candele PRECEDENTI (causale,
-                // come il backtest); il best si aggiorna con QUESTA candela solo dopo il controllo.
-                var effectiveStop = pos.StopLoss;
-                if (pos.TrailingStopPercent is decimal trailPct && trailPct > 0m)
-                {
-                    var best = pos.BestPriceSinceEntry ?? pos.EntryPrice;
-                    var trailLevel = pos.Side == OrderSide.Buy
-                        ? best * (1m - trailPct / 100m)
-                        : best * (1m + trailPct / 100m);
-                    if (effectiveStop is null
-                        || (pos.Side == OrderSide.Buy && trailLevel > effectiveStop.Value)
-                        || (pos.Side == OrderSide.Sell && trailLevel < effectiveStop.Value))
-                    {
-                        effectiveStop = trailLevel;
-                    }
-                }
-
-                // Stop PRIMA del target: se entrambi cadono nella stessa candela si assume lo stop.
-                if (effectiveStop is decimal sl
-                    && ((pos.Side == OrderSide.Buy && low <= sl) || (pos.Side == OrderSide.Sell && high >= sl)))
-                {
-                    var fill = pos.Side == OrderSide.Buy ? Math.Min(sl, candle.Open) : Math.Max(sl, candle.Open);
-                    await ClosePositionAsync(pos, fill, "StopLoss", ts, ct);
-                }
-                else if (pos.TakeProfit is decimal tp
-                    && ((pos.Side == OrderSide.Buy && high >= tp) || (pos.Side == OrderSide.Sell && low <= tp)))
-                {
-                    var fill = pos.Side == OrderSide.Buy ? Math.Max(tp, candle.Open) : Math.Min(tp, candle.Open);
-                    await ClosePositionAsync(pos, fill, "TakeProfit", ts, ct);
-                }
-                else if (pos.TrailingStopPercent is > 0m)
-                {
-                    pos.BestPriceSinceEntry = pos.Side == OrderSide.Buy
-                        ? Math.Max(pos.BestPriceSinceEntry ?? pos.EntryPrice, high)
-                        : Math.Min(pos.BestPriceSinceEntry ?? pos.EntryPrice, low);
-                }
-            }
+            //
+            // La DECISIONE vive in ProtectiveExitEvaluator (funzione pura): stessa identica logica
+            // usata dal percorso a tick real-time (ProcessPriceTickAsync), così le due strade non
+            // possono divergere. Qui resta solo l'esecuzione (chiusura + persistenza).
+            //
+            // Stop/target sono valutati INTRABAR su High/Low della candela chiusa, come la
+            // liquidazione e come il motore di backtest: un wick può bucare lo stop anche se la
+            // candela chiude al di là.
+            await ApplyProtectiveExitsAsync(candle.Open, candle.High, candle.Low, price, ts, "candle", ct);
 
             // Valuta i segnali delle strategie.
             var closes = _buffer.Select(c => c.Close).ToList();
@@ -563,6 +526,108 @@ public sealed class TradingEngine(
             }
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// [R1] Elabora un TICK di prezzo real-time. Valuta ESCLUSIVAMENTE le uscite protettive
+    /// (liquidazione, stop loss, take profit, trailing) sulle posizioni già aperte.
+    ///
+    /// CONFINE NON NEGOZIABILE: da qui non si apre MAI una posizione e non si valuta MAI un segnale
+    /// di strategia. <see cref="IStrategy"/> è per-candela con indicatori precalcolati ed è quello
+    /// che il backtest valida: valutarlo sui tick introdurrebbe un divario backtest/live nuovo,
+    /// esattamente l'opposto di ciò che questo percorso serve a chiudere. Gli ingressi restano
+    /// governati da <see cref="ProcessCandleAsync"/>.
+    ///
+    /// Il tick è passato all'evaluator come barra DEGENERE (open=high=low=prezzo): la stessa
+    /// funzione pura decide per candela e per tick, e il fill collassa spontaneamente sul prezzo
+    /// corrente di mercato — il prezzo realistico di esecuzione in quell'istante.
+    ///
+    /// COALESCENZA: se il motore è occupato (una chiusura in corso fa I/O di rete tenendo il gate)
+    /// il tick viene SCARTATO invece di accodarsi. Ne arriva un altro entro millisecondi, mentre una
+    /// coda di tick vecchi farebbe decidere su prezzi ormai stantii. Questo è anche il latch che
+    /// impedisce a una raffica di tick di emettere due chiusure sulla stessa posizione: chi non
+    /// entra non decide, e chi entra dopo non trova più la posizione chiusa in <see cref="_positions"/>.
+    /// </summary>
+    public async Task ProcessPriceTickAsync(decimal price, DateTime tsUtc, CancellationToken ct = default)
+    {
+        if (price <= 0m)
+        {
+            return; // prezzo non plausibile: mai decidere un'uscita su di esso
+        }
+
+        if (!await _gate.WaitAsync(0, ct))
+        {
+            return; // motore occupato: si scarta questo tick, non si accoda
+        }
+        try
+        {
+            await EnsureLoadedAsync(ct);
+            if (!_state.IsRunning || _state.IsEmergencyStopped || _positions.Count == 0)
+            {
+                return;
+            }
+
+            var ts = DateTime.SpecifyKind(tsUtc, DateTimeKind.Utc);
+            await ApplyProtectiveExitsAsync(price, price, price, price, ts, "tick", ct);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Mark-to-market e applicazione delle uscite protettive a tutte le posizioni aperte della
+    /// corsia. Il CHIAMANTE deve già detenere <see cref="_gate"/>.
+    ///
+    /// La decisione è delegata a <see cref="ProtectiveExitEvaluator"/> (pura, condivisa fra percorso
+    /// a candela e percorso a tick); qui resta solo l'esecuzione. Il ciclo itera su una COPIA perché
+    /// <see cref="ClosePositionAsync"/> rimuove da <see cref="_positions"/>.
+    /// </summary>
+    private async Task ApplyProtectiveExitsAsync(
+        decimal open, decimal high, decimal low, decimal markPrice, DateTime ts, string source, CancellationToken ct)
+    {
+        var isFutures = _state.MarketType == MarketType.Futures;
+
+        foreach (var pos in _positions.ToList())
+        {
+            MarkToMarket(pos, markPrice);
+
+            var liquidation = ProtectiveExitEvaluator.EvaluateLiquidation(pos, high, low, isFutures);
+            if (liquidation.ShouldClose)
+            {
+                await CloseAndCountAsync(pos, liquidation, source, ts, ct);
+                continue;
+            }
+
+            var exit = ProtectiveExitEvaluator.EvaluateStopAndTarget(pos, open, high, low);
+            if (exit.ShouldClose)
+            {
+                await CloseAndCountAsync(pos, exit, source, ts, ct);
+            }
+            else
+            {
+                // Solo se NESSUNA uscita è scattata: il trailing resta causale.
+                ProtectiveExitEvaluator.UpdateBestSinceEntry(pos, high, low);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Chiude e conta l'uscita SOLO se la chiusura è andata a buon fine, cioè se la posizione ha
+    /// davvero lasciato <see cref="_positions"/>.
+    ///
+    /// La distinzione conta: <see cref="ClosePositionAsync"/> può rinunciare (rete incerta, rifiuto
+    /// dell'exchange) lasciando la posizione aperta per il retry. Contando comunque, un ordine di
+    /// chiusura che continua a fallire genererebbe una registrazione a OGNI valutazione — e sul
+    /// percorso a tick, dove le valutazioni sono decine al secondo invece di una per candela,
+    /// gonfierebbe di migliaia di conteggi proprio la metrica che serve a confrontare tick e candela.
+    /// </summary>
+    private async Task CloseAndCountAsync(
+        OpenPosition pos, Internal.ProtectiveExit exit, string source, DateTime ts, CancellationToken ct)
+    {
+        await ClosePositionAsync(pos, exit.FillPrice, exit.Reason, ts, ct);
+        if (!_positions.Contains(pos))
+        {
+            metrics?.RecordProtectiveExit(source, exit.Reason);
+        }
     }
 
     /// <summary>
@@ -655,8 +720,14 @@ public sealed class TradingEngine(
 
     private SignalOrderBuilder SignalOrderBuilder => new(logger, Persistence, safety);
 
+    /// <summary>
+    /// Le chiusure passate a <see cref="SignalOrderBuilder"/> vengono dal buffer del motore, cioè
+    /// dalle STESSE candele che la strategia ha già visto: il dosaggio sulla volatilità non può
+    /// quindi guardare avanti più di quanto guardi il segnale che sta dimensionando.
+    /// </summary>
     private Task TryOpenAsync(EnsembleStrategy strat, OrderSide side, decimal price, DateTime ts, CancellationToken ct) =>
-        SignalOrderBuilder.TryOpenAsync(_state, _filters, TryBuildAndStartExecutionPlanAsync, strat, side, price, ts, ct);
+        SignalOrderBuilder.TryOpenAsync(_state, _filters, TryBuildAndStartExecutionPlanAsync, strat, side, price, ts, ct,
+            _buffer.Select(c => c.Close).ToList());
 
     /// <summary>
     /// Applica automaticamente lo stop-loss/take-profit/trailing validati nel backtest (se

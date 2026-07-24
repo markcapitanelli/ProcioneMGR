@@ -183,6 +183,44 @@ public class TradingServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void RealtimeFeed_LivesOnlyWhereTheEngineIsLocal()
+    {
+        // [R1] Stessa regola "un scrittore, un host" degli altri componenti attivi. Il feed non può
+        // stare nel monolite quando il trading è remoto per DUE motivi, entrambi sufficienti:
+        //  - i tick dovrebbero attraversare gRPC, reintroducendo dal lato sbagliato proprio la
+        //    latenza che il feed serve a togliere;
+        //  - RemoteTradingEngineClient.ProcessPriceTickAsync LANCIA di proposito, quindi un feed
+        //    registrato lì produrrebbe un fiume di eccezioni invece di chiudere posizioni.
+        using (var remote = BuildProvider(useRemoteTrading: true))
+        {
+            Assert.Empty(remote.GetServices<IHostedService>().OfType<ProcioneMGR.Services.MarketData.RealtimePriceWorker>());
+        }
+
+        using (var local = BuildProvider(useRemoteTrading: false))
+        {
+            Assert.Single(local.GetServices<IHostedService>().OfType<ProcioneMGR.Services.MarketData.RealtimePriceWorker>());
+        }
+
+        // Il servizio di trading standalone È l'host locale: lì il feed deve esserci.
+        using (var tradingHost = BuildProvider(useRemoteTrading: true, isTradingServiceHost: true))
+        {
+            Assert.Single(tradingHost.GetServices<IHostedService>().OfType<ProcioneMGR.Services.MarketData.RealtimePriceWorker>());
+        }
+    }
+
+    [Fact]
+    public void RealtimeFeed_IsOneForTheFleet_NotOnePerLane()
+    {
+        // Una connessione WebSocket per exchange, condivisa da tutte le corsie. Registrarne una per
+        // corsia aprirebbe TradingLanes.Count connessioni identiche allo stesso stream: spreco e
+        // rumore verso l'exchange, senza alcun beneficio.
+        using var sp = BuildProvider(useRemoteTrading: false);
+
+        Assert.Single(sp.GetServices<IHostedService>().OfType<ProcioneMGR.Services.MarketData.RealtimePriceWorker>());
+        Assert.Equal(2, sp.GetServices<ProcioneMGR.Services.MarketData.IExchangeStreamMapper>().Count()); // Binance + Bitget
+    }
+
+    [Fact]
     public void ToggleOff_StartsWorkersInTheHistoricalOrder()
     {
         // Gli IHostedService partono in ordine di registrazione. Il ramo locale è un'estrazione a

@@ -469,10 +469,19 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
 
+                    b.Property<decimal?>("QuoteVolume")
+                        .HasColumnType("numeric");
+
                     b.Property<string>("Symbol")
                         .IsRequired()
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
+
+                    b.Property<decimal?>("TakerBuyQuoteVolume")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal?>("TakerBuyVolume")
+                        .HasColumnType("numeric");
 
                     b.Property<string>("Timeframe")
                         .IsRequired()
@@ -481,6 +490,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
 
                     b.Property<DateTime>("TimestampUtc")
                         .HasColumnType("timestamp without time zone");
+
+                    b.Property<long?>("TradeCount")
+                        .HasColumnType("bigint");
 
                     b.Property<decimal>("Volume")
                         .HasPrecision(28, 8)

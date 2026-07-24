@@ -95,6 +95,24 @@ public sealed class OptimizationEngine(
             var inSlice = Slice(allCandles, win.IsStart, win.IsEnd);
             var outSlice = Slice(allCandles, win.OosStart, win.OosEnd);
 
+            // [T0.1] Embargo: salta le prime EmbargoBars barre dell'OOS, così l'informazione a
+            // cavallo del confine (posizioni aperte a fine IS, lookback degli indicatori) non
+            // contamina la misura fuori campione. Default 0 = comportamento storico invariato.
+            var embargo = config.WalkForward.EmbargoBars;
+            var oosStartEffective = win.OosStart;
+            if (embargo > 0)
+            {
+                if (outSlice.Count - embargo < 2)
+                {
+                    logger.LogWarning(
+                        "Finestra {W}: l'embargo di {Embargo} barre consuma quasi tutto l'out-of-sample ({N} barre): finestra saltata.",
+                        w, embargo, outSlice.Count);
+                    continue;
+                }
+                outSlice = outSlice.Skip(embargo).ToList();
+                oosStartEffective = outSlice[0].TimestampUtc;
+            }
+
             var comboResults = new ConcurrentBag<ComboResult>();
             var currentWindow = w;
 
@@ -109,7 +127,7 @@ public sealed class OptimizationEngine(
                     var isRes = await backtestEngine.RunBacktestAsync(isCfg, inSlice, ct2);
                     var isSharpe = Statistics.SharpeRatio(isRes.EquityCurve, periodsPerYear);
 
-                    var oosCfg = BuildBacktestConfig(config, combo, win.OosStart, win.OosEnd);
+                    var oosCfg = BuildBacktestConfig(config, combo, oosStartEffective, win.OosEnd);
                     var oosRes = await backtestEngine.RunBacktestAsync(oosCfg, outSlice, ct2);
                     var oosSharpe = Statistics.SharpeRatio(oosRes.EquityCurve, periodsPerYear);
 
@@ -186,7 +204,9 @@ public sealed class OptimizationEngine(
                 WindowIndex = w,
                 InSampleStart = win.IsStart,
                 InSampleEnd = win.IsEnd,
-                OutOfSampleStart = win.OosStart,
+                // Con embargo attivo l'OOS effettivo inizia DOPO il cuscinetto: il report riflette
+                // quello che è stato misurato davvero, non la finestra nominale.
+                OutOfSampleStart = oosStartEffective,
                 OutOfSampleEnd = win.OosEnd,
                 BestParameters = new Dictionary<string, decimal>(best.Parameters),
                 InSampleSharpe = best.IsSharpe,
@@ -201,6 +221,207 @@ public sealed class OptimizationEngine(
         return BuildResult(config, agg, wfWindows, combined, tested, sw.Elapsed);
     }
 
+    // ---------------------------------------------------------------- CPCV (T1.6)
+
+    /// <summary>
+    /// [T1.6 roadmap macchina-ricerca] Validazione CPCV del percorso strategie: la serie è divisa in
+    /// gruppi temporali contigui e per OGNI combinazione C(gruppi, gruppiTest) i parametri si
+    /// scelgono sui gruppi di train (con purge/embargo attorno ai test) e si giudicano sui gruppi di
+    /// test mai visti da quella scelta. Il risultato non è UN numero ma una DISTRIBUZIONE di Sharpe
+    /// out-of-sample — più percorsi dagli stessi dati, che è l'antidoto strutturale al "one lucky
+    /// path" del singolo walk-forward+holdout. Riusa <see cref="Validation.CombinatorialPurgedCv"/>
+    /// (finora confinato al percorso ML) e <see cref="Validation.BacktestOverfitting"/> per il PBO.
+    ///
+    /// Il train di uno split è l'insieme dei gruppi INTERAMENTE contenuti negli indici di train:
+    /// i gruppi mutilati dalle bande di purge/embargo vengono scartati (conservativo — meglio meno
+    /// train pulito che train contaminato). Lo score di train di una combinazione è la MEDIA degli
+    /// Sharpe sui gruppi di train: premia la costanza, non il singolo periodo fortunato.
+    /// </summary>
+    public async Task<CpcvResult> OptimizeCpcvAsync(
+        OptimizationConfiguration config,
+        CpcvConfiguration cpcv,
+        IProgress<OptimizationProgress>? progress,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(cpcv);
+        ValidateConfig(config);
+
+        var ppy = Statistics.PeriodsPerYear(config.Timeframe);
+        var allCandles = await LoadCandlesAsync(config, ct);
+        if (allCandles.Count < cpcv.Groups * 30)
+        {
+            throw new InvalidOperationException(
+                $"Servono almeno {cpcv.Groups * 30} candele per {cpcv.Groups} gruppi CPCV sensati (trovate {allCandles.Count}).");
+        }
+
+        var combos = GenerateCombinations(config.ParameterRanges);
+        if (combos.Count == 0) throw new InvalidOperationException("Nessuna combinazione di parametri generata.");
+
+        var splits = new Validation.CombinatorialPurgedCv()
+            .Split(allCandles.Count, cpcv.Groups, cpcv.TestGroups, cpcv.PurgeBars, cpcv.EmbargoBars);
+
+        // Confini dei gruppi (stessa segmentazione dello splitter: l'ultimo assorbe il resto).
+        var groupSize = allCandles.Count / cpcv.Groups;
+        var groupSlices = new List<OhlcvData>[cpcv.Groups];
+        for (var g = 0; g < cpcv.Groups; g++)
+        {
+            var start = g * groupSize;
+            var end = g == cpcv.Groups - 1 ? allCandles.Count : start + groupSize;
+            groupSlices[g] = allCandles.GetRange(start, end - start);
+        }
+
+        // Pre-calcolo per (combinazione × gruppo): Sharpe e rendimenti per-candela del gruppo.
+        // È il costo dominante (combos × gruppi backtest), parallelizzato sulle combinazioni.
+        var perGroupSharpe = new decimal[combos.Count, cpcv.Groups];
+        var perGroupReturns = new double[combos.Count, cpcv.Groups][];
+        var tested = 0;
+        var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = ct };
+
+        await Parallel.ForAsync(0, combos.Count, parallelOpts, async (c, ct2) =>
+        {
+            for (var g = 0; g < cpcv.Groups; g++)
+            {
+                try
+                {
+                    var cfg = BuildBacktestConfig(config, combos[c], groupSlices[g][0].TimestampUtc, groupSlices[g][^1].TimestampUtc);
+                    var res = await backtestEngine.RunBacktestAsync(cfg, groupSlices[g], ct2);
+                    perGroupSharpe[c, g] = Statistics.SharpeRatio(res.EquityCurve, ppy);
+                    perGroupReturns[c, g] = PerPeriodReturns(res.EquityCurve);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception)
+                {
+                    // Combinazione invalida su questo gruppo: Sharpe pessimo, mai scelta dal train.
+                    perGroupSharpe[c, g] = decimal.MinValue;
+                    perGroupReturns[c, g] = [];
+                }
+            }
+            var n = Interlocked.Increment(ref tested);
+            progress?.Report(new OptimizationProgress
+            {
+                CombinationsTested = n,
+                TotalCombinations = combos.Count,
+                CurrentWindow = 1,
+                TotalWindows = splits.Count,
+                Message = $"CPCV: {n}/{combos.Count} combinazioni × {cpcv.Groups} gruppi",
+            });
+        });
+
+        // Un percorso per split: scelta sul train, giudizio sul test.
+        var result = new CpcvResult { CombinationsTested = combos.Count, TotalPaths = splits.Count };
+        foreach (var split in splits)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var trainSet = split.TrainIndices.ToHashSet();
+            var trainGroups = new List<int>();
+            for (var g = 0; g < cpcv.Groups; g++)
+            {
+                var start = g * groupSize;
+                var end = g == cpcv.Groups - 1 ? allCandles.Count : start + groupSize;
+                var whole = true;
+                for (var i = start; i < end; i++)
+                {
+                    if (!trainSet.Contains(i)) { whole = false; break; }
+                }
+                if (whole) trainGroups.Add(g);
+            }
+            if (trainGroups.Count == 0) continue;
+
+            var bestCombo = -1;
+            var bestScore = decimal.MinValue;
+            for (var c = 0; c < combos.Count; c++)
+            {
+                decimal sum = 0m;
+                var valid = true;
+                foreach (var g in trainGroups)
+                {
+                    if (perGroupSharpe[c, g] == decimal.MinValue) { valid = false; break; }
+                    sum += perGroupSharpe[c, g];
+                }
+                if (!valid) continue;
+                var score = sum / trainGroups.Count;
+                if (score > bestScore || (score == bestScore && bestCombo >= 0 && ComboKey(combos[c]).CompareTo(ComboKey(combos[bestCombo])) < 0))
+                {
+                    bestScore = score;
+                    bestCombo = c;
+                }
+            }
+            if (bestCombo < 0) continue;
+
+            // Rendimenti OOS = concatenazione cronologica dei gruppi di test del percorso.
+            var oosReturns = new List<double>();
+            foreach (var g in split.TestGroups.OrderBy(x => x))
+            {
+                oosReturns.AddRange(perGroupReturns[bestCombo, g]);
+            }
+
+            result.Paths.Add(new CpcvPathResult
+            {
+                Combination = split.Combination,
+                TestGroups = split.TestGroups,
+                BestParameters = new Dictionary<string, decimal>(combos[bestCombo]),
+                TrainSharpe = bestScore,
+                OosSharpe = SharpeFromReturns(oosReturns, ppy),
+            });
+        }
+
+        if (result.Paths.Count > 0)
+        {
+            var sharpes = result.Paths.Select(p => p.OosSharpe).OrderBy(x => x).ToList();
+            result.MedianOosSharpe = TradeStatistics.Percentile(sharpes, 0.5m);
+            result.P05OosSharpe = TradeStatistics.Percentile(sharpes, 0.05m);
+            result.P95OosSharpe = TradeStatistics.Percentile(sharpes, 0.95m);
+            result.PositivePaths = result.Paths.Count(p => p.OosSharpe > 0m);
+
+            // Stabilità della selezione: quanto spesso i train scelgono gli stessi parametri.
+            var modal = result.Paths.GroupBy(p => ComboKey(p.BestParameters)).OrderByDescending(g => g.Count()).First();
+            result.ModalParameters = new Dictionary<string, decimal>(modal.First().BestParameters);
+            result.SelectionStability = (decimal)modal.Count() / result.Paths.Count;
+        }
+
+        // PBO sul pannello dei rendimenti full-period (tutti i gruppi concatenati) dei candidati.
+        try
+        {
+            var panel = new List<IReadOnlyList<double>>(combos.Count);
+            for (var c = 0; c < combos.Count; c++)
+            {
+                var full = new List<double>();
+                for (var g = 0; g < cpcv.Groups; g++) full.AddRange(perGroupReturns[c, g]);
+                if (full.Count >= 10) panel.Add(full);
+            }
+            if (panel.Count >= 2)
+            {
+                result.Pbo = Validation.BacktestOverfitting.ProbabilityOfOverfitting(panel, partitions: 10)
+                    .ProbabilityOfBacktestOverfitting;
+            }
+        }
+        catch (ArgumentException) { result.Pbo = null; }
+
+        return result;
+    }
+
+    private static double[] PerPeriodReturns(IReadOnlyList<EquityPoint> equity)
+    {
+        if (equity.Count < 2) return [];
+        var r = new double[equity.Count - 1];
+        for (var i = 1; i < equity.Count; i++)
+        {
+            var prev = equity[i - 1].Capital;
+            r[i - 1] = prev > 0m ? (double)((equity[i].Capital - prev) / prev) : 0d;
+        }
+        return r;
+    }
+
+    private static decimal SharpeFromReturns(IReadOnlyList<double> returns, int periodsPerYear)
+    {
+        if (returns.Count < 3) return 0m;
+        var mean = returns.Average();
+        var sd = Math.Sqrt(returns.Sum(v => (v - mean) * (v - mean)) / (returns.Count - 1));
+        return sd > 1e-12 ? (decimal)(mean / sd * Math.Sqrt(periodsPerYear)) : 0m;
+    }
+
     // ---------------------------------------------------------------- validazione
 
     private static void ValidateConfig(OptimizationConfiguration config)
@@ -213,6 +434,8 @@ public sealed class OptimizationEngine(
             throw new ArgumentException("OutOfSampleMonths deve essere > 0.");
         if (config.WalkForward.StepMonths <= 0)
             throw new ArgumentException("StepMonths deve essere > 0.");
+        if (config.WalkForward.EmbargoBars < 0)
+            throw new ArgumentException("EmbargoBars non può essere negativo.");
         if (config.ParameterRanges is null || config.ParameterRanges.Count == 0)
             throw new ArgumentException("Serve almeno un ParameterRange.");
         if (config.To <= config.From)
@@ -331,6 +554,9 @@ public sealed class OptimizationEngine(
         InitialCapital = config.InitialCapital,
         PositionSizePercent = config.PositionSizePercent,
         FeePercent = config.CommissionPercent,
+        // [R2] Prima mancava: la selezione dei parametri girava senza attrito mentre la validazione
+        // holdout lo applicava. Vedi OptimizationConfiguration.SlippagePercent.
+        SlippagePercent = config.SlippagePercent,
         StrategyName = config.StrategyName,
         StrategyParameters = new Dictionary<string, decimal>(combo),
     };

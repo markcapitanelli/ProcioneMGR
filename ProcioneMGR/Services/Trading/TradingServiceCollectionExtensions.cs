@@ -138,6 +138,13 @@ public static class TradingServiceCollectionExtensions
             }
             else
             {
+                // [R3] Soglie di sicurezza EFFETTIVE della corsia: profilo di rischio sovrapposto
+                // alla configurazione globale. Una istanza PER CORSIA (è dove vive il profilo);
+                // implementa IOptionsMonitor<SafetyConfiguration>, quindi entra al posto del
+                // monitor globale in tutti i punti di lettura senza toccarne nessuno.
+                services.AddKeyedSingleton(laneId, (sp, _) =>
+                    new LaneSafetyMonitor(sp.GetRequiredService<IOptionsMonitor<SafetyConfiguration>>()));
+
                 services.AddKeyedSingleton<ITradingEngine>(laneId, (sp, _) => new TradingEngine(
                     laneId,
                     sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
@@ -145,7 +152,7 @@ public static class TradingServiceCollectionExtensions
                     sp.GetRequiredService<ITechnicalIndicatorsService>(),
                     sp.GetRequiredService<IExchangeClientFactory>(),
                     sp.GetRequiredKeyedService<IEnsembleManager>(laneId),
-                    sp.GetRequiredService<IOptionsMonitor<SafetyConfiguration>>(),
+                    sp.GetRequiredKeyedService<LaneSafetyMonitor>(laneId),
                     sp.GetRequiredService<IOptionsMonitor<LiveExecutionOptions>>(),
                     sp.GetRequiredService<Execution.IExecutionAlgorithmFactory>(),
                     sp.GetRequiredService<ILogger<TradingEngine>>(),
@@ -158,7 +165,11 @@ public static class TradingServiceCollectionExtensions
                     // configurato → confronto spento, comportamento identico a prima.
                     sp.GetService<ML.IMlComparisonClient>(),
                     sp.GetService<IOptionsMonitor<ML.MlComparisonOptions>>(),
-                    sp.GetRequiredService<IExchangeCredentialReader>()));
+                    sp.GetRequiredService<IExchangeCredentialReader>(),
+                    // Lo STESSO oggetto passato come monitor delle soglie: il motore vi deposita il
+                    // profilo letto dalla configurazione della corsia, e da lì in poi ogni lettura
+                    // delle soglie — ovunque nella cascata — vede quelle effettive.
+                    sp.GetRequiredKeyedService<LaneSafetyMonitor>(laneId)));
 
                 services.AddSingleton<IHostedService>(sp => new TradingWorker(
                     sp.GetRequiredKeyedService<ITradingEngine>(laneId),
@@ -193,6 +204,24 @@ public static class TradingServiceCollectionExtensions
         // nell'host dove il motore è locale — è uno scrittore (quarantena + StopAsync), e la regola
         // della Fase 2b è che ogni scrittore ha esattamente un host. In modalità remota vive quindi
         // dentro procionemgr-trading, mai nel monolite.
+        // [R1] Feed di prezzo real-time. Vive nello STESSO host del motore, mai nel monolite quando
+        // il trading è remoto: i tick non devono attraversare gRPC (una chiamata di rete per tick
+        // reintrodurrebbe dal lato sbagliato proprio la latenza che il feed serve a togliere).
+        // Stessa regola "un scrittore, un host" del watchdog qui sotto.
+        //
+        // La registrazione è incondizionata ma il worker si autospegne se
+        // MarketData:Realtime:Enabled è false (default): a feature spenta non apre alcuna
+        // connessione e la piattaforma resta sul solo percorso a candele REST.
+        if (!useRemote)
+        {
+            services.Configure<MarketData.RealtimeFeedOptions>(
+                configuration.GetSection(MarketData.RealtimeFeedOptions.SectionName));
+            services.TryAddSingleton<MarketData.IWebSocketTransportFactory, MarketData.ClientWebSocketTransportFactory>();
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<MarketData.IExchangeStreamMapper, MarketData.BinanceStreamMapper>());
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<MarketData.IExchangeStreamMapper, MarketData.BitgetStreamMapper>());
+            services.AddHostedService<MarketData.RealtimePriceWorker>();
+        }
+
         if (!useRemote)
         {
             services.AddSingleton<IHostedService>(sp => new LaneInvariantWatchdog(

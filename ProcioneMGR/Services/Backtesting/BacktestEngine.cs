@@ -164,7 +164,7 @@ public sealed class BacktestEngine(
         await strategy.InitializeAsync(closes, candles, config.StrategyParameters ?? new(), indicators, ct);
 
         // 3) Loop event-driven.
-        var book = new Portfolio(config.InitialCapital, config.FeePercent, config.PositionSizePercent, config.Leverage);
+        var book = new Portfolio(config.InitialCapital, config.FeePercent, config.PositionSizePercent, config.Leverage, config.SlippagePercent);
         var equity = new List<EquityPoint>(n);
 
         // Overlay stop/target a livello di motore (0 = disattivi, comportamento invariato).
@@ -179,12 +179,39 @@ public sealed class BacktestEngine(
         var slipFrac = config.SlippagePercent > 0m ? config.SlippagePercent / 100m : 0m;
         var maintFrac = config.MaintenanceMarginPercent > 0m ? config.MaintenanceMarginPercent / 100m : 0m;
         var leveraged = config.Leverage > 1m;
-        var fundingFrac = config.FundingRatePercentPer8h > 0m ? config.FundingRatePercentPer8h / 100m : 0m;
+        // [T0.2] Il funding è FIRMATO: niente azzeramento dei negativi. 0 resta "disattivo".
+        var fundingFrac = config.FundingRatePercentPer8h / 100m;
+        var fundingLookup = FundingRateLookup.BuildOrNull(config.FundingHistory);
         var candleHours = TimeframeHours(config.Timeframe);
 
         // Fill con slippage: chi compra paga di piu', chi vende incassa di meno.
         decimal Buy(decimal level) => level * (1m + slipFrac);
         decimal Sell(decimal level) => level * (1m - slipFrac);
+
+        // [R3] Ingresso MAKER: un limite passivo che puo' non essere riempito. Serve a misurare la
+        // SELEZIONE AVVERSA — un long appoggiato sotto il mercato si riempie solo quando il prezzo
+        // scende, cioe' sproporzionatamente quando il segnale stava sbagliando. Senza modellarla,
+        // "commissione maker invece di taker" e' un risparmio contabile che non esiste.
+        var makerMode = config.EntryExecution == EntryExecutionStyle.Maker;
+        var makerOffsetFrac = config.MakerOffsetPercent > 0m ? config.MakerOffsetPercent / 100m : 0m;
+        var makerFeeFrac = config.MakerFeePercent > 0m ? config.MakerFeePercent / 100m : 0m;
+        var makerWait = Math.Max(1, config.MakerMaxWaitBars);
+        int pendingSide = 0;          // 0 nessun limite appoggiato, +1 long, -1 short
+        var pendingLimit = 0m;
+        var pendingExpiryIndex = -1;
+        int makerAttempted = 0, makerFilled = 0, makerFallback = 0, makerMissed = 0;
+        var prevSignal = Signal.Hold;
+
+        // Dosaggio sulla volatilità: stessa funzione pura usata dal trading dal vivo
+        // (ProcioneMGR.Services.Trading.Internal.VolatilityScaler), così backtest e live non possono
+        // divergere. Usa SOLO le chiusure fino alla barra corrente: nessuno sguardo in avanti.
+        var vtCfg = config.VolatilityTargeting ?? new VolatilityTargetingOptions();
+        decimal SizeMultiplierAt(int i) => vtCfg.Enabled
+            ? ProcioneMGR.Services.Trading.Internal.VolatilityScaler.Compute(
+                closeArr.AsSpan(0, i + 1).ToArray(), config.Timeframe,
+                vtCfg.TargetAnnualVolatilityPercent, vtCfg.LookbackBars,
+                vtCfg.MinExposureMultiplier, vtCfg.MaxExposureMultiplier)
+            : 1m;
 
         for (var i = 0; i < n; i++)
         {
@@ -273,22 +300,86 @@ public sealed class BacktestEngine(
                 }
             }
 
-            // Funding dei perpetual: addebito pro-rata per candela con posizione aperta.
-            if (fundingFrac > 0m && !book.IsFlat)
+            // [T0.2] Funding dei perpetual: pro-rata per candela con posizione aperta, con il rate
+            // STORICO quando la serie c'è (ultimo evento <= ts) e comunque FIRMATO per lato: con
+            // funding positivo il long paga e lo short INCASSA. La vecchia costante senza segno
+            // addebitava il funding anche agli short — che nella realtà lo avrebbero ricevuto —
+            // penalizzando sistematicamente meta' del catalogo.
+            if (!book.IsFlat)
             {
-                book.ChargeFunding(book.OpenNotional * fundingFrac * candleHours / 8m);
+                var rateFrac = fundingLookup?.RateFracAt(ts, fundingFrac) ?? fundingFrac;
+                if (rateFrac != 0m)
+                {
+                    var side = book.IsLong ? 1m : -1m;
+                    book.ChargeFunding(book.OpenNotional * rateFrac * candleHours / 8m * side);
+                }
+            }
+
+            // [R3] Risoluzione del limite maker appoggiato in una candela precedente. Il fill si
+            // giudica sull'escursione della candela: un long limite si riempie se il minimo lo
+            // raggiunge, uno short se lo raggiunge il massimo. Riempito = prezzo ESATTO del limite,
+            // senza slippage, con commissione maker.
+            if (pendingSide != 0)
+            {
+                var touched = pendingSide == 1 ? candles[i].Low <= pendingLimit : candles[i].High >= pendingLimit;
+                if (touched && book.IsFlat)
+                {
+                    if (pendingSide == 1) book.OpenLong(pendingLimit, ts, makerFeeFrac, chargeSlippage: false, sizeMultiplier: SizeMultiplierAt(i));
+                    else book.OpenShort(pendingLimit, ts, makerFeeFrac, chargeSlippage: false, sizeMultiplier: SizeMultiplierAt(i));
+                    entryIndex = i;
+                    entryPrice = pendingLimit;
+                    bestSinceEntry = pendingLimit;
+                    makerFilled++;
+                    pendingSide = 0;
+                }
+                else if (touched || i >= pendingExpiryIndex)
+                {
+                    // Scaduto senza fill (o riempibile ma con la posizione ormai non più flat).
+                    if (!touched && config.MakerFallbackToTaker && book.IsFlat)
+                    {
+                        var lateFill = pendingSide == 1 ? Buy(price) : Sell(price);
+                        if (pendingSide == 1) book.OpenLong(lateFill, ts, sizeMultiplier: SizeMultiplierAt(i));
+                        else book.OpenShort(lateFill, ts, sizeMultiplier: SizeMultiplierAt(i));
+                        entryIndex = i;
+                        entryPrice = lateFill;
+                        bestSinceEntry = lateFill;
+                        makerFallback++;
+                    }
+                    else if (!touched)
+                    {
+                        makerMissed++;
+                    }
+                    pendingSide = 0;
+                }
             }
 
             var signal = strategy.EvaluateSignal(i, price, ts);
+
+            // [R3] In modalità maker si appoggia UN limite per ogni nuova occasione di ingresso,
+            // cioè quando il segnale CAMBIA — non a ogni candela in cui persiste. Senza questo,
+            // una strategia che tiene il segnale acceso ripiazzerebbe il limite all'infinito e il
+            // tasso di riempimento misurerebbe la pazienza del ciclo invece della selezione avversa.
+            var isNewOpportunity = signal != prevSignal;
+            prevSignal = signal;
 
             switch (signal)
             {
                 case Signal.Long:
                     if (book.IsShort) book.Close(Buy(price), ts);
-                    if (book.IsFlat)
+                    if (book.IsFlat && makerMode)
+                    {
+                        if (isNewOpportunity && pendingSide == 0)
+                        {
+                            pendingSide = 1;
+                            pendingLimit = price * (1m - makerOffsetFrac);
+                            pendingExpiryIndex = i + makerWait;
+                            makerAttempted++;
+                        }
+                    }
+                    else if (book.IsFlat)
                     {
                         var fill = Buy(price);
-                        book.OpenLong(fill, ts);
+                        book.OpenLong(fill, ts, sizeMultiplier: SizeMultiplierAt(i));
                         entryIndex = i;
                         entryPrice = fill;
                         bestSinceEntry = fill;
@@ -296,10 +387,20 @@ public sealed class BacktestEngine(
                     break;
                 case Signal.Short:
                     if (book.IsLong) book.Close(Sell(price), ts);
-                    if (book.IsFlat)
+                    if (book.IsFlat && makerMode)
+                    {
+                        if (isNewOpportunity && pendingSide == 0)
+                        {
+                            pendingSide = -1;
+                            pendingLimit = price * (1m + makerOffsetFrac);
+                            pendingExpiryIndex = i + makerWait;
+                            makerAttempted++;
+                        }
+                    }
+                    else if (book.IsFlat)
                     {
                         var fill = Sell(price);
-                        book.OpenShort(fill, ts);
+                        book.OpenShort(fill, ts, sizeMultiplier: SizeMultiplierAt(i));
                         entryIndex = i;
                         entryPrice = fill;
                         bestSinceEntry = fill;
@@ -328,8 +429,12 @@ public sealed class BacktestEngine(
             }
         }
 
-        return BuildResult(config, book, equity, n);
+        return BuildResult(config, book, equity, n,
+            new MakerFillStats(makerAttempted, makerFilled, makerFallback, makerMissed));
     }
+
+    /// <summary>[R3] Esito degli ingressi tentati come limite maker, per la diagnostica del risultato.</summary>
+    private readonly record struct MakerFillStats(int Attempted, int Filled, int FallbackTaker, int Missed);
 
     /// <summary>Durata di una candela in ore (per il funding pro-rata).</summary>
     private static decimal TimeframeHours(string timeframe) => timeframe switch
@@ -344,7 +449,8 @@ public sealed class BacktestEngine(
         _ => 1m,
     };
 
-    private static BacktestResult BuildResult(BacktestConfiguration config, Portfolio book, List<EquityPoint> equity, int candlesEvaluated)
+    private static BacktestResult BuildResult(BacktestConfiguration config, Portfolio book, List<EquityPoint> equity, int candlesEvaluated,
+        MakerFillStats maker)
     {
         var trades = book.Trades;
         var winning = 0;
@@ -367,6 +473,17 @@ public sealed class BacktestEngine(
             MaxDrawdownPercent = MaxDrawdown(equity),
             CandlesEvaluated = candlesEvaluated,
             LiquidationCount = book.LiquidationCount,
+            // [R2] Contabilità dei costi: puramente diagnostica, non tocca nessuno dei numeri sopra
+            // (fee e slippage erano già dentro il PnL). Serve a rispondere "quanto ha eroso l'attrito".
+            TotalFeesPaid = book.TotalFees,
+            TotalSlippagePaid = book.TotalSlippage,
+            TotalFundingPaid = book.TotalFunding,
+            // [R3] Diagnostica del fill maker: quanti limiti si è tentato, quanti hanno preso.
+            MakerEntriesAttempted = maker.Attempted,
+            MakerEntriesFilled = maker.Filled,
+            MakerEntriesFallbackTaker = maker.FallbackTaker,
+            MakerEntriesMissed = maker.Missed,
+            InitialCapital = config.InitialCapital,
             Trades = trades,
             EquityCurve = equity,
         };
@@ -396,11 +513,20 @@ public sealed class BacktestEngine(
     /// Con leva &gt; 1 espone il prezzo di liquidazione (margine eroso fino al mantenimento)
     /// e accumula gli eventuali costi di funding nel PnL del trade.
     /// </summary>
-    private sealed class Portfolio(decimal initialCapital, decimal feePercent, decimal sizePercent, decimal leverage)
+    private sealed class Portfolio(
+        decimal initialCapital, decimal feePercent, decimal sizePercent, decimal leverage, decimal slippagePercent = 0m)
     {
         private readonly decimal _feeFrac = feePercent / 100m;
         private readonly decimal _marginFrac = sizePercent / 100m;
         private readonly decimal _leverage = Math.Max(1m, leverage);
+
+        /// <summary>
+        /// [R2] Attrito modellato per lato. NON influenza il PnL — lo slippage è già dentro i prezzi
+        /// di fill che il motore passa a <see cref="Open"/>/<see cref="Close"/> (vedi Buy/Sell nel
+        /// loop). Serve SOLO a contabilizzare quanto è costato, perché la domanda "a 1m l'edge
+        /// sopravvive ai costi?" non è rispondibile senza sapere quanto pesano.
+        /// </summary>
+        private readonly decimal _slipFrac = slippagePercent > 0m ? slippagePercent / 100m : 0m;
 
         private int _side; // 0 flat, +1 long, -1 short
         private decimal _qty;
@@ -414,6 +540,15 @@ public sealed class BacktestEngine(
         public decimal Cash { get; private set; } = initialCapital;
         public List<BacktestTrade> Trades { get; } = new();
         public int LiquidationCount { get; private set; }
+
+        /// <summary>[R2] Commissioni pagate, cumulate su entrambi i lati di ogni trade.</summary>
+        public decimal TotalFees { get; private set; }
+
+        /// <summary>[R2] Attrito di slippage stimato sul nozionale di ogni fill. Diagnostico: vedi <see cref="_slipFrac"/>.</summary>
+        public decimal TotalSlippage { get; private set; }
+
+        /// <summary>[R2] Funding perpetual addebitato (0 senza leva/derivati).</summary>
+        public decimal TotalFunding { get; private set; }
 
         public bool IsFlat => _side == 0;
         public bool IsLong => _side == 1;
@@ -439,24 +574,42 @@ public sealed class BacktestEngine(
             return MarginMath.LiquidationPrice(_entryPrice, _qty, _margin, _notionalEntry, isLong: _side == 1, maintenanceFrac);
         }
 
-        /// <summary>Addebita il funding pro-rata sul nozionale aperto (entra nel PnL del trade).</summary>
+        /// <summary>
+        /// Addebita (o ACCREDITA, amount negativo) il funding pro-rata sul nozionale aperto: entra
+        /// nel PnL del trade. [T0.2] Il segno arriva dal chiamante (rate firmato × lato): uno short
+        /// con funding positivo riceve un amount negativo, cioè un accredito.
+        /// </summary>
         public void ChargeFunding(decimal amount)
         {
-            if (_side == 0 || amount <= 0m) return;
+            if (_side == 0 || amount == 0m) return;
             Cash -= amount;
             _fundingAccrued += amount;
+            TotalFunding += amount;
         }
 
-        public void OpenLong(decimal price, DateTime ts) => Open(1, price, ts);
-        public void OpenShort(decimal price, DateTime ts) => Open(-1, price, ts);
+        public void OpenLong(decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true, decimal sizeMultiplier = 1m)
+            => Open(1, price, ts, feeFracOverride, chargeSlippage, sizeMultiplier);
 
-        private void Open(int side, decimal price, DateTime ts)
+        public void OpenShort(decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true, decimal sizeMultiplier = 1m)
+            => Open(-1, price, ts, feeFracOverride, chargeSlippage, sizeMultiplier);
+
+        /// <summary>
+        /// <paramref name="feeFracOverride"/> e <paramref name="chargeSlippage"/> servono al fill
+        /// MAKER: commissione maker invece di taker, e nessuno slippage — un limite appoggiato al
+        /// book, se viene riempito, è riempito ESATTAMENTE al suo prezzo. È il rovescio della
+        /// medaglia di non avere la certezza del fill.
+        /// </summary>
+        private void Open(int side, decimal price, DateTime ts, decimal? feeFracOverride = null, bool chargeSlippage = true, decimal sizeMultiplier = 1m)
         {
-            var margin = Equity(price) * _marginFrac;
+            // sizeMultiplier: dosaggio sulla volatilità (1 = invariato). Moltiplica il MARGINE, cioè
+            // la stessa grandezza che PositionSizePercent governa dal vivo.
+            var margin = Equity(price) * _marginFrac * sizeMultiplier;
             if (margin <= 0m || price <= 0m) return;
             var notional = margin * _leverage;
             _qty = notional / price;
-            _entryFee = notional * _feeFrac;
+            _entryFee = notional * (feeFracOverride ?? _feeFrac);
+            TotalFees += _entryFee;
+            if (chargeSlippage) TotalSlippage += notional * _slipFrac;
             Cash -= margin + _entryFee;
             _margin = margin;
             _notionalEntry = notional;
@@ -472,6 +625,8 @@ public sealed class BacktestEngine(
 
             var pnlRaw = UnrealizedPnl(price);
             var exitFee = _qty * price * _feeFrac;
+            TotalFees += exitFee;
+            TotalSlippage += _qty * price * _slipFrac;
             Cash += _margin + pnlRaw - exitFee;
 
             var pnl = pnlRaw - _entryFee - exitFee - _fundingAccrued;

@@ -268,6 +268,13 @@ public sealed class TradingPageService(
             PositionSizePercent = c.PositionSizePercent,
             UseExchangeRestingStops = c.UseExchangeRestingStops,
             FeePercent = c.FeePercent,
+            // Dosaggio sulla volatilità: vanno copiati anche questi, altrimenti il pannello
+            // mostrerebbe i default e il salvataggio successivo cancellerebbe la configurazione vera.
+            VolatilityTargetingEnabled = c.VolatilityTargetingEnabled,
+            TargetAnnualVolatilityPercent = c.TargetAnnualVolatilityPercent,
+            VolatilityLookbackBars = c.VolatilityLookbackBars,
+            MinExposureMultiplier = c.MinExposureMultiplier,
+            MaxExposureMultiplier = c.MaxExposureMultiplier,
         };
     }
 
