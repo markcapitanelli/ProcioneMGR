@@ -118,6 +118,7 @@ switch (phase)
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
     case "statarb": await StatArbAsync(args.Length > 1 ? args[1] : "4h"); break;
+    case "bitgetfunding": await BitgetFundingAsync(); break;
     case "nightsetup": await NightSetupAsync(args.Length > 1 ? args[1] : "claude-notte@local", args.Length > 2 ? args[2] : throw new ArgumentException("serve la password: nightsetup <email> <password>")); break;
     case "nulltwin": await NullTwinAsync(
         args.Length > 1 ? args[1] : "BTC/USDT",
@@ -665,6 +666,77 @@ async Task NightSetupAsync(string email, string password)
     }
     await db.SaveChangesAsync();
     Console.WriteLine("Night setup completato.");
+}
+
+// ------------------------------------------------------------------ BITGETFUNDING (E3: l'edge regge su Bitget?)
+// Il carry F1.b fu misurato sul funding BINANCE (l'unico storico in DB). Ma l'utente opera solo su
+// BITGET. Domanda onesta prima di costruire l'esecuzione: il funding Bitget e' vicino a quello
+// Binance? Se si', la stima 5-12%/anno trasferisce e l'edge di E3 vale sull'exchange vero. Scarica
+// lo storico funding Bitget (endpoint pubblico history-fund-rate) e lo confronta con Binance in DB.
+async Task BitgetFundingAsync()
+{
+    string[] symbols = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+    using var httpClient = new HttpClient { BaseAddress = new Uri("https://api.bitget.com") };
+    httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("ProcioneMGR/1.0");
+
+    Console.WriteLine("=== FUNDING BITGET vs BINANCE (E3: l'edge del carry regge sul venue vero?) ===\n");
+    Console.WriteLine($"{"Sym",-6}{"n Bitget",10}{"media BG %/8h",16}{"media BN %/8h",16}{"corr",8}{"ann. BG",10}{"ann. BN",10}");
+
+    await using var db = await dbFactory.CreateDbContextAsync();
+    foreach (var sym in symbols)
+    {
+        // Bitget: storico funding (pagina piu' recente, ~100-500 punti). Frazione per periodo -> %.
+        var bg = new List<(DateTime Ts, decimal Rate)>();
+        try
+        {
+            using var resp = await httpClient.GetAsync($"/api/v2/mix/market/history-fund-rate?symbol={sym}USDT&productType=USDT-FUTURES&pageSize=500");
+            if (resp.IsSuccessStatusCode)
+            {
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+                if (doc.RootElement.TryGetProperty("data", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    foreach (var e in arr.EnumerateArray())
+                    {
+                        var rate = e.TryGetProperty("fundingRate", out var fr) && decimal.TryParse(fr.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var r) ? r * 100m : 0m;
+                        var ts = e.TryGetProperty("fundingTime", out var ft) && long.TryParse(ft.GetString(), out var ms) ? DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime : DateTime.MinValue;
+                        if (ts > DateTime.MinValue) bg.Add((ts, rate));
+                    }
+            }
+        }
+        catch (Exception ex) { Console.WriteLine($"{sym,-6} errore Bitget: {ex.Message}"); continue; }
+        if (bg.Count < 20) { Console.WriteLine($"{sym,-6} storico Bitget insufficiente ({bg.Count})"); continue; }
+
+        bg = bg.OrderBy(p => p.Ts).ToList();
+        var bgFrom = bg[0].Ts;
+        // Binance dal DB nello stesso intervallo, per il confronto appaiato per ora.
+        var bn = (await db.SentimentMetricPoints.AsNoTracking()
+            .Where(p => p.Metric == SentimentMetrics.FundingRate && p.Symbol == sym && p.TimestampUtc >= bgFrom)
+            .OrderBy(p => p.TimestampUtc).Select(p => new { p.TimestampUtc, p.Value }).ToListAsync())
+            .ToDictionary(p => new DateTime(p.TimestampUtc.Year, p.TimestampUtc.Month, p.TimestampUtc.Day, p.TimestampUtc.Hour, 0, 0), p => p.Value);
+
+        var pairsX = new List<double>(); var pairsY = new List<double>();
+        foreach (var (ts, rate) in bg)
+        {
+            var key = new DateTime(ts.Year, ts.Month, ts.Day, ts.Hour, 0, 0);
+            if (bn.TryGetValue(key, out var bnr)) { pairsX.Add((double)rate); pairsY.Add((double)bnr); }
+        }
+
+        var meanBg = bg.Average(p => (double)p.Rate);
+        var meanBn = bn.Count > 0 ? bn.Values.Average(v => (double)v) : 0;
+        double corr = 0;
+        if (pairsX.Count >= 10)
+        {
+            var mx = pairsX.Average(); var my = pairsY.Average();
+            var cov = pairsX.Zip(pairsY, (a, b) => (a - mx) * (b - my)).Sum();
+            var sx = Math.Sqrt(pairsX.Sum(a => (a - mx) * (a - mx)));
+            var sy = Math.Sqrt(pairsY.Sum(b => (b - my) * (b - my)));
+            corr = sx > 0 && sy > 0 ? cov / (sx * sy) : 0;
+        }
+        // Annualizzato: 3 funding/giorno x 365.
+        Console.WriteLine($"{sym,-6}{bg.Count,10}{meanBg,15:F4}%{meanBn,15:F4}%{corr,8:F2}{meanBg * 3 * 365,9:F1}%{meanBn * 3 * 365,9:F1}%");
+    }
+    Console.WriteLine("\nLettura: corr alta e medie vicine => la stima F1.b (netto 5-12%/anno) trasferisce a Bitget,");
+    Console.WriteLine("e l'edge del carry vale sull'exchange su cui l'utente opera davvero. Il netto reale dipende");
+    Console.WriteLine("dai costi delle due gambe (fee+slippage spot e perp) e dalla capacita' del wallet demo.");
 }
 
 // ------------------------------------------------------------------ STATARB (E1: cointegrazione 2.0 market-neutral)
