@@ -278,7 +278,7 @@ funding. Rivalutare dopo M1.
 | F-spread per-minuto | Fill | S/M | onestà | costo reale = spread del minuto (F8) | A/B piatto vs per-minuto |
 | F-impact √ intraday | Fill | S | onestà | size grande paga l'impatto vero | — |
 | **E1 stat-arb cointegr. 2.0** | Edge | M/L | **market-neutral** | ✅ **COSTRUITO+MISURATO 2026-07-24**: filtro vol + fase statarb + gemello; 0 confermate su 4h/1h (77-90 trade/coppia = +operazioni SÌ ma perdono ai costi) → REPORT-E1-STATARB | gate + gemello + rolling |
-| **E2 cross-sectional multi-fattore** | Edge | M/L | **cross-section** | +operazioni ranked, diversificate | IC combinato + purged CV |
+| **E2 cross-sectional multi-fattore** | Edge | M/L | **cross-section** | ✅ **COSTRUITO+MISURATO 2026-07-24** (fase xsection2): su 1d Sharpe holdout 3,10 batteva il null MA a 4h −2,23 → NON replica: periodo fortunato, non edge | IC combinato + purged CV |
 | E3 carry funding operativo | Edge | M | carry | ✅ **COSTRUITO 2026-07-24**: funding Bitget verificato (3-6%/anno lordo, corr Binance); CarryBacktestEngine testato (deep=F1.b, 8,7%/anno); CarryEngine two-leg Paper (Live IRRAPPRESENTABILE); forward-test attivabile. Testnet reale gated dal wallet demo Futures finanziato | A/B funding 0 + forward |
 | E4 market making OBI | Edge | L | microstruttura | l'endgame "molte op/giorno" | condizionato a D2 |
 | **M1 triple-barrier + meta-label** | Metodo | L | amplificatore | alza precision; sizing onesto | edge piantato + precision↑ |
