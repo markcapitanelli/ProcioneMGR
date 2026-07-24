@@ -58,24 +58,40 @@ public static class SignalCatalog
         "Post-Surge",
     ];
 
-    private static readonly ConditionalWeakTable<object, Task<decimal?[][]>> Cache = new();
+    /// <summary>
+    /// Impronta del contenuto accanto al task: la cache per ISTANZA della lista è corretta nei
+    /// backtest (liste immutabili per run) ma il TradingEngine live riusa UN buffer che cresce/
+    /// scorre e ri-inizializza la strategia a ogni candela — senza il controllo d'impronta la
+    /// matrice tornava stantia: più corta del buffer (IndexOutOfRange a ogni candela, trovato
+    /// DAL VIVO la prima notte di Composite su una corsia) o, peggio, della stessa lunghezza con
+    /// contenuto vecchio = segnali sbagliati in silenzio su una finestra rotolante.
+    /// (Count, primo, ultimo timestamp) cambia sempre quando il buffer cresce o scorre.
+    /// </summary>
+    private sealed record CacheEntry(int Count, DateTime FirstTs, DateTime LastTs, Task<decimal?[][]> Task);
+
+    private static readonly ConditionalWeakTable<object, CacheEntry> Cache = new();
     private static readonly object Gate = new();
 
     /// <summary>
     /// Normalized signal matrix for the series: <c>matrix[signalId][barIndex]</c>, null during
-    /// each signal's warm-up. Cached per candle-list instance (thread-safe, computed once).
+    /// each signal's warm-up. Cached per candle-list instance (thread-safe, computed once) —
+    /// with a content fingerprint so a MUTATED list (live engine) recomputes instead of lying.
     /// </summary>
     public static Task<decimal?[][]> GetMatrixAsync(
         IReadOnlyList<OhlcvData> candles, ITechnicalIndicatorsService indicators, CancellationToken ct)
     {
         lock (Gate)
         {
-            if (Cache.TryGetValue(candles, out var cached))
+            var first = candles.Count > 0 ? candles[0].TimestampUtc : default;
+            var last = candles.Count > 0 ? candles[^1].TimestampUtc : default;
+            if (Cache.TryGetValue(candles, out var cached)
+                && cached.Count == candles.Count && cached.FirstTs == first && cached.LastTs == last)
             {
-                return cached;
+                return cached.Task;
             }
             var task = ComputeMatrixAsync(candles, indicators, ct);
-            Cache.Add(candles, task);
+            Cache.Remove(candles);
+            Cache.Add(candles, new CacheEntry(candles.Count, first, last, task));
             return task;
         }
     }
