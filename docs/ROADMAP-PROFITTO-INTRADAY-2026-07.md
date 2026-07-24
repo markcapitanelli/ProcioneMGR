@@ -274,10 +274,10 @@ funding. Rivalutare dopo M1.
 | D1 order-flow intraday | Dati | S | quick win | sblocca i fattori order-flow a 5m/15m | IC intraday |
 | D2 order book + tape | Dati | M/L | investimento | base dell'edge intraday vero (2027) | igiene dato ora |
 | D3 funding intraday | Dati | S | onestà | costo carry corretto a intraday | — |
-| F-queue fill maker in coda | Fill | M | **onestà 5m** | rende CREDIBILI i numeri ad alta frequenza | monotonia fill/size |
+| F-queue fill maker in coda | Fill | M | **onestà 5m** | ✅ **COSTRUITO 2026-07-24**: penetrazione vs touch, testato (REPORT-E1-STATARB) | monotonia fill/size |
 | F-spread per-minuto | Fill | S/M | onestà | costo reale = spread del minuto (F8) | A/B piatto vs per-minuto |
 | F-impact √ intraday | Fill | S | onestà | size grande paga l'impatto vero | — |
-| **E1 stat-arb cointegr. 2.0** | Edge | M/L | **market-neutral** | Sharpe 1,5-2,5 in letteratura; +operazioni | gate + gemello + rolling |
+| **E1 stat-arb cointegr. 2.0** | Edge | M/L | **market-neutral** | ✅ **COSTRUITO+MISURATO 2026-07-24**: filtro vol + fase statarb + gemello; 0 confermate su 4h/1h (77-90 trade/coppia = +operazioni SÌ ma perdono ai costi) → REPORT-E1-STATARB | gate + gemello + rolling |
 | **E2 cross-sectional multi-fattore** | Edge | M/L | **cross-section** | +operazioni ranked, diversificate | IC combinato + purged CV |
 | E3 carry funding operativo | Edge | M | carry | 5-12%/anno MISURATO | A/B funding 0 + forward |
 | E4 market making OBI | Edge | L | microstruttura | l'endgame "molte op/giorno" | condizionato a D2 |
