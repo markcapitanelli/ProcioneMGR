@@ -119,6 +119,7 @@ switch (phase)
     case "huntedge": await HuntEdgeAsync(); break;
     case "statarb": await StatArbAsync(args.Length > 1 ? args[1] : "4h"); break;
     case "bitgetfunding": await BitgetFundingAsync(); break;
+    case "carrybt": await CarryBtAsync(); break;
     case "nightsetup": await NightSetupAsync(args.Length > 1 ? args[1] : "claude-notte@local", args.Length > 2 ? args[2] : throw new ArgumentException("serve la password: nightsetup <email> <password>")); break;
     case "nulltwin": await NullTwinAsync(
         args.Length > 1 ? args[1] : "BTC/USDT",
@@ -666,6 +667,48 @@ async Task NightSetupAsync(string email, string password)
     }
     await db.SaveChangesAsync();
     Console.WriteLine("Night setup completato.");
+}
+
+// ------------------------------------------------------------------ CARRYBT (E3: backtest deep col motore testato)
+// Gira il CarryBacktestEngine (nuovo, testato) sulla storia funding profonda (2019+) in DB, per i 6
+// simboli, con due profili di soglia. E' la versione "motore di produzione" della fase `carry` di
+// F1.b: stesso edge, ma ora attraverso l'engine riusato anche dal percorso live, così backtest e
+// live NON possono divergere.
+async Task CarryBtAsync()
+{
+    string[] symbols = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+    var engine = new ProcioneMGR.Services.Carry.CarryBacktestEngine();
+    var profiles = new (string Name, decimal Enter, decimal Exit)[] { ("5/0", 5m, 0m), ("10/3", 10m, 3m) };
+
+    await using var db = await dbFactory.CreateDbContextAsync();
+    foreach (var (name, enter, exit) in profiles)
+    {
+        Console.WriteLine($"\n=== CARRYBT profilo {name} (entra >{enter}%/anno, esce <{exit}%/anno) — motore testato ===");
+        Console.WriteLine($"{"Sym",-6}{"eventi",8}{"dal",10}{"episodi",9}{"in pos",8}{"gross%",9}{"costi%",9}{"netto%",9}{"netto%/anno",13}");
+        decimal totNet = 0m; var count = 0;
+        foreach (var sym in symbols)
+        {
+            var pts = await db.SentimentMetricPoints.AsNoTracking()
+                .Where(p => p.Metric == SentimentMetrics.FundingRate && p.Symbol == sym)
+                .OrderBy(p => p.TimestampUtc)
+                .Select(p => new ProcioneMGR.Services.Backtesting.FundingRatePoint(p.TimestampUtc, p.Value))
+                .ToListAsync();
+            if (pts.Count < 50) { Console.WriteLine($"{sym,-6} storico insufficiente ({pts.Count})"); continue; }
+
+            var r = engine.Run(pts, new ProcioneMGR.Services.Carry.CarryConfiguration
+            {
+                InitialCapital = 10_000m, PositionSizePercent = 100m,
+                EnterAnnualFundingPercent = enter, ExitAnnualFundingPercent = exit, TrailingFundingEvents = 9,
+                SpotFeePercent = 0.1m, PerpFeePercent = 0.05m, SlippagePercent = 0.03m,
+            });
+            Console.WriteLine($"{sym,-6}{pts.Count,8}{pts[0].TimestampUtc,10:yyyy-MM}{r.Episodes,9}{r.TimeInPositionFraction,7:P0} {r.GrossFundingPercent,8:F1}{r.TotalCostPercent,9:F1}{r.TotalReturnPercent,9:F1}{r.NetAnnualizedPercent,12:F1}%");
+            totNet += r.NetAnnualizedPercent; count++;
+        }
+        if (count > 0) Console.WriteLine($"  media netto/anno sui {count} simboli: {totNet / count:F1}%");
+    }
+    Console.WriteLine("\nStesso engine del percorso live (CarryBacktestEngine): backtest e live non divergono.");
+    Console.WriteLine("Onesto: e' il carry PURO (funding − costi due gambe); la BASE spot/perp aggiunge rumore");
+    Console.WriteLine("reale del second'ordine non modellato qui — da sorvegliare dal vivo su Bitget demo.");
 }
 
 // ------------------------------------------------------------------ BITGETFUNDING (E3: l'edge regge su Bitget?)
