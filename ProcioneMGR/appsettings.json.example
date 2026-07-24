@@ -43,6 +43,17 @@
     "ChatId": "",
     "MaxPerHour": 20
   },
+  "Carry": {
+    "_comment": "[E3] Forward test del carry delta-neutro (long spot + short perp): apre quando il funding annualizzato supera EnterAnnualFundingPercent, chiude sotto ExitAnnualFundingPercent. Default OFF. Mode: Paper (simulazione, nessun ordine) o Testnet; Live NON e' accettato (il carry non puo' operare con denaro reale). Testnet reale su Bitget demo = follow-up gated dal wallet demo Futures finanziato.",
+    "Enabled": false,
+    "Mode": "Paper",
+    "Symbols": [ "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE" ],
+    "EvaluationMinutes": 60,
+    "EnterAnnualFundingPercent": 5,
+    "ExitAnnualFundingPercent": 0,
+    "TrailingFundingEvents": 9,
+    "PositionSizePercent": 50
+  },
   "Liquidations": {
     "_comment": "[F4] Accumulo liquidazioni dal WebSocket pubblico Binance futures (!forceOrder@arr, keyless, sola lettura). Default ON: il dato NON e' ricostruibile a posteriori - ogni giorno spento e' storia persa. Nessun consumo decisionale: solo accumulo in SentimentMetricPoints (esente dalla retention del sentiment).",
     "Enabled": true,

@@ -253,6 +253,10 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentNewsProvi
 builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>());
 
+// --- [E3] Forward test del carry delta-neutro (default OFF, mai Live per costruzione) ---
+builder.Services.Configure<ProcioneMGR.Services.Carry.CarryOptions>(builder.Configuration.GetSection("Carry"));
+builder.Services.AddHostedService<ProcioneMGR.Services.Carry.CarryWorker>();
+
 // --- [F4] Accumulo liquidazioni (stream pubblico Binance futures, keyless) ---
 // Default ON: il dato non è ricostruibile a posteriori, ogni giorno spento è storia persa.
 // TryAdd: la factory WebSocket è la stessa del feed real-time R1 (registrata lì quando attivo).

@@ -80,24 +80,25 @@ public sealed class CarryBacktestEngine
             windowSum += ratePct;
             if (window.Count > trailing) windowSum -= window.Dequeue();
 
-            // 3) Decisione (solo con finestra piena).
+            // 3) Decisione (solo con finestra piena), tramite la REGOLA CONDIVISA col percorso live.
             if (window.Count >= trailing)
             {
                 var annualized = windowSum / window.Count * perYear;
-                if (!inPosition && annualized > config.EnterAnnualFundingPercent)
+                switch (CarryDecider.Decide(annualized, inPosition, config))
                 {
-                    inPosition = true;
-                    openedAt = e.TimestampUtc;
-                    episodeFundingPct = 0m;
-                    episodeEvents = 0;
-                    costPctSum += episodeCostPct;   // costo di apertura+chiusura contabilizzato all'ingresso
-                }
-                else if (inPosition && annualized < config.ExitAnnualFundingPercent)
-                {
-                    var netPct = episodeFundingPct - episodeCostPct;
-                    episodes.Add(new CarryEpisode(openedAt, e.TimestampUtc, episodeEvents, episodeFundingPct, episodeCostPct, netPct));
-                    cumulativeNetOnCapital += netPct / 100m * legFrac;
-                    inPosition = false;
+                    case CarryAction.Open:
+                        inPosition = true;
+                        openedAt = e.TimestampUtc;
+                        episodeFundingPct = 0m;
+                        episodeEvents = 0;
+                        costPctSum += episodeCostPct;   // costo di apertura+chiusura contabilizzato all'ingresso
+                        break;
+                    case CarryAction.Close:
+                        var netPct = episodeFundingPct - episodeCostPct;
+                        episodes.Add(new CarryEpisode(openedAt, e.TimestampUtc, episodeEvents, episodeFundingPct, episodeCostPct, netPct));
+                        cumulativeNetOnCapital += netPct / 100m * legFrac;
+                        inPosition = false;
+                        break;
                 }
             }
 
