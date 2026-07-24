@@ -117,6 +117,7 @@ switch (phase)
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
+    case "statarb": await StatArbAsync(args.Length > 1 ? args[1] : "4h"); break;
     case "nightsetup": await NightSetupAsync(args.Length > 1 ? args[1] : "claude-notte@local", args.Length > 2 ? args[2] : throw new ArgumentException("serve la password: nightsetup <email> <password>")); break;
     case "nulltwin": await NullTwinAsync(
         args.Length > 1 ? args[1] : "BTC/USDT",
@@ -664,6 +665,143 @@ async Task NightSetupAsync(string email, string password)
     }
     await db.SaveChangesAsync();
     Console.WriteLine("Night setup completato.");
+}
+
+// ------------------------------------------------------------------ STATARB (E1: cointegrazione 2.0 market-neutral)
+// La roadmap PROFITTO-INTRADAY dice: cambiare CLASSE di edge. Questo e' il primo passo — stat-arb
+// MARKET-NEUTRAL. Rispetto alla vecchia fase `pairs`: (a) filtro di VOLATILITA' attivo (salta gli
+// ingressi quando lo spread entra in regime di rottura), (b) piccola griglia sulle soglie z scelta
+// SULLA SELEZIONE e giudicata SULL'HOLDOUT (nessun peeking), (c) i sopravvissuti passano il GEMELLO
+// SINTETICO: le due gambe vengono rese NULLE indipendenti (co-movenza distrutta) e il pairs deve
+// battere il P95 di quei nulli. Se una coppia batte i nulli, la sua cointegrazione porta informazione
+// vera, non e' due random walk che ogni tanto convergono per caso.
+async Task StatArbAsync(string tf)
+{
+    string[] universe =
+    [
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT",
+        "LINK/USDT", "AVAX/USDT", "LTC/USDT", "DOT/USDT", "ATOM/USDT", "BCH/USDT", "ETC/USDT",
+        "XLM/USDT", "UNI/USDT", "AAVE/USDT", "ALGO/USDT", "ICP/USDT", "FIL/USDT",
+    ];
+    var selFrom = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    Console.WriteLine($"=== STATARB (E1) su {universe.Length} simboli, {tf} ===");
+    Console.WriteLine($"    Selezione (cointegrazione + soglie): {selFrom:yyyy-MM-dd} -> {selectionTo:yyyy-MM-dd}");
+    Console.WriteLine($"    Holdout   (giudizio):                {holdoutFrom:yyyy-MM-dd} -> oggi");
+    Console.WriteLine($"    Novita' E1: filtro vol ON, griglia soglie, gemello sintetico sulle gambe\n");
+
+    var sel = new Dictionary<string, List<OhlcvData>>();
+    var hold = new Dictionary<string, List<OhlcvData>>();
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        foreach (var s in universe)
+        {
+            sel[s] = await db.OhlcvData.AsNoTracking()
+                .Where(c => c.Symbol == s && c.Timeframe == tf && c.TimestampUtc >= selFrom && c.TimestampUtc < selectionTo)
+                .OrderBy(c => c.TimestampUtc).ToListAsync();
+            hold[s] = await db.OhlcvData.AsNoTracking()
+                .Where(c => c.Symbol == s && c.Timeframe == tf && c.TimestampUtc >= holdoutFrom)
+                .OrderBy(c => c.TimestampUtc).ToListAsync();
+        }
+    }
+
+    var coint = new ProcioneMGR.Services.TimeSeries.EngleGrangerCointegrationTest();
+    var engine = new PairsBacktestEngine();
+    var minObs = tf == "1h" ? 2000 : 500;
+
+    // Selezione: coppie operabili (spread stazionario + elasticita' in banda).
+    var candidates = new List<(string Y, string X, double Margin)>();
+    foreach (var y in universe)
+        foreach (var x in universe)
+        {
+            if (string.CompareOrdinal(y, x) >= 0) continue;
+            if (sel[y].Count < minObs || sel[x].Count < minObs) continue;
+            var (ay, ax) = PairsCandleAligner.Align(sel[y], sel[x]);
+            if (ay.Count < minObs) continue;
+            var r = coint.Test([.. ay.Select(c => c.Close)], [.. ax.Select(c => c.Close)]);
+            if (r.IsTradeable) candidates.Add((y, x, r.AdfStatistic - r.CriticalValue));
+        }
+    Console.WriteLine($"  Coppie operabili in selezione: {candidates.Count}/{universe.Length * (universe.Length - 1) / 2}\n");
+
+    // Griglia soglie: scelta la MIGLIORE per Sharpe SULLA SELEZIONE (mai sull'holdout).
+    (decimal Entry, decimal Exit, decimal Stop, decimal VolRatio)[] grid =
+    [
+        (2.0m, 0.5m, 3.5m, 0m), (2.0m, 0.5m, 3.5m, 1.8m), (2.5m, 0.75m, 4.0m, 1.8m), (1.5m, 0.3m, 3.0m, 1.6m),
+    ];
+
+    PairsBacktestConfiguration BuildCfg(string y, string x, (decimal Entry, decimal Exit, decimal Stop, decimal VolRatio) g) => new()
+    {
+        SymbolY = y, SymbolX = x, InitialCapital = 10_000m, PositionSizePercent = 10m,
+        FeePercent = PipelineCosts.DefaultFeePercent, SlippagePercent = PipelineCosts.DefaultSlippagePercent,
+        LookbackWindow = 90, RecalibrationInterval = 30, ZScoreLookback = 20,
+        EntryZScore = g.Entry, ExitZScore = g.Exit, StopZScore = g.Stop,
+        MaxSpreadVolRatio = g.VolRatio, SpreadVolBaselineWindow = 120,
+    };
+
+    var results = new List<(string Y, string X, decimal HoldRet, decimal HoldSharpe, int Trades, decimal MaxDD, (decimal,decimal,decimal,decimal) G)>();
+    foreach (var (y, x, _) in candidates.OrderBy(c => c.Margin).Take(12))
+    {
+        if (hold[y].Count < 100 || hold[x].Count < 100) continue;
+
+        // Scelta soglie sulla SELEZIONE.
+        var best = grid[0]; var bestSelSharpe = decimal.MinValue;
+        foreach (var g in grid)
+        {
+            try
+            {
+                var rs = engine.RunBacktest(sel[y], sel[x], BuildCfg(y, x, g));
+                var sh = Statistics.SharpeRatio(rs.EquityCurve, Statistics.PeriodsPerYear(tf));
+                if (rs.TotalTrades >= 8 && sh > bestSelSharpe) { bestSelSharpe = sh; best = g; }
+            }
+            catch { }
+        }
+        // Giudizio sull'HOLDOUT con le soglie scelte.
+        try
+        {
+            var rh = engine.RunBacktest(hold[y], hold[x], BuildCfg(y, x, best));
+            var hsh = Statistics.SharpeRatio(rh.EquityCurve, Statistics.PeriodsPerYear(tf));
+            if (rh.TotalTrades >= 5)
+                results.Add((y, x, rh.TotalReturnPercent, hsh, rh.TotalTrades, rh.MaxDrawdownPercent, best));
+        }
+        catch { }
+    }
+
+    var ranked = results.OrderByDescending(r => r.HoldSharpe).ToList();
+    Console.WriteLine($"  {"Coppia",-24}{"holdRet",9}{"holdSh",8}{"trd",5}{"maxDD",7}  soglie(E/X/S/vol)");
+    foreach (var r in ranked)
+        Console.WriteLine($"  {r.Y + "/" + r.X,-24}{r.HoldRet,8:F1}%{r.HoldSharpe,8:F2}{r.Trades,5}{r.MaxDD,6:F1}%  {r.G.Item1}/{r.G.Item2}/{r.G.Item3}/{r.G.Item4}");
+
+    // Gemello sintetico: le due gambe rese NULLE indipendenti (co-movenza distrutta).
+    Console.WriteLine($"\n=== GEMELLO SINTETICO sui top-{Math.Min(6, ranked.Count)} (holdSh reale vs P95 gambe nulle) ===");
+    Console.WriteLine($"  {"Coppia",-24}{"reale",7}{"P95null",9}{"batte",7}  verdetto");
+    var confirmed = 0;
+    foreach (var r in ranked.Where(r => r.HoldSharpe > 0.3m).Take(6))
+    {
+        var cfg = BuildCfg(r.Y, r.X, r.G);
+        var nulls = new List<decimal>();
+        for (var t = 0; t < 15; t++)
+        {
+            var ny = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(hold[r.Y], seed: 3000 + t);
+            var nx = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(hold[r.X], seed: 7000 + t);
+            try
+            {
+                var rn = engine.RunBacktest(ny, nx, cfg);
+                nulls.Add(Statistics.SharpeRatio(rn.EquityCurve, Statistics.PeriodsPerYear(tf)));
+            }
+            catch { }
+        }
+        if (nulls.Count < 10) { Console.WriteLine($"  {r.Y + "/" + r.X,-24}  gemelli insufficienti"); continue; }
+        nulls.Sort();
+        var p95 = nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(0.95 * nulls.Count) - 1)];
+        var beats = r.HoldSharpe > p95;
+        if (beats) confirmed++;
+        Console.WriteLine($"  {r.Y + "/" + r.X,-24}{r.HoldSharpe,7:F2}{p95,9:F2}{(beats ? "  SI" : "  no"),7}  {(beats ? "co-movenza VERA: candidato" : "dentro il nullo: selezione")}");
+    }
+
+    Console.WriteLine($"\n=== {confirmed} coppie CONFERMATE (cointegr. + holdout + gemello) ===");
+    Console.WriteLine("Onesto: market-neutral e piu' operazioni, ma la cointegrazione e' instabile. Il forward");
+    Console.WriteLine("Paper resta il giudice finale; nessun backtest e' una promessa. F-queue (fill in coda)");
+    Console.WriteLine("rendera' onesto anche il conto delle due gambe ad alta frequenza.");
 }
 
 // ------------------------------------------------------------------ HUNTEDGE (caccia col motore onesto di oggi)
