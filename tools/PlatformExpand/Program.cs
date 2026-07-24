@@ -104,6 +104,7 @@ switch (phase)
     case "costfrontier": await CostFrontierAsync(); break;
     case "makerfill": await MakerFillAsync(); break;
     case "xsection": await CrossSectionAsync(); break;
+    case "xsection2": await CrossSection2Async(args.Length > 1 ? args[1] : "1d"); break;
     case "voloverlay": await VolOverlayAsync(); break;
     case "volsingle": await VolSingleAsync(); break;
     case "volrobust": await VolRobustAsync(); break;
@@ -2309,6 +2310,161 @@ async Task VolOverlayAsync()
 //
 // Disciplina anti-overfitting: i parametri (lookback, K, ribilanciamento) si scelgono SOLO sulla
 // finestra di selezione; l'holdout viene calcolato una volta sola alla fine, sul parametro scelto.
+// ------------------------------------------------------------------ XSECTION2 (E2: multi-fattore cross-sectional)
+// La fase `xsection` era MONO-fattore (solo momentum). E2 della ROADMAP-PROFITTO-INTRADAY: combinare
+// piu' fattori in un punteggio composito (z-score cross-sectional di: momentum lungo + reversal breve
+// + tilt bassa-volatilita'), ordinare l'universo, long top-k / short bottom-k market-neutral, molte
+// piccole posizioni ranked = "piu' operazioni" con rischio diversificato. Disciplina: parametri scelti
+// SOLO in selezione, giudizio sull'holdout, e NULL DI PERMUTAZIONE (a ogni ribilanciamento si mescola
+// l'associazione punteggio->simbolo: se la strategia batte il ranking casuale, i fattori portano
+// segnale vero; se no, e' l'illusione della combinatoria).
+async Task CrossSection2Async(string tf)
+{
+    string[] universe =
+    [
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT",
+        "LINK/USDT", "AVAX/USDT", "LTC/USDT", "DOT/USDT", "ATOM/USDT", "BCH/USDT", "ETC/USDT",
+        "XLM/USDT", "UNI/USDT", "AAVE/USDT", "ALGO/USDT", "ICP/USDT", "FIL/USDT",
+        "NEAR/USDT", "TRX/USDT", "SHIB/USDT", "CRV/USDT",
+    ];
+    var from = new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    const decimal CostPerSide = 0.0015m;   // 0,10% fee + 0,05% slippage per unita' di turnover
+
+    Console.WriteLine($"=== XSECTION2 (E2) MULTI-FATTORE — {tf} ===");
+    Console.WriteLine($"    Fattori: momentum lungo + reversal breve + tilt bassa-vol (z-score cross-sectional, peso uguale)");
+    Console.WriteLine($"    Selezione fino al {selectionTo:yyyy-MM-dd}, holdout dopo, + null di permutazione\n");
+
+    // Serie chiusure per simbolo, allineate a un calendario comune (no survivorship mascherato).
+    var series = new Dictionary<string, List<(DateTime D, decimal C)>>();
+    await using (var db = await dbFactory.CreateDbContextAsync())
+        foreach (var s in universe)
+        {
+            var rows = await db.OhlcvData.AsNoTracking()
+                .Where(o => o.Symbol == s && o.Timeframe == tf && o.TimestampUtc >= from)
+                .OrderBy(o => o.TimestampUtc).Select(o => new { o.TimestampUtc, o.Close }).ToListAsync();
+            if (rows.Count > 200) series[s] = rows.Select(r => (r.TimestampUtc, r.Close)).ToList();
+        }
+    var symbols = series.Keys.OrderBy(s => s).ToList();
+    var calendar = series[symbols[0]].Select(p => p.D).ToHashSet();
+    foreach (var s in symbols) calendar.IntersectWith(series[s].Select(p => p.D));
+    var dates = calendar.OrderBy(d => d).ToList();
+    var px = symbols.ToDictionary(s => s, s => series[s].Where(p => calendar.Contains(p.D)).OrderBy(p => p.D).Select(p => p.C).ToList());
+    Console.WriteLine($"    {symbols.Count} simboli, {dates.Count} barre allineate ({dates[0]:yyyy-MM-dd} -> {dates[^1]:yyyy-MM-dd})\n");
+    if (dates.Count < 400) { Console.WriteLine("    Storia comune insufficiente."); return; }
+
+    var ppy = Math.Sqrt(Statistics.PeriodsPerYear(tf));
+
+    // Punteggio composito cross-sectional a un indice di barra: z(mom lungo)+z(reversal breve)+z(-vol).
+    Dictionary<string, double> Scores(int gi, int momLong, int revShort, int volWin)
+    {
+        double[] Zed(Func<string, double?> raw)
+        {
+            var vals = symbols.Select(raw).ToArray();
+            var have = vals.Where(v => v.HasValue).Select(v => v!.Value).ToList();
+            if (have.Count < 3) return new double[symbols.Count];
+            var m = have.Average(); var sd = Math.Sqrt(have.Sum(v => (v - m) * (v - m)) / have.Count);
+            return vals.Select(v => v.HasValue && sd > 1e-12 ? (v!.Value - m) / sd : 0.0).ToArray();
+        }
+        double? Mom(string s, int lb) => gi >= lb && (double)px[s][gi - lb] > 0 ? (double)(px[s][gi] / px[s][gi - lb]) - 1 : null;
+        double? Vol(string s, int w)
+        {
+            if (gi < w) return null;
+            var r = new List<double>();
+            for (var j = gi - w + 1; j <= gi; j++) { var p0 = (double)px[s][j - 1]; if (p0 > 0) r.Add((double)px[s][j] / p0 - 1); }
+            if (r.Count < 3) return null;
+            var m = r.Average(); return Math.Sqrt(r.Sum(v => (v - m) * (v - m)) / r.Count);
+        }
+        var zMom = Zed(s => Mom(s, momLong));
+        var zRev = Zed(s => { var mm = Mom(s, revShort); return mm.HasValue ? -mm : null; }); // reversal: segno invertito
+        var zVol = Zed(s => { var vv = Vol(s, volWin); return vv.HasValue ? -vv : null; });    // tilt bassa-vol
+        return symbols.Select((s, i) => (s, sc: zMom[i] + zRev[i] + zVol[i])).ToDictionary(x => x.s, x => x.sc);
+    }
+
+    // Backtest: a ogni rebalDays ordina per punteggio, long top-k / short bottom-k market-neutral.
+    // permuteSeed != null => mescola l'associazione punteggio->simbolo (null di permutazione).
+    (decimal Ret, double Sharpe, decimal MaxDd, int Rebals) Run(
+        int momLong, int revShort, int volWin, int topK, int rebalBars, DateTime rFrom, DateTime rTo, int? permuteSeed)
+    {
+        var idx = dates.Select((d, i) => (d, i)).Where(x => x.d >= rFrom && x.d <= rTo).ToList();
+        var warm = Math.Max(momLong, volWin) + 2;
+        if (idx.Count < warm + rebalBars * 3) return (0m, 0d, 0m, 0);
+        var rng = permuteSeed.HasValue ? new Random(permuteSeed.Value) : null;
+
+        decimal equity = 1m, peak = 1m, maxDd = 0m;
+        var daily = new List<double>();
+        var weights = new Dictionary<string, decimal>();
+        var rebals = 0;
+
+        for (var k = 0; k < idx.Count; k++)
+        {
+            var gi = idx[k].i;
+            if (gi < warm) continue;
+            if (k % rebalBars == 0)
+            {
+                var sc = Scores(gi, momLong, revShort, volWin);
+                var order = symbols.ToList();
+                if (rng is not null) order = order.OrderBy(_ => rng.Next()).ToList();   // permutazione: ranking casuale
+                var ranked = (rng is null ? sc.OrderByDescending(kv => kv.Value).Select(kv => kv.Key)
+                                          : order).ToList();
+                if (ranked.Count >= topK * 2)
+                {
+                    var target = new Dictionary<string, decimal>();
+                    var w = 1m / topK * 0.5m;
+                    foreach (var s in ranked.Take(topK)) target[s] = w;
+                    foreach (var s in ranked.AsEnumerable().Reverse().Take(topK)) target[s] = -w;
+                    var turn = symbols.Sum(s => Math.Abs((target.TryGetValue(s, out var nw) ? nw : 0m) - (weights.TryGetValue(s, out var ow) ? ow : 0m)));
+                    equity *= 1m - turn * CostPerSide;
+                    weights = target; rebals++;
+                }
+            }
+            if (k + 1 < idx.Count && weights.Count > 0)
+            {
+                var gNext = idx[k + 1].i;
+                decimal r = 0m;
+                foreach (var (s, wt) in weights) { var p0 = px[s][gi]; if (p0 > 0m) r += wt * (px[s][gNext] / p0 - 1m); }
+                equity *= 1m + r; daily.Add((double)r);
+                if (equity > peak) peak = equity;
+                var dd = peak > 0m ? (peak - equity) / peak * 100m : 0m; if (dd > maxDd) maxDd = dd;
+            }
+        }
+        double sharpe = 0d;
+        if (daily.Count > 2) { var m = daily.Average(); var sd = Math.Sqrt(daily.Sum(v => (v - m) * (v - m)) / (daily.Count - 1)); if (sd > 1e-12) sharpe = m / sd * ppy; }
+        return ((equity - 1m) * 100m, sharpe, maxDd, rebals);
+    }
+
+    // Selezione: griglia scelta per Sharpe sulla sola finestra di selezione.
+    (int L, int Rv, int V, int K, int Rb) best = default; var bestSh = double.MinValue;
+    foreach (var L in new[] { 30, 60, 90 })
+        foreach (var Rv in new[] { 3, 5 })
+            foreach (var K in new[] { 3, 5 })
+                foreach (var Rb in new[] { 3, 7 })
+                {
+                    var (_, sh, _, rb) = Run(L, Rv, 20, K, Rb, from, selectionTo, null);
+                    if (rb >= 10 && sh > bestSh) { bestSh = sh; best = (L, Rv, 20, K, Rb); }
+                }
+    Console.WriteLine($"--- Migliore in selezione: mom{best.L}/rev{best.Rv}/vol{best.V}, topK {best.K}, rebal {best.Rb} barre (Sharpe sel {bestSh:F2}) ---\n");
+
+    // Giudizio sull'holdout.
+    var (hRet, hSh, hDd, hRb) = Run(best.L, best.Rv, best.V, best.K, best.Rb, holdoutFrom, dates[^1], null);
+    Console.WriteLine($"HOLDOUT: rendimento {hRet:F1}%  Sharpe {hSh:F2}  maxDD {hDd:F1}%  ribilanciamenti {hRb}\n");
+
+    // Null di permutazione sull'holdout: 200 ranking casuali, P95 dello Sharpe.
+    var nulls = new List<double>();
+    for (var t = 0; t < 200; t++)
+    {
+        var (_, sh, _, _) = Run(best.L, best.Rv, best.V, best.K, best.Rb, holdoutFrom, dates[^1], 1000 + t);
+        nulls.Add(sh);
+    }
+    nulls.Sort();
+    var p95 = nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(0.95 * nulls.Count) - 1)];
+    var beats = hSh > p95;
+    Console.WriteLine($"NULL DI PERMUTAZIONE (200 ranking casuali): mediana {nulls[100]:F2}  P95 {p95:F2}");
+    Console.WriteLine(beats
+        ? $"VERDETTO: Sharpe reale {hSh:F2} OLTRE il P95 nullo {p95:F2} — i fattori portano segnale cross-sectional VERO."
+        : $"VERDETTO: Sharpe reale {hSh:F2} dentro il nullo (P95 {p95:F2}) — il ranking multi-fattore non batte il caso.");
+    Console.WriteLine("\nOnesto: market-neutral e molte piccole posizioni ranked. Il forward Paper resta il giudice.");
+}
+
 async Task CrossSectionAsync()
 {
     string[] universe =
