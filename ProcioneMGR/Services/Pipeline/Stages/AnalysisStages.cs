@@ -133,6 +133,27 @@ public sealed class RegimeAnalysisStage(
 
     public string? ValidateInput(PipelineContext ctx) => null;
 
+    /// <summary>
+    /// Giorni minimi perché la finestra di etichettatura contenga abbastanza BARRE da superare il
+    /// warmup dell'estrattore di feature (50 barre) con un margine utile allo smoothing dei regimi.
+    /// Senza questo, ogni timeframe più lungo di 4h produce silenziosamente zero feature.
+    /// </summary>
+    /// <summary>Esposto ai test: è la regola che impedisce il regime "sconosciuto" perenne.</summary>
+    internal static int MinLabelDaysForTests(string timeframe) => MinLabelDays(timeframe);
+
+    private static int MinLabelDays(string timeframe)
+    {
+        const int barsNeeded = 120;   // 50 di warmup + margine per lo smoothing a conferma
+        var hoursPerBar = timeframe switch
+        {
+            "1m" => 1 / 60d, "5m" => 5 / 60d, "15m" => 0.25d, "30m" => 0.5d,
+            "1h" => 1d, "2h" => 2d, "4h" => 4d, "6h" => 6d, "12h" => 12d,
+            "1d" => 24d, "1w" => 168d,
+            _ => 1d,
+        };
+        return (int)Math.Ceiling(barsNeeded * hoursPerBar / 24d);
+    }
+
     public async Task ExecuteAsync(PipelineContext ctx, StageConfig config, CancellationToken ct)
     {
         var primary = ctx.PrimarySeries;
@@ -161,7 +182,14 @@ public sealed class RegimeAnalysisStage(
 
         // Current regime: label the recent window up to NOW (inference, not selection —
         // reading the latest data here is legitimate: it doesn't influence any backtest choice).
-        var lookback = config.GetInt("labelLookbackDays", 30);
+        //
+        // La finestra è espressa in GIORNI ma il warmup delle feature è in BARRE (50: la finestra
+        // più lunga usata dall'estrattore). Su 1h trenta giorni fanno 720 barre e va bene; su 1d ne
+        // fanno 30, cioè SOTTO il warmup — l'estrattore restituiva zero feature e il regime usciva
+        // "sconosciuto" a ogni run, senza che niente dicesse perché. Una configurazione swing
+        // giornaliera non poteva quindi avere un regime, mai. Qui il minimo di giorni si ricava dal
+        // timeframe, e la finestra chiesta dall'utente può solo allargarlo.
+        var lookback = Math.Max(config.GetInt("labelLookbackDays", 30), MinLabelDays(primary.Timeframe));
         var to = DateTime.UtcNow;
         var features = await featureExtractor.ExtractFeaturesAsync(ctx.ExchangeName, primary.Symbol, primary.Timeframe, to.AddDays(-lookback), to, ct);
         var labeled = await regimeDetector.LabelFeaturesAsync(features, primary.Symbol, primary.Timeframe, ct);

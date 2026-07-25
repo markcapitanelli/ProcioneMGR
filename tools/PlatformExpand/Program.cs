@@ -121,6 +121,7 @@ switch (phase)
     case "gridtest": await GridTestAsync(); break;
     case "huntdense": await HuntDenseAsync(); break;
     case "verifysurvivor": await VerifySurvivorAsync(); break;
+    case "pipeconfig": await PipeConfigAsync(); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1314,6 +1315,127 @@ async Task VerifySurvivorAsync()
         ? "Il reale sta oltre il 99° percentile del nullo: regge anche a una soglia severa."
         : $"Il reale sta al {percentile:F0}° percentile del nullo. Con ~15.000 combinazioni provate, un singolo\n"
           + "sopravvissuto al 95% è la resa ATTESA del caso: serviva il 99,99° percentile per dire qualcosa.");
+}
+
+/// <summary>
+/// Crea configurazioni di pipeline che coprono ciò che quelle esistenti NON provano.
+///
+/// Il punto di partenza è una diagnosi, non un'idea: le due configurazioni presenti sono la stessa
+/// ricerca (direzionale-tecnica su OHLCV di maggiori) a timeframe diversi, e l'ultimo run ha valutato
+/// <b>28 candidati</b>. Il collo di bottiglia non sono gli stage — sono tutti e sedici accesi — ma
+/// tre parametri e l'ampiezza dell'universo:
+///
+/// <list type="bullet">
+/// <item><c>timeLimitMinutes=10</c> sulla scoperta creativa: il run è durato 8:05, quindi la
+/// generazione si fermava per tempo scaduto, non per esaurimento delle idee;</item>
+/// <item><c>confirmTopN=3</c>: solo tre spec per serie arrivano alla conferma walk-forward;</item>
+/// <item><c>minHoldoutTrades=10</c>: dieci operazioni non bastano a distinguere un edge dal rumore —
+/// misurato oggi, dove candidati con 5-7 trade venivano battuti dai mercati sintetici.</item>
+/// </list>
+///
+/// Ogni configurazione nuova cambia UNA cosa identificabile rispetto alla base. Moltiplicare i
+/// tentativi senza moltiplicare l'informazione è il modo di fabbricare falsi positivi, ed è
+/// esattamente ciò che il DSR della pipeline poi punisce.
+/// </summary>
+async Task PipeConfigAsync()
+{
+    await using var db = await dbFactory.CreateDbContextAsync();
+    var basi = await db.PipelineConfigurations.OrderBy(c => c.Id).ToListAsync();
+    if (basi.Count == 0) { Console.WriteLine("Nessuna configurazione da cui partire."); return; }
+
+    var baseCfg = basi.First(c => c.Name.Contains("1h", StringComparison.OrdinalIgnoreCase));
+    Console.WriteLine($"Base: {baseCfg.Name}");
+
+    var universoBase = JsonSerializer.Deserialize<List<SeriesSpec>>(baseCfg.UniverseJson) ?? [];
+    Console.WriteLine($"  universo attuale: {universoBase.Count} serie");
+
+    var stagesBase = JsonSerializer.Deserialize<List<StageConfig>>(baseCfg.StagesJson) ?? [];
+    Console.WriteLine($"  stage: {stagesBase.Count}");
+
+    // Universo ALLARGATO: gli stessi timeframe, ma su tutti i simboli disponibili invece dei soli
+    // maggiori. Più simboli è il modo giusto di comprare densità statistica — il 15m ha dimostrato
+    // oggi che comprarla con la frequenza costa più di quanto renda.
+    string[] simboliLarghi =
+    [
+        "BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","DOGE/USDT","ADA/USDT","LINK/USDT",
+        "AVAX/USDT","LTC/USDT","DOT/USDT","UNI/USDT","ATOM/USDT","NEAR/USDT","APT/USDT","SUI/USDT",
+        "INJ/USDT","TIA/USDT","SEI/USDT","AAVE/USDT","ARB/USDT","OP/USDT",
+    ];
+    var universoLargo = simboliLarghi.Select(s => new SeriesSpec { Symbol = s, Timeframe = "1h" }).ToList();
+
+    StageConfig Patch(StageConfig s, params (string Key, string Value)[] set)
+    {
+        var p = new Dictionary<string, string>(s.Parameters);
+        foreach (var (k, v) in set) p[k] = v;
+        return new StageConfig { Type = s.Type, Enabled = s.Enabled, Order = s.Order, Parameters = p };
+    }
+
+    List<StageConfig> ConStage(List<StageConfig> src, string nome, params (string, string)[] set) =>
+        [.. src.Select(s => s.Type == nome ? Patch(s, set) : s)];
+
+    var creati = new List<string>();
+
+    async Task CreaAsync(string nome, string descrizione, List<SeriesSpec> universo, List<StageConfig> stages)
+    {
+        if (await db.PipelineConfigurations.AnyAsync(c => c.Name == nome))
+        {
+            Console.WriteLine($"  (già presente) {nome}");
+            return;
+        }
+        db.PipelineConfigurations.Add(new PipelineConfiguration
+        {
+            Name = nome,
+            Description = descrizione,
+            CreatedBy = baseCfg.CreatedBy,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            ExchangeName = baseCfg.ExchangeName,
+            UniverseJson = JsonSerializer.Serialize(universo),
+            DateRangesJson = baseCfg.DateRangesJson,
+            StagesJson = JsonSerializer.Serialize(stages),
+            InitialCapital = baseCfg.InitialCapital,
+            Seed = baseCfg.Seed,
+            ExecutionMode = "Paper",
+        });
+        creati.Add(nome);
+        Console.WriteLine($"  + {nome}");
+    }
+
+    // A) Generazione senza il tetto di tempo: la stessa ricerca, ma lasciata finire.
+    var stagesA = ConStage(stagesBase, "CreativeDiscovery",
+        ("timeLimitMinutes", "45"), ("maxCandidates", "400"), ("confirmTopN", "6"));
+    stagesA = ConStage(stagesA, "HoldoutValidation", ("minHoldoutTrades", "25"));
+    await CreaAsync(
+        "A · stessa caccia ma lasciata finire (no time-box, 25 trade min)",
+        "Cambia SOLO i limiti che troncavano la generazione: timeLimit 10->45 min, maxCandidates 200->400, "
+        + "confirmTopN 3->6, e minHoldoutTrades 10->25 perche' dieci operazioni non distinguono un edge dal rumore. "
+        + "Serve a rispondere a una domanda sola: il 0/28 era assenza di edge o generazione troncata?",
+        universoBase, stagesA);
+
+    // B) Universo largo: 22 simboli su 1h invece di 10 maggiori.
+    var stagesB = ConStage(stagesBase, "CreativeDiscovery",
+        ("timeLimitMinutes", "45"), ("maxCandidates", "300"), ("confirmTopN", "4"));
+    stagesB = ConStage(stagesB, "HoldoutValidation", ("minHoldoutTrades", "25"));
+    await CreaAsync(
+        "B · universo largo 22 simboli 1h",
+        "Stessi gate di A ma su 22 simboli invece di 10: la densita' statistica si compra con l'AMPIEZZA, "
+        + "non con la frequenza — il 15m ha dato zero sopravvissuti pagando piu' costi.",
+        universoLargo, stagesB);
+
+    // C) Solo composite, niente event-trigger: la famiglia che produce i falsi positivi migliori.
+    var stagesC = ConStage(stagesBase, "CreativeDiscovery",
+        ("timeLimitMinutes", "45"), ("maxCandidates", "400"), ("confirmTopN", "6"),
+        ("enableEvent", "false"), ("enableRegime", "false"));
+    stagesC = ConStage(stagesC, "HoldoutValidation", ("minHoldoutTrades", "25"));
+    await CreaAsync(
+        "C · solo composite (event-trigger escluso)",
+        "Nel torchio di oggi quasi tutti i candidati arrivati in fondo erano EventTrigger, con la soglia "
+        + "completamente inerte e lo Sharpe che cambia segno muovendo la tenuta: sospetto che quella famiglia "
+        + "generi rumore per costruzione. Escluderla dice se il resto del catalogo regge da solo.",
+        universoBase, stagesC);
+
+    await db.SaveChangesAsync();
+    Console.WriteLine($"\n{creati.Count} configurazioni create. Ognuna cambia UNA cosa identificabile rispetto alla base.");
 }
 
 // Riassunto leggibile di una spec Composite dai suoi parametri decimali.
