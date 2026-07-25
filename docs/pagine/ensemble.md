@@ -98,6 +98,18 @@ del registry. Vincolo di sicurezza scolpito nella UI e nel motore: mai in Live.
 - **Scrive**: configurazione ensemble della corsia (Save), eventi di rebalance,
   enable/disable del ribilanciamento automatico.
 
+## [2026-07-25] Corsie configurabili e selettore a schede
+
+Il numero di corsie non è più fisso a tre: si configura con `Trading:LaneCount` (default 3, massimo
+12) e richiede un riavvio, perché le corsie sono registrate nel contenitore DI all'avvio. Le corsie
+in più nascono vuote e ferme, e si configurano da [Ensemble](ensemble.md) come tutte le altre.
+
+Al posto della tendina c'è ora `<LaneSelector>`: ogni corsia è una **scheda cliccabile** con id,
+simbolo, modalità e un puntino verde quando sta operando — così si sa cosa gira dove senza entrare
+in ogni corsia. Oltre sei corsie le altre si raccolgono sotto `+N`, ma chi resta a vista lo decide
+l'utilità e non l'id: prima chi opera, poi chi è configurato, infine le vuote; e la corsia
+selezionata è sempre visibile.
+
 ## Collegamenti con le altre pagine
 
 - **In ingresso**: [Optimization](optimization.md) ("Aggiungila all'Ensemble →"),

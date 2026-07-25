@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcioneMGR.Data;
@@ -37,6 +37,8 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         public Task ActivateModelAsync(RegimeModel model, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<MarketFeatures>> LabelFeaturesAsync(List<MarketFeatures> features, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<RegimeModel?> LoadLatestModelAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<List<MarketFeatures>> LabelFeaturesAsync(List<MarketFeatures> features, string symbol, string timeframe, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<RegimeModel?> LoadActiveModelAsync(string symbol, string timeframe, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private sealed class UnusedFeatureExtractor : IMarketFeatureExtractor

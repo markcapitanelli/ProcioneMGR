@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Backtesting;
@@ -434,8 +434,11 @@ public sealed class EnsembleManager(
 
     private async Task<RegimeContext?> BuildRegimeContextAsync(EnsembleConfiguration cfg, DateTime from, DateTime to, CancellationToken ct)
     {
-        var model = await regimeDetector.LoadLatestModelAsync(ct);
-        if (model is null || model.Symbol != cfg.Symbol || model.Timeframe != cfg.Timeframe)
+        // Modello DELLA SERIE di questa corsia: prima si chiedeva il più recente fra tutti e lo si
+        // scartava se non combaciava, il che rendeva i pesi regime-aware un privilegio della sola
+        // corsia che per caso corrispondeva all'ultimo addestramento.
+        var model = await regimeDetector.LoadActiveModelAsync(cfg.Symbol, cfg.Timeframe, ct);
+        if (model is null)
         {
             return null;
         }
@@ -445,7 +448,7 @@ public sealed class EnsembleManager(
         {
             return null;
         }
-        await regimeDetector.LabelFeaturesAsync(feats);
+        await regimeDetector.LabelFeaturesAsync(feats, cfg.Symbol, cfg.Timeframe, ct);
 
         var map = new Dictionary<DateTime, (int, string)>(feats.Count);
         foreach (var f in feats)

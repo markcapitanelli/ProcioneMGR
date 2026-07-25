@@ -107,6 +107,18 @@ per costruzione.
 - **Scrive**: comandi al motore (avvio/stop/emergenza/conferme/SL-TP/chiusure),
   `appsettings.json` (safety, solo Admin), audit di conferma/rifiuto con utente.
 
+## [2026-07-25] Corsie configurabili e selettore a schede
+
+Il numero di corsie non è più fisso a tre: si configura con `Trading:LaneCount` (default 3, massimo
+12) e richiede un riavvio, perché le corsie sono registrate nel contenitore DI all'avvio. Le corsie
+in più nascono vuote e ferme, e si configurano da [Ensemble](ensemble.md) come tutte le altre.
+
+Al posto della tendina c'è ora `<LaneSelector>`: ogni corsia è una **scheda cliccabile** con id,
+simbolo, modalità e un puntino verde quando sta operando — così si sa cosa gira dove senza entrare
+in ogni corsia. Oltre sei corsie le altre si raccolgono sotto `+N`, ma chi resta a vista lo decide
+l'utilità e non l'id: prima chi opera, poi chi è configurato, infine le vuote; e la corsia
+selezionata è sempre visibile.
+
 ## Collegamenti con le altre pagine
 
 - [Ensemble](ensemble.md) — definisce COSA gira (strategie, Spot/Futures, leva, stop per gamba).

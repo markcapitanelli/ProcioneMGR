@@ -1,0 +1,108 @@
+﻿@using ProcioneMGR.Services.Trading
+
+@*
+    Selettore di corsia riusabile (Trading, Ensemble).
+
+    Sostituisce la <select> che c'era prima. Il motivo non è estetico: con la tendina la corsia
+    corrente era un numero e basta, e per sapere quali corsie fossero configurate — o quale stesse
+    operando — bisognava sceglierle una per una e guardare. Qui ogni corsia è una scheda cliccabile
+    che porta con sé ciò che serve per decidere dove andare: simbolo, modalità, e se sta girando.
+
+    Con poche corsie si vedono tutte. Quando diventano tante (il tetto è TradingLanes.MaxCount) ne
+    resta visibile un numero fisso e le altre si aprono con "+N": ma la scelta di CHI resta visibile
+    non è l'ordine numerico, è l'utilità — prima le corsie che stanno operando, poi quelle
+    configurate, infine le vuote. Una corsia che sta muovendo denaro non deve finire nascosta
+    dietro un menu perché ha un id alto.
+*@
+<div class="lane-selector mb-3">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="text-muted small text-uppercase fw-semibold me-1">Corsie</span>
+
+        @foreach (var lane in Visible)
+        {
+            <button type="button"
+                    class="lane-chip @(lane.Id == Selected ? "active" : "") @(lane.IsRunning ? "running" : "")"
+                    title="@Tooltip(lane)"
+                    @onclick="() => SelectAsync(lane.Id)">
+                <span class="lane-chip-id">@lane.Id</span>
+                <span class="lane-chip-body">
+                    <span class="lane-chip-symbol">@(string.IsNullOrEmpty(lane.Symbol) ? "non configurata" : lane.Symbol)</span>
+                    <span class="lane-chip-meta">
+                        @if (lane.IsRunning)
+                        {
+                            <span class="lane-dot" aria-hidden="true"></span>
+                        }
+                        @lane.Mode
+                    </span>
+                </span>
+            </button>
+        }
+
+        @if (Overflow > 0)
+        {
+            <button type="button" class="lane-chip lane-chip-more" @onclick="() => _expanded = !_expanded"
+                    title="@(_expanded ? "Mostra solo le corsie principali" : $"Mostra tutte e {Lanes.Count} le corsie")">
+                @(_expanded ? "− mostra meno" : $"+{Overflow}")
+            </button>
+        }
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Hint))
+    {
+        <div class="text-muted small mt-2">@Hint</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<LaneSummary> Lanes { get; set; } = [];
+
+    [Parameter, EditorRequired] public int Selected { get; set; }
+
+    [Parameter] public EventCallback<int> SelectedChanged { get; set; }
+
+    /// <summary>Nota esplicativa sotto le schede (ogni pagina ha la sua).</summary>
+    [Parameter] public string? Hint { get; set; }
+
+    /// <summary>
+    /// Quante schede restano visibili prima di collassare il resto sotto "+N". Sei sta comodo su un
+    /// portatile senza mandare a capo la riga; oltre, la fila di schede diventa essa stessa rumore.
+    /// </summary>
+    [Parameter] public int MaxVisible { get; set; } = 6;
+
+    /// <summary>
+    /// Ordine di priorità: prima chi opera, poi chi è configurato, poi il resto — e a parità, l'id.
+    /// La corsia SELEZIONATA è sempre visibile, altrimenti cliccare su una corsia dal menu la farebbe
+    /// sparire dentro il menu stesso.
+    /// </summary>
+    private List<LaneSummary> Ranked => [.. Lanes
+        .OrderByDescending(l => l.Id == Selected)
+        .ThenByDescending(l => l.IsRunning)
+        .ThenByDescending(l => l.IsConfigured)
+        .ThenBy(l => l.Id)];
+
+    /// <summary>
+    /// Espansione: mostra tutte le corsie invece delle sole prioritarie.
+    ///
+    /// È stato Blazor e non un dropdown Bootstrap perché <b>questa applicazione non carica il
+    /// JavaScript di Bootstrap</b>, solo il CSS — verificato dal vivo il 2026-07-25, dove il
+    /// <c>data-bs-toggle="dropdown"</c> della prima versione risultava un pulsante morto. Espandere
+    /// in linea è anche più diretto di un menu: le schede in più compaiono accanto alle altre, con
+    /// lo stesso aspetto, invece che in un elenco a parte con una grafica sua.
+    /// </summary>
+    private bool _expanded;
+
+    /// <summary>Le schede mostrate, riportate in ordine di id: la priorità decide CHI, non DOVE.</summary>
+    private List<LaneSummary> Visible =>
+        _expanded ? [.. Lanes.OrderBy(l => l.Id)]
+                  : [.. Ranked.Take(Math.Max(1, MaxVisible)).OrderBy(l => l.Id)];
+
+    /// <summary>Quante corsie resterebbero fuori senza espansione.</summary>
+    private int Overflow => Math.Max(0, Lanes.Count - Math.Max(1, MaxVisible));
+
+    private static string Tooltip(LaneSummary lane) =>
+        lane.IsConfigured
+            ? $"Corsia {lane.Id} — {lane.Symbol} {lane.Timeframe}, {lane.Mode}{(lane.IsRunning ? ", in esecuzione" : "")}"
+            : $"Corsia {lane.Id} — non ancora configurata";
+
+    private Task SelectAsync(int laneId) => laneId == Selected ? Task.CompletedTask : SelectedChanged.InvokeAsync(laneId);
+}

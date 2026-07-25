@@ -37,11 +37,34 @@ public sealed class RegimeDetector(
     private readonly SemaphoreSlim _gate = new(1, 1);
     private static readonly JsonSerializerOptions Json = new();
 
-    // Cache del modello attivo.
-    private RegimeModel? _cached;
-    private float[][]? _cachedCentroids;
-    private FeatureScaling? _cachedScaling;
-    private List<RegimeProfile>? _cachedProfiles;
+    /// <summary>Modello materializzato e pronto all'inferenza.</summary>
+    private sealed record CacheEntry(RegimeModel Model, float[][] Centroids, FeatureScaling Scaling, List<RegimeProfile> Profiles);
+
+    /// <summary>
+    /// Cache PER SERIE. Prima era un modello solo, e da lì nasceva un difetto silenzioso: chi
+    /// chiedeva "il modello attivo" riceveva il più recente fra TUTTI, di qualunque coppia. Con più
+    /// modelli attivi su serie diverse — che è la norma appena si segue più di un mercato — si
+    /// finiva per etichettare le candele di una coppia con i centroidi di un'altra: un numero ben
+    /// formato e privo di senso. Chiave = (Symbol, Timeframe), perché il regime è una proprietà
+    /// della serie, non del processo.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Symbol, string Timeframe), CacheEntry> _cacheBySeries =
+        new(SeriesComparer.Instance);
+
+    /// <summary>Ultima serie materializzata, per il percorso storico che non dichiara la serie.</summary>
+    private (string Symbol, string Timeframe)? _latestSeries;
+
+    private sealed class SeriesComparer : IEqualityComparer<(string Symbol, string Timeframe)>
+    {
+        public static readonly SeriesComparer Instance = new();
+
+        public bool Equals((string Symbol, string Timeframe) a, (string Symbol, string Timeframe) b) =>
+            string.Equals(a.Symbol, b.Symbol, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.Timeframe, b.Timeframe, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string Symbol, string Timeframe) x) => HashCode.Combine(
+            x.Symbol.ToLowerInvariant(), x.Timeframe.ToLowerInvariant());
+    }
 
     public async Task<RegimeModel> TrainAsync(TrainingConfiguration config, bool activate = true, CancellationToken ct = default)
     {
@@ -139,34 +162,57 @@ public sealed class RegimeDetector(
             model.Symbol, model.Timeframe, model.SilhouetteScore);
     }
 
-    public async Task<List<MarketFeatures>> LabelFeaturesAsync(List<MarketFeatures> features, CancellationToken ct = default)
+    public Task<List<MarketFeatures>> LabelFeaturesAsync(List<MarketFeatures> features, CancellationToken ct = default) =>
+        LabelInternalAsync(features, series: null, ct);
+
+    public Task<List<MarketFeatures>> LabelFeaturesAsync(
+        List<MarketFeatures> features, string symbol, string timeframe, CancellationToken ct = default) =>
+        LabelInternalAsync(features, (symbol, timeframe), ct);
+
+    private async Task<List<MarketFeatures>> LabelInternalAsync(
+        List<MarketFeatures> features, (string Symbol, string Timeframe)? series, CancellationToken ct)
     {
-        var loaded = await EnsureCacheAsync(ct);
+        var loaded = await EnsureCacheAsync(series, ct);
         if (loaded is null || features.Count == 0)
         {
             return features;
         }
 
+        // Il timeframe che governa breadth e smoothing è quello del MODELLO che sta etichettando —
+        // non un default globale: uno smoothing tarato su 1h applicato a un modello 1d cambierebbe
+        // di fatto il numero di transizioni di regime osservate.
+        var timeframe = loaded.Model.Timeframe;
+
         // [3.8a] Il modello sa quali feature usa (Scaling.Names): l'inference ricostruisce lo
         // STESSO vettore del training — un modello storico resta a 4 feature, uno nuovo può
         // averne 5 (volume) o 6 (breadth, che qui va ricalcolata per i timestamp richiesti).
-        var useVolume = loaded.Value.Scaling.Uses("VolumeRatio");
-        var useBreadth = loaded.Value.Scaling.Uses("MarketBreadth");
+        var useVolume = loaded.Scaling.Uses("VolumeRatio");
+        var useBreadth = loaded.Scaling.Uses("MarketBreadth");
         if (useBreadth)
         {
-            await PopulateBreadthAsync(features, _cached?.Timeframe ?? "1h", ct);
+            await PopulateBreadthAsync(features, timeframe, ct);
         }
-        var matrix = features.Select(f => loaded.Value.Scaling.Transform(f.ToClusteringVector(useVolume, useBreadth))).ToArray();
-        var raw = RegimeAssignment.AssignRaw(matrix, loaded.Value.Centroids);
-        var smoothed = RegimeAssignment.SmoothRolling(raw, SmoothWindow(_cached?.Timeframe ?? "1h"), confirmFrames: 3, loaded.Value.Centroids.Length);
+        var matrix = features.Select(f => loaded.Scaling.Transform(f.ToClusteringVector(useVolume, useBreadth))).ToArray();
+        var raw = RegimeAssignment.AssignRaw(matrix, loaded.Centroids);
+        var smoothed = RegimeAssignment.SmoothRolling(raw, SmoothWindow(timeframe), confirmFrames: 3, loaded.Centroids.Length);
 
-        var labelByRegime = loaded.Value.Profiles.ToDictionary(p => p.RegimeId, p => p.SuggestedLabel);
+        var labelByRegime = loaded.Profiles.ToDictionary(p => p.RegimeId, p => p.SuggestedLabel);
         for (var i = 0; i < features.Count; i++)
         {
             features[i].RegimeId = smoothed[i];
             features[i].RegimeLabel = labelByRegime.GetValueOrDefault(smoothed[i], $"Regime {smoothed[i]}");
         }
         return features;
+    }
+
+    /// <summary>Modello attivo della serie indicata. Null se quella serie non ne ha uno.</summary>
+    public async Task<RegimeModel?> LoadActiveModelAsync(string symbol, string timeframe, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        return await db.RegimeModels
+            .Where(m => m.IsActive && m.Symbol == symbol && m.Timeframe == timeframe)
+            .OrderByDescending(m => m.TrainedAtUtc)
+            .FirstOrDefaultAsync(ct);
     }
 
     public async Task<RegimeModel?> LoadLatestModelAsync(CancellationToken ct = default)
@@ -441,36 +487,56 @@ public sealed class RegimeDetector(
         await db.SaveChangesAsync(ct);
     }
 
-    private async Task<(float[][] Centroids, FeatureScaling Scaling, List<RegimeProfile> Profiles)?> EnsureCacheAsync(CancellationToken ct)
+    /// <summary>
+    /// Materializza il modello per la serie richiesta; con <paramref name="series"/> null ricade sul
+    /// comportamento storico (il modello attivo più recente, di qualunque coppia) — che resta per i
+    /// chiamanti che una serie non ce l'hanno, come la pagina di ispezione dei regimi.
+    /// </summary>
+    private async Task<CacheEntry?> EnsureCacheAsync((string Symbol, string Timeframe)? series, CancellationToken ct)
     {
-        if (_cached is not null && _cachedCentroids is not null && _cachedScaling is not null && _cachedProfiles is not null)
+        if (series is { } key && _cacheBySeries.TryGetValue(key, out var hit)) return hit;
+        if (series is null && _latestSeries is { } latestKey && _cacheBySeries.TryGetValue(latestKey, out var latestHit))
         {
-            return (_cachedCentroids, _cachedScaling, _cachedProfiles);
+            return latestHit;
         }
 
         await _gate.WaitAsync(ct);
         try
         {
-            if (_cached is null)
-            {
-                var latest = await LoadLatestModelAsync(ct);
-                if (latest is null) return null;
-                var centroids = JsonSerializer.Deserialize<float[][]>(latest.CentroidsJson, Json)!;
-                var scaling = JsonSerializer.Deserialize<FeatureScaling>(latest.FeatureScalingJson, Json)!;
-                var profiles = JsonSerializer.Deserialize<List<RegimeProfile>>(latest.RegimeProfilesJson, Json)!;
-                UpdateCache(latest, centroids, scaling, profiles);
-            }
-            return (_cachedCentroids!, _cachedScaling!, _cachedProfiles!);
+            // Ricontrollo dentro il lock: un'altra corsia può aver materializzato la stessa serie
+            // mentre aspettavamo, e deserializzare due volte lo stesso modello è solo lavoro sprecato.
+            if (series is { } k2 && _cacheBySeries.TryGetValue(k2, out var raced)) return raced;
+
+            var model = series is { } s
+                ? await LoadActiveModelAsync(s.Symbol, s.Timeframe, ct)
+                : await LoadLatestModelAsync(ct);
+            if (model is null) return null;
+
+            return Materialize(model);
         }
         finally { _gate.Release(); }
     }
 
+    /// <summary>Deserializza il modello e lo mette in cache sotto la SUA serie.</summary>
+    private CacheEntry Materialize(RegimeModel model)
+    {
+        var entry = new CacheEntry(
+            model,
+            JsonSerializer.Deserialize<float[][]>(model.CentroidsJson, Json)!,
+            JsonSerializer.Deserialize<FeatureScaling>(model.FeatureScalingJson, Json)!,
+            JsonSerializer.Deserialize<List<RegimeProfile>>(model.RegimeProfilesJson, Json)!);
+
+        var key = (model.Symbol, model.Timeframe);
+        _cacheBySeries[key] = entry;
+        _latestSeries = key;
+        return entry;
+    }
+
     private void UpdateCache(RegimeModel model, float[][] centroids, FeatureScaling scaling, List<RegimeProfile> profiles)
     {
-        _cached = model;
-        _cachedCentroids = centroids;
-        _cachedScaling = scaling;
-        _cachedProfiles = profiles;
+        var key = (model.Symbol, model.Timeframe);
+        _cacheBySeries[key] = new CacheEntry(model, centroids, scaling, profiles);
+        _latestSeries = key;
     }
 
     // ML.NET schema row. La dimensione del vettore è impostata a runtime via SchemaDefinition

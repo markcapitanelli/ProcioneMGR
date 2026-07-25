@@ -129,6 +129,22 @@ public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>
 {
 }
 
+/// <summary>
+/// Collezione per i test che CAMBIANO <c>TradingLanes.Count</c>.
+///
+/// Quel conteggio è uno static di processo — scelta deliberata, perché è consultato da pagine Razor,
+/// worker e validatori dove un servizio iniettato non arriverebbe senza una cascata di modifiche.
+/// Il prezzo è che un test che lo cambia, se girasse in parallelo, farebbe fallire a intermittenza
+/// ogni altro test che lo legge (e sono parecchi: registrazione DI, watchdog degli invarianti,
+/// planner delle campagne, UI). <c>DisableParallelization</c> impedisce a questa collezione di
+/// girare insieme a qualunque altra: è il modo per avere una manopola globale senza pagarla in
+/// test capricciosi.
+/// </summary>
+[CollectionDefinition("TradingLanes", DisableParallelization = true)]
+public sealed class TradingLanesCollection
+{
+}
+
 /// <summary>Cifratura passthrough condivisa dai test (nessuna dipendenza dalla chiave master reale).</summary>
 public sealed class PassthroughEncryption : IEncryptionService
 {
