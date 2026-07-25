@@ -30,6 +30,8 @@ public sealed class ProcioneMetrics : IDisposable
     private readonly Counter<long> _sentimentSyncs;
     private readonly Counter<long> _realtimeReconnects;
     private readonly Counter<long> _protectiveExits;
+    private readonly Histogram<double> _tradingSlippageBps;
+    private readonly Histogram<double> _orderLatencyMs;
 
     public ProcioneMetrics()
     {
@@ -62,6 +64,10 @@ public sealed class ProcioneMetrics : IDisposable
             description: "Riconnessioni del feed WebSocket real-time, per exchange.");
         _protectiveExits = _meter.CreateCounter<long>("procione.trading.protective_exits", unit: "{exit}",
             description: "Uscite protettive scattate, per origine (tick real-time vs candela chiusa) e motivo.");
+        _tradingSlippageBps = _meter.CreateHistogram<double>("procione.trading.slippage_bps", unit: "bps",
+            description: "Implementation shortfall degli ordini di corsia (positivo = costo), per modalità e azione.");
+        _orderLatencyMs = _meter.CreateHistogram<double>("procione.trading.order_latency_ms", unit: "ms",
+            description: "Latenza invio→risposta degli ordini, per exchange, mercato ed esito.");
     }
 
     public void RecordLanePromotion(int laneId, string newMode) =>
@@ -117,6 +123,27 @@ public sealed class ProcioneMetrics : IDisposable
         _protectiveExits.Add(1,
             new KeyValuePair<string, object?>("source", source),
             new KeyValuePair<string, object?>("reason", reason));
+
+    /// <summary>
+    /// [Fase 1] Shortfall di un ordine di corsia, positivo = costo. Gemello di
+    /// <see cref="RecordExecutionSlippage"/>, che copre i soli ordini eseguiti a fette: insieme
+    /// danno la prima misura completa di quanto costa davvero eseguire, da confrontare con lo
+    /// slippage assunto in selezione (<c>PipelineCosts.DefaultSlippagePercent</c>).
+    /// </summary>
+    public void RecordTradingSlippage(double bps, string mode, string action) =>
+        _tradingSlippageBps.Record(bps,
+            new KeyValuePair<string, object?>("mode", mode),
+            new KeyValuePair<string, object?>("action", action));
+
+    /// <summary>
+    /// [Fase 1] Latenza invio→risposta di un ordine. Da leggere ai percentili alti (P95/P99): è
+    /// sulla coda, non sulla media, che si decide se un ritardo è costato un fill.
+    /// </summary>
+    public void RecordOrderLatency(double milliseconds, string exchange, string market, string outcome) =>
+        _orderLatencyMs.Record(milliseconds,
+            new KeyValuePair<string, object?>("exchange", exchange),
+            new KeyValuePair<string, object?>("market", market),
+            new KeyValuePair<string, object?>("outcome", outcome));
 
     public void Dispose() => _meter.Dispose();
 }

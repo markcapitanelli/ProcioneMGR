@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Exchanges;
+using ProcioneMGR.Services.Observability;
 
 namespace ProcioneMGR.Services.Trading.Internal;
 
@@ -23,8 +24,26 @@ internal sealed class PositionCloser(
     IExchangeClientFactory exchangeFactory,
     ILogger logger,
     TradingPersistence persistence,
+    ProcioneMetrics? metrics,
     IOptionsMonitor<SafetyConfiguration> safety)
 {
+    /// <summary>[Fase 1] Vedi <see cref="PositionOpener"/>: stessa etichetta d'esito, stessa metrica.</summary>
+    private static string OrderOutcome(PlaceOrderResult res) =>
+        res.NetworkUncertain ? "network_uncertain" : res.Success ? "ok" : "rejected";
+
+    /// <summary>
+    /// [Fase 1] Shortfall della chiusura, azione <c>Close</c>. Il lato passato è quello dell'ordine
+    /// di chiusura (già dentro <see cref="Order.Side"/>), non quello della posizione: è l'ordine a
+    /// pagare lo slittamento.
+    /// </summary>
+    private void RecordShortfall(Order closeOrder, TradingMode mode)
+    {
+        if (closeOrder.ShortfallBps is decimal bps)
+        {
+            metrics?.RecordTradingSlippage((double)bps, mode.ToString(), "Close");
+        }
+    }
+
     /// <summary>
     /// [B1] Fill di chiusura implausibile (vedi <see cref="FillSanityCheck"/>): la chiusura si
     /// finalizza comunque — l'ordine è andato a buon fine e rifiutarla riaprirebbe il loop di
@@ -64,11 +83,19 @@ internal sealed class PositionCloser(
         var closeSide = pos.Side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
         var closeClientId = Guid.NewGuid().ToString("N");
 
+        // [Fase 1] Il prezzo di riferimento della decisione, prima che `exitPrice` venga sostituito
+        // dal fill poco sotto: era esattamente questo passaggio a rendere il costo di una chiusura
+        // non misurabile a posteriori. Resta null in Paper, dove fill e riferimento coincidono.
+        decimal? arrivalPrice = null;
+        int? submitLatencyMs = null;
+
         // Testnet/Live: piazza l'ordine di chiusura reale (market opposto).
         if (state.Mode != TradingMode.Paper && credsOrNull is TradingCredentials creds)
         {
+            arrivalPrice = exitPrice;
+
             var client = exchangeFactory.Create(state.ExchangeName);
-            var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+            var (res, latencyMs) = await ExecutionQuality.MeasureAsync(() => client.PlaceOrderAsync(new PlaceOrderRequest
             {
                 Symbol = pos.Symbol,
                 Side = closeSide == OrderSide.Buy ? "BUY" : "SELL",
@@ -76,7 +103,11 @@ internal sealed class PositionCloser(
                 Quantity = qty,
                 ClientOrderId = closeClientId,
                 Credentials = creds,
-            }, ct);
+            }, ct));
+
+            submitLatencyMs = latencyMs;
+            metrics?.RecordOrderLatency(latencyMs, state.ExchangeName.ToString(), "spot", OrderOutcome(res));
+
             if (res.NetworkUncertain)
             {
                 var outcome = await new OrderReconciler(exchangeFactory)
@@ -150,7 +181,10 @@ internal sealed class PositionCloser(
             CreatedAtUtc = ts,
             FilledAtUtc = ts,
             Mode = state.Mode,
+            ArrivalPrice = arrivalPrice,
+            SubmitLatencyMs = submitLatencyMs,
         };
+        RecordShortfall(closeOrder, state.Mode);
 
         var trade = new TradeRecord
         {
@@ -192,6 +226,10 @@ internal sealed class PositionCloser(
         var closeSide = pos.Side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
         var closeClientId = Guid.NewGuid().ToString("N");
 
+        // [Fase 1] Come nel ramo Spot: il riferimento va salvato prima che il fill lo sostituisca.
+        decimal? arrivalPrice = null;
+        int? submitLatencyMs = null;
+
         if (!alreadyClosedOnExchange && state.Mode != TradingMode.Paper && credsOrNull is TradingCredentials creds)
         {
             var futuresClient = exchangeFactory.CreateFutures(state.ExchangeName);
@@ -203,7 +241,11 @@ internal sealed class PositionCloser(
                 await BracketManager(state.Mode).TryCancelRestingBracketAsync(pos, creds, state.ExchangeName, ct);
             }
 
-            var res = await futuresClient.PlaceFuturesOrderAsync(new PlaceOrderRequest
+            // Il riferimento si fissa DOPO la cancellazione del bracket: quella è una chiamata a sé,
+            // e includerla nella latenza dell'ordine di chiusura falserebbe la misura.
+            arrivalPrice = exitPrice;
+
+            var (res, latencyMs) = await ExecutionQuality.MeasureAsync(() => futuresClient.PlaceFuturesOrderAsync(new PlaceOrderRequest
             {
                 Symbol = pos.Symbol,
                 Side = closeSide == OrderSide.Buy ? "BUY" : "SELL",
@@ -211,7 +253,11 @@ internal sealed class PositionCloser(
                 Quantity = qty,
                 ClientOrderId = closeClientId,
                 Credentials = creds,
-            }, reduceOnly: true, ct);
+            }, reduceOnly: true, ct));
+
+            submitLatencyMs = latencyMs;
+            metrics?.RecordOrderLatency(latencyMs, state.ExchangeName.ToString(), "futures", OrderOutcome(res));
+
             if (res.NetworkUncertain)
             {
                 var outcome = await new OrderReconciler(exchangeFactory)
@@ -285,7 +331,10 @@ internal sealed class PositionCloser(
             Mode = state.Mode,
             MarketType = MarketType.Futures,
             Leverage = pos.Leverage,
+            ArrivalPrice = arrivalPrice,
+            SubmitLatencyMs = submitLatencyMs,
         };
+        RecordShortfall(closeOrder, state.Mode);
 
         var trade = new TradeRecord
         {

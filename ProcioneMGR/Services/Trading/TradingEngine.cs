@@ -1016,7 +1016,7 @@ public sealed class TradingEngine(
             metrics?.RecordTradeExecuted(_state.Mode.ToString(), pos.Side.ToString(), "Close");
     }
 
-    private PositionCloser PositionCloser => new(exchangeFactory, logger, Persistence, safety);
+    private PositionCloser PositionCloser => new(exchangeFactory, logger, Persistence, metrics, safety);
 
     /// <summary>Chiusura SPOT (comportamento INVARIATO rispetto a prima dell'introduzione dei Futures).</summary>
     private Task CloseSpotPositionAsync(OpenPosition pos, decimal exitPrice, string reason, DateTime ts, CancellationToken ct) =>
