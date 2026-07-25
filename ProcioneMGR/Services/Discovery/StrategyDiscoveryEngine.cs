@@ -162,6 +162,17 @@ public sealed class StrategyDiscoveryEngine(
             new() { Name = "Threshold", Min = 0.005m, Max = 0.02m, Step = 0.005m, IsInteger = false },
             new() { Name = "AllowShort", Min = 0, Max = 1, Step = 1, IsInteger = true },
         ],
+        // [Fase 5b] Gradini FISSI attorno a un ancoraggio mobile. Il gradino parte dall'1%: sotto,
+        // su timeframe intraday, il ciclo incasserebbe meno di quanto costa aprirlo e chiuderlo —
+        // la frontiera dei costi misurata in R2 dice che è il turnover, non la risoluzione, a
+        // mangiare il rendimento, e questa strategia è per costruzione ad alto turnover.
+        "GridMeanReversion" =>
+        [
+            new() { Name = "AnchorPeriod", Min = 20, Max = 100, Step = 40, IsInteger = true },
+            new() { Name = "StepPercent", Min = 1m, Max = 3m, Step = 1m, IsInteger = false },
+            new() { Name = "EntryRungs", Min = 1, Max = 3, Step = 1, IsInteger = true },
+            new() { Name = "Direction", Min = 0, Max = 2, Step = 1, IsInteger = true },
+        ],
         // Meta-strategie creative: la griglia di DEFAULT sweppa un template classico (le
         // combinazioni RICCHE di forme/segnali le genera lo StrategyComposer). Le pinned
         // range (Min=Max) fissano la forma, le altre sweppano le soglie.

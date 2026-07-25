@@ -38,6 +38,15 @@ public sealed class RegimeRoutingOptions
     /// <summary>Candele minime in memoria perché la classificazione sia tentata.</summary>
     public int MinCandles { get; set; } = 60;
 
+    /// <summary>
+    /// Per quanto tempo si riusa l'esito della verifica "esiste un modello attivo per questa serie"
+    /// senza rinterrogare il database. Il compromesso è dichiarato: attivare un modello nuovo da
+    /// <c>/regimes</c> impiega fino a questo tempo a farsi sentire sul router, in cambio di zero
+    /// query per candela. Con candele da un'ora il default è invisibile; abbassarlo ha senso solo
+    /// mentre si sta sperimentando con i modelli.
+    /// </summary>
+    public TimeSpan ModelCheckTtl { get; set; } = TimeSpan.FromMinutes(5);
+
     public List<RegimeRoutingRule> Rules { get; set; } = [];
 }
 
@@ -105,6 +114,35 @@ public sealed class LaneRegimeRouter(
     IOptionsMonitor<RegimeRoutingOptions> options,
     ILogger<LaneRegimeRouter> logger) : ILaneRegimeRouter
 {
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Symbol, string Timeframe), (RegimeRoutingDecision? Refusal, DateTime CheckedAtUtc)> _modelCheck = new();
+
+    /// <summary>
+    /// Verifica (con cache a tempo) che esista un modello attivo per QUESTA serie.
+    /// Ritorna <c>null</c> se tutto è a posto, oppure la decisione di rifiuto già pronta.
+    /// </summary>
+    private async Task<RegimeRoutingDecision?> ModelMatchesAsync(
+        string symbol, string timeframe, TimeSpan ttl, CancellationToken ct)
+    {
+        var key = (symbol, timeframe);
+        if (_modelCheck.TryGetValue(key, out var cached) && DateTime.UtcNow - cached.CheckedAtUtc < ttl)
+        {
+            return cached.Refusal;
+        }
+
+        var model = await regimeDetector.LoadLatestModelAsync(ct);
+        RegimeRoutingDecision? refusal =
+            model is null
+                ? RegimeRoutingDecision.Unknown("nessun modello di regime attivo")
+                : !string.Equals(model.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
+                  || !string.Equals(model.Timeframe, timeframe, StringComparison.OrdinalIgnoreCase)
+                    ? RegimeRoutingDecision.Unknown(
+                        $"il modello attivo è di {model.Symbol} {model.Timeframe}, non di {symbol} {timeframe}")
+                    : null;
+
+        _modelCheck[key] = (refusal, DateTime.UtcNow);
+        return refusal;
+    }
+
     public async Task<RegimeRoutingDecision> DecideAsync(
         string symbol, string timeframe, IReadOnlyList<OhlcvData> recentCandles, CancellationToken ct = default)
     {
@@ -120,14 +158,14 @@ public sealed class LaneRegimeRouter(
             // Il modello va verificato PRIMA di spendere il calcolo delle feature, e deve essere
             // quello della serie che stiamo instradando: etichettare BTC 1h col modello di ETH 4h
             // darebbe un numero perfettamente formato e completamente privo di senso.
-            var model = await regimeDetector.LoadLatestModelAsync(ct);
-            if (model is null) return RegimeRoutingDecision.Unknown("nessun modello di regime attivo");
-            if (!string.Equals(model.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(model.Timeframe, timeframe, StringComparison.OrdinalIgnoreCase))
-            {
-                return RegimeRoutingDecision.Unknown(
-                    $"il modello attivo è di {model.Symbol} {model.Timeframe}, non di {symbol} {timeframe}");
-            }
+            //
+            // L'esito è tenuto in cache a tempo perché questo metodo gira a OGNI candela di OGNI
+            // corsia: senza, sarebbe una query al database per candela solo per riscoprire che il
+            // modello è lo stesso di un minuto fa. L'etichettatura vera e propria ha già una sua
+            // cache in memoria dentro il detector, quindi questa era l'unica I/O rimasta sul
+            // percorso caldo.
+            var check = await ModelMatchesAsync(symbol, timeframe, cfg.ModelCheckTtl, ct);
+            if (check is not null) return check;
 
             var features = featureExtractor.ComputeFeatures(recentCandles, timeframe, ct);
             if (features.Count == 0) return RegimeRoutingDecision.Unknown("feature non calcolabili");
