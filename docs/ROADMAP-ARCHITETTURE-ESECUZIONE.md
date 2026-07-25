@@ -421,6 +421,15 @@ L'isteresi anti flip-flop non è riscritta: arriva da `IRegimeDetector.LabelFeat
 applica già la conferma a più candele di `RegimeAssignment`. Un router che cambiasse idea a ogni
 barra di confine spegnerebbe e riaccenderebbe le strategie sul rumore.
 
+**Un bug trovato rileggendo, prima che uscisse dal ramo.** La prima stesura applicava il filtro
+saltando l'intero giro della strategia quando non c'era una posizione aperta. Sembrava equivalente e
+non lo era: *con* una posizione aperta il filtro non veniva nemmeno consultato, e su un segnale di
+inversione il motore chiudeva e **riapriva dal lato opposto** — cioè apriva in un regime vietato
+proprio perché c'era una posizione, l'esatto contrario dell'intento. Il filtro è stato spostato sul
+punto di apertura: le chiusure restano sempre permesse (sono protettive, e un router che potesse
+impedirle sarebbe un rischio, non un filtro), le aperture no. Il caso ha ora un test end-to-end
+dedicato, che è il modo per non riscoprirlo dal vivo.
+
 **Default OFF.** Prima di dare a un K-means il potere di spegnere una strategia dal vivo, quel
 potere va guadagnato in validazione — e la validazione richiede un modello di regime attivo sulla
 stessa serie della corsia, che oggi va addestrato da `/regimes`.

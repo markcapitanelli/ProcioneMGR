@@ -494,22 +494,14 @@ public sealed class TradingEngine(
                 {
                     if (_state.IsEmergencyStopped) break;
 
-                    // Il filtro agisce SOLO sulle aperture: una posizione già aperta va gestita fino
-                    // alla sua uscita naturale anche se il regime è cambiato sotto di lei. Chiuderla
-                    // d'imperio al cambio di regime sarebbe una decisione di trading presa dal
-                    // router, che è un'altra cosa da quella che gli si sta chiedendo di fare.
-                    if (routing is { IsKnown: true } && !routing.Allows(strat.StrategyName)
-                        && _positions.All(p => p.StrategyId != strat.StrategyId))
-                    {
-                        await AuditAsync("RegimeRouterSkipped", new
-                        {
-                            strategy = strat.StrategyName,
-                            regimeId = routing.RegimeId,
-                            routing.Reason,
-                            allowed = routing.AllowedStrategies,
-                        }, ts, ct);
-                        continue;
-                    }
+                    // [Fase 4] Il filtro vale SOLO per le APERTURE, e va applicato al punto di
+                    // apertura — non saltando l'intero giro della strategia. Saltarlo quando una
+                    // posizione è già aperta lascerebbe passare il caso peggiore: su un segnale di
+                    // inversione il motore chiude e RIAPRE dal lato opposto, cioè apre in un regime
+                    // vietato proprio perché c'era una posizione. Le CHIUSURE restano sempre
+                    // permesse: sono protettive, e un router che potesse impedirle sarebbe un
+                    // rischio, non un filtro.
+                    var mayOpen = routing is not { IsKnown: true } || routing.Allows(strat.StrategyName);
 
                     var s = strat.StrategyName == ChampionStrategyName
                         ? await ResolveChampionStrategyAsync(ct)
@@ -529,11 +521,19 @@ public sealed class TradingEngine(
                     {
                         case Signal.Long:
                             if (pos is { Side: OrderSide.Sell }) await ClosePositionAsync(pos, price, "Signal", ts, ct);
-                            if (_positions.All(p => p.StrategyId != strat.StrategyId)) await TryOpenAsync(strat, OrderSide.Buy, price, ts, ct);
+                            if (_positions.All(p => p.StrategyId != strat.StrategyId))
+                            {
+                                if (mayOpen) await TryOpenAsync(strat, OrderSide.Buy, price, ts, ct);
+                                else await AuditRegimeSkipAsync(strat, routing!, OrderSide.Buy, ts, ct);
+                            }
                             break;
                         case Signal.Short:
                             if (pos is { Side: OrderSide.Buy }) await ClosePositionAsync(pos, price, "Signal", ts, ct);
-                            if (_positions.All(p => p.StrategyId != strat.StrategyId)) await TryOpenAsync(strat, OrderSide.Sell, price, ts, ct);
+                            if (_positions.All(p => p.StrategyId != strat.StrategyId))
+                            {
+                                if (mayOpen) await TryOpenAsync(strat, OrderSide.Sell, price, ts, ct);
+                                else await AuditRegimeSkipAsync(strat, routing!, OrderSide.Sell, ts, ct);
+                            }
                             break;
                         case Signal.Close:
                             if (pos is not null) await ClosePositionAsync(pos, price, "Signal", ts, ct);
@@ -837,6 +837,30 @@ public sealed class TradingEngine(
         return _state.MarketType == MarketType.Futures
             ? await ExecuteFuturesOpenAsync(order, strategyName, currentPrice, ts, ct, isExisting, mergeInto)
             : await ExecuteSpotOpenAsync(order, strategyName, currentPrice, ts, ct, isExisting, mergeInto);
+    }
+
+    /// <summary>
+    /// [Fase 4] Traccia l'apertura NON eseguita per volere del router di regime. Si registra solo
+    /// quando un'apertura sarebbe davvero avvenuta — non a ogni candela in cui la strategia tace —
+    /// altrimenti l'audit si riempirebbe di non-eventi e il segnale utile ("quante occasioni ha
+    /// tolto il router") sparirebbe nel rumore.
+    /// </summary>
+    private Task AuditRegimeSkipAsync(
+        EnsembleStrategy strat, ProcioneMGR.Services.Regime.RegimeRoutingDecision routing,
+        OrderSide side, DateTime ts, CancellationToken ct)
+    {
+        logger.LogInformation(
+            "Corsia {Lane}: apertura {Side} di {Strategy} non eseguita — regime {RegimeId} non la prevede.",
+            laneId, side, strat.StrategyName, routing.RegimeId);
+
+        return AuditAsync("RegimeRouterSkipped", new
+        {
+            strategy = strat.StrategyName,
+            side = side.ToString(),
+            regimeId = routing.RegimeId,
+            routing.Reason,
+            allowed = routing.AllowedStrategies,
+        }, ts, ct);
     }
 
     private PositionOpener PositionOpener => new(exchangeFactory, logger, Persistence, metrics, safety);
