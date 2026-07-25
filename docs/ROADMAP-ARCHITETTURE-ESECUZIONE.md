@@ -548,6 +548,14 @@ in posizione il giorno in cui una corsia passa ai futures. A 5x ferma la terza c
 lascia passare la seconda. Il difetto onesto di questa scelta: una soglia che non scatta mai non
 viene mai collaudata dal vivo, quindi il primo collaudo vero arriverà proprio quando servirà.
 
+C'è però un **secondo modo, non ovvio, in cui questa soglia può iniziare a mordere anche senza
+leva**: il numero di posizioni per corsia. Oggi ogni corsia ha una sola strategia e quindi al più una
+posizione aperta, il che è ciò che tiene l'esposizione correlata all'8%. Aggiungere strategie a una
+corsia moltiplica le sue posizioni (il tetto è `MaxOpenPositions`, oggi 5), e con due corsie a
+cinque posizioni ciascuna si arriverebbe al 40% — sopra la soglia. Non è un difetto: è esattamente
+ciò che il limite deve fare, perché dieci posizioni su asset che si muovono insieme *sono* una
+scommessa sola. Va però saputo in anticipo, per non scambiare un rifiuto legittimo per un guasto.
+
 ### 11.3 Manopola B — il dato per scrivere le regole non c'è
 
 Esiste un modello attivo per la serie della corsia 0 (**BTC/USDT 1h, K=4, silhouette 0,402**, appena
