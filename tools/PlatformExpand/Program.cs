@@ -116,6 +116,7 @@ switch (phase)
     case "minuteprofile": await MinuteProfileAsync(); break;
     case "liquidationsverify": await LiquidationsVerifyAsync(); break;
     case "tapecost": await TapeCostAsync(); break;
+    case "trailcompare": await TrailCompareAsync(); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1311,6 +1312,101 @@ async Task TapeCostAsync()
     Console.WriteLine($"Il tape grezzo dei soli 3 simboli più liquidi vale {pilotGbYear / ohlcvGb:F0}x tutto ciò che la");
     Console.WriteLine("piattaforma ha raccolto finora: a quel punto non è un'estensione, è un secondo sistema di dati,");
     Console.WriteLine("e va deciso come tale — non fatto scivolare dentro come se fosse una tabella in più.");
+}
+
+/// <summary>
+/// [Fase 5a — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Il GATE del chandelier: il trailing a k×ATR
+/// va adottato solo se batte quello percentuale già presente, su dati veri e a costi onesti.
+///
+/// Il confronto gira su più simboli, più strategie e più impostazioni: un chandelier che vince su
+/// una sola combinazione non ha vinto niente — a forza di provare, qualcosa vince sempre. Il criterio
+/// è la <b>frequenza di vittoria attraverso le combinazioni</b>, non il caso migliore.
+/// </summary>
+async Task TrailCompareAsync()
+{
+    string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "LINK/USDT"];
+    string[] strategies = ["EmaCross", "DonchianBreakout", "Momentum", "PriceSmaCross"];
+    const string timeframe = "4h";
+
+    // Le varianti a confronto. "nessuno" è il riferimento: senza, non si saprebbe se il trailing
+    // aiuta o se stiamo solo scegliendo il meno dannoso fra due modi di tagliare i profitti.
+    var variants = new (string Label, decimal TrailPercent, decimal AtrMultiple)[]
+    {
+        ("nessun trailing", 0m, 0m),
+        ("percentuale 3%", 3m, 0m),
+        ("percentuale 5%", 5m, 0m),
+        ("chandelier 2xATR", 0m, 2m),
+        ("chandelier 3xATR", 0m, 3m),
+        ("chandelier 4xATR", 0m, 4m),
+    };
+
+    Console.WriteLine("=== GATE FASE 5a: chandelier ATR vs trailing percentuale ===");
+    Console.WriteLine($"{symbols.Length} simboli x {strategies.Length} strategie su {timeframe}, costi onesti "
+        + $"(fee {PipelineCosts.DefaultFeePercent}%, slippage {PipelineCosts.DefaultSlippagePercent}%).\n");
+
+    var engine = provider.GetRequiredService<IServiceScopeFactory>() is { } _
+        ? provider.CreateScope().ServiceProvider.GetRequiredService<IBacktestEngine>()
+        : throw new InvalidOperationException("motore non risolvibile");
+
+    // Somma dei rendimenti e conteggio delle vittorie per variante.
+    var totalReturn = new decimal[variants.Length];
+    var totalDrawdown = new decimal[variants.Length];
+    var wins = new int[variants.Length];
+    var combos = 0;
+
+    foreach (var symbol in symbols)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var candles = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == symbol && c.Timeframe == timeframe)
+            .OrderBy(c => c.TimestampUtc)
+            .ToListAsync();
+        if (candles.Count < 500) { Console.WriteLine($"{symbol}: storico {timeframe} insufficiente ({candles.Count})."); continue; }
+
+        foreach (var strategyName in strategies)
+        {
+            var results = new decimal[variants.Length];
+            for (var v = 0; v < variants.Length; v++)
+            {
+                var (_, trailPercent, atrMultiple) = variants[v];
+                var config = new BacktestConfiguration
+                {
+                    Symbol = symbol, Timeframe = timeframe, StrategyName = strategyName,
+                    InitialCapital = 10_000m, PositionSizePercent = 100m,
+                    FeePercent = PipelineCosts.DefaultFeePercent,
+                    SlippagePercent = PipelineCosts.DefaultSlippagePercent,
+                    TrailingStopPercent = trailPercent,
+                    TrailingAtrMultiple = atrMultiple,
+                };
+                var result = await engine.RunBacktestAsync(config, candles, CancellationToken.None);
+                results[v] = result.TotalReturnPercent;
+                totalReturn[v] += result.TotalReturnPercent;
+                totalDrawdown[v] += result.MaxDrawdownPercent;
+            }
+
+            var best = Array.IndexOf(results, results.Max());
+            wins[best]++;
+            combos++;
+            Console.WriteLine($"{symbol,-10} {strategyName,-18} vince: {variants[best].Label,-18} "
+                + string.Join(" ", results.Select(r => $"{r,7:F1}")));
+        }
+    }
+
+    if (combos == 0) { Console.WriteLine("Nessuna combinazione eseguita."); return; }
+
+    Console.WriteLine($"\n{"Variante",-20} {"vittorie",9} {"rend. medio",12} {"drawdown medio",15}");
+    for (var v = 0; v < variants.Length; v++)
+    {
+        Console.WriteLine($"{variants[v].Label,-20} {wins[v],6}/{combos,-3} {totalReturn[v] / combos,12:F1} {totalDrawdown[v] / combos,15:F1}");
+    }
+
+    var chandelierWins = wins[3] + wins[4] + wins[5];
+    var percentWins = wins[1] + wins[2];
+    Console.WriteLine($"\nCHANDELIER {chandelierWins}/{combos} vittorie · PERCENTUALE {percentWins}/{combos} · NESSUN TRAILING {wins[0]}/{combos}");
+    Console.WriteLine(chandelierWins > percentWins + combos / 10
+        ? "VERDETTO: il chandelier batte il trailing percentuale in modo non marginale."
+        : "VERDETTO: il chandelier NON batte il trailing percentuale. Resta nel motore come opzione\n"
+          + "          disponibile alla caccia, ma non c'e' ragione di preferirlo per default.");
 }
 
 async Task LiquidationsVerifyAsync()
