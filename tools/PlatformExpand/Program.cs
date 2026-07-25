@@ -117,6 +117,7 @@ switch (phase)
     case "liquidationsverify": await LiquidationsVerifyAsync(); break;
     case "tapecost": await TapeCostAsync(); break;
     case "trailcompare": await TrailCompareAsync(); break;
+    case "calibrate": await CalibrateAsync(); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1408,6 +1409,215 @@ async Task TrailCompareAsync()
         : "VERDETTO: il chandelier NON batte il trailing percentuale. Resta nel motore come opzione\n"
           + "          disponibile alla caccia, ma non c'e' ragione di preferirlo per default.");
 }
+
+/// <summary>
+/// [Taratura delle due manopole spente — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md §11]
+/// Il limite di esposizione correlata e il router di regime sono nati default-off perché una soglia
+/// scelta a occhio non protegge: o è inerte, o paralizza. Questa fase calcola, sulle corsie REALI e
+/// sui prezzi REALI, dove cadrebbero quelle soglie — così la decisione di accenderle si prende su
+/// un numero e non su un'impressione.
+/// </summary>
+async Task CalibrateAsync()
+{
+    await using var db = await dbFactory.CreateDbContextAsync();
+    var json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    // --- 1. Le corsie come sono davvero -------------------------------------------------------
+    var lanes = new List<(int Lane, string Symbol, string Timeframe, string Mode, decimal Capital, bool Futures, int Leverage)>();
+    for (var lane = 0; lane < 3; lane++)
+    {
+        var st = await db.TradingEngineStates.AsNoTracking().FirstOrDefaultAsync(s => s.LaneId == lane);
+        var row = await db.EnsembleStates.AsNoTracking().Where(e => e.LaneId == lane).OrderBy(e => e.Id).FirstOrDefaultAsync();
+        if (st is null || row is null || string.IsNullOrWhiteSpace(row.ConfigurationJson)) continue;
+        var cfg = JsonSerializer.Deserialize<EnsembleConfiguration>(row.ConfigurationJson, json) ?? new();
+        if (string.IsNullOrEmpty(cfg.Symbol)) continue;
+        lanes.Add((lane, cfg.Symbol, cfg.Timeframe, st.Mode.ToString(), st.TotalCapital, cfg.IsFutures, Math.Max(1, cfg.Leverage)));
+    }
+
+    Console.WriteLine("=== TARATURA DELLE DUE MANOPOLE SPENTE ===\n");
+    Console.WriteLine("--- Corsie ---");
+    foreach (var l in lanes)
+    {
+        Console.WriteLine($"  corsia {l.Lane}: {l.Symbol,-10} {l.Timeframe}  {l.Mode,-8} capitale {l.Capital,10:N2}"
+            + (l.Futures ? $"  futures x{l.Leverage}" : "  spot"));
+    }
+
+    // --- 2. Manopola A: esposizione correlata -------------------------------------------------
+    // Il guard isola per MODALITA': una posizione Paper non e' un'esposizione reale e non vincola
+    // una corsia Testnet. E' quindi la modalita', non il numero di corsie, a decidere chi si vede.
+    Console.WriteLine("\n--- MANOPOLA A: esposizione correlata ---");
+    const decimal positionSizePercent = 8m;   // SafetyConfiguration.PositionSizePercent (default)
+
+    foreach (var group in lanes.GroupBy(l => l.Mode))
+    {
+        var inMode = group.ToList();
+        var aggregateCapital = inMode.Sum(l => l.Capital);
+        Console.WriteLine($"\n  Modalita' {group.Key}: {inMode.Count} corsia/e, capitale aggregato {aggregateCapital:N2}");
+
+        if (inMode.Count < 2)
+        {
+            Console.WriteLine("    -> UNA SOLA corsia in questa modalita': il limite di correlazione e' per costruzione");
+            Console.WriteLine("       INERTE qui (non esistono altre posizioni con cui correlarsi).");
+            continue;
+        }
+
+        // Correlazioni reali fra le serie delle corsie, con i parametri del guard.
+        Console.WriteLine("    correlazioni (log-rendimenti, 1h, barre in comune):");
+        var rho = new Dictionary<(string, string), double>();
+        for (var i = 0; i < inMode.Count; i++)
+        {
+            for (var j = i + 1; j < inMode.Count; j++)
+            {
+                var a = await ClosesForAsync(db, inMode[i].Symbol, "1h", 720);
+                var b = await ClosesForAsync(db, inMode[j].Symbol, "1h", 720);
+                var (x, y) = AlignedLogReturns(a, b);
+                if (x.Count < 100)
+                {
+                    Console.WriteLine($"      {inMode[i].Symbol} ~ {inMode[j].Symbol}: NON STIMABILE ({x.Count} barre in comune)");
+                    continue;
+                }
+                var r = ProcioneMGR.Services.Alpha.Correlation.Pearson(x, y);
+                rho[(inMode[i].Symbol, inMode[j].Symbol)] = r;
+                Console.WriteLine($"      {inMode[i].Symbol,-10} ~ {inMode[j].Symbol,-10} rho = {r,6:F3}   ({x.Count} barre)");
+            }
+        }
+
+        // Scenario PEGGIORE realistico: ogni corsia apre una posizione long della sua taglia tipica,
+        // e tutte le correlazioni contano piene. E' il caso che la manopola dovrebbe intercettare.
+        var worstCorrelated = 0m;
+        foreach (var l in inMode)
+        {
+            var notional = l.Capital * positionSizePercent / 100m * (l.Futures ? l.Leverage : 1);
+            worstCorrelated += notional;
+        }
+        var worstPercent = aggregateCapital > 0m ? worstCorrelated / aggregateCapital * 100m : 0m;
+
+        Console.WriteLine($"\n    Scenario peggiore (tutte long, rho=1, taglia {positionSizePercent}% del capitale di ogni corsia):");
+        Console.WriteLine($"      esposizione correlata = {worstCorrelated:N2} = {worstPercent:F1}% del capitale aggregato");
+        Console.WriteLine($"      soglia attuale di default = 50,0%  ->  {(worstPercent > 50m ? "SCATTEREBBE" : "MAI ATTIVA")}");
+
+        // La soglia utile e' quella che sta SOTTO il caso peggiore ma sopra l'operativita' normale.
+        Console.WriteLine("      soglia che intercetterebbe questo scenario: qualsiasi valore sotto "
+            + $"{worstPercent:F1}%; per lasciar passare {inMode.Count - 1} corsia/e su {inMode.Count} servirebbe "
+            + $"circa {worstPercent * (inMode.Count - 1) / inMode.Count:F1}%.");
+    }
+
+    // --- 3. Manopola B: modello di regime -----------------------------------------------------
+    Console.WriteLine("\n--- MANOPOLA B: router di regime ---");
+    var models = await db.RegimeModels.AsNoTracking()
+        .OrderByDescending(m => m.TrainedAtUtc)
+        .Select(m => new { m.Id, m.Symbol, m.Timeframe, m.IsActive, m.TrainedAtUtc, m.NumberOfRegimes, m.SilhouetteScore })
+        .Take(10).ToListAsync();
+
+    if (models.Count == 0)
+    {
+        Console.WriteLine("  NESSUN modello di regime nel database.");
+    }
+    else
+    {
+        Console.WriteLine($"  {"id",4} {"serie",-16} {"attivo",7} {"K",3} {"silhouette",11}  addestrato");
+        foreach (var m in models)
+        {
+            Console.WriteLine($"  {m.Id,4} {m.Symbol + " " + m.Timeframe,-16} {(m.IsActive ? "SI" : "no"),7} {m.NumberOfRegimes,3} "
+                + $"{m.SilhouetteScore,11:F3}  {m.TrainedAtUtc:yyyy-MM-dd}");
+        }
+    }
+
+    var active = models.FirstOrDefault(m => m.IsActive);
+    Console.WriteLine();
+    foreach (var l in lanes)
+    {
+        var usable = active is not null
+            && string.Equals(active.Symbol, l.Symbol, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(active.Timeframe, l.Timeframe, StringComparison.OrdinalIgnoreCase);
+        Console.WriteLine($"  corsia {l.Lane} ({l.Symbol} {l.Timeframe}): router {(usable ? "UTILIZZABILE" : "INERTE — nessun modello attivo per questa serie")}");
+    }
+
+    // Profili del modello attivo + strategie realmente in uso: senza questi, scrivere regole di
+    // routing significherebbe indovinare, e una regola che non nomina la strategia in uso ferma
+    // la corsia invece di indirizzarla.
+    if (active is not null)
+    {
+        var full = await db.RegimeModels.AsNoTracking().FirstAsync(m => m.Id == active.Id);
+        var profiles = JsonSerializer.Deserialize<List<ProcioneMGR.Services.Regime.RegimeProfile>>(full.RegimeProfilesJson) ?? [];
+        Console.WriteLine($"\n  Profili del modello attivo ({full.Symbol} {full.Timeframe}):");
+        foreach (var p in profiles.OrderBy(p => p.RegimeId))
+        {
+            Console.WriteLine($"    regime {p.RegimeId}: {p.SuggestedLabel,-22} n={p.SampleCount,6:N0}  "
+                + $"vol={p.MeanVolatility,7:F4} trendDir={p.MeanTrendDirection,7:F4} trendStr={p.MeanTrendStrength,7:F4}");
+            if (p.StrategyPerformances.Count > 0)
+            {
+                foreach (var sp in p.StrategyPerformances.OrderByDescending(s => s.Value.AverageSharpe).Take(4))
+                {
+                    Console.WriteLine($"        {sp.Key,-26} Sharpe {sp.Value.AverageSharpe,7:F2}  rend. {sp.Value.AverageReturn,8:F2}%  "
+                        + $"win {sp.Value.WinRate,5:F1}%  trade {sp.Value.TotalTrades,4}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("        (nessuna performance per-strategia profilata su questo regime)");
+            }
+        }
+    }
+
+    Console.WriteLine("\n  Strategie ATTIVE per corsia (le regole devono nominare queste):");
+    for (var lane = 0; lane < 3; lane++)
+    {
+        var row = await db.EnsembleStates.AsNoTracking().Where(e => e.LaneId == lane).OrderBy(e => e.Id).FirstOrDefaultAsync();
+        if (row is null || string.IsNullOrWhiteSpace(row.ConfigurationJson)) continue;
+        var cfg = JsonSerializer.Deserialize<EnsembleConfiguration>(row.ConfigurationJson, json) ?? new();
+        var names = cfg.Strategies.Where(s => s.IsActive).Select(s => s.StrategyName).ToList();
+        Console.WriteLine($"    corsia {lane}: {(names.Count == 0 ? "(nessuna attiva)" : string.Join(", ", names))}");
+    }
+
+    // Dati disponibili per addestrare, per ciascuna serie di corsia.
+    Console.WriteLine("\n  Dati disponibili per l'addestramento (il modello si addestra su UNA serie):");
+    foreach (var l in lanes.DistinctBy(l => (l.Symbol, l.Timeframe)))
+    {
+        var count = await db.OhlcvData.AsNoTracking().CountAsync(c => c.Symbol == l.Symbol && c.Timeframe == l.Timeframe);
+        var first = await db.OhlcvData.AsNoTracking().Where(c => c.Symbol == l.Symbol && c.Timeframe == l.Timeframe)
+            .OrderBy(c => c.TimestampUtc).Select(c => (DateTime?)c.TimestampUtc).FirstOrDefaultAsync();
+        var last = await db.OhlcvData.AsNoTracking().Where(c => c.Symbol == l.Symbol && c.Timeframe == l.Timeframe)
+            .OrderByDescending(c => c.TimestampUtc).Select(c => (DateTime?)c.TimestampUtc).FirstOrDefaultAsync();
+        Console.WriteLine($"    {l.Symbol,-10} {l.Timeframe}: {count,7:N0} candele  {first:yyyy-MM-dd} -> {last:yyyy-MM-dd}");
+    }
+}
+
+/// <summary>
+/// Rendimenti logaritmici sulle sole barre con lo STESSO timestamp — stessa matematica di
+/// <c>CorrelatedExposureGuard</c> (che e' internal e quindi non visibile da qui). Accostare due
+/// serie per posizione invece che per timestamp correlerebbe istanti diversi.
+/// </summary>
+static (List<double> X, List<double> Y) AlignedLogReturns(
+    IReadOnlyList<(DateTime T, decimal Close)> a, IReadOnlyList<(DateTime T, decimal Close)> b)
+{
+    var byTimestamp = b.ToDictionary(p => p.T, p => p.Close);
+    var pairs = new List<(decimal A, decimal B)>();
+    foreach (var (t, closeA) in a)
+    {
+        if (byTimestamp.TryGetValue(t, out var closeB)) pairs.Add((closeA, closeB));
+    }
+
+    var x = new List<double>(Math.Max(0, pairs.Count - 1));
+    var y = new List<double>(Math.Max(0, pairs.Count - 1));
+    for (var i = 1; i < pairs.Count; i++)
+    {
+        var (prevA, prevB) = pairs[i - 1];
+        var (curA, curB) = pairs[i];
+        if (prevA <= 0m || prevB <= 0m || curA <= 0m || curB <= 0m) continue;
+        x.Add(Math.Log((double)(curA / prevA)));
+        y.Add(Math.Log((double)(curB / prevB)));
+    }
+    return (x, y);
+}
+
+/// <summary>Chiusure recenti di una serie, ordinate nel tempo (helper della taratura).</summary>
+async Task<List<(DateTime T, decimal Close)>> ClosesForAsync(ApplicationDbContext db, string symbol, string timeframe, int bars) =>
+    (await db.OhlcvData.AsNoTracking()
+        .Where(o => o.Symbol == symbol && o.Timeframe == timeframe)
+        .OrderByDescending(o => o.TimestampUtc).Take(bars)
+        .Select(o => new { o.TimestampUtc, o.Close }).ToListAsync())
+    .Select(o => (o.TimestampUtc, o.Close)).OrderBy(o => o.TimestampUtc).ToList();
 
 async Task LiquidationsVerifyAsync()
 {

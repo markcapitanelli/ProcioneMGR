@@ -1,4 +1,4 @@
-{
+﻿{
   "ConnectionStrings": {
     "_comment_PostgresConnection": "Unico provider supportato: PostgreSQL. Lo schema si applica con `dotnet ef database update --project ProcioneMGR.Migrations.Postgres` (vedi docs/POSTGRES_MIGRATION.md).",
     "PostgresConnection": "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=__CHANGE_ME__"
@@ -161,10 +161,11 @@
     },
     "CorrelatedExposure": {
       "_comment": "[Fase 2] Limite di esposizione su posizioni CORRELATE fra corsie. Tutti gli altri limiti sono scalari e ciechi alla correlazione: tre corsie long su tre altcoin che si muovono con BTC contano come tre scommesse indipendenti mentre sono una sola scommessa di taglia tripla — e nei crash le correlazioni crypto tendono a 1. La somma e' CON SEGNO: un long e uno short correlati si compensano, quindi una copertura genuina non viene punita.",
-      "_comment_Enabled": "Default false: la soglia va prima CALIBRATA sui dati delle corsie realmente attive. Una soglia scelta male non protegge, paralizza — con MaxCorrelatedExposurePercent troppo basso la seconda corsia non apre mai. Accendere solo dopo aver guardato l'audit CorrelatedExposureRejected in simulazione.",
+      "_comment_taratura": "TARATO il 2026-07-25 con la fase 'calibrate' di PlatformExpand, sulle corsie e sui prezzi reali. Scoperta che cambia la lettura: in SPOT l'esposizione correlata vale ~8% del capitale aggregato e RESTA tale qualunque sia il numero di corsie — numeratore e denominatore crescono insieme — quindi qualunque soglia sopra l'8% non scatta mai. Il limite diventa vivo con la LEVA (8% x L): a 5x tre corsie correlate fanno ~40%, due ~25%. Soglia 30% = ferma la terza, lascia passare la seconda. Oggi in spot e' inerte per costruzione: e' protezione posizionata in anticipo.",
       "_comment_fail_safe": "Se la correlazione non e' stimabile (storico corto, simbolo nuovo) il limite NON blocca: lo registra e lascia passare. Bloccare al buio fermerebbe l'operativita' per un buco di dati.",
-      "Enabled": false,
-      "MaxCorrelatedExposurePercent": 50.0,
+      "_comment_modalita": "Il guard isola per MODALITA': una posizione Paper non vincola una corsia Testnet. Con corsie in modalita' diverse (oggi 2 Paper + 1 Testnet) chi e' solo nella sua modalita' non ha nulla con cui correlarsi.",
+      "Enabled": true,
+      "MaxCorrelatedExposurePercent": 30.0,
       "MinCorrelationToCount": 0.5,
       "Timeframe": "1h",
       "LookbackBars": 720,
@@ -172,10 +173,13 @@
     },
     "RegimeRouting": {
       "_comment": "[Fase 4] Router di regime: classifica il regime corrente col RegimeDetector K-means e lascia operare SOLO le strategie mappate a quel regime. E' un FILTRO sulle aperture, non una mutazione: non tocca EnsembleStrategy.IsActive e non chiude le posizioni gia' aperte quando il regime cambia (chiuderle d'imperio sarebbe una decisione di trading presa dal router). L'isteresi anti flip-flop e' quella del detector, non riscritta qui.",
-      "_comment_Enabled": "Default false: prima di dare a un K-means il potere di spegnere una strategia dal vivo, quel potere va guadagnato in validazione. Richiede anche un modello di regime ATTIVO per la stessa serie della corsia (stesso simbolo e timeframe), altrimenti il router si dichiara 'non so' e lascia passare tutto.",
+      "_comment_Enabled": "Richiede un modello di regime ATTIVO per la stessa serie della corsia (stesso simbolo e timeframe), altrimenti il router si dichiara 'non so' e lascia passare tutto — dicendolo con un warning, una volta sola, per non spegnersi in silenzio.",
+      "_comment_DriveDecisions": "Separa OSSERVARE da DECIDERE, come MarketData:Realtime:DriveProtectiveExits. false = il router classifica il regime e ne registra i CAMBI nei log, senza impedire nulla. Serve perche' le regole si scrivono guardando come rende una strategia in ciascun regime, e quel dato e' spesso sottile (sul modello BTC 1h la strategia in uso ha da 5 a 37 trade per regime: scriverci regole sopra sarebbe curve-fitting). Si accende dopo aver accumulato l'osservazione.",
+      "_comment_una_sola_serie": "Il detector carica il modello attivo piu' RECENTE senza filtrare per serie: con piu' modelli attivi su coppie diverse ne vince uno solo, e addestrarne uno nuovo puo' togliere il router alla corsia che lo stava usando.",
       "_comment_Rules": "Una regola per regime. Strategies vuoto = 'in questo regime la corsia sta ferma', che e' una decisione, non una configurazione mancante. Gli id dei regimi sono quelli mostrati in /regimes.",
       "_comment_AllowUnmappedRegimes": "true (default): un regime senza regola lascia operare tutti. Serve perche' un modello riaddestrato puo' avere piu' cluster di quanti ne conosca questa configurazione, e non deve zittire la corsia di soppiatto.",
-      "Enabled": false,
+      "Enabled": true,
+      "DriveDecisions": false,
       "AllowUnmappedRegimes": true,
       "MinCandles": 60,
       "Rules": [

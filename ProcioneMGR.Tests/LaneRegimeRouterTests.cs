@@ -77,8 +77,50 @@ public sealed class LaneRegimeRouterTests
 
     private static RegimeRoutingOptions Enabled(params RegimeRoutingRule[] rules) => new()
     {
-        Enabled = true, MinCandles = 10, Rules = [.. rules],
+        Enabled = true, DriveDecisions = true, MinCandles = 10, Rules = [.. rules],
     };
+
+    /// <summary>Acceso ma NON decidente: classifica e registra, non impedisce.</summary>
+    private static RegimeRoutingOptions Observing(params RegimeRoutingRule[] rules) => new()
+    {
+        Enabled = true, DriveDecisions = false, MinCandles = 10, Rules = [.. rules],
+    };
+
+    // --- Osservazione: la classificazione avviene, la decisione no ------------------------------
+
+    [Fact]
+    public async Task Observing_ClassifiesButNeverBlocks()
+    {
+        // Il caso per cui la modalità esiste: le regole di instradamento si scrivono guardando come
+        // si comporta una strategia in ciascun regime, e su BTC 1h quel dato oggi è da 5 a 37 trade
+        // per regime. In osservazione si accumula il dato mancante senza rischiare nulla.
+        var options = Observing(new RegimeRoutingRule { RegimeId = 3, Strategies = [] });   // regola che vieterebbe tutto
+
+        var decision = await Router(options, new FakeRegimeDetector(Model(), regimeId: 3))
+            .DecideAsync("BTC/USDT", "1h", Candles(60));
+
+        Assert.True(decision.IsKnown);          // il regime È stato riconosciuto...
+        Assert.Equal(3, decision.RegimeId);
+        Assert.True(decision.Observing);
+        Assert.True(decision.Allows("Composite"));   // ...ma nessuna strategia viene fermata
+        Assert.True(decision.Allows("QualsiasiAltra"));
+    }
+
+    [Fact]
+    public async Task DriveDecisions_TurnsTheSameRuleIntoABlock()
+    {
+        // Stessa identica regola, stesso regime: cambia solo l'interruttore. È la prova che
+        // osservare e decidere sono davvero separati, e che accendere il secondo è un atto esplicito.
+        var rule = new RegimeRoutingRule { RegimeId = 3, Strategies = [] };
+
+        var observing = await Router(Observing(rule), new FakeRegimeDetector(Model(), regimeId: 3))
+            .DecideAsync("BTC/USDT", "1h", Candles(60));
+        var driving = await Router(Enabled(rule), new FakeRegimeDetector(Model(), regimeId: 3))
+            .DecideAsync("BTC/USDT", "1h", Candles(60));
+
+        Assert.True(observing.Allows("Composite"));
+        Assert.False(driving.Allows("Composite"));
+    }
 
     // --- Il comportamento centrale ------------------------------------------------------------
 
