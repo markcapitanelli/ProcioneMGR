@@ -214,10 +214,10 @@ Le Fasi 1 e 2 sono il miglior rapporto valore/sforzo dell'intera roadmap: strume
 | 0 — Consolidamento base | 🟡 **PR #46 aperta** (fast-forward, 64 commit); riconciliazione `faa381` CHIUSA (§7.1); restano migration al DB reale e verifica dal vivo del feed R1 |
 | 1 — TCA + latenza | ✅ **FATTA** 2026-07-25 — §8 |
 | 2 — Correlazione live | ✅ **FATTA** 2026-07-25, default-off da calibrare — §8 |
-| 3 — Microstruttura (D1/D2/D3) | ⬜ aperta (fonte di verità: ROADMAP-PROFITTO-INTRADAY) |
-| 4 — Regime router live | ⬜ aperta |
-| 5a — Chandelier ATR | ⬜ aperta, gated |
-| 5b — Grid nel catalogo | ⬜ aperta, gated |
+| 3 — Microstruttura (D1/D2/D3) | 🔁 **RIVISTA** dopo la misura del costo (§9): come scritta era 124× lo storico esistente |
+| 4 — Regime router live | ✅ **FATTO** 2026-07-25, default-off — §10 |
+| 5a — Chandelier ATR | ✅ **FATTO e MISURATO**: il gate dice **no** — §10.2 |
+| 5b — Grid nel catalogo | ✅ **FATTO**, con una correzione di sostanza — §10.3 |
 
 ### 7.1 Esito della riconciliazione dei branch
 
@@ -293,7 +293,211 @@ l'audit `CorrelatedExposureRejected` in simulazione prima di dargli potere.
 
 ### 8.3 Cosa resta da fare a mano
 
-- Applicare al DB reale le migration pendenti: `TargetKind` (roadmap macchina-ricerca) e
-  `AddOrderExecutionQuality` (Fase 1).
 - Verifica dal vivo del feed R1 acceso in Paper.
 - Calibrare la soglia di correlazione prima di accendere la Fase 2.
+
+*(Le migration `TargetKind` e `AddOrderExecutionQuality` sono state applicate al DB reale il
+2026-07-25, dopo il merge di PR #46 e #47: `dotnet ef migrations list` non riporta più pendenze.)*
+
+---
+
+## 9. Fase 3 rivista: il costo misurato cambia il piano
+
+**La Fase 3 come scritta al §5 non si può fare.** Non per prudenza generica: per un numero.
+
+### 9.1 La misura
+
+Aggiunta la fase `tapecost` a `tools/PlatformExpand` (2026-07-25). Non stima nulla a occhio: usa
+`OhlcvData.TradeCount`, che è il numero di trade *davvero* avvenuti in ogni barra — cioè esattamente
+quante righe produrrebbe uno stream `aggTrade` non aggregato. Il dato era già nel database, gratis,
+da quando T0.3 ha smesso di scartare i campi estesi delle klines.
+
+Esito su 30 simboli reali, a fronte di un intero storico OHLCV che pesa **12,4 milioni di righe,
+~1,4 GB**:
+
+| Cattura | Costo/anno | Rapporto con tutto lo storico attuale |
+|---|---|---|
+| Tape grezzo, 3 simboli più liquidi | **171,6 GB** | **124×** |
+| Tape grezzo, 30 simboli | 244 GB (2.189 GB ai ritmi di picco) | 174× |
+| Tape aggregato a 1s, 30 simboli | 79,3 GB | 57× |
+| **Tape aggregato a 10s, 30 simboli** | **7,9 GB** | 5,6× |
+| Depth top-5 ogni 1s, 30 simboli | 229,1 GB | 164× |
+| **Depth top-5 ogni 10s, 30 simboli** | **22,9 GB** | 16× |
+
+Il tape grezzo dei soli tre simboli più liquidi vale **124 volte** tutto ciò che la piattaforma ha
+raccolto in anni. A quel punto non è un'estensione: è un secondo sistema di dati, con i suoi problemi
+di backup (il `pg_dump` attuale diventerebbe impraticabile), di vacuum, di indici e di query. Farlo
+scivolare dentro come "una tabella in più" degraderebbe la piattaforma esistente — che oggi fa girare
+backtest e cacce su un database piccolo e veloce.
+
+### 9.2 Cosa cambia nel piano
+
+Tre correzioni, tutte figlie della tabella sopra.
+
+**1. Aggregare all'origine, non archiviare tick.** Un tape aggregato in barre da 10 secondi costa
+7,9 GB/anno su 30 simboli invece di 244. E il punto forte non è il fattore medio (~31×): è che la
+compressione **cresce proprio quando il mercato accelera**, cioè quando il tick grezzo esplode. È
+questo che rende il costo *prevedibile* — un tetto, non una scommessa sulla volatilità futura.
+L'informazione che serve a un segnale di order flow (imbalance firmato, conteggio, volume ai due
+lati) sopravvive all'aggregazione; quella che si perde è la sequenza esatta dei tick, che serve solo
+a strategie di latenza che questa piattaforma ha già deciso di non fare.
+
+**2. Depth a cadenza fissa, non a ogni aggiornamento.** `@depth` in streaming manda un aggiornamento
+per ogni modifica del book: migliaia al secondo. Uno snapshot top-5 ogni 10 secondi costa 22,9 GB/anno
+su 30 simboli e risponde alla stessa domanda (com'è messo il book adesso). Su un pilota di 3 simboli:
+~2,3 GB/anno, cioè un costo confrontabile con quello che la piattaforma già sostiene.
+
+**3. Pilota a termine con verifica di valore PRIMA di allargare.** Qui c'è un problema di uovo e
+gallina onesto: non si può sapere se la microstruttura aggiunge informazione senza raccoglierla, ma
+raccoglierla per tutti i simboli per sempre è il costo di cui sopra. La via d'uscita è la stessa
+metodologia che la piattaforma applica a ogni ipotesi: **raccogliere il minimo indispensabile per un
+tempo definito, poi misurare**.
+
+### 9.3 Fase 3 rivista — piano operativo
+
+| Passo | Cosa | Costo | Gate |
+|---|---|---|---|
+| **3.0** | Fase `tapecost` per misurare il costo | fatto ✅ | — |
+| **3.1** | Tabelle `TradeTapeBars` (10s) e `OrderBookSnapshots` (top-5, 10s), con retention **per tipo** dichiarata esplicitamente | schema | Retention obbligatoria alla creazione: la lezione della purge sentiment (che avrebbe raso il funding storico) dice che una retention generica applicata a dati eterogenei è un bug latente |
+| **3.2** | Estensione del feed R1: sottoscrizione `aggTrade` + `depth`, **aggregazione in memoria**, scrittura periodica | ~2,3 GB/anno su 3 simboli | Default-off; pilota su 3 simboli e **90 giorni**, non "sempre" |
+| **3.3** | **Misura di valore**: l'imbalance a 10s aggiunge informazione predittiva *oltre* al `TakerBuyVolume` per-candela che già abbiamo? Stesso gauntlet degli altri fattori (IC, CPCV, placebo) | compute | **Se non aggiunge, la Fase 3 si chiude qui con un report negativo** e le tabelle si svuotano. È l'esito più probabile a giudicare dalle cinque cacce precedenti, e va messo in conto come risultato valido |
+| **3.4** | Solo se 3.3 è positivo: allargamento simboli + E4 (market making OBI) come da roadmap intraday | da rivalutare | — |
+
+**Il passo 3.3 è il vero contenuto della fase.** Costruire la cattura senza di esso significherebbe
+pagare un costo permanente per un'ipotesi mai verificata — esattamente l'errore che la piattaforma
+ha imparato a non fare quando ha costruito il gemello sintetico e la frontiera dei costi.
+
+### 9.4 Ordine di lavoro rivisto
+
+Sequenza aggiornata dopo la misura:
+
+1. **Fase 5a** (chandelier ATR) e **5b** (grid) — piccole, isolate nel backtest, nessun rischio per
+   la piattaforma: si fanno subito.
+2. **Fase 4** (regime router live) — nessun rischio di volume, tocca il percorso decisionale ma
+   default-off e validata prima dell'uso.
+3. **Fase 3 rivista** (3.1→3.3) — dopo le altre, perché è la sola che lascia un costo permanente
+   sulla piattaforma e va decisa con il risultato di 3.3 in mano.
+
+
+
+
+---
+
+## 10. Seconda ondata eseguita (2026-07-25)
+
+### 10.1 Fase 4 — il router di regime, finalmente col K-means vero
+
+Il PDF mette al centro del suo framework ibrido una sequenza precisa: classifica il regime, poi
+attiva la strategia adatta a quel regime. In piattaforma esisteva solo a metà —
+`RegimeConditionalStrategy` è un router vero ma vive nel backtest e usa un surrogato (pendenza di
+una SMA con dead zone), mentre il motore live il regime non lo consultava affatto.
+
+Il commento in testa a quella strategia spiegava anche il perché: le strategie qui sono
+*dependency-free* per scelta (la factory è `new`-based), quindi una strategia legata al DB non
+potrebbe girare dentro gli sweep dell'ottimizzatore. Quel commento indicava che serviva "nuovo
+plumbing". `LaneRegimeRouter` è quel plumbing, costruito però **fuori** dalla strategia: al livello
+della corsia, dove il DB c'è già e dove la domanda "chi opera adesso" appartiene naturalmente.
+
+Tre scelte di progetto, tutte difese da test:
+
+1. **È un filtro, non una mutazione.** Non tocca `EnsembleStrategy.IsActive` né alcuno stato:
+   risponde a una domanda quando gliela si fa. Mutare la configurazione dell'ensemble avrebbe
+   significato litigare col ribilanciamento dell'`EnsembleManager` e lasciare la corsia in uno stato
+   che nessuno dei due possiede davvero.
+2. **Non tocca le posizioni aperte.** Il filtro agisce solo sulle *aperture*: una posizione già in
+   essere va alla sua uscita naturale anche se il regime le cambia sotto. Chiuderla d'imperio
+   sarebbe una decisione di trading presa dal router — un'altra cosa da quella che gli si chiede.
+3. **Fallisce verso il permesso.** Nessun modello attivo, modello di un'altra serie, candele
+   insufficienti, feature non calcolabili, guasto qualsiasi ⇒ regime "non noto" ⇒ tutte le strategie
+   operano. Un filtro che fallisse verso il blocco trasformerebbe un'assenza di informazione in una
+   decisione di trading, e fermerebbe l'intera corsia per un modello mancante.
+
+Distinzione che vale la pena avere esplicita: una regola con lista di strategie **vuota** significa
+"in questo regime la corsia sta ferma" — una decisione — ed è cosa diversa da un regime **senza
+regola**, che è un'assenza di configurazione e resta permissivo per default. Sono i due casi che un
+router mal disegnato confonde, e la confusione si paga in silenzio.
+
+L'isteresi anti flip-flop non è riscritta: arriva da `IRegimeDetector.LabelFeaturesAsync`, che
+applica già la conferma a più candele di `RegimeAssignment`. Un router che cambiasse idea a ogni
+barra di confine spegnerebbe e riaccenderebbe le strategie sul rumore.
+
+**Un bug trovato rileggendo, prima che uscisse dal ramo.** La prima stesura applicava il filtro
+saltando l'intero giro della strategia quando non c'era una posizione aperta. Sembrava equivalente e
+non lo era: *con* una posizione aperta il filtro non veniva nemmeno consultato, e su un segnale di
+inversione il motore chiudeva e **riapriva dal lato opposto** — cioè apriva in un regime vietato
+proprio perché c'era una posizione, l'esatto contrario dell'intento. Il filtro è stato spostato sul
+punto di apertura: le chiusure restano sempre permesse (sono protettive, e un router che potesse
+impedirle sarebbe un rischio, non un filtro), le aperture no. Il caso ha ora un test end-to-end
+dedicato, che è il modo per non riscoprirlo dal vivo.
+
+**Default OFF.** Prima di dare a un K-means il potere di spegnere una strategia dal vivo, quel
+potere va guadagnato in validazione — e la validazione richiede un modello di regime attivo sulla
+stessa serie della corsia, che oggi va addestrato da `/regimes`.
+
+### 10.2 Fase 5a — il gate ha detto no, ed è un risultato
+
+Il chandelier (trailing a k×ATR) è stato costruito **e misurato**, che era il punto: la roadmap lo
+ammetteva solo se avesse battuto l'esistente. Fase `trailcompare` in `tools/PlatformExpand`:
+6 simboli × 4 strategie su 4h, costi onesti, 6 varianti di trailing. Criterio dichiarato prima di
+guardare i numeri: **frequenza di vittoria fra le combinazioni**, non il caso migliore — a forza di
+provare, qualcosa vince sempre.
+
+| Variante | Vittorie su 24 | Rendimento medio | Drawdown medio |
+|---|---|---|---|
+| nessun trailing | **11** | −16,1% | 72,4% |
+| percentuale 3% | 5 | −51,2% | **62,4%** |
+| percentuale 5% | 5 | −43,0% | 64,2% |
+| chandelier 2×ATR | 1 | −55,2% | 68,2% |
+| chandelier 3×ATR | 2 | −49,5% | 70,1% |
+| chandelier 4×ATR | 0 | −38,3% | 71,4% |
+
+**Il "S-Tier" del PDF non regge su questi dati**: 3 vittorie su 24 contro le 10 del trailing
+percentuale. Il chandelier resta nel motore come opzione disponibile alla caccia — tenerlo non costa
+nulla e l'ottimizzatore può sempre sceglierlo — ma non c'è ragione di preferirlo per default.
+
+Il risultato secondario è più interessante del primo: **il trailing fa quello che promette** e lo
+paga. Riduce il drawdown medio (72% → 62%) a costo del rendimento. Non è "il trailing è inutile": è
+che sta tagliando anche i trade buoni. Con l'onestà d'obbligo: su un insieme di strategie che
+perdono tutte, questa graduatoria misura soprattutto *quale stop taglia meglio le perdite*, e andrà
+rifatta se e quando una strategia guadagnerà davvero.
+
+### 10.3 Fase 5b — e la correzione che il codice ha imposto
+
+Costruendo la strategia grid è emerso un vincolo che la roadmap non aveva visto: **il motore è a
+posizione singola** (`Portfolio` ha un solo stato flat/long/short), mentre un grid vero appoggia
+molti ordini limite simultanei e porta più posizioni insieme. Il grid multi-ordine **non è
+esprimibile** in questo motore.
+
+A quel punto c'erano due strade oneste: non farlo, oppure farlo e chiamarlo col suo nome. La seconda,
+purché il nome non menta — da cui `GridMeanReversion` e non "Grid". Cattura il ciclo finito e
+restartabile che è il cuore economico dell'idea (entra a N gradini dall'ancoraggio, raccoglie un
+gradino, ricomincia); non cattura la media dei prezzi su più gradini né l'inventario simultaneo, che
+sono poi proprio ciò che rende il grid pericoloso quando il laterale finisce. I numeri del PDF
+(8,39%, Sharpe 0,38) **non si trasferiscono** e non vanno attribuiti a questa strategia.
+
+Vale la pena averla accanto alla `BollingerMeanReversion` per una differenza deliberata: là la banda
+è *adattiva* alla volatilità, qui il gradino è *fisso*. Quale delle due funzioni meglio è una
+domanda empirica, ed è la caccia a doverla decidere.
+
+### 10.4 Due difetti trovati dalla verifica, non dal caso
+
+Vale la pena registrarli perché dicono qualcosa sul metodo, non solo sul codice.
+
+**La suite conosceva un invariante che io non conoscevo.** Il primo giro completo ha bocciato
+`StrategyDiscoveryDefaultsTests`: ogni strategia registrata nella factory deve avere griglie di
+parametri di default in Discovery, altrimenti appare selezionabile nella UI ma lo sweep non produce
+nulla. Il commento di quel test dice che è un bug già capitato davvero, con `DonchianBreakout` e
+`PriceSmaCross`. La strategia nuova ne era scoperta, e nessuna revisione a occhio l'avrebbe notato:
+è esattamente il tipo di contratto che solo un test di integrazione può far rispettare.
+
+**Il router pagava una query per candela.** L'etichettatura vera ha già una cache in memoria dentro
+il detector, ma il controllo "esiste un modello attivo per questa serie" interrogava il database a
+ogni candela di ogni corsia solo per riscoprire che il modello era lo stesso di un minuto prima. Ora
+ha una cache a tempo, con il compromesso dichiarato in configurazione: attivare un modello nuovo da
+`/regimes` impiega fino a cinque minuti a farsi sentire sul router.
+
+### 10.5 Stato dopo la seconda ondata
+
+Fatte: 0 (merge in master + migration applicate), 1, 2, 4, 5a (con verdetto negativo), 5b.
+Aperta: **3 rivista** (§9), che è ora l'unica fase rimasta e la sola che lasci un costo permanente
+sulla piattaforma.

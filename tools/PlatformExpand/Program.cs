@@ -115,6 +115,8 @@ switch (phase)
     case "eventstudy": await EventStudyAsync(args.Length > 1 ? args[1] : "BTC/USDT", args.Length > 2 ? args[2] : "1d"); break;
     case "minuteprofile": await MinuteProfileAsync(); break;
     case "liquidationsverify": await LiquidationsVerifyAsync(); break;
+    case "tapecost": await TapeCostAsync(); break;
+    case "trailcompare": await TrailCompareAsync(); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1202,6 +1204,211 @@ async Task EventEdgeAsync()
 // ------------------------------------------------------------------ LIQUIDATIONSVERIFY (F4: verifica dal vivo)
 // Connessione REALE allo stream !forceOrder@arr per ~60s: dimostra che endpoint, payload e parsing
 // combaciano col mercato vero PRIMA di fidarsi dell'accumulo in produzione.
+/// <summary>
+/// [Fase 3 — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Quanto costerebbe DAVVERO catturare il trade
+/// tape e gli snapshot di order book, misurato sui dati che abbiamo già invece che stimato a occhio.
+///
+/// La domanda è decisiva: la roadmap intraday chiama D2 un "investimento 2027" proprio per il
+/// volume, e senza un numero la decisione di costruirlo (o di limitarlo) resta un'opinione. La
+/// misura si appoggia a un dato reale e gratuito che è già nel database: <c>OhlcvData.TradeCount</c>
+/// è il numero di trade davvero avvenuti nella barra — cioè esattamente quante righe produrrebbe
+/// uno stream aggTrade non aggregato.
+/// </summary>
+async Task TapeCostAsync()
+{
+    // Byte per riga stimati includendo l'overhead di riga Postgres (~24B di header + null bitmap) e
+    // l'indice (Symbol, TimestampUtc). Volutamente prudenti: su un costo è meglio sovrastimare.
+    const int tapeRowBytes = 90;      // ts, symbol, price, qty, isBuyerMaker, id
+    const int depthRowBytes = 260;    // ts, symbol, 5 livelli bid+ask (prezzo + quantità)
+    const double ohlcvRowBytes = 120;
+
+    Console.WriteLine("=== COSTO DI CATTURA MICROSTRUTTURA (Fase 3) ===");
+    Console.WriteLine("Fonte: TradeCount reale delle candele — nessuna stima di comodo.\n");
+
+    await using var db = await dbFactory.CreateDbContextAsync();
+
+    // Si usa il timeframe più fine che abbia davvero il conteggio trade: il reingest dei campi
+    // estesi non ha coperto tutti i timeframe, e un TradeCount null non è uno zero.
+    var candidates = new (string Tf, int Minutes)[] { ("1m", 1), ("5m", 5), ("15m", 15), ("1h", 60), ("4h", 240), ("1d", 1440) };
+    string? timeframe = null;
+    var barMinutes = 1;
+    foreach (var (tf, minutes) in candidates)
+    {
+        if (await db.OhlcvData.AsNoTracking().AnyAsync(c => c.Timeframe == tf && c.TradeCount != null))
+        {
+            timeframe = tf; barMinutes = minutes; break;
+        }
+    }
+
+    if (timeframe is null)
+    {
+        Console.WriteLine("Nessuna candela con TradeCount: ingerire prima i campi estesi (fase reingestx).");
+        return;
+    }
+    Console.WriteLine($"Timeframe più fine con TradeCount disponibile: {timeframe} (normalizzo a trade/minuto).\n");
+
+    var perSymbol = (await db.OhlcvData.AsNoTracking()
+        .Where(c => c.Timeframe == timeframe && c.TradeCount != null)
+        .GroupBy(c => c.Symbol)
+        .Select(g => new
+        {
+            Symbol = g.Key,
+            Bars = g.Count(),
+            AvgTrades = g.Average(c => (double)c.TradeCount!.Value),
+            MaxTrades = g.Max(c => c.TradeCount!.Value),
+        })
+        .ToListAsync())
+        .Select(x => new
+        {
+            x.Symbol,
+            x.Bars,
+            AvgPerMinute = x.AvgTrades / barMinutes,
+            PeakPerMinute = (double)x.MaxTrades / barMinutes,
+        })
+        .OrderByDescending(x => x.AvgPerMinute)
+        .ToList();
+
+    static double GbYear(double perMinute, int rowBytes) =>
+        perMinute * 60 * 24 * 365 * rowBytes / 1024d / 1024d / 1024d;
+
+    Console.WriteLine($"{"Simbolo",-12} {"barre",8} {"trade/min",10} {"picco/min",10} {"tape GB/anno",13} {"picco GB/anno",14}");
+    foreach (var s in perSymbol.Take(12))
+    {
+        Console.WriteLine($"{s.Symbol,-12} {s.Bars,8:N0} {s.AvgPerMinute,10:F0} {s.PeakPerMinute,10:F0} "
+            + $"{GbYear(s.AvgPerMinute, tapeRowBytes),13:F1} {GbYear(s.PeakPerMinute, tapeRowBytes),14:F1}");
+    }
+
+    var totalGbYear = perSymbol.Sum(s => GbYear(s.AvgPerMinute, tapeRowBytes));
+    var totalPeakGbYear = perSymbol.Sum(s => GbYear(s.PeakPerMinute, tapeRowBytes));
+    var pilotGbYear = perSymbol.Take(3).Sum(s => GbYear(s.AvgPerMinute, tapeRowBytes));
+
+    Console.WriteLine($"\n(mostrati i primi 12 di {perSymbol.Count}) — PILOTA sui 3 più liquidi: {pilotGbYear:F1} GB/anno.");
+    Console.WriteLine($"TAPE GREZZO, {perSymbol.Count} simboli: {totalGbYear:F1} GB/anno al ritmo medio, "
+        + $"{totalPeakGbYear:F0} GB/anno se il ritmo di picco fosse permanente.");
+
+    // Alternativa 1: barre di trade aggregate nel tempo invece del tick grezzo. Il guadagno non è
+    // il rapporto medio: cresce proprio quando il mercato accelera, cioè quando il tick grezzo
+    // esplode. È la proprietà che rende il costo PREVEDIBILE, e quindi accettabile.
+    var avgPerMinute = perSymbol.Average(s => s.AvgPerMinute);
+    foreach (var seconds in new[] { 1, 10 })
+    {
+        var barsPerMinute = 60d / seconds;
+        Console.WriteLine($"TAPE AGGREGATO a {seconds,2}s, {perSymbol.Count} simboli: "
+            + $"{perSymbol.Count * GbYear(barsPerMinute, tapeRowBytes):F1} GB/anno "
+            + $"(compressione ~{avgPerMinute / barsPerMinute:F1}x sul ritmo MEDIO, molto di più nello stress).");
+    }
+
+    // Alternativa 2: snapshot di profondità a cadenza fissa (non ogni aggiornamento del book).
+    foreach (var cadence in new[] { 1, 5, 10 })
+    {
+        Console.WriteLine($"DEPTH top-5 ogni {cadence,2}s, {perSymbol.Count} simboli: "
+            + $"{perSymbol.Count * GbYear(60d / cadence, depthRowBytes):F1} GB/anno.");
+    }
+
+    // Termine di paragone: quanto pesa OGGI tutto lo storico OHLCV.
+    var ohlcvRows = await db.OhlcvData.AsNoTracking().LongCountAsync();
+    var ohlcvGb = ohlcvRows * ohlcvRowBytes / 1024d / 1024d / 1024d;
+    Console.WriteLine($"\nPer confronto: l'INTERO storico OHLCV attuale è {ohlcvRows:N0} righe (~{ohlcvGb:F1} GB stimati).");
+    Console.WriteLine($"Il tape grezzo dei soli 3 simboli più liquidi vale {pilotGbYear / ohlcvGb:F0}x tutto ciò che la");
+    Console.WriteLine("piattaforma ha raccolto finora: a quel punto non è un'estensione, è un secondo sistema di dati,");
+    Console.WriteLine("e va deciso come tale — non fatto scivolare dentro come se fosse una tabella in più.");
+}
+
+/// <summary>
+/// [Fase 5a — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Il GATE del chandelier: il trailing a k×ATR
+/// va adottato solo se batte quello percentuale già presente, su dati veri e a costi onesti.
+///
+/// Il confronto gira su più simboli, più strategie e più impostazioni: un chandelier che vince su
+/// una sola combinazione non ha vinto niente — a forza di provare, qualcosa vince sempre. Il criterio
+/// è la <b>frequenza di vittoria attraverso le combinazioni</b>, non il caso migliore.
+/// </summary>
+async Task TrailCompareAsync()
+{
+    string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "LINK/USDT"];
+    string[] strategies = ["EmaCross", "DonchianBreakout", "Momentum", "PriceSmaCross"];
+    const string timeframe = "4h";
+
+    // Le varianti a confronto. "nessuno" è il riferimento: senza, non si saprebbe se il trailing
+    // aiuta o se stiamo solo scegliendo il meno dannoso fra due modi di tagliare i profitti.
+    var variants = new (string Label, decimal TrailPercent, decimal AtrMultiple)[]
+    {
+        ("nessun trailing", 0m, 0m),
+        ("percentuale 3%", 3m, 0m),
+        ("percentuale 5%", 5m, 0m),
+        ("chandelier 2xATR", 0m, 2m),
+        ("chandelier 3xATR", 0m, 3m),
+        ("chandelier 4xATR", 0m, 4m),
+    };
+
+    Console.WriteLine("=== GATE FASE 5a: chandelier ATR vs trailing percentuale ===");
+    Console.WriteLine($"{symbols.Length} simboli x {strategies.Length} strategie su {timeframe}, costi onesti "
+        + $"(fee {PipelineCosts.DefaultFeePercent}%, slippage {PipelineCosts.DefaultSlippagePercent}%).\n");
+
+    var engine = provider.GetRequiredService<IServiceScopeFactory>() is { } _
+        ? provider.CreateScope().ServiceProvider.GetRequiredService<IBacktestEngine>()
+        : throw new InvalidOperationException("motore non risolvibile");
+
+    // Somma dei rendimenti e conteggio delle vittorie per variante.
+    var totalReturn = new decimal[variants.Length];
+    var totalDrawdown = new decimal[variants.Length];
+    var wins = new int[variants.Length];
+    var combos = 0;
+
+    foreach (var symbol in symbols)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var candles = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == symbol && c.Timeframe == timeframe)
+            .OrderBy(c => c.TimestampUtc)
+            .ToListAsync();
+        if (candles.Count < 500) { Console.WriteLine($"{symbol}: storico {timeframe} insufficiente ({candles.Count})."); continue; }
+
+        foreach (var strategyName in strategies)
+        {
+            var results = new decimal[variants.Length];
+            for (var v = 0; v < variants.Length; v++)
+            {
+                var (_, trailPercent, atrMultiple) = variants[v];
+                var config = new BacktestConfiguration
+                {
+                    Symbol = symbol, Timeframe = timeframe, StrategyName = strategyName,
+                    InitialCapital = 10_000m, PositionSizePercent = 100m,
+                    FeePercent = PipelineCosts.DefaultFeePercent,
+                    SlippagePercent = PipelineCosts.DefaultSlippagePercent,
+                    TrailingStopPercent = trailPercent,
+                    TrailingAtrMultiple = atrMultiple,
+                };
+                var result = await engine.RunBacktestAsync(config, candles, CancellationToken.None);
+                results[v] = result.TotalReturnPercent;
+                totalReturn[v] += result.TotalReturnPercent;
+                totalDrawdown[v] += result.MaxDrawdownPercent;
+            }
+
+            var best = Array.IndexOf(results, results.Max());
+            wins[best]++;
+            combos++;
+            Console.WriteLine($"{symbol,-10} {strategyName,-18} vince: {variants[best].Label,-18} "
+                + string.Join(" ", results.Select(r => $"{r,7:F1}")));
+        }
+    }
+
+    if (combos == 0) { Console.WriteLine("Nessuna combinazione eseguita."); return; }
+
+    Console.WriteLine($"\n{"Variante",-20} {"vittorie",9} {"rend. medio",12} {"drawdown medio",15}");
+    for (var v = 0; v < variants.Length; v++)
+    {
+        Console.WriteLine($"{variants[v].Label,-20} {wins[v],6}/{combos,-3} {totalReturn[v] / combos,12:F1} {totalDrawdown[v] / combos,15:F1}");
+    }
+
+    var chandelierWins = wins[3] + wins[4] + wins[5];
+    var percentWins = wins[1] + wins[2];
+    Console.WriteLine($"\nCHANDELIER {chandelierWins}/{combos} vittorie · PERCENTUALE {percentWins}/{combos} · NESSUN TRAILING {wins[0]}/{combos}");
+    Console.WriteLine(chandelierWins > percentWins + combos / 10
+        ? "VERDETTO: il chandelier batte il trailing percentuale in modo non marginale."
+        : "VERDETTO: il chandelier NON batte il trailing percentuale. Resta nel motore come opzione\n"
+          + "          disponibile alla caccia, ma non c'e' ragione di preferirlo per default.");
+}
+
 async Task LiquidationsVerifyAsync()
 {
     Console.WriteLine($"Connessione a {ProcioneMGR.Services.MarketData.BinanceLiquidationMapper.StreamUri} (60s)...");
