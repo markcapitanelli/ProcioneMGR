@@ -1,4 +1,4 @@
-namespace ProcioneMGR.Services.Backtesting;
+﻿namespace ProcioneMGR.Services.Backtesting;
 
 /// <summary>
 /// Crea istanze di strategia per nome (switch case, niente reflection) ed espone
@@ -30,6 +30,7 @@ public sealed class StrategyFactory : IStrategyFactory
         new CompositeSignalStrategy(),
         new EventTriggerStrategy(),
         new RegimeConditionalStrategy(),
+        new GridMeanReversionStrategy(),
     ];
 
     public IStrategy Create(string strategyName) => strategyName switch
@@ -47,6 +48,7 @@ public sealed class StrategyFactory : IStrategyFactory
         "Composite" => new CompositeSignalStrategy(),
         "EventTrigger" => new EventTriggerStrategy(),
         "RegimeConditional" => new RegimeConditionalStrategy(),
+        "GridMeanReversion" => new GridMeanReversionStrategy(),
         _ => throw new NotSupportedException($"Strategia non supportata: '{strategyName}'."),
     };
 }

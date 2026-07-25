@@ -46,6 +46,23 @@ public class BacktestConfiguration
     public decimal TrailingStopPercent { get; set; }
 
     /// <summary>
+    /// [Fase 5a] Trailing "chandelier": distanza dal miglior prezzo pari a questo multiplo
+    /// dell'ATR invece che a una percentuale fissa (0 = disattivo). Quando è &gt; 0 <b>sostituisce</b>
+    /// <see cref="TrailingStopPercent"/>, non vi si somma — due trailing attivi insieme sarebbero
+    /// semplicemente il più stretto dei due, un confronto che non direbbe nulla.
+    ///
+    /// L'ipotesi da falsificare è quella del PDF sulle architetture di trading: uno stop che si
+    /// allarga quando il mercato si agita evita di essere sbalzati fuori dal rumore. La piattaforma
+    /// ha già una risposta più raffinata alla stessa domanda (i bracket dai percentili di MAE/MFE
+    /// condizionati al regime di ATR, vedi <c>ExcursionAnalyzer</c>), quindi questo va adottato
+    /// SOLO se batte quella in un confronto onesto: è un candidato, non un miglioramento assunto.
+    /// </summary>
+    public decimal TrailingAtrMultiple { get; set; }
+
+    /// <summary>Periodo dell'ATR usato dal trailing chandelier (default 14, Wilder).</summary>
+    public int TrailingAtrPeriod { get; set; } = 14;
+
+    /// <summary>
     /// Leva finanziaria (futures/margin). Con leva L, <see cref="PositionSizePercent"/> e' la
     /// quota di capitale usata come MARGINE e il nozionale e' margine x L. A 1 (default) il
     /// comportamento coincide esattamente con lo spot attuale. Con L &gt; 1 il motore modella

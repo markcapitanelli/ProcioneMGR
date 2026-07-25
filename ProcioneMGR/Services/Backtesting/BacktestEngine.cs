@@ -171,7 +171,32 @@ public sealed class BacktestEngine(
         var slFrac = config.StopLossPercent > 0m ? config.StopLossPercent / 100m : 0m;
         var tpFrac = config.TakeProfitPercent > 0m ? config.TakeProfitPercent / 100m : 0m;
         var trailFrac = config.TrailingStopPercent > 0m ? config.TrailingStopPercent / 100m : 0m;
-        var stopsActive = slFrac > 0m || tpFrac > 0m || trailFrac > 0m;
+
+        // [Fase 5a] Trailing chandelier: distanza = k x ATR invece che percentuale fissa. Se attivo
+        // SOSTITUISCE il trailing percentuale (due trailing insieme sarebbero il più stretto dei
+        // due, e il confronto non direbbe nulla). L'ATR è precalcolato una volta: dentro il loop
+        // sarebbe O(n x period) su ogni barra.
+        var trailAtrMultiple = config.TrailingAtrMultiple > 0m ? config.TrailingAtrMultiple : 0m;
+        decimal?[]? atrSeries = null;
+        if (trailAtrMultiple > 0m)
+        {
+            trailFrac = 0m;
+            var highs = new List<decimal>(n);
+            var lows = new List<decimal>(n);
+            for (var i = 0; i < n; i++) { highs.Add(candles[i].High); lows.Add(candles[i].Low); }
+            atrSeries = [.. await indicators.CalculateAtrAsync(highs, lows, closes, Math.Max(1, config.TrailingAtrPeriod), ct)];
+        }
+
+        // Distanza di trailing da usare SU questa barra, calcolata sull'ATR della barra PRECEDENTE:
+        // lo stop è "in macchina" prima che la barra apra, esattamente come il livello percentuale
+        // qui sotto usa il best delle barre precedenti. Usare l'ATR della barra corrente sarebbe
+        // uno sguardo in avanti — piccolo, e per questo tanto più facile da lasciarsi sfuggire.
+        decimal TrailDistanceAt(int i) =>
+            atrSeries is not null && i > 0 && atrSeries[i - 1] is decimal atr && atr > 0m
+                ? trailAtrMultiple * atr
+                : 0m;
+
+        var stopsActive = slFrac > 0m || tpFrac > 0m || trailFrac > 0m || trailAtrMultiple > 0m;
         var entryIndex = -1;
         decimal entryPrice = 0m, bestSinceEntry = 0m;
 
@@ -248,6 +273,11 @@ public sealed class BacktestEngine(
                         var trail = bestSinceEntry * (1m - trailFrac);
                         if (trail > stopLevel) stopLevel = trail;
                     }
+                    else if (TrailDistanceAt(i) is decimal d and > 0m)
+                    {
+                        var trail = bestSinceEntry - d;
+                        if (trail > stopLevel) stopLevel = trail;
+                    }
                     if (stopLevel > decimal.MinValue && low <= stopLevel)
                     {
                         book.Close(Sell(Math.Min(stopLevel, candles[i].Open)), ts);
@@ -267,6 +297,11 @@ public sealed class BacktestEngine(
                     if (trailFrac > 0m)
                     {
                         var trail = bestSinceEntry * (1m + trailFrac);
+                        if (trail < stopLevel) stopLevel = trail;
+                    }
+                    else if (TrailDistanceAt(i) is decimal d and > 0m)
+                    {
+                        var trail = bestSinceEntry + d;
                         if (trail < stopLevel) stopLevel = trail;
                     }
                     if (stopLevel < decimal.MaxValue && high >= stopLevel)

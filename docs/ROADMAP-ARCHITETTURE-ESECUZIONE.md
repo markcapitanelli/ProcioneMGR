@@ -214,7 +214,7 @@ Le Fasi 1 e 2 sono il miglior rapporto valore/sforzo dell'intera roadmap: strume
 | 0 — Consolidamento base | 🟡 **PR #46 aperta** (fast-forward, 64 commit); riconciliazione `faa381` CHIUSA (§7.1); restano migration al DB reale e verifica dal vivo del feed R1 |
 | 1 — TCA + latenza | ✅ **FATTA** 2026-07-25 — §8 |
 | 2 — Correlazione live | ✅ **FATTA** 2026-07-25, default-off da calibrare — §8 |
-| 3 — Microstruttura (D1/D2/D3) | ⬜ aperta (fonte di verità: ROADMAP-PROFITTO-INTRADAY) |
+| 3 — Microstruttura (D1/D2/D3) | 🔁 **RIVISTA** dopo la misura del costo (§9): come scritta era 124× lo storico esistente |
 | 4 — Regime router live | ⬜ aperta |
 | 5a — Chandelier ATR | ⬜ aperta, gated |
 | 5b — Grid nel catalogo | ⬜ aperta, gated |
@@ -293,7 +293,89 @@ l'audit `CorrelatedExposureRejected` in simulazione prima di dargli potere.
 
 ### 8.3 Cosa resta da fare a mano
 
-- Applicare al DB reale le migration pendenti: `TargetKind` (roadmap macchina-ricerca) e
-  `AddOrderExecutionQuality` (Fase 1).
 - Verifica dal vivo del feed R1 acceso in Paper.
 - Calibrare la soglia di correlazione prima di accendere la Fase 2.
+
+*(Le migration `TargetKind` e `AddOrderExecutionQuality` sono state applicate al DB reale il
+2026-07-25, dopo il merge di PR #46 e #47: `dotnet ef migrations list` non riporta più pendenze.)*
+
+---
+
+## 9. Fase 3 rivista: il costo misurato cambia il piano
+
+**La Fase 3 come scritta al §5 non si può fare.** Non per prudenza generica: per un numero.
+
+### 9.1 La misura
+
+Aggiunta la fase `tapecost` a `tools/PlatformExpand` (2026-07-25). Non stima nulla a occhio: usa
+`OhlcvData.TradeCount`, che è il numero di trade *davvero* avvenuti in ogni barra — cioè esattamente
+quante righe produrrebbe uno stream `aggTrade` non aggregato. Il dato era già nel database, gratis,
+da quando T0.3 ha smesso di scartare i campi estesi delle klines.
+
+Esito su 30 simboli reali, a fronte di un intero storico OHLCV che pesa **12,4 milioni di righe,
+~1,4 GB**:
+
+| Cattura | Costo/anno | Rapporto con tutto lo storico attuale |
+|---|---|---|
+| Tape grezzo, 3 simboli più liquidi | **171,6 GB** | **124×** |
+| Tape grezzo, 30 simboli | 244 GB (2.189 GB ai ritmi di picco) | 174× |
+| Tape aggregato a 1s, 30 simboli | 79,3 GB | 57× |
+| **Tape aggregato a 10s, 30 simboli** | **7,9 GB** | 5,6× |
+| Depth top-5 ogni 1s, 30 simboli | 229,1 GB | 164× |
+| **Depth top-5 ogni 10s, 30 simboli** | **22,9 GB** | 16× |
+
+Il tape grezzo dei soli tre simboli più liquidi vale **124 volte** tutto ciò che la piattaforma ha
+raccolto in anni. A quel punto non è un'estensione: è un secondo sistema di dati, con i suoi problemi
+di backup (il `pg_dump` attuale diventerebbe impraticabile), di vacuum, di indici e di query. Farlo
+scivolare dentro come "una tabella in più" degraderebbe la piattaforma esistente — che oggi fa girare
+backtest e cacce su un database piccolo e veloce.
+
+### 9.2 Cosa cambia nel piano
+
+Tre correzioni, tutte figlie della tabella sopra.
+
+**1. Aggregare all'origine, non archiviare tick.** Un tape aggregato in barre da 10 secondi costa
+7,9 GB/anno su 30 simboli invece di 244. E il punto forte non è il fattore medio (~31×): è che la
+compressione **cresce proprio quando il mercato accelera**, cioè quando il tick grezzo esplode. È
+questo che rende il costo *prevedibile* — un tetto, non una scommessa sulla volatilità futura.
+L'informazione che serve a un segnale di order flow (imbalance firmato, conteggio, volume ai due
+lati) sopravvive all'aggregazione; quella che si perde è la sequenza esatta dei tick, che serve solo
+a strategie di latenza che questa piattaforma ha già deciso di non fare.
+
+**2. Depth a cadenza fissa, non a ogni aggiornamento.** `@depth` in streaming manda un aggiornamento
+per ogni modifica del book: migliaia al secondo. Uno snapshot top-5 ogni 10 secondi costa 22,9 GB/anno
+su 30 simboli e risponde alla stessa domanda (com'è messo il book adesso). Su un pilota di 3 simboli:
+~2,3 GB/anno, cioè un costo confrontabile con quello che la piattaforma già sostiene.
+
+**3. Pilota a termine con verifica di valore PRIMA di allargare.** Qui c'è un problema di uovo e
+gallina onesto: non si può sapere se la microstruttura aggiunge informazione senza raccoglierla, ma
+raccoglierla per tutti i simboli per sempre è il costo di cui sopra. La via d'uscita è la stessa
+metodologia che la piattaforma applica a ogni ipotesi: **raccogliere il minimo indispensabile per un
+tempo definito, poi misurare**.
+
+### 9.3 Fase 3 rivista — piano operativo
+
+| Passo | Cosa | Costo | Gate |
+|---|---|---|---|
+| **3.0** | Fase `tapecost` per misurare il costo | fatto ✅ | — |
+| **3.1** | Tabelle `TradeTapeBars` (10s) e `OrderBookSnapshots` (top-5, 10s), con retention **per tipo** dichiarata esplicitamente | schema | Retention obbligatoria alla creazione: la lezione della purge sentiment (che avrebbe raso il funding storico) dice che una retention generica applicata a dati eterogenei è un bug latente |
+| **3.2** | Estensione del feed R1: sottoscrizione `aggTrade` + `depth`, **aggregazione in memoria**, scrittura periodica | ~2,3 GB/anno su 3 simboli | Default-off; pilota su 3 simboli e **90 giorni**, non "sempre" |
+| **3.3** | **Misura di valore**: l'imbalance a 10s aggiunge informazione predittiva *oltre* al `TakerBuyVolume` per-candela che già abbiamo? Stesso gauntlet degli altri fattori (IC, CPCV, placebo) | compute | **Se non aggiunge, la Fase 3 si chiude qui con un report negativo** e le tabelle si svuotano. È l'esito più probabile a giudicare dalle cinque cacce precedenti, e va messo in conto come risultato valido |
+| **3.4** | Solo se 3.3 è positivo: allargamento simboli + E4 (market making OBI) come da roadmap intraday | da rivalutare | — |
+
+**Il passo 3.3 è il vero contenuto della fase.** Costruire la cattura senza di esso significherebbe
+pagare un costo permanente per un'ipotesi mai verificata — esattamente l'errore che la piattaforma
+ha imparato a non fare quando ha costruito il gemello sintetico e la frontiera dei costi.
+
+### 9.4 Ordine di lavoro rivisto
+
+Sequenza aggiornata dopo la misura:
+
+1. **Fase 5a** (chandelier ATR) e **5b** (grid) — piccole, isolate nel backtest, nessun rischio per
+   la piattaforma: si fanno subito.
+2. **Fase 4** (regime router live) — nessun rischio di volume, tocca il percorso decisionale ma
+   default-off e validata prima dell'uso.
+3. **Fase 3 rivista** (3.1→3.3) — dopo le altre, perché è la sola che lascia un costo permanente
+   sulla piattaforma e va decisa con il risultato di 3.3 in mano.
+
+
