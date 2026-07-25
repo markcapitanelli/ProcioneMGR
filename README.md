@@ -6,6 +6,14 @@
 
 **Principio fondante:** *Safety > Solidità > Velocità.* Niente promozione automatica in Live; determinismo e anti-overfitting sono obbligatori, non opzionali.
 
+> 📄 **[Stato della piattaforma](docs/STATO-DELLA-PIATTAFORMA.md) — leggilo prima di usarla per decidere qualcosa.**
+> Riassume, in una pagina, cosa è stato misurato e cosa è venuto fuori. In breve: la piattaforma è
+> matura come *strumento di misura*, ma **non contiene una strategia che, misurata onestamente,
+> guadagni** — 445.280 combinazioni provate, zero significative al Deflated Sharpe, zero sopravvissute
+> all'holdout. Un esperimento di controllo con un edge sintetico piantato dimostra che gli strumenti
+> funzionano: quando un edge c'è, lo trovano. I risultati negativi dicono quindi qualcosa sui dati,
+> non sugli strumenti.
+
 ---
 
 ## Indice

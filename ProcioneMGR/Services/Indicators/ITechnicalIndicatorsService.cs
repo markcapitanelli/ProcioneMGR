@@ -52,4 +52,18 @@ public interface ITechnicalIndicatorsService
     /// </summary>
     Task<List<decimal?>> CalculateAtrAsync(
         List<decimal> highs, List<decimal> lows, List<decimal> closes, int period = 14, CancellationToken ct = default);
+
+    /// <summary>[3.8a] On-Balance Volume: somma cumulata del volume col segno della variazione di prezzo (OBV[0]=0).</summary>
+    Task<List<decimal?>> CalculateObvAsync(List<decimal> closes, List<decimal> volumes, CancellationToken ct = default);
+
+    /// <summary>[3.8a] Money Flow Index: RSI pesato per volume sul typical price, nativo 0-100. Primo valore all'indice <paramref name="period"/>.</summary>
+    Task<List<decimal?>> CalculateMfiAsync(
+        List<decimal> highs, List<decimal> lows, List<decimal> closes, List<decimal> volumes, int period = 14, CancellationToken ct = default);
+
+    /// <summary>
+    /// [3.8a] VWAP ROLLING sulle ultime <paramref name="period"/> barre (Σ typical·vol / Σ vol, finestra
+    /// scorrevole). Complementare al VWAP ancorato alla sessione UTC usato dal SignalCatalog (id 5).
+    /// </summary>
+    Task<List<decimal?>> CalculateRollingVwapAsync(
+        List<decimal> highs, List<decimal> lows, List<decimal> closes, List<decimal> volumes, int period = 20, CancellationToken ct = default);
 }

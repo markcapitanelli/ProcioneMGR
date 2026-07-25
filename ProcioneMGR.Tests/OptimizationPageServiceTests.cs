@@ -51,7 +51,9 @@ public sealed class OptimizationPageServiceTests : IAsyncDisposable
     private sealed class CapturingOptEngine : IOptimizationEngine
     {
         public OptimizationConfiguration? LastConfig { get; private set; }
+        public CpcvConfiguration? LastCpcvConfig { get; private set; }
         public OptimizationResult ResultToReturn { get; set; } = CannedResult();
+        public CpcvResult CpcvResultToReturn { get; set; } = CannedCpcvResult();
 
         public Task<OptimizationResult> OptimizeAsync(OptimizationConfiguration config, IProgress<OptimizationProgress>? progress, CancellationToken ct)
         {
@@ -59,6 +61,31 @@ public sealed class OptimizationPageServiceTests : IAsyncDisposable
             progress?.Report(new OptimizationProgress { CombinationsTested = 1, TotalCombinations = 2, Message = "fake" });
             return Task.FromResult(ResultToReturn);
         }
+
+        public Task<CpcvResult> OptimizeCpcvAsync(OptimizationConfiguration config, CpcvConfiguration cpcv, IProgress<OptimizationProgress>? progress, CancellationToken ct)
+        {
+            LastConfig = config;
+            LastCpcvConfig = cpcv;
+            return Task.FromResult(CpcvResultToReturn);
+        }
+
+        public static CpcvResult CannedCpcvResult() => new()
+        {
+            Paths =
+            [
+                new CpcvPathResult { Combination = 0, TestGroups = [0, 1], BestParameters = new() { ["FastPeriod"] = 10m }, TrainSharpe = 1.1m, OosSharpe = 0.7m },
+                new CpcvPathResult { Combination = 1, TestGroups = [0, 2], BestParameters = new() { ["FastPeriod"] = 10m }, TrainSharpe = 1.0m, OosSharpe = -0.2m },
+            ],
+            MedianOosSharpe = 0.25m,
+            P05OosSharpe = -0.2m,
+            P95OosSharpe = 0.7m,
+            PositivePaths = 1,
+            TotalPaths = 2,
+            Pbo = 0.4,
+            CombinationsTested = 5,
+            ModalParameters = new Dictionary<string, decimal> { ["FastPeriod"] = 10m },
+            SelectionStability = 1.0m,
+        };
 
         public static OptimizationResult CannedResult() => new()
         {
@@ -309,6 +336,103 @@ public sealed class OptimizationPageServiceTests : IAsyncDisposable
         Assert.Equal(15m, pinned.Min);
         Assert.Equal(15m, pinned.Max);      // Min=Max: veicola il riferimento senza sweepparlo
         Assert.True(pinned.IsInteger);
+    }
+
+    // --- CPCV (T1.6 fase 2) ----------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunAsync_Cpcv_PopulatesCpcvResult_NotWalkForwardResult()
+    {
+        var (svc, engine, _) = await BuildAsync();
+        var snap = DefaultSnapshot(svc) with
+        {
+            Validation = OptimizationValidationMethod.Cpcv,
+            CpcvGroups = 6, CpcvTestGroups = 2, CpcvPurgeBars = 5, CpcvEmbargoBars = 3,
+        };
+
+        var res = await svc.RunAsync(snap, UserA, null, CancellationToken.None);
+
+        Assert.False(res.IsError);
+        Assert.Contains("CPCV", res.Message);
+        Assert.NotNull(svc.CpcvResult);
+        Assert.Null(svc.Result);                    // mutuamente esclusivi
+        Assert.NotNull(svc.ResultConfig);
+        Assert.Empty(svc.EquitySeries);
+        var cpcvCfg = engine.LastCpcvConfig!;
+        Assert.Equal((6, 2, 5, 3), (cpcvCfg.Groups, cpcvCfg.TestGroups, cpcvCfg.PurgeBars, cpcvCfg.EmbargoBars));
+    }
+
+    [Fact]
+    public async Task RunAsync_CpcvWithBayesian_ReturnsError_WithoutInvokingEngine()
+    {
+        var (svc, engine, _) = await BuildAsync();
+        var snap = DefaultSnapshot(svc) with
+        {
+            Validation = OptimizationValidationMethod.Cpcv,
+            SearchStrategy = SearchStrategy.Bayesian,
+        };
+
+        var res = await svc.RunAsync(snap, UserA, null, CancellationToken.None);
+
+        Assert.True(res.IsError);
+        Assert.Contains("Grid Search", res.Message);
+        Assert.Null(engine.LastConfig);
+        Assert.Null(svc.CpcvResult);
+    }
+
+    [Fact]
+    public async Task RunAsync_NewRun_ClearsPreviousCpcvResult()
+    {
+        var (svc, _, _) = await BuildAsync();
+        await svc.RunAsync(DefaultSnapshot(svc) with { Validation = OptimizationValidationMethod.Cpcv }, UserA, null, CancellationToken.None);
+        Assert.NotNull(svc.CpcvResult);
+
+        await svc.RunAsync(DefaultSnapshot(svc), UserA, null, CancellationToken.None);
+        Assert.Null(svc.CpcvResult);               // il run walk-forward azzera l'esito CPCV precedente
+        Assert.NotNull(svc.Result);
+    }
+
+    [Fact]
+    public async Task SaveBestAsync_CpcvRun_PersistsModalParameters_WithMedianSharpe()
+    {
+        var (svc, _, db) = await BuildAsync();
+        await using (var ctx = await db.CreateDbContextAsync())
+        {
+            ctx.Users.Add(new ApplicationUser { Id = UserA, UserName = "a@t.io" });
+            await ctx.SaveChangesAsync();
+        }
+
+        await svc.RunAsync(DefaultSnapshot(svc) with { Validation = OptimizationValidationMethod.Cpcv }, UserA, null, CancellationToken.None);
+        var ok = await svc.SaveBestAsync("Modale CPCV", "EmaCross", UserA);
+
+        Assert.False(ok!.IsError);
+        await using var verify = await db.CreateDbContextAsync();
+        var saved = await verify.SavedStrategies.SingleAsync();
+        Assert.True(saved.IsOptimized);
+        Assert.Equal(0.25m, saved.OptimizationSharpe);          // Sharpe OOS MEDIANO, non il migliore
+        Assert.Contains("FastPeriod", saved.ParametersJson);    // parametri MODALI
+    }
+
+    [Fact]
+    public async Task ApplyConfig_CpcvFields_RoundTrip_AndLegacyPresetDefaultsToWalkForward()
+    {
+        var (svc, _, _) = await BuildAsync(ensureSchema: false);
+        var saved = DefaultSnapshot(svc) with
+        {
+            Validation = OptimizationValidationMethod.Cpcv,
+            CpcvGroups = 10, CpcvTestGroups = 3, CpcvPurgeBars = 7, CpcvEmbargoBars = 2,
+        };
+
+        var applied = svc.ApplyConfig(svc.SerializeConfig(saved), DefaultSnapshot(svc));
+        Assert.Equal(OptimizationValidationMethod.Cpcv, applied.Validation);
+        Assert.Equal((10, 3, 7, 2), (applied.CpcvGroups, applied.CpcvTestGroups, applied.CpcvPurgeBars, applied.CpcvEmbargoBars));
+
+        // Preset "legacy" senza i campi CPCV (pre-T1.6 fase 2): deserializza a WalkForward con default.
+        var legacyJson = """{"Exchange":"Binance","Symbol":"BTC/USDT","Timeframe":"1h","From":"2024-06-01","To":"2026-06-01","InitialCapital":10000,"Commission":0.1,"InSampleMonths":12,"OosMonths":3,"StepMonths":3,"SearchStrategy":"GridSearch","BayesIterations":40,"BayesInitialRandom":8,"BayesSeed":42,"StrategyName":"EmaCross","MlModelId":0,"Ranges":[]}""";
+        var legacy = svc.ApplyConfig(legacyJson, DefaultSnapshot(svc));
+        Assert.Equal(OptimizationValidationMethod.WalkForward, legacy.Validation);
+        Assert.Equal(8, legacy.CpcvGroups);
+        Assert.Equal(2, legacy.CpcvTestGroups);
     }
 
     // --- Heatmap -------------------------------------------------------------------------------

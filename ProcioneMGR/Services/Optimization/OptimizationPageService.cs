@@ -19,7 +19,14 @@ public sealed record OptimizationConfigSnapshot(
     ExchangeName Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
     decimal InitialCapital, decimal Commission, int InSampleMonths, int OosMonths, int StepMonths,
     SearchStrategy SearchStrategy, int BayesIterations, int BayesInitialRandom, int BayesSeed,
-    string StrategyName, int MlModelId, IReadOnlyList<OptRange> Ranges);
+    string StrategyName, int MlModelId, IReadOnlyList<OptRange> Ranges,
+    // [T0.1] In coda e con default per compatibilità: i preset salvati prima del campo
+    // deserializzano a 0 (= nessun embargo, comportamento storico).
+    int EmbargoBars = 0,
+    // [T1.6 fase 2] In coda e con default per la stessa ragione: i preset pre-CPCV
+    // deserializzano a WalkForward (comportamento storico invariato).
+    OptimizationValidationMethod Validation = OptimizationValidationMethod.WalkForward,
+    int CpcvGroups = 8, int CpcvTestGroups = 2, int CpcvPurgeBars = 0, int CpcvEmbargoBars = 0);
 
 /// <summary>Esito di un'azione con messaggio per l'operatore.</summary>
 public sealed record OptActionResult(string Message, bool IsError)
@@ -64,6 +71,9 @@ public sealed class OptimizationPageService(
     public List<SavedMlModel> MlModels { get; private set; } = [];
 
     public OptimizationResult? Result { get; private set; }
+
+    /// <summary>[T1.6 fase 2] Esito CPCV del run corrente (mutuamente esclusivo con <see cref="Result"/>).</summary>
+    public CpcvResult? CpcvResult { get; private set; }
 
     /// <summary>Config del run corrente: i link "Backtest →" restano coerenti anche se il form cambia dopo.</summary>
     public OptimizationConfiguration? ResultConfig { get; private set; }
@@ -127,14 +137,18 @@ public sealed class OptimizationPageService(
         string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
         decimal InitialCapital, decimal Commission, int InSampleMonths, int OosMonths, int StepMonths,
         string SearchStrategy, int BayesIterations, int BayesInitialRandom, int BayesSeed,
-        string StrategyName, int MlModelId, List<RangeDto> Ranges);
+        string StrategyName, int MlModelId, List<RangeDto> Ranges, int EmbargoBars = 0,
+        string Validation = "WalkForward", int CpcvGroups = 8, int CpcvTestGroups = 2,
+        int CpcvPurgeBars = 0, int CpcvEmbargoBars = 0);
 
     public string SerializeConfig(OptimizationConfigSnapshot cfg) => JsonSerializer.Serialize(new ConfigDto(
         cfg.Exchange.ToString(), cfg.Symbol.Trim(), cfg.Timeframe, cfg.From, cfg.To,
         cfg.InitialCapital, cfg.Commission, cfg.InSampleMonths, cfg.OosMonths, cfg.StepMonths,
         cfg.SearchStrategy.ToString(), cfg.BayesIterations, cfg.BayesInitialRandom, cfg.BayesSeed,
         cfg.StrategyName, cfg.MlModelId,
-        cfg.Ranges.Select(r => new RangeDto(r.Key, r.Min, r.Max, r.Step)).ToList()));
+        cfg.Ranges.Select(r => new RangeDto(r.Key, r.Min, r.Max, r.Step)).ToList(),
+        cfg.EmbargoBars,
+        cfg.Validation.ToString(), cfg.CpcvGroups, cfg.CpcvTestGroups, cfg.CpcvPurgeBars, cfg.CpcvEmbargoBars));
 
     /// <summary>
     /// Applica un preset a <paramref name="current"/>: exchange/timeframe/strategia presi dal preset
@@ -175,6 +189,12 @@ public sealed class OptimizationPageService(
             InSampleMonths = dto.InSampleMonths,
             OosMonths = dto.OosMonths,
             StepMonths = dto.StepMonths,
+            EmbargoBars = Math.Max(0, dto.EmbargoBars),
+            Validation = Enum.TryParse<OptimizationValidationMethod>(dto.Validation, out var vm) ? vm : current.Validation,
+            CpcvGroups = Math.Max(2, dto.CpcvGroups),
+            CpcvTestGroups = Math.Max(1, dto.CpcvTestGroups),
+            CpcvPurgeBars = Math.Max(0, dto.CpcvPurgeBars),
+            CpcvEmbargoBars = Math.Max(0, dto.CpcvEmbargoBars),
             SearchStrategy = search,
             BayesIterations = dto.BayesIterations,
             BayesInitialRandom = dto.BayesInitialRandom,
@@ -279,6 +299,11 @@ public sealed class OptimizationPageService(
         if (cfg.StrategyName == MlStrategyName && cfg.MlModelId == 0)
             return OptActionResult.Error("Seleziona un modello ML salvato per questo symbol/timeframe.");
 
+        // [T1.6 fase 2] Il CPCV pre-calcola i backtest per (combinazione × gruppo) sull'INTERA
+        // griglia: una ricerca guidata che propone i punti uno alla volta non è compatibile.
+        if (cfg.Validation == OptimizationValidationMethod.Cpcv && cfg.SearchStrategy == SearchStrategy.Bayesian)
+            return OptActionResult.Error("La validazione CPCV richiede Grid Search: la ricerca Bayesian propone i punti in modo incrementale e non copre la griglia.");
+
         var ranges = cfg.Ranges.Select(r => new ParameterRange
         {
             Name = r.Key, Min = r.Min, Max = r.Max, Step = r.Step, IsInteger = r.IsInteger,
@@ -304,12 +329,18 @@ public sealed class OptimizationPageService(
             WalkForward = new WalkForwardConfiguration
             {
                 InSampleMonths = cfg.InSampleMonths, OutOfSampleMonths = cfg.OosMonths, StepMonths = cfg.StepMonths,
+                EmbargoBars = cfg.EmbargoBars,
             },
             SearchStrategy = cfg.SearchStrategy,
             BayesianIterations = cfg.BayesIterations,
             BayesianInitialRandom = cfg.BayesInitialRandom,
             BayesianSeed = cfg.BayesSeed,
         };
+
+        if (cfg.Validation == OptimizationValidationMethod.Cpcv)
+        {
+            return await RunCpcvAsync(cfg, config, userId, progress, ct);
+        }
 
         var result = await optEngine.OptimizeAsync(config, progress, ct);
         Result = result;
@@ -364,6 +395,64 @@ public sealed class OptimizationPageService(
         return OptActionResult.Ok($"Ottimizzazione completata: {result.WalkForwardAnalysis.Windows.Count} finestre, {result.TotalCombinationsTested} valutazioni.");
     }
 
+    /// <summary>
+    /// [T1.6 fase 2] Ramo CPCV di <see cref="RunAsync"/>: la stessa griglia del walk-forward, ma il
+    /// giudizio è una DISTRIBUZIONE di Sharpe out-of-sample su C(gruppi, gruppiTest) percorsi —
+    /// più out-of-sample dagli stessi dati, l'antidoto strutturale al "one lucky path".
+    /// </summary>
+    private async Task<OptActionResult> RunCpcvAsync(
+        OptimizationConfigSnapshot cfg, OptimizationConfiguration config, string? userId,
+        IProgress<OptimizationProgress>? progress, CancellationToken ct)
+    {
+        var cpcvConfig = new CpcvConfiguration
+        {
+            Groups = Math.Max(2, cfg.CpcvGroups),
+            TestGroups = Math.Clamp(cfg.CpcvTestGroups, 1, Math.Max(1, cfg.CpcvGroups - 1)),
+            PurgeBars = Math.Max(0, cfg.CpcvPurgeBars),
+            EmbargoBars = Math.Max(0, cfg.CpcvEmbargoBars),
+        };
+
+        var cpcv = await optEngine.OptimizeCpcvAsync(config, cpcvConfig, progress, ct);
+        CpcvResult = cpcv;
+        ResultConfig = config;
+
+        var runId = await tracker.SafeStartRunAsync(
+            "OptimizationCpcv",
+            $"{cfg.StrategyName} · {cfg.Symbol.Trim()} · {cfg.Timeframe} · CPCV {cpcvConfig.Groups}/{cpcvConfig.TestGroups}",
+            new
+            {
+                config.StrategyName,
+                config.Symbol,
+                config.Timeframe,
+                config.From,
+                config.To,
+                cpcvConfig.Groups,
+                cpcvConfig.TestGroups,
+                cpcvConfig.PurgeBars,
+                cpcvConfig.EmbargoBars,
+                Ranges = config.ParameterRanges.Select(r => new { r.Name, r.Min, r.Max, r.Step }).ToList(),
+                ModalParameters = cpcv.ModalParameters,
+            },
+            config.Symbol, config.Timeframe, userId);
+        var metrics = new Dictionary<string, decimal>
+        {
+            ["CombinationsTested"] = cpcv.CombinationsTested,
+            ["Paths"] = cpcv.Paths.Count,
+            ["PositivePaths"] = cpcv.PositivePaths,
+            ["MedianOosSharpe"] = cpcv.MedianOosSharpe,
+            ["P05OosSharpe"] = cpcv.P05OosSharpe,
+            ["P95OosSharpe"] = cpcv.P95OosSharpe,
+            ["SelectionStability"] = cpcv.SelectionStability,
+        };
+        if (cpcv.Pbo is { } pbo) metrics["Pbo"] = (decimal)pbo;
+        await tracker.SafeLogMetricsAsync(runId, metrics);
+        await tracker.SafeCompleteAsync(runId, "Completed");
+
+        return OptActionResult.Ok(
+            $"CPCV completato: {cpcv.Paths.Count} percorsi ({cpcv.PositivePaths} positivi), " +
+            $"Sharpe OOS mediano {cpcv.MedianOosSharpe:F2}, stabilità selezione {cpcv.SelectionStability:P0}.");
+    }
+
     // --- Heatmap (2 parametri): parsing di AllResults in matrice --------------------------------
 
     /// <summary>
@@ -407,28 +496,42 @@ public sealed class OptimizationPageService(
     /// </summary>
     public async Task<OptActionResult?> SaveBestAsync(string name, string strategyName, string userId, CancellationToken ct = default)
     {
-        if (Result is null || Result.BestParameters.Count == 0) return null;
+        // [T1.6 fase 2] Da un run CPCV si salvano i parametri MODALI (i più spesso scelti dai
+        // train dei percorsi) con lo Sharpe OOS MEDIANO: il candidato stabile, non il più fortunato.
+        Dictionary<string, decimal>? parameters = null;
+        decimal sharpe = 0m;
+        if (Result is { BestParameters.Count: > 0 })
+        {
+            parameters = Result.BestParameters[0].Parameters;
+            sharpe = Result.BestParameters[0].OutOfSampleSharpe;
+        }
+        else if (CpcvResult is { ModalParameters.Count: > 0 } cpcv)
+        {
+            parameters = cpcv.ModalParameters;
+            sharpe = cpcv.MedianOosSharpe;
+        }
+        if (parameters is null) return null;
         if (string.IsNullOrWhiteSpace(name)) return OptActionResult.Error("Inserisci un nome.");
 
-        var best = Result.BestParameters[0];
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         db.SavedStrategies.Add(new SavedStrategy
         {
             UserId = userId,
             Name = name.Trim(),
             StrategyName = strategyName,
-            ParametersJson = JsonSerializer.Serialize(best.Parameters),
+            ParametersJson = JsonSerializer.Serialize(parameters),
             IsOptimized = true,
             OptimizationDate = DateTime.UtcNow,
-            OptimizationSharpe = best.OutOfSampleSharpe,
+            OptimizationSharpe = sharpe,
         });
         await db.SaveChangesAsync(ct);
-        return OptActionResult.Ok($"Configurazione ottimizzata '{name}' salvata (Sharpe OOS {best.OutOfSampleSharpe:F2}).");
+        return OptActionResult.Ok($"Configurazione ottimizzata '{name}' salvata (Sharpe OOS {sharpe:F2}).");
     }
 
     private void ResetRun()
     {
         Result = null;
+        CpcvResult = null;
         ResultConfig = null;
         EquitySeries = [];
     }

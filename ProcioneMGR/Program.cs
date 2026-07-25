@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using ProcioneMGR.Components;
 using ProcioneMGR.Components.Account;
@@ -55,15 +56,11 @@ builder.Services.AddAuthentication(options =>
 // memoria, quindi OGNI riavvio del pod invalida tutti i cookie e disconnette gli utenti. Non è il
 // caso di un deploy pianificato (raro, scelto): basta un OOM-kill o una liveness probe fallita, ed
 // è silenzioso. In K8s si monta una PVC e si punta qui (vedi infra/k8s/ui/deployment.yaml).
-var keyRingPath = builder.Configuration["DataProtection:KeyRingPath"];
-if (!string.IsNullOrWhiteSpace(keyRingPath))
-{
-    builder.Services.AddDataProtection()
-        // Nome esplicito e stabile: il default deriva dal ContentRootPath, che cambiando fra host
-        // (sviluppo vs /app nel container) renderebbe indecifrabili le chiavi già scritte.
-        .SetApplicationName("ProcioneMGR")
-        .PersistKeysToFileSystem(new DirectoryInfo(keyRingPath));
-}
+// --- Data Protection: nome applicativo fisso + keyring persistito ---
+// Estratto in DataProtectionSetup per essere verificabile da test: il nome applicativo decide
+// quali chiavi firmano i cookie, e prima veniva impostato solo quando era configurato un keyring
+// su file — cioè mai in sviluppo locale. Vedi il commento della classe.
+builder.Services.AddProcioneDataProtection(builder.Configuration);
 
 // Servizio di cifratura (AES-256-GCM) per i segreti a riposo. Singleton: la chiave
 // master viene derivata una sola volta. Va registrato PRIMA del DbContext perche'
@@ -121,6 +118,7 @@ builder.Services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsSe
 
 // --- Market regime detection (Fase 7): feature extraction + clustering ---
 builder.Services.AddSingleton<IMarketFeatureExtractor, MarketFeatureExtractor>();
+builder.Services.AddSingleton<IMarketBreadthCalculator, MarketBreadthCalculator>(); // [3.8a] breadth interna per i regimi
 builder.Services.AddSingleton<IRegimeDetector, RegimeDetector>();
 builder.Services.AddHostedService<RegimeRetrainingWorker>();
 
@@ -142,6 +140,8 @@ builder.Services.Configure<LiveExecutionOptions>(builder.Configuration.GetSectio
 // --- Backtesting ---
 builder.Services.AddSingleton<IStrategyFactory, StrategyFactory>();
 builder.Services.AddScoped<IBacktestEngine, BacktestEngine>();
+// [T0.2] Serie storica dei funding per i backtest futures (da SentimentMetricPoints).
+builder.Services.AddScoped<IFundingHistoryProvider, FundingHistoryProvider>();
 
 // Preset di configurazione pagina + memoria dell'ultima configurazione usata (per utente).
 builder.Services.AddScoped<ProcioneMGR.Services.Preferences.IPageConfigStore, ProcioneMGR.Services.Preferences.PageConfigStore>();
@@ -252,6 +252,17 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentNewsProvi
 // Worker anche singleton risolvibile: "Esegui ora" dalla UI usa la stessa istanza del hosted service.
 builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>());
+
+// --- [E3] Forward test del carry delta-neutro (default OFF, mai Live per costruzione) ---
+builder.Services.Configure<ProcioneMGR.Services.Carry.CarryOptions>(builder.Configuration.GetSection("Carry"));
+builder.Services.AddHostedService<ProcioneMGR.Services.Carry.CarryWorker>();
+
+// --- [F4] Accumulo liquidazioni (stream pubblico Binance futures, keyless) ---
+// Default ON: il dato non è ricostruibile a posteriori, ogni giorno spento è storia persa.
+// TryAdd: la factory WebSocket è la stessa del feed real-time R1 (registrata lì quando attivo).
+builder.Services.Configure<ProcioneMGR.Services.MarketData.LiquidationsOptions>(builder.Configuration.GetSection("Liquidations"));
+builder.Services.TryAddSingleton<ProcioneMGR.Services.MarketData.IWebSocketTransportFactory, ProcioneMGR.Services.MarketData.ClientWebSocketTransportFactory>();
+builder.Services.AddHostedService<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>();
 
 // --- Portfolio optimization (Mean-Variance, Risk Parity, HRP) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.MeanVarianceOptimizer>();
@@ -433,6 +444,9 @@ builder.Services.AddHostedService<PromotionWorker>();
 // testabile senza Blazor — vedi il doc-comment della classe. Scoped: uno scope Blazor Server = un
 // circuito, quindi un'istanza per sessione utente, come il componente che la consuma.
 builder.Services.AddScoped<ProcioneMGR.Services.Trading.TradingPageService>();
+
+// [R3] Modalità Semplice (/bot): stessa granularità Scoped delle altre page service.
+builder.Services.AddScoped<ProcioneMGR.Services.Risk.BotPageService>();
 builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.CampaignPageService>();
 
 // Orchestrazione di MlLab.razor estratta in un service testabile (P1-5, PRD §3.3). Scoped come sopra.

@@ -33,34 +33,65 @@ namespace ProcioneMGR.Services.Backtesting;
 /// </summary>
 public static class SignalCatalog
 {
-    public const int SignalCount = 9;
+    public const int SignalCount = 14;
     public const int PercentileWindow = 250;
+
+    /// <summary>[F3] Barre di decadimento lineare dei segnali post-evento (12/13): 100 alla barra evento → 0 dopo N barre.</summary>
+    public const int EventDecayBars = 20;
 
     /// <summary>Display names, index-aligned to the signal ids (for UI/log readability).</summary>
     public static readonly IReadOnlyList<string> SignalNames =
     [
         "RSI", "Stoch %D", "Bollinger %B", "Supertrend dir",
         "Volume ratio pct", "VWAP dev pct", "Momentum pct", "MACD hist pct", "Dist SMA50 pct",
+        // [2.S] Ora UTC scalata 0-100: stagionalità oraria cacciabile. Id 9, APPESO in coda: gli id
+        // 0-8 delle strategie Composite già salvate restano validi.
+        "Ora UTC",
+        // [3.8a] Volume come INFORMAZIONE, non solo conferma. Id 10-11 appesi in coda (id storici
+        // invariati). Il VWAP non ha un id nuovo: la deviazione dal VWAP di sessione è già l'id 5.
+        "MFI",
+        "OBV slope pct",
+        // [F3] Promossi a segnale SOLO dopo il run eventstudy sul campo (2026-07-24): continuazione
+        // post-Crash e post-Surge con p placebo 0,002 replicata su BTC/ETH/SOL 1d e BTC/ETH 1h.
+        // VolSpike (segno incoerente fra simboli) e VolumeBlowout (p>0,4) NON promossi.
+        "Post-Crash",
+        "Post-Surge",
     ];
 
-    private static readonly ConditionalWeakTable<object, Task<decimal?[][]>> Cache = new();
+    /// <summary>
+    /// Impronta del contenuto accanto al task: la cache per ISTANZA della lista è corretta nei
+    /// backtest (liste immutabili per run) ma il TradingEngine live riusa UN buffer che cresce/
+    /// scorre e ri-inizializza la strategia a ogni candela — senza il controllo d'impronta la
+    /// matrice tornava stantia: più corta del buffer (IndexOutOfRange a ogni candela, trovato
+    /// DAL VIVO la prima notte di Composite su una corsia) o, peggio, della stessa lunghezza con
+    /// contenuto vecchio = segnali sbagliati in silenzio su una finestra rotolante.
+    /// (Count, primo, ultimo timestamp) cambia sempre quando il buffer cresce o scorre.
+    /// </summary>
+    private sealed record CacheEntry(int Count, DateTime FirstTs, DateTime LastTs, Task<decimal?[][]> Task);
+
+    private static readonly ConditionalWeakTable<object, CacheEntry> Cache = new();
     private static readonly object Gate = new();
 
     /// <summary>
     /// Normalized signal matrix for the series: <c>matrix[signalId][barIndex]</c>, null during
-    /// each signal's warm-up. Cached per candle-list instance (thread-safe, computed once).
+    /// each signal's warm-up. Cached per candle-list instance (thread-safe, computed once) —
+    /// with a content fingerprint so a MUTATED list (live engine) recomputes instead of lying.
     /// </summary>
     public static Task<decimal?[][]> GetMatrixAsync(
         IReadOnlyList<OhlcvData> candles, ITechnicalIndicatorsService indicators, CancellationToken ct)
     {
         lock (Gate)
         {
-            if (Cache.TryGetValue(candles, out var cached))
+            var first = candles.Count > 0 ? candles[0].TimestampUtc : default;
+            var last = candles.Count > 0 ? candles[^1].TimestampUtc : default;
+            if (Cache.TryGetValue(candles, out var cached)
+                && cached.Count == candles.Count && cached.FirstTs == first && cached.LastTs == last)
             {
-                return cached;
+                return cached.Task;
             }
             var task = ComputeMatrixAsync(candles, indicators, ct);
-            Cache.Add(candles, task);
+            Cache.Remove(candles);
+            Cache.Add(candles, new CacheEntry(candles.Count, first, last, task));
             return task;
         }
     }
@@ -177,7 +208,81 @@ public static class SignalCatalog
         }
         matrix[8] = CausalPercentile(dist, PercentileWindow, ct);
 
+        // 9) [2.S roadmap macchina-ricerca] Ora UTC scalata 0-100 (hour/23·100). Rende la
+        //    STAGIONALITÀ ORARIA cacciabile dalla stessa combinatoria degli altri segnali:
+        //    "RSI < 20 AND OraUtc >= 30 AND OraUtc <= 60" = ipotesi «solo nelle ore X-Y», che
+        //    CyclicalAnalyzer misura da tempo senza che nessuna strategia potesse usarla.
+        //    Nessun warm-up e nessuna storia: il valore alla barra i dipende solo dal suo
+        //    timestamp (anti-look-ahead per costruzione). ATTENZIONE dichiarata nel catalogo:
+        //    i bias orari sono notoriamente instabili — le composizioni che usano questo segnale
+        //    vanno giudicate con enfasi sulla replica su finestre temporali disgiunte.
+        var hourOfDay = new decimal?[n];
+        for (var i = 0; i < n; i++)
+        {
+            hourOfDay[i] = candles[i].TimestampUtc.Hour * 100m / 23m;
+        }
+        matrix[9] = hourOfDay;
+
+        // 10) [3.8a] MFI(14): RSI pesato per volume, nativo 0-100. Rispetto all'id 4 (solo
+        //     intensità del volume) porta la DIREZIONE del flusso di denaro.
+        matrix[10] = [.. await indicators.CalculateMfiAsync(highs, lows, closes, volumes, 14, ct)];
+
+        // 11) [3.8a] OBV slope: variazione a 10 barre dell'On-Balance Volume, normalizzata col
+        //     percentile causale (l'OBV assoluto ha scala arbitraria: conta la variazione).
+        var obv = await indicators.CalculateObvAsync(closes, volumes, ct);
+        var obvSlope = new decimal?[n];
+        for (var i = 10; i < n; i++)
+        {
+            if (obv[i] is decimal now && obv[i - 10] is decimal past)
+            {
+                obvSlope[i] = now - past;
+            }
+        }
+        matrix[11] = CausalPercentile(obvSlope, PercentileWindow, ct);
+
+        // 12-13) [F3] Post-Crash / Post-Surge: 100 alla barra dell'evento, decadimento lineare a 0
+        //     in EventDecayBars barre. Il rilevatore è CAUSALE (la barra giudicata non contribuisce
+        //     alla propria soglia) quindi il segnale eredita l'anti-look-ahead. Soglie tipiche:
+        //     "Post-Surge > 50" = surge nelle ultime 10 barre. La continuazione post-evento è stata
+        //     MISURATA (event-study con placebo) prima di promuovere questi id; resta al gate il
+        //     giudizio sulle composizioni che li usano.
+        var events = Analysis.MarketEventDetector.Detect(candles);
+        matrix[12] = EventDecaySignal(candles, events, Analysis.MarketEventKind.Crash);
+        matrix[13] = EventDecaySignal(candles, events, Analysis.MarketEventKind.Surge);
+
         return matrix;
+    }
+
+    /// <summary>
+    /// Segnale di decadimento post-evento: null nel warm-up del rilevatore (prima soglia possibile),
+    /// poi 0 = nessun evento recente, 100→0 lineare dall'evento in EventDecayBars barre.
+    /// </summary>
+    private static decimal?[] EventDecaySignal(
+        IReadOnlyList<OhlcvData> candles, IReadOnlyList<Analysis.MarketEvent> events, Analysis.MarketEventKind kind)
+    {
+        var n = candles.Count;
+        var result = new decimal?[n];
+        var eventTimes = new HashSet<DateTime>(events.Where(e => e.Kind == kind).Select(e => e.TimestampUtc));
+
+        // Il rilevatore giudica Crash/Surge solo da VolWindow+1 in poi: prima è warm-up (null).
+        var warmup = new Analysis.MarketEventDetectorConfig().VolWindow + 1;
+        var barsSince = int.MaxValue;
+        for (var i = 0; i < n; i++)
+        {
+            if (eventTimes.Contains(candles[i].TimestampUtc))
+            {
+                barsSince = 0;
+            }
+            else if (barsSince != int.MaxValue)
+            {
+                barsSince++;
+            }
+            if (i < warmup) continue;
+            result[i] = barsSince >= EventDecayBars
+                ? 0m
+                : 100m * (EventDecayBars - barsSince) / EventDecayBars;
+        }
+        return result;
     }
 
     /// <summary>

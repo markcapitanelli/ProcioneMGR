@@ -35,6 +35,12 @@ public sealed class PairsBacktestEngine : IPairsBacktestEngine
         var analyzer = new RollingPairsSpreadAnalyzer();
         var analysis = analyzer.Analyze(closesY, closesX, config.LookbackWindow, config.RecalibrationInterval, config.ZScoreLookback);
 
+        // [E1] Rapporto causale vol-recente / vol-di-base dello spread, per il filtro di volatilità.
+        // Null dove una delle due finestre non è ancora piena: in quel caso il filtro non vincola.
+        var spreadVolRatio = config.MaxSpreadVolRatio > 0m
+            ? SpreadVolRatio(analysis.Spread, config.ZScoreLookback, Math.Max(config.ZScoreLookback * 2, config.SpreadVolBaselineWindow))
+            : null;
+
         var book = new PairsPortfolio(config.InitialCapital, config.FeePercent, config.PositionSizePercent, config.SlippagePercent);
         var equity = new List<EquityPoint>(n);
         var trades = new List<PairsTrade>();
@@ -57,6 +63,15 @@ public sealed class PairsBacktestEngine : IPairsBacktestEngine
                     PairsPositionSide? entrySide = zv > config.EntryZScore ? PairsPositionSide.ShortSpread
                                                  : zv < -config.EntryZScore ? PairsPositionSide.LongSpread
                                                  : null;
+
+                    // [E1] Filtro di volatilità: se lo spread è entrato in un regime ad alta vol
+                    // (vol recente >> vol di base), NON aprire — è dove la mean-reversion diverge.
+                    if (entrySide is not null && spreadVolRatio is not null
+                        && spreadVolRatio[i] is double r && (decimal)r > config.MaxSpreadVolRatio)
+                    {
+                        entrySide = null;
+                    }
+
                     if (entrySide is PairsPositionSide open)
                     {
                         side = open;
@@ -117,6 +132,38 @@ public sealed class PairsBacktestEngine : IPairsBacktestEngine
         }
 
         return BuildResult(config, book, equity, trades, n);
+    }
+
+    /// <summary>
+    /// [E1] Rapporto CAUSALE fra la deviazione standard dello spread sulle ultime <paramref name="shortWindow"/>
+    /// barre e quella sulle ultime <paramref name="longWindow"/>: &gt; 1 = lo spread si è fatto più
+    /// volatile del solito (regime di rottura). Anti-look-ahead: a i usa solo spread[..i]. Null finché
+    /// la finestra lunga non è piena o durante il warm-up dello spread (nessun vincolo → si può entrare).
+    /// </summary>
+    internal static double?[] SpreadVolRatio(IReadOnlyList<double?> spread, int shortWindow, int longWindow)
+    {
+        var n = spread.Count;
+        var result = new double?[n];
+        for (var i = 0; i < n; i++)
+        {
+            var s = StdOfLastNonNull(spread, i, shortWindow);
+            var l = StdOfLastNonNull(spread, i, longWindow);
+            if (s is double sv && l is double lv && lv > 1e-12) result[i] = sv / lv;
+        }
+        return result;
+    }
+
+    /// <summary>Std campionaria degli ultimi <paramref name="window"/> valori non-null di <paramref name="series"/> fino a <paramref name="endInclusive"/>.</summary>
+    private static double? StdOfLastNonNull(IReadOnlyList<double?> series, int endInclusive, int window)
+    {
+        var vals = new List<double>(window);
+        for (var j = endInclusive; j >= 0 && vals.Count < window; j--)
+        {
+            if (series[j] is double v) vals.Add(v);
+        }
+        if (vals.Count < window) return null;
+        var mean = vals.Average();
+        return Math.Sqrt(vals.Sum(v => (v - mean) * (v - mean)) / (vals.Count - 1));
     }
 
     private static void CloseTrade(PairsPortfolio book, PairsTrade trade, decimal priceY, decimal priceX, DateTime ts, List<PairsTrade> trades, string exitReason)

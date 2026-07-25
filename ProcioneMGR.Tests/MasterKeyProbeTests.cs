@@ -11,6 +11,27 @@ namespace ProcioneMGR.Tests;
 /// </summary>
 public class MasterKeyProbeTests
 {
+    /// <summary>Reader il cui esito può CAMBIARE fra un probe e l'altro, come la realtà.</summary>
+    private sealed class MutableReader(int total, int unreadable) : IExchangeCredentialReader
+    {
+        public int Total { get; set; } = total;
+        public int Unreadable { get; set; } = unreadable;
+        public bool Throw { get; set; }
+        public int Calls { get; private set; }
+
+        public Task<(int Total, int Unreadable)> CountUnreadableAsync(CancellationToken ct = default)
+        {
+            Calls++;
+            if (Throw) throw new InvalidOperationException("DB irraggiungibile (simulato).");
+            return Task.FromResult((Total, Unreadable));
+        }
+
+        public Task<IReadOnlyList<DecryptedExchangeCredential>> LoadForUserAsync(string userId, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<DecryptedExchangeCredential?> FindForTradingAsync(ExchangeName exchange, bool testnet, CancellationToken ct = default)
+            => throw new NotSupportedException();
+    }
+
     private sealed class ScriptedReader(int total, int unreadable) : IExchangeCredentialReader
     {
         public Task<(int Total, int Unreadable)> CountUnreadableAsync(CancellationToken ct = default)
@@ -69,5 +90,61 @@ public class MasterKeyProbeTests
         var result = await probe.ProbeAsync();
 
         Assert.False(result.HasUnreadable);
+    }
+
+    // ---------------------------------------------------------------- ri-probe dopo modifica
+
+    [Fact]
+    public async Task RefreshAfterCredentialChange_ClearsAnAlarmThatIsNoLongerTrue()
+    {
+        // BUG REALE (2026-07-20): l'esito era un'istantanea presa una volta all'avvio. Chi
+        // reinseriva le credenziali sistemandole si vedeva restare addosso il banner "non
+        // decifrabili" fino al riavvio dell'app, e concludeva — ragionevolmente — che il
+        // salvataggio non avesse funzionato. L'allarme accusava uno stato che non esisteva più.
+        var reader = new MutableReader(total: 3, unreadable: 3);
+        var probe = new MasterKeyProbe(reader, NullLogger<MasterKeyProbe>.Instance);
+        await probe.ProbeAsync();
+        Assert.True(probe.Result!.HasUnreadable);
+
+        // L'utente elimina le credenziali illeggibili e ne reinserisce una buona.
+        reader.Total = 1;
+        reader.Unreadable = 0;
+        await probe.RefreshAfterCredentialChangeAsync();
+
+        Assert.False(probe.Result!.HasUnreadable);
+        Assert.Equal(1, probe.Result.Total);
+    }
+
+    [Fact]
+    public async Task RefreshAfterCredentialChange_RaisesAnAlarmThatHasJustBecomeTrue()
+    {
+        // Simmetrico: il ri-probe deve poter anche ACCENDERE l'allarme, non solo spegnerlo.
+        var reader = new MutableReader(total: 0, unreadable: 0);
+        var probe = new MasterKeyProbe(reader, NullLogger<MasterKeyProbe>.Instance);
+        await probe.ProbeAsync();
+        Assert.False(probe.Result!.HasUnreadable);
+
+        reader.Total = 1;
+        reader.Unreadable = 1;
+        await probe.RefreshAfterCredentialChangeAsync();
+
+        Assert.True(probe.Result!.HasUnreadable);
+    }
+
+    [Fact]
+    public async Task RefreshAfterCredentialChange_NeverThrows_AndKeepsThePreviousResult()
+    {
+        // Il refresh e' agganciato al salvataggio delle credenziali: se il DB singhiozza proprio
+        // in quel momento, un banner diagnostico stantio e' molto meglio di un salvataggio
+        // riuscito che all'utente appare fallito.
+        var reader = new MutableReader(total: 2, unreadable: 1);
+        var probe = new MasterKeyProbe(reader, NullLogger<MasterKeyProbe>.Instance);
+        await probe.ProbeAsync();
+        var before = probe.Result;
+
+        reader.Throw = true;
+        await probe.RefreshAfterCredentialChangeAsync();   // non deve lanciare
+
+        Assert.Same(before, probe.Result);
     }
 }

@@ -71,6 +71,33 @@ html, body {
     color: #e6edf3;
 }
 
+/* …ma il `color` qui sopra non basta quando la stessa marcatura porta anche `text-dark`, che in
+   Bootstrap è dichiarato `!important` e quindi vince: il risultato è testo #212529 su sfondo
+   #21262d, cioè un rettangolo grigio VUOTO. La combinazione `bg-light text-dark` è idiomatica su
+   tema chiaro ed è usata in Bot, Trading, Pipeline, Registry, Sentiment e AI Supervisor: si
+   neutralizza qui una volta invece che in ogni pagina.
+   Trovato guardando la pagina in un browser vero — i test di rendering controllano la marcatura,
+   non il colore calcolato, e questo era invisibile a loro. */
+[data-bs-theme="dark"] .bg-light.text-dark,
+[data-bs-theme="dark"] .badge.bg-light {
+    color: #e6edf3 !important;
+}
+
+/* Stessa trappola, altra famiglia di utility: le varianti `bg-*-subtle` sul tema scuro diventano
+   superfici SCURE (Bootstrap le ridefinisce via variabile), ma `text-dark` resta `!important` e
+   vince lo stesso. In /sentiment i badge `bg-primary-subtle text-dark` avevano un rapporto di
+   contrasto di 1,17 — praticamente invisibili — su 145 elementi.
+   Il primo fix copriva solo `.bg-light`: era troppo stretto, e questa regola chiude la famiglia.
+   Trovato misurando il contrasto calcolato pagina per pagina, non a occhio. */
+[data-bs-theme="dark"] .bg-primary-subtle.text-dark,
+[data-bs-theme="dark"] .bg-secondary-subtle.text-dark,
+[data-bs-theme="dark"] .bg-success-subtle.text-dark,
+[data-bs-theme="dark"] .bg-danger-subtle.text-dark,
+[data-bs-theme="dark"] .bg-warning-subtle.text-dark,
+[data-bs-theme="dark"] .bg-info-subtle.text-dark {
+    color: #e6edf3 !important;
+}
+
 [data-bs-theme="dark"] .table-light {
     --bs-table-bg: #21262d;
     --bs-table-color: #e6edf3;

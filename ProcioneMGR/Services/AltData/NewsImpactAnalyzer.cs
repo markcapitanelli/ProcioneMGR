@@ -37,6 +37,16 @@ public interface INewsImpactAnalyzer
     /// fonte. <paramref name="referenceCandles"/> deve essere ordinato cronologicamente.
     /// </summary>
     NewsImpactReport Analyze(string referenceSymbol, IReadOnlyList<AltDataPoint> news, IReadOnlyList<OhlcvData> referenceCandles);
+
+    /// <summary>
+    /// [T2.7] Event-study RIGOROSO sugli stessi eventi alt-data: abnormal return contro una baseline
+    /// per-evento, finestra pre-evento (anticipazione/leakage) e p-value placebo su date casuali —
+    /// il rigore che le medie semplici di <see cref="Analyze"/> non hanno. Filtra prima per
+    /// categoria/fonte se vuoi studiare un sottoinsieme; le finestre sono in barre di
+    /// <paramref name="referenceCandles"/>.
+    /// </summary>
+    Analysis.EventStudyResult StudyRigorous(
+        IReadOnlyList<AltDataPoint> news, IReadOnlyList<OhlcvData> referenceCandles, Analysis.EventStudyConfig? config = null);
 }
 
 /// <summary>
@@ -81,6 +91,15 @@ public sealed class NewsImpactAnalyzer : INewsImpactAnalyzer
         var crossSource = BuildRetailSentimentAgreement(news, referenceCandles);
 
         return new NewsImpactReport(referenceSymbol, byCategory, bySource, crossSource);
+    }
+
+    /// <inheritdoc />
+    public Analysis.EventStudyResult StudyRigorous(
+        IReadOnlyList<AltDataPoint> news, IReadOnlyList<OhlcvData> referenceCandles, Analysis.EventStudyConfig? config = null)
+    {
+        ArgumentNullException.ThrowIfNull(news);
+        ArgumentNullException.ThrowIfNull(referenceCandles);
+        return Analysis.EventStudy.Run(referenceCandles, news.Select(n => n.TimestampUtc).ToList(), config);
     }
 
     private static List<RetailSentimentAgreement> BuildRetailSentimentAgreement(

@@ -71,6 +71,7 @@ public class TradingPageServiceTests
         public Task<List<Order>> GetOrderHistoryAsync(DateTime? from = null, CancellationToken ct = default) => Task.FromResult(OrdersToReturn);
         public Task<TradingPerformance> GetPerformanceAsync(DateTime? from = null, CancellationToken ct = default) => Task.FromResult(PerformanceToReturn);
         public Task ProcessCandleAsync(OhlcvData candle, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ProcessPriceTickAsync(decimal price, DateTime tsUtc, CancellationToken ct = default) => Task.CompletedTask;
         public Task ProcessDueExecutionSlicesAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 

@@ -70,7 +70,8 @@
         <div class="small mt-1">
             L'app è partita con una <code>Security:MasterKey</code> diversa da quella con cui queste credenziali
             furono salvate: Testnet/Live falliranno finché non le reinserisci (o non ripristini la chiave giusta
-            via <code>PROCIONE_MGR_MASTER_KEY</code>). Verificato all'avvio (@keyProbe.CheckedAtUtc.ToString("dd/MM HH:mm") UTC).
+            via <code>PROCIONE_MGR_MASTER_KEY</code>). Ultima verifica: @keyProbe.CheckedAtUtc.ToString("dd/MM HH:mm") UTC
+            — si aggiorna a ogni salvataggio o eliminazione qui sotto.
         </div>
     </div>
 }
@@ -222,6 +223,18 @@
         await LoadAsync();
     }
 
+    /// <summary>
+    /// Ricarica l'elenco E rivaluta il banner della master key. Il probe era un'istantanea presa
+    /// all'avvio: chi reinseriva le credenziali sistemandole si vedeva restare addosso l'allarme
+    /// "non decifrabili" fino al riavvio dell'app, e concludeva ragionevolmente che il salvataggio
+    /// non fosse andato a buon fine.
+    /// </summary>
+    private async Task ReloadAndRecheckAsync()
+    {
+        await LoadAsync();
+        await KeyProbe.RefreshAfterCredentialChangeAsync();
+    }
+
     private async Task LoadAsync()
     {
         if (userId is null) return;
@@ -262,7 +275,7 @@
 
         Input = new CredentialInput();
         SetMessage("Credenziale salvata e cifrata.", error: false);
-        await LoadAsync();
+        await ReloadAndRecheckAsync();
     }
 
     private async Task DeleteAsync(int id)
@@ -274,7 +287,7 @@
             .Where(c => c.Id == id && c.UserId == userId)
             .ExecuteDeleteAsync();
         SetMessage("Credenziale eliminata.", error: false);
-        await LoadAsync();
+        await ReloadAndRecheckAsync();
     }
 
     private async Task TestAsync(DecryptedExchangeCredential c)

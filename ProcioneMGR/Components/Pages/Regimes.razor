@@ -95,6 +95,16 @@
                 <input type="range" class="form-range" min="2" max="8" @bind="_k" disabled="@_busy" style="width:8rem" />
             </div>
             <div class="col-auto">
+                <div class="form-check" title="Quinta feature di clustering: volume/media 20 periodi. Cambia le etichette dei regimi del modello riaddestrato.">
+                    <input class="form-check-input" type="checkbox" id="rg_vol" @bind="_includeVolume" disabled="@_busy" />
+                    <label class="form-check-label" for="rg_vol">Volume (3.8a)</label>
+                </div>
+                <div class="form-check" title="Sesta feature: % dei simboli /USDT sopra la propria SMA50 (partecipazione del mercato interno). Cambia le etichette dei regimi.">
+                    <input class="form-check-input" type="checkbox" id="rg_breadth" @bind="_includeBreadth" disabled="@_busy" />
+                    <label class="form-check-label" for="rg_breadth">Breadth interna</label>
+                </div>
+            </div>
+            <div class="col-auto">
                 <button class="btn btn-primary" @onclick="TrainAsync" disabled="@(_busy || !_hasData)"
                         title="@(!_hasData ? $"Nessun dato per {_symbol} {_timeframe}: scaricali prima da Watchlist." : null)">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
@@ -240,6 +250,10 @@
     private DateTime _to = DateTime.UtcNow.Date;
     private int _k = 4;
 
+    // [3.8a] Feature opzionali di clustering (default OFF = etichette storiche invariate).
+    private bool _includeVolume;
+    private bool _includeBreadth;
+
     private List<string> _symbols = new();
     private RegimeModel? _model;
     private List<RegimeProfile>? _profiles;
@@ -329,6 +343,8 @@
             {
                 ExchangeName = _exchange.ToString(), Symbol = _symbol.Trim(), Timeframe = _timeframe,
                 From = _from.Date, To = _to.Date, NumberOfRegimes = _k, MaxIterations = 100,
+                // [3.8a] Feature opzionali: la scelta viaggia col modello (FeatureScaling.Names).
+                IncludeVolumeFeature = _includeVolume, IncludeBreadthFeature = _includeBreadth,
             }, activate: false);
             _profiles = JsonSerializer.Deserialize<List<RegimeProfile>>(_model.RegimeProfilesJson);
             SetStatus($"Modello addestrato (preview): Silhouette {_model.SilhouetteScore:F3}. Premi 'Activate' per renderlo attivo.", false);

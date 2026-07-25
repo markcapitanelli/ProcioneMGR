@@ -18,6 +18,12 @@ using ProcioneMGR.Data;
 using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Security;
 
+// Npgsql "legacy timestamp behavior": stessa impostazione dell'app (vedi ProcioneMGR/Program.cs).
+// Le colonne sono 'timestamp without time zone' e il codice usa DateTime con Kind=Utc: senza questo
+// switch Npgsql rifiuta la scrittura ("Cannot write DateTime with Kind=UTC to PostgreSQL type
+// 'timestamp without time zone'"). Va impostato PRIMA di costruire qualunque data source Npgsql.
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+
 var placeMinOrder = args.Contains("--place-min-order", StringComparer.OrdinalIgnoreCase);
 
 var appDir = @"C:\Users\proci\Desktop\ProgettoP\ProcioneMGR";

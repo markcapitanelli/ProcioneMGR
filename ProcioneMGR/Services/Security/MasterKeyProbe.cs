@@ -20,6 +20,19 @@ public interface IMasterKeyProbe
 
     /// <summary>Esegue il probe e aggiorna <see cref="Result"/>. Usato dal worker di avvio (e dai test).</summary>
     Task<MasterKeyProbeResult> ProbeAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Ri-esegue il probe dopo una MODIFICA alle credenziali, senza propagare errori al chiamante.
+    ///
+    /// Serve perché <see cref="Result"/> era un'istantanea presa una volta sola all'avvio: chi
+    /// reinseriva le credenziali sistemandole si vedeva restare addosso il banner "non decifrabili"
+    /// fino al riavvio dell'app, e concludeva ragionevolmente che il salvataggio non avesse
+    /// funzionato. L'allarme accusava uno stato che non esisteva più.
+    ///
+    /// Non lancia: aggiornare un banner diagnostico non deve poter far fallire un salvataggio di
+    /// credenziali andato a buon fine.
+    /// </summary>
+    Task RefreshAfterCredentialChangeAsync(CancellationToken ct = default);
 }
 
 /// <inheritdoc cref="IMasterKeyProbe"/>
@@ -29,6 +42,20 @@ public sealed class MasterKeyProbe(
     ProcioneMGR.Services.Notifications.INotifier? notifier = null) : IMasterKeyProbe
 {
     public MasterKeyProbeResult? Result { get; private set; }
+
+    public async Task RefreshAfterCredentialChangeAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await ProbeAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            // Si tiene l'esito precedente: un banner stantio è meglio di un salvataggio che
+            // sembra fallito perché il refresh diagnostico ha lanciato.
+            logger.LogWarning(ex, "Ri-probe della master key dopo modifica credenziali fallito; mantengo l'esito precedente.");
+        }
+    }
 
     public async Task<MasterKeyProbeResult> ProbeAsync(CancellationToken ct = default)
     {
@@ -60,9 +87,13 @@ public sealed class MasterKeyProbe(
 }
 
 /// <summary>
-/// Esegue il probe UNA volta all'avvio, con retry se il DB non è ancora raggiungibile (l'ordine
-/// di avvio dei pod in K8s non è garantito — stessa cura di PipelineSchedulerWorker per la
-/// bonifica orfani).
+/// Esegue il probe all'AVVIO, con retry se il DB non è ancora raggiungibile (l'ordine di avvio dei
+/// pod in K8s non è garantito — stessa cura di PipelineSchedulerWorker per la bonifica orfani).
+///
+/// Da qui in poi l'esito NON resta congelato: la pagina delle credenziali chiama
+/// <see cref="IMasterKeyProbe.RefreshAfterCredentialChangeAsync"/> dopo ogni aggiunta o
+/// eliminazione, così chi sistema le credenziali vede sparire il banner subito invece di doverci
+/// convivere fino al riavvio.
 /// </summary>
 public sealed class MasterKeyProbeWorker(
     IMasterKeyProbe probe,

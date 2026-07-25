@@ -11,7 +11,13 @@ public readonly record struct Ohlcv(
     decimal High,
     decimal Low,
     decimal Close,
-    decimal Volume)
+    decimal Volume,
+    // [T0.3] Campi estesi delle klines, opzionali in coda: i client che non li espongono (o i
+    // costruttori esistenti) li lasciano null e nulla cambia a valle.
+    decimal? QuoteVolume = null,
+    long? TradeCount = null,
+    decimal? TakerBuyVolume = null,
+    decimal? TakerBuyQuoteVolume = null)
 {
     /// <summary>Timestamp di apertura in millisecondi Unix (UTC).</summary>
     public long TimestampMs => new DateTimeOffset(TimestampUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();

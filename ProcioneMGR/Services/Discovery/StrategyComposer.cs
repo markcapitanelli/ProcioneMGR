@@ -122,8 +122,10 @@ public sealed class CompositeSignalGenerator : ICompositeSignalGenerator
     private static (int Op, decimal Thr)[] MenuFor(int signal) => signal switch
     {
         3 => DirectionMenu,                 // Supertrend dir
-        0 or 1 or 2 => OscillatorMenu,      // RSI, StochD, %B
-        _ => PercentileMenu,                // percentile-normalized signals
+        0 or 1 or 2 or 10 => OscillatorMenu, // RSI, StochD, %B, MFI (tutti nativi 0-100: [3.8a] l'MFI
+                                             // era finito nel menu percentile di default, perdendo la
+                                             // soglia <35; è un oscillatore come l'RSI e va trattato tale)
+        _ => PercentileMenu,                // percentile-normalized signals (incl. 9 OraUTC, 11 OBV, 12/13 post-evento)
     };
 
     public List<ComposedCandidate> Generate(ComposerConfiguration config, int quota)

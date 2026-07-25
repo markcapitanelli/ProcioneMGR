@@ -10,9 +10,20 @@ namespace ProcioneMGR.Services.Exchanges;
 /// Client Bitget Spot via REST pubblica v2 (dati di mercato non firmati).
 /// Endpoint candele: GET /api/v2/spot/market/candles.
 /// </summary>
-public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, IConfiguration? configuration = null) : IExchangeClient, IFuturesExchangeClient
+public sealed class BitgetClient(
+    HttpClient http,
+    ILogger<BitgetClient> logger,
+    IConfiguration? configuration = null,
+    IExchangeClock? clock = null) : IExchangeClient, IFuturesExchangeClient
 {
     public ExchangeName Exchange => ExchangeName.Bitget;
+
+    /// <summary>
+    /// Timestamp per le richieste FIRMATE, corretto per l'offset misurato verso il server Bitget
+    /// (vedi <see cref="IExchangeClock"/>). Il clock è opzionale: se non iniettato si ricade
+    /// sull'orologio locale, cioè esattamente il comportamento precedente.
+    /// </summary>
+    private long SignedTimestamp() => clock?.TimestampMillis(Exchange) ?? ExchangeSigning.UnixMillis(DateTime.UtcNow);
 
     // Bitget consigliato: 200 candele per richiesta per restare sotto i rate-limit.
     public int MaxCandlesPerRequest => 200;
@@ -55,6 +66,7 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, 
         foreach (var k in data.EnumerateArray())
         {
             // [ ts(string ms), open, high, low, close, baseVolume, quoteVolume ]
+            // [T0.3] Bitget non espone trades/taker, ma il quoteVolume c'e' e veniva scartato.
             var ts = long.Parse(k[0].GetString() ?? "0", CultureInfo.InvariantCulture);
             result.Add(new Ohlcv(
                 DateTimeOffset.FromUnixTimeMilliseconds(ts).UtcDateTime,
@@ -62,7 +74,8 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, 
                 ParseDecimal(k[2]),
                 ParseDecimal(k[3]),
                 ParseDecimal(k[4]),
-                ParseDecimal(k[5])));
+                ParseDecimal(k[5]),
+                QuoteVolume: k.GetArrayLength() > 6 ? ParseDecimal(k[6]) : null));
         }
 
         // Bitget puo' restituire le candele non ordinate: normalizziamo in ordine cronologico.
@@ -345,7 +358,7 @@ public sealed class BitgetClient(HttpClient http, ILogger<BitgetClient> logger, 
     private async Task<(bool Ok, string Body, bool Uncertain, string? Error)> SignedAsync(
         HttpMethod method, string path, string query, string jsonBody, TradingCredentials creds, CancellationToken ct)
     {
-        var ts = ExchangeSigning.UnixMillis(DateTime.UtcNow).ToString();
+        var ts = SignedTimestamp().ToString();
         var requestPath = string.IsNullOrEmpty(query) ? path : $"{path}?{query}";
         var prehash = ts + method.Method.ToUpperInvariant() + requestPath + jsonBody;
         var sign = ExchangeSigning.HmacSha256Base64(prehash, creds.ApiSecret);

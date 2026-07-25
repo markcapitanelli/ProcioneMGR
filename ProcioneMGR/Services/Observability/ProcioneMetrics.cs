@@ -28,6 +28,8 @@ public sealed class ProcioneMetrics : IDisposable
     private readonly Counter<long> _llmAdvisories;
     private readonly Counter<long> _llmVetoes;
     private readonly Counter<long> _sentimentSyncs;
+    private readonly Counter<long> _realtimeReconnects;
+    private readonly Counter<long> _protectiveExits;
 
     public ProcioneMetrics()
     {
@@ -56,6 +58,10 @@ public sealed class ProcioneMetrics : IDisposable
             description: "Veti posti dal supervisore AI sulla ri-applica.");
         _sentimentSyncs = _meter.CreateCounter<long>("procione.sentiment.sync", unit: "{sync}",
             description: "Sync delle fonti di sentiment (news e metriche di market mood), per fonte ed esito.");
+        _realtimeReconnects = _meter.CreateCounter<long>("procione.marketdata.realtime.reconnects", unit: "{reconnect}",
+            description: "Riconnessioni del feed WebSocket real-time, per exchange.");
+        _protectiveExits = _meter.CreateCounter<long>("procione.trading.protective_exits", unit: "{exit}",
+            description: "Uscite protettive scattate, per origine (tick real-time vs candela chiusa) e motivo.");
     }
 
     public void RecordLanePromotion(int laneId, string newMode) =>
@@ -98,6 +104,19 @@ public sealed class ProcioneMetrics : IDisposable
     /// <summary>Sync di una fonte sentiment: esito ok | error.</summary>
     public void RecordSentimentSync(string source, string esito) =>
         _sentimentSyncs.Add(1, new KeyValuePair<string, object?>("source", source), new KeyValuePair<string, object?>("esito", esito));
+
+    public void RecordRealtimeReconnect(string exchange) =>
+        _realtimeReconnects.Add(1, new KeyValuePair<string, object?>("exchange", exchange));
+
+    /// <summary>
+    /// [R1] Metrica-prova della fase: confrontando <c>source=tick</c> con <c>source=candle</c> si
+    /// vede quante uscite protettive sono state colte dal feed real-time invece che alla chiusura
+    /// della candela — cioè quanto ritardo è stato effettivamente tolto agli stop.
+    /// </summary>
+    public void RecordProtectiveExit(string source, string reason) =>
+        _protectiveExits.Add(1,
+            new KeyValuePair<string, object?>("source", source),
+            new KeyValuePair<string, object?>("reason", reason));
 
     public void Dispose() => _meter.Dispose();
 }

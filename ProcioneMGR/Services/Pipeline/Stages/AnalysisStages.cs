@@ -349,6 +349,7 @@ public sealed class PairsScreeningStage(ICointegrationTest cointegration) : IPip
                         AdfStatistic = result.AdfStatistic,
                         IsCointegrated = result.IsCointegrated,
                         HedgeRatio = result.HedgeRatio,
+                        IsHedgeRatioPlausible = result.IsHedgeRatioPlausible,
                         AlignedCandles = alignedY.Count,
                     });
                 }
@@ -357,24 +358,36 @@ public sealed class PairsScreeningStage(ICointegrationTest cointegration) : IPip
 
         output.Pairs = output.Pairs.OrderBy(p => p.AdfStatistic).ToList();
         output.CointegratedCount = output.Pairs.Count(p => p.IsCointegrated);
+        output.TradeableCount = output.Pairs.Count(p => p.IsTradeable);
         ctx.Pairs = output;
-        ctx.LogLine($"[{Name}] {output.Pairs.Count} coppie testate, {output.CointegratedCount} cointegrate.");
+
+        // I due numeri sono riportati separati apposta: la differenza dice quante coppie hanno uno
+        // spread stazionario ma un'elasticità che rende il portafoglio negoziato un'altra cosa.
+        var discarded = output.CointegratedCount - output.TradeableCount;
+        ctx.LogLine($"[{Name}] {output.Pairs.Count} coppie testate, {output.CointegratedCount} cointegrate, "
+                  + $"{output.TradeableCount} operabili"
+                  + (discarded > 0 ? $" ({discarded} scartate per elasticità fuori banda)." : "."));
     }
 
     public StageSummary Summarize(PipelineContext ctx)
     {
         var o = ctx.Pairs ?? new PairsOutput();
-        var best = o.Pairs.FirstOrDefault();
+
+        // "Migliore" fra le OPERABILI, non fra le cointegrate: la lista è ordinata per ADF, e
+        // prendere il primo elemento e basta è come una coppia con elasticità fuori banda finiva
+        // consigliata all'operatore nonostante fosse la peggiore delle otto una volta negoziata.
+        var best = o.Pairs.FirstOrDefault(p => p.IsTradeable);
         return new StageSummary
         {
             StageName = Name,
             DisplayName = DisplayName,
-            Text = $"{o.Pairs.Count} coppie testate, {o.CointegratedCount} cointegrate"
-                 + (best is null ? "." : $"; migliore: {best.SymbolY}/{best.SymbolX} (ADF {best.AdfStatistic:F2}, hedge {best.HedgeRatio:F3})."),
+            Text = $"{o.Pairs.Count} coppie testate, {o.CointegratedCount} cointegrate, {o.TradeableCount} operabili"
+                 + (best is null ? "." : $"; migliore: {best.SymbolY}/{best.SymbolX} (ADF {best.AdfStatistic:F2}, elasticità {best.HedgeRatio:F3})."),
             Metrics = new()
             {
                 ["CoppieTestate"] = o.Pairs.Count,
                 ["CoppieCointegrate"] = o.CointegratedCount,
+                ["CoppieOperabili"] = o.TradeableCount,
             },
         };
     }

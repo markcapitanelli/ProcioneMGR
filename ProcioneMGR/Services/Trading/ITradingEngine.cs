@@ -50,6 +50,17 @@ public interface ITradingEngine
     Task ProcessCandleAsync(OhlcvData candle, CancellationToken ct = default);
 
     /// <summary>
+    /// [R1] Elabora un tick di prezzo real-time proveniente dal feed WebSocket: valuta SOLO le
+    /// uscite protettive (liquidazione, stop loss, take profit, trailing) sulle posizioni aperte.
+    /// Non valuta segnali e non apre MAI posizioni — gli ingressi restano a
+    /// <see cref="ProcessCandleAsync"/>, l'unico percorso che il backtest valida.
+    ///
+    /// Serve a chiudere il ritardo strutturale del percorso a sole candele: con la sincronizzazione
+    /// REST ogni 5 minuti, uno stop violato veniva rilevato fino a minuti dopo.
+    /// </summary>
+    Task ProcessPriceTickAsync(decimal price, DateTime tsUtc, CancellationToken ct = default);
+
+    /// <summary>
     /// Avanza le fette dovute dei piani di esecuzione live (TWAP/VWAP/Iceberg) di questa corsia.
     /// Chiamato periodicamente dall'ExecutionWorker; no-op in Paper o se l'esecuzione a fette è
     /// disabilitata. Rif. docs/ROADMAP-QLIB.md §1.2.

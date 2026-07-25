@@ -1,0 +1,297 @@
+@page "/bot"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using ProcioneMGR.Services.Risk
+@using ProcioneMGR.Services.Trading
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+@implements IDisposable
+
+@inject BotPageService Service
+@inject ILogger<Bot> Logger
+
+<PageTitle>Bot</PageTitle>
+
+<div class="hero-compact mb-4">
+    <span class="hero-logo-sm">🦝</span>
+    <div>
+        <h1 class="mb-0">
+            Bot
+            @if (Service.IsRunning)
+            {
+                <span class="badge bg-success align-middle ms-2">IN FUNZIONE</span>
+            }
+            else
+            {
+                <span class="badge bg-secondary align-middle ms-2">FERMO</span>
+            }
+            <span class="badge bg-light text-dark border align-middle ms-1">Simulazione</span>
+        </h1>
+        <p class="text-muted mb-0">Due scelte, un pulsante. Tutto il resto lo decide la piattaforma.</p>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(Service.Message))
+{
+    <div class="alert @(Service.IsError ? "alert-danger" : "alert-success") py-2">@Service.Message</div>
+}
+
+@if (Service.Status?.IsEmergencyStopped == true)
+{
+    <div class="alert alert-danger fw-bold">
+        🛑 Il bot si è fermato da solo per superamento dei limiti di sicurezza:
+        @Service.Status.EmergencyStopReason<br />
+        <span class="fw-normal">Va verificato cos'è successo prima di riavviarlo — vedi <a href="trading" class="alert-link">Trading</a>.</span>
+    </div>
+}
+
+<div class="row g-3">
+    <div class="col-lg-7">
+
+        @* ---------------------------------------------------------------- configurazione *@
+        <div class="card mb-3">
+            <div class="card-header">Come deve operare</div>
+            <div class="card-body">
+
+                <div class="mb-3">
+                    <label class="form-label fw-semibold" for="bot-capital">Capitale da affidare al bot</label>
+                    <div class="input-group" style="max-width: 22rem">
+                        <input id="bot-capital" type="number" class="form-control text-end" min="100" step="100"
+                               value="@Service.Capital" @onchange="OnCapitalChanged" disabled="@Service.IsRunning" />
+                        <span class="input-group-text">USDT</span>
+                    </div>
+                    <div class="form-text">
+                        È la base su cui vengono calcolate tutte le dimensioni delle operazioni.
+                        In simulazione è denaro finto.
+                    </div>
+                </div>
+
+                <label class="form-label fw-semibold">Quanto rischio accettare</label>
+                <div class="row g-2 mb-2">
+                    @foreach (var p in RiskProfiles.All)
+                    {
+                        var selected = string.Equals(p.Name, Service.ProfileName, StringComparison.OrdinalIgnoreCase);
+                        <div class="col-md-4">
+                            <button type="button"
+                                    class="w-100 h-100 text-start btn @(selected ? "btn-primary" : "btn-outline-secondary")"
+                                    disabled="@Service.IsRunning"
+                                    @onclick="() => SelectProfile(p.Name)">
+                                <span class="fw-semibold d-block">@p.DisplayName</span>
+                                <small class="d-block mt-1" style="opacity:.85; white-space: normal">@p.Description</small>
+                            </button>
+                        </div>
+                    }
+                </div>
+
+                @* Anteprima: la lezione di R2 resa visibile PRIMA della scelta, non dall'estratto conto. *@
+                <div class="border rounded p-3 bg-body-tertiary">
+                    <div class="fw-semibold mb-2">Cosa significa «@Service.Profile.DisplayName», concretamente</div>
+                    <dl class="row mb-0 small">
+                        <dt class="col-sm-6">Su ogni operazione impegna</dt>
+                        <dd class="col-sm-6 text-end tabular-nums">
+                            @Service.Profile.PositionSizePercent.ToString("F0")% del capitale
+                            (@((Service.Capital * Service.Profile.PositionSizePercent / 100m).ToString("N0")) USDT)
+                        </dd>
+
+                        <dt class="col-sm-6">Al massimo in gioco insieme</dt>
+                        <dd class="col-sm-6 text-end tabular-nums">@Service.Profile.MaxTotalExposurePercent.ToString("F0")% del capitale</dd>
+
+                        <dt class="col-sm-6">Posizioni aperte contemporaneamente</dt>
+                        <dd class="col-sm-6 text-end tabular-nums">fino a @Service.Profile.MaxOpenPositions</dd>
+
+                        <dt class="col-sm-6">Si ferma da solo se perde</dt>
+                        <dd class="col-sm-6 text-end tabular-nums">
+                            @Service.Profile.MaxDailyLossPercent.ToString("F0")% in un giorno,
+                            oppure @Service.Profile.MaxDrawdownPercent.ToString("F0")% dal massimo
+                        </dd>
+
+                        <dt class="col-sm-6">Leva</dt>
+                        <dd class="col-sm-6 text-end tabular-nums">
+                            @(Service.Profile.MaxLeverageAllowed == 1 ? "nessuna" : $"fino a {Service.Profile.MaxLeverageAllowed}x")
+                        </dd>
+
+                        <dt class="col-sm-6">Quanto spesso opera</dt>
+                        <dd class="col-sm-6 text-end tabular-nums">
+                            al massimo @Service.Profile.MaxTradesPerDay.ToString("0.##") operazioni al giorno
+                        </dd>
+
+                        <dt class="col-sm-6 text-warning-emphasis">Commissioni a pieno regime</dt>
+                        <dd class="col-sm-6 text-end tabular-nums text-warning-emphasis">
+                            ~@Service.Profile.EstimatedAnnualCostPercent(BotPageService.RoundTurnPercent).ToString("F1")% del capitale all'anno
+                        </dd>
+                    </dl>
+                    <p class="text-muted small mb-0 mt-2">
+                        L'ultima riga è il tetto di spesa in commissioni se il bot operasse sempre al
+                        massimo consentito. Operare più spesso non è gratis: è la ragione per cui i
+                        profili limitano il numero di operazioni invece di lasciarlo libero.
+                    </p>
+                </div>
+
+                @if (Service.TimeframeMismatch)
+                {
+                    <div class="alert alert-warning mt-3 mb-0 py-2 small">
+                        La strategia in corsia lavora su candele da <strong>@Service.ConfiguredTimeframe</strong>, mentre
+                        «@Service.Profile.DisplayName» è pensato per @string.Join(" o ", Service.Profile.PreferredTimeframes).
+                        Il bot funzionerà lo stesso, ma il limite sul numero di operazioni lo frenerà spesso:
+                        aspettati lunghi periodi di inattività.
+                    </div>
+                }
+            </div>
+        </div>
+
+        @* ---------------------------------------------------------------- azione *@
+        <div class="card mb-3">
+            <div class="card-body">
+                @if (!Service.HasStrategies)
+                {
+                    <div class="alert alert-info mb-3">
+                        <strong>Manca ancora una strategia da far girare.</strong>
+                        Il bot esegue strategie che la piattaforma ha già verificato sui dati storici — non le inventa.
+                    </div>
+                    @if (Service.LatestApplicableRunId is not null)
+                    {
+                        <button class="btn btn-primary" disabled="@Service.Busy" @onclick="ApplyResearchAsync">
+                            Usa il risultato dell'ultima ricerca
+                        </button>
+                    }
+                    else
+                    {
+                        <a class="btn btn-primary" href="pipeline">Avvia una ricerca di strategie</a>
+                    }
+                }
+                else
+                {
+                    <p class="mb-3">
+                        In funzione su <strong>@Service.StrategySummary</strong>.
+                    </p>
+                    @if (Service.IsRunning)
+                    {
+                        <button class="btn btn-outline-danger" disabled="@Service.Busy" @onclick="StopAsync">Ferma il bot</button>
+                    }
+                    else
+                    {
+                        <button class="btn btn-success btn-lg" disabled="@Service.Busy" @onclick="StartAsync">
+                            ▶ Avvia il bot in simulazione
+                        </button>
+                        <button class="btn btn-link" disabled="@Service.Busy" @onclick="SaveAsync">Salva soltanto</button>
+                    }
+                }
+
+                <p class="text-muted small mb-0 mt-3">
+                    Da qui il bot opera <strong>solo in simulazione</strong>, con denaro finto. Il passaggio a
+                    denaro reale non avviene mai da questa pagina: richiede una conferma esplicita in
+                    <a href="trading">Trading</a>, dove ogni singolo ordine reale va approvato a mano.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    @* ---------------------------------------------------------------- monitoraggio *@
+    <div class="col-lg-5">
+        <div class="card mb-3">
+            <div class="card-header">Come sta andando</div>
+            <div class="card-body">
+                @if (Service.Status is null)
+                {
+                    <p class="text-muted mb-0">Nessun dato: il bot non è mai stato avviato.</p>
+                }
+                else
+                {
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <Stat Label="Guadagno / perdita"
+                                  Value="@($"{Service.Status.TotalPnl:N2} USDT")"
+                                  Positive="@(Service.Status.TotalPnl >= 0m)" />
+                        </div>
+                        <div class="col-6">
+                            <Stat Label="Variazione"
+                                  Value="@($"{Service.Status.TotalPnlPercent:F2}%")"
+                                  Positive="@(Service.Status.TotalPnlPercent >= 0m)" />
+                        </div>
+                        <div class="col-6">
+                            <Stat Label="Calo dal massimo"
+                                  Value="@($"{Service.Status.MaxDrawdown:F1}%")"
+                                  Positive="false"
+                                  Hint="@($"limite {Service.Profile.MaxDrawdownPercent:F0}%")" />
+                        </div>
+                        <div class="col-6">
+                            <Stat Label="Operazioni chiuse" Value="@Service.Status.TotalTrades.ToString()" />
+                        </div>
+                    </div>
+
+                    <div class="fw-semibold small mb-1">Posizioni aperte</div>
+                    @if (Service.Positions.Count == 0)
+                    {
+                        <p class="text-muted small">Nessuna posizione aperta in questo momento.</p>
+                    }
+                    else
+                    {
+                        <table class="table table-sm align-middle">
+                            <thead><tr><th>Coppia</th><th></th><th class="text-end">Guadagno</th></tr></thead>
+                            <tbody>
+                            @foreach (var p in Service.Positions)
+                            {
+                                <tr>
+                                    <td>@p.Symbol</td>
+                                    <td><span class="badge @(p.Side == OrderSide.Buy ? "bg-success" : "bg-danger")">@(p.Side == OrderSide.Buy ? "al rialzo" : "al ribasso")</span></td>
+                                    <td class="text-end tabular-nums @(p.UnrealizedPnl >= 0m ? "text-success" : "text-danger")">@p.UnrealizedPnl.ToString("N2")</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    }
+
+                    <div class="fw-semibold small mb-1 mt-3">Ultime operazioni concluse</div>
+                    @if (Service.RecentTrades.Count == 0)
+                    {
+                        <p class="text-muted small mb-0">Ancora nessuna operazione conclusa.</p>
+                    }
+                    else
+                    {
+                        <table class="table table-sm align-middle mb-0">
+                            <tbody>
+                            @foreach (var t in Service.RecentTrades)
+                            {
+                                <tr>
+                                    <td class="small">@t.ClosedAtUtc.ToString("dd/MM HH:mm")</td>
+                                    <td class="small">@t.Symbol</td>
+                                    <td class="text-end tabular-nums small @(t.Pnl >= 0m ? "text-success" : "text-danger")">@t.Pnl.ToString("N2")</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private ProcioneMGR.Components.Shared.PollingTimer? _timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Service.LoadAsync();
+        _timer = new ProcioneMGR.Components.Shared.PollingTimer(
+            TimeSpan.FromSeconds(5),
+            () => InvokeAsync(async () => { await Service.RefreshAsync(); StateHasChanged(); }),
+            Logger);
+    }
+
+    private void OnCapitalChanged(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), out var v) && v > 0m)
+        {
+            Service.Capital = v;
+        }
+    }
+
+    private void SelectProfile(string name) => Service.ProfileName = name;
+
+    private Task SaveAsync() => Service.SaveAsync();
+    private Task StartAsync() => Service.StartAsync();
+    private Task StopAsync() => Service.StopAsync();
+    private Task ApplyResearchAsync() => Service.ApplyLatestResearchAsync();
+
+    public void Dispose() => _timer?.Dispose();
+}

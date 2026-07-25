@@ -15,6 +15,12 @@ using ProcioneMGR.Services.Ingestion;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Risk;
 
+// Npgsql "legacy timestamp behavior": stessa impostazione dell'app (vedi ProcioneMGR/Program.cs).
+// Le colonne sono 'timestamp without time zone' e il codice usa DateTime con Kind=Utc: senza questo
+// switch Npgsql rifiuta la scrittura ("Cannot write DateTime with Kind=UTC to PostgreSQL type
+// 'timestamp without time zone'"). Va impostato PRIMA di costruire qualunque data source Npgsql.
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+
 // Guida raggiungibile a zero configurazione: senza argomenti si stampa l'usage e si esce,
 // PRIMA di pretendere la connection string (che serve solo alle fasi vere).
 if (args.Length == 0)

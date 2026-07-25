@@ -117,15 +117,21 @@ public class SentimentSyncWorkerTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Tick_Purge_RespectsCutoffs_AndExemptsFearGreed()
+    public async Task Tick_Purge_RespectsCutoffs_AndExemptsHistoricalSeries()
     {
+        // Esenzioni della purge: FearGreed (baseline lungo), FundingRate (backfill 2019 che alimenta
+        // il backtest — il vecchio test sanciva la sua CANCELLAZIONE: era il bug, non il contratto)
+        // e BinanceLiquidations (F4: non ricostruibile a posteriori). Le metriche-cache (OI ecc.)
+        // continuano a essere potate.
         var (worker, _, dbFactory, _) = await BuildAsync(new SentimentOptions { NewsRetentionDays = 30, MetricRetentionDays = 60 });
 
         await using (var db = await dbFactory.CreateDbContextAsync())
         {
             db.AltDataPoints.Add(new AltDataPoint { TimestampUtc = DateTime.UtcNow.AddDays(-40), Source = "X", Title = "vecchia", DedupeKey = "X:vecchia" });
             db.AltDataPoints.Add(new AltDataPoint { TimestampUtc = DateTime.UtcNow.AddDays(-5), Source = "X", Title = "recente", DedupeKey = "X:recente" });
-            db.SentimentMetricPoints.Add(new SentimentMetricPoint { TimestampUtc = DateTime.UtcNow.AddDays(-90), Source = SentimentMetricSources.BinanceFutures, Metric = SentimentMetrics.FundingRate, Symbol = "BTC", Value = 1m });
+            db.SentimentMetricPoints.Add(new SentimentMetricPoint { TimestampUtc = DateTime.UtcNow.AddDays(-90), Source = SentimentMetricSources.BinanceFutures, Metric = SentimentMetrics.OpenInterest, Symbol = "BTC", Value = 1m });
+            db.SentimentMetricPoints.Add(new SentimentMetricPoint { TimestampUtc = DateTime.UtcNow.AddDays(-90), Source = SentimentMetricSources.BinanceFutures, Metric = SentimentMetrics.FundingRate, Symbol = "BTC", Value = 0.01m });
+            db.SentimentMetricPoints.Add(new SentimentMetricPoint { TimestampUtc = DateTime.UtcNow.AddDays(-90), Source = SentimentMetricSources.BinanceLiquidations, Metric = SentimentMetrics.LongLiquidationNotional, Symbol = "BTC", Value = 1_000_000m });
             db.SentimentMetricPoints.Add(new SentimentMetricPoint { TimestampUtc = DateTime.UtcNow.AddDays(-90), Source = SentimentMetricSources.FearGreed, Metric = SentimentMetrics.FearGreedIndex, Symbol = "", Value = 50m });
             await db.SaveChangesAsync();
         }
@@ -135,8 +141,12 @@ public class SentimentSyncWorkerTests : IAsyncDisposable
         await using var check = await dbFactory.CreateDbContextAsync();
         Assert.False(await check.AltDataPoints.AnyAsync(a => a.Title == "vecchia"));   // oltre retention
         Assert.True(await check.AltDataPoints.AnyAsync(a => a.Title == "recente"));
-        Assert.False(await check.SentimentMetricPoints.AnyAsync(p => p.Source == SentimentMetricSources.BinanceFutures && p.TimestampUtc < DateTime.UtcNow.AddDays(-80)));
-        Assert.True(await check.SentimentMetricPoints.AnyAsync(p => p.Source == SentimentMetricSources.FearGreed)); // esente
+        // La metrica-cache (OI) muore oltre la retention...
+        Assert.False(await check.SentimentMetricPoints.AnyAsync(p => p.Metric == SentimentMetrics.OpenInterest && p.TimestampUtc < DateTime.UtcNow.AddDays(-80)));
+        // ...le serie storiche sopravvivono.
+        Assert.True(await check.SentimentMetricPoints.AnyAsync(p => p.Metric == SentimentMetrics.FundingRate));
+        Assert.True(await check.SentimentMetricPoints.AnyAsync(p => p.Source == SentimentMetricSources.BinanceLiquidations));
+        Assert.True(await check.SentimentMetricPoints.AnyAsync(p => p.Source == SentimentMetricSources.FearGreed));
     }
 
     public async ValueTask DisposeAsync()

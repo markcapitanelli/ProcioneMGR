@@ -299,15 +299,31 @@ public sealed class PairScreenResult
     public string SymbolX { get; set; } = string.Empty;
     public string Timeframe { get; set; } = string.Empty;
     public double AdfStatistic { get; set; }
+
+    /// <summary>Verdetto puramente statistico dell'ADF sullo spread.</summary>
     public bool IsCointegrated { get; set; }
+
+    /// <summary>Elasticità log-log fra le due gambe (β ≈ 1 = si muovono in proporzione).</summary>
     public double HedgeRatio { get; set; }
+
+    /// <summary>Elasticità dentro la banda di sanità economica (vedi <c>EngleGrangerCointegrationTest</c>).</summary>
+    public bool IsHedgeRatioPlausible { get; set; }
+
     public int AlignedCandles { get; set; }
+
+    /// <summary>Operabile solo se regge sia la statistica sia la plausibilità dell'elasticità.</summary>
+    public bool IsTradeable => IsCointegrated && IsHedgeRatioPlausible;
 }
 
 public sealed class PairsOutput
 {
     public List<PairScreenResult> Pairs { get; set; } = new();
+
+    /// <summary>Quante coppie superano l'ADF (metrica statistica, storicamente riportata).</summary>
     public int CointegratedCount { get; set; }
+
+    /// <summary>Quante ne superano ANCHE la banda di elasticità: è questo il numero operativo.</summary>
+    public int TradeableCount { get; set; }
 }
 
 public sealed class MlTrainingOutput
@@ -359,6 +375,15 @@ public sealed class ValidatedCandidate
     public double? DeflatedSharpe { get; set; }
     /// <summary>Probability of Backtest Overfitting del PANNELLO di candidati (comune a tutti). null = non calcolabile.</summary>
     public double? PanelPbo { get; set; }
+
+    /// <summary>
+    /// [T1.5] P-value del test di permutazione a blocchi di segno sui rendimenti holdout
+    /// (<see cref="Validation.PermutationTest"/>): probabilità di uno Sharpe almeno così alto se la
+    /// strategia non avesse alcuna deriva. INFORMATIVO di default (blocca solo se il gate riceve
+    /// una soglia &lt; 1): prima si calibra sul campo, poi si decide se farlo mordere. null = serie
+    /// troppo corta.
+    /// </summary>
+    public double? PermutationPValue { get; set; }
 
     // Robustness (filled by RobustnessProbeStage on survivors)
     public decimal MonteCarloRiskFactor95 { get; set; }

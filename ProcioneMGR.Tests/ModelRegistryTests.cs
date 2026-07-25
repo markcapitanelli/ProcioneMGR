@@ -91,6 +91,34 @@ public class ModelRegistryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Promote_NonDirectionalModel_IsRejectedBySemantics_EvenWithGoodDsr()
+    {
+        // [1.V fase 2] Gate 0: il Champion alimenta MlStrategy (segnali long/short) — un modello
+        // che predice la volatilità non è MAI promuovibile, anche se qualcuno gli mettesse un DSR.
+        var f = await BuildFactoryAsync();
+        var user = await SeedUserAsync(f);
+        int volModel;
+        await using (var db = await f.CreateDbContextAsync())
+        {
+            var m = new SavedMlModel
+            {
+                UserId = user, Name = "vol", ModelType = "Linear", Symbol = "BTCUSDT", Timeframe = "1h",
+                FactorsJson = "[]", ModelBytes = [1], DeflatedSharpe = 0.99, TargetKind = "ForwardRealizedVol",
+            };
+            db.SavedMlModels.Add(m);
+            await db.SaveChangesAsync();
+            volModel = m.Id;
+        }
+        var registry = NewRegistry(f);
+
+        var outcome = await registry.TryPromoteToChampionAsync(volModel);
+
+        Assert.False(outcome.Promoted);
+        Assert.Contains("ForwardRealizedVol", outcome.Reason);
+        Assert.Null(await registry.GetChampionAsync("BTCUSDT", "1h"));
+    }
+
+    [Fact]
     public async Task Promote_LowerDsr_IsRejected_AndIncumbentStays()
     {
         var f = await BuildFactoryAsync();

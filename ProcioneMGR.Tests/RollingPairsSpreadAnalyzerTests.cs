@@ -6,28 +6,42 @@ namespace ProcioneMGR.Tests;
 /// Test di <see cref="RollingPairsSpreadAnalyzer"/>: anti-look-ahead (invariante di
 /// troncamento, come per gli IAlphaFactor), recupero approssimato dell'hedge ratio su una
 /// coppia sintetica cointegrata, e struttura del warm-up.
+///
+/// Come in <see cref="CointegrationTests"/>, le serie sintetiche sono costruite sui LOG
+/// (log Y = α + β·log X + rumore): è la specificazione che l'analizzatore stima, e le due devono
+/// combaciare o il backtest negozierebbe uno spread diverso da quello dichiarato cointegrato.
 /// </summary>
 public class RollingPairsSpreadAnalyzerTests
 {
     private readonly RollingPairsSpreadAnalyzer _analyzer = new();
 
+    /// <summary>Random walk geometrico: livello sempre &gt; 0, log-prezzo integrato.</summary>
     private static List<decimal> RandomWalk(int n, double stepScale, int seed)
     {
         var rnd = new Random(seed);
+        var logLevel = Math.Log(100.0);
         var series = new List<decimal>(n) { 100m };
         for (var i = 1; i < n; i++)
         {
-            series.Add(series[^1] + (decimal)((rnd.NextDouble() - 0.5) * 2 * stepScale));
+            logLevel += (rnd.NextDouble() - 0.5) * 2 * stepScale * 0.01;
+            series.Add((decimal)Math.Exp(logLevel));
         }
         return series;
+    }
+
+    /// <summary>Y cointegrata con X sui log: log Y = intercept + beta·log X + rumore stazionario.</summary>
+    private static List<decimal> CointegratedWith(List<decimal> x, double beta, int seed, double noise = 0.003)
+    {
+        var rnd = new Random(seed);
+        return x.Select(xi =>
+            (decimal)Math.Exp(beta * Math.Log((double)xi) + (rnd.NextDouble() - 0.5) * 2 * noise)).ToList();
     }
 
     [Fact]
     public void Analyze_IsAntiLookAhead_TruncationDoesNotChangePastValues()
     {
         var x = RandomWalk(500, 1.0, seed: 1);
-        var rnd = new Random(2);
-        var y = x.Select(xi => (decimal)(1.5 * (double)xi + (rnd.NextDouble() - 0.5) * 0.5)).ToList();
+        var y = CointegratedWith(x, beta: 1.5, seed: 2);
 
         var full = _analyzer.Analyze(y, x, lookbackWindow: 60, recalibrationInterval: 20, zScoreLookback: 15);
 
@@ -52,15 +66,14 @@ public class RollingPairsSpreadAnalyzerTests
     public void Analyze_HedgeRatio_ApproximatesTrueBeta_OnCointegratedPair()
     {
         var x = RandomWalk(1000, 1.0, seed: 3);
-        var rnd = new Random(4);
-        const double trueBeta = 2.5;
-        var y = x.Select(xi => (decimal)(trueBeta * (double)xi + (rnd.NextDouble() - 0.5) * 0.3)).ToList();
+        const double trueBeta = 1.4;
+        var y = CointegratedWith(x, trueBeta, seed: 4);
 
         var result = _analyzer.Analyze(y, x, lookbackWindow: 100, recalibrationInterval: 50, zScoreLookback: 20);
 
         var lastHedge = result.HedgeRatio[^1];
         Assert.NotNull(lastHedge);
-        Assert.True(Math.Abs(lastHedge!.Value - trueBeta) < 0.2, $"hedgeRatio={lastHedge}, atteso ~{trueBeta}");
+        Assert.True(Math.Abs(lastHedge!.Value - trueBeta) < 0.2, $"elasticità={lastHedge}, attesa ~{trueBeta}");
     }
 
     [Fact]

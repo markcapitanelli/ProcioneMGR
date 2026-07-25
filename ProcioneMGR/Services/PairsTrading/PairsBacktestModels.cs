@@ -41,6 +41,19 @@ public class PairsBacktestConfiguration
 
     /// <summary>Slippage sfavorevole (%) applicato al fill di OGNI gamba, in entrata e in uscita (0 = fill teorici).</summary>
     public decimal SlippagePercent { get; set; }
+
+    /// <summary>
+    /// [E1] FILTRO DI VOLATILITÀ dello spread. Salta l'apertura di una nuova posizione quando la
+    /// volatilità RECENTE dello spread (finestra <see cref="ZScoreLookback"/>) supera di questo
+    /// rapporto la sua volatilità di BASE (finestra <see cref="SpreadVolBaselineWindow"/>): è il
+    /// regime in cui la relazione si sta rompendo e la mean-reversion diventa un blow-up. La
+    /// letteratura stat-arb che ottiene Sharpe alti usa questo filtro insieme al lookback dinamico e
+    /// allo stop di divergenza. 0 = disattivo (comportamento storico). Valore tipico: 1,5-2,0.
+    /// </summary>
+    public decimal MaxSpreadVolRatio { get; set; }
+
+    /// <summary>Finestra di base della volatilità dello spread per il filtro (vedi <see cref="MaxSpreadVolRatio"/>).</summary>
+    public int SpreadVolBaselineWindow { get; set; } = 120;
 }
 
 /// <summary>LongSpread = Long Y / Short X. ShortSpread = Short Y / Long X.</summary>
