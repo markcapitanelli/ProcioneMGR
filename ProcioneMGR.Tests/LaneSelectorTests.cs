@@ -1,4 +1,4 @@
-using Bunit;
+﻿using Bunit;
 using ProcioneMGR.Components.Shared;
 using ProcioneMGR.Services.Trading;
 
@@ -110,7 +110,40 @@ public class LaneSelectorTests : BunitContext
         // Sei schede + il pulsante "+6".
         Assert.Equal(7, cut.FindAll("button.lane-chip").Count);
         Assert.Contains("+6", cut.Find("button.lane-chip-more").TextContent);
-        Assert.Equal(6, cut.FindAll("ul.lane-dropdown button").Count);
+    }
+
+    [Fact]
+    public void TheMoreButton_ActuallyExpands_WithoutBootstrapJavaScript()
+    {
+        // REGRESSIONE trovata provando la pagina dal vivo il 2026-07-25. La prima versione usava un
+        // dropdown Bootstrap (data-bs-toggle), ma QUESTA APPLICAZIONE NON CARICA il JavaScript di
+        // Bootstrap — solo il CSS. Il markup era perfetto e il pulsante era morto: nessun errore in
+        // console, nessun test rosso, semplicemente non succedeva niente al clic.
+        var lanes = Enumerable.Range(0, 10).Select(i => Lane(i, $"SYM{i}/USDT")).ToList();
+        var cut = Render(lanes, selected: 0, maxVisible: 6);
+
+        Assert.Equal(6, cut.FindAll("button.lane-chip:not(.lane-chip-more)").Count);
+
+        cut.Find("button.lane-chip-more").Click();
+
+        // Espanso: si vedono tutte, e il pulsante offre la strada del ritorno.
+        Assert.Equal(10, cut.FindAll("button.lane-chip:not(.lane-chip-more)").Count);
+        Assert.Contains("meno", cut.Find("button.lane-chip-more").TextContent);
+
+        cut.Find("button.lane-chip-more").Click();
+        Assert.Equal(6, cut.FindAll("button.lane-chip:not(.lane-chip-more)").Count);
+    }
+
+    [Fact]
+    public void ExpandedView_StaysInNumericOrder()
+    {
+        var lanes = Enumerable.Range(0, 9).Select(i => Lane(i, $"SYM{i}/USDT", running: i == 8)).ToList();
+        var cut = Render(lanes, selected: 0, maxVisible: 4);
+
+        cut.Find("button.lane-chip-more").Click();
+
+        var ids = cut.FindAll("span.lane-chip-id").Select(e => int.Parse(e.TextContent)).ToList();
+        Assert.Equal(Enumerable.Range(0, 9), ids);
     }
 
     [Fact]

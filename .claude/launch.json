@@ -29,13 +29,13 @@
       "port": 5257
     },
     {
-      "_comment": "Profilo per la verifica CON LOGIN REALE del worktree. A differenza di procione-test NON sovrascrive PROCIONE_MGR_MASTER_KEY: la chiave viene da ProcioneMGR/appsettings.json (non tracciato), che e' l'unico modo perche' le credenziali gia' cifrate si decifrino e il login dell'utente funzioni. Stesso ambiente di scripts/run-postgres.ps1 (Production) ma su porta 5199 e con il codice DI QUESTO worktree. Prerequisito: copiare appsettings.json dal repo principale dentro il worktree.",
+      "_comment": "Profilo per la verifica CON LOGIN REALE del worktree. A differenza di procione-test NON sovrascrive PROCIONE_MGR_MASTER_KEY: la chiave viene da ProcioneMGR/appsettings.json (non tracciato), che e' l'unico modo perche' le credenziali gia' cifrate si decifrino e il login dell'utente funzioni. Prerequisito: copiare appsettings.json dal repo principale dentro il worktree. Ambiente Development e NON Production come scripts/run-postgres.ps1: con `dotnet run` non pubblicato, in Production gli static web assets non vengono agganciati e la UI resta senza blazor.web.js ne' CSS (404). appsettings.Development.json contiene solo Logging, quindi chiave e connection string restano quelle vere.",
       "name": "procione-reale",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [
         "-NoProfile",
         "-Command",
-        "$env:ASPNETCORE_ENVIRONMENT='Production'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-launch-profile -c Release"
+        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-launch-profile -c Release"
       ],
       "port": 5199
     }

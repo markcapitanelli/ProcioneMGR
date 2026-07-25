@@ -698,3 +698,69 @@ riguarda anche i test, non solo la pagina.
 `/ensemble` richiedono un utente autenticato, e non posso creare account né inserire password —
 quindi il rendering va guardato al prossimo avvio dell'applicazione. Le classi CSS seguono la
 palette già in uso da `.stat-card`, quindi il rischio è di gusto, non di leggibilità.
+
+---
+
+## 13. Verifica dal vivo e gauntlet della strategia nuova (2026-07-25)
+
+Prova completa dell'applicazione nel browser, con login reale, sul codice di questo ramo.
+
+### 13.1 Tre bug trovati provandola, non rileggendola
+
+**1. In Production la UI resta senza JavaScript né CSS.** Il primo avvio replicava
+`scripts/run-postgres.ps1` (ambiente Production). Risultato: `blazor.web.js`,
+`ProcioneMGR.styles.css` e gli altri asset in 404 — con `dotnet run` non pubblicato, in Production
+gli static web assets non vengono agganciati. Il profilo di verifica usa ora Development, dopo aver
+controllato che `appsettings.Development.json` contenga **solo** la sezione Logging: chiave master e
+connection string restano quelle vere, quindi il login funziona. Vale anche per lo script
+dell'utente, se gli è mai capitata una pagina senza stili.
+
+**2. Il pulsante "+N" del selettore era morto.** Era un dropdown Bootstrap
+(`data-bs-toggle="dropdown"`), e **questa applicazione non carica il JavaScript di Bootstrap**: solo
+il CSS. Il markup era perfetto, i test bUnit verdi, la console pulita — e al clic non succedeva
+niente. È il tipo di difetto che nessuna rilettura trova, perché il codice *è* giusto: sbagliata era
+un'assunzione sull'ambiente. Riscritto come espansione in linea gestita da Blazor, che oltre a
+funzionare è più diretta: le corsie in più compaiono accanto alle altre invece che in un menu con
+una grafica sua.
+
+**3. Cambiando corsia, la modalità non seguiva.** Il radio "Modalità" è lo stato di un form ("in che
+modalità avviare"), e restava sul suo default: scegliendo la corsia 2, che gira in **Testnet**,
+continuava a dire Paper. Un "Ferma" seguito da "Avvia" l'avrebbe fatta ripartire in Paper senza che
+nulla lo dicesse — e siccome le posizioni sono discriminate per modalità, quella corsia sarebbe
+diventata cieca alle proprie posizioni Testnet. Ora la modalità si allinea alla corsia scelta, ma
+**solo** al cambio di corsia e non al tick del timer: altrimenti il radio tornerebbe indietro sotto
+le dita dell'operatore ogni due secondi. Difetto preesistente, non introdotto qui.
+
+### 13.2 Quello che ha funzionato al primo colpo
+
+Il router di regime ha parlato appena i motori hanno ripreso, sui dati veri:
+
+```
+Regime BTC/USDT 1h: (primo rilevamento) → 3 — osservazione, nessun filtro applicato
+Router di regime INATTIVO su DOGE/USDT 1h: nessun modello di regime attivo per DOGE/USDT 1h
+```
+
+Cioè: classificazione col modello **della propria serie**, dichiarazione esplicita dove il modello
+non c'è invece di uno spegnimento silenzioso, e nessun filtro applicato perché è in osservazione.
+Otto corsie configurate e avviate correttamente (0-7), selettore che ne mostra sei e collassa le
+altre, `/metrics` coi pannelli nuovi, colonne `ArrivalPrice`/`SubmitLatencyMs` visibili nelle query.
+
+### 13.3 Il gauntlet di GridMeanReversion: spettacolare dentro, nulla fuori
+
+La strategia aggiunta in Fase 5b non era mai stata misurata. Nuova fase `gridtest`: si sceglie il
+parametro migliore su un periodo di **selezione** (fino al 2026-03-01) e lo si giudica su un
+**holdout** che quella scelta non ha mai visto (marzo→luglio 2026). Costi onesti.
+
+| | Rendimento medio |
+|---|---|
+| Selezione (scegliendo il meglio) | **+361,1%** |
+| **Holdout (dati mai visti)** | **+1,9%** — positivo in **6 casi su 12** |
+
+Sei su dodici è il lancio di una moneta. E il caso singolo più istruttivo è DOGE/USDT 4h:
+**+1909,7% in selezione → +7,0% in holdout**. Il parametro migliore era il migliore *su quei dati*,
+e non porta informazione al periodo successivo.
+
+**Verdetto: la strategia resta nel catalogo come candidata, non come qualcosa da mettere su una
+corsia.** È il sesto esito negativo consecutivo di questa piattaforma, ed è coerente con tutti gli
+altri: il valore di questa macchina non è che trova edge, è che smette di crederci quando non ce
+n'è. Il numero da guardare non è mai il +361% della selezione.

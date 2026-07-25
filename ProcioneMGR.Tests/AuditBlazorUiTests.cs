@@ -1,4 +1,4 @@
-using Bunit;
+﻿using Bunit;
 using Mediator;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Data;
@@ -65,6 +65,10 @@ public class AuditBlazorUiTests : BunitContext
     {
         public int LaneId => laneId;
         public bool IsRunning { get; set; }
+
+        /// <summary>Modalità in cui la corsia si trova (non quella scelta nel form).</summary>
+        public TradingMode Mode { get; set; } = TradingMode.Paper;
+
         public List<Order> PendingToReturn { get; set; } = [];
         public TradingMode? StartedWith { get; private set; }
         public bool StopCalled { get; private set; }
@@ -73,7 +77,7 @@ public class AuditBlazorUiTests : BunitContext
         public (string OrderId, string? UserId)? LastRejected { get; private set; }
 
         public Task<TradingEngineStatus> GetStatusAsync(CancellationToken ct = default)
-            => Task.FromResult(new TradingEngineStatus { Mode = TradingMode.Paper, IsRunning = IsRunning, Symbol = "BTC/USDT" });
+            => Task.FromResult(new TradingEngineStatus { Mode = Mode, IsRunning = IsRunning, Symbol = "BTC/USDT" });
         public Task StartAsync(TradingMode mode, CancellationToken ct = default) { StartedWith = mode; return Task.CompletedTask; }
         public Task StopAsync(CancellationToken ct = default) { StopCalled = true; return Task.CompletedTask; }
         public Task EmergencyStopAsync(string reason, CancellationToken ct = default) { LastEmergencyReason = reason; return Task.CompletedTask; }
@@ -192,6 +196,33 @@ public class AuditBlazorUiTests : BunitContext
     {
         public Task PromoteLaneAsync(int laneId, TradingMode newMode, string reason, CancellationToken ct = default)
             => throw new InvalidOperationException("Il test non deve promuovere davvero.");
+    }
+
+    [Fact]
+    public void Trading_SwitchingLane_AdoptsThatLaneMode_NotTheFormDefault()
+    {
+        // REGRESSIONE trovata provando la pagina dal vivo il 2026-07-25. Il radio "Modalità" è lo
+        // stato di un form ("in che modalità avviare"), non del dominio, e restava sul suo default:
+        // scegliendo la corsia 2, che gira in Testnet, continuava a dire Paper. Un "Ferma" seguito
+        // da "Avvia" l'avrebbe fatta ripartire in PAPER senza che nulla lo dicesse — e siccome le
+        // posizioni sono discriminate per modalità, quella corsia sarebbe diventata cieca alle
+        // proprie posizioni Testnet.
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        var (_, engines) = RegisterTradingServices();
+        engines[2].Mode = TradingMode.Testnet;
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+
+        // Prima: la corsia 0 è Paper e il radio dice Paper.
+        Assert.True(cut.Find("input#m_Paper").HasAttribute("checked"));
+
+        // Si passa alla corsia 2 (Testnet) cliccando la sua scheda.
+        cut.FindAll("button.lane-chip")[2].Click();
+
+        Assert.True(cut.Find("input#m_Testnet").HasAttribute("checked"));
+        Assert.False(cut.Find("input#m_Paper").HasAttribute("checked"));
     }
 
     [Fact]

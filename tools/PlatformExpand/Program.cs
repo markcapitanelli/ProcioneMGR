@@ -118,6 +118,7 @@ switch (phase)
     case "tapecost": await TapeCostAsync(); break;
     case "trailcompare": await TrailCompareAsync(); break;
     case "calibrate": await CalibrateAsync(); break;
+    case "gridtest": await GridTestAsync(); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1618,6 +1619,111 @@ async Task<List<(DateTime T, decimal Close)>> ClosesForAsync(ApplicationDbContex
         .OrderByDescending(o => o.TimestampUtc).Take(bars)
         .Select(o => new { o.TimestampUtc, o.Close }).ToListAsync())
     .Select(o => (o.TimestampUtc, o.Close)).OrderBy(o => o.TimestampUtc).ToList();
+
+/// <summary>
+/// [Fase 5b] Il gauntlet della strategia a gradini fissi, che era stata aggiunta al catalogo e mai
+/// misurata. Il disegno è quello che la piattaforma usa per ogni ipotesi, e serve a non ripetere
+/// l'errore classico: si sceglie il parametro migliore su un periodo di SELEZIONE, e poi lo si
+/// giudica su un HOLDOUT che quella scelta non ha mai visto. Il numero che conta è il secondo.
+/// </summary>
+async Task GridTestAsync()
+{
+    string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "XRP/USDT", "ADA/USDT"];
+    string[] timeframes = ["1h", "4h"];
+
+    // Griglia dei parametri: gradino, distanza d'ingresso, ancoraggio, direzione.
+    var steps = new[] { 1m, 2m, 3m };
+    var rungs = new[] { 1m, 2m };
+    var anchors = new[] { 20m, 50m, 100m };
+    var directions = new[] { 0m, 2m };   // solo long | entrambi i lati
+
+    Console.WriteLine("=== GAUNTLET GridMeanReversion (Fase 5b) ===");
+    Console.WriteLine($"Selezione fino al {selectionTo:yyyy-MM-dd}, holdout {holdoutFrom:yyyy-MM-dd} → {holdoutTo:yyyy-MM-dd} (mai visto in selezione).");
+    Console.WriteLine($"Costi onesti: fee {PipelineCosts.DefaultFeePercent}%, slippage {PipelineCosts.DefaultSlippagePercent}% per fill.\n");
+
+    using var scope = provider.CreateScope();
+    var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+
+    var rows = new List<(string Symbol, string Tf, decimal Step, decimal Rungs, decimal Anchor, decimal Dir,
+                        decimal SelReturn, decimal HoldReturn, int SelTrades, int HoldTrades, decimal HoldDd)>();
+
+    foreach (var symbol in symbols)
+    {
+        foreach (var tf in timeframes)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync();
+            var all = await db.OhlcvData.AsNoTracking()
+                .Where(c => c.Symbol == symbol && c.Timeframe == tf && c.TimestampUtc <= holdoutTo)
+                .OrderBy(c => c.TimestampUtc).ToListAsync();
+            var selection = all.Where(c => c.TimestampUtc < selectionTo).ToList();
+            var holdout = all.Where(c => c.TimestampUtc >= holdoutFrom).ToList();
+            if (selection.Count < 500 || holdout.Count < 200)
+            {
+                Console.WriteLine($"{symbol} {tf}: storico insufficiente (sel {selection.Count}, hold {holdout.Count}).");
+                continue;
+            }
+
+            // 1) SELEZIONE: si cerca il parametro migliore.
+            (decimal Step, decimal Rung, decimal Anchor, decimal Dir, decimal Ret, int Trades) best =
+                (0m, 0m, 0m, 0m, decimal.MinValue, 0);
+
+            foreach (var step in steps)
+            foreach (var rung in rungs)
+            foreach (var anchor in anchors)
+            foreach (var dir in directions)
+            {
+                var cfg = GridConfig(symbol, tf, step, rung, anchor, dir);
+                var r = await engine.RunBacktestAsync(cfg, selection, CancellationToken.None);
+                if (r.TotalTrades >= 10 && r.TotalReturnPercent > best.Ret)
+                {
+                    best = (step, rung, anchor, dir, r.TotalReturnPercent, r.TotalTrades);
+                }
+            }
+
+            if (best.Ret == decimal.MinValue)
+            {
+                Console.WriteLine($"{symbol} {tf}: nessuna combinazione con almeno 10 trade in selezione.");
+                continue;
+            }
+
+            // 2) HOLDOUT: lo stesso parametro, su dati mai visti.
+            var holdCfg = GridConfig(symbol, tf, best.Step, best.Rung, best.Anchor, best.Dir);
+            var hold = await engine.RunBacktestAsync(holdCfg, holdout, CancellationToken.None);
+
+            rows.Add((symbol, tf, best.Step, best.Rung, best.Anchor, best.Dir,
+                      best.Ret, hold.TotalReturnPercent, best.Trades, hold.TotalTrades, hold.MaxDrawdownPercent));
+
+            Console.WriteLine($"{symbol,-10} {tf,-3} migliore: gradino {best.Step}% x{best.Rung} ancora {best.Anchor} dir {best.Dir}  "
+                + $"selezione {best.Ret,8:F1}% ({best.Trades,4} trade)  →  HOLDOUT {hold.TotalReturnPercent,8:F1}% ({hold.TotalTrades,3} trade, DD {hold.MaxDrawdownPercent:F1}%)");
+        }
+    }
+
+    if (rows.Count == 0) { Console.WriteLine("\nNessun risultato."); return; }
+
+    var positivi = rows.Count(r => r.HoldReturn > 0m);
+    var mediaHold = rows.Average(r => r.HoldReturn);
+    var mediaSel = rows.Average(r => r.SelReturn);
+
+    Console.WriteLine($"\n{rows.Count} combinazioni simbolo/timeframe.");
+    Console.WriteLine($"  selezione: rendimento medio {mediaSel:F1}%   (è il numero che si ottiene SCEGLIENDO il meglio)");
+    Console.WriteLine($"  holdout:   rendimento medio {mediaHold:F1}%   positivi {positivi}/{rows.Count}");
+    Console.WriteLine(positivi > rows.Count * 0.6 && mediaHold > 0m
+        ? "\nVERDETTO: regge fuori campione. Merita il gauntlet completo (CPCV/DSR) prima di qualunque corsia."
+        : "\nVERDETTO: NON regge fuori campione. Il divario selezione→holdout è la firma della sovra-ottimizzazione:\n"
+          + "          il parametro migliore era il migliore SU QUEI DATI, e non porta informazione al periodo dopo.");
+
+    static BacktestConfiguration GridConfig(string symbol, string tf, decimal step, decimal rung, decimal anchor, decimal dir) => new()
+    {
+        Symbol = symbol, Timeframe = tf, StrategyName = "GridMeanReversion",
+        InitialCapital = 10_000m, PositionSizePercent = 100m,
+        FeePercent = PipelineCosts.DefaultFeePercent,
+        SlippagePercent = PipelineCosts.DefaultSlippagePercent,
+        StrategyParameters = new Dictionary<string, decimal>
+        {
+            ["StepPercent"] = step, ["EntryRungs"] = rung, ["AnchorPeriod"] = anchor, ["Direction"] = dir,
+        },
+    };
+}
 
 async Task LiquidationsVerifyAsync()
 {

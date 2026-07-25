@@ -553,6 +553,7 @@
         _userId = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         Service.ReloadSafety();
         await RefreshAsync();
+        AdoptLaneMode();
         await Service.RefreshPromotionsAsync();
         _timer = new PollingTimer(TimeSpan.FromSeconds(2), () => InvokeAsync(RefreshAsync), Logger);
     }
@@ -581,6 +582,27 @@
     {
         _laneId = laneId;
         await RefreshAsync();
+        AdoptLaneMode();
+    }
+
+    /// <summary>
+    /// Allinea il selettore di modalità a quella in cui la corsia si trova davvero.
+    ///
+    /// Serve perché <c>_mode</c> è lo stato di un form ("in che modalità avviare"), non del dominio,
+    /// e restava sul suo default: scegliendo una corsia Testnet il radio continuava a dire Paper, e
+    /// un "Ferma" seguito da "Avvia" la faceva ripartire in Paper senza che nulla lo dicesse. Le
+    /// posizioni sono discriminate per modalità, quindi quella corsia si sarebbe ritrovata cieca
+    /// alle proprie posizioni Testnet.
+    ///
+    /// Si allinea SOLO al cambio di corsia e al primo caricamento, mai al tick del timer: se lo
+    /// facesse a ogni refresh, l'operatore non potrebbe scegliere una modalità diversa da quella
+    /// corrente — il radio gli tornerebbe indietro sotto le dita ogni due secondi.
+    /// </summary>
+    private void AdoptLaneMode()
+    {
+        if (Service.Status is null) return;
+        _mode = Service.Status.Mode.ToString();
+        _liveConfirmed = false;   // la conferma esplicita non sopravvive a un cambio di contesto
     }
 
     private async Task RefreshAsync()
