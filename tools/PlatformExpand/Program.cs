@@ -119,6 +119,8 @@ switch (phase)
     case "trailcompare": await TrailCompareAsync(); break;
     case "calibrate": await CalibrateAsync(); break;
     case "gridtest": await GridTestAsync(); break;
+    case "huntdense": await HuntDenseAsync(); break;
+    case "verifysurvivor": await VerifySurvivorAsync(); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1025,18 +1027,26 @@ async Task HuntEdgeAsync()
             Statistics.PeriodsPerYear(s.Cand.Timeframe));
 
         var real = s.HoldSharpe;
+        // 200 gemelli e non 15: con quindici campioni il "95° percentile" coincide quasi col massimo
+        // osservato, quindi la soglia era essa stessa rumore — un candidato poteva superarla per la
+        // fortuna di quei quindici sorteggi. Misurato il 2026-07-25 su un sopravvissuto: con 15
+        // gemelli il P95 risultava 0,85 e il candidato "passava"; con 200 il P95 vero era 2,51 e il
+        // candidato stava all'86° percentile. La soglia è inoltre al 99° e non al 95°, perché la
+        // caccia prova ~15.000 combinazioni e un test al 95% lascia passare il 5% del rumore per
+        // costruzione: un singolo sopravvissuto al 95% è la resa ATTESA del caso, non una scoperta.
         var nulls = new List<decimal>();
-        for (var t = 0; t < 15; t++)
+        for (var t = 0; t < 200; t++)
         {
             var twin = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(candles, seed: 2000 + t);
             try { nulls.Add(RealSharpe(twin)); } catch { }
         }
-        if (nulls.Count < 10) { Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}  gemelli insufficienti"); continue; }
+        if (nulls.Count < 100) { Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}  gemelli insufficienti"); continue; }
         nulls.Sort();
-        var p95 = nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(0.95 * nulls.Count) - 1)];
-        var beats = real > p95;
-        Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}{real,7:F2}{p95,9:F2}{(beats ? "  SI" : "  no"),7}  {(beats ? "OLTRE il nullo: candidato vero" : "dentro il nullo: selezione")}");
-        if (beats) confirmed.Add(new { s.Cand.Symbol, s.Cand.Timeframe, s.Cand.StrategyName, s.Cand.Parameters, HoldSharpe = real, s.HoldRet, P95Null = p95 });
+        var p99 = nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(0.99 * nulls.Count) - 1)];
+        var percentile = 100.0 * nulls.Count(n => n < real) / nulls.Count;
+        var beats = real > p99;
+        Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}{real,7:F2}{p99,9:F2}{(beats ? "  SI" : "  no"),7}  percentile {percentile:F0}  {(beats ? "OLTRE il 99° del nullo" : "dentro il nullo: selezione")}");
+        if (beats) confirmed.Add(new { s.Cand.Symbol, s.Cand.Timeframe, s.Cand.StrategyName, s.Cand.Parameters, HoldSharpe = real, s.HoldRet, P99Null = p99, PercentileVsNull = percentile });
     }
 
     var outPath = Path.Combine(AppContext.BaseDirectory, "huntedge-confirmed.json");
@@ -1044,6 +1054,266 @@ async Task HuntEdgeAsync()
     Console.WriteLine($"\n=== {confirmed.Count} candidati CONFERMATI (selezione + holdout + nulltwin) -> {outPath} ===");
     Console.WriteLine("Onesto: 'confermato' = ha passato tre giudici indipendenti su dati storici. Il vero out-of-sample");
     Console.WriteLine("resta il forward sulle corsie Paper — nessun backtest è una promessa di rendimento futuro.");
+}
+
+/// <summary>
+/// Caccia DENSA: stessa struttura a tre giudici di <c>huntedge</c>, ma disegnata attorno al vincolo
+/// che quella ha misurato invece di ignorarlo.
+///
+/// <b>Il problema che questa risolve.</b> In <c>huntedge</c> cinque candidati hanno passato selezione
+/// e holdout e sono stati bocciati tutti dal gemello sintetico — con Sharpe reale 0,95-1,43 contro un
+/// 95° percentile nullo di 1,87-3,31. Il motivo non era la strategia: erano i <b>5-7 trade</b>
+/// dell'holdout. Con sei operazioni lo Sharpe è dominato dal caso, e infatti su mercati finti quella
+/// stessa famiglia arrivava abitualmente a 2-3. Un test che il rumore vince sempre non è un test.
+///
+/// <b>Le tre correzioni.</b> Timeframe più fitto (15m: quattro volte le barre di 1h nello stesso
+/// periodo), universo intero invece di dieci simboli, e soprattutto un <b>minimo di trade
+/// nell'holdout</b> sotto il quale il candidato non viene nemmeno considerato. Quest'ultimo è il
+/// punto: prima il gemello sintetico faceva da rete su candidati che non avrebbero dovuto arrivargli.
+///
+/// <b>Il prezzo, dichiarato.</b> R2 ha misurato che il costo dipende dal TURNOVER, non dalla
+/// risoluzione: a 15m si opera di più e si paga di più. Se un edge esiste solo lordo, questa caccia
+/// lo scarterà — ed è corretto che lo faccia, perché lordo non si incassa.
+/// </summary>
+async Task HuntDenseAsync()
+{
+    string[] symbols = [.. allSymbols];
+    string[] tfs = ["15m", "1h"];
+
+    // Il 15m parte da gennaio 2025: la selezione si allinea a quello, altrimenti i due timeframe
+    // guarderebbero periodi diversi e il confronto non direbbe nulla.
+    var selFrom = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    var selTo = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+    var holdFrom = selTo;
+    var holdTo = new DateTime(2026, 7, 2, 0, 0, 0, DateTimeKind.Utc);
+
+    const int minHoldoutTrades = 25;   // la correzione che conta
+
+    using var scope = provider.CreateScope();
+    var composer = scope.ServiceProvider.GetRequiredService<IStrategyComposer>();
+    var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+
+    Console.WriteLine("=== HUNTDENSE — caccia a densità di trade sufficiente ===");
+    Console.WriteLine($"{symbols.Length} simboli x {tfs.Length} timeframe · selezione {selFrom:yyyy-MM} -> {selTo:yyyy-MM} · holdout {holdFrom:yyyy-MM} -> {holdTo:yyyy-MM}");
+    Console.WriteLine($"Soglia NUOVA: almeno {minHoldoutTrades} trade nell'holdout — sotto, lo Sharpe è rumore e il test non decide nulla.\n");
+
+    var survivors = new List<(DiscoveryCandidate Cand, decimal HoldSharpe, decimal HoldRet, int HoldTrades)>();
+    var scartatiPochiTrade = 0;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    foreach (var tf in tfs)
+    {
+        foreach (var sym in symbols)
+        {
+            var composerCfg = new ComposerConfiguration
+            {
+                MaxCandidates = 250, Seed = 42,
+                EnableComposite = true, EnableEvent = true, EnableRegime = false,
+                SignalPool = [],
+            };
+            var screening = new ComposerScreeningConfiguration
+            {
+                ExchangeName = "Binance", Symbol = sym, Timeframe = tf,
+                From = selFrom, To = selTo, InitialCapital = 10_000m,
+                SlippagePercent = 0.05m, FeePercent = 0.1m, FundingRatePercentPer8h = 0.01m,
+                MinScreenSharpe = 0.4m, MinTrades = 40, ConfirmTopN = 4,
+                OosWindowMonths = 2, MinOosSharpe = 0.4m,
+            };
+            List<DiscoveryCandidate> cands;
+            try { cands = await composer.ComposeAndScreenAsync(composerCfg, screening, null, CancellationToken.None); }
+            catch (Exception ex) { Console.WriteLine($"  {sym} {tf}: errore composer {ex.Message}"); continue; }
+
+            foreach (var c in cands.Where(c => c.OutOfSampleSharpe >= 0.4m))
+            {
+                try
+                {
+                    var hold = await engine.RunBacktestAsync(new BacktestConfiguration
+                    {
+                        ExchangeName = "Binance", Symbol = sym, Timeframe = tf,
+                        From = holdFrom, To = holdTo, InitialCapital = 10_000m,
+                        PositionSizePercent = 20m, FeePercent = 0.1m, SlippagePercent = 0.05m,
+                        StrategyName = c.StrategyName, StrategyParameters = new Dictionary<string, decimal>(c.Parameters),
+                    }, CancellationToken.None);
+
+                    if (hold.TotalTrades < minHoldoutTrades) { scartatiPochiTrade++; continue; }
+
+                    var hs = Statistics.SharpeRatio(hold.EquityCurve, Statistics.PeriodsPerYear(tf));
+                    if (hs > 0.3m) survivors.Add((c, hs, hold.TotalReturnPercent, hold.TotalTrades));
+                }
+                catch { }
+            }
+        }
+        Console.WriteLine($"  {tf}: {survivors.Count(s => s.Cand.Timeframe == tf)} oltre selezione+holdout   ({sw.Elapsed.TotalMinutes:F1} min)");
+    }
+
+    Console.WriteLine($"\n=== {survivors.Count} candidati oltre selezione E holdout ({scartatiPochiTrade} scartati per meno di {minHoldoutTrades} trade) ===");
+    var ranked = survivors.OrderByDescending(s => s.HoldSharpe).Take(20).ToList();
+    if (ranked.Count > 0)
+    {
+        Console.WriteLine($"  {"Symbol",-10}{"TF",-5}{"selOOS",8}{"holdSh",8}{"holdRet",9}{"trd",5}  parametri");
+        foreach (var s in ranked)
+            Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-5}{s.Cand.OutOfSampleSharpe,8:F2}{s.HoldSharpe,8:F2}{s.HoldRet,8:F1}%{s.HoldTrades,5}  {DescribeComposite(s.Cand.Parameters)}");
+    }
+
+    Console.WriteLine($"\n=== NULLTWIN sui top-{Math.Min(8, ranked.Count)} ===");
+    var confirmed = new List<object>();
+    foreach (var s in ranked.Take(8))
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var candles = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == s.Cand.Symbol && c.Timeframe == s.Cand.Timeframe
+                        && c.TimestampUtc >= holdFrom && c.TimestampUtc <= holdTo)
+            .OrderBy(c => c.TimestampUtc).ToListAsync();
+        if (candles.Count < 200) continue;
+
+        var pars = new Dictionary<string, decimal>(s.Cand.Parameters);
+        decimal SharpeOn(List<OhlcvData> series) => Statistics.SharpeRatio(
+            engine.RunBacktestAsync(new BacktestConfiguration
+            {
+                ExchangeName = "Binance", Symbol = s.Cand.Symbol, Timeframe = s.Cand.Timeframe,
+                From = series[0].TimestampUtc, To = series[^1].TimestampUtc, InitialCapital = 10_000m,
+                PositionSizePercent = 20m, FeePercent = 0.1m, SlippagePercent = 0.05m,
+                StrategyName = s.Cand.StrategyName, StrategyParameters = pars,
+            }, series, CancellationToken.None).GetAwaiter().GetResult().EquityCurve,
+            Statistics.PeriodsPerYear(s.Cand.Timeframe));
+
+        var nulls = new List<decimal>();
+        for (var t = 0; t < 15; t++)
+        {
+            var twin = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(candles, seed: 3000 + t);
+            try { nulls.Add(SharpeOn(twin)); } catch { }
+        }
+        if (nulls.Count < 10) continue;
+        nulls.Sort();
+        var p95 = nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(0.95 * nulls.Count) - 1)];
+        var beats = s.HoldSharpe > p95;
+        Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-5}reale {s.HoldSharpe,6:F2}  P95null {p95,6:F2}  {(beats ? "OLTRE il nullo" : "dentro il nullo")}  ({s.HoldTrades} trade)");
+        if (beats) confirmed.Add(new { s.Cand.Symbol, s.Cand.Timeframe, s.Cand.StrategyName, s.Cand.Parameters, HoldSharpe = s.HoldSharpe, s.HoldRet, s.HoldTrades, P95Null = p95 });
+    }
+
+    var outPath = Path.Combine(AppContext.BaseDirectory, "huntdense-confirmed.json");
+    File.WriteAllText(outPath, JsonSerializer.Serialize(confirmed, new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"\n=== {confirmed.Count} CONFERMATI (selezione + holdout con >= {minHoldoutTrades} trade + nulltwin) -> {outPath} ===");
+}
+
+/// <summary>
+/// Il torchio per l'unico sopravvissuto della caccia densa. Non serve a confermarlo: serve a provare
+/// a ucciderlo, che è l'unico modo onesto di guadagnarsi una promozione.
+///
+/// Tre attacchi, ciascuno mirato a una debolezza specifica di ciò che lo ha promosso:
+///
+/// <b>1. Il P95 nullo su 200 gemelli invece di 15.</b> Stimare un 95° percentile da quindici campioni
+/// significa prendere quasi il massimo osservato: la soglia che il candidato ha superato era essa
+/// stessa rumore. Con duecento gemelli la soglia si stabilizza, e va guardato anche il P99.
+///
+/// <b>2. La molteplicità.</b> La caccia ha provato dell'ordine di quindicimila combinazioni. Un test
+/// al 95% lascia passare per costruzione il 5% del rumore, quindi trovare UN sopravvissuto non è una
+/// scoperta: è la resa attesa del caso. Qui si calcola il percentile che il candidato occupa nella
+/// distribuzione nulla, che è la domanda giusta da porre.
+///
+/// <b>3. Il vicinato dei parametri.</b> Un edge vero degrada dolcemente quando si muovono i parametri;
+/// un artefatto di sovra-ottimizzazione è un picco isolato circondato da niente. Se solo la
+/// combinazione esatta funziona, quella combinazione ha imparato il rumore di questi dati.
+/// </summary>
+async Task VerifySurvivorAsync()
+{
+    const string symbol = "SEI/USDT";
+    const string tf = "1h";
+    var holdFrom = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+    var holdTo = new DateTime(2026, 7, 2, 0, 0, 0, DateTimeKind.Utc);
+
+    using var scope = provider.CreateScope();
+    var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+
+    await using var db = await dbFactory.CreateDbContextAsync();
+    var candles = await db.OhlcvData.AsNoTracking()
+        .Where(c => c.Symbol == symbol && c.Timeframe == tf && c.TimestampUtc >= holdFrom && c.TimestampUtc <= holdTo)
+        .OrderBy(c => c.TimestampUtc).ToListAsync();
+
+    Console.WriteLine($"=== TORCHIO sul sopravvissuto: {symbol} {tf}, EventTrigger flipDown SHORT, hold 48 barre ===");
+    Console.WriteLine($"Holdout {holdFrom:yyyy-MM-dd} -> {holdTo:yyyy-MM-dd}, {candles.Count} barre\n");
+
+    Dictionary<string, decimal> Pars(decimal ev, decimal dir, decimal thr, decimal hold) => new()
+    {
+        ["EventType"] = ev, ["Direction"] = dir, ["Threshold"] = thr, ["MaxHoldBars"] = hold,
+    };
+
+    (decimal Sharpe, decimal Ret, int Trades) Run(List<OhlcvData> series, Dictionary<string, decimal> p)
+    {
+        var r = engine.RunBacktestAsync(new BacktestConfiguration
+        {
+            ExchangeName = "Binance", Symbol = symbol, Timeframe = tf,
+            From = series[0].TimestampUtc, To = series[^1].TimestampUtc, InitialCapital = 10_000m,
+            PositionSizePercent = 20m, FeePercent = 0.1m, SlippagePercent = 0.05m,
+            StrategyName = "EventTrigger", StrategyParameters = p,
+        }, series, CancellationToken.None).GetAwaiter().GetResult();
+        return (Statistics.SharpeRatio(r.EquityCurve, Statistics.PeriodsPerYear(tf)), r.TotalReturnPercent, r.TotalTrades);
+    }
+
+    var basePars = Pars(3m, 1m, 85m, 48m);
+    var real = Run(candles, basePars);
+    Console.WriteLine($"REALE: Sharpe {real.Sharpe:F2}, rendimento {real.Ret:F1}%, {real.Trades} trade\n");
+
+    // --- Attacco 1+2: 200 gemelli nulli -------------------------------------------------------
+    Console.WriteLine("--- 200 gemelli sintetici (la soglia che l'ha promosso era stimata su 15) ---");
+    var nulls = new List<decimal>();
+    for (var t = 0; t < 200; t++)
+    {
+        try { nulls.Add(Run(ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(candles, seed: 9000 + t), basePars).Sharpe); }
+        catch { }
+    }
+    nulls.Sort();
+    decimal Pct(double q) => nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(q * nulls.Count) - 1)];
+    var battuti = nulls.Count(n => n < real.Sharpe);
+    var percentile = 100.0 * battuti / nulls.Count;
+
+    Console.WriteLine($"  gemelli validi {nulls.Count}   mediana {Pct(0.50):F2}   P90 {Pct(0.90):F2}   P95 {Pct(0.95):F2}   P99 {Pct(0.99):F2}   max {nulls[^1]:F2}");
+    Console.WriteLine($"  il reale ({real.Sharpe:F2}) batte {battuti}/{nulls.Count} gemelli = percentile {percentile:F1}");
+    Console.WriteLine($"  p-value empirico (quota di gemelli >= reale): {(nulls.Count - battuti) / (double)nulls.Count:F3}");
+
+    // --- Attacco 3: vicinato dei parametri ----------------------------------------------------
+    Console.WriteLine("\n--- Vicinato dei parametri (un edge vero degrada dolcemente, un artefatto è un picco isolato) ---");
+    Console.WriteLine($"  {"MaxHold",8}{"Thr",6}{"Sharpe",8}{"Rend",8}{"trd",5}");
+    foreach (var hold in new[] { 24m, 36m, 48m, 72m, 96m })
+    {
+        foreach (var thr in new[] { 75m, 85m, 95m })
+        {
+            var r = Run(candles, Pars(3m, 1m, thr, hold));
+            var marker = hold == 48m && thr == 85m ? "  <- il candidato" : "";
+            Console.WriteLine($"  {hold,8}{thr,6}{r.Sharpe,8:F2}{r.Ret,7:F1}%{r.Trades,5}{marker}");
+        }
+    }
+
+    Console.WriteLine("\n--- Lo stesso evento sugli ALTRI simboli (se è un edge di mercato, non solo di SEI) ---");
+    Console.WriteLine($"  {"Simbolo",-12}{"Sharpe",8}{"Rend",8}{"trd",5}");
+    var altri = new List<decimal>();
+    foreach (var sym in new[] { "BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "APT/USDT", "SUI/USDT", "INJ/USDT", "TIA/USDT" })
+    {
+        var serie = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == sym && c.Timeframe == tf && c.TimestampUtc >= holdFrom && c.TimestampUtc <= holdTo)
+            .OrderBy(c => c.TimestampUtc).ToListAsync();
+        if (serie.Count < 200) continue;
+        var r = engine.RunBacktestAsync(new BacktestConfiguration
+        {
+            ExchangeName = "Binance", Symbol = sym, Timeframe = tf,
+            From = serie[0].TimestampUtc, To = serie[^1].TimestampUtc, InitialCapital = 10_000m,
+            PositionSizePercent = 20m, FeePercent = 0.1m, SlippagePercent = 0.05m,
+            StrategyName = "EventTrigger", StrategyParameters = basePars,
+        }, serie, CancellationToken.None).GetAwaiter().GetResult();
+        var sh = Statistics.SharpeRatio(r.EquityCurve, Statistics.PeriodsPerYear(tf));
+        altri.Add(sh);
+        Console.WriteLine($"  {sym,-12}{sh,8:F2}{r.TotalReturnPercent,7:F1}%{r.TotalTrades,5}");
+    }
+    if (altri.Count > 0)
+    {
+        Console.WriteLine($"  media sugli altri: {altri.Average():F2}   positivi {altri.Count(a => a > 0)}/{altri.Count}");
+    }
+
+    Console.WriteLine("\n=== LETTURA ===");
+    Console.WriteLine(percentile >= 99.0
+        ? "Il reale sta oltre il 99° percentile del nullo: regge anche a una soglia severa."
+        : $"Il reale sta al {percentile:F0}° percentile del nullo. Con ~15.000 combinazioni provate, un singolo\n"
+          + "sopravvissuto al 95% è la resa ATTESA del caso: serviva il 99,99° percentile per dire qualcosa.");
 }
 
 // Riassunto leggibile di una spec Composite dai suoi parametri decimali.

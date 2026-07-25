@@ -764,3 +764,71 @@ e non porta informazione al periodo successivo.
 corsia.** È il sesto esito negativo consecutivo di questa piattaforma, ed è coerente con tutti gli
 altri: il valore di questa macchina non è che trova edge, è che smette di crederci quando non ce
 n'è. Il numero da guardare non è mai il +361% della selezione.
+
+---
+
+## 14. Caccia all'edge intraday/swing — e un difetto trovato nel giudice (2026-07-25)
+
+Ricerca su richiesta esplicita: usare la piattaforma al massimo per trovare una tattica operabile,
+e in caso promuoverla a Paper e poi Testnet. **Nulla è stato promosso**, e il perché è più
+interessante dell'esito.
+
+### 14.1 Prima caccia (`huntedge`): il vincolo non era la strategia
+
+Dieci simboli maggiori × 1h/4h, catalogo completo, tre giudici (selezione con OOS interno → holdout
+mai visto → gemello sintetico). Cinque candidati hanno passato i primi due; **tutti e cinque bocciati
+dal terzo**, con Sharpe reale 0,95-1,43 contro un P95 nullo di 1,87-3,31.
+
+Il motivo non era la qualità delle strategie: erano i **5-7 trade** dell'holdout. Con sei operazioni
+lo Sharpe è dominato dal caso, e infatti su mercati sintetici la stessa famiglia arrivava
+abitualmente a 2-3. Un test che il rumore vince quasi sempre non discrimina nulla.
+
+### 14.2 Seconda caccia (`huntdense`): correggere il vincolo misurato
+
+Tre modifiche mirate: timeframe 15m (quattro volte le barre di 1h), universo intero (30 simboli, i
+dodici nuovi compresi), e soprattutto **almeno 25 trade nell'holdout** come requisito d'ingresso al
+terzo giudice — 44 candidati sono stati scartati proprio lì.
+
+Esito: 18 oltre selezione+holdout, e **2 "confermati"** — che erano poi lo stesso candidato con un
+parametro inerte: SEI/USDT 1h, EventTrigger *flipDown* short, tenuta 48 barre, Sharpe 1,06 su 27
+trade contro un P95 nullo di 0,85.
+
+Interessante che il 15m abbia prodotto **zero** sopravvissuti: più operazioni, ma anche più costi —
+esattamente ciò che R2 aveva misurato sul turnover.
+
+### 14.3 Il torchio: il sopravvissuto era rumore, e il giudice era debole
+
+Invece di promuoverlo, tre attacchi mirati (fase `verifysurvivor`):
+
+| Attacco | Esito |
+|---|---|
+| **200 gemelli** invece di 15 | P95 vero **2,51** (non 0,85). Il reale sta all'**86° percentile**, p-value **0,145** |
+| **Vicinato dei parametri** | tenuta 24 e 36 barre → Sharpe **−1,50** e **−1,09**; 48 → +1,06. Cambia segno, non degrada: picco isolato |
+| **Stesso evento, altri simboli** | Sharpe negativo su **8 casi su 8**, media **−2,30** |
+
+Il parametro `Threshold` risulta inoltre completamente **inerte** (75/85/95 danno risultati
+identici), il che spiega i due "confermati" duplicati.
+
+**La scoperta di metodo**: il giudice del gemello sintetico usava **15 gemelli**. Con quindici
+campioni il "95° percentile" coincide quasi col massimo osservato, quindi la soglia era essa stessa
+rumore — un candidato poteva superarla per la fortuna di quei quindici sorteggi. È esattamente ciò
+che è successo qui: con 15 gemelli il P95 usciva 0,85 e il candidato passava; con 200 il P95 vero è
+2,51 e il candidato è dentro il nullo.
+
+**Correzione applicata a `huntedge`**: 200 gemelli, soglia al **99°** percentile e non al 95°, e il
+percentile occupato riportato sempre. La soglia al 99 non è severità gratuita: la caccia prova
+dell'ordine di **15.000 combinazioni**, e un test al 95% lascia passare il 5% del rumore *per
+costruzione*. Un singolo sopravvissuto al 95% su quindicimila tentativi è la resa **attesa** del
+caso, non una scoperta.
+
+### 14.4 Dove cercare, viste queste due cacce
+
+Il settimo esito negativo, ma con due indicazioni nuove che non erano disponibili prima:
+
+- **Il 15m non aiuta**: più trade, più costi, zero sopravvissuti. La densità di operazioni si
+  compra meglio con più *simboli* che con più *frequenza* — coerente con la frontiera dei costi.
+- **La famiglia EventTrigger produce i falsi positivi più convincenti**: quasi tutti i candidati
+  arrivati in fondo appartengono a quella. Con `MaxHoldBars=48` fisso e soglie inerti, quella
+  strategia sta di fatto scommettendo sul percorso di un singolo simbolo in una singola finestra.
+  Vale la pena guardare se i suoi parametri siano davvero identificati o se generi rumore per
+  costruzione.
