@@ -211,10 +211,89 @@ Le Fasi 1 e 2 sono il miglior rapporto valore/sforzo dell'intera roadmap: strume
 
 | Fase | Stato |
 |---|---|
-| 0 — Consolidamento base | ⬜ aperta |
-| 1 — TCA + latenza | ⬜ aperta |
-| 2 — Correlazione live | ⬜ aperta |
+| 0 — Consolidamento base | 🟡 **PR #46 aperta** (fast-forward, 64 commit); riconciliazione `faa381` CHIUSA (§7.1); restano migration al DB reale e verifica dal vivo del feed R1 |
+| 1 — TCA + latenza | ✅ **FATTA** 2026-07-25 — §8 |
+| 2 — Correlazione live | ✅ **FATTA** 2026-07-25, default-off da calibrare — §8 |
 | 3 — Microstruttura (D1/D2/D3) | ⬜ aperta (fonte di verità: ROADMAP-PROFITTO-INTRADAY) |
 | 4 — Regime router live | ⬜ aperta |
 | 5a — Chandelier ATR | ⬜ aperta, gated |
 | 5b — Grid nel catalogo | ⬜ aperta, gated |
+
+### 7.1 Esito della riconciliazione dei branch
+
+Verificato il 2026-07-25, e l'esito **toglie un dubbio** che pesava sulla pianificazione:
+`claude/roadmap-macchina-ricerca-ad7c3b` è discendente diretto di `master`
+(`git rev-list --left-right --count master...ad7c3b` → `0  64`), quindi il merge è un
+**fast-forward**: nessun conflitto è possibile.
+
+Quanto a `claude/procione-trading-bot-roadmap-faa381`, che sembrava divergente: contiene **un solo**
+commit formalmente assente (`da66473`, potatura dei pool Npgsql per il `53300 too many clients`), e
+il suo contenuto è **già ricostruito** nel ramo di ricerca — `ProcioneMGR.Tests/Infrastructure/PostgresFixture.cs`
+è identico fra i due rami. Tutte le altre differenze sono versioni più vecchie di file poi evoluti.
+Nessun cherry-pick da fare: la **PR #32 va chiusa come confluita**, non mergiata.
+
+---
+
+## 8. Prima ondata eseguita (2026-07-25)
+
+### 8.1 Fase 1 — quello che si è scoperto misurando
+
+Il lavoro ha confermato la diagnosi e ne ha aggiunte due che non erano nella roadmap.
+
+**Confermato**: l'implementation shortfall esisteva solo per gli ordini a fette; gli ordini di
+corsia catturavano il fill e lo usavano solo come guardia (`FillSanityCheck`), mai come costo.
+
+**Scoperta 1 — la chiusura non aveva una misura mancante, ne aveva una distrutta.** Su quel percorso
+`exitPrice` (il prezzo di riferimento della decisione) veniva **sovrascritto** dal prezzo di fill
+prima di finire nell'ordine persistito: il termine di paragone spariva prima che qualcuno potesse
+usarlo, e nessuna analisi a posteriori avrebbe potuto ricostruirlo. Da qui la scelta di un campo
+`ArrivalPrice` esplicito invece di riusare `Price`, che ha già due significati (limite oppure
+riferimento).
+
+**Scoperta 2 — in Paper la misura di costo è una tautologia.** Il fill Paper è per costruzione
+uguale al prezzo di riferimento: lo slippage onesto che R2 ha portato nella *selezione* non esiste
+sul percorso Paper del motore. Per questo `ArrivalPrice` resta null in Paper e la metrica non
+registra — un campione di zeri trascinerebbe verso lo zero proprio la statistica che deve dire
+quanto costa eseguire. **Resta aperto**: dare a Paper un modello di fill onesto (il F-queue esiste
+già nel backtest) è un lavoro a sé, non fatto qui, e va a finire nel backlog della roadmap intraday.
+
+Cosa è entrato: `Order.ArrivalPrice` + `SubmitLatencyMs` (migration `AddOrderExecutionQuality`, due
+colonne nullable), `ExecutionQuality` (shortfall segnato come costo su entrambi i lati + misura
+della durata della chiamata), cablaggio sui 4 percorsi reali (apertura/chiusura × Spot/Futures),
+latenza con esito (`ok`/`rejected`/`network_uncertain`) inclusa di proposito l'attesa del
+rate-limiter, `MetricsCollector` generalizzato a più istogrammi con percentili, e in `/metrics` il
+pannello **"assunto vs pagato"** più la latenza a P50/P95/P99.
+
+Il verdetto in UI è **asimmetrico di proposito**: un costo reale *minore* dell'assunto è una buona
+notizia (la selezione è stata prudente), uno *maggiore* invalida le decisioni già prese — solo il
+secondo merita un allarme.
+
+### 8.2 Fase 2 — il limite di correlazione
+
+`CorrelatedExposureGuard` in `ProcioneMGR/Services/Risk/`, agganciato al percorso di apertura dopo i
+limiti scalari (l'I/O non si paga per un ordine già rifiutato) e **solo sulle nuove esposizioni**:
+le fette 2..K di un piano di esecuzione non ripassano di qui, perché il piano intero è già stato
+valutato alla prima.
+
+Due decisioni di merito, entrambe difese da test:
+
+1. **Somma con segno, non in valore assoluto.** Due long correlati sommano rischio, un long e uno
+   short correlati lo compensano. Sommare i nozionali in valore assoluto avrebbe fatto risultare una
+   copertura genuina come il doppio del rischio: un limite che punisce le coperture spinge verso il
+   portafoglio più rischioso, cioè è peggio del non averlo.
+2. **Fail-safe verso il permesso.** Se la correlazione non è stimabile (storico corto, simbolo
+   nuovo) il guard dichiara la misura non disponibile e lascia passare. È l'opposto della scelta
+   fatta sul capitale ≤ 0 nel `SafetyChecker`, e volutamente: lì il dato mancante rende indecidibile
+   *ogni* limite percentuale, qui ne rende indecidibile *uno* mentre tutti gli altri reggono.
+
+**Default OFF, e va lasciato OFF finché non è calibrato.** La soglia (50% del capitale aggregato) è
+ereditata dal tetto di esposizione per singola corsia, non misurata sulle corsie reali: accenderla a
+scatola chiusa rischia di impedire alla seconda corsia di aprire. Il passo mancante è osservare
+l'audit `CorrelatedExposureRejected` in simulazione prima di dargli potere.
+
+### 8.3 Cosa resta da fare a mano
+
+- Applicare al DB reale le migration pendenti: `TargetKind` (roadmap macchina-ricerca) e
+  `AddOrderExecutionQuality` (Fase 1).
+- Verifica dal vivo del feed R1 acceso in Paper.
+- Calibrare la soglia di correlazione prima di accendere la Fase 2.

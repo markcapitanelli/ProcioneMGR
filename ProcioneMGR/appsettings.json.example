@@ -159,6 +159,17 @@
       "MaxLeverageAllowed": 5,
       "FeePercent": 0.1
     },
+    "CorrelatedExposure": {
+      "_comment": "[Fase 2] Limite di esposizione su posizioni CORRELATE fra corsie. Tutti gli altri limiti sono scalari e ciechi alla correlazione: tre corsie long su tre altcoin che si muovono con BTC contano come tre scommesse indipendenti mentre sono una sola scommessa di taglia tripla — e nei crash le correlazioni crypto tendono a 1. La somma e' CON SEGNO: un long e uno short correlati si compensano, quindi una copertura genuina non viene punita.",
+      "_comment_Enabled": "Default false: la soglia va prima CALIBRATA sui dati delle corsie realmente attive. Una soglia scelta male non protegge, paralizza — con MaxCorrelatedExposurePercent troppo basso la seconda corsia non apre mai. Accendere solo dopo aver guardato l'audit CorrelatedExposureRejected in simulazione.",
+      "_comment_fail_safe": "Se la correlazione non e' stimabile (storico corto, simbolo nuovo) il limite NON blocca: lo registra e lascia passare. Bloccare al buio fermerebbe l'operativita' per un buco di dati.",
+      "Enabled": false,
+      "MaxCorrelatedExposurePercent": 50.0,
+      "MinCorrelationToCount": 0.5,
+      "Timeframe": "1h",
+      "LookbackBars": 720,
+      "MinOverlappingBars": 100
+    },
     "LiveExecution": {
       "Enabled": false,
       "DefaultWindowMinutes": 5,

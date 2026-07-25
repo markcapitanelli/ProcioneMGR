@@ -125,10 +125,12 @@ public sealed class ProcioneMetrics : IDisposable
             new KeyValuePair<string, object?>("reason", reason));
 
     /// <summary>
-    /// [Fase 1] Shortfall di un ordine di corsia, positivo = costo. Gemello di
-    /// <see cref="RecordExecutionSlippage"/>, che copre i soli ordini eseguiti a fette: insieme
-    /// danno la prima misura completa di quanto costa davvero eseguire, da confrontare con lo
-    /// slippage assunto in selezione (<c>PipelineCosts.DefaultSlippagePercent</c>).
+    /// [Fase 1] Shortfall di un SINGOLO ordine, positivo = costo. Si affianca a
+    /// <see cref="RecordExecutionSlippage"/> senza sovrapporvisi, perché le due misurano cose
+    /// diverse: là lo scarto dell'INTERO piano a fette dal suo prezzo di arrivo a t0, qui la
+    /// qualità di esecuzione del singolo ordine (fetta compresa) rispetto al riferimento del
+    /// momento in cui è partito. È questa la misura confrontabile con lo slippage per-fill assunto
+    /// in selezione (<c>PipelineCosts.DefaultSlippagePercent</c>).
     /// </summary>
     public void RecordTradingSlippage(double bps, string mode, string action) =>
         _tradingSlippageBps.Record(bps,
