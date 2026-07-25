@@ -345,7 +345,7 @@ async Task LanesAsync(bool clean)
     Console.WriteLine(clean ? "=== CORSIE â€” svuotamento delle sole sperimentali ===\n" : "=== CORSIE â€” stato attuale ===\n");
 
     await using var db = await dbFactory.CreateDbContextAsync();
-    for (var lane = 0; lane < 3; lane++)
+    for (var lane = 0; lane < ProcioneMGR.Services.Trading.TradingLanes.Count; lane++)
     {
         var st = await db.TradingEngineStates.AsNoTracking().FirstOrDefaultAsync(s => s.LaneId == lane);
         var row = await db.EnsembleStates.AsNoTracking().Where(e => e.LaneId == lane).OrderBy(e => e.Id).FirstOrDefaultAsync();
@@ -1424,7 +1424,7 @@ async Task CalibrateAsync()
 
     // --- 1. Le corsie come sono davvero -------------------------------------------------------
     var lanes = new List<(int Lane, string Symbol, string Timeframe, string Mode, decimal Capital, bool Futures, int Leverage)>();
-    for (var lane = 0; lane < 3; lane++)
+    for (var lane = 0; lane < ProcioneMGR.Services.Trading.TradingLanes.Count; lane++)
     {
         var st = await db.TradingEngineStates.AsNoTracking().FirstOrDefaultAsync(s => s.LaneId == lane);
         var row = await db.EnsembleStates.AsNoTracking().Where(e => e.LaneId == lane).OrderBy(e => e.Id).FirstOrDefaultAsync();
@@ -1561,7 +1561,7 @@ async Task CalibrateAsync()
     }
 
     Console.WriteLine("\n  Strategie ATTIVE per corsia (le regole devono nominare queste):");
-    for (var lane = 0; lane < 3; lane++)
+    for (var lane = 0; lane < ProcioneMGR.Services.Trading.TradingLanes.Count; lane++)
     {
         var row = await db.EnsembleStates.AsNoTracking().Where(e => e.LaneId == lane).OrderBy(e => e.Id).FirstOrDefaultAsync();
         if (row is null || string.IsNullOrWhiteSpace(row.ConfigurationJson)) continue;

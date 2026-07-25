@@ -52,9 +52,15 @@ public class RegimeAugmentationTests
             foreach (var f in features) f.RegimeId = RegimeOf(f);
             return Task.FromResult(features);
         }
+        /// <summary>Il fake non distingue le serie: etichetta allo stesso modo, così il test resta sul suo oggetto (la causalità).</summary>
+        public Task<List<MarketFeatures>> LabelFeaturesAsync(
+            List<MarketFeatures> features, string symbol, string timeframe, CancellationToken ct = default)
+            => LabelFeaturesAsync(features, ct);
+
         public Task<RegimeModel> TrainAsync(TrainingConfiguration config, bool activate = true, CancellationToken ct = default) => throw new NotSupportedException();
         public Task ActivateModelAsync(RegimeModel model, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<RegimeModel?> LoadLatestModelAsync(CancellationToken ct = default) => Task.FromResult<RegimeModel?>(null);
+        public Task<RegimeModel?> LoadActiveModelAsync(string symbol, string timeframe, CancellationToken ct = default) => Task.FromResult<RegimeModel?>(null);
     }
 
     // ---- Helpers ------------------------------------------------------------------------------

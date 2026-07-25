@@ -148,6 +148,15 @@ public class AuditBlazorUiTests : BunitContext
 
     // --- Test 2: il percorso verso Live è sbarrato nella UI --------------------------------------
 
+    /// <summary>Elenco corsie fittizio: una scheda per corsia, senza toccare il database.</summary>
+    private sealed class FakeLaneDirectory : ILaneDirectory
+    {
+        public Task<IReadOnlyList<LaneSummary>> ListAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<LaneSummary>>(
+                [.. Enumerable.Range(0, TradingLanes.Count)
+                    .Select(i => new LaneSummary(i, "BTC/USDT", "1h", "Paper", false))]);
+    }
+
     private (RecordingSafetyWriter Writer, FakeTradingEngine[] Engines) RegisterTradingServices()
     {
         Services.AddLogging();
@@ -171,6 +180,9 @@ public class AuditBlazorUiTests : BunitContext
         ]));
         Services.AddSingleton<ILanePromoter>(new ThrowingPromoter());
         Services.AddSingleton<ILaneQuarantineStore>(new Infrastructure.FakeLaneQuarantineStore());
+        // Elenco corsie del selettore: qui non è l'oggetto del test, ma la pagina non renderizza
+        // senza. Restituisce le corsie configurate quanto basta perché le schede abbiano un'etichetta.
+        Services.AddSingleton<ILaneDirectory>(new FakeLaneDirectory());
         Services.AddSingleton<ProcioneMGR.Services.Security.IMasterKeyProbe>(new Infrastructure.FakeMasterKeyProbe());
         Services.AddScoped<TradingPageService>();
         return (writer, engines);

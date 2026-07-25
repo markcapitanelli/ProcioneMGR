@@ -55,6 +55,13 @@ public static class TradingServiceCollectionExtensions
         IConfiguration configuration,
         bool isTradingServiceHost = false)
     {
+        // Numero di corsie: letto QUI, prima di ogni registrazione keyed, perché la prima lettura di
+        // TradingLanes.Count congela il valore e tutto ciò che viene dopo (motori, worker, UI,
+        // validatore gRPC) vi si aggancia. Entrambi gli host chiamano questo metodo, quindi entrambi
+        // vedono lo stesso numero — che è ciò che impedisce al monolite e al servizio di trading di
+        // avere idee diverse su quante corsie esistano.
+        TradingLanes.Configure(configuration.GetValue("Trading:LaneCount", TradingLanes.DefaultCount));
+
         // Lettura resiliente delle credenziali (bug B2): serve al TradingEngine (avvio Testnet/Live
         // con errore chiaro invece di AuthenticationTagMismatchException grezza) e alla pagina
         // /settings/exchanges. Registrata QUI perché è la composizione condivisa da entrambi gli
@@ -71,6 +78,10 @@ public static class TradingServiceCollectionExtensions
         // Quarantena corsie (Fase 0-A3): lo store serve a ENTRAMBI gli host (la UI del monolite
         // legge/rimuove anche in modalità remota; il watchdog scrive dove gira il motore locale).
         services.TryAddSingleton<ILaneQuarantineStore, LaneQuarantineStore>();
+
+        // Elenco corsie per il selettore della UI: sola lettura, serve a entrambe le pagine che
+        // permettono di cambiare corsia (Trading, Ensemble).
+        services.TryAddSingleton<ILaneDirectory, LaneDirectory>();
         services.Configure<LaneInvariantOptions>(configuration.GetSection("Trading:LaneInvariants"));
 
         // [Fase 2] Esposizione correlata FRA corsie: singolo servizio condiviso (il limite è

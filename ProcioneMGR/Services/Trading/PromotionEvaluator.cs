@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 
 namespace ProcioneMGR.Services.Trading;
 
@@ -92,7 +92,7 @@ public sealed class PromotionEvaluator(
     Microsoft.Extensions.Options.IOptionsMonitor<PromotionEvaluatorOptions> options) : IPromotionEvaluator
 {
     /// <summary>Numero di corsie isolate (allineato a Program.cs LaneCount).</summary>
-    public const int LaneCount = TradingLanes.Count;
+    public static int LaneCount => TradingLanes.Count;
 
     public async Task<IReadOnlyList<PromotionDecision>> EvaluateAllLanesAsync(CancellationToken ct = default)
     {

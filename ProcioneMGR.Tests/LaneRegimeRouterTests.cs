@@ -28,7 +28,11 @@ public sealed class LaneRegimeRouterTests
             Open = 100m + i, High = 101m + i, Low = 99m + i, Close = 100m + i, Volume = 10m,
         })];
 
-    /// <summary>Detector scriptato: modello dichiarato e regime assegnato a piacere del test.</summary>
+    /// <summary>
+    /// Detector scriptato. <see cref="LoadActiveModelAsync"/> risponde SOLO per la serie del modello
+    /// dichiarato: è così che il detector vero si comporta da quando carica per serie, ed è ciò che
+    /// permette a corsie diverse di avere ciascuna il proprio modello.
+    /// </summary>
     private sealed class FakeRegimeDetector(RegimeModel? model, int? regimeId) : IRegimeDetector
     {
         public int LabelCalls { get; private set; }
@@ -38,12 +42,22 @@ public sealed class LaneRegimeRouterTests
         public Task ActivateModelAsync(RegimeModel m, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<RegimeModel?> LoadLatestModelAsync(CancellationToken ct = default) => Task.FromResult(model);
 
+        public Task<RegimeModel?> LoadActiveModelAsync(string symbol, string timeframe, CancellationToken ct = default) =>
+            Task.FromResult(model is not null
+                && string.Equals(model.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(model.Timeframe, timeframe, StringComparison.OrdinalIgnoreCase)
+                    ? model : null);
+
         public Task<List<MarketFeatures>> LabelFeaturesAsync(List<MarketFeatures> features, CancellationToken ct = default)
         {
             LabelCalls++;
             foreach (var f in features) f.RegimeId = regimeId;
             return Task.FromResult(features);
         }
+
+        public Task<List<MarketFeatures>> LabelFeaturesAsync(
+            List<MarketFeatures> features, string symbol, string timeframe, CancellationToken ct = default)
+            => LabelFeaturesAsync(features, ct);
     }
 
     /// <summary>Estrattore che restituisce una feature per candela (il contenuto non conta qui).</summary>
@@ -211,10 +225,12 @@ public sealed class LaneRegimeRouterTests
     }
 
     [Fact]
-    public async Task ModelOfAnotherSeries_IsRefused_NotUsedAnyway()
+    public async Task ModelOfAnotherSeries_IsNeverBorrowed()
     {
         // Etichettare BTC 1h col modello di ETH 4h darebbe un numero perfettamente formato e
-        // completamente privo di senso: il router deve accorgersene PRIMA di spendere il calcolo.
+        // completamente privo di senso. Da quando il detector carica PER SERIE, il modello di
+        // un'altra coppia non viene nemmeno trovato — prima veniva trovato e poi scartato, il che
+        // funzionava solo finché qualcuno si ricordava di scartarlo.
         var detector = new FakeRegimeDetector(Model("ETH/USDT", "4h"), regimeId: 0);
         var options = Enabled(new RegimeRoutingRule { RegimeId = 0, Strategies = [] });
 
@@ -223,7 +239,26 @@ public sealed class LaneRegimeRouterTests
         Assert.False(decision.IsKnown);
         Assert.True(decision.Allows("Supertrend"));
         Assert.Equal(0, detector.LabelCalls);
-        Assert.Contains("ETH/USDT", decision.Reason);
+        Assert.Contains("BTC/USDT 1h", decision.Reason);   // il motivo nomina la serie CHIESTA
+    }
+
+    [Fact]
+    public async Task EachSeriesGetsItsOwnModel_SoLanesDoNotStealTheRouterFromEachOther()
+    {
+        // Il motivo per cui il caricamento per serie esisteva: prima il detector restituiva il
+        // modello attivo più RECENTE di qualunque coppia, quindi addestrarne uno per una seconda
+        // corsia toglieva il router alla prima. Ora ogni serie interroga il proprio.
+        var options = Enabled(new RegimeRoutingRule { RegimeId = 2, Strategies = ["Supertrend"] });
+
+        var btc = await Router(options, new FakeRegimeDetector(Model("BTC/USDT", "1h"), regimeId: 2))
+            .DecideAsync("BTC/USDT", "1h", Candles(60));
+        var eth = await Router(options, new FakeRegimeDetector(Model("ETH/USDT", "1h"), regimeId: 2))
+            .DecideAsync("ETH/USDT", "1h", Candles(60));
+
+        Assert.True(btc.IsKnown);
+        Assert.True(eth.IsKnown);
+        Assert.True(btc.Allows("Supertrend"));
+        Assert.True(eth.Allows("Supertrend"));
     }
 
     [Fact]

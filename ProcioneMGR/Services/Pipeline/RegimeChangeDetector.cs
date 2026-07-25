@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
@@ -109,10 +109,10 @@ public sealed class RegimeChangeDetector(
         int? currentRegime = null;
         if (baselineRegime is not null)
         {
-            var model = await regimeDetector.LoadLatestModelAsync(ct);
-            if (model is not null && model.Symbol == primary.Symbol && model.Timeframe == primary.Timeframe)
+            var model = await regimeDetector.LoadActiveModelAsync(primary.Symbol, primary.Timeframe, ct);
+            if (model is not null)
             {
-                await regimeDetector.LabelFeaturesAsync(features, ct);
+                await regimeDetector.LabelFeaturesAsync(features, primary.Symbol, primary.Timeframe, ct);
                 currentRegime = features.LastOrDefault(f => f.RegimeId is not null)?.RegimeId;
             }
         }

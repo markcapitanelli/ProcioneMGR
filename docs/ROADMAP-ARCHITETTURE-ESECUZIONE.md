@@ -599,3 +599,102 @@ osservazione per sempre.
   l'unico momento in cui la sua soglia va rimessa in discussione.
 - **Se si vuole il router su più corsie**: serve prima il caricamento del modello *per serie* nel
   detector, altrimenti addestrare un secondo modello disattiva il primo.
+
+---
+
+## 12. Corsie dinamiche e modelli di regime per serie (2026-07-25)
+
+Tre modifiche che nascono da una richiesta sola — *«vorrei il router su più di una corsia, e più di
+tre corsie in generale»* — ma che hanno scoperchiato un difetto più vecchio di entrambe.
+
+### 12.1 Il numero di corsie diventa configurabile
+
+Era `public const int Count = 3`. Il commento sopra quella costante spiegava già perché fosse
+un'unica fonte di verità, quindi il grosso del lavoro era stato fatto anni fa: bastava renderla
+leggibile dalla configurazione (`Trading:LaneCount`, default 3, **massimo 12**).
+
+Il tetto non è una stima di capacità: è protezione dal refuso. Ogni corsia avvia tre worker, e il
+più frequente batte ogni due secondi con una lettura di stato — un `"LaneCount": 300` scritto per
+sbaglio creerebbe novecento cicli di fondo prima che qualcuno se ne accorga. A dodici corsie il
+carico continuo resta di poche letture al secondo.
+
+**Il valore si congela alla prima lettura.** Le corsie sono registrate *keyed* nel contenitore DI, e
+UI, worker e validatore del gRPC si basano tutti sullo stesso numero: se cambiasse dopo che qualcuno
+lo ha letto, resterebbero motori senza corsia o corsie senza motore, e lo si scoprirebbe come un
+errore di risoluzione DI molto lontano dalla causa. Ri-configurare con lo *stesso* valore resta
+innocuo (i test costruiscono più contenitori nello stesso processo); con un valore diverso, si
+sente subito.
+
+Effetto collaterale da gestire, e gestito: quel conteggio è ora uno static mutabile, e i test che lo
+leggono sono parecchi (registrazione DI, watchdog degli invarianti, planner delle campagne, UI). Un
+test che lo cambia girando in parallelo li farebbe fallire a intermittenza — la peggior specie di
+guasto, perché sembra casuale. I test che lo mutano vivono quindi in una collezione xUnit con
+`DisableParallelization`.
+
+Le corsie in più nascono vuote e ferme: si configurano da `/ensemble` come le altre.
+
+### 12.2 Il modello di regime si carica per serie — e qui c'era un bug
+
+`IRegimeDetector.LoadLatestModelAsync` restituiva il modello attivo **più recente fra tutti**, di
+qualunque coppia. Con più serie seguite insieme — che è la norma appena si segue più di un mercato —
+questo produceva tre comportamenti diversi a seconda di chi chiamava:
+
+| Chiamante | Comportamento prima | Esito |
+|---|---|---|
+| `EnsembleManager` | controllava che la serie combaciasse, altrimenti rinunciava | ✅ sicuro, ma i pesi regime-aware erano un privilegio della sola corsia che combaciava |
+| `RegimeChangeDetector` | stesso controllo | ✅ sicuro, stessa limitazione |
+| **`AnalysisStages`** (pipeline) | **nessun controllo** | ❌ **bug**: una caccia su SOL 4h poteva etichettare le proprie candele coi centroidi di BTC 1h |
+| `LaneRegimeRouter` | controllo aggiunto in Fase 4 | ✅ sicuro, ma serviva una corsia sola |
+
+Il terzo caso è un difetto vero, non una limitazione: il "regime corrente" finiva nel contesto del
+run come se fosse una misura, mentre era un numero ben formato e privo di senso. E il modo in cui i
+primi due si difendevano — ricordarsi di controllare — funziona solo finché tutti se ne ricordano.
+
+Ora il detector sa caricare il modello **della serie richiesta** (`LoadActiveModelAsync`, e
+l'overload di `LabelFeaturesAsync` che dichiara la serie), con cache per `(simbolo, timeframe)`
+invece che a modello singolo. Il modello di un'altra coppia non viene più trovato-e-scartato: non
+viene proprio trovato. I quattro chiamanti sono stati portati sulla nuova forma.
+
+Conseguenza pratica: **ogni corsia può avere il proprio modello di regime**, e addestrarne uno per
+una coppia non toglie più il router alle altre. Effetto collaterale onesto: la pipeline addestrerà
+un modello per serie invece di riusarne uno sbagliato, quindi qualche run sarà più lento la prima
+volta che tocca una serie nuova.
+
+### 12.3 Il selettore di corsia diventa una cosa che si guarda
+
+La `<select>` funzionava con tre corsie perché tre si tengono a mente. Con dodici, una tendina di
+numeri costringe a entrare in ogni corsia per sapere cosa ci gira.
+
+Il nuovo `<LaneSelector>` (condiviso fra `/trading` ed `/ensemble`) mostra ogni corsia come una
+scheda cliccabile che porta con sé quello che serve per decidere dove andare: **id, simbolo,
+modalità, e un puntino verde se sta operando**. Il puntino è volutamente statico: su una pagina che
+si auto-aggiorna ogni pochi secondi, un indicatore che pulsa diventa un tic nervoso invece di
+un'informazione.
+
+Quando le corsie sono molte ne restano visibili sei e le altre si aprono con `+N`. La regola che
+conta non è quante se ne vedono ma **chi** resta visibile: prima le corsie che stanno operando, poi
+quelle configurate, infine le vuote — una corsia che sta muovendo denaro non deve finire dietro un
+menu perché ha un id alto. E la corsia selezionata è sempre visibile, altrimenti sceglierla dal menu
+la farebbe sparire dentro il menu stesso. Le schede mostrate restano però ordinate per id: la
+priorità decide *chi* si vede, non *dove*, perché schede che cambiano posizione a ogni refresh —
+quando una corsia parte o si ferma — sarebbero peggio del problema che risolvono.
+
+L'elenco arriva da un servizio condiviso (`ILaneDirectory`): due query per tutte le corsie, non due
+per corsia, perché si ridisegna a ogni refresh della pagina.
+
+### 12.4 Verifica
+
+Suite completa verde. Il selettore è coperto da test bUnit (lo stesso strumento già usato per la UI
+critica): priorità di visibilità, collasso sotto `+N`, selezionata mai nascosta, ordine stabile.
+
+Un difetto trovato dalla suite, non dalla rilettura: aggiungere un servizio iniettato a una pagina
+Razor rompe ogni test bUnit che quella pagina la renderizza — nove test di `AuditBlazorUiTests`
+sono caduti tutti insieme con lo stesso messaggio. È il tipo di rottura che si nota subito ed è
+banale da riparare (un fake in più nel contenitore), ma dice qualcosa che vale la pena ricordare:
+le pagine sotto test bUnit hanno un contratto di dipendenze, e allargarlo è un cambiamento che
+riguarda anche i test, non solo la pagina.
+
+**Quello che non ho potuto verificare**: l'aspetto reale nel browser. Le pagine `/trading` ed
+`/ensemble` richiedono un utente autenticato, e non posso creare account né inserire password —
+quindi il rendering va guardato al prossimo avvio dell'applicazione. Le classi CSS seguono la
+palette già in uso da `.stat-card`, quindi il rischio è di gusto, non di leggibilità.

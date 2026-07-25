@@ -1,0 +1,117 @@
+﻿@using ProcioneMGR.Services.Trading
+
+@*
+    Selettore di corsia riusabile (Trading, Ensemble).
+
+    Sostituisce la <select> che c'era prima. Il motivo non è estetico: con la tendina la corsia
+    corrente era un numero e basta, e per sapere quali corsie fossero configurate — o quale stesse
+    operando — bisognava sceglierle una per una e guardare. Qui ogni corsia è una scheda cliccabile
+    che porta con sé ciò che serve per decidere dove andare: simbolo, modalità, e se sta girando.
+
+    Con poche corsie si vedono tutte. Quando diventano tante (il tetto è TradingLanes.MaxCount) ne
+    resta visibile un numero fisso e le altre si aprono con "+N": ma la scelta di CHI resta visibile
+    non è l'ordine numerico, è l'utilità — prima le corsie che stanno operando, poi quelle
+    configurate, infine le vuote. Una corsia che sta muovendo denaro non deve finire nascosta
+    dietro un menu perché ha un id alto.
+*@
+<div class="lane-selector mb-3">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="text-muted small text-uppercase fw-semibold me-1">Corsie</span>
+
+        @foreach (var lane in Visible)
+        {
+            <button type="button"
+                    class="lane-chip @(lane.Id == Selected ? "active" : "") @(lane.IsRunning ? "running" : "")"
+                    title="@Tooltip(lane)"
+                    @onclick="() => SelectAsync(lane.Id)">
+                <span class="lane-chip-id">@lane.Id</span>
+                <span class="lane-chip-body">
+                    <span class="lane-chip-symbol">@(string.IsNullOrEmpty(lane.Symbol) ? "non configurata" : lane.Symbol)</span>
+                    <span class="lane-chip-meta">
+                        @if (lane.IsRunning)
+                        {
+                            <span class="lane-dot" aria-hidden="true"></span>
+                        }
+                        @lane.Mode
+                    </span>
+                </span>
+            </button>
+        }
+
+        @if (Hidden.Count > 0)
+        {
+            <div class="dropdown">
+                <button type="button" class="lane-chip lane-chip-more dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                    +@Hidden.Count
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end lane-dropdown">
+                    <li><h6 class="dropdown-header">Altre corsie</h6></li>
+                    @foreach (var lane in Hidden)
+                    {
+                        <li>
+                            <button type="button" class="dropdown-item d-flex justify-content-between align-items-center gap-3"
+                                    @onclick="() => SelectAsync(lane.Id)">
+                                <span>
+                                    <strong class="me-2">@lane.Id</strong>
+                                    @(string.IsNullOrEmpty(lane.Symbol) ? "non configurata" : lane.Symbol)
+                                </span>
+                                <span class="small text-muted">
+                                    @if (lane.IsRunning)
+                                    {
+                                        <span class="lane-dot" aria-hidden="true"></span>
+                                    }
+                                    @lane.Mode
+                                </span>
+                            </button>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Hint))
+    {
+        <div class="text-muted small mt-2">@Hint</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<LaneSummary> Lanes { get; set; } = [];
+
+    [Parameter, EditorRequired] public int Selected { get; set; }
+
+    [Parameter] public EventCallback<int> SelectedChanged { get; set; }
+
+    /// <summary>Nota esplicativa sotto le schede (ogni pagina ha la sua).</summary>
+    [Parameter] public string? Hint { get; set; }
+
+    /// <summary>
+    /// Quante schede restano visibili prima di collassare il resto sotto "+N". Sei sta comodo su un
+    /// portatile senza mandare a capo la riga; oltre, la fila di schede diventa essa stessa rumore.
+    /// </summary>
+    [Parameter] public int MaxVisible { get; set; } = 6;
+
+    /// <summary>
+    /// Ordine di priorità: prima chi opera, poi chi è configurato, poi il resto — e a parità, l'id.
+    /// La corsia SELEZIONATA è sempre visibile, altrimenti cliccare su una corsia dal menu la farebbe
+    /// sparire dentro il menu stesso.
+    /// </summary>
+    private List<LaneSummary> Ranked => [.. Lanes
+        .OrderByDescending(l => l.Id == Selected)
+        .ThenByDescending(l => l.IsRunning)
+        .ThenByDescending(l => l.IsConfigured)
+        .ThenBy(l => l.Id)];
+
+    /// <summary>Le schede mostrate, riportate in ordine di id: la priorità decide CHI, non DOVE.</summary>
+    private List<LaneSummary> Visible => [.. Ranked.Take(Math.Max(1, MaxVisible)).OrderBy(l => l.Id)];
+
+    private List<LaneSummary> Hidden => [.. Ranked.Skip(Math.Max(1, MaxVisible)).OrderBy(l => l.Id)];
+
+    private static string Tooltip(LaneSummary lane) =>
+        lane.IsConfigured
+            ? $"Corsia {lane.Id} — {lane.Symbol} {lane.Timeframe}, {lane.Mode}{(lane.IsRunning ? ", in esecuzione" : "")}"
+            : $"Corsia {lane.Id} — non ancora configurata";
+
+    private Task SelectAsync(int laneId) => laneId == Selected ? Task.CompletedTask : SelectedChanged.InvokeAsync(laneId);
+}

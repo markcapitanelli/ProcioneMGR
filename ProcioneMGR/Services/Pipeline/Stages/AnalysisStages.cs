@@ -1,4 +1,4 @@
-using ProcioneMGR.Services.Alpha;
+﻿using ProcioneMGR.Services.Alpha;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.PairsTrading;
 using ProcioneMGR.Services.Regime;
@@ -138,7 +138,11 @@ public sealed class RegimeAnalysisStage(
         var primary = ctx.PrimarySeries;
         var retrain = config.GetBool("retrain", false);
 
-        var model = await regimeDetector.LoadLatestModelAsync(ct);
+        // Il modello dev'essere quello DI QUESTA serie. Prima si prendeva il più recente fra tutti
+        // gli attivi e lo si usava comunque: con più coppie seguite insieme, una caccia su SOL 4h
+        // poteva etichettare le proprie candele coi centroidi di BTC 1h — un numero ben formato e
+        // privo di senso, che poi entrava nel contesto del run come se fosse una misura.
+        var model = await regimeDetector.LoadActiveModelAsync(primary.Symbol, primary.Timeframe, ct);
         var trainedNew = false;
         if (model is null || retrain)
         {
@@ -160,7 +164,7 @@ public sealed class RegimeAnalysisStage(
         var lookback = config.GetInt("labelLookbackDays", 30);
         var to = DateTime.UtcNow;
         var features = await featureExtractor.ExtractFeaturesAsync(ctx.ExchangeName, primary.Symbol, primary.Timeframe, to.AddDays(-lookback), to, ct);
-        var labeled = await regimeDetector.LabelFeaturesAsync(features, ct);
+        var labeled = await regimeDetector.LabelFeaturesAsync(features, primary.Symbol, primary.Timeframe, ct);
         var current = labeled.LastOrDefault(f => f.RegimeId is not null);
 
         var profiles = System.Text.Json.JsonSerializer.Deserialize<List<RegimeProfile>>(model.RegimeProfilesJson) ?? [];

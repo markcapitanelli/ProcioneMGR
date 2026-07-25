@@ -27,6 +27,17 @@
         "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ConnectionStrings__PostgresConnection='Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure'; $env:ASPNETCORE_URLS='http://localhost:5257'; $env:PROCIONE_MGR_MASTER_KEY='__CHANGE_ME_BASE64_32_BYTES__'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-build --no-launch-profile"
       ],
       "port": 5257
+    },
+    {
+      "_comment": "Profilo per la verifica CON LOGIN REALE del worktree. A differenza di procione-test NON sovrascrive PROCIONE_MGR_MASTER_KEY: la chiave viene da ProcioneMGR/appsettings.json (non tracciato), che e' l'unico modo perche' le credenziali gia' cifrate si decifrino e il login dell'utente funzioni. Stesso ambiente di scripts/run-postgres.ps1 (Production) ma su porta 5199 e con il codice DI QUESTO worktree. Prerequisito: copiare appsettings.json dal repo principale dentro il worktree.",
+      "name": "procione-reale",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:ASPNETCORE_ENVIRONMENT='Production'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-launch-profile -c Release"
+      ],
+      "port": 5199
     }
   ]
 }

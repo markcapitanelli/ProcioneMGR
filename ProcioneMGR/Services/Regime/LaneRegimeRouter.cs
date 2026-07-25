@@ -186,15 +186,14 @@ public sealed class LaneRegimeRouter(
             return cached.Refusal;
         }
 
-        var model = await regimeDetector.LoadLatestModelAsync(ct);
-        RegimeRoutingDecision? refusal =
-            model is null
-                ? RegimeRoutingDecision.Unknown("nessun modello di regime attivo")
-                : !string.Equals(model.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
-                  || !string.Equals(model.Timeframe, timeframe, StringComparison.OrdinalIgnoreCase)
-                    ? RegimeRoutingDecision.Unknown(
-                        $"il modello attivo è di {model.Symbol} {model.Timeframe}, non di {symbol} {timeframe}")
-                    : null;
+        // Modello DI QUESTA serie. Finché il detector sapeva restituire solo "il più recente fra
+        // tutti", il router poteva servire una corsia sola e addestrare un modello per un'altra
+        // coppia gliela toglieva; ora ogni corsia interroga la propria serie e le corsie non si
+        // rubano più il router a vicenda.
+        var model = await regimeDetector.LoadActiveModelAsync(symbol, timeframe, ct);
+        var refusal = model is null
+            ? RegimeRoutingDecision.Unknown($"nessun modello di regime attivo per {symbol} {timeframe}")
+            : null;
 
         _modelCheck[key] = (refusal, DateTime.UtcNow);
         return refusal;
@@ -231,8 +230,9 @@ public sealed class LaneRegimeRouter(
             var features = featureExtractor.ComputeFeatures(recentCandles, timeframe, ct);
             if (features.Count == 0) return RegimeRoutingDecision.Unknown("feature non calcolabili");
 
-            // Etichettatura con lo smoothing del detector: l'ultima candela è il regime corrente.
-            await regimeDetector.LabelFeaturesAsync(features, ct);
+            // Etichettatura col modello DI QUESTA serie e con lo smoothing del detector: l'ultima
+            // candela è il regime corrente.
+            await regimeDetector.LabelFeaturesAsync(features, symbol, timeframe, ct);
             var current = features.LastOrDefault(f => f.RegimeId is not null)?.RegimeId;
             if (current is not int regimeId) return RegimeRoutingDecision.Unknown("nessuna candela etichettata");
 

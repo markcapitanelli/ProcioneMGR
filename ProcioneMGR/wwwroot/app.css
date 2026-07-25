@@ -663,3 +663,95 @@ h1:focus {
     color: #8b949e;
     margin-top: 0.1rem;
 }
+
+/* ==========================================================================
+   Selettore di corsia (.lane-chip) — usato da <LaneSelector> in Trading ed
+   Ensemble. Prima era una <select>: la corsia corrente era un numero e per
+   sapere cosa ci girasse bisognava selezionarla e guardare. Ogni scheda porta
+   invece con sé simbolo, modalità e un puntino verde se la corsia sta operando.
+   Palette allineata a .stat-card, così le due famiglie di tessere convivono.
+   ========================================================================== */
+.lane-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 0.35rem 0.7rem;
+    color: #e6edf3;
+    text-align: left;
+    line-height: 1.15;
+    transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.lane-chip:hover {
+    border-color: #58a6ff;
+    background: #1c2430;
+}
+
+/* La corsia selezionata: bordo acceso e una barra a sinistra, così resta
+   riconoscibile anche a colpo d'occhio fra molte schede. */
+.lane-chip.active {
+    border-color: #58a6ff;
+    box-shadow: inset 3px 0 0 0 #58a6ff;
+    background: #1c2430;
+}
+
+.lane-chip-id {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #8b949e;
+    min-width: 1.1rem;
+    text-align: center;
+}
+
+.lane-chip.active .lane-chip-id { color: #58a6ff; }
+
+.lane-chip-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.lane-chip-symbol {
+    font-size: 0.82rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.lane-chip-meta {
+    font-size: 0.68rem;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+/* Puntino "sta operando". Volutamente SENZA animazione: su una pagina che si
+   auto-aggiorna ogni pochi secondi, un puntino che pulsa diventa un tic
+   nervoso nel campo visivo invece di un'informazione. */
+.lane-dot {
+    display: inline-block;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: #3fb950;
+    margin-right: 0.3rem;
+    vertical-align: baseline;
+}
+
+.lane-chip-more {
+    align-self: stretch;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #8b949e;
+}
+
+.lane-dropdown { max-height: 22rem; overflow-y: auto; }
+
+/* Su schermi stretti le schede si accorciano invece di mandare a capo la riga
+   una scheda per volta, che sprecherebbe tutta l'altezza sopra la pagina. */
+@media (max-width: 768px) {
+    .lane-chip-symbol { max-width: 6rem; overflow: hidden; text-overflow: ellipsis; }
+}

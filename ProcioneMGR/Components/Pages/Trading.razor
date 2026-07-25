@@ -1,4 +1,4 @@
-@page "/trading"
+﻿@page "/trading"
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Authorization
 @using ProcioneMGR.Services.Backtesting
@@ -11,6 +11,7 @@
 @inject ProcioneMGR.Services.Security.IMasterKeyProbe KeyProbe
 @inject AuthenticationStateProvider AuthProvider
 @inject ILogger<Trading> Logger
+@inject ILaneDirectory LaneDirectory
 
 <PageTitle>Trading</PageTitle>
 <h1>Trading
@@ -30,16 +31,8 @@
     }
 </h1>
 
-<div class="mb-3 d-flex align-items-center gap-2">
-    <label class="form-label mb-0">Corsia</label>
-    <select class="form-select form-select-sm" style="width: auto" value="@_laneId" @onchange="OnLaneChangedAsync">
-        @for (var i = 0; i < LaneCount; i++)
-        {
-            <option value="@i">Corsia @i@(i == 0 ? " (default)" : "")</option>
-        }
-    </select>
-    <span class="text-muted small">Motore di trading indipendente per corsia — stessa isolazione della configurazione in <a href="ensemble">Ensemble</a>.</span>
-</div>
+<LaneSelector Lanes="_lanes" Selected="_laneId" SelectedChanged="OnLaneSelectedAsync"
+              Hint="Motore di trading indipendente per corsia — stessa isolazione della configurazione in Ensemble." />
 
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -551,7 +544,7 @@
     private bool _running => Service.Status?.IsRunning == true;
 
     /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): fonte unica TradingLanes.Count.</summary>
-    private const int LaneCount = TradingLanes.Count;
+    private static int LaneCount => TradingLanes.Count;
     private int _laneId;
 
     protected override async Task OnInitializedAsync()
@@ -582,15 +575,20 @@
         StateHasChanged();
     }
 
-    private async Task OnLaneChangedAsync(ChangeEventArgs e)
+    private IReadOnlyList<LaneSummary> _lanes = [];
+
+    private async Task OnLaneSelectedAsync(int laneId)
     {
-        _laneId = int.Parse((string)e.Value!);
+        _laneId = laneId;
         await RefreshAsync();
     }
 
     private async Task RefreshAsync()
     {
         await Service.RefreshAsync(_laneId);
+        // L'elenco corsie segue lo stesso polling dello stato: i puntini "in esecuzione" devono
+        // dire come stanno le cose adesso, non com'erano al primo caricamento della pagina.
+        _lanes = await LaneDirectory.ListAsync();
         StateHasChanged();
     }
 
