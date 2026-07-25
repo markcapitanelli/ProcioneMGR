@@ -32,6 +32,33 @@ Più i grafici: trade per azione/lato, job per esito (con colori semantici), e l
 temporale dello **slippage** dei job completati (implementation shortfall in bps, con
 n/media/min/max nell'header).
 
+### [Fase 2026-07-25] Costo di esecuzione: assunto vs pagato
+
+Il pannello in evidenza in cima ai grafici confronta due numeri che prima non erano mai stati
+messi uno accanto all'altro:
+
+- **assunto in selezione** — `PipelineCosts.DefaultSlippagePercent` (0,05% per fill = 5 bps), cioè
+  il costo che la caccia alle strategie dà per scontato quando decide se una strategia è
+  profittevole;
+- **pagato davvero** — mediana, media e coda (P95/P99) dell'implementation shortfall misurato sugli
+  ordini di corsia reali (`procione.trading.slippage_bps`).
+
+Se il pagato supera stabilmente l'assunto, le strategie promosse sono state scelte con un vantaggio
+che non esiste: il verdetto colorato dice esattamente questo. È **asimmetrico di proposito** — un
+costo minore dell'assunto è una buona notizia (selezione prudente), solo il maggiore è un allarme.
+
+La misura esiste **solo su Testnet/Live**: in Paper il prezzo eseguito coincide per costruzione con
+quello di riferimento, quindi uno shortfall Paper sarebbe zero per definizione e diluirebbe le
+statistiche. Un pannello vuoto su una corsia Paper è il comportamento corretto, non un guasto.
+
+### [Fase 2026-07-25] Latenza degli ordini
+
+`procione.trading.order_latency_ms` a P50/P95/P99 più la serie temporale. Misura invio→risposta
+dell'exchange, **inclusa l'attesa del rate-limiter interno**: è il ritardo che la strategia subisce
+davvero, e una coda interna lo produce esattamente come lo produce la rete. Va letta ai percentili
+alti — è sulla coda che un ritardo costa un fill. I percentili sono calcolati sugli **ultimi
+campioni** della sessione (finestra scorrevole), non su tutta la sua storia.
+
 ## Come funziona (flusso del codice)
 
 ### Snapshot e polling (righe 115–127)

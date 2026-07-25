@@ -73,6 +73,12 @@ public static class TradingServiceCollectionExtensions
         services.TryAddSingleton<ILaneQuarantineStore, LaneQuarantineStore>();
         services.Configure<LaneInvariantOptions>(configuration.GetSection("Trading:LaneInvariants"));
 
+        // [Fase 2] Esposizione correlata FRA corsie: singolo servizio condiviso (il limite è
+        // trasversale per definizione, e la cache delle correlazioni va condivisa). Default SPENTO
+        // nelle sue opzioni: senza configurazione il comportamento è quello di prima.
+        services.Configure<Risk.CorrelatedExposureOptions>(configuration.GetSection("Trading:CorrelatedExposure"));
+        services.TryAddSingleton<Risk.ICorrelatedExposureGuard, Risk.CorrelatedExposureGuard>();
+
         var useRemote = !isTradingServiceHost && configuration.GetValue<bool>("Trading:UseRemoteTrading");
 
         if (useRemote)
@@ -169,7 +175,10 @@ public static class TradingServiceCollectionExtensions
                     // Lo STESSO oggetto passato come monitor delle soglie: il motore vi deposita il
                     // profilo letto dalla configurazione della corsia, e da lì in poi ogni lettura
                     // delle soglie — ovunque nella cascata — vede quelle effettive.
-                    sp.GetRequiredKeyedService<LaneSafetyMonitor>(laneId)));
+                    sp.GetRequiredKeyedService<LaneSafetyMonitor>(laneId),
+                    // [Fase 2] Singleton condiviso fra le corsie: il limite è per definizione
+                    // trasversale, e la cache delle correlazioni va condivisa, non replicata.
+                    sp.GetRequiredService<Risk.ICorrelatedExposureGuard>()));
 
                 services.AddSingleton<IHostedService>(sp => new TradingWorker(
                     sp.GetRequiredKeyedService<ITradingEngine>(laneId),

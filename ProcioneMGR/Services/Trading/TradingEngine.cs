@@ -56,7 +56,11 @@ public sealed class TradingEngine(
     // [R3] Destinatario del profilo di rischio della corsia (tipicamente lo STESSO oggetto passato
     // come `safety`, cioè un LaneSafetyMonitor). Opzionale: se assente, la corsia resta sulle
     // soglie globali — il comportamento di prima di R3.
-    ILaneRiskProfileSink? riskProfileSink = null) : ITradingEngine
+    ILaneRiskProfileSink? riskProfileSink = null,
+    // [Fase 2] Limite di esposizione su posizioni correlate FRA CORSIE. Opzionale come le altre
+    // dipendenze recenti: se assente (o disattivato nelle sue opzioni) il motore si comporta
+    // esattamente come prima.
+    ProcioneMGR.Services.Risk.ICorrelatedExposureGuard? correlatedExposure = null) : ITradingEngine
 {
     public int LaneId => laneId;
 
@@ -769,6 +773,39 @@ public sealed class TradingEngine(
             return false;
         }
 
+        // [Fase 2] Limite di esposizione CORRELATA, valutato dopo i limiti scalari perché richiede
+        // I/O (posizioni delle altre corsie + storico prezzi) e non ha senso pagarlo per un ordine
+        // già rifiutato. Le fette 2..K di un piano di esecuzione non ripassano di qui come nuova
+        // esposizione: il piano intero è già stato valutato alla prima fetta.
+        if (correlatedExposure is not null && mergeInto is null)
+        {
+            var exposure = await correlatedExposure.AssessAsync(
+                laneId, _state.Symbol, order.Side, order.Notional, _state.Mode, ct);
+
+            if (exposure.Exceeds)
+            {
+                var detail =
+                    $"Esposizione correlata {exposure.CorrelatedNotional:N2} oltre il limite {exposure.LimitNotional:N2} " +
+                    $"({string.Join(", ", exposure.Contributions.Select(c => $"corsia {c.LaneId} {c.Symbol} ρ={c.Correlation:F2}"))}).";
+
+                order.Status = OrderStatus.Rejected;
+                order.ErrorMessage = detail;
+                await SaveOrderAsync(order, isExisting, ct);
+                await AuditAsync("CorrelatedExposureRejected", new
+                {
+                    order.ClientOrderId,
+                    strategyName,
+                    correlatedNotional = exposure.CorrelatedNotional,
+                    limitNotional = exposure.LimitNotional,
+                    aggregateCapital = exposure.AggregateCapital,
+                    contributions = exposure.Contributions.Select(c => new { c.LaneId, c.Symbol, c.Correlation, c.SignedNotional }),
+                }, ts, ct);
+                logger.LogWarning(
+                    "Corsia {Lane}: apertura rifiutata per esposizione correlata. {Detail}", laneId, detail);
+                return false;
+            }
+        }
+
         return _state.MarketType == MarketType.Futures
             ? await ExecuteFuturesOpenAsync(order, strategyName, currentPrice, ts, ct, isExisting, mergeInto)
             : await ExecuteSpotOpenAsync(order, strategyName, currentPrice, ts, ct, isExisting, mergeInto);
@@ -1016,7 +1053,7 @@ public sealed class TradingEngine(
             metrics?.RecordTradeExecuted(_state.Mode.ToString(), pos.Side.ToString(), "Close");
     }
 
-    private PositionCloser PositionCloser => new(exchangeFactory, logger, Persistence, safety);
+    private PositionCloser PositionCloser => new(exchangeFactory, logger, Persistence, metrics, safety);
 
     /// <summary>Chiusura SPOT (comportamento INVARIATO rispetto a prima dell'introduzione dei Futures).</summary>
     private Task CloseSpotPositionAsync(OpenPosition pos, decimal exitPrice, string reason, DateTime ts, CancellationToken ct) =>

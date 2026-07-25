@@ -28,6 +28,15 @@
         <dd class="col-sm-9">Aperture e chiusure di posizione dal motore (per lato Buy/Sell e azione Open/Close).</dd>
         <dt class="col-sm-3">Job di esecuzione</dt>
         <dd class="col-sm-9">Piani di esecuzione a fette (TWAP/VWAP/Iceberg) per esito: avviati, completati, falliti, annullati.</dd>
+        <dt class="col-sm-3">Costo assunto vs pagato</dt>
+        <dd class="col-sm-9">
+            Il confronto fra lo slippage che la <em>selezione</em> assume e quello effettivamente
+            pagato sugli ordini di corsia (Testnet/Live). È la verifica del modello di costo: se il
+            pagato supera stabilmente l'assunto, le strategie promosse sono state scelte con un
+            vantaggio che non esiste.
+        </dd>
+        <dt class="col-sm-3">Latenza ordini</dt>
+        <dd class="col-sm-9">Millisecondi fra invio e risposta dell'exchange, ai percentili (P50/P95/P99).</dd>
         <dt class="col-sm-3">Slippage</dt>
         <dd class="col-sm-9">Implementation shortfall (bps) dei job completati: quanto il prezzo medio realizzato si è discostato dal prezzo di arrivo.</dd>
         <dt class="col-sm-3">Promozioni / Drift / Ritiri / Pipeline</dt>
@@ -82,6 +91,82 @@
     </div>
 </div>
 
+<div class="card mt-3 border-primary">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><strong>Costo di esecuzione: assunto vs pagato</strong></span>
+        <span class="small text-muted">ordini di corsia · @_shortfall.Count misurati</span>
+    </div>
+    <div class="card-body">
+        @if (_shortfall.Count == 0)
+        {
+            <div class="text-muted">
+                Nessun ordine misurabile in questa sessione. La misura esiste solo su
+                <strong>Testnet/Live</strong>: in Paper il prezzo eseguito coincide per costruzione con
+                quello di riferimento, quindi uno shortfall Paper sarebbe zero per definizione.
+            </div>
+        }
+        else
+        {
+            <div class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <div class="text-muted small">Assunto in selezione</div>
+                    <div class="h4 mb-0 font-monospace">@ModeledBps.ToString("F1") bps</div>
+                </div>
+                <div class="col-auto">
+                    <div class="text-muted small">Pagato (mediana)</div>
+                    <div class="h4 mb-0 font-monospace">@_shortfall.P50.ToString("F1") bps</div>
+                </div>
+                <div class="col-auto">
+                    <div class="text-muted small">Pagato (media)</div>
+                    <div class="h4 mb-0 font-monospace">@_shortfall.Mean.ToString("F1") bps</div>
+                </div>
+                <div class="col-auto">
+                    <div class="text-muted small">Coda (P95 / P99)</div>
+                    <div class="h4 mb-0 font-monospace">@_shortfall.P95.ToString("F1") / @_shortfall.P99.ToString("F1")</div>
+                </div>
+                <div class="col-auto">
+                    <span class="badge @CostVerdictClass">@CostVerdict</span>
+                </div>
+            </div>
+            <div class="small text-muted mt-2">
+                Positivo = costo. Il confronto è con
+                <code>PipelineCosts.DefaultSlippagePercent</code> (@ModeledBps.ToString("F1") bps per fill),
+                cioè il costo che la <em>selezione</em> assume quando decide se una strategia è
+                profittevole: se il pagato è sistematicamente maggiore, le strategie promosse sono
+                state scelte con un vantaggio che non esiste.
+            </div>
+        }
+    </div>
+</div>
+
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Latenza degli ordini (ms)</span>
+        @if (_latency.Count > 0)
+        {
+            <span class="small text-muted">
+                n=@_latency.Count · P50 @_latency.P50.ToString("F0") · P95 @_latency.P95.ToString("F0") · P99 @_latency.P99.ToString("F0") · max @_latency.Max.ToString("F0")
+            </span>
+        }
+    </div>
+    <div class="card-body">
+        @if (_latency.Count == 0)
+        {
+            <div class="text-muted">Nessun ordine inviato a un exchange in questa sessione.</div>
+        }
+        else
+        {
+            <div id="m_lat" style="width:100%;"></div>
+            <div class="small text-muted mt-2">
+                Misura invio→risposta, inclusa l'attesa del rate-limiter interno: è il ritardo che la
+                strategia subisce davvero. Va letta ai <strong>percentili alti</strong> — è sulla coda,
+                non sulla media, che un ritardo costa un fill. I percentili sono calcolati sugli ultimi
+                campioni della sessione, non su tutta la sua storia.
+            </div>
+        }
+    </div>
+</div>
+
 <div class="card mt-3">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Slippage dei job completati (bps)</span>
@@ -112,15 +197,36 @@
     private IJSObjectReference? _charts;
     private bool _renderPending;
 
+    private HistogramSummary _shortfall = HistogramSummary.Empty;
+    private HistogramSummary _latency = HistogramSummary.Empty;
+
+    /// <summary>Lo slippage che la selezione assume, in bps: 0,05% per fill ⇒ 5 bps.</summary>
+    private static double ModeledBps => (double)ProcioneMGR.Services.Pipeline.PipelineCosts.DefaultSlippagePercent * 100d;
+
+    /// <summary>
+    /// Verdetto sul modello di costo. La soglia non è simmetrica di proposito: un costo reale
+    /// MINORE dell'assunto è una buona notizia (la selezione è stata prudente), uno maggiore
+    /// invalida le decisioni prese — quindi solo il secondo caso merita un allarme.
+    /// </summary>
+    private string CostVerdict => _shortfall.P50 > ModeledBps * 1.5
+        ? "il modello sottostima il costo"
+        : _shortfall.P50 < ModeledBps * 0.5 ? "modello prudente" : "modello coerente";
+
+    private string CostVerdictClass => _shortfall.P50 > ModeledBps * 1.5
+        ? "bg-danger"
+        : _shortfall.P50 < ModeledBps * 0.5 ? "bg-info" : "bg-success";
+
     protected override void OnInitialized()
     {
-        _s = Collector.Snapshot();
+        Refresh();
         _timer = new PollingTimer(TimeSpan.FromSeconds(5), () => InvokeAsync(Refresh), Logger);
     }
 
     private void Refresh()
     {
         _s = Collector.Snapshot();
+        _shortfall = _s.Histogram(MetricsCollector.TradingSlippageInstrument);
+        _latency = _s.Histogram(MetricsCollector.OrderLatencyInstrument);
         _lastRefresh = DateTime.UtcNow;
         _renderPending = true;
         StateHasChanged();
@@ -169,6 +275,14 @@
             var trace = new { name = "Slippage bps", x = xs, y = ys, color = "#FB8C00" };
             await _charts.InvokeVoidAsync("timeseries", "m_slip", new[] { trace }, "bps");
         }
+
+        if (_latency.Count > 0)
+        {
+            var xs = _latency.Recent.Select(p => new DateTimeOffset(DateTime.SpecifyKind(p.T, DateTimeKind.Utc)).ToUnixTimeSeconds()).ToArray();
+            var ys = _latency.Recent.Select(p => p.V).ToArray();
+            var trace = new { name = "Latenza ms", x = xs, y = ys, color = "#2962FF" };
+            await _charts.InvokeVoidAsync("timeseries", "m_lat", new[] { trace }, "ms");
+        }
     }
 
     private static RenderFragment Tile(string label, string value, string icon) => builder =>
@@ -201,6 +315,7 @@
                 await _charts.InvokeVoidAsync("dispose", "m_trades");
                 await _charts.InvokeVoidAsync("dispose", "m_jobs");
                 await _charts.InvokeVoidAsync("dispose", "m_slip");
+                await _charts.InvokeVoidAsync("dispose", "m_lat");
                 await _charts.DisposeAsync();
             }
         }

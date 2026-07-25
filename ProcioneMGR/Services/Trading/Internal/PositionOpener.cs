@@ -28,6 +28,21 @@ internal sealed class PositionOpener(
         (action, details, ts, ct) => persistence.AuditAsync(action, details, mode, ts, ct),
         persistence.UpdatePositionRowAsync);
 
+    /// <summary>[Fase 1] Etichetta d'esito per la metrica di latenza: un ordine lento e RIFIUTATO
+    /// non dice la stessa cosa di uno lento e riempito, e mediarli insieme nasconderebbe entrambi.</summary>
+    private static string OrderOutcome(PlaceOrderResult res) =>
+        res.NetworkUncertain ? "network_uncertain" : res.Success ? "ok" : "rejected";
+
+    /// <summary>[Fase 1] Emette shortfall e latenza dell'ordine appena eseguito. In Paper
+    /// <c>ArrivalPrice</c> è null (il fill è il riferimento), quindi non si registra nulla.</summary>
+    private void RecordExecutionQuality(Order order, TradingMode mode)
+    {
+        if (order.ShortfallBps is decimal bps)
+        {
+            metrics?.RecordTradingSlippage((double)bps, mode.ToString(), "Open");
+        }
+    }
+
     /// <summary>Apertura SPOT. mergeInto=null crea una nuova posizione (INVARIATO); non-null fonde il fill via media ponderata.</summary>
     public async Task<bool> ExecuteSpotOpenAsync(
         TradingEngineState state, List<OpenPosition> positions, List<EnsembleStrategy> active, TradingCredentials? credsOrNull, decimal feeFrac,
@@ -42,8 +57,12 @@ internal sealed class PositionOpener(
 
         if (state.Mode != TradingMode.Paper && credsOrNull is TradingCredentials creds)
         {
+            // [Fase 1] Il riferimento della decisione va fissato PRIMA di toccare l'exchange: dopo
+            // il fill non è più ricostruibile, ed è proprio il termine di paragone dello shortfall.
+            order.ArrivalPrice = currentPrice;
+
             var client = exchangeFactory.Create(state.ExchangeName);
-            var res = await client.PlaceOrderAsync(new PlaceOrderRequest
+            var (res, latencyMs) = await ExecutionQuality.MeasureAsync(() => client.PlaceOrderAsync(new PlaceOrderRequest
             {
                 Symbol = state.Symbol,
                 Side = side == OrderSide.Buy ? "BUY" : "SELL",
@@ -51,7 +70,10 @@ internal sealed class PositionOpener(
                 Quantity = qty,
                 ClientOrderId = order.ClientOrderId,
                 Credentials = creds,
-            }, ct);
+            }, ct));
+
+            order.SubmitLatencyMs = latencyMs;
+            metrics?.RecordOrderLatency(latencyMs, state.ExchangeName.ToString(), "spot", OrderOutcome(res));
 
             if (res.NetworkUncertain)
             {
@@ -140,6 +162,7 @@ internal sealed class PositionOpener(
         order.FilledAtUtc = ts;
         order.ExchangeOrderId = exchangeOrderId;
         metrics?.RecordTradeExecuted(state.Mode.ToString(), side.ToString(), "Open");
+        RecordExecutionQuality(order, state.Mode);
 
         OpenPosition pos;
         if (mergeInto is null)
@@ -205,8 +228,11 @@ internal sealed class PositionOpener(
 
         if (state.Mode != TradingMode.Paper && credsOrNull is TradingCredentials creds)
         {
+            // [Fase 1] Vedi ExecuteSpotOpenAsync: il riferimento si fissa prima della chiamata.
+            order.ArrivalPrice = currentPrice;
+
             var futuresClient = exchangeFactory.CreateFutures(state.ExchangeName);
-            var res = await futuresClient.PlaceFuturesOrderAsync(new PlaceOrderRequest
+            var (res, latencyMs) = await ExecutionQuality.MeasureAsync(() => futuresClient.PlaceFuturesOrderAsync(new PlaceOrderRequest
             {
                 Symbol = state.Symbol,
                 Side = side == OrderSide.Buy ? "BUY" : "SELL",
@@ -214,7 +240,10 @@ internal sealed class PositionOpener(
                 Quantity = qty,
                 ClientOrderId = order.ClientOrderId,
                 Credentials = creds,
-            }, reduceOnly: false, ct);
+            }, reduceOnly: false, ct));
+
+            order.SubmitLatencyMs = latencyMs;
+            metrics?.RecordOrderLatency(latencyMs, state.ExchangeName.ToString(), "futures", OrderOutcome(res));
 
             if (res.NetworkUncertain)
             {
@@ -320,6 +349,7 @@ internal sealed class PositionOpener(
         order.FilledAtUtc = ts;
         order.ExchangeOrderId = exchangeOrderId;
         metrics?.RecordTradeExecuted(state.Mode.ToString(), side.ToString(), "Open");
+        RecordExecutionQuality(order, state.Mode);
 
         OpenPosition pos;
         if (mergeInto is null)

@@ -191,9 +191,36 @@ public class Order
     /// <summary>Conferma manuale dell'operatore (richiesta in Live se abilitata in SafetyConfiguration).</summary>
     public bool ManuallyConfirmed { get; set; }
 
+    /// <summary>
+    /// [Fase 1] Prezzo di riferimento fissato al momento della DECISIONE, prima di inviare l'ordine
+    /// all'exchange: il denominatore dell'implementation shortfall. Serve un campo suo perché
+    /// <see cref="Price"/> ha due significati (limite oppure riferimento) e in chiusura veniva
+    /// sovrascritto dal fill, cancellando proprio il termine di paragone.
+    ///
+    /// Valorizzato SOLO su Testnet/Live: in Paper il fill è per costruzione uguale al riferimento,
+    /// quindi uno shortfall Paper sarebbe zero per definizione e diluirebbe le statistiche. Null
+    /// significa dunque "esecuzione non misurabile" (Paper, o ordine anteriore a questa fase).
+    /// </summary>
+    public decimal? ArrivalPrice { get; set; }
+
+    /// <summary>
+    /// [Fase 1] Millisecondi fra l'invio della richiesta all'exchange e la sua risposta. Include
+    /// di proposito l'attesa del rate-limiter client-side: è il ritardo che la strategia subisce
+    /// davvero, non solo quello di rete.
+    /// </summary>
+    public int? SubmitLatencyMs { get; set; }
+
     /// <summary>Notional stimato dell'ordine (Quantity × Price).</summary>
     [NotMapped]
     public decimal Notional => Quantity * (Price ?? 0m);
+
+    /// <summary>
+    /// [Fase 1] Implementation shortfall in punti base, segnato come COSTO (positivo = eseguito
+    /// peggio del riferimento), stessa convenzione degli ExecutionJob e di ExecutionSimulator.
+    /// Null quando l'esecuzione non è misurabile.
+    /// </summary>
+    [NotMapped]
+    public decimal? ShortfallBps => Internal.ExecutionQuality.ShortfallBps(Side, ArrivalPrice, FilledPrice);
 }
 
 public class TradingPerformance
