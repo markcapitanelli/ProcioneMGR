@@ -170,6 +170,20 @@
       "LookbackBars": 720,
       "MinOverlappingBars": 100
     },
+    "RegimeRouting": {
+      "_comment": "[Fase 4] Router di regime: classifica il regime corrente col RegimeDetector K-means e lascia operare SOLO le strategie mappate a quel regime. E' un FILTRO sulle aperture, non una mutazione: non tocca EnsembleStrategy.IsActive e non chiude le posizioni gia' aperte quando il regime cambia (chiuderle d'imperio sarebbe una decisione di trading presa dal router). L'isteresi anti flip-flop e' quella del detector, non riscritta qui.",
+      "_comment_Enabled": "Default false: prima di dare a un K-means il potere di spegnere una strategia dal vivo, quel potere va guadagnato in validazione. Richiede anche un modello di regime ATTIVO per la stessa serie della corsia (stesso simbolo e timeframe), altrimenti il router si dichiara 'non so' e lascia passare tutto.",
+      "_comment_Rules": "Una regola per regime. Strategies vuoto = 'in questo regime la corsia sta ferma', che e' una decisione, non una configurazione mancante. Gli id dei regimi sono quelli mostrati in /regimes.",
+      "_comment_AllowUnmappedRegimes": "true (default): un regime senza regola lascia operare tutti. Serve perche' un modello riaddestrato puo' avere piu' cluster di quanti ne conosca questa configurazione, e non deve zittire la corsia di soppiatto.",
+      "Enabled": false,
+      "AllowUnmappedRegimes": true,
+      "MinCandles": 60,
+      "Rules": [
+        { "RegimeId": 0, "Strategies": [ "Supertrend", "DonchianBreakout" ] },
+        { "RegimeId": 1, "Strategies": [ "BollingerMeanReversion", "RsiOversold" ] },
+        { "RegimeId": 2, "Strategies": [] }
+      ]
+    },
     "LiveExecution": {
       "Enabled": false,
       "DefaultWindowMinutes": 5,

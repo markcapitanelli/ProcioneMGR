@@ -215,9 +215,9 @@ Le Fasi 1 e 2 sono il miglior rapporto valore/sforzo dell'intera roadmap: strume
 | 1 — TCA + latenza | ✅ **FATTA** 2026-07-25 — §8 |
 | 2 — Correlazione live | ✅ **FATTA** 2026-07-25, default-off da calibrare — §8 |
 | 3 — Microstruttura (D1/D2/D3) | 🔁 **RIVISTA** dopo la misura del costo (§9): come scritta era 124× lo storico esistente |
-| 4 — Regime router live | ⬜ aperta |
-| 5a — Chandelier ATR | ⬜ aperta, gated |
-| 5b — Grid nel catalogo | ⬜ aperta, gated |
+| 4 — Regime router live | ✅ **FATTO** 2026-07-25, default-off — §10 |
+| 5a — Chandelier ATR | ✅ **FATTO e MISURATO**: il gate dice **no** — §10.2 |
+| 5b — Grid nel catalogo | ✅ **FATTO**, con una correzione di sostanza — §10.3 |
 
 ### 7.1 Esito della riconciliazione dei branch
 
@@ -379,3 +379,99 @@ Sequenza aggiornata dopo la misura:
    sulla piattaforma e va decisa con il risultato di 3.3 in mano.
 
 
+
+
+---
+
+## 10. Seconda ondata eseguita (2026-07-25)
+
+### 10.1 Fase 4 — il router di regime, finalmente col K-means vero
+
+Il PDF mette al centro del suo framework ibrido una sequenza precisa: classifica il regime, poi
+attiva la strategia adatta a quel regime. In piattaforma esisteva solo a metà —
+`RegimeConditionalStrategy` è un router vero ma vive nel backtest e usa un surrogato (pendenza di
+una SMA con dead zone), mentre il motore live il regime non lo consultava affatto.
+
+Il commento in testa a quella strategia spiegava anche il perché: le strategie qui sono
+*dependency-free* per scelta (la factory è `new`-based), quindi una strategia legata al DB non
+potrebbe girare dentro gli sweep dell'ottimizzatore. Quel commento indicava che serviva "nuovo
+plumbing". `LaneRegimeRouter` è quel plumbing, costruito però **fuori** dalla strategia: al livello
+della corsia, dove il DB c'è già e dove la domanda "chi opera adesso" appartiene naturalmente.
+
+Tre scelte di progetto, tutte difese da test:
+
+1. **È un filtro, non una mutazione.** Non tocca `EnsembleStrategy.IsActive` né alcuno stato:
+   risponde a una domanda quando gliela si fa. Mutare la configurazione dell'ensemble avrebbe
+   significato litigare col ribilanciamento dell'`EnsembleManager` e lasciare la corsia in uno stato
+   che nessuno dei due possiede davvero.
+2. **Non tocca le posizioni aperte.** Il filtro agisce solo sulle *aperture*: una posizione già in
+   essere va alla sua uscita naturale anche se il regime le cambia sotto. Chiuderla d'imperio
+   sarebbe una decisione di trading presa dal router — un'altra cosa da quella che gli si chiede.
+3. **Fallisce verso il permesso.** Nessun modello attivo, modello di un'altra serie, candele
+   insufficienti, feature non calcolabili, guasto qualsiasi ⇒ regime "non noto" ⇒ tutte le strategie
+   operano. Un filtro che fallisse verso il blocco trasformerebbe un'assenza di informazione in una
+   decisione di trading, e fermerebbe l'intera corsia per un modello mancante.
+
+Distinzione che vale la pena avere esplicita: una regola con lista di strategie **vuota** significa
+"in questo regime la corsia sta ferma" — una decisione — ed è cosa diversa da un regime **senza
+regola**, che è un'assenza di configurazione e resta permissivo per default. Sono i due casi che un
+router mal disegnato confonde, e la confusione si paga in silenzio.
+
+L'isteresi anti flip-flop non è riscritta: arriva da `IRegimeDetector.LabelFeaturesAsync`, che
+applica già la conferma a più candele di `RegimeAssignment`. Un router che cambiasse idea a ogni
+barra di confine spegnerebbe e riaccenderebbe le strategie sul rumore.
+
+**Default OFF.** Prima di dare a un K-means il potere di spegnere una strategia dal vivo, quel
+potere va guadagnato in validazione — e la validazione richiede un modello di regime attivo sulla
+stessa serie della corsia, che oggi va addestrato da `/regimes`.
+
+### 10.2 Fase 5a — il gate ha detto no, ed è un risultato
+
+Il chandelier (trailing a k×ATR) è stato costruito **e misurato**, che era il punto: la roadmap lo
+ammetteva solo se avesse battuto l'esistente. Fase `trailcompare` in `tools/PlatformExpand`:
+6 simboli × 4 strategie su 4h, costi onesti, 6 varianti di trailing. Criterio dichiarato prima di
+guardare i numeri: **frequenza di vittoria fra le combinazioni**, non il caso migliore — a forza di
+provare, qualcosa vince sempre.
+
+| Variante | Vittorie su 24 | Rendimento medio | Drawdown medio |
+|---|---|---|---|
+| nessun trailing | **11** | −16,1% | 72,4% |
+| percentuale 3% | 5 | −51,2% | **62,4%** |
+| percentuale 5% | 5 | −43,0% | 64,2% |
+| chandelier 2×ATR | 1 | −55,2% | 68,2% |
+| chandelier 3×ATR | 2 | −49,5% | 70,1% |
+| chandelier 4×ATR | 0 | −38,3% | 71,4% |
+
+**Il "S-Tier" del PDF non regge su questi dati**: 3 vittorie su 24 contro le 10 del trailing
+percentuale. Il chandelier resta nel motore come opzione disponibile alla caccia — tenerlo non costa
+nulla e l'ottimizzatore può sempre sceglierlo — ma non c'è ragione di preferirlo per default.
+
+Il risultato secondario è più interessante del primo: **il trailing fa quello che promette** e lo
+paga. Riduce il drawdown medio (72% → 62%) a costo del rendimento. Non è "il trailing è inutile": è
+che sta tagliando anche i trade buoni. Con l'onestà d'obbligo: su un insieme di strategie che
+perdono tutte, questa graduatoria misura soprattutto *quale stop taglia meglio le perdite*, e andrà
+rifatta se e quando una strategia guadagnerà davvero.
+
+### 10.3 Fase 5b — e la correzione che il codice ha imposto
+
+Costruendo la strategia grid è emerso un vincolo che la roadmap non aveva visto: **il motore è a
+posizione singola** (`Portfolio` ha un solo stato flat/long/short), mentre un grid vero appoggia
+molti ordini limite simultanei e porta più posizioni insieme. Il grid multi-ordine **non è
+esprimibile** in questo motore.
+
+A quel punto c'erano due strade oneste: non farlo, oppure farlo e chiamarlo col suo nome. La seconda,
+purché il nome non menta — da cui `GridMeanReversion` e non "Grid". Cattura il ciclo finito e
+restartabile che è il cuore economico dell'idea (entra a N gradini dall'ancoraggio, raccoglie un
+gradino, ricomincia); non cattura la media dei prezzi su più gradini né l'inventario simultaneo, che
+sono poi proprio ciò che rende il grid pericoloso quando il laterale finisce. I numeri del PDF
+(8,39%, Sharpe 0,38) **non si trasferiscono** e non vanno attribuiti a questa strategia.
+
+Vale la pena averla accanto alla `BollingerMeanReversion` per una differenza deliberata: là la banda
+è *adattiva* alla volatilità, qui il gradino è *fisso*. Quale delle due funzioni meglio è una
+domanda empirica, ed è la caccia a doverla decidere.
+
+### 10.4 Stato dopo la seconda ondata
+
+Fatte: 0 (merge in master + migration applicate), 1, 2, 4, 5a (con verdetto negativo), 5b.
+Aperta: **3 rivista** (§9), che è ora l'unica fase rimasta e la sola che lasci un costo permanente
+sulla piattaforma.

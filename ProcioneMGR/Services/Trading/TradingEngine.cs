@@ -60,7 +60,10 @@ public sealed class TradingEngine(
     // [Fase 2] Limite di esposizione su posizioni correlate FRA CORSIE. Opzionale come le altre
     // dipendenze recenti: se assente (o disattivato nelle sue opzioni) il motore si comporta
     // esattamente come prima.
-    ProcioneMGR.Services.Risk.ICorrelatedExposureGuard? correlatedExposure = null) : ITradingEngine
+    ProcioneMGR.Services.Risk.ICorrelatedExposureGuard? correlatedExposure = null,
+    // [Fase 4] Router di regime: filtra QUALI strategie possono operare nel regime corrente.
+    // Opzionale e default-spento nelle sue opzioni: assente ⇒ comportamento identico a prima.
+    ProcioneMGR.Services.Regime.ILaneRegimeRouter? regimeRouter = null) : ITradingEngine
 {
     public int LaneId => laneId;
 
@@ -480,9 +483,34 @@ public sealed class TradingEngine(
             var closes = _buffer.Select(c => c.Close).ToList();
             if (closes.Count >= 5)
             {
+                // [Fase 4] Regime corrente della corsia, classificato UNA volta per candela e non
+                // per strategia: è una proprietà del mercato, non della strategia, e ricalcolarlo
+                // N volte darebbe lo stesso numero pagandolo N volte.
+                var routing = regimeRouter is not null
+                    ? await regimeRouter.DecideAsync(_state.Symbol, _state.Timeframe, _buffer, ct)
+                    : null;
+
                 foreach (var strat in _active)
                 {
                     if (_state.IsEmergencyStopped) break;
+
+                    // Il filtro agisce SOLO sulle aperture: una posizione già aperta va gestita fino
+                    // alla sua uscita naturale anche se il regime è cambiato sotto di lei. Chiuderla
+                    // d'imperio al cambio di regime sarebbe una decisione di trading presa dal
+                    // router, che è un'altra cosa da quella che gli si sta chiedendo di fare.
+                    if (routing is { IsKnown: true } && !routing.Allows(strat.StrategyName)
+                        && _positions.All(p => p.StrategyId != strat.StrategyId))
+                    {
+                        await AuditAsync("RegimeRouterSkipped", new
+                        {
+                            strategy = strat.StrategyName,
+                            regimeId = routing.RegimeId,
+                            routing.Reason,
+                            allowed = routing.AllowedStrategies,
+                        }, ts, ct);
+                        continue;
+                    }
+
                     var s = strat.StrategyName == ChampionStrategyName
                         ? await ResolveChampionStrategyAsync(ct)
                         : strategyFactory.Create(strat.StrategyName);

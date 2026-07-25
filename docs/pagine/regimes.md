@@ -79,10 +79,33 @@ dell'ensemble (symbol/timeframe devono combaciare col modello attivo).
 - [Ensemble](ensemble.md) — il consumatore del regime corrente (pesi regime-aware).
 - [Pipeline](pipeline.md) — lo stage di regime detection e il trigger "Event" al cambio regime.
 - [ML Lab](ml.md) — il regime one-hot come feature opzionale dei modelli.
+- [Trading](trading.md) — **[Fase 2026-07-25]** il *router di regime* delle corsie, che usa il
+  modello **attivato da questa pagina** per decidere quali strategie possono operare adesso.
+
+## Il modello attivato qui può ora filtrare il trading dal vivo
+
+Prima di questa fase i regimi agivano solo *indirettamente* sul live (feature ML opzionale,
+calibrazione degli stop, trigger di ri-caccia, contesto per il supervisore AI): il motore non li
+consultava mai per decidere. Con `LaneRegimeRouter` (`Trading:RegimeRouting`, **default off**) una
+corsia può lasciar operare solo le strategie mappate al regime corrente — la sequenza
+"classifica il regime → scegli la strategia" del report sulle architetture di trading.
+
+Due conseguenze pratiche per chi usa questa pagina:
+
+- **Attivare un modello diventa un atto operativo**, non più solo analitico, se il router è acceso:
+  il modello attivo è quello che il router consulta.
+- Il router pretende che il modello attivo sia **della stessa serie della corsia** (stesso simbolo e
+  timeframe). Se non lo è si dichiara "non so" e lascia operare tutte le strategie: etichettare
+  BTC 1h col modello di ETH 4h darebbe un numero ben formato e privo di senso, e il router preferisce
+  tacere piuttosto che produrlo.
+
+Una regola con lista di strategie **vuota** significa "in questo regime la corsia sta ferma", ed è
+una decisione; un regime **senza regola** è invece un'assenza di configurazione e resta permissivo.
 
 ## Note di design
 
 - Train ≠ Activate: si può esplorare K e periodi senza toccare l'operatività.
 - Il Silhouette a semaforo educa a non fidarsi di cluster mal separati.
-- La strategia `RegimeConditionalStrategy` del backtesting usa questi stessi regimi per le
-  meta-strategie condizionate.
+- La strategia `RegimeConditionalStrategy` del backtesting usa un **surrogato** di regime (pendenza
+  di una SMA), non questi cluster: le strategie sono dependency-free per scelta e non possono
+  leggere il DB. Il router di corsia è la via per cui il K-means *vero* arriva all'operatività.

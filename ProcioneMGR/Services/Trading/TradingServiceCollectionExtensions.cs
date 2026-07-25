@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
@@ -78,6 +78,12 @@ public static class TradingServiceCollectionExtensions
         // nelle sue opzioni: senza configurazione il comportamento è quello di prima.
         services.Configure<Risk.CorrelatedExposureOptions>(configuration.GetSection("Trading:CorrelatedExposure"));
         services.TryAddSingleton<Risk.ICorrelatedExposureGuard, Risk.CorrelatedExposureGuard>();
+
+        // [Fase 4] Router di regime: filtra quali strategie operano nel regime corrente. Default
+        // SPENTO nelle sue opzioni. Singleton condiviso: la classificazione dipende dalla serie,
+        // non dalla corsia.
+        services.Configure<Regime.RegimeRoutingOptions>(configuration.GetSection("Trading:RegimeRouting"));
+        services.TryAddSingleton<Regime.ILaneRegimeRouter, Regime.LaneRegimeRouter>();
 
         var useRemote = !isTradingServiceHost && configuration.GetValue<bool>("Trading:UseRemoteTrading");
 
@@ -178,7 +184,8 @@ public static class TradingServiceCollectionExtensions
                     sp.GetRequiredKeyedService<LaneSafetyMonitor>(laneId),
                     // [Fase 2] Singleton condiviso fra le corsie: il limite è per definizione
                     // trasversale, e la cache delle correlazioni va condivisa, non replicata.
-                    sp.GetRequiredService<Risk.ICorrelatedExposureGuard>()));
+                    sp.GetRequiredService<Risk.ICorrelatedExposureGuard>(),
+                    sp.GetRequiredService<Regime.ILaneRegimeRouter>()));
 
                 services.AddSingleton<IHostedService>(sp => new TradingWorker(
                     sp.GetRequiredKeyedService<ITradingEngine>(laneId),
