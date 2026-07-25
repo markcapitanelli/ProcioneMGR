@@ -479,7 +479,24 @@ Vale la pena averla accanto alla `BollingerMeanReversion` per una differenza del
 è *adattiva* alla volatilità, qui il gradino è *fisso*. Quale delle due funzioni meglio è una
 domanda empirica, ed è la caccia a doverla decidere.
 
-### 10.4 Stato dopo la seconda ondata
+### 10.4 Due difetti trovati dalla verifica, non dal caso
+
+Vale la pena registrarli perché dicono qualcosa sul metodo, non solo sul codice.
+
+**La suite conosceva un invariante che io non conoscevo.** Il primo giro completo ha bocciato
+`StrategyDiscoveryDefaultsTests`: ogni strategia registrata nella factory deve avere griglie di
+parametri di default in Discovery, altrimenti appare selezionabile nella UI ma lo sweep non produce
+nulla. Il commento di quel test dice che è un bug già capitato davvero, con `DonchianBreakout` e
+`PriceSmaCross`. La strategia nuova ne era scoperta, e nessuna revisione a occhio l'avrebbe notato:
+è esattamente il tipo di contratto che solo un test di integrazione può far rispettare.
+
+**Il router pagava una query per candela.** L'etichettatura vera ha già una cache in memoria dentro
+il detector, ma il controllo "esiste un modello attivo per questa serie" interrogava il database a
+ogni candela di ogni corsia solo per riscoprire che il modello era lo stesso di un minuto prima. Ora
+ha una cache a tempo, con il compromesso dichiarato in configurazione: attivare un modello nuovo da
+`/regimes` impiega fino a cinque minuti a farsi sentire sul router.
+
+### 10.5 Stato dopo la seconda ondata
 
 Fatte: 0 (merge in master + migration applicate), 1, 2, 4, 5a (con verdetto negativo), 5b.
 Aperta: **3 rivista** (§9), che è ora l'unica fase rimasta e la sola che lasci un costo permanente
