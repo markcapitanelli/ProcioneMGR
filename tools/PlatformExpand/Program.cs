@@ -78,6 +78,10 @@ services.AddSingleton<ICompositeSignalGenerator, CompositeSignalGenerator>();
 services.AddSingleton<IEventTriggerGenerator, EventTriggerGenerator>();
 services.AddSingleton<IRegimeMapGenerator, RegimeMapGenerator>();
 services.AddScoped<IStrategyComposer, StrategyComposer>();
+// [regimepersistence] Regime detection: stessa registrazione dell'app (detector + estrattore + breadth).
+services.AddSingleton<ProcioneMGR.Services.Regime.IMarketBreadthCalculator, ProcioneMGR.Services.Regime.MarketBreadthCalculator>();
+services.AddSingleton<ProcioneMGR.Services.Regime.IMarketFeatureExtractor, ProcioneMGR.Services.Regime.MarketFeatureExtractor>();
+services.AddSingleton<ProcioneMGR.Services.Regime.IRegimeDetector, ProcioneMGR.Services.Regime.RegimeDetector>();
 await using var provider = services.BuildServiceProvider();
 
 var dbFactory = provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
@@ -122,6 +126,7 @@ switch (phase)
     case "huntdense": await HuntDenseAsync(); break;
     case "verifysurvivor": await VerifySurvivorAsync(); break;
     case "pipeconfig": await PipeConfigAsync(); break;
+    case "regimepersistence": await RegimePersistenceAsync(); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1436,6 +1441,60 @@ async Task PipeConfigAsync()
 
     await db.SaveChangesAsync();
     Console.WriteLine($"\n{creati.Count} configurazioni create. Ognuna cambia UNA cosa identificabile rispetto alla base.");
+}
+
+/// <summary>
+/// [Revisione stato dell'arte 2026-07] Quanto durano DAVVERO i nostri regimi K-means.
+///
+/// La letteratura 2026 sul regime detection dice che i regimi K-means durano in media ~2 giorni
+/// (non operabili coi costi reali) mentre gli HMM durano 21-40 giorni, e che l'ibrido
+/// K-means→HMM batte entrambi. Prima di decidere se ci serve un HMM, la domanda giusta è: i
+/// NOSTRI regimi — che non sono K-means nudo, hanno smoothing a maggioranza mobile più conferma
+/// a 3 candele — quanto durano sui nostri dati? Un numero, non una citazione.
+/// </summary>
+async Task RegimePersistenceAsync()
+{
+    using var scope = provider.CreateScope();
+    var detector = scope.ServiceProvider.GetRequiredService<ProcioneMGR.Services.Regime.IRegimeDetector>();
+    var extractor = scope.ServiceProvider.GetRequiredService<ProcioneMGR.Services.Regime.IMarketFeatureExtractor>();
+
+    var model = await detector.LoadActiveModelAsync("BTC/USDT", "1h");
+    if (model is null) { Console.WriteLine("Nessun modello attivo per BTC/USDT 1h."); return; }
+
+    var to = DateTime.UtcNow;
+    var from = to.AddDays(-365);
+    var feats = await extractor.ExtractFeaturesAsync("Binance", "BTC/USDT", "1h", from, to, CancellationToken.None);
+    await detector.LabelFeaturesAsync(feats, "BTC/USDT", "1h", CancellationToken.None);
+
+    var labels = feats.Where(f => f.RegimeId is not null).Select(f => f.RegimeId!.Value).ToArray();
+    if (labels.Length < 100) { Console.WriteLine($"Etichette insufficienti ({labels.Length})."); return; }
+
+    // Durate dei tratti consecutivi nello stesso regime.
+    var durate = new List<int>();
+    var run = 1;
+    for (var i = 1; i < labels.Length; i++)
+    {
+        if (labels[i] == labels[i - 1]) { run++; continue; }
+        durate.Add(run);
+        run = 1;
+    }
+    durate.Add(run);
+    durate.Sort();
+
+    var transizioni = durate.Count - 1;
+    var mediaBarre = durate.Average();
+    var medianaBarre = durate[durate.Count / 2];
+
+    Console.WriteLine($"=== PERSISTENZA DEI REGIMI K-MEANS (BTC/USDT 1h, ultimi 365 giorni, {labels.Length} barre etichettate) ===");
+    Console.WriteLine($"  transizioni: {transizioni}   (~{transizioni / 12.0:F1} al mese)");
+    Console.WriteLine($"  durata di un regime: media {mediaBarre:F0} barre = {mediaBarre / 24:F1} giorni · mediana {medianaBarre} barre = {medianaBarre / 24.0:F1} giorni");
+    Console.WriteLine($"  tratti più corti di 1 giorno: {durate.Count(d => d < 24)}/{durate.Count}");
+    Console.WriteLine($"  tratti più lunghi di 7 giorni: {durate.Count(d => d >= 168)}/{durate.Count}");
+    Console.WriteLine();
+    Console.WriteLine("  Riferimenti dalla letteratura 2026: K-means nudo ~2 giorni (non operabile),");
+    Console.WriteLine("  HMM 21-40 giorni, ibrido K-means→HMM il migliore. Se la nostra mediana è");
+    Console.WriteLine("  dell'ordine dei giorni, lo smoothing sta già facendo il lavoro dell'HMM;");
+    Console.WriteLine("  se è dell'ordine delle ore, il router sta guardando rumore etichettato.");
 }
 
 // Riassunto leggibile di una spec Composite dai suoi parametri decimali.
