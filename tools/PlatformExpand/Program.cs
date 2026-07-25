@@ -78,6 +78,10 @@ services.AddSingleton<ICompositeSignalGenerator, CompositeSignalGenerator>();
 services.AddSingleton<IEventTriggerGenerator, EventTriggerGenerator>();
 services.AddSingleton<IRegimeMapGenerator, RegimeMapGenerator>();
 services.AddScoped<IStrategyComposer, StrategyComposer>();
+// [regimepersistence] Regime detection: stessa registrazione dell'app (detector + estrattore + breadth).
+services.AddSingleton<ProcioneMGR.Services.Regime.IMarketBreadthCalculator, ProcioneMGR.Services.Regime.MarketBreadthCalculator>();
+services.AddSingleton<ProcioneMGR.Services.Regime.IMarketFeatureExtractor, ProcioneMGR.Services.Regime.MarketFeatureExtractor>();
+services.AddSingleton<ProcioneMGR.Services.Regime.IRegimeDetector, ProcioneMGR.Services.Regime.RegimeDetector>();
 await using var provider = services.BuildServiceProvider();
 
 var dbFactory = provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
@@ -121,6 +125,8 @@ switch (phase)
     case "gridtest": await GridTestAsync(); break;
     case "huntdense": await HuntDenseAsync(); break;
     case "verifysurvivor": await VerifySurvivorAsync(); break;
+    case "pipeconfig": await PipeConfigAsync(); break;
+    case "regimepersistence": await RegimePersistenceAsync(); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1314,6 +1320,181 @@ async Task VerifySurvivorAsync()
         ? "Il reale sta oltre il 99° percentile del nullo: regge anche a una soglia severa."
         : $"Il reale sta al {percentile:F0}° percentile del nullo. Con ~15.000 combinazioni provate, un singolo\n"
           + "sopravvissuto al 95% è la resa ATTESA del caso: serviva il 99,99° percentile per dire qualcosa.");
+}
+
+/// <summary>
+/// Crea configurazioni di pipeline che coprono ciò che quelle esistenti NON provano.
+///
+/// Il punto di partenza è una diagnosi, non un'idea: le due configurazioni presenti sono la stessa
+/// ricerca (direzionale-tecnica su OHLCV di maggiori) a timeframe diversi, e l'ultimo run ha valutato
+/// <b>28 candidati</b>. Il collo di bottiglia non sono gli stage — sono tutti e sedici accesi — ma
+/// tre parametri e l'ampiezza dell'universo:
+///
+/// <list type="bullet">
+/// <item><c>timeLimitMinutes=10</c> sulla scoperta creativa: il run è durato 8:05, quindi la
+/// generazione si fermava per tempo scaduto, non per esaurimento delle idee;</item>
+/// <item><c>confirmTopN=3</c>: solo tre spec per serie arrivano alla conferma walk-forward;</item>
+/// <item><c>minHoldoutTrades=10</c>: dieci operazioni non bastano a distinguere un edge dal rumore —
+/// misurato oggi, dove candidati con 5-7 trade venivano battuti dai mercati sintetici.</item>
+/// </list>
+///
+/// Ogni configurazione nuova cambia UNA cosa identificabile rispetto alla base. Moltiplicare i
+/// tentativi senza moltiplicare l'informazione è il modo di fabbricare falsi positivi, ed è
+/// esattamente ciò che il DSR della pipeline poi punisce.
+/// </summary>
+async Task PipeConfigAsync()
+{
+    await using var db = await dbFactory.CreateDbContextAsync();
+    var basi = await db.PipelineConfigurations.OrderBy(c => c.Id).ToListAsync();
+    if (basi.Count == 0) { Console.WriteLine("Nessuna configurazione da cui partire."); return; }
+
+    var baseCfg = basi.First(c => c.Name.Contains("1h", StringComparison.OrdinalIgnoreCase));
+    Console.WriteLine($"Base: {baseCfg.Name}");
+
+    var universoBase = JsonSerializer.Deserialize<List<SeriesSpec>>(baseCfg.UniverseJson) ?? [];
+    Console.WriteLine($"  universo attuale: {universoBase.Count} serie");
+
+    var stagesBase = JsonSerializer.Deserialize<List<StageConfig>>(baseCfg.StagesJson) ?? [];
+    Console.WriteLine($"  stage: {stagesBase.Count}");
+
+    // Universo ALLARGATO: gli stessi timeframe, ma su tutti i simboli disponibili invece dei soli
+    // maggiori. Più simboli è il modo giusto di comprare densità statistica — il 15m ha dimostrato
+    // oggi che comprarla con la frequenza costa più di quanto renda.
+    string[] simboliLarghi =
+    [
+        "BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","DOGE/USDT","ADA/USDT","LINK/USDT",
+        "AVAX/USDT","LTC/USDT","DOT/USDT","UNI/USDT","ATOM/USDT","NEAR/USDT","APT/USDT","SUI/USDT",
+        "INJ/USDT","TIA/USDT","SEI/USDT","AAVE/USDT","ARB/USDT","OP/USDT",
+    ];
+    var universoLargo = simboliLarghi.Select(s => new SeriesSpec { Symbol = s, Timeframe = "1h" }).ToList();
+
+    StageConfig Patch(StageConfig s, params (string Key, string Value)[] set)
+    {
+        var p = new Dictionary<string, string>(s.Parameters);
+        foreach (var (k, v) in set) p[k] = v;
+        return new StageConfig { Type = s.Type, Enabled = s.Enabled, Order = s.Order, Parameters = p };
+    }
+
+    List<StageConfig> ConStage(List<StageConfig> src, string nome, params (string, string)[] set) =>
+        [.. src.Select(s => s.Type == nome ? Patch(s, set) : s)];
+
+    var creati = new List<string>();
+
+    async Task CreaAsync(string nome, string descrizione, List<SeriesSpec> universo, List<StageConfig> stages)
+    {
+        if (await db.PipelineConfigurations.AnyAsync(c => c.Name == nome))
+        {
+            Console.WriteLine($"  (già presente) {nome}");
+            return;
+        }
+        db.PipelineConfigurations.Add(new PipelineConfiguration
+        {
+            Name = nome,
+            Description = descrizione,
+            CreatedBy = baseCfg.CreatedBy,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            ExchangeName = baseCfg.ExchangeName,
+            UniverseJson = JsonSerializer.Serialize(universo),
+            DateRangesJson = baseCfg.DateRangesJson,
+            StagesJson = JsonSerializer.Serialize(stages),
+            InitialCapital = baseCfg.InitialCapital,
+            Seed = baseCfg.Seed,
+            ExecutionMode = "Paper",
+        });
+        creati.Add(nome);
+        Console.WriteLine($"  + {nome}");
+    }
+
+    // A) Generazione senza il tetto di tempo: la stessa ricerca, ma lasciata finire.
+    var stagesA = ConStage(stagesBase, "CreativeDiscovery",
+        ("timeLimitMinutes", "45"), ("maxCandidates", "400"), ("confirmTopN", "6"));
+    stagesA = ConStage(stagesA, "HoldoutValidation", ("minHoldoutTrades", "25"));
+    await CreaAsync(
+        "A · stessa caccia ma lasciata finire (no time-box, 25 trade min)",
+        "Cambia SOLO i limiti che troncavano la generazione: timeLimit 10->45 min, maxCandidates 200->400, "
+        + "confirmTopN 3->6, e minHoldoutTrades 10->25 perche' dieci operazioni non distinguono un edge dal rumore. "
+        + "Serve a rispondere a una domanda sola: il 0/28 era assenza di edge o generazione troncata?",
+        universoBase, stagesA);
+
+    // B) Universo largo: 22 simboli su 1h invece di 10 maggiori.
+    var stagesB = ConStage(stagesBase, "CreativeDiscovery",
+        ("timeLimitMinutes", "45"), ("maxCandidates", "300"), ("confirmTopN", "4"));
+    stagesB = ConStage(stagesB, "HoldoutValidation", ("minHoldoutTrades", "25"));
+    await CreaAsync(
+        "B · universo largo 22 simboli 1h",
+        "Stessi gate di A ma su 22 simboli invece di 10: la densita' statistica si compra con l'AMPIEZZA, "
+        + "non con la frequenza — il 15m ha dato zero sopravvissuti pagando piu' costi.",
+        universoLargo, stagesB);
+
+    // C) Solo composite, niente event-trigger: la famiglia che produce i falsi positivi migliori.
+    var stagesC = ConStage(stagesBase, "CreativeDiscovery",
+        ("timeLimitMinutes", "45"), ("maxCandidates", "400"), ("confirmTopN", "6"),
+        ("enableEvent", "false"), ("enableRegime", "false"));
+    stagesC = ConStage(stagesC, "HoldoutValidation", ("minHoldoutTrades", "25"));
+    await CreaAsync(
+        "C · solo composite (event-trigger escluso)",
+        "Nel torchio di oggi quasi tutti i candidati arrivati in fondo erano EventTrigger, con la soglia "
+        + "completamente inerte e lo Sharpe che cambia segno muovendo la tenuta: sospetto che quella famiglia "
+        + "generi rumore per costruzione. Escluderla dice se il resto del catalogo regge da solo.",
+        universoBase, stagesC);
+
+    await db.SaveChangesAsync();
+    Console.WriteLine($"\n{creati.Count} configurazioni create. Ognuna cambia UNA cosa identificabile rispetto alla base.");
+}
+
+/// <summary>
+/// [Revisione stato dell'arte 2026-07] Quanto durano DAVVERO i nostri regimi K-means.
+///
+/// La letteratura 2026 sul regime detection dice che i regimi K-means durano in media ~2 giorni
+/// (non operabili coi costi reali) mentre gli HMM durano 21-40 giorni, e che l'ibrido
+/// K-means→HMM batte entrambi. Prima di decidere se ci serve un HMM, la domanda giusta è: i
+/// NOSTRI regimi — che non sono K-means nudo, hanno smoothing a maggioranza mobile più conferma
+/// a 3 candele — quanto durano sui nostri dati? Un numero, non una citazione.
+/// </summary>
+async Task RegimePersistenceAsync()
+{
+    using var scope = provider.CreateScope();
+    var detector = scope.ServiceProvider.GetRequiredService<ProcioneMGR.Services.Regime.IRegimeDetector>();
+    var extractor = scope.ServiceProvider.GetRequiredService<ProcioneMGR.Services.Regime.IMarketFeatureExtractor>();
+
+    var model = await detector.LoadActiveModelAsync("BTC/USDT", "1h");
+    if (model is null) { Console.WriteLine("Nessun modello attivo per BTC/USDT 1h."); return; }
+
+    var to = DateTime.UtcNow;
+    var from = to.AddDays(-365);
+    var feats = await extractor.ExtractFeaturesAsync("Binance", "BTC/USDT", "1h", from, to, CancellationToken.None);
+    await detector.LabelFeaturesAsync(feats, "BTC/USDT", "1h", CancellationToken.None);
+
+    var labels = feats.Where(f => f.RegimeId is not null).Select(f => f.RegimeId!.Value).ToArray();
+    if (labels.Length < 100) { Console.WriteLine($"Etichette insufficienti ({labels.Length})."); return; }
+
+    // Durate dei tratti consecutivi nello stesso regime.
+    var durate = new List<int>();
+    var run = 1;
+    for (var i = 1; i < labels.Length; i++)
+    {
+        if (labels[i] == labels[i - 1]) { run++; continue; }
+        durate.Add(run);
+        run = 1;
+    }
+    durate.Add(run);
+    durate.Sort();
+
+    var transizioni = durate.Count - 1;
+    var mediaBarre = durate.Average();
+    var medianaBarre = durate[durate.Count / 2];
+
+    Console.WriteLine($"=== PERSISTENZA DEI REGIMI K-MEANS (BTC/USDT 1h, ultimi 365 giorni, {labels.Length} barre etichettate) ===");
+    Console.WriteLine($"  transizioni: {transizioni}   (~{transizioni / 12.0:F1} al mese)");
+    Console.WriteLine($"  durata di un regime: media {mediaBarre:F0} barre = {mediaBarre / 24:F1} giorni · mediana {medianaBarre} barre = {medianaBarre / 24.0:F1} giorni");
+    Console.WriteLine($"  tratti più corti di 1 giorno: {durate.Count(d => d < 24)}/{durate.Count}");
+    Console.WriteLine($"  tratti più lunghi di 7 giorni: {durate.Count(d => d >= 168)}/{durate.Count}");
+    Console.WriteLine();
+    Console.WriteLine("  Riferimenti dalla letteratura 2026: K-means nudo ~2 giorni (non operabile),");
+    Console.WriteLine("  HMM 21-40 giorni, ibrido K-means→HMM il migliore. Se la nostra mediana è");
+    Console.WriteLine("  dell'ordine dei giorni, lo smoothing sta già facendo il lavoro dell'HMM;");
+    Console.WriteLine("  se è dell'ordine delle ore, il router sta guardando rumore etichettato.");
 }
 
 // Riassunto leggibile di una spec Composite dai suoi parametri decimali.
