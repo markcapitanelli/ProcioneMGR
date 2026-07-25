@@ -213,9 +213,9 @@ Le Fasi 1 e 2 sono il miglior rapporto valore/sforzo dell'intera roadmap: strume
 |---|---|
 | 0 — Consolidamento base | 🟡 **PR #46 aperta** (fast-forward, 64 commit); riconciliazione `faa381` CHIUSA (§7.1); restano migration al DB reale e verifica dal vivo del feed R1 |
 | 1 — TCA + latenza | ✅ **FATTA** 2026-07-25 — §8 |
-| 2 — Correlazione live | ✅ **FATTA** 2026-07-25, default-off da calibrare — §8 |
+| 2 — Correlazione live | ✅ **FATTA e TARATA** 2026-07-25: **accesa** a soglia 30% — §8, §11.2 |
 | 3 — Microstruttura (D1/D2/D3) | 🔁 **RIVISTA** dopo la misura del costo (§9): come scritta era 124× lo storico esistente |
-| 4 — Regime router live | ✅ **FATTO** 2026-07-25, default-off — §10 |
+| 4 — Regime router live | ✅ **FATTO e TARATO** 2026-07-25: **acceso in OSSERVAZIONE** (le regole non sono ancora scrivibili) — §10, §11.3 |
 | 5a — Chandelier ATR | ✅ **FATTO e MISURATO**: il gate dice **no** — §10.2 |
 | 5b — Grid nel catalogo | ✅ **FATTO**, con una correzione di sostanza — §10.3 |
 
@@ -501,3 +501,93 @@ ha una cache a tempo, con il compromesso dichiarato in configurazione: attivare 
 Fatte: 0 (merge in master + migration applicate), 1, 2, 4, 5a (con verdetto negativo), 5b.
 Aperta: **3 rivista** (§9), che è ora l'unica fase rimasta e la sola che lasci un costo permanente
 sulla piattaforma.
+
+---
+
+## 11. Taratura delle due manopole (2026-07-25)
+
+Le Fasi 2 e 4 erano nate default-off con una consegna esplicita: *calibrare prima di accendere*.
+La taratura è stata fatta con una nuova fase `calibrate` di `tools/PlatformExpand`, sulle corsie e
+sui prezzi **reali**. Entrambe le manopole si comportano diversamente da come la roadmap le aveva
+previste, e in un caso il numero ribalta l'aspettativa.
+
+### 11.1 Il setup reale, che non era quello che ricordavo
+
+| Corsia | Serie | Modalità | Capitale | Mercato | Strategia attiva |
+|---|---|---|---|---|---|
+| 0 | BTC/USDT 1h | Paper | 10.000 | spot | Composite |
+| 1 | DOGE/USDT 1h | Paper | 10.000 | spot | Composite |
+| 2 | ETH/USDT 1h | **Testnet** | 10.000 | spot | Composite |
+
+Due fatti che contano più di quanto sembri: le corsie stanno in **modalità diverse**, e il guard di
+correlazione isola per modalità — quindi la corsia Testnet è **sola** e non ha nulla con cui
+correlarsi. E tutte e tre girano la **stessa** strategia.
+
+### 11.2 Manopola A — inerte per costruzione, non per taratura
+
+La correlazione fra le due serie Paper è alta e vera: **ρ(BTC, DOGE) = 0,841** su 719 barre 1h. Il
+rischio che la Fase 2 voleva intercettare esiste. Ma nello scenario peggiore — entrambe long,
+correlazione piena, taglia dell'8% del capitale di ciascuna — l'esposizione correlata vale **1.600 su
+20.000, cioè l'8,0% del capitale aggregato**, contro una soglia di default del 50%. Non scatta.
+
+E non è un problema di soglia scelta male. Con corsie di pari capitale e una posizione ciascuna,
+**numeratore e denominatore crescono insieme**: N corsie che rischiano l'8% del proprio capitale
+producono sempre l'8% del capitale aggregato, qualunque sia N. Il rapporto è invariante al numero di
+corsie, quindi *nessuna* soglia sopra l'8% potrà mai distinguere una corsia da tre.
+
+Il limite diventa vivo con la **leva**, dove il nozionale è margine × L e il rapporto diventa 8%×L:
+
+| Leva | Esposizione correlata (3 corsie) | Soglia 30% |
+|---|---|---|
+| 1x (oggi, spot) | 8% | non scatta |
+| 3x | 24% | non scatta |
+| 5x (massimo consentito) | **40%** | **scatta** |
+
+**Scelta fatta: acceso a 30%.** Oggi è inerte per costruzione — non blocca nulla in spot — ma è già
+in posizione il giorno in cui una corsia passa ai futures. A 5x ferma la terza corsia correlata e
+lascia passare la seconda. Il difetto onesto di questa scelta: una soglia che non scatta mai non
+viene mai collaudata dal vivo, quindi il primo collaudo vero arriverà proprio quando servirà.
+
+### 11.3 Manopola B — il dato per scrivere le regole non c'è
+
+Esiste un modello attivo per la serie della corsia 0 (**BTC/USDT 1h, K=4, silhouette 0,402**, appena
+sopra la soglia di 0,4 che la UI colora di verde). Ma due cose lo rendono meno pronto di quanto la
+roadmap assumesse.
+
+**Primo: il router può servire una corsia sola.** `IRegimeDetector.LoadLatestModelAsync` non filtra
+per serie — restituisce il modello attivo più *recente* fra tutti (oggi ce ne sono tre: BTC 1h,
+ATOM 4h, NEAR 4h). Addestrare un modello per DOGE o ETH **toglierebbe il router alla corsia BTC**,
+in silenzio. Il router ora lo dice con un warning una volta sola per motivo, invece di spegnersi
+senza far rumore.
+
+**Secondo, e più serio: le regole non sono scrivibili.** Il modello profila la resa di ogni strategia
+in ogni regime, ed è da lì che le regole dovrebbero nascere. Per `Composite`, la strategia
+effettivamente in uso:
+
+| Regime | Barre | Composite: Sharpe | Trade |
+|---|---|---|---|
+| 0 Trend Up High-Vol | 1.725 | fuori dai primi quattro | — |
+| 1 Choppy/Volatile | 1.490 | +1,51 | **5** |
+| 2 Sideways | 6.837 | −0,92 | 16 |
+| 3 Trend Up Low-Vol | 7.418 | −0,26 | 37 |
+
+Il regime che sembra migliore poggia su **cinque trade**. Costruirci sopra una regola sarebbe
+esattamente il curve-fitting che il resto della piattaforma passa il tempo a rifiutare — e sarebbe
+peggio del solito, perché una regola di routing non è una scommessa fra tante: spegne una strategia.
+
+**Scelta fatta: acceso in osservazione.** È stato aggiunto `DriveDecisions` (default false), sullo
+stesso schema che il feed real-time usa già con `DriveProtectiveExits`: il router classifica il
+regime a ogni candela e **registra i cambi nei log**, senza impedire nulla. Così accumula il dato che
+oggi manca, a rischio zero. Le regole si accenderanno quando i trade per regime saranno abbastanza da
+significare qualcosa — e se non lo diventeranno mai, la risposta onesta sarà lasciare il router in
+osservazione per sempre.
+
+### 11.4 Cosa guardare, e quando
+
+- **Fra qualche settimana**: i log `Regime BTC/USDT 1h: X → Y` dicono quanto spesso il regime cambia
+  davvero. Se cambia ogni poche candele, il problema non sono le regole ma l'isteresi; se cambia
+  raramente, ogni regime accumulerà trade lentamente e la pazienza è la strada.
+- **Prima di passare ai futures**: rileggere §11.2. È lì che la manopola A si accende davvero, ed è
+  l'unico momento in cui la sua soglia va rimessa in discussione.
+- **Se si vuole il router su più corsie**: serve prima il caricamento del modello *per serie* nel
+  detector, altrimenti addestrare un secondo modello disattiva il primo.

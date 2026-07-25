@@ -1533,6 +1533,43 @@ async Task CalibrateAsync()
         Console.WriteLine($"  corsia {l.Lane} ({l.Symbol} {l.Timeframe}): router {(usable ? "UTILIZZABILE" : "INERTE — nessun modello attivo per questa serie")}");
     }
 
+    // Profili del modello attivo + strategie realmente in uso: senza questi, scrivere regole di
+    // routing significherebbe indovinare, e una regola che non nomina la strategia in uso ferma
+    // la corsia invece di indirizzarla.
+    if (active is not null)
+    {
+        var full = await db.RegimeModels.AsNoTracking().FirstAsync(m => m.Id == active.Id);
+        var profiles = JsonSerializer.Deserialize<List<ProcioneMGR.Services.Regime.RegimeProfile>>(full.RegimeProfilesJson) ?? [];
+        Console.WriteLine($"\n  Profili del modello attivo ({full.Symbol} {full.Timeframe}):");
+        foreach (var p in profiles.OrderBy(p => p.RegimeId))
+        {
+            Console.WriteLine($"    regime {p.RegimeId}: {p.SuggestedLabel,-22} n={p.SampleCount,6:N0}  "
+                + $"vol={p.MeanVolatility,7:F4} trendDir={p.MeanTrendDirection,7:F4} trendStr={p.MeanTrendStrength,7:F4}");
+            if (p.StrategyPerformances.Count > 0)
+            {
+                foreach (var sp in p.StrategyPerformances.OrderByDescending(s => s.Value.AverageSharpe).Take(4))
+                {
+                    Console.WriteLine($"        {sp.Key,-26} Sharpe {sp.Value.AverageSharpe,7:F2}  rend. {sp.Value.AverageReturn,8:F2}%  "
+                        + $"win {sp.Value.WinRate,5:F1}%  trade {sp.Value.TotalTrades,4}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("        (nessuna performance per-strategia profilata su questo regime)");
+            }
+        }
+    }
+
+    Console.WriteLine("\n  Strategie ATTIVE per corsia (le regole devono nominare queste):");
+    for (var lane = 0; lane < 3; lane++)
+    {
+        var row = await db.EnsembleStates.AsNoTracking().Where(e => e.LaneId == lane).OrderBy(e => e.Id).FirstOrDefaultAsync();
+        if (row is null || string.IsNullOrWhiteSpace(row.ConfigurationJson)) continue;
+        var cfg = JsonSerializer.Deserialize<EnsembleConfiguration>(row.ConfigurationJson, json) ?? new();
+        var names = cfg.Strategies.Where(s => s.IsActive).Select(s => s.StrategyName).ToList();
+        Console.WriteLine($"    corsia {lane}: {(names.Count == 0 ? "(nessuna attiva)" : string.Join(", ", names))}");
+    }
+
     // Dati disponibili per addestrare, per ciascuna serie di corsia.
     Console.WriteLine("\n  Dati disponibili per l'addestramento (il modello si addestra su UNA serie):");
     foreach (var l in lanes.DistinctBy(l => (l.Symbol, l.Timeframe)))
