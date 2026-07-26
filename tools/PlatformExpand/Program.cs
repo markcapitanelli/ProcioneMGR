@@ -103,7 +103,7 @@ switch (phase)
     case "hunt": await HuntAsync(); break;
     case "deploy": await DeployAsync(); break;
     case "holdout": await HoldoutAsync(); break;
-    case "pairs": await PairsAsync(); break;
+    case "pairs": await PairsAsync(args.Length > 1 ? args[1] : "4h"); break;
     case "control": await ControlAsync(); break;
     case "costfrontier": await CostFrontierAsync(); break;
     case "makerfill": await MakerFillAsync(); break;
@@ -127,6 +127,7 @@ switch (phase)
     case "verifysurvivor": await VerifySurvivorAsync(); break;
     case "pipeconfig": await PipeConfigAsync(); break;
     case "regimepersistence": await RegimePersistenceAsync(); break;
+    case "carrynow": await CarryNowAsync(); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1490,11 +1491,100 @@ async Task RegimePersistenceAsync()
     Console.WriteLine($"  durata di un regime: media {mediaBarre:F0} barre = {mediaBarre / 24:F1} giorni · mediana {medianaBarre} barre = {medianaBarre / 24.0:F1} giorni");
     Console.WriteLine($"  tratti più corti di 1 giorno: {durate.Count(d => d < 24)}/{durate.Count}");
     Console.WriteLine($"  tratti più lunghi di 7 giorni: {durate.Count(d => d >= 168)}/{durate.Count}");
+
+    // ---- [R4] GATE dell'ibrido K-means→HMM: stessa serie, stessi cluster, decodifica diversa ----
+    // Le etichette GREZZE (prima di ogni smoothing) si ricostruiscono dal modello stesso:
+    // normalizzazione salvata + nearest-centroid. È l'input dell'HMM.
+    var centroids = JsonSerializer.Deserialize<float[][]>(model.CentroidsJson)!;
+    var scaling = JsonSerializer.Deserialize<ProcioneMGR.Services.Regime.FeatureScaling>(model.FeatureScalingJson)!;
+    var useVolume = scaling.Uses("VolumeRatio");
+    var useBreadth = scaling.Uses("MarketBreadth");
+    if (useBreadth) { Console.WriteLine("  (modello con breadth: confronto HMM saltato in questa fase)"); return; }
+
+    var matrix = feats.Select(f => scaling.Transform(f.ToClusteringVector(useVolume, useBreadth))).ToArray();
+    var rawLabels = ProcioneMGR.Services.Regime.RegimeAssignment.AssignRaw(matrix, centroids);
+    var k = centroids.Length;
+
+    (double MedianDays, int Transitions, double Agreement, int StatesVisited) Misura(int[] path)
+    {
+        var runs = ProcioneMGR.Services.Regime.StickyHmmSmoother.RunLengths(path);
+        runs.Sort();
+        var agree = path.Zip(rawLabels, (a, b) => a == b ? 1 : 0).Average();
+        return (runs[runs.Count / 2] / 24.0, runs.Count - 1, agree, path.Distinct().Count());
+    }
+
     Console.WriteLine();
-    Console.WriteLine("  Riferimenti dalla letteratura 2026: K-means nudo ~2 giorni (non operabile),");
-    Console.WriteLine("  HMM 21-40 giorni, ibrido K-means→HMM il migliore. Se la nostra mediana è");
-    Console.WriteLine("  dell'ordine dei giorni, lo smoothing sta già facendo il lavoro dell'HMM;");
-    Console.WriteLine("  se è dell'ordine delle ore, il router sta guardando rumore etichettato.");
+    Console.WriteLine("  ---- GATE R4: smoothing attuale vs sticky-HMM (stessi cluster, stessa serie) ----");
+    Console.WriteLine($"  {"decodifica",-22}{"mediana gg",11}{"transizioni",12}{"accordo",9}{"stati",7}");
+
+    var attuale = Misura(labels);
+    Console.WriteLine($"  {"attuale (rolling+3)",-22}{attuale.MedianDays,11:F1}{attuale.Transitions,12}{attuale.Agreement,9:P0}{attuale.StatesVisited,7}");
+
+    // Griglia dichiarata su ENTRAMBI i parametri: ρ (durata attesa) e p (fiducia nelle etichette).
+    // p basso = il filtro crede poco alle etichette grezze e serve una sequenza contraria lunga per
+    // cambiare stato: è la manopola che conta quando le etichette oscillano per costruzione.
+    foreach (var p in new[] { 0.75, 0.5, 0.35 })
+    {
+        foreach (var rho in new[] { 0.995, 0.999 })
+        {
+            var vit = Misura(ProcioneMGR.Services.Regime.StickyHmmSmoother.Decode(rawLabels, k, rho, p));
+            var cau = Misura(ProcioneMGR.Services.Regime.StickyHmmSmoother.DecodeCausal(rawLabels, k, rho, p));
+            Console.WriteLine($"  {$"viterbi ρ={rho} p={p}",-22}{vit.MedianDays,11:F1}{vit.Transitions,12}{vit.Agreement,9:P0}{vit.StatesVisited,7}");
+            Console.WriteLine($"  {$"causale ρ={rho} p={p}",-22}{cau.MedianDays,11:F1}{cau.Transitions,12}{cau.Agreement,9:P0}{cau.StatesVisited,7}");
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("  GATE (roadmap rendimento): mediana >= 20 gg E accordo > 55% E tutti gli stati visitati.");
+    Console.WriteLine("  La riga che conta per il LIVE è la causale: il Viterbi guarda avanti, il router no.");
+}
+
+/// <summary>
+/// [R1 — ROADMAP-RENDIMENTO] La decisione che il carry Paper sta prendendo ADESSO, calcolata dagli
+/// stessi dati e con la stessa funzione pura (<c>CarryDecider</c>) che il worker usa nell'app.
+/// Serve come verifica dal vivo dell'accensione: i log del worker affogano nel rumore EF di
+/// Development, ma la decisione è deterministica — stessi input, stessa funzione, stessa risposta.
+/// </summary>
+async Task CarryNowAsync()
+{
+    var cfg = new ProcioneMGR.Services.Carry.CarryConfiguration
+    {
+        EnterAnnualFundingPercent = 5m, ExitAnnualFundingPercent = 0m,
+        TrailingFundingEvents = 9, PositionSizePercent = 50m,
+    };
+    string[] symbols = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+
+    Console.WriteLine("=== CARRY PAPER — la decisione di adesso, dagli stessi dati del worker ===");
+    Console.WriteLine($"Soglia ingresso: funding annualizzato > {cfg.EnterAnnualFundingPercent}% · finestra {cfg.TrailingFundingEvents} eventi (3 giorni)\n");
+
+    await using var db = await dbFactory.CreateDbContextAsync();
+    foreach (var sym in symbols)
+    {
+        var recent = await db.SentimentMetricPoints.AsNoTracking()
+            .Where(p => p.Metric == ProcioneMGR.Data.SentimentMetrics.FundingRate && p.Symbol == sym)
+            .OrderByDescending(p => p.TimestampUtc)
+            .Take(cfg.TrailingFundingEvents)
+            .Select(p => new { p.TimestampUtc, p.Value })
+            .ToListAsync();
+        recent.Reverse();
+
+        if (recent.Count < cfg.TrailingFundingEvents)
+        {
+            Console.WriteLine($"  {sym,-5} dati insufficienti ({recent.Count}/{cfg.TrailingFundingEvents} eventi di funding)");
+            continue;
+        }
+
+        var annualized = ProcioneMGR.Services.Carry.CarryDecider.TrailingAnnualized(
+            [.. recent.Select(r => r.Value)], cfg.TrailingFundingEvents, cfg.FundingEventsPerDay);
+        var action = annualized is null
+            ? ProcioneMGR.Services.Carry.CarryAction.Hold
+            : ProcioneMGR.Services.Carry.CarryDecider.Decide(annualized.Value, inPosition: false, cfg);
+
+        Console.WriteLine($"  {sym,-5} funding annualizzato {annualized,7:F2}%  (ultimo evento {recent[^1].TimestampUtc:MM-dd HH:mm}Z)  → {action}");
+    }
+
+    Console.WriteLine("\nHold = il funding non paga abbastanza per aprire; Open = il worker Paper sta simulando l'apertura.");
+    Console.WriteLine("È la STESSA funzione pura del worker: stessi input ⇒ stessa decisione dell'app in esecuzione.");
 }
 
 // Riassunto leggibile di una spec Composite dai suoi parametri decimali.
@@ -3917,7 +4007,7 @@ async Task ControlAsync()
 // selectionTo) e il backtest si valuta SOLO sull'holdout, che quella selezione non ha mai visto.
 // Cercare le coppie cointegrate sull'intero periodo e poi "validarle" al suo interno sarebbe
 // esattamente l'errore che il Deflated Sharpe esiste per smascherare.
-async Task PairsAsync()
+async Task PairsAsync(string tf = "4h")
 {
     string[] universe =
     [
@@ -3925,8 +4015,15 @@ async Task PairsAsync()
         "LINK/USDT", "AVAX/USDT", "LTC/USDT", "DOT/USDT", "ATOM/USDT", "BCH/USDT", "ETC/USDT",
         "XLM/USDT", "UNI/USDT", "AAVE/USDT", "ALGO/USDT", "ICP/USDT", "FIL/USDT",
     ];
-    const string tf = "4h";
-    var selFrom = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    // [R2 — ROADMAP-RENDIMENTO] Su 1d la selezione parte dal 2022: e' la stessa profondita' degli
+    // studi 2025-26 che riportano Sharpe 1,5-2,2 sulle coppie cointegrate GIORNALIERE (il nostro
+    // verdetto negativo era su 4h/1h). Con barre 1d servono anni, non mesi, per stimare una
+    // cointegrazione; e la soglia di barre minime scala col timeframe per lo stesso motivo.
+    var selFrom = tf == "1d"
+        ? new DateTime(2022, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        : new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    var minSelBars = tf == "1d" ? 900 : 500;
+    var minHoldBars = tf == "1d" ? 100 : 100;
 
     Console.WriteLine($"=== PAIRS su {universe.Length} simboli, {tf} ===");
     Console.WriteLine($"    Selezione (cointegrazione): {selFrom:yyyy-MM-dd} -> {selectionTo:yyyy-MM-dd}");
@@ -3956,10 +4053,10 @@ async Task PairsAsync()
         foreach (var x in universe)
         {
             if (string.CompareOrdinal(y, x) >= 0) continue;              // ogni coppia una volta sola
-            if (sel[y].Count < 500 || sel[x].Count < 500) continue;
+            if (sel[y].Count < minSelBars || sel[x].Count < minSelBars) continue;
 
             var (ay, ax) = PairsCandleAligner.Align(sel[y], sel[x]);
-            if (ay.Count < 500) continue;
+            if (ay.Count < minSelBars) continue;
 
             var r = coint.Test([.. ay.Select(c => c.Close)], [.. ax.Select(c => c.Close)]);
             // IsTradeable, non IsCointegrated: scarta anche le coppie il cui spread e' stazionario
@@ -3986,7 +4083,7 @@ async Task PairsAsync()
 
     foreach (var p in top)
     {
-        if (hold[p.Y].Count < 100 || hold[p.X].Count < 100)
+        if (hold[p.Y].Count < minHoldBars || hold[p.X].Count < minHoldBars)
         {
             Console.WriteLine($"  {p.Y,-11}/{p.X,-11} SALTATA: holdout insufficiente.");
             continue;
