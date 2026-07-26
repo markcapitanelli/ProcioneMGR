@@ -263,14 +263,25 @@ public sealed class EventTriggerGenerator : IEventTriggerGenerator
 {
     private static readonly string[] EventNames = ["VolSpike", "VolCrush", "FlipUp", "FlipDown", "ShockDown", "ShockUp"];
 
+    /// <summary>
+    /// [R3 — ROADMAP-RENDIMENTO] Eventi su cui <c>Threshold</c> NON lega: i flip del Supertrend
+    /// (2=FlipUp, 3=FlipDown) sono cambi di segno, non percentili. Emettere le varianti 85/95 su
+    /// questi eventi produceva DUPLICATI ESATTI — stessa strategia, stesso risultato — che
+    /// gonfiavano il conteggio dei trial del DSR e uscivano come "confermati" doppi dalle cacce
+    /// (misurato il 2026-07-25: i due sopravvissuti della caccia densa erano lo stesso candidato).
+    /// Su questi eventi si emette una sola variante canonica, col default del parametro.
+    /// </summary>
+    private static readonly int[] ThresholdInertEvents = [2, 3];
+
     public List<ComposedCandidate> Generate(ComposerConfiguration config, int quota)
     {
         var all = new List<ComposedCandidate>();
         foreach (var eventType in Enumerable.Range(0, 6))
         {
+            var thresholds = ThresholdInertEvents.Contains(eventType) ? [90m] : new[] { 85m, 95m };
             foreach (var direction in new[] { 0, 1 })
             {
-                foreach (var threshold in new[] { 85m, 95m })
+                foreach (var threshold in thresholds)
                 {
                     foreach (var hold in new[] { 12m, 48m })
                     {
