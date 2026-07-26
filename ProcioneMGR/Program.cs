@@ -31,6 +31,15 @@ AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Asset statici quando si gira DA SORGENTE con ASPNETCORE_ENVIRONMENT=Production (run-postgres.ps1):
+// il manifest degli Static Web Assets viene caricato in automatico solo in Development, e senza di
+// esso MapStaticAssets risponde 500 proprio sugli asset impronta-digitalizzati (blazor.web.js, il
+// bundle CSS scoped) mentre i file "semplici" di wwwroot rispondono 200 — l'app parte e sembra sana,
+// ma il CSS dei componenti manca e NESSUN circuito interattivo si avvia. È il warning esplicito di
+// StaticAssetsInvoker a suggerire questa chiamata. Sull'output PUBBLICATO (immagini Docker) il
+// manifest runtime non esiste e la chiamata è un no-op: il pod non cambia comportamento.
+builder.WebHost.UseStaticWebAssets();
+
 // Add services to the container.
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
