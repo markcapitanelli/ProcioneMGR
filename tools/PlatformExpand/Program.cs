@@ -104,6 +104,7 @@ switch (phase)
     case "deploy": await DeployAsync(); break;
     case "holdout": await HoldoutAsync(); break;
     case "pairs": await PairsAsync(args.Length > 1 ? args[1] : "4h"); break;
+    case "volgate": await VolGateAsync(args.Length > 1 && args[1] == "confirm"); break;
     case "control": await ControlAsync(); break;
     case "costfrontier": await CostFrontierAsync(); break;
     case "makerfill": await MakerFillAsync(); break;
@@ -4434,6 +4435,191 @@ async Task PairsAsync(string tf = "4h")
             .Spread.Where(v => v.HasValue).Select(v => v!.Value).ToList();
         if (s.Count < 30) return double.NaN;
         return ProcioneMGR.Services.TimeSeries.EngleGrangerCointegrationTest.AdfStatisticOnSeries(s).Statistic;
+    }
+}
+
+// ------------------------------------------------------------------ VOLGATE (C3: HAR-RV vs GARCH vs EWMA su QLIKE)
+// Gate C3 della roadmap: HAR-RV (OLS a 3 regressori sulla varianza realizzata giornaliera dai 5m)
+// entra come previsore di volatilità SOLO se batte il vincitore attuale (il migliore fra GARCH(1,1)
+// ed EWMA RiskMetrics) su QLIKE out-of-sample. OOS dal 2026-03-01 (la stessa finestra di holdout di
+// tutta la piattaforma), orizzonti 1 e 5 giorni. Tutte le serie di previsione sono CAUSALI.
+async Task VolGateAsync(bool confirm = false)
+{
+    // Set di sviluppo (6 majors): qui e' stata FATTA la scelta della variante (livelli vs log).
+    // Set di CONFERMA (24 simboli con 5m pieni, mai guardati per quella scelta): `volgate confirm`.
+    // La sequenza onesta: il gate sul modello base e' fallito sui majors, la variante log li ha
+    // dominati 6/6 — ma siccome la variante e' stata scelta guardando quei numeri, l'adozione
+    // richiede che il verdetto regga sul set che la scelta non ha mai visto.
+    string[] symbols = confirm
+        ? ["AAVE/USDT", "ADA/USDT", "ALGO/USDT", "APT/USDT", "ARB/USDT", "ATOM/USDT", "AVAX/USDT",
+           "DOT/USDT", "FIL/USDT", "GRT/USDT", "HBAR/USDT", "ICP/USDT", "INJ/USDT", "LINK/USDT",
+           "LTC/USDT", "NEAR/USDT", "OP/USDT", "PEPE/USDT", "SEI/USDT", "SHIB/USDT", "SUI/USDT",
+           "TIA/USDT", "TRX/USDT", "UNI/USDT"]
+        : ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"];
+    int[] horizons = [1, 5];
+    var oosFrom = DateOnly.FromDateTime(holdoutFrom);
+
+    Console.WriteLine($"=== VOLGATE (C3){(confirm ? " — SET DI CONFERMA (simboli mai usati per scegliere la variante)" : "")} — HAR-RV vs GARCH(1,1) vs EWMA su QLIKE, OOS dal {oosFrom:yyyy-MM-dd} ===");
+    Console.WriteLine("    RV giornaliera dai 5m (giorni con buchi scartati); QLIKE su scala varianza; piu' basso = meglio.\n");
+
+    var garch = new ProcioneMGR.Services.TimeSeries.GarchModel();
+    // [orizzonte][simbolo] -> QLIKE medio per contendente. HarLog = variante log-HAR (robusta ai
+    // salti di RV), misurata ACCANTO al modello base: il gate resta sul modello base come scritto
+    // in roadmap — la variante serve a capire il perché di un eventuale fallimento, non a
+    // ripescare il verdetto.
+    var summary = new Dictionary<int, List<(string Symbol, double Har, double HarLog, double Garch, double Ewma, double Naive, int Rows)>>
+    {
+        [1] = [], [5] = [],
+    };
+
+    foreach (var symbol in symbols)
+    {
+        List<OhlcvData> bars5m;
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            bars5m = await db.OhlcvData.AsNoTracking()
+                .Where(c => c.Symbol == symbol && c.Timeframe == "5m")
+                .OrderBy(c => c.TimestampUtc)
+                .ToListAsync();
+        }
+
+        var daily = ProcioneMGR.Services.TimeSeries.RealizedVariance.DailyFromIntraday(bars5m);
+        if (daily.Count < 200)
+        {
+            Console.WriteLine($"  {symbol,-10} SALTATO: solo {daily.Count} giorni di RV.");
+            continue;
+        }
+        var rv = daily.Select(d => d.Rv).ToList();
+        var days = daily.Select(d => d.Day).ToList();
+
+        // Rendimenti GIORNALIERI log per GARCH/EWMA, dagli stessi giorni della RV (chiusura =
+        // ultima barra 5m del giorno). Un giorno scartato dalla RV allunga il rendimento successivo:
+        // raro e accettato, l'allineamento per indice con la RV vale piu' della purezza del singolo.
+        var dailyClose = new List<double>(daily.Count);
+        {
+            var idx = 0;
+            foreach (var (day, _) in daily)
+            {
+                while (idx < bars5m.Count - 1 && DateOnly.FromDateTime(bars5m[idx + 1].TimestampUtc) <= day) idx++;
+                dailyClose.Add(Math.Log((double)bars5m[idx].Close));
+            }
+        }
+        var dailyReturns = new double[rv.Count];
+        for (var i = 1; i < rv.Count; i++) dailyReturns[i] = dailyClose[i] - dailyClose[i - 1];
+
+        foreach (var h in horizons)
+        {
+            var har = ProcioneMGR.Services.TimeSeries.HarRvForecaster.ForecastSeries(rv, h);
+            var harLog = ProcioneMGR.Services.TimeSeries.HarRvForecaster.ForecastSeries(rv, h, onLogRv: true);
+
+            // EWMA RiskMetrics sui rendimenti giornalieri: previsione piatta su ogni orizzonte.
+            var ewmaVar = new double?[rv.Count];
+            {
+                const double lambda = 0.94;
+                var seed = dailyReturns.Skip(1).Take(20).Select(r => r * r).DefaultIfEmpty(0).Average();
+                var v = seed;
+                for (var i = 1; i < rv.Count; i++)
+                {
+                    v = lambda * v + (1 - lambda) * dailyReturns[i] * dailyReturns[i];
+                    ewmaVar[i] = v;
+                }
+            }
+
+            // GARCH(1,1) espanso, rifittato ogni 5 giorni (MLE costoso); previsione = media delle
+            // varianze previste sui prossimi h passi.
+            var garchVar = new double?[rv.Count];
+            {
+                ProcioneMGR.Services.TimeSeries.GarchFit? fit = null;
+                var lastFitAt = -999;
+                for (var i = 100; i < rv.Count; i++)
+                {
+                    if (fit is null || i - lastFitAt >= 5)
+                    {
+                        var window = dailyReturns.Skip(1).Take(i).Select(r => (decimal)r).ToList();
+                        try { fit = garch.Fit(window); lastFitAt = i; }
+                        catch (Exception) { fit = null; }
+                    }
+                    if (fit is null) continue;
+                    double sum = 0;
+                    for (var step = 1; step <= h; step++) sum += fit.ForecastVariance(step);
+                    garchVar[i] = sum / h;
+                }
+            }
+
+            // Target: RV media realizzata sui prossimi h giorni; QLIKE solo su righe OOS complete.
+            double qHar = 0, qHarLog = 0, qGarch = 0, qEwma = 0, qNaive = 0;
+            var rows = 0;
+            for (var i = 0; i < rv.Count - h; i++)
+            {
+                if (days[i] < oosFrom) continue;
+                if (har[i] is not { } hf || harLog[i] is not { } hlf || garchVar[i] is not { } gf || ewmaVar[i] is not { } ef) continue;
+                double actual = 0;
+                for (var k = i + 1; k <= i + h; k++) actual += rv[k];
+                actual /= h;
+                if (actual <= 0) continue;
+
+                var actualVol = Math.Sqrt(actual);
+                qHar += ProcioneMGR.Services.ML.VolForecastEvaluator.Qlike(Math.Sqrt(hf), actualVol);
+                qHarLog += ProcioneMGR.Services.ML.VolForecastEvaluator.Qlike(Math.Sqrt(hlf), actualVol);
+                qGarch += ProcioneMGR.Services.ML.VolForecastEvaluator.Qlike(Math.Sqrt(gf), actualVol);
+                qEwma += ProcioneMGR.Services.ML.VolForecastEvaluator.Qlike(Math.Sqrt(ef), actualVol);
+                qNaive += ProcioneMGR.Services.ML.VolForecastEvaluator.Qlike(Math.Sqrt(rv[i]), actualVol);
+                rows++;
+            }
+            if (rows < 30)
+            {
+                Console.WriteLine($"  {symbol,-10} h={h}: SALTATO, solo {rows} righe OOS.");
+                continue;
+            }
+            summary[h].Add((symbol, qHar / rows, qHarLog / rows, qGarch / rows, qEwma / rows, qNaive / rows, rows));
+        }
+    }
+
+    foreach (var h in horizons)
+    {
+        Console.WriteLine($"\n--- Orizzonte {h} giorno/i (QLIKE medio OOS; * = migliore) ---");
+        Console.WriteLine($"  {"Symbol",-10} {"righe",5}  {"HAR-RV",8}  {"logHAR",8}  {"GARCH",8}  {"EWMA",8}  {"naive",8}");
+        var harWins = 0;
+        var harLogWins = 0;
+        foreach (var r in summary[h])
+        {
+            var best = Math.Min(Math.Min(Math.Min(r.Har, r.HarLog), Math.Min(r.Garch, r.Ewma)), r.Naive);
+            var incumbent = Math.Min(r.Garch, r.Ewma);
+            if (r.Har < incumbent) harWins++;
+            if (r.HarLog < incumbent) harLogWins++;
+            string Mark(double v) => v == best ? "*" : " ";
+            Console.WriteLine($"  {r.Symbol,-10} {r.Rows,5}  {r.Har,8:F4}{Mark(r.Har)} {r.HarLog,8:F4}{Mark(r.HarLog)} {r.Garch,8:F4}{Mark(r.Garch)} {r.Ewma,8:F4}{Mark(r.Ewma)} {r.Naive,8:F4}{Mark(r.Naive)}");
+        }
+        if (summary[h].Count > 0)
+        {
+            var medHar = Median(summary[h].Select(r => r.Har));
+            var medHarLog = Median(summary[h].Select(r => r.HarLog));
+            var medInc = Median(summary[h].Select(r => Math.Min(r.Garch, r.Ewma)));
+            Console.WriteLine($"  mediane: HAR-RV {medHar:F4} · logHAR {medHarLog:F4} vs migliore attuale {medInc:F4} — battuto da HAR in {harWins}/{summary[h].Count}, da logHAR in {harLogWins}/{summary[h].Count}");
+        }
+    }
+
+    var h1 = summary[1];
+    if (h1.Count > 0)
+    {
+        // Sul set di sviluppo il gate giudica il modello base (com'e' scritto in roadmap); sul set
+        // di conferma giudica la variante log — e' il candidato uscito dai majors, e qui incontra
+        // dati che non hanno partecipato alla sua scelta.
+        var candidate = confirm ? "logHAR" : "HAR-RV";
+        var wins = h1.Count(r => (confirm ? r.HarLog : r.Har) < Math.Min(r.Garch, r.Ewma));
+        var medianCand = Median(h1.Select(r => confirm ? r.HarLog : r.Har));
+        var medianInc = Median(h1.Select(r => Math.Min(r.Garch, r.Ewma)));
+        var pass = wins * 2 > h1.Count && medianCand < medianInc;
+        Console.WriteLine($"\n=== GATE C3 (orizzonte 1g, {h1.Count} simboli{(confirm ? ", set di conferma" : "")}) ===");
+        Console.WriteLine(pass
+            ? $"  PASSA: {candidate} batte il vincitore attuale in {wins}/{h1.Count} e sulla mediana ({medianCand:F4} vs {medianInc:F4})."
+            : $"  NON PASSA: {candidate} batte il vincitore attuale solo in {wins}/{h1.Count} (mediane {medianCand:F4} vs {medianInc:F4}) -> non entra.");
+    }
+
+    static double Median(IEnumerable<double> xs)
+    {
+        var s = xs.OrderBy(v => v).ToList();
+        return s.Count % 2 == 1 ? s[s.Count / 2] : (s[s.Count / 2 - 1] + s[s.Count / 2]) / 2.0;
     }
 }
 

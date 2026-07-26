@@ -1,4 +1,5 @@
 ﻿using ProcioneMGR.Services.Alpha;
+using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.PairsTrading;
 using ProcioneMGR.Services.Regime;
@@ -227,12 +228,19 @@ public sealed class RegimeAnalysisStage(
     }
 }
 
-/// <summary>Stage 5 — fits GARCH(1,1) on recent returns of the primary series and classifies the volatility level.</summary>
+/// <summary>
+/// Stage 5 — classifies the volatility level of the primary series. [C3] Il PREVISORE che decide
+/// il Level è il log-HAR sulla varianza realizzata giornaliera dai 5m quando i 5m bastano (gate C3:
+/// QLIKE OOS migliore del vincitore GARCH/EWMA su 6/6 simboli di sviluppo e 24/24 di conferma a 1g),
+/// altrimenti GARCH(1,1) come sempre. Il GARCH viene comunque fittato: persistenza, parametri e
+/// soprattutto le CODE Student-t (VaR 1%) restano sue — il gate C3 riguarda la previsione di σ,
+/// non i quantili di coda.
+/// </summary>
 public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
 {
     public string Name => "VolatilityRegime";
     public string DisplayName => "Regime di volatilità";
-    public string Description => "Stima GARCH(1,1), prevede la volatilità e la classifica (bassa/media/alta).";
+    public string Description => "Prevede la volatilità (log-HAR dai 5m; GARCH in fallback) e la classifica (bassa/media/alta).";
     public int DefaultOrder => 5;
     public IReadOnlyList<StageDependency> Dependencies => [StageDependency.On("DataIngestion")];
 
@@ -242,6 +250,7 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
         new("horizonSteps", "Orizzonte forecast (candele)", "24", ""),
         new("highRatio", "Soglia 'Alta' (forecast/lungo periodo)", "1.3", ""),
         new("lowRatio", "Soglia 'Bassa' (forecast/lungo periodo)", "0.8", ""),
+        new("volForecaster", "Previsore (auto = log-HAR se i 5m bastano, garch = solo GARCH)", "auto", ""),
     ];
 
     public string? ValidateInput(PipelineContext ctx) => null;
@@ -269,6 +278,45 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
         var longRunVol = double.IsNaN(fit.LongRunVariance) ? currentVol : Math.Sqrt(Math.Max(0, fit.LongRunVariance));
         var forecastVol = Math.Sqrt(Math.Max(0, fit.ForecastVariance(horizon)));
 
+        // [C3] Previsore del Level: log-HAR sulla RV giornaliera dai 5m, se i 5m bastano. Il ratio
+        // forecast/lungo-periodo resta adimensionale: numeratore e denominatore sono entrambi su
+        // scala GIORNALIERA (la classificazione confronta livelli, non unità). Il fallback GARCH
+        // scatta anche a metà strada: qualunque intoppo sui 5m non deve far fallire lo stage.
+        var forecastSource = "garch";
+        if (!string.Equals(config.GetString("volForecaster", "auto"), "garch", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var bars5m = await ctx.Candles.GetAsync(primary.Symbol, "5m", to.AddDays(-365), to, ct);
+                var daily = RealizedVariance.DailyFromIntraday(bars5m);
+                var horizonDays = Math.Clamp((int)Math.Round(
+                    horizon * Timeframes.Supported.GetValueOrDefault(primary.Timeframe, TimeSpan.FromHours(1)).TotalMinutes / 1440.0), 1, 5);
+                var rv = daily.Select(d => d.Rv).ToList();
+                var harSeries = HarRvForecaster.ForecastSeries(rv, horizonDays, onLogRv: true);
+                if (harSeries.Length > 0 && harSeries[^1] is { } harVariance)
+                {
+                    var harForecastVol = Math.Sqrt(harVariance);
+                    var harLongRunVol = Math.Sqrt(rv.Average());
+                    var harCurrentVol = Math.Sqrt(rv[^1]);
+                    if (harLongRunVol > 0)
+                    {
+                        forecastVol = harForecastVol;
+                        longRunVol = harLongRunVol;
+                        currentVol = harCurrentVol;
+                        forecastSource = "har-log-rv";
+                    }
+                }
+                else
+                {
+                    ctx.LogLine($"[{Name}] 5m insufficienti per il log-HAR ({daily.Count} giorni di RV): classifico col GARCH.");
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                ctx.LogLine($"[{Name}] log-HAR non disponibile ({ex.GetType().Name}): classifico col GARCH.");
+            }
+        }
+
         var ratio = longRunVol > 0 ? forecastVol / longRunVol : 1.0;
         var level = ratio >= (double)config.GetDecimal("highRatio", 1.3m) ? "Alta"
                   : ratio <= (double)config.GetDecimal("lowRatio", 0.8m) ? "Bassa"
@@ -277,6 +325,7 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
         var vol = new VolatilityOutput
         {
             Symbol = primary.Symbol,
+            ForecastSource = forecastSource,
             Omega = fit.Omega,
             Alpha = fit.Alpha,
             Beta = fit.Beta,
@@ -302,7 +351,7 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
         }
 
         ctx.Volatility = vol;
-        ctx.LogLine($"[{Name}] {primary.Symbol}: persistenza {fit.Persistence:F4}, vol {currentVol:P3} → forecast {forecastVol:P3} ({level})"
+        ctx.LogLine($"[{Name}] {primary.Symbol} [{forecastSource}]: persistenza {fit.Persistence:F4}, vol {currentVol:P3} → forecast {forecastVol:P3} ({level})"
                   + (vol.TailDegreesOfFreedom is double dof ? $"; ν={dof:F1}, VaR1% {vol.ForecastTailMove99:P2}." : "."));
     }
 
@@ -313,7 +362,7 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
         {
             StageName = Name,
             DisplayName = DisplayName,
-            Text = $"{o.Symbol}: volatilità {o.Level} (attuale {o.CurrentVolatility:P3}, forecast {o.ForecastVolatility24:P3}, persistenza {o.Persistence:F3})"
+            Text = $"{o.Symbol}: volatilità {o.Level} [{o.ForecastSource}] (attuale {o.CurrentVolatility:P3}, forecast {o.ForecastVolatility24:P3}, persistenza {o.Persistence:F3})"
                  + (o.TailDegreesOfFreedom is double dof ? $"; code grasse ν={dof:F1}, VaR1% {o.ForecastTailMove99:P2}." : "."),
             Metrics = new()
             {

@@ -291,6 +291,14 @@ public sealed class VolatilityOutput
     /// Serve da distanza di stop prudente per l'operatore.
     /// </summary>
     public double ForecastTailMove99 { get; set; }
+
+    /// <summary>
+    /// [C3] Chi ha prodotto la previsione che classifica il Level: "har-log-rv" (log-HAR sulla
+    /// varianza realizzata dai 5m — gate C3 passato 24/24 sul set di conferma) oppure "garch"
+    /// (fallback quando i 5m non bastano, e comportamento storico). I parametri GARCH esposti qui
+    /// sopra descrivono comunque il fit GARCH, che resta per persistenza e code.
+    /// </summary>
+    public string ForecastSource { get; set; } = "garch";
 }
 
 public sealed class PairScreenResult
