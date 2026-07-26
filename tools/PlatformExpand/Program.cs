@@ -4287,7 +4287,7 @@ async Task PairsAsync(string tf = "4h")
     }
 
     var coint = new ProcioneMGR.Services.TimeSeries.EngleGrangerCointegrationTest();
-    var found = new List<(string Y, string X, double Adf, double Crit, double Hedge)>();
+    var all = new List<(string Y, string X, double Adf, double Crit, double Hedge, bool Tradeable)>();
 
     foreach (var y in universe)
     {
@@ -4302,9 +4302,10 @@ async Task PairsAsync(string tf = "4h")
             var r = coint.Test([.. ay.Select(c => c.Close)], [.. ax.Select(c => c.Close)]);
             // IsTradeable, non IsCointegrated: scarta anche le coppie il cui spread e' stazionario
             // ma la cui elasticita' e' fuori banda (il caso AAVE/XLM).
-            if (r.IsTradeable) found.Add((y, x, r.AdfStatistic, r.CriticalValue, r.HedgeRatio));
+            all.Add((y, x, r.AdfStatistic, r.CriticalValue, r.HedgeRatio, r.IsTradeable));
         }
     }
+    var found = all.Where(t => t.Tradeable).Select(t => (t.Y, t.X, t.Adf, t.Crit, t.Hedge)).ToList();
 
     var total = universe.Length * (universe.Length - 1) / 2;
     Console.WriteLine($"  Coppie operabili in selezione: {found.Count}/{total} ({(decimal)found.Count / total:P0})");
@@ -4318,9 +4319,24 @@ async Task PairsAsync(string tf = "4h")
     Console.WriteLine();
 
     // Le piu' fortemente cointegrate per margine sul valore critico (piu' negativo = piu' severo).
+    // [C2] Se NESSUNA coppia passa la selezione (l'esito del ri-test 1d), l'A/B degli estimatori
+    // gira comunque sulle 8 migliori per margine: la domanda di C2 e' sull'ESTIMATORE (stazionarieta'
+    // dello spread, coda dei drawdown), non sul deploy della classe pairs — che resta bocciata.
     var top = found.OrderBy(f => f.Adf - f.Crit).Take(8).ToList();
+    var abFallback = top.Count == 0;
+    if (abFallback)
+    {
+        Console.WriteLine("  Nessuna coppia operabile in selezione: l'A/B OLS/Kalman gira sulle 8 migliori per margine ADF.");
+        top = all.OrderBy(f => f.Adf - f.Crit).Take(8).Select(t => (t.Y, t.X, t.Adf, t.Crit, t.Hedge)).ToList();
+    }
     var engine = new PairsBacktestEngine();
     var survivors = 0;
+
+    // [C2] A/B rolling OLS vs Kalman sullo STESSO holdout: per ciascun estimatore, ADF sullo spread
+    // out-of-sample (piu' negativo = piu' stazionario) e coda dei drawdown del backtest. Il gate:
+    // il Kalman "vince" SOLO se migliora entrambe.
+    var adfDeltas = new List<double>();
+    var ddDeltas = new List<decimal>();
 
     foreach (var p in top)
     {
@@ -4330,22 +4346,95 @@ async Task PairsAsync(string tf = "4h")
             continue;
         }
 
-        var cfg = new PairsBacktestConfiguration
+        var cfgOls = new PairsBacktestConfiguration
         {
             SymbolY = p.Y, SymbolX = p.X,
             InitialCapital = 10_000m, PositionSizePercent = 10m,
             FeePercent = PipelineCosts.DefaultFeePercent,
             SlippagePercent = PipelineCosts.DefaultSlippagePercent,
+            // Esplicito, non default: dal 2026-07-26 il default di classe e' Kalman (gate C2
+            // passato) e il ramo OLS di questo A/B deve restare l'OLS storico.
+            HedgeRatioEstimator = PairsHedgeRatioEstimator.RollingOls,
         };
-        var r = engine.RunBacktest(hold[p.Y], hold[p.X], cfg);
+        var cfgKal = new PairsBacktestConfiguration
+        {
+            SymbolY = p.Y, SymbolX = p.X,
+            InitialCapital = 10_000m, PositionSizePercent = 10m,
+            FeePercent = PipelineCosts.DefaultFeePercent,
+            SlippagePercent = PipelineCosts.DefaultSlippagePercent,
+            HedgeRatioEstimator = PairsHedgeRatioEstimator.Kalman,
+        };
+        var rOls = engine.RunBacktest(hold[p.Y], hold[p.X], cfgOls);
+        var rKal = engine.RunBacktest(hold[p.Y], hold[p.X], cfgKal);
 
-        var ok = r.TotalReturnPercent > 0m && r.TotalTrades >= 5;
+        // Spread OOS dei due estimatori, per l'ADF: stessi input allineati che usa il motore.
+        var (ahy, ahx) = PairsCandleAligner.Align(hold[p.Y], hold[p.X]);
+        var closesY = ahy.Select(c => c.Close).ToList();
+        var closesX = ahx.Select(c => c.Close).ToList();
+        var spreadOls = new RollingPairsSpreadAnalyzer()
+            .Analyze(closesY, closesX, cfgOls.LookbackWindow, cfgOls.RecalibrationInterval, cfgOls.ZScoreLookback)
+            .Spread.Where(s => s.HasValue).Select(s => s!.Value).ToList();
+        var spreadKal = new KalmanPairsSpreadAnalyzer()
+            .Analyze(closesY, closesX, cfgKal.LookbackWindow, cfgKal.KalmanDelta, cfgKal.ZScoreLookback)
+            .Spread.Where(s => s.HasValue).Select(s => s!.Value).ToList();
+        if (spreadOls.Count < 30 || spreadKal.Count < 30)
+        {
+            Console.WriteLine($"  {p.Y,-11}/{p.X,-11} SALTATA: spread OOS troppo corto per l'ADF.");
+            continue;
+        }
+        var (adfOls, _) = ProcioneMGR.Services.TimeSeries.EngleGrangerCointegrationTest.AdfStatisticOnSeries(spreadOls);
+        var (adfKal, _) = ProcioneMGR.Services.TimeSeries.EngleGrangerCointegrationTest.AdfStatisticOnSeries(spreadKal);
+
+        // Sensibilita' su delta (solo ADF): la conclusione non deve essere un artefatto del default.
+        var adfKalFast = AdfOfKalman(closesY, closesX, cfgKal, 1e-3);
+        var adfKalSlow = AdfOfKalman(closesY, closesX, cfgKal, 1e-5);
+
+        static decimal WorstTrade(PairsBacktestResult r)
+            => r.Trades.Count == 0 ? 0m : r.Trades.Min(t => t.PnlPercent);
+
+        var ok = rOls.TotalReturnPercent > 0m && rOls.TotalTrades >= 5;
         if (ok) survivors++;
-        Console.WriteLine($"  {(ok ? "OK " : "-- ")}{p.Y,-11}/{p.X,-11}  ADF {p.Adf,6:F2} (crit {p.Crit,6:F2})  hedge {p.Hedge,6:F2}");
-        Console.WriteLine($"      HOLDOUT: netto {r.TotalReturnPercent,7:F2}%   trade {r.TotalTrades,3}   maxDD {r.MaxDrawdownPercent,5:F1}%");
+        adfDeltas.Add(adfKal - adfOls);
+        ddDeltas.Add(rKal.MaxDrawdownPercent - rOls.MaxDrawdownPercent);
+
+        Console.WriteLine($"  {(ok ? "OK " : "-- ")}{p.Y,-11}/{p.X,-11}  ADF sel {p.Adf,6:F2} (crit {p.Crit,6:F2})  hedge {p.Hedge,6:F2}");
+        Console.WriteLine($"      OLS    : netto {rOls.TotalReturnPercent,7:F2}%  trade {rOls.TotalTrades,3}  maxDD {rOls.MaxDrawdownPercent,5:F1}%  worst {WorstTrade(rOls),6:F2}%  ADF(spread OOS) {adfOls,6:F2}");
+        Console.WriteLine($"      KALMAN : netto {rKal.TotalReturnPercent,7:F2}%  trade {rKal.TotalTrades,3}  maxDD {rKal.MaxDrawdownPercent,5:F1}%  worst {WorstTrade(rKal),6:F2}%  ADF(spread OOS) {adfKal,6:F2}  [δ 1e-3: {adfKalFast,6:F2} | 1e-5: {adfKalSlow,6:F2}]");
     }
 
-    Console.WriteLine($"\n=== SOPRAVVISSUTI: {survivors}/{top.Count} (netto > 0 e almeno 5 operazioni) ===");
+    if (!abFallback)
+    {
+        Console.WriteLine($"\n=== SOPRAVVISSUTI (OLS storico): {survivors}/{top.Count} (netto > 0 e almeno 5 operazioni) ===");
+    }
+
+    if (adfDeltas.Count > 0)
+    {
+        static double Median(IEnumerable<double> xs)
+        {
+            var s = xs.OrderBy(v => v).ToList();
+            return s.Count % 2 == 1 ? s[s.Count / 2] : (s[s.Count / 2 - 1] + s[s.Count / 2]) / 2.0;
+        }
+        var medAdf = Median(adfDeltas);
+        var medDd = Median(ddDeltas.Select(d => (double)d));
+        var adfBetter = adfDeltas.Count(d => d < 0);
+        var ddBetter = ddDeltas.Count(d => d < 0m);
+        Console.WriteLine($"\n=== GATE C2 (Kalman vs rolling OLS su {adfDeltas.Count} coppie) ===");
+        Console.WriteLine($"  ADF spread OOS : mediana Δ {medAdf:+0.00;-0.00} (negativo = Kalman piu' stazionario)  — meglio in {adfBetter}/{adfDeltas.Count}");
+        Console.WriteLine($"  MaxDD          : mediana Δ {medDd:+0.0;-0.0} pt (negativo = Kalman drawdown minore) — meglio in {ddBetter}/{ddDeltas.Count}");
+        var wins = medAdf < 0 && medDd <= 0 && adfBetter * 2 > adfDeltas.Count;
+        Console.WriteLine(wins
+            ? "  VERDETTO: il Kalman migliora stazionarieta' E coda dei drawdown -> il gate C2 PASSA."
+            : "  VERDETTO: il gate C2 NON passa (serve migliorare ENTRAMBE le metriche): l'estimatore resta rolling OLS.");
+    }
+
+    static double AdfOfKalman(List<decimal> closesY, List<decimal> closesX, PairsBacktestConfiguration cfg, double delta)
+    {
+        var s = new KalmanPairsSpreadAnalyzer()
+            .Analyze(closesY, closesX, cfg.LookbackWindow, delta, cfg.ZScoreLookback)
+            .Spread.Where(v => v.HasValue).Select(v => v!.Value).ToList();
+        if (s.Count < 30) return double.NaN;
+        return ProcioneMGR.Services.TimeSeries.EngleGrangerCointegrationTest.AdfStatisticOnSeries(s).Statistic;
+    }
 }
 
 // ------------------------------------------------------------------ HOLDOUT (test davvero fuori campione)

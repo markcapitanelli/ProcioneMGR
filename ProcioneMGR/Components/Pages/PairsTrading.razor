@@ -45,8 +45,10 @@
         </dd>
         <dt class="col-sm-3">Hedge ratio</dt>
         <dd class="col-sm-9">Quanto di un asset serve per bilanciare una unità dell'altro nello spread (es. 1 BTC ≈ 15 ETH in un certo momento).</dd>
+        <dt class="col-sm-3">Estimatore hedge ratio</dt>
+        <dd class="col-sm-9">Come viene inseguito l'hedge ratio nel tempo. <b>Kalman</b> (default dal gate C2, 2026-07-26): si aggiorna a ogni barra, senza finestra di ricalibrazione — sull'holdout ha prodotto spread più stazionari e drawdown minori su tutte le coppie misurate. <b>Rolling OLS</b>: comportamento storico, ristima su finestra a intervalli.</dd>
         <dt class="col-sm-3">Lookback ristima / Ricalibra ogni</dt>
-        <dd class="col-sm-9">L'hedge ratio non è fisso: viene ricalcolato periodicamente usando solo dati passati (mai il futuro), per adattarsi a come cambia la relazione fra i due asset nel tempo.</dd>
+        <dd class="col-sm-9">L'hedge ratio non è fisso: viene ricalcolato periodicamente usando solo dati passati (mai il futuro), per adattarsi a come cambia la relazione fra i due asset nel tempo. Col Kalman il lookback serve solo a inizializzare il filtro e "Ricalibra ogni" non si applica.</dd>
         <dt class="col-sm-3">Z-score lookback</dt>
         <dd class="col-sm-9">Su quante barre recenti si calcola la media/deviazione standard dello spread, per misurare quanto è "anomalo" il suo valore attuale (lo z-score).</dd>
         <dt class="col-sm-3">Soglia entrata / uscita (|z|)</dt>
@@ -108,13 +110,23 @@
         <AdvancedPanel Summary="@AdvancedSummary">
             <div class="row g-3 align-items-end">
                 <div class="col-auto">
+                    <label class="form-label">Estimatore hedge ratio</label>
+                    <select class="form-select" @bind="_estimator" disabled="@_busy">
+                        <option value="@PairsHedgeRatioEstimator.Kalman">Kalman (default)</option>
+                        <option value="@PairsHedgeRatioEstimator.RollingOls">Rolling OLS (storico)</option>
+                    </select>
+                </div>
+                <div class="col-auto">
                     <label class="form-label">Lookback ristima (barre)</label>
                     <input type="number" class="form-control" style="width: 9rem;" @bind="_lookbackWindow" disabled="@_busy" />
                 </div>
-                <div class="col-auto">
-                    <label class="form-label">Ricalibra ogni (barre)</label>
-                    <input type="number" class="form-control" style="width: 9rem;" @bind="_recalibrationInterval" disabled="@_busy" />
-                </div>
+                @if (_estimator == PairsHedgeRatioEstimator.RollingOls)
+                {
+                    <div class="col-auto">
+                        <label class="form-label">Ricalibra ogni (barre)</label>
+                        <input type="number" class="form-control" style="width: 9rem;" @bind="_recalibrationInterval" disabled="@_busy" />
+                    </div>
+                }
                 <div class="col-auto">
                     <label class="form-label">Z-score lookback</label>
                     <input type="number" class="form-control" style="width: 9rem;" @bind="_zScoreLookback" disabled="@_busy" />
@@ -255,6 +267,9 @@
     private decimal _entryZScore = 2.0m;
     private decimal _exitZScore = 0.5m;
 
+    // [C2] Kalman di default (gate passato 2026-07-26); Rolling OLS resta selezionabile.
+    private PairsHedgeRatioEstimator _estimator = PairsHedgeRatioEstimator.Kalman;
+
     private decimal _initialCapital = 10_000m;
     private decimal _positionSizePercent = 10m;
     private decimal _feePercent = 0.1m;
@@ -265,7 +280,10 @@
 
     /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
     private string AdvancedSummary =>
-        $"Lookback {_lookbackWindow} · Ricalibra {_recalibrationInterval} · Z-lookback {_zScoreLookback}"
+        (_estimator == PairsHedgeRatioEstimator.Kalman
+            ? $"Kalman · Lookback (init) {_lookbackWindow}"
+            : $"Rolling OLS · Lookback {_lookbackWindow} · Ricalibra {_recalibrationInterval}")
+        + $" · Z-lookback {_zScoreLookback}"
         + $" · Entrata |z|≥{_entryZScore:0.##} · Uscita |z|≤{_exitZScore:0.##}"
         + $" · Capitale {_initialCapital:N0} · Size {_positionSizePercent:0.##}% · Fee {_feePercent:0.##}%";
 
@@ -290,17 +308,21 @@
     private string? _userId;
     private ConfigPresets? _presets;
 
-    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.</summary>
+    /// <summary>Fotografia completa del form per preset e memoria dell'ultima configurazione.
+    /// NB: un preset salvato PRIMA del C2 non ha il campo Estimator e viene riletto come
+    /// RollingOls (enum 0) — fedele a com'era la pagina quando fu salvato.</summary>
     private sealed record PageConfig(
         string Exchange, string SymbolY, string SymbolX, string Timeframe, DateTime From, DateTime To,
         int LookbackWindow, int RecalibrationInterval, int ZScoreLookback,
         decimal EntryZScore, decimal ExitZScore,
-        decimal InitialCapital, decimal PositionSizePercent, decimal FeePercent);
+        decimal InitialCapital, decimal PositionSizePercent, decimal FeePercent,
+        PairsHedgeRatioEstimator Estimator = PairsHedgeRatioEstimator.RollingOls);
 
     private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
         _exchange.ToString(), _symbolY.Trim(), _symbolX.Trim(), _timeframe, _from, _to,
         _lookbackWindow, _recalibrationInterval, _zScoreLookback,
-        _entryZScore, _exitZScore, _initialCapital, _positionSizePercent, _feePercent));
+        _entryZScore, _exitZScore, _initialCapital, _positionSizePercent, _feePercent,
+        _estimator));
 
     private void ApplyConfigJson(string json)
     {
@@ -323,6 +345,7 @@
         _initialCapital = cfg.InitialCapital;
         _positionSizePercent = cfg.PositionSizePercent;
         _feePercent = cfg.FeePercent;
+        if (Enum.IsDefined(cfg.Estimator)) _estimator = cfg.Estimator;
     }
 
     private async Task RunAsync()
@@ -388,6 +411,7 @@
                 ZScoreLookback = _zScoreLookback,
                 EntryZScore = _entryZScore,
                 ExitZScore = _exitZScore,
+                HedgeRatioEstimator = _estimator,
             };
 
             _result = Engine.RunBacktest(candlesY, candlesX, config);
