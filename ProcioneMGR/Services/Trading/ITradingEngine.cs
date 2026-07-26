@@ -63,7 +63,7 @@ public interface ITradingEngine
     /// <summary>
     /// Avanza le fette dovute dei piani di esecuzione live (TWAP/VWAP/Iceberg) di questa corsia.
     /// Chiamato periodicamente dall'ExecutionWorker; no-op in Paper o se l'esecuzione a fette è
-    /// disabilitata. Rif. docs/ROADMAP-QLIB.md §1.2.
+    /// disabilitata. Rif. docs/archive/ROADMAP-QLIB.md §1.2.
     /// </summary>
     Task ProcessDueExecutionSlicesAsync(CancellationToken ct = default);
 }

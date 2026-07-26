@@ -5,7 +5,7 @@ using ProcioneMGR.Services.AlphaMining;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// Test del formulaic alpha mining (rif. <c>docs/ROADMAP-QLIB.md §1.7</c>): gli alberi di espressione
+/// Test del formulaic alpha mining (rif. <c>docs/archive/ROADMAP-QLIB.md §1.7</c>): gli alberi di espressione
 /// sono anti-look-ahead per costruzione, la serializzazione fa round-trip, i fattori minati si
 /// ricreano dal nome tramite la factory esistente, e il miner genetico è deterministico e trova un
 /// segnale su una serie con momentum reale.

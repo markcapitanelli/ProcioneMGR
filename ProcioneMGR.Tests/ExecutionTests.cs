@@ -4,7 +4,7 @@ using ProcioneMGR.Services.Execution;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// Test del layer di esecuzione (rif. <c>docs/ROADMAP-QLIB.md §1.2</c>): i piani conservano ESATTAMENTE
+/// Test del layer di esecuzione (rif. <c>docs/archive/ROADMAP-QLIB.md §1.2</c>): i piani conservano ESATTAMENTE
 /// la quantità totale, VWAP segue il profilo di volume, e il simulatore mostra la tesi centrale —
 /// distribuire l'ordine (TWAP/VWAP) riduce l'implementation shortfall rispetto all'esecuzione
 /// immediata quando la size è significativa. Il default "Immediate" resta il comportamento odierno.

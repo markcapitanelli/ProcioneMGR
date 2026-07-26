@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 namespace ProcioneMGR.Data;
 
 /// <summary>
-/// Un fattore alpha "minato" (formulaic alpha mining, rif. <c>docs/ROADMAP-QLIB.md §1.7</c>) salvato
+/// Un fattore alpha "minato" (formulaic alpha mining, rif. <c>docs/archive/ROADMAP-QLIB.md §1.7</c>) salvato
 /// per riuso: l'espressione serializzata + la diagnostica IC su selezione e holdout. L'espressione si
 /// ricostruisce in un <c>IAlphaFactor</c> (via <c>AlphaExpressionFactor</c>/<c>IAlphaFactorFactory.Create</c>
 /// con nome "expr:…"), quindi è riusabile ovunque come qualunque altro fattore.

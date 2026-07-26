@@ -6,7 +6,7 @@ using ProcioneMGR.Tests.Infrastructure;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// [Fase 4 — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Il router di regime: classifica il regime
+/// [Fase 4 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Il router di regime: classifica il regime
 /// corrente col <see cref="IRegimeDetector"/> K-means vero e lascia operare solo le strategie che
 /// vi hanno senso. Fino a qui il routing per regime esisteva soltanto dentro il backtest, e per di
 /// più con un surrogato (pendenza di una SMA), mentre il motore live il regime non lo consultava

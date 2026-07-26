@@ -56,8 +56,13 @@ Accendilo se vuoi oscillare meno accettando di guadagnare meno. Non per far funz
 
 ## Se vuoi continuare la ricerca
 
+> **Aggiornamento 2026-07-26**: la roadmap CORRENTE è **[ROADMAP.md](ROADMAP.md)** (integrazione,
+> core caldo, algoritmi), col dettaglio architetturale nel
+> [PRD-INTEGRAZIONE-CORE-CALDO](PRD-INTEGRAZIONE-CORE-CALDO.md). Le roadmap precedenti sono in
+> `docs/archive/`.
+
 > **Aggiornamento 2026-07-20**: esiste ora una roadmap dedicata —
-> **[ROADMAP-MACCHINA-RICERCA.md](ROADMAP-MACCHINA-RICERCA.md)** — nata dall'obiezione del
+> **[ROADMAP-MACCHINA-RICERCA.md](archive/ROADMAP-MACCHINA-RICERCA.md)** — nata dall'obiezione del
 > proprietario alla conclusione "servono dati di un altro mercato". Il censimento del codice gli ha
 > dato ragione: molti dati preziosi sono già raccolti ma scollegati dal motore (funding storico,
 > order flow scartato al parsing, purged CV esistente ma non usata dal walk-forward). La roadmap

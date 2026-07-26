@@ -6,7 +6,7 @@ using ProcioneMGR.Services.Indicators;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// [Fase 5a — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Trailing "chandelier": distanza k×ATR dal
+/// [Fase 5a — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Trailing "chandelier": distanza k×ATR dal
 /// miglior prezzo invece di una percentuale fissa. È l'unica raccomandazione del PDF sugli stop che
 /// la piattaforma non avesse già in forma migliore, ed entra come <b>candidato da falsificare</b>,
 /// non come miglioramento assunto.

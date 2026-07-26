@@ -4,7 +4,7 @@ using ProcioneMGR.Services.Alpha;
 namespace ProcioneMGR.Services.Execution;
 
 // =============================================================================================
-//  Algoritmi di esecuzione (rif. docs/ROADMAP-QLIB.md §1.2). Ogni BuildPlan garantisce
+//  Algoritmi di esecuzione (rif. docs/archive/ROADMAP-QLIB.md §1.2). Ogni BuildPlan garantisce
 //  Σ(fette) == TotalQuantity esatto e indici di candela validi. Puri/stateless.
 // =============================================================================================
 

@@ -39,7 +39,7 @@ public sealed class BayesianOptions
 /// <summary>
 /// Ottimizzatore di iperparametri: dato lo storico dei punti valutati, propone il prossimo punto da
 /// provare. Alternativa al grid search esaustivo quando lo spazio dei parametri è grande e ogni
-/// valutazione è costosa (un walk-forward completo). Rif. docs/ROADMAP-QLIB §1.6.
+/// valutazione è costosa (un walk-forward completo). Rif. docs/archive/ROADMAP-QLIB §1.6.
 ///
 /// METODOLOGIA (decisione presa nell'aggancio a OptimizationEngine): l'obiettivo che GUIDA la
 /// ricerca è lo <b>Sharpe</b> della finestra (la stessa <c>Statistics.SharpeRatio</c> usata dal

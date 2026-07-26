@@ -6,7 +6,7 @@ namespace ProcioneMGR.Services.Execution;
 /// Algoritmo di esecuzione: dato un ordine "intenzione" (<see cref="ExecutionIntent"/>) e le candele
 /// del timeframe di esecuzione (es. 5m dentro una barra di decisione 4h), produce un
 /// <see cref="ExecutionPlan"/> di ordini figli. È il layer che oggi manca fra "la strategia decide"
-/// e "l'ordine parte" (rif. <c>docs/ROADMAP-QLIB.md §1.2</c>).
+/// e "l'ordine parte" (rif. <c>docs/archive/ROADMAP-QLIB.md §1.2</c>).
 ///
 /// <see cref="ImmediateExecutionAlgorithm"/> riproduce il comportamento ODIERNO (un solo ordine) ed è
 /// il default retrocompatibile; TWAP/VWAP/Iceberg distribuiscono l'ordine per ridurre l'impatto di

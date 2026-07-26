@@ -21,7 +21,7 @@ public enum StackingMode
 
 /// <summary>
 /// <b>Ensemble di modelli a livello di PREDIZIONE</b> (stacking), non di strategia (rif.
-/// <c>docs/ROADMAP-QLIB.md §1.8</c>). Implementa <see cref="IReturnPredictor"/>, quindi si inserisce
+/// <c>docs/archive/ROADMAP-QLIB.md §1.8</c>). Implementa <see cref="IReturnPredictor"/>, quindi si inserisce
 /// senza modifiche in tutto ciò che consuma quell'interfaccia (<c>MlStrategy</c>, <c>SavedMlModel</c>
 /// con <c>ModelType="Stacked"</c>, /ml, /optimization, /ensemble) — stesso pattern con cui
 /// <c>MlpReturnPredictor</c> si è inserito.

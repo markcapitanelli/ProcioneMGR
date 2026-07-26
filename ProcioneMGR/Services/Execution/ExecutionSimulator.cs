@@ -7,7 +7,7 @@ namespace ProcioneMGR.Services.Execution;
 /// mercato e spread, invece di assumere un fill istantaneo a chiusura candela (assunzione odierna
 /// del <c>BacktestEngine</c>). Serve a MISURARE la differenza fra algoritmi (Immediate vs TWAP/VWAP/
 /// Iceberg) sugli stessi dati — la premessa del 10-20% di miglioramento va misurata qui, non
-/// assunta (rif. <c>docs/ROADMAP-QLIB.md §1.2</c>). Puro/deterministico.
+/// assunta (rif. <c>docs/archive/ROADMAP-QLIB.md §1.2</c>). Puro/deterministico.
 /// </summary>
 public interface IExecutionSimulator
 {

@@ -3,7 +3,7 @@ using ProcioneMGR.Services.Monitoring.Drift;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// Test dei detector di concept drift (rif. <c>docs/ROADMAP-QLIB.md §1.5</c>): su due campioni
+/// Test dei detector di concept drift (rif. <c>docs/archive/ROADMAP-QLIB.md §1.5</c>): su due campioni
 /// dalla STESSA distribuzione non deve scattare drift; su una distribuzione chiaramente spostata
 /// deve scattare (PSI alto / KS p→0 / Page-Hinkley oltre soglia). Dati insufficienti ⇒ None.
 /// </summary>

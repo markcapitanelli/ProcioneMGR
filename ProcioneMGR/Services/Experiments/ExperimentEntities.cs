@@ -9,7 +9,7 @@ namespace ProcioneMGR.Services.Experiments;
 /// mentre parametri/metriche evolvono), ma disaccoppiato da un singolo consumatore. Non sostituisce
 /// <c>PipelineRun</c> (il cui checkpoint per-stadio è un bisogno diverso): il Pipeline può SCRIVERE
 /// in aggiunta un <see cref="ExperimentRun"/> di kind "Pipeline" per comparire nella stessa tabella
-/// comparativa degli altri (comporre, non sostituire). Rif. <c>docs/ROADMAP-QLIB.md §1.3</c>.
+/// comparativa degli altri (comporre, non sostituire). Rif. <c>docs/archive/ROADMAP-QLIB.md §1.3</c>.
 /// </summary>
 public class ExperimentRun
 {

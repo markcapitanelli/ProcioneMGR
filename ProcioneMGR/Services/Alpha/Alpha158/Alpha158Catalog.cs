@@ -55,7 +55,7 @@ public sealed class Alpha158Factor : IAlphaFactor
 /// <summary>
 /// Catalogo Alpha158: pochi operatori rolling causali × più orizzonti, generati come istanze
 /// <see cref="Alpha158Factor"/> invece di scrivere ~150 classi a mano (rif.
-/// <c>docs/ROADMAP-QLIB.md §1.1</c>). Nessuna nuova infrastruttura di valutazione: il catalogo
+/// <c>docs/archive/ROADMAP-QLIB.md §1.1</c>). Nessuna nuova infrastruttura di valutazione: il catalogo
 /// alimenta gli stessi <c>FactorEvaluator</c>/<c>DatasetBuilder</c> già equivalenti ad Alphalens.
 /// </summary>
 public static class Alpha158Catalog
