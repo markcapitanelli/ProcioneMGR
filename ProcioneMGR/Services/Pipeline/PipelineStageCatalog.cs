@@ -25,6 +25,9 @@ public sealed class PipelineStageCatalog : IPipelineStageCatalog
         typeof(StrategyDiscoveryStage),
         typeof(CreativeDiscoveryStage),
         typeof(HoldoutValidationStage),
+        // Prima della RobustnessProbe a parità di DefaultOrder (10): il nullo boccia, la probe
+        // arricchisce — inutile spendere Monte Carlo su chi il nullo scarterebbe.
+        typeof(NullTwinValidationStage),
         typeof(RobustnessProbeStage),
         typeof(EnsembleAssemblyStage),
         typeof(RiskSizingStage),

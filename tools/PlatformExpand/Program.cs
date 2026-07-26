@@ -901,14 +901,16 @@ async Task StatArbAsync(string tf)
         Console.WriteLine($"  {r.Y + "/" + r.X,-24}{r.HoldRet,8:F1}%{r.HoldSharpe,8:F2}{r.Trades,5}{r.MaxDD,6:F1}%  {r.G.Item1}/{r.G.Item2}/{r.G.Item3}/{r.G.Item4}");
 
     // Gemello sintetico: le due gambe rese NULLE indipendenti (co-movenza distrutta).
-    Console.WriteLine($"\n=== GEMELLO SINTETICO sui top-{Math.Min(6, ranked.Count)} (holdSh reale vs P95 gambe nulle) ===");
-    Console.WriteLine($"  {"Coppia",-24}{"reale",7}{"P95null",9}{"batte",7}  verdetto");
+    // [A1] Policy unificata del giudice (NullTwinJudge): 200 gemelli, soglia al 99° — questa fase
+    // era rimasta a 15/95°, la coppia debole che sul single-leg aveva già promosso un falso positivo.
+    Console.WriteLine($"\n=== GEMELLO SINTETICO sui top-{Math.Min(6, ranked.Count)} (holdSh reale vs P99 gambe nulle) ===");
+    Console.WriteLine($"  {"Coppia",-24}{"reale",7}{"P99null",9}{"batte",7}  verdetto");
     var confirmed = 0;
     foreach (var r in ranked.Where(r => r.HoldSharpe > 0.3m).Take(6))
     {
         var cfg = BuildCfg(r.Y, r.X, r.G);
         var nulls = new List<decimal>();
-        for (var t = 0; t < 15; t++)
+        for (var t = 0; t < ProcioneMGR.Services.Validation.NullTwinJudge.DefaultTwins; t++)
         {
             var ny = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(hold[r.Y], seed: 3000 + t);
             var nx = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(hold[r.X], seed: 7000 + t);
@@ -919,12 +921,10 @@ async Task StatArbAsync(string tf)
             }
             catch { }
         }
-        if (nulls.Count < 10) { Console.WriteLine($"  {r.Y + "/" + r.X,-24}  gemelli insufficienti"); continue; }
-        nulls.Sort();
-        var p95 = nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(0.95 * nulls.Count) - 1)];
-        var beats = r.HoldSharpe > p95;
-        if (beats) confirmed++;
-        Console.WriteLine($"  {r.Y + "/" + r.X,-24}{r.HoldSharpe,7:F2}{p95,9:F2}{(beats ? "  SI" : "  no"),7}  {(beats ? "co-movenza VERA: candidato" : "dentro il nullo: selezione")}");
+        var verdict = ProcioneMGR.Services.Validation.NullTwinJudge.Evaluate(r.HoldSharpe, nulls);
+        if (verdict is null) { Console.WriteLine($"  {r.Y + "/" + r.X,-24}  gemelli insufficienti"); continue; }
+        if (verdict.Passed) confirmed++;
+        Console.WriteLine($"  {r.Y + "/" + r.X,-24}{verdict.RealSharpe,7:F2}{verdict.Threshold,9:F2}{(verdict.Passed ? "  SI" : "  no"),7}  {(verdict.Passed ? "co-movenza VERA: candidato" : "dentro il nullo: selezione")}");
     }
 
     Console.WriteLine($"\n=== {confirmed} coppie CONFERMATE (cointegr. + holdout + gemello) ===");
@@ -938,8 +938,8 @@ async Task StatArbAsync(string tf)
 // include Post-Crash/Post-Surge (12/13), MFI (10), OBV slope (11), Ora UTC (9) oltre ai classici.
 // Costi onesti (fee+slippage), funding, walk-forward con EMBARGO. I sopravvissuti al gate di
 // selezione passano poi due giudici indipendenti: (a) HOLDOUT su un periodo mai visto, (b) il
-// GEMELLO SINTETICO (I2) — lo Sharpe reale deve battere il 95° percentile di 15 mercati nulli.
-// Solo chi passa entrambi è "nuovo ed efficace"; il resto è selezione, e lo scriviamo.
+// GEMELLO SINTETICO (I2) — policy unificata NullTwinJudge: battere il 99° percentile di 200
+// mercati nulli. Solo chi passa entrambi è "nuovo ed efficace"; il resto è selezione, e lo scriviamo.
 async Task HuntEdgeAsync()
 {
     string[] symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "LINK/USDT", "AVAX/USDT", "LTC/USDT"];
@@ -1009,9 +1009,9 @@ async Task HuntEdgeAsync()
     foreach (var s in ranked)
         Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}{s.Cand.OutOfSampleSharpe,8:F2}{s.HoldSharpe,8:F2}{s.HoldRet,8:F1}%{s.HoldTrades,5}  {DescribeComposite(s.Cand.Parameters)}");
 
-    // Giudice 2: il GEMELLO SINTETICO sui top-8. Il reale deve battere il 95° percentile nullo.
-    Console.WriteLine($"\n=== NULLTWIN sui top-{Math.Min(8, ranked.Count)} (holdSh reale vs P95 di 15 mercati nulli) ===");
-    Console.WriteLine($"  {"Symbol",-10}{"TF",-4}{"reale",7}{"P95null",9}{"batte",7}  verdetto");
+    // Giudice 2: il GEMELLO SINTETICO sui top-8. Policy NullTwinJudge: battere il 99° su 200 nulli.
+    Console.WriteLine($"\n=== NULLTWIN sui top-{Math.Min(8, ranked.Count)} (holdSh reale vs P99 di 200 mercati nulli) ===");
+    Console.WriteLine($"  {"Symbol",-10}{"TF",-4}{"reale",7}{"P99null",9}{"batte",7}  verdetto");
     var confirmed = new List<object>();
     foreach (var s in ranked.Take(8))
     {
@@ -1034,26 +1034,19 @@ async Task HuntEdgeAsync()
             Statistics.PeriodsPerYear(s.Cand.Timeframe));
 
         var real = s.HoldSharpe;
-        // 200 gemelli e non 15: con quindici campioni il "95° percentile" coincide quasi col massimo
-        // osservato, quindi la soglia era essa stessa rumore — un candidato poteva superarla per la
-        // fortuna di quei quindici sorteggi. Misurato il 2026-07-25 su un sopravvissuto: con 15
-        // gemelli il P95 risultava 0,85 e il candidato "passava"; con 200 il P95 vero era 2,51 e il
-        // candidato stava all'86° percentile. La soglia è inoltre al 99° e non al 95°, perché la
-        // caccia prova ~15.000 combinazioni e un test al 95% lascia passare il 5% del rumore per
-        // costruzione: un singolo sopravvissuto al 95% è la resa ATTESA del caso, non una scoperta.
+        // [A1] Il perché di 200 gemelli e del 99° (misurato il 2026-07-25 su SEI/USDT: P95 su 15
+        // gemelli = 0,85 e "passava"; su 200 il P95 vero era 2,51) ora vive in UN posto solo:
+        // ProcioneMGR.Services.Validation.NullTwinJudge, che è anche il giudice della pipeline.
         var nulls = new List<decimal>();
-        for (var t = 0; t < 200; t++)
+        for (var t = 0; t < ProcioneMGR.Services.Validation.NullTwinJudge.DefaultTwins; t++)
         {
             var twin = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(candles, seed: 2000 + t);
             try { nulls.Add(RealSharpe(twin)); } catch { }
         }
-        if (nulls.Count < 100) { Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}  gemelli insufficienti"); continue; }
-        nulls.Sort();
-        var p99 = nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(0.99 * nulls.Count) - 1)];
-        var percentile = 100.0 * nulls.Count(n => n < real) / nulls.Count;
-        var beats = real > p99;
-        Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}{real,7:F2}{p99,9:F2}{(beats ? "  SI" : "  no"),7}  percentile {percentile:F0}  {(beats ? "OLTRE il 99° del nullo" : "dentro il nullo: selezione")}");
-        if (beats) confirmed.Add(new { s.Cand.Symbol, s.Cand.Timeframe, s.Cand.StrategyName, s.Cand.Parameters, HoldSharpe = real, s.HoldRet, P99Null = p99, PercentileVsNull = percentile });
+        var verdict = ProcioneMGR.Services.Validation.NullTwinJudge.Evaluate(real, nulls);
+        if (verdict is null) { Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}  gemelli insufficienti"); continue; }
+        Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-4}{real,7:F2}{verdict.Threshold,9:F2}{(verdict.Passed ? "  SI" : "  no"),7}  percentile {verdict.PercentileOfReal:F0}  {(verdict.Passed ? "OLTRE il 99° del nullo" : "dentro il nullo: selezione")}");
+        if (verdict.Passed) confirmed.Add(new { s.Cand.Symbol, s.Cand.Timeframe, s.Cand.StrategyName, s.Cand.Parameters, HoldSharpe = real, s.HoldRet, P99Null = verdict.Threshold, PercentileVsNull = verdict.PercentileOfReal });
     }
 
     var outPath = Path.Combine(AppContext.BaseDirectory, "huntedge-confirmed.json");
@@ -1184,18 +1177,17 @@ async Task HuntDenseAsync()
             }, series, CancellationToken.None).GetAwaiter().GetResult().EquityCurve,
             Statistics.PeriodsPerYear(s.Cand.Timeframe));
 
+        // [A1] Era il giudice DEBOLE (15 gemelli, 95°): allineato alla policy unificata NullTwinJudge.
         var nulls = new List<decimal>();
-        for (var t = 0; t < 15; t++)
+        for (var t = 0; t < ProcioneMGR.Services.Validation.NullTwinJudge.DefaultTwins; t++)
         {
             var twin = ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(candles, seed: 3000 + t);
             try { nulls.Add(SharpeOn(twin)); } catch { }
         }
-        if (nulls.Count < 10) continue;
-        nulls.Sort();
-        var p95 = nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(0.95 * nulls.Count) - 1)];
-        var beats = s.HoldSharpe > p95;
-        Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-5}reale {s.HoldSharpe,6:F2}  P95null {p95,6:F2}  {(beats ? "OLTRE il nullo" : "dentro il nullo")}  ({s.HoldTrades} trade)");
-        if (beats) confirmed.Add(new { s.Cand.Symbol, s.Cand.Timeframe, s.Cand.StrategyName, s.Cand.Parameters, HoldSharpe = s.HoldSharpe, s.HoldRet, s.HoldTrades, P95Null = p95 });
+        var verdict = ProcioneMGR.Services.Validation.NullTwinJudge.Evaluate(s.HoldSharpe, nulls);
+        if (verdict is null) continue;
+        Console.WriteLine($"  {s.Cand.Symbol,-10}{s.Cand.Timeframe,-5}reale {s.HoldSharpe,6:F2}  P99null {verdict.Threshold,6:F2}  {(verdict.Passed ? "OLTRE il nullo" : "dentro il nullo")}  ({s.HoldTrades} trade)");
+        if (verdict.Passed) confirmed.Add(new { s.Cand.Symbol, s.Cand.Timeframe, s.Cand.StrategyName, s.Cand.Parameters, HoldSharpe = s.HoldSharpe, s.HoldRet, s.HoldTrades, P99Null = verdict.Threshold });
     }
 
     var outPath = Path.Combine(AppContext.BaseDirectory, "huntdense-confirmed.json");
@@ -1261,22 +1253,21 @@ async Task VerifySurvivorAsync()
     var real = Run(candles, basePars);
     Console.WriteLine($"REALE: Sharpe {real.Sharpe:F2}, rendimento {real.Ret:F1}%, {real.Trades} trade\n");
 
-    // --- Attacco 1+2: 200 gemelli nulli -------------------------------------------------------
+    // --- Attacco 1+2: 200 gemelli nulli (policy unificata NullTwinJudge) ----------------------
     Console.WriteLine("--- 200 gemelli sintetici (la soglia che l'ha promosso era stimata su 15) ---");
     var nulls = new List<decimal>();
-    for (var t = 0; t < 200; t++)
+    for (var t = 0; t < ProcioneMGR.Services.Validation.NullTwinJudge.DefaultTwins; t++)
     {
         try { nulls.Add(Run(ProcioneMGR.Services.Validation.NullTwinGenerator.Generate(candles, seed: 9000 + t), basePars).Sharpe); }
         catch { }
     }
-    nulls.Sort();
-    decimal Pct(double q) => nulls[(int)Math.Min(nulls.Count - 1, Math.Ceiling(q * nulls.Count) - 1)];
-    var battuti = nulls.Count(n => n < real.Sharpe);
-    var percentile = 100.0 * battuti / nulls.Count;
+    var verdict = ProcioneMGR.Services.Validation.NullTwinJudge.Evaluate(real.Sharpe, nulls)
+        ?? throw new InvalidOperationException("Gemelli validi insufficienti per il torchio.");
+    var percentile = verdict.PercentileOfReal;
 
-    Console.WriteLine($"  gemelli validi {nulls.Count}   mediana {Pct(0.50):F2}   P90 {Pct(0.90):F2}   P95 {Pct(0.95):F2}   P99 {Pct(0.99):F2}   max {nulls[^1]:F2}");
-    Console.WriteLine($"  il reale ({real.Sharpe:F2}) batte {battuti}/{nulls.Count} gemelli = percentile {percentile:F1}");
-    Console.WriteLine($"  p-value empirico (quota di gemelli >= reale): {(nulls.Count - battuti) / (double)nulls.Count:F3}");
+    Console.WriteLine($"  gemelli validi {verdict.ValidTwins}   mediana {verdict.Median:F2}   P90 {verdict.P90:F2}   P95 {verdict.P95:F2}   P99 {verdict.P99:F2}   max {verdict.Max:F2}");
+    Console.WriteLine($"  il reale ({real.Sharpe:F2}) sta al percentile {percentile:F1} della distribuzione nulla");
+    Console.WriteLine($"  p-value empirico (quota di gemelli >= reale): {verdict.EmpiricalPValue:F3}");
 
     // --- Attacco 3: vicinato dei parametri ----------------------------------------------------
     Console.WriteLine("\n--- Vicinato dei parametri (un edge vero degrada dolcemente, un artefatto è un picco isolato) ---");
@@ -1492,51 +1483,12 @@ async Task RegimePersistenceAsync()
     Console.WriteLine($"  tratti più corti di 1 giorno: {durate.Count(d => d < 24)}/{durate.Count}");
     Console.WriteLine($"  tratti più lunghi di 7 giorni: {durate.Count(d => d >= 168)}/{durate.Count}");
 
-    // ---- [R4] GATE dell'ibrido K-means→HMM: stessa serie, stessi cluster, decodifica diversa ----
-    // Le etichette GREZZE (prima di ogni smoothing) si ricostruiscono dal modello stesso:
-    // normalizzazione salvata + nearest-centroid. È l'input dell'HMM.
-    var centroids = JsonSerializer.Deserialize<float[][]>(model.CentroidsJson)!;
-    var scaling = JsonSerializer.Deserialize<ProcioneMGR.Services.Regime.FeatureScaling>(model.FeatureScalingJson)!;
-    var useVolume = scaling.Uses("VolumeRatio");
-    var useBreadth = scaling.Uses("MarketBreadth");
-    if (useBreadth) { Console.WriteLine("  (modello con breadth: confronto HMM saltato in questa fase)"); return; }
-
-    var matrix = feats.Select(f => scaling.Transform(f.ToClusteringVector(useVolume, useBreadth))).ToArray();
-    var rawLabels = ProcioneMGR.Services.Regime.RegimeAssignment.AssignRaw(matrix, centroids);
-    var k = centroids.Length;
-
-    (double MedianDays, int Transitions, double Agreement, int StatesVisited) Misura(int[] path)
-    {
-        var runs = ProcioneMGR.Services.Regime.StickyHmmSmoother.RunLengths(path);
-        runs.Sort();
-        var agree = path.Zip(rawLabels, (a, b) => a == b ? 1 : 0).Average();
-        return (runs[runs.Count / 2] / 24.0, runs.Count - 1, agree, path.Distinct().Count());
-    }
-
-    Console.WriteLine();
-    Console.WriteLine("  ---- GATE R4: smoothing attuale vs sticky-HMM (stessi cluster, stessa serie) ----");
-    Console.WriteLine($"  {"decodifica",-22}{"mediana gg",11}{"transizioni",12}{"accordo",9}{"stati",7}");
-
-    var attuale = Misura(labels);
-    Console.WriteLine($"  {"attuale (rolling+3)",-22}{attuale.MedianDays,11:F1}{attuale.Transitions,12}{attuale.Agreement,9:P0}{attuale.StatesVisited,7}");
-
-    // Griglia dichiarata su ENTRAMBI i parametri: ρ (durata attesa) e p (fiducia nelle etichette).
-    // p basso = il filtro crede poco alle etichette grezze e serve una sequenza contraria lunga per
-    // cambiare stato: è la manopola che conta quando le etichette oscillano per costruzione.
-    foreach (var p in new[] { 0.75, 0.5, 0.35 })
-    {
-        foreach (var rho in new[] { 0.995, 0.999 })
-        {
-            var vit = Misura(ProcioneMGR.Services.Regime.StickyHmmSmoother.Decode(rawLabels, k, rho, p));
-            var cau = Misura(ProcioneMGR.Services.Regime.StickyHmmSmoother.DecodeCausal(rawLabels, k, rho, p));
-            Console.WriteLine($"  {$"viterbi ρ={rho} p={p}",-22}{vit.MedianDays,11:F1}{vit.Transitions,12}{vit.Agreement,9:P0}{vit.StatesVisited,7}");
-            Console.WriteLine($"  {$"causale ρ={rho} p={p}",-22}{cau.MedianDays,11:F1}{cau.Transitions,12}{cau.Agreement,9:P0}{cau.StatesVisited,7}");
-        }
-    }
-
-    Console.WriteLine();
-    Console.WriteLine("  GATE (roadmap rendimento): mediana >= 20 gg E accordo > 55% E tutti gli stati visitati.");
-    Console.WriteLine("  La riga che conta per il LIVE è la causale: il Viterbi guarda avanti, il router no.");
+    // [A3 roadmap integrazione] Qui viveva il GATE R4 dell'ibrido K-means→HMM (StickyHmmSmoother:
+    // decodifica sticky sopra i cluster esistenti). È stato ESEGUITO e BOCCIATO su tutta la griglia
+    // ρ×p (settima roadmap, 2026-07-25): il problema è nei CLUSTER, non nella decodifica — nessuna
+    // decodifica rende persistenti regimi i cui centroidi oscillano per costruzione. Smoother e gate
+    // rimossi (la storia git li conserva); il candidato vivo è il jump model C1 della ROADMAP
+    // corrente, che ristima cluster e persistenza CONGIUNTAMENTE invece di filtrare a valle.
 }
 
 /// <summary>
@@ -1748,7 +1700,7 @@ async Task EventEdgeAsync()
 // Connessione REALE allo stream !forceOrder@arr per ~60s: dimostra che endpoint, payload e parsing
 // combaciano col mercato vero PRIMA di fidarsi dell'accumulo in produzione.
 /// <summary>
-/// [Fase 3 — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Quanto costerebbe DAVVERO catturare il trade
+/// [Fase 3 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Quanto costerebbe DAVVERO catturare il trade
 /// tape e gli snapshot di order book, misurato sui dati che abbiamo già invece che stimato a occhio.
 ///
 /// La domanda è decisiva: la roadmap intraday chiama D2 un "investimento 2027" proprio per il
@@ -1858,7 +1810,7 @@ async Task TapeCostAsync()
 }
 
 /// <summary>
-/// [Fase 5a — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Il GATE del chandelier: il trailing a k×ATR
+/// [Fase 5a — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Il GATE del chandelier: il trailing a k×ATR
 /// va adottato solo se batte quello percentuale già presente, su dati veri e a costi onesti.
 ///
 /// Il confronto gira su più simboli, più strategie e più impostazioni: un chandelier che vince su
@@ -1953,7 +1905,7 @@ async Task TrailCompareAsync()
 }
 
 /// <summary>
-/// [Taratura delle due manopole spente — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md §11]
+/// [Taratura delle due manopole spente — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md §11]
 /// Il limite di esposizione correlata e il router di regime sono nati default-off perché una soglia
 /// scelta a occhio non protegge: o è inerte, o paralizza. Questa fase calcola, sulle corsie REALI e
 /// sui prezzi REALI, dove cadrebbero quelle soglie — così la decisione di accenderle si prende su
@@ -2441,13 +2393,19 @@ async Task NullTwinAsync(string symbol, string timeframe, int twins, bool plante
     }
     Console.WriteLine();
 
-    Array.Sort(nullBests);
-    var beaten = nullBests.Count(b => b < realBest);
-    var p95 = nullBests[(int)Math.Min(twins - 1, Math.Ceiling(0.95 * twins) - 1)];
-    Console.WriteLine($"\nDistribuzione NULLA del 'migliore': min {nullBests[0]:F2} · mediana {nullBests[twins / 2]:F2} · P95 {p95:F2} · max {nullBests[^1]:F2}");
-    Console.WriteLine($"Il reale batte {beaten}/{twins} gemelli.");
-    Console.WriteLine(realBest > p95
-        ? "VERDETTO: il migliore reale e' OLTRE il 95° percentile nullo — c'e' piu' che selezione. (Il gate DSR/holdout resta il giudice finale.)"
+    // [A1] Verdetto dal giudice unificato. Questa fase diagnostica lavora spesso con pochi gemelli
+    // (ogni gemello costa una mini-caccia intera): minValidTwins e' rilassato APPOSTA e lo si dice —
+    // sotto i 200 della policy il quantile e' una stima grossolana, buona per orientarsi, non per
+    // promuovere (per promuovere c'e' huntedge/pipeline, che usano la policy piena).
+    var verdict = ProcioneMGR.Services.Validation.NullTwinJudge.Evaluate(
+        (decimal)realBest, [.. nullBests.Select(b => (decimal)b)],
+        minValidTwins: Math.Max(5, twins / 2));
+    if (verdict is null) { Console.WriteLine("\nGemelli validi insufficienti: nessun verdetto."); return; }
+    Console.WriteLine($"\nDistribuzione NULLA del 'migliore': mediana {verdict.Median:F2} · P90 {verdict.P90:F2} · P95 {verdict.P95:F2} · P99 {verdict.P99:F2} · max {verdict.Max:F2}");
+    Console.WriteLine($"Il reale sta al percentile {verdict.PercentileOfReal:F1} ({verdict.ValidTwins} gemelli validi"
+        + (verdict.ValidTwins < ProcioneMGR.Services.Validation.NullTwinJudge.DefaultTwins ? " — sotto la policy di 200: stima orientativa)" : ")"));
+    Console.WriteLine(verdict.Passed
+        ? "VERDETTO: il migliore reale e' OLTRE il 99° percentile nullo — c'e' piu' che selezione. (Il gate DSR/holdout resta il giudice finale.)"
         : "VERDETTO: serie senza alcuna struttura producono 'migliori' cosi' belli — il candidato reale e' SELEZIONE, non segnale.");
 }
 
@@ -2826,7 +2784,7 @@ async Task FundingBackfillAsync()
 // ------------------------------------------------------------------ COVERAGE (T0.0 roadmap macchina-ricerca)
 // L'audit che viene PRIMA di qualunque "spremiamo i dati": cosa c'e' davvero in casa, con quali
 // buchi, e quali episodi storici nominabili sono coperti. Read-only, sicuro con l'app accesa.
-// L'output alimenta la sezione "Inventario" di docs/ROADMAP-MACCHINA-RICERCA.md.
+// L'output alimenta la sezione "Inventario" di docs/archive/ROADMAP-MACCHINA-RICERCA.md.
 async Task CoverageAsync()
 {
     await using var db = await dbFactory.CreateDbContextAsync();

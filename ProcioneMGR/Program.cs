@@ -132,7 +132,7 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Config.IAppConfigWriter, Proc
 builder.Services.AddSingleton<ISafetyConfigWriter, SafetyConfigWriter>();
 
 // --- Esecuzione live "a fette" (TWAP/VWAP/Iceberg su Testnet/Live). Master switch default-off
-//     (Trading:LiveExecution:Enabled). Rif. docs/ROADMAP-QLIB.md §1.2. ---
+//     (Trading:LiveExecution:Enabled). Rif. docs/archive/ROADMAP-QLIB.md §1.2. ---
 builder.Services.Configure<LiveExecutionOptions>(builder.Configuration.GetSection("Trading:LiveExecution"));
 // ITradingEngine/TradingWorker sono registrati piu' sotto come keyed singleton per corsia
 // (vedi blocco "Multi-strategy ensemble + trading: corsie isolate").
@@ -140,6 +140,9 @@ builder.Services.Configure<LiveExecutionOptions>(builder.Configuration.GetSectio
 // --- Backtesting ---
 builder.Services.AddSingleton<IStrategyFactory, StrategyFactory>();
 builder.Services.AddScoped<IBacktestEngine, BacktestEngine>();
+// [A1 roadmap integrazione] Giudice del gemello nullo unificato (200 gemelli, 99°): unico punto
+// di policy per pipeline (NullTwinValidationStage) e tool CLI. Scoped come il motore che usa.
+builder.Services.AddScoped<ProcioneMGR.Services.Validation.INullTwinJudge, ProcioneMGR.Services.Validation.NullTwinJudge>();
 // [T0.2] Serie storica dei funding per i backtest futures (da SentimentMetricPoints).
 builder.Services.AddScoped<IFundingHistoryProvider, FundingHistoryProvider>();
 
@@ -153,7 +156,7 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Optimization.Bayesian.IHyperp
 builder.Services.AddSingleton<ProcioneMGR.Services.Optimization.Bayesian.BayesianSearch>();
 
 // --- Nested decision execution (TWAP/VWAP/Iceberg + simulatore di fill). Additivo: il default
-//     "Immediate" riproduce il comportamento odierno. Rif. docs/ROADMAP-QLIB.md §1.2. ---
+//     "Immediate" riproduce il comportamento odierno. Rif. docs/archive/ROADMAP-QLIB.md §1.2. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Execution.IExecutionAlgorithmFactory, ProcioneMGR.Services.Execution.ExecutionAlgorithmFactory>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Execution.IExecutionSimulator, ProcioneMGR.Services.Execution.ExecutionSimulator>();
 var executionParams = builder.Configuration.GetSection("Execution").Get<ProcioneMGR.Services.Execution.ExecutionParameters>()
@@ -174,7 +177,7 @@ builder.Services.AddScoped<IStrategyComposer, StrategyComposer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IAlphaFactorFactory, ProcioneMGR.Services.Alpha.AlphaFactorFactory>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorEvaluator, ProcioneMGR.Services.Alpha.FactorEvaluator>();
 
-// --- Formulaic alpha mining (programmazione genetica, C# puro). Rif. docs/ROADMAP-QLIB.md §1.7. ---
+// --- Formulaic alpha mining (programmazione genetica, C# puro). Rif. docs/archive/ROADMAP-QLIB.md §1.7. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.AlphaMining.GeneticAlphaMiner>();
 
 // --- Processo ML (dataset da fattori + cross-validation temporale purged/embargoed) ---
@@ -295,7 +298,7 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Risk.LeverageAdvisor>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.IStrategyDecayMonitor, ProcioneMGR.Services.Monitoring.StrategyDecayMonitor>();
 
 // --- Concept drift detection (segnale anticipatore: distribuzione delle feature, AFFIANCA il
-//     monitor di decadimento reattivo). Rif. docs/ROADMAP-QLIB.md §1.5. ---
+//     monitor di decadimento reattivo). Rif. docs/archive/ROADMAP-QLIB.md §1.5. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.IFeatureDriftDetector, ProcioneMGR.Services.Monitoring.Drift.PsiDriftDetector>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.IFeatureDriftDetector, ProcioneMGR.Services.Monitoring.Drift.KsDriftDetector>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.IFeatureDriftDetector, ProcioneMGR.Services.Monitoring.Drift.PageHinkleyDetector>();
@@ -395,7 +398,7 @@ builder.Services.AddHostedService<ProcioneMGR.Services.Pipeline.RegimeChangeTrig
 
 // --- Experiment tracking generalizzato (osservabilità confrontabile di ogni run di ricerca) ---
 // Singleton: usa IDbContextFactory (context a vita breve per operazione), additivo, nessuna
-// modifica agli engine. Rif. docs/ROADMAP-QLIB.md §1.3.
+// modifica agli engine. Rif. docs/archive/ROADMAP-QLIB.md §1.3.
 builder.Services.AddSingleton<ProcioneMGR.Services.Experiments.IExperimentTracker, ProcioneMGR.Services.Experiments.ExperimentTracker>();
 
 // --- Layer AI di supervisione del ciclo di ricerca (SOLO advisory) ---
