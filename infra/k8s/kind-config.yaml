@@ -11,8 +11,13 @@ networking:
   # Il CNI lo installa scripts/k8s-bootstrap.ps1 (manifest Calico pinnato) subito dopo la creazione.
   # NB: un cluster creato PRIMA di questo cambio va ricreato (k8s-teardown + k8s-bootstrap).
   disableDefaultCNI: true
-  # Allineato al default del manifest Calico (CALICO_IPV4POOL_CIDR): CIDR diversi = pod senza rete.
-  podSubnet: "192.168.0.0/16"
+  # NON il default Calico (192.168.0.0/16): Docker Desktop risolve host.docker.internal in
+  # 192.168.65.254, che CADE DENTRO quel pool — Calico quindi non fa SNAT verso il Postgres
+  # dell'host ("destinazione interna al pool") e i SYN dei pod partono con IP di pod, a cui il
+  # gateway di Docker non sa rispondere: timeout su OGNI connessione al DB, scoperto solo
+  # eseguendo (B1, 2026-07-26). 10.244.0.0/16 è fuori da ogni rete di Docker Desktop; il
+  # bootstrap patcha CALICO_IPV4POOL_CIDR allo stesso valore (i due DEVONO combaciare).
+  podSubnet: "10.244.0.0/16"
 nodes:
   - role: control-plane
     # Porte 80/443 mappate sull'host: pronte per un futuro ingress-nginx (Fase 1+),

@@ -46,10 +46,28 @@ if (Test-KindCluster $clusterName) {
 # e la policy su procionemgr-trading è l'unico controllo di accesso davanti a ConfirmOrder (ordini
 # Live reali). Versione PINNATA, mai un tag mobile: stesso patto delle nostre immagini e di ArgoCD.
 # L'apply è idempotente: rilanciare lo script su un cluster già con Calico non cambia nulla.
+#
+# Il pool IPv4 viene PATCHATO a 10.244.0.0/16 (default: 192.168.0.0/16) prima dell'apply, in
+# accordo col podSubnet di kind-config.yaml. Motivo (B1, 2026-07-26, trovato solo eseguendo):
+# host.docker.internal è 192.168.65.254, DENTRO il pool di default — Calico non fa SNAT verso
+# destinazioni interne al pool, quindi ogni connessione dei pod al Postgres dell'host partiva con
+# IP di pod e moriva in timeout. Il patch è verificato: se il testo del manifest cambia con una
+# futura versione di Calico, lo script FALLISCE invece di applicare il default sbagliato.
 $calicoVersion = "v3.29.1"
-$calicoManifest = "https://raw.githubusercontent.com/projectcalico/calico/$calicoVersion/manifests/calico.yaml"
-Write-Host "Installo il CNI Calico $calicoVersion (applica le NetworkPolicy, kindnet le ignora)..." -ForegroundColor Cyan
-kubectl apply -f $calicoManifest --context "kind-$clusterName"
+$calicoManifestUrl = "https://raw.githubusercontent.com/projectcalico/calico/$calicoVersion/manifests/calico.yaml"
+$podCidr = "10.244.0.0/16"
+Write-Host "Installo il CNI Calico $calicoVersion (pool $podCidr, applica le NetworkPolicy)..." -ForegroundColor Cyan
+$calicoYaml = (Invoke-WebRequest -UseBasicParsing -Uri $calicoManifestUrl).Content
+$cidrBlock = "# - name: CALICO_IPV4POOL_CIDR`n            #   value: `"192.168.0.0/16`""
+if (-not $calicoYaml.Contains($cidrBlock)) {
+    Write-Host "ERRORE: il manifest Calico $calicoVersion non contiene il blocco CALICO_IPV4POOL_CIDR atteso." -ForegroundColor Red
+    Write-Host "Senza il patch i pod non avrebbero SNAT verso host.docker.internal: mi fermo." -ForegroundColor Red
+    exit 1
+}
+$calicoYaml = $calicoYaml.Replace($cidrBlock, "- name: CALICO_IPV4POOL_CIDR`n              value: `"$podCidr`"")
+$calicoTmp = Join-Path $env:TEMP "calico-$calicoVersion-patched.yaml"
+[IO.File]::WriteAllText($calicoTmp, $calicoYaml)
+kubectl apply -f $calicoTmp --context "kind-$clusterName"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Attendo che Calico e il nodo siano pronti..." -ForegroundColor Cyan
