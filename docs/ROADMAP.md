@@ -30,11 +30,11 @@ trading sempre acceso; il monolite come guscio riavviabile di UI+ricerca), non c
 
 | # | Cosa | Stato | Gate / verifica |
 |---|---|---|---|
-| A1 | **Giudice del gemello nullo unificato**: servizio `NullTwinJudge` (200 gemelli, soglia 99°) + stage pipeline `NullTwinValidation` (opt-in, sui soli sopravvissuti all'holdout) + le 4 fasi CLI rifatte sul giudice condiviso | in esecuzione | stessi verdetti del torchio sul caso SEI documentato; suite verde |
+| A1 | **Giudice del gemello nullo unificato**: servizio `NullTwinJudge` (200 gemelli, soglia 99°) + stage pipeline `NullTwinValidation` (opt-in, sui soli sopravvissuti all'holdout) + le 4 fasi CLI rifatte sul giudice condiviso | fatto (PR #54) | stessi verdetti del torchio sul caso SEI documentato; suite verde |
 | A2 | Rimozione tool one-shot: TriggerVerify, RealtimeVerify (verifiche concluse e documentate nei report; la storia git li conserva). **SpotVerify RESTA** — scoperto in corso d'opera che il messaggio d'errore di `BitgetClient` lo indica come gate di verifica dal vivo della semantica spot, non ancora eseguita; stesso motivo per cui resta FuturesVerify | fatto | build solution verde |
-| A3 | Rimozione `StickyHmmSmoother` + test (il candidato regimi è il jump model C1, che non lo riusa: ristima i cluster, non li ridecodifica) | in esecuzione | build+suite verdi |
+| A3 | Rimozione `StickyHmmSmoother` + test (il candidato regimi è il jump model C1, che non lo riusa: ristima i cluster, non li ridecodifica) | fatto (PR #54) | build+suite verdi |
 | A4 | Allineamento `RegimeTrigger`/`Campaign` | **verificato: nessuna azione** — senza campagne abilitate `CheckAsync` esce alla prima query (costo ~1 query/30min); il default ON è documentato come additivo | — |
-| A5 | Archivio docs: le 8 roadmap storiche in `docs/archive/`, questa come unica corrente; link aggiornati | in esecuzione | nessun link rotto nei doc attivi |
+| A5 | Archivio docs: le 8 roadmap storiche in `docs/archive/`, questa come unica corrente; link aggiornati | fatto (PR #54) | nessun link rotto nei doc attivi |
 | A6 | Estrazione delle fasi di PlatformExpand (4.300 righe in un file) in libreria richiamabile anche dall'app | aperto | fase per fase, dopo A1 che ne estrae la prima |
 
 ## Filone B — Core caldo / guscio freddo (microservizi, per gradi e con gate)
@@ -44,9 +44,9 @@ host**; mai auto-Live; l'AI resta advisory.
 
 | # | Cosa | Stato | Gate / verifica |
 |---|---|---|---|
-| B0 | **Lease di esecuzione per corsia** (advisory lock Postgres): "mai due esecutori sulla stessa corsia" passa da patto operativo a invariante applicata — un deploy incoerente fallisce a voce alta invece di eseguire doppio | in esecuzione | test: due lease sulla stessa corsia confliggono; corsie diverse no |
-| B1 | Monolite in K8s come baseline (rivalidare il percorso di Fase 3: immagini, GitOps, PVC keyring) | aperto | app raggiungibile dal cluster, login persistente al riavvio del pod |
-| B2 | `MarketData:UseRemoteIngestion=true` | aperto | 7 giorni di sync senza buchi nelle candele |
+| B0 | **Lease di esecuzione per corsia** (advisory lock Postgres): "mai due esecutori sulla stessa corsia" passa da patto operativo a invariante applicata — un deploy incoerente fallisce a voce alta invece di eseguire doppio | fatto (PR #54) + visto dal vivo in B1: il servizio trading in-cluster acquisisce i 3 lease all'avvio | test: due lease sulla stessa corsia confliggono; corsie diverse no |
+| B1 | Monolite in K8s come baseline (rivalidare il percorso di Fase 3: immagini, GitOps, PVC keyring) | **fatto (2026-07-26)**: cluster ricreato, tag pinnati allo sha, stack completo sincronizzato via ArgoCD, keyring su PVC verificato con 2 riavvii del pod (stessa chiave ricaricata + cookie antiforgery pre-riavvio accettato dal pod nuovo), NetworkPolicy Calico rivista sul test 8080, backup pg_dump 290MB dal cluster (leggibile). **2 bug trovati SOLO eseguendo**: podSubnet Calico conteneva host.docker.internal → niente SNAT, nessun pod raggiungeva il DB (fix: 10.244.0.0/16); pg_dump 16 di distro vs server Postgres 18.4 (fix: client 18 PGDG pinnato). Fino a B3, ui e trading restano **scalati a 0** (il guscio operativo è ancora l'app locale: il pod trading terrebbe i lease, il pod ui doppierebbe scheduler/sentiment) — rivalidarli è un click di Sync | app raggiungibile dal cluster, login persistente al riavvio del pod ✓ (resta la conferma umana col proprio account) |
+| B2 | `MarketData:UseRemoteIngestion=true` | **acceso (2026-07-26), gate in osservazione**: worker di sync nel servizio in-cluster (228/228 serie OK al primo ciclo, 0 errori, candele 5m fresche), `POST /sync/{id}` verificato; monolite locale delegato (toggle nell'appsettings reale + port-forward 18080 best-effort in run-postgres.ps1). Richiede Docker Desktop attivo; i buchi da downtime si auto-riparano al ciclo successivo (cursore incrementale) | 7 giorni di sync senza buchi nelle candele — scadenza 2026-08-02 |
 | B3 | `Trading:UseRemoteTrading=true` con **feed R1 acceso dentro il servizio** (prima in osservazione: `DriveProtectiveExits=false`, confronto tick-vs-candle) | aperto | **chaos test**: kill del pod UI con posizioni Paper aperte → stop/trailing scattano lo stesso; drill di restore dal backup |
 | B4 | ML remoto *solo se* il dual-read osservativo dimostra parità (`procione.ml.comparisons`) | aperto | N settimane di confronti senza divergenze decisionali; altrimenti resta in-process e non è un fallimento |
 | B5 | Ritiro del ramo di hosting in-process del motore nel monolite (la semplificazione che il committment compra) | aperto | dopo B3 stabile; suite adattata |
@@ -69,9 +69,11 @@ motore. Confermate le bocciature: RL (QLIB-5), SOR (una venue sola).
 
 ## Ordine di esecuzione
 
-**Oggi (2026-07-26):** A1, A2, A3, A5, B0 — poi build+suite, PR.
-**Poi, in ordine:** B1→B2→B3 (operativi, sulla macchina reale col cluster) · C1 (il più fondato sul
-problema misurato) · C2 col ri-test pairs · C3 · B4/B5 · A6 · C4/C5.
+**Fatto il 2026-07-26:** A1, A2, A3, A5, B0 (PR #54) · C1 chiuso senza cablaggio (gate fallito
+sulla seconda gamba) · **B1 fatto e B2 acceso** (stessa giornata, cluster reale; gate B2 in
+osservazione fino al 2026-08-02).
+**Poi, in ordine:** B3 (chaos test, sposta il carry nel core) · C2 col ri-test pairs · C3 ·
+B4/B5 · A6 · C4/C5.
 
 *Il carry Paper resta ON (unica classe con edge misurato positivo). Il router di regime resta in
-osservazione finché C1 non supera il suo gate.*
+osservazione per misura (esito C1.b), non per prudenza.*

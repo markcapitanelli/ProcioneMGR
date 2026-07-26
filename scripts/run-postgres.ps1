@@ -28,6 +28,23 @@ if (-not $env:ASPNETCORE_URLS) { $env:ASPNETCORE_URLS = "http://localhost:5199" 
 
 Write-Host "Ambiente : $env:ASPNETCORE_ENVIRONMENT (provider: PostgreSQL)" -ForegroundColor Cyan
 Write-Host "URL      : $env:ASPNETCORE_URLS" -ForegroundColor Cyan
+
+# --- B2 (2026-07-26): ingestion remota nel cluster kind ---
+# Con MarketData:UseRemoteIngestion=true il monolite NON avvia il worker di sync locale: lo
+# scheduling vive nel servizio ProcioneMGR.Ingestion in-cluster (mai due scrittori OHLCV sullo
+# stesso DB). La sync MANUALE dalla UI passa da http://localhost:18080 => serve il port-forward.
+# Best-effort di proposito: cluster giu' = si avvisa e si parte lo stesso (le candele riprendono
+# ad avanzare quando il cluster torna; il pulsante di sync manuale dara' errore fino ad allora).
+$pfListening = Test-NetConnection -ComputerName localhost -Port 18080 -InformationLevel Quiet -WarningAction SilentlyContinue
+if ($pfListening) {
+    Write-Host "Ingestion: port-forward 18080 gia' attivo." -ForegroundColor Green
+} elseif ((Get-Command kubectl -ErrorAction SilentlyContinue) -and
+          (kubectl get svc procionemgr-ingestion -n procionemgr-ingestion --context kind-procionemgr-dev 2>$null)) {
+    Start-Process -WindowStyle Hidden kubectl -ArgumentList "port-forward","-n","procionemgr-ingestion","svc/procionemgr-ingestion","18080:8080","--context","kind-procionemgr-dev"
+    Write-Host "Ingestion: port-forward 18080 avviato (servizio in-cluster)." -ForegroundColor Green
+} else {
+    Write-Host "Ingestion: cluster kind non raggiungibile - sync manuale UI indisponibile finche' non torna (il worker e' in-cluster)." -ForegroundColor Yellow
+}
 if ($env:ANTHROPIC_API_KEY) {
     Write-Host "Layer AI : ANTHROPIC_API_KEY rilevata (supervisione AI abilitabile via Llm:Enabled)." -ForegroundColor Green
 } else {
