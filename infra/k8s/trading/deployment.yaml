@@ -77,6 +77,10 @@ spec:
                 # ConnectionStrings__PostgresConnection + Security__MasterKey.
                 # La master key NON sta in questo YAML né nell'immagine: solo nel Secret.
                 name: trading-secrets
+            - configMapRef:
+                # [B3] Assetto del core: feed R1 acceso in osservazione + carry Paper. Non
+                # sensibile, committato (trading-config.env via configMapGenerator).
+                name: trading-config
           volumeMounts:
             - name: shared-config
               # STESSO path assoluto del ContentRootPath del monolite: AppConfigWriter scrive

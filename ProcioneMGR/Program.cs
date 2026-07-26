@@ -257,8 +257,12 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSyncWorker
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>());
 
 // --- [E3] Forward test del carry delta-neutro (default OFF, mai Live per costruzione) ---
-builder.Services.Configure<ProcioneMGR.Services.Carry.CarryOptions>(builder.Configuration.GetSection("Carry"));
-builder.Services.AddHostedService<ProcioneMGR.Services.Carry.CarryWorker>();
+// [B3 core caldo] Il CarryWorker NON è più registrato qui: vive nell'host del MOTORE (AddTradingLanes,
+// ramo !useRemote) — è operatività che deve sopravvivere ai riavvii del guscio. Con
+// Trading:UseRemoteTrading=false resta in questo processo come sempre; con true gira dentro
+// procionemgr-trading. NB: il funding che il carry legge (SentimentMetricPoints) lo scrive il
+// SentimentSyncWorker, che RESTA nel guscio per scelta (PRD §2): a guscio giù il carry conserva lo
+// stato e riprende a decidere quando il funding torna fresco.
 
 // --- [F4] Accumulo liquidazioni (stream pubblico Binance futures, keyless) ---
 // Default ON: il dato non è ricostruibile a posteriori, ogni giorno spento è storia persa.

@@ -16,6 +16,13 @@ resources:
   - service.yaml
   - networkpolicy.yaml
 
+# [B3] Assetto del core (feed R1 in osservazione, carry Paper): generato con hash nel nome, come
+# ui-config — cambiare il file sostituisce il pod e le env vengono rilette davvero.
+configMapGenerator:
+  - name: trading-config
+    envs:
+      - trading-config.env
+
 images:
   - name: ghcr.io/markcapitanelli/procionemgr-trading
     newTag: f59845c4897420ff64a33fc2c36eb3ea5429cd9c
