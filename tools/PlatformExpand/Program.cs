@@ -132,6 +132,11 @@ switch (phase)
         args.Length > 1 ? args[1] : "BTC/USDT",
         args.Length > 2 ? args[2] : "1h",
         args.Length > 3 && int.TryParse(args[3], out var jmDays) ? jmDays : 365); break;
+    case "jumpstability": await JumpStabilityAsync(
+        args.Length > 1 ? args[1] : "BTC/USDT",
+        args.Length > 2 ? args[2] : "1d",
+        args.Length > 3 && int.TryParse(args[3], out var jsDays) ? jsDays : 2000,
+        args.Length > 4 && double.TryParse(args[4], System.Globalization.CultureInfo.InvariantCulture, out var jsLambda) ? jsLambda : 20); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1580,6 +1585,193 @@ async Task JumpModelAsync(string symbol, string tf, int days)
     Console.WriteLine(gatePassed.Count > 0
         ? $"  Passano λ = [{string.Join(", ", gatePassed)}]. Prossimo passo (roadmap): stabilità per-regime della performance, POI il cablaggio nel detector."
         : "  NESSUN λ passa: o i regimi persistenti su questa serie non esistono, o non vivono in queste feature. Il router resta in osservazione, niente cablaggio.");
+}
+
+/// <summary>
+/// [C1.b — ROADMAP corrente] La SECONDA gamba del gate del jump model: i regimi durano (C1.a,
+/// misurato), ma DISCRIMINANO? Un regime si guadagna il cablaggio solo se le strategie rendono in
+/// modo diverso E stabile a seconda del regime — etichette lente ma vuote non cambiano nessuna
+/// decisione in meglio.
+///
+/// Disegno anti-illusione:
+///  - jump model addestrato sulla PRIMA METÀ della finestra; l'intera serie è decodificata in modo
+///    CAUSALE con quei centroidi (la seconda metà è interamente out-of-sample);
+///  - il rendimento della barra t è condizionato al regime della barra t−1 (la decisione si prende
+///    a barra chiusa: condizionare a t sarebbe look-ahead);
+///  - per-BARRA e non per-trade: sul giornaliero i trade per regime sono decine, i rendimenti per
+///    barra centinaia — si misura dove i dati bastano;
+///  - verdetto = profilo strategia×regime della metà 1 confrontato con la metà 2 (accordo di segno
+///    e correlazione di rango), contro un NULLO a rotazione circolare delle etichette (stessa
+///    struttura a segmenti, allineamento distrutto), giudicato dallo stesso Evaluate del gemello.
+/// </summary>
+async Task JumpStabilityAsync(string symbol, string tf, int days, double lambda)
+{
+    using var scope = provider.CreateScope();
+    var detector = scope.ServiceProvider.GetRequiredService<ProcioneMGR.Services.Regime.IRegimeDetector>();
+    var extractor = scope.ServiceProvider.GetRequiredService<ProcioneMGR.Services.Regime.IMarketFeatureExtractor>();
+    var factory = provider.GetRequiredService<IStrategyFactory>();
+
+    var to = DateTime.UtcNow;
+    var from = to.AddDays(-days);
+    var feats = await extractor.ExtractFeaturesAsync("Binance", symbol, tf, from, to, CancellationToken.None);
+    if (feats.Count < 600) { Console.WriteLine($"Feature insufficienti ({feats.Count})."); return; }
+
+    var k = 3;
+    var useVolume = false;
+    var model = await detector.LoadActiveModelAsync(symbol, tf);
+    if (model is not null)
+    {
+        k = JsonSerializer.Deserialize<float[][]>(model.CentroidsJson)!.Length;
+        useVolume = JsonSerializer.Deserialize<ProcioneMGR.Services.Regime.FeatureScaling>(model.FeatureScalingJson)!.Uses("VolumeRatio");
+    }
+
+    // Fit sulla metà 1, decodifica causale su TUTTO con quei centroidi.
+    var raw = feats.Select(f => f.ToClusteringVector(useVolume, includeBreadth: false)).ToArray();
+    var half = raw.Length / 2;
+    var (zTrain, means, stds) = ProcioneMGR.Services.Regime.JumpModel.Standardize(raw[..half]);
+    var fit = ProcioneMGR.Services.Regime.JumpModel.Fit(zTrain, k, lambda, seed: 1);
+    var zAll = ProcioneMGR.Services.Regime.JumpModel.ApplyStandardization(raw, means, stds);
+    var states = ProcioneMGR.Services.Regime.JumpModel.DecodeCausal(zAll, fit.Centroids, lambda);
+    var regimeAt = new Dictionary<DateTime, int>(feats.Count);
+    for (var i = 0; i < feats.Count; i++) regimeAt[feats[i].Timestamp] = states[i];
+    var halfSplitTs = feats[half].Timestamp;
+
+    Console.WriteLine($"=== JUMP STABILITY (C1.b) — {symbol} {tf}, {feats.Count} barre, k={k}, λ={lambda} ===");
+    Console.WriteLine($"  fit su metà 1 ({half} barre), decodifica causale su tutto; metà 2 (da {halfSplitTs:yyyy-MM-dd}) mai vista dal fit\n");
+
+    // ---- Discriminanza di MERCATO: rendimento della barra t condizionato al regime a t−1 --------
+    await using var db = await dbFactory.CreateDbContextAsync();
+    var candles = await db.OhlcvData.AsNoTracking()
+        .Where(c => c.Symbol == symbol && c.Timeframe == tf && c.TimestampUtc >= from && c.TimestampUtc <= to)
+        .OrderBy(c => c.TimestampUtc).ToListAsync();
+
+    Console.WriteLine($"  {"mercato",-12}{"regime",8}{"metà1 bps/b",13}{"n1",6}{"metà2 bps/b",13}{"n2",6}");
+    for (var r = 0; r < k; r++)
+    {
+        var m1 = new List<double>(); var m2 = new List<double>();
+        for (var i = 1; i < candles.Count; i++)
+        {
+            if (!regimeAt.TryGetValue(candles[i - 1].TimestampUtc, out var reg) || reg != r) continue;
+            if (candles[i - 1].Close <= 0m) continue;
+            var ret = (double)(candles[i].Close / candles[i - 1].Close - 1m) * 10_000;
+            (candles[i].TimestampUtc < halfSplitTs ? m1 : m2).Add(ret);
+        }
+        Console.WriteLine($"  {"",-12}{r,8}{(m1.Count > 0 ? m1.Average() : 0),13:F1}{m1.Count,6}{(m2.Count > 0 ? m2.Average() : 0),13:F1}{m2.Count,6}");
+    }
+
+    // ---- Profilo strategia×regime sulle due metà ------------------------------------------------
+    // Un backtest per strategia, una volta sola: l'equity serve sia per le celle sia per i 200
+    // giri del nullo a rotazione.
+    const int MinBarsPerCell = 60;
+    var eqCache = new Dictionary<string, IReadOnlyList<EquityPoint>>();
+    var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+    foreach (var proto in factory.Prototypes)
+    {
+        try
+        {
+            var result = await engine.RunBacktestAsync(new BacktestConfiguration
+            {
+                ExchangeName = "Binance", Symbol = symbol, Timeframe = tf,
+                From = candles[0].TimestampUtc, To = candles[^1].TimestampUtc,
+                InitialCapital = 10_000m, PositionSizePercent = 100m,
+                FeePercent = 0.1m, SlippagePercent = 0.05m,
+                StrategyName = proto.Name,
+                StrategyParameters = proto.ParameterDefinitions.ToDictionary(d => d.Key, d => d.Default),
+            }, candles, CancellationToken.None);
+            if (result.TotalTrades >= 10) eqCache[proto.Name] = result.EquityCurve; // mai operato = nessun profilo
+        }
+        catch { }
+    }
+
+    var cells = new List<(string Strategy, int Regime, double E1, double E2)>();
+    Console.WriteLine($"\n  {"strategia",-24}{"regime",8}{"metà1 bps/b",13}{"metà2 bps/b",13}   (celle con ≥{MinBarsPerCell} barre per metà)");
+    foreach (var (name, eq) in eqCache)
+    {
+        for (var r = 0; r < k; r++)
+        {
+            var s1 = new List<double>(); var s2 = new List<double>();
+            for (var i = 1; i < eq.Count; i++)
+            {
+                if (!regimeAt.TryGetValue(eq[i - 1].Timestamp, out var reg) || reg != r) continue;
+                if (eq[i - 1].Capital <= 0m) continue;
+                var ret = (double)(eq[i].Capital / eq[i - 1].Capital - 1m) * 10_000;
+                (eq[i].Timestamp < halfSplitTs ? s1 : s2).Add(ret);
+            }
+            if (s1.Count < MinBarsPerCell || s2.Count < MinBarsPerCell) continue;
+            cells.Add((name, r, s1.Average(), s2.Average()));
+            Console.WriteLine($"  {name,-24}{r,8}{s1.Average(),13:F1}{s2.Average(),13:F1}");
+        }
+    }
+
+    if (cells.Count < 6)
+    {
+        Console.WriteLine($"\n  Solo {cells.Count} celle valide: troppo poche per un verdetto. GATE NON VALUTABILE.");
+        return;
+    }
+
+    // ---- Verdetto: coerenza fra le metà, contro il nullo a rotazione ---------------------------
+    double Spearman(IReadOnlyList<double> a, IReadOnlyList<double> b)
+    {
+        int[] Rank(IReadOnlyList<double> v) { var idx = Enumerable.Range(0, v.Count).OrderBy(i => v[i]).ToArray(); var rk = new int[v.Count]; for (var i = 0; i < idx.Length; i++) rk[idx[i]] = i; return rk; }
+        var ra = Rank(a); var rb = Rank(b);
+        var n = a.Count;
+        var d2 = ra.Zip(rb, (x, y) => (double)(x - y) * (x - y)).Sum();
+        return 1 - 6 * d2 / (n * ((double)n * n - 1));
+    }
+
+    var e1 = cells.Select(c => c.E1).ToList();
+    var e2 = cells.Select(c => c.E2).ToList();
+    var realRho = Spearman(e1, e2);
+    var signAgree = cells.Count(c => Math.Sign(c.E1) == Math.Sign(c.E2)) / (double)cells.Count;
+
+    // Nullo: rotazione circolare delle etichette (stessa struttura a segmenti, allineamento
+    // distrutto) applicata alla sola metà 2 — la domanda è se la CONFERMA out-of-sample del
+    // profilo richieda il vero orologio dei regimi o basti una qualunque etichettatura lenta.
+    var rng = new Random(99);
+    var nullRhos = new List<decimal>();
+    var strategyNames = cells.Select(c => c.Strategy).Distinct().ToList();
+    for (var shift = 0; shift < 200; shift++)
+    {
+        var offset = 30 + rng.Next(states.Length - 60);
+        var shifted = new int[states.Length];
+        for (var i = 0; i < states.Length; i++) shifted[i] = states[(i + offset) % states.Length];
+        var shiftedAt = new Dictionary<DateTime, int>(feats.Count);
+        for (var i = 0; i < feats.Count; i++) shiftedAt[feats[i].Timestamp] = shifted[i];
+
+        var n1 = new List<double>(); var n2 = new List<double>();
+        foreach (var c in cells)
+        {
+            if (!eqCache.TryGetValue(c.Strategy, out var eq)) continue;
+            var s2 = new List<double>();
+            for (var i = 1; i < eq.Count; i++)
+            {
+                if (eq[i].Timestamp < halfSplitTs) continue;
+                if (!shiftedAt.TryGetValue(eq[i - 1].Timestamp, out var reg) || reg != c.Regime) continue;
+                if (eq[i - 1].Capital <= 0m) continue;
+                s2.Add((double)(eq[i].Capital / eq[i - 1].Capital - 1m) * 10_000);
+            }
+            if (s2.Count < MinBarsPerCell) continue;
+            n1.Add(c.E1);
+            n2.Add(s2.Average());
+        }
+        if (n1.Count >= 6) nullRhos.Add((decimal)Spearman(n1, n2));
+    }
+
+    var verdict = ProcioneMGR.Services.Validation.NullTwinJudge.Evaluate(
+        (decimal)realRho, nullRhos, requiredPercentile: 0.95, minValidTwins: 100);
+
+    Console.WriteLine($"\n  celle valide: {cells.Count} (strategie: {strategyNames.Count})");
+    Console.WriteLine($"  Spearman metà1↔metà2 (profilo strategia×regime): {realRho:F2}");
+    Console.WriteLine($"  accordo di segno fra le metà: {signAgree:P0}");
+    if (verdict is null) { Console.WriteLine("  nullo a rotazione insufficiente: GATE NON VALUTABILE."); return; }
+    Console.WriteLine($"  nullo a rotazione ({verdict.ValidTwins} giri): mediana {verdict.Median:F2} · P95 {verdict.Threshold:F2} · percentile del reale {verdict.PercentileOfReal:F0}");
+
+    var pass = verdict.Passed && signAgree >= 0.60;
+    Console.WriteLine();
+    Console.WriteLine($"  GATE C1.b: Spearman reale > P95 del nullo a rotazione E accordo di segno ≥ 60%.");
+    Console.WriteLine(pass
+        ? "  GATE SUPERATO: il profilo per-regime è reale e stabile — si può progettare il cablaggio (detector 1d + regole router), sempre per gradi."
+        : "  GATE NON SUPERATO: i regimi durano ma non discriminano in modo stabile — nessun cablaggio; il router resta in osservazione.");
 }
 
 /// <summary>
