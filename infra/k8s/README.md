@@ -28,7 +28,7 @@ kubectl get namespaces --context kind-procionemgr-dev | Select-String procionemg
 
 | File | Scopo |
 |---|---|
-| `kind-config.yaml` | Cluster mono-nodo `procionemgr-dev`, porte 80/443 mappate su 8080/8443 host (pronte per un futuro ingress). Da Fase 3: kindnet disattivato, il CNI è **Calico** (installato dal bootstrap) perché applica le NetworkPolicy che kindnet ignora |
+| `kind-config.yaml` | Cluster mono-nodo `procionemgr-dev`, porte 80/443 mappate su 8080/8443 host (pronte per un futuro ingress). Da Fase 3: kindnet disattivato, il CNI è **Calico** (installato dal bootstrap) perché applica le NetworkPolicy che kindnet ignora. Da B1 (2026-07-26): podSubnet **10.244.0.0/16**, NON il default Calico — `host.docker.internal` (192.168.65.254) cade dentro 192.168.0.0/16 e senza SNAT i pod non raggiungono il Postgres dell'host (timeout su ogni connessione; dal nodo invece funziona, sintomo ingannevole) |
 | `namespaces/00-namespaces.yaml` | I 6 namespace dei bounded context (`procionemgr-ui`, `-trading`, `-ml`, `-pipeline`, `-ingestion`, `-supervisor`) |
 
 ## Vincoli per le fasi successive
