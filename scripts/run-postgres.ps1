@@ -45,6 +45,22 @@ if ($pfListening) {
 } else {
     Write-Host "Ingestion: cluster kind non raggiungibile - sync manuale UI indisponibile finche' non torna (il worker e' in-cluster)." -ForegroundColor Yellow
 }
+
+# --- B3 (2026-07-26): motore di trading remoto nel cluster kind (core caldo) ---
+# Con Trading:UseRemoteTrading=true questo processo e' il GUSCIO: non registra motore, worker,
+# feed R1 ne' carry — comanda il servizio procionemgr-trading via gRPC su localhost:18092.
+# NB: a differenza dell'ingestion questo port-forward e' NECESSARIO alla pagina /trading (senza,
+# la UI mostra errori di connessione — il core continua a operare da solo, e' il punto di B3).
+$tfListening = Test-NetConnection -ComputerName localhost -Port 18092 -InformationLevel Quiet -WarningAction SilentlyContinue
+if ($tfListening) {
+    Write-Host "Trading  : port-forward 18092 gia' attivo (motore in-cluster)." -ForegroundColor Green
+} elseif ((Get-Command kubectl -ErrorAction SilentlyContinue) -and
+          (kubectl get svc procionemgr-trading -n procionemgr-trading --context kind-procionemgr-dev 2>$null)) {
+    Start-Process -WindowStyle Hidden kubectl -ArgumentList "port-forward","-n","procionemgr-trading","svc/procionemgr-trading","18092:8080","--context","kind-procionemgr-dev"
+    Write-Host "Trading  : port-forward 18092 avviato (motore in-cluster)." -ForegroundColor Green
+} else {
+    Write-Host "Trading  : cluster kind non raggiungibile - /trading non potra' comandare il motore finche' non torna." -ForegroundColor Yellow
+}
 if ($env:ANTHROPIC_API_KEY) {
     Write-Host "Layer AI : ANTHROPIC_API_KEY rilevata (supervisione AI abilitabile via Llm:Enabled)." -ForegroundColor Green
 } else {
