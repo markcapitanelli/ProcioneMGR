@@ -5,7 +5,7 @@ using ProcioneMGR.Services.Alpha.Alpha158;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// Test del catalogo Alpha158 (rif. <c>docs/ROADMAP-QLIB.md §1.1</c>). Il cuore è l'invariante
+/// Test del catalogo Alpha158 (rif. <c>docs/archive/ROADMAP-QLIB.md §1.1</c>). Il cuore è l'invariante
 /// ANTI-LOOK-AHEAD verificato in un solo test parametrico su TUTTO il catalogo (~150 feature),
 /// non un test scritto a mano per feature. Più: coerenza del round-trip per nome (persistenza),
 /// dimensione del catalogo, e correttezza numerica di alcuni operatori rappresentativi.

@@ -7,7 +7,7 @@ namespace ProcioneMGR.Services.AlphaMining;
 /// Adatta un albero di espressione (<see cref="AlphaNode"/>) all'interfaccia <see cref="IAlphaFactor"/>:
 /// un alpha "minato" diventa così un fattore di prima classe, riusabile ovunque un
 /// <c>IAlphaFactor</c> è consumato oggi (dataset ML, <c>MlStrategy</c>, valutazione IC), senza toccare
-/// quei consumatori. Rif. <c>docs/ROADMAP-QLIB.md §1.7</c>.
+/// quei consumatori. Rif. <c>docs/archive/ROADMAP-QLIB.md §1.7</c>.
 ///
 /// Il <see cref="Name"/> incapsula l'espressione con prefisso <c>expr:</c> così che
 /// <c>IAlphaFactorFactory.Create(Name)</c> possa ricostruirlo per parsing — round-trip identico a

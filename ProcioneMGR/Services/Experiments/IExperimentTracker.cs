@@ -4,7 +4,7 @@ namespace ProcioneMGR.Services.Experiments;
 /// Logger sperimentale generalizzato (un piccolo MLflow interno). Ogni tipo di esecuzione di
 /// ricerca apre un run all'inizio, ne registra le metriche/artefatti, e lo chiude a fine —
 /// così backtest, sweep, training e discovery finiscono nella STESSA tabella comparabile,
-/// invece di vivere solo nella UI del momento e poi perdersi. Rif. <c>docs/ROADMAP-QLIB.md §1.3</c>.
+/// invece di vivere solo nella UI del momento e poi perdersi. Rif. <c>docs/archive/ROADMAP-QLIB.md §1.3</c>.
 ///
 /// Additivo per costruzione: non modifica il comportamento degli engine, aggiunge solo
 /// osservabilità. Idempotente rispetto agli errori del chiamante: un fallimento del logging non

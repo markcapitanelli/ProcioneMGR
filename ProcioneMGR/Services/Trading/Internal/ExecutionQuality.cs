@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace ProcioneMGR.Services.Trading.Internal;
 
 /// <summary>
-/// [Fase 1 — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Qualità di esecuzione degli ordini di corsia.
+/// [Fase 1 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Qualità di esecuzione degli ordini di corsia.
 ///
 /// Fino a questa fase la piattaforma misurava l'implementation shortfall <b>solo</b> sugli ordini
 /// eseguiti a fette (TWAP/VWAP/Iceberg), dove <c>ExecutionJob.ArrivalPrice</c> era già fissato a t0.

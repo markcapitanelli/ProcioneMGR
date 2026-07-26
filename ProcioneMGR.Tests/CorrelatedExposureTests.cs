@@ -10,7 +10,7 @@ using ProcioneMGR.Tests.Infrastructure;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// [Fase 2 — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Prima di questo guard tutti i limiti di
+/// [Fase 2 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Prima di questo guard tutti i limiti di
 /// rischio a runtime erano scalari e ciechi alla correlazione: tetto sulla singola posizione, tetto
 /// sull'esposizione della corsia, numero massimo di posizioni. Tre corsie long su tre altcoin che
 /// si muovono con BTC contavano quindi come tre scommesse indipendenti, mentre erano una sola

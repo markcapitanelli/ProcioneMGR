@@ -18,7 +18,7 @@ using ProcioneMGR.Tests.Infrastructure;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// [Fase 1 — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Prima del fix, l'implementation shortfall
+/// [Fase 1 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Prima del fix, l'implementation shortfall
 /// esisteva solo per gli ordini eseguiti a fette: gli ordini di corsia — cioè quasi tutti —
 /// catturavano il prezzo di fill ma lo usavano solo come guardia anti-fill-patologico, mai come
 /// misura di costo. Il costo assunto in selezione non aveva quindi alcun riscontro con quello

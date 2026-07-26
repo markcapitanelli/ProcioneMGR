@@ -79,6 +79,16 @@ public static class TradingServiceCollectionExtensions
         // legge/rimuove anche in modalità remota; il watchdog scrive dove gira il motore locale).
         services.TryAddSingleton<ILaneQuarantineStore, LaneQuarantineStore>();
 
+        // [B0 PRD core-caldo] Lease di esecuzione per corsia (advisory lock Postgres): il vincolo
+        // "mai due esecutori sulla stessa corsia" — finora retto SOLO dalla registrazione
+        // condizionale qui sotto e dalla disciplina di deploy — diventa invariante applicata dal
+        // database. TryAdd: i test possono sostituirlo con un fake senza rete. La configuration è
+        // quella PASSATA a questo metodo (come per ogni altra lettura qui dentro), non risolta dal
+        // contenitore: gli host di test non registrano IConfiguration come servizio.
+        services.TryAddSingleton<ILaneLeaseFactory>(sp => new NpgsqlLaneLeaseFactory(
+            configuration,
+            sp.GetRequiredService<ILogger<NpgsqlLaneLeaseFactory>>()));
+
         // Elenco corsie per il selettore della UI: sola lettura, serve a entrambe le pagine che
         // permettono di cambiare corsia (Trading, Ensemble).
         services.TryAddSingleton<ILaneDirectory, LaneDirectory>();
@@ -202,7 +212,8 @@ public static class TradingServiceCollectionExtensions
                     sp.GetRequiredKeyedService<ITradingEngine>(laneId),
                     sp.GetRequiredKeyedService<IEnsembleManager>(laneId),
                     sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
-                    sp.GetRequiredService<ILogger<TradingWorker>>()));
+                    sp.GetRequiredService<ILogger<TradingWorker>>(),
+                    sp.GetRequiredService<ILaneLeaseFactory>()));
 
                 services.AddSingleton<IHostedService>(sp => new ExecutionWorker(
                     sp.GetRequiredKeyedService<ITradingEngine>(laneId),

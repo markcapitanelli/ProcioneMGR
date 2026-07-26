@@ -58,7 +58,7 @@ public sealed class MinedFactor
 
 /// <summary>
 /// <b>Formulaic alpha mining</b> via programmazione genetica in C# puro (rif.
-/// <c>docs/ROADMAP-QLIB.md §1.7</c>): evolve alberi di <see cref="AlphaNode"/> massimizzando |IC|
+/// <c>docs/archive/ROADMAP-QLIB.md §1.7</c>): evolve alberi di <see cref="AlphaNode"/> massimizzando |IC|
 /// sul periodo di SELEZIONE, con penalità di complessità contro l'overfitting. Deterministico a
 /// parità di <see cref="MiningConfig.Seed"/>.
 ///

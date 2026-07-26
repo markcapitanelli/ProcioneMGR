@@ -237,10 +237,10 @@ ProcioneMGR.Ml/                  Microservizio inferenza ML
 ProcioneMGR.Trading/             Microservizio motore di trading
 ProcioneMGR.Migrations.Postgres/ Migrazioni EF Core (PostgreSQL)
 ProcioneMGR.Tests/               Suite di test (988)
-tools/                           CLI: DbBackup, FuturesVerify, PlatformExpand, StrategyHunter, SpotVerify, ...
+tools/                           CLI: DbBackup, FuturesVerify, PlatformExpand, StrategyHunter, SpotVerify
 infra/k8s/                       Manifest Kubernetes (deployment/service/networkpolicy) + ArgoCD, jobs
 scripts/                         run-postgres.ps1, bootstrap K8s/ArgoCD, osservabilità
-docs/                            Report e roadmap (ML4T, Qlib, autonomia, pipeline, microservizi, ...)
+docs/                            ROADMAP.md + PRD correnti; report e roadmap storiche in docs/archive/
 ```
 
 ---

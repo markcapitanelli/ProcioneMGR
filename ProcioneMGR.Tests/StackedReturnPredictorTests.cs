@@ -5,7 +5,7 @@ using ProcioneMGR.Services.ML;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// Test dello <see cref="StackedReturnPredictor"/> (rif. <c>docs/ROADMAP-QLIB.md §1.8</c>): ogni
+/// Test dello <see cref="StackedReturnPredictor"/> (rif. <c>docs/archive/ROADMAP-QLIB.md §1.8</c>): ogni
 /// modalità di stacking addestra e predice su un dataset apprendibile, e il round-trip Save/Load
 /// riproduce le stesse predizioni. Essendo un <c>IReturnPredictor</c>, si comporta come gli altri
 /// modelli (nessun consumatore va toccato).

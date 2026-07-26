@@ -86,7 +86,7 @@ public interface ICorrelatedExposureGuard
 }
 
 /// <summary>
-/// [Fase 2 — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Limite di esposizione su posizioni CORRELATE.
+/// [Fase 2 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Limite di esposizione su posizioni CORRELATE.
 ///
 /// Tutti i limiti di rischio a runtime erano scalari e ciechi alla correlazione: tetto sulla singola
 /// posizione, tetto sull'esposizione totale di una corsia, numero massimo di posizioni aperte. Tre

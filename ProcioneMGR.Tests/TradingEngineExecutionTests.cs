@@ -19,7 +19,7 @@ namespace ProcioneMGR.Tests;
 
 /// <summary>
 /// Test dell'esecuzione live "a fette" (TWAP/VWAP/Iceberg) nel <see cref="TradingEngine"/>
-/// (rif. <c>docs/ROADMAP-QLIB.md §1.2</c>). Verifica gli invarianti critici trovati in fase di
+/// (rif. <c>docs/archive/ROADMAP-QLIB.md §1.2</c>). Verifica gli invarianti critici trovati in fase di
 /// design: media ponderata dopo N fette, emergency stop a metà piano che chiude SOLO il riempito
 /// e annulla il job, riavvio che abbandona il job ma preserva la posizione reale, e il bypass di
 /// MaxPositionSizePercent chiuso da un pre-check aggregato.

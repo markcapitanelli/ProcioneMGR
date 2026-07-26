@@ -98,7 +98,7 @@ public interface ILaneRegimeRouter
 }
 
 /// <summary>
-/// [Fase 4 — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Il router di regime che il PDF mette al centro
+/// [Fase 4 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Il router di regime che il PDF mette al centro
 /// del suo framework ibrido: classifica il regime, e in base a quello lascia operare solo le
 /// strategie che vi hanno senso.
 ///

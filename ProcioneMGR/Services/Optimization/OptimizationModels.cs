@@ -180,7 +180,7 @@ public class OptimizationResult
     /// <summary>
     /// Verdetto anti-overfitting sul migliore selezionato: Deflated Sharpe che corregge lo Sharpe
     /// grezzo per il selection bias (aver provato N combinazioni). null se non calcolabile
-    /// (curva combinata troppo corta o meno di 2 combinazioni). Rif. docs/ROADMAP-QLIB / Fase 1.
+    /// (curva combinata troppo corta o meno di 2 combinazioni). Rif. docs/archive/ROADMAP-QLIB / Fase 1.
     /// </summary>
     public Validation.SelectionValidation? Validation { get; set; }
 }

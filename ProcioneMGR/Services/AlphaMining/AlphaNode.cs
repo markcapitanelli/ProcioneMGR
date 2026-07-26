@@ -28,7 +28,7 @@ public enum AlphaOp
 
 /// <summary>
 /// Nodo di un <b>albero di espressione alpha</b> (formulaic alpha mining, rif.
-/// <c>docs/ROADMAP-QLIB.md §1.7</c>). Ogni nodo compila a una serie <c>decimal?[]</c> allineata alle
+/// <c>docs/archive/ROADMAP-QLIB.md §1.7</c>). Ogni nodo compila a una serie <c>decimal?[]</c> allineata alle
 /// candele. CONTRATTO ANTI-LOOK-AHEAD PER COSTRUZIONE: ogni operatore usa solo <c>candles[0..i]</c>
 /// (i temporali leggono la finestra che termina a i), quindi qualunque albero — anche generato a
 /// caso dal miner genetico — rispetta l'invariante senza bisogno di verifiche per-nodo.

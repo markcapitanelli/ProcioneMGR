@@ -9,7 +9,7 @@ using ProcioneMGR.Tests.Infrastructure;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// Test dell'Experiment Tracker (rif. <c>docs/ROADMAP-QLIB.md §1.3</c>): ciclo di vita di un run
+/// Test dell'Experiment Tracker (rif. <c>docs/archive/ROADMAP-QLIB.md §1.3</c>): ciclo di vita di un run
 /// (Running → metriche → Completed), merge delle metriche, hash "git-like" dei parametri
 /// (config identiche ⇒ hash identico), e robustezza best-effort degli helper Safe* (non lanciano).
 /// </summary>

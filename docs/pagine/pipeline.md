@@ -50,7 +50,9 @@ dipendenze, parametri con default). Il salvataggio valida il DAG delle dipendenz
 [`Services/Pipeline/Stages/`](../../ProcioneMGR/Services/Pipeline/Stages): dati (sync/ingestione),
 analisi (fattori, regime, volatilità, **sentiment**), ricerca (walk-forward, **scoperta
 creativa** — generazione deterministica di strategie composite/event/regime col seed della
-config), modelli ML, decisione (holdout, Monte Carlo, ensemble, raccomandazione).
+config), modelli ML, decisione (holdout, **giudice del gemello nullo** — i finalisti devono
+battere il 99° percentile di 200 mercati nulli, stessa policy dei tool CLI (`NullTwinJudge`) —,
+Monte Carlo, ensemble, raccomandazione).
 
 ### Esecuzione, pausa, ripresa
 `StartRunAsync` avvia il run nel `PipelineEngine` (motore **a slot singolo**: un solo run

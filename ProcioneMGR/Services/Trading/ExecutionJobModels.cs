@@ -5,7 +5,7 @@ namespace ProcioneMGR.Services.Trading;
 
 /// <summary>
 /// Un <b>piano di esecuzione live</b> di un'apertura di posizione, distribuita in fette nel tempo
-/// reale (TWAP/VWAP/Iceberg) su Testnet/Live (rif. <c>docs/ROADMAP-QLIB.md §1.2</c>). Una riga per
+/// reale (TWAP/VWAP/Iceberg) su Testnet/Live (rif. <c>docs/archive/ROADMAP-QLIB.md §1.2</c>). Una riga per
 /// corsia, persistita così che un piano sopravviva a un riavvio del processo e sia ispezionabile in
 /// UI. Le fette vivono in <see cref="SlicesJson"/> (blob, stesso pattern di
 /// <c>PipelineRun.StageSummariesJson</c>): poche fette per job, pochi job attivi per corsia — nessun

@@ -4,7 +4,7 @@ using ProcioneMGR.Services.Indicators;
 namespace ProcioneMGR.Services.Backtesting;
 
 /// <summary>
-/// [Fase 5b — docs/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Mean reversion a gradini fissi attorno a un
+/// [Fase 5b — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Mean reversion a gradini fissi attorno a un
 /// ancoraggio mobile: entra quando il prezzo si allontana di <c>EntryRungs</c> gradini dall'SMA di
 /// riferimento, esce quando ne ha recuperato uno. È il **ciclo finito e restartabile** che il PDF
 /// descrive come cuore economico del grid trading.

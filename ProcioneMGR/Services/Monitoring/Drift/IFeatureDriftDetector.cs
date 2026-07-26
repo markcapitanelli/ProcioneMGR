@@ -7,7 +7,7 @@ namespace ProcioneMGR.Services.Monitoring.Drift;
 /// È un segnale <i>anticipatore</i> che AFFIANCA — non sostituisce — lo
 /// <see cref="StrategyDecayMonitor"/>: quest'ultimo misura il PnL realizzato (il giudice finale),
 /// il drift misura se gli INPUT del modello sono cambiati prima ancora che il PnL ne risenta
-/// (rif. <c>docs/ROADMAP-QLIB.md §1.5</c>). Puro/stateless → registrabile come Singleton.
+/// (rif. <c>docs/archive/ROADMAP-QLIB.md §1.5</c>). Puro/stateless → registrabile come Singleton.
 /// </summary>
 public interface IFeatureDriftDetector
 {

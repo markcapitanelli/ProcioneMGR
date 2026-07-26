@@ -385,6 +385,13 @@ public sealed class ValidatedCandidate
     /// </summary>
     public double? PermutationPValue { get; set; }
 
+    /// <summary>
+    /// [A1] Percentile (0-100) occupato dallo Sharpe holdout nella distribuzione dei gemelli nulli
+    /// (<see cref="Validation.NullTwinJudge"/>), scritto da NullTwinValidationStage sui finalisti.
+    /// null = non giudicato (stage non abilitato, candidato fuori dal tetto, o non giudicabile).
+    /// </summary>
+    public double? NullTwinPercentile { get; set; }
+
     // Robustness (filled by RobustnessProbeStage on survivors)
     public decimal MonteCarloRiskFactor95 { get; set; }
     public decimal MonteCarloDrawdown95 { get; set; }

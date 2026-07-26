@@ -8,7 +8,7 @@ namespace ProcioneMGR.Services.Alpha;
 /// definizioni parametri). Gli 8 fattori "storici" restano uno switch case esplicito; il catalogo
 /// <see cref="Alpha158Catalog"/> (pochi operatori × molti orizzonti) si aggiunge in blocco senza
 /// una classe per feature — stesso principio additivo del resto della piattaforma
-/// (rif. <c>docs/ROADMAP-QLIB.md §1.1</c>).
+/// (rif. <c>docs/archive/ROADMAP-QLIB.md §1.1</c>).
 /// </summary>
 public interface IAlphaFactorFactory
 {
