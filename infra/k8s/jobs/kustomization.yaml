@@ -18,6 +18,6 @@ resources:
 
 images:
   - name: ghcr.io/markcapitanelli/strategyhunter
-    newTag: latest
+    newTag: f59845c4897420ff64a33fc2c36eb3ea5429cd9c
   - name: ghcr.io/markcapitanelli/dbbackup
-    newTag: latest
+    newTag: f59845c4897420ff64a33fc2c36eb3ea5429cd9c
