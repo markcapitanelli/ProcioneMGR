@@ -128,6 +128,10 @@ switch (phase)
     case "pipeconfig": await PipeConfigAsync(); break;
     case "regimepersistence": await RegimePersistenceAsync(); break;
     case "carrynow": await CarryNowAsync(); break;
+    case "jumpmodel": await JumpModelAsync(
+        args.Length > 1 ? args[1] : "BTC/USDT",
+        args.Length > 2 ? args[2] : "1h",
+        args.Length > 3 && int.TryParse(args[3], out var jmDays) ? jmDays : 365); break;
     case "streamdiag": await StreamDiagAsync(); break;
     case "eventedge": await EventEdgeAsync(); break;
     case "huntedge": await HuntEdgeAsync(); break;
@@ -1488,7 +1492,94 @@ async Task RegimePersistenceAsync()
     // ρ×p (settima roadmap, 2026-07-25): il problema è nei CLUSTER, non nella decodifica — nessuna
     // decodifica rende persistenti regimi i cui centroidi oscillano per costruzione. Smoother e gate
     // rimossi (la storia git li conserva); il candidato vivo è il jump model C1 della ROADMAP
-    // corrente, che ristima cluster e persistenza CONGIUNTAMENTE invece di filtrare a valle.
+    // corrente, che ristima cluster e persistenza CONGIUNTAMENTE invece di filtrare a valle —
+    // misurato dalla fase `jumpmodel` qui sotto.
+}
+
+/// <summary>
+/// [C1 — ROADMAP corrente] Il GATE dello statistical jump model: cluster + penalità di salto λ
+/// stimati CONGIUNTAMENTE (<c>JumpModel</c>), contro la persistenza dei regimi attuali (mediana
+/// 2,2 giorni, misurata da `regimepersistence`). Split anti-illusione: fit sul primo 70%, verdetto
+/// sulla decodifica CAUSALE dell'ultimo 30% mai visto — perché il router, live, non guarda avanti.
+///
+/// GATE (roadmap C1): mediana out-of-sample ≥ ~21 giorni con ≥ 2 stati visitati e senza collasso
+/// (nessuno stato > 95%). La seconda gamba del gate — stabilità della performance PER-REGIME delle
+/// strategie — richiede l'osservazione del router accumulata e resta dichiaratamente fuori da
+/// questa fase: qui si decide se la persistenza c'è, non se le regole convengono.
+/// </summary>
+async Task JumpModelAsync(string symbol, string tf, int days)
+{
+    using var scope = provider.CreateScope();
+    var detector = scope.ServiceProvider.GetRequiredService<ProcioneMGR.Services.Regime.IRegimeDetector>();
+    var extractor = scope.ServiceProvider.GetRequiredService<ProcioneMGR.Services.Regime.IMarketFeatureExtractor>();
+
+    var to = DateTime.UtcNow;
+    var from = to.AddDays(-days);
+    var feats = await extractor.ExtractFeaturesAsync("Binance", symbol, tf, from, to, CancellationToken.None);
+    if (feats.Count < 500) { Console.WriteLine($"Feature insufficienti ({feats.Count}) per {symbol} {tf}."); return; }
+
+    var barsPerDay = tf switch { "5m" => 288.0, "15m" => 96.0, "1h" => 24.0, "4h" => 6.0, "1d" => 1.0, _ => 24.0 };
+
+    // Baseline: il detector ATTUALE sulla stessa finestra (k e feature del modello attivo, se c'è).
+    var k = 3;
+    var useVolume = false;
+    var model = await detector.LoadActiveModelAsync(symbol, tf);
+    Console.WriteLine($"=== JUMP MODEL (C1) — {symbol} {tf}, {feats.Count} barre ({days} giorni) ===");
+    if (model is not null)
+    {
+        k = JsonSerializer.Deserialize<float[][]>(model.CentroidsJson)!.Length;
+        var scaling = JsonSerializer.Deserialize<ProcioneMGR.Services.Regime.FeatureScaling>(model.FeatureScalingJson)!;
+        useVolume = scaling.Uses("VolumeRatio");
+        await detector.LabelFeaturesAsync(feats, symbol, tf, CancellationToken.None);
+        var lbl = feats.Where(f => f.RegimeId is not null).Select(f => f.RegimeId!.Value).ToList();
+        if (lbl.Count > 100)
+        {
+            var runs = ProcioneMGR.Services.Regime.JumpModel.RunLengths(lbl);
+            runs.Sort();
+            Console.WriteLine($"  baseline (K-means attuale, k={k}): mediana {runs[runs.Count / 2] / barsPerDay:F1} gg · " +
+                              $"{(runs.Count - 1) / (lbl.Count / barsPerDay / 30.0):F1} transizioni/mese");
+        }
+    }
+    else
+    {
+        Console.WriteLine($"  nessun modello attivo per {symbol} {tf}: baseline saltata, k={k} di default.");
+    }
+
+    var raw = feats.Select(f => f.ToClusteringVector(useVolume, includeBreadth: false)).ToArray();
+    var split = (int)(raw.Length * 0.7);
+    var (zTrain, means, stds) = ProcioneMGR.Services.Regime.JumpModel.Standardize(raw[..split]);
+    var zTest = ProcioneMGR.Services.Regime.JumpModel.ApplyStandardization(raw[split..], means, stds);
+    Console.WriteLine($"  fit sulle prime {split} barre, verdetto CAUSALE sulle ultime {zTest.Length} (mai viste)\n");
+    Console.WriteLine($"  {"λ",6}{"train med gg",14}{"trans/mese",12}{"stati",7} | {"OOS med gg",12}{"trans/mese",12}{"stati",7}{"top-stato",11}");
+
+    var gatePassed = new List<double>();
+    foreach (var lambda in new[] { 0.0, 5, 10, 20, 50, 100, 200 })
+    {
+        var fit = ProcioneMGR.Services.Regime.JumpModel.Fit(zTrain, k, lambda, seed: 1);
+        var trainRuns = ProcioneMGR.Services.Regime.JumpModel.RunLengths(fit.States);
+        trainRuns.Sort();
+        var trainMedian = trainRuns[trainRuns.Count / 2] / barsPerDay;
+        var trainPerMonth = (trainRuns.Count - 1) / (fit.States.Length / barsPerDay / 30.0);
+
+        var causal = ProcioneMGR.Services.Regime.JumpModel.DecodeCausal(zTest, fit.Centroids, lambda, initialState: fit.States[^1]);
+        var testRuns = ProcioneMGR.Services.Regime.JumpModel.RunLengths(causal);
+        testRuns.Sort();
+        var testMedian = testRuns[testRuns.Count / 2] / barsPerDay;
+        var testPerMonth = (testRuns.Count - 1) / (causal.Length / barsPerDay / 30.0);
+        var testStates = causal.Distinct().Count();
+        var topShare = causal.GroupBy(s => s).Max(g => g.Count()) / (double)causal.Length;
+
+        var pass = testMedian >= 21 && testStates >= 2 && topShare <= 0.95;
+        if (pass) gatePassed.Add(lambda);
+        Console.WriteLine($"  {lambda,6:F0}{trainMedian,14:F1}{trainPerMonth,12:F1}{fit.States.Distinct().Count(),7} | " +
+                          $"{testMedian,12:F1}{testPerMonth,12:F1}{testStates,7}{topShare,11:P0}{(pass ? "   <- GATE OK" : "")}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("  GATE C1: mediana OOS causale >= 21 gg, >= 2 stati, nessuno stato > 95%.");
+    Console.WriteLine(gatePassed.Count > 0
+        ? $"  Passano λ = [{string.Join(", ", gatePassed)}]. Prossimo passo (roadmap): stabilità per-regime della performance, POI il cablaggio nel detector."
+        : "  NESSUN λ passa: o i regimi persistenti su questa serie non esistono, o non vivono in queste feature. Il router resta in osservazione, niente cablaggio.");
 }
 
 /// <summary>
