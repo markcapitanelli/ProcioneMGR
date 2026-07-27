@@ -77,7 +77,34 @@ conteggi identici; prerequisito B3) · **C2 passato e adottato** (Kalman default
 **B3 eseguito con chaos test superato** (motore+feed+carry nel core in-cluster, guscio locale
 remoto; 4 minuti di orfanità senza un errore; resta il confronto tick-vs-candle prima di
 `DriveProtectiveExits=true`).
-**Poi, in ordine:** osservazione B3 (tick-vs-candle → R1 pieno) · B4/B5 · A6 · C4/C5.
+**Fatto il 2026-07-27** (giornata di esercizio operativo, tutto in Paper):
+- **Ripresa dopo un fermo macchina** e un guasto che si ripresenterà: dopo un riavvio di
+  Windows/Docker `kubectl` non raggiunge più il cluster perché Windows **riserva** la porta
+  dell'API server e Docker non ripristina il binding (`docker restart` non basta). Rimedio senza
+  ricreare il cluster: container `socat` che ripubblica 6443 su una porta libera +
+  `kubectl config set-cluster`. **Recupero automatico verificato**: nessun buco nelle candele
+  (36/36 attese), corsie auto-riprese, lease riacquisiti, carry ripartito.
+- **Bug del suggeritore SL/TP corretto**: la pagina Backtest usava le escursioni della SINGOLA
+  candela mentre `SuggestAdaptiveBracket` (MAE/MFE sull'orizzonte, R1.5) esisteva già ed era
+  cablato solo nella pipeline. Ora l'orizzonte è la **durata mediana dei trade**. Su DOT 15m il
+  suggerimento passa da 0,38%/1,12% (che trasformava +24,6% in −45,8%) a 3,72%/10,32%.
+  **Regola imparata**: il bracket automatico va sempre verificato col backtest — su AAVE migliora,
+  su DOT è neutro e protettivo, su XLM peggiora (stop troppo stretto) e va allargato.
+- **Corsie riorganizzate**: rimosse le tre PostSurge 1h (BTC in perdita e ferma, DOGE mai un trade,
+  ETH Testnet con lo storico avvelenato dal fill patologico). Restano tre forward test Paper con
+  bracket verificati: `0` RegimeConditional **AAVE 1d** (~2 trade/mese), `1` RsiOversold **DOT 15m**,
+  `2` RegimeConditional **XLM 1h** (~9,8 trade/mese). Preferenza del proprietario registrata:
+  **sempre intraday/swing**, il giornaliero solo come controllo.
+- **Sei cacce, zero promozioni automatiche, due candidati in forward test.** Intraday 15m/5m, ALT
+  15m, 30m, 1d majors, 1d largo (34 serie), 4h largo, 1h largo: sempre 0 sopravvissuti ai gate. I
+  due schierati **non hanno passato l'anti-overfitting** (XLM lo ha fallito col DSR a 0,677 sotto
+  la penalità di 64 tentativi; AAVE non l'ha nemmeno affrontato perché già fuori per conteggio
+  trade) e stanno in Paper proprio per questo: il forward test è l'unico giudice immune al
+  multiple testing. Lezione trasversale: **guardare selezione e holdout insieme** — un holdout che
+  esplode su una selezione piatta (INJ 4h: 0,06 → 1,85) è un allarme, non una promozione.
+
+**Poi, in ordine:** osservazione B3 (tick-vs-candle → R1 pieno) · confronto forward-vs-predizione
+sulle tre corsie (AAVE/XLM holdout coerente, DOT dato per perdente dal CPCV) · B4/B5 · A6 · C4/C5.
 
 *Il carry Paper resta ON (unica classe con edge misurato positivo). Il router di regime resta in
 osservazione per misura (esito C1.b), non per prudenza.*
