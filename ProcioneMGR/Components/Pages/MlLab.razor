@@ -459,7 +459,8 @@
 
                     <div class="mb-4">
                         <label class="form-label d-block">
-                            Importanza per contesto di volatilità — il modello cambia idea quando il mercato si agita?
+                            Importanza per contesto — il modello cambia idea a seconda dello stato di mercato?
+                            <span class="badge bg-secondary ms-1">@shap.LensName</span>
                         </label>
                         <div style="overflow-x: auto;">
                             <table class="table table-sm table-bordered" style="max-width: 40rem;">
@@ -494,10 +495,27 @@
                             </table>
                         </div>
                         <div class="form-text">
-                            I tre contesti sono i terzili della volatilità realizzata a 20 barre del periodo di
-                            training — non i regimi K-means di <a href="regimes">/regimes</a>, che richiedono un
-                            modello attivo della stessa serie e che il gate C1 ha misurato non discriminanti.
-                            Qui la lente serve solo a descrivere, non a decidere.
+                            @if (shap.LensName.StartsWith("Regimi K-means", StringComparison.Ordinal))
+                            {
+                                <text>
+                                    Le colonne sono i <strong>regimi K-means</strong> del modello attivo per questa
+                                    serie (<a href="regimes">/regimes</a>). Qui il regime è solo un
+                                    <strong>asse di raggruppamento descrittivo</strong>: non decide nulla e non deve
+                                    superare alcun gate. È una cosa diversa dal <em>router di corsia</em>, che invece
+                                    userebbe questi stessi regimi per filtrare le operazioni e resta in osservazione
+                                    dopo l'esito del gate C1.
+                                </text>
+                            }
+                            else
+                            {
+                                <text>
+                                    Nessun modello di regime attivo per questa serie, quindi le colonne sono i
+                                    <strong>terzili della volatilità realizzata</strong> a 20 barre del periodo di
+                                    training. Per vedere la matrice per regime, addestra e <em>attiva</em> un modello
+                                    sulla stessa coppia e timeframe da <a href="regimes">/regimes</a>, poi riaddestra
+                                    qui. La lente in uso è sempre dichiarata nell'etichetta qui sopra.
+                                </text>
+                            }
                         </div>
                     </div>
                 }
@@ -879,7 +897,9 @@ else if (Svc.HasTrainedModel)
         _isError = false;
         try
         {
-            var res = await Task.Run(() => Svc.ComputeShapAnalysis());
+            // L'etichettatura per regime fa I/O (carica il modello attivo dal DB), quindi il metodo
+            // è asincrono; il calcolo SHAP vero resta CPU-bound dentro il servizio.
+            var res = await Svc.ComputeShapAnalysisAsync();
             SetStatus(res.Message, res.IsError);
         }
         catch (Exception ex)
