@@ -269,6 +269,15 @@ public static class TradingServiceCollectionExtensions
                 sp.GetRequiredService<IOptionsMonitor<LaneInvariantOptions>>(),
                 sp.GetRequiredService<ILogger<LaneInvariantWatchdog>>(),
                 sp.GetService<ProcioneMGR.Services.Notifications.INotifier>()));
+
+            // [B3 core caldo] Forward test del carry delta-neutro: vive nell'host del MOTORE, come
+            // il feed R1 e il watchdog — è operatività continua che deve sopravvivere ai riavvii
+            // del guscio (PRD §3). Default OFF nelle sue opzioni, mai Live per costruzione
+            // (CarryWorker rifiuta tutto tranne Paper/Testnet, e Testnet degrada a Paper). Il
+            // funding che legge (SentimentMetricPoints) lo scrive il SentimentSyncWorker del
+            // guscio: a guscio giù lo stato resta, le decisioni riprendono col funding fresco.
+            services.Configure<Carry.CarryOptions>(configuration.GetSection("Carry"));
+            services.AddHostedService<Carry.CarryWorker>();
         }
 
         // Fallback non-keyed: risolve sempre la corsia 0. Serve ai consumer non ancora aggiornati con

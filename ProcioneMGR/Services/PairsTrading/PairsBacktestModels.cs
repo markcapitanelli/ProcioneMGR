@@ -54,6 +54,29 @@ public class PairsBacktestConfiguration
 
     /// <summary>Finestra di base della volatilità dello spread per il filtro (vedi <see cref="MaxSpreadVolRatio"/>).</summary>
     public int SpreadVolBaselineWindow { get; set; } = 120;
+
+    /// <summary>
+    /// [C2] Estimatore dell'hedge ratio. Default <see cref="PairsHedgeRatioEstimator.Kalman"/> per
+    /// esito del gate C2 MISURATO (2026-07-26, fase `pairs 1d` di PlatformExpand, holdout
+    /// 2026-03-01→oggi sulle 5 coppie operabili in selezione): spread OOS più stazionario in 5/5
+    /// (mediana ΔADF −0,98, stabile con δ da 1e-5 a 1e-3) e MaxDD minore in 5/5 (mediana −0,9 pt).
+    /// <see cref="PairsHedgeRatioEstimator.RollingOls"/> resta selezionabile (comportamento storico,
+    /// byte-identico). NB: la classe pairs resta NON schierata (0 sopravvissuti all'holdout).
+    /// </summary>
+    public PairsHedgeRatioEstimator HedgeRatioEstimator { get; set; } = PairsHedgeRatioEstimator.Kalman;
+
+    /// <summary>[C2] δ del filtro di Kalman (rumore di stato, adimensionale). Vedi <see cref="KalmanPairsSpreadAnalyzer"/>.</summary>
+    public double KalmanDelta { get; set; } = KalmanPairsSpreadAnalyzer.DefaultDelta;
+}
+
+/// <summary>[C2] Come viene stimato l'hedge ratio del pairs, a parità di tutto il resto.</summary>
+public enum PairsHedgeRatioEstimator
+{
+    /// <summary>Rolling OLS su finestra fissa, ristimata a intervalli (comportamento storico).</summary>
+    RollingOls,
+
+    /// <summary>Filtro di Kalman con β a passeggiata aleatoria, aggiornato a ogni barra.</summary>
+    Kalman,
 }
 
 /// <summary>LongSpread = Long Y / Short X. ShortSpread = Short Y / Long X.</summary>

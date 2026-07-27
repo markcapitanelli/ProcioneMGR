@@ -210,6 +210,29 @@ public class TradingServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void CarryWorker_LivesOnlyWhereTheEngineIsLocal()
+    {
+        // [B3 core caldo] Il carry è operatività continua (valuta il funding e gestisce posizioni
+        // Paper in-memory): deve sopravvivere ai riavvii del guscio, quindi vive nell'host del
+        // motore — mai nel monolite in modalità remota (due carry = doppie valutazioni e log
+        // doppi sulle stesse soglie di funding).
+        using (var remote = BuildProvider(useRemoteTrading: true))
+        {
+            Assert.Empty(remote.GetServices<IHostedService>().OfType<ProcioneMGR.Services.Carry.CarryWorker>());
+        }
+
+        using (var local = BuildProvider(useRemoteTrading: false))
+        {
+            Assert.Single(local.GetServices<IHostedService>().OfType<ProcioneMGR.Services.Carry.CarryWorker>());
+        }
+
+        using (var tradingHost = BuildProvider(useRemoteTrading: true, isTradingServiceHost: true))
+        {
+            Assert.Single(tradingHost.GetServices<IHostedService>().OfType<ProcioneMGR.Services.Carry.CarryWorker>());
+        }
+    }
+
+    [Fact]
     public void RealtimeFeed_IsOneForTheFleet_NotOnePerLane()
     {
         // Una connessione WebSocket per exchange, condivisa da tutte le corsie. Registrarne una per

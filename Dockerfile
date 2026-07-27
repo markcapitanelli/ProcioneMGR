@@ -103,9 +103,23 @@ CMD ["discover"]
 
 # --- Target: DbBackup (K8s CronJob) ---
 # postgresql-client fornisce pg_dump/pg_restore, richiesti da DatabaseBackupHelper.
+# Versione 18 PINNATA dal repo PGDG, NON il default di distro: il server reale e' PostgreSQL 18 e
+# pg_dump rifiuta i server piu' nuovi di se stesso ("server version mismatch" — trovato solo
+# eseguendo lo smoke del backup in B1, 2026-07-26: il client di Ubuntu 24.04 e' il 16).
+# pg_dump 18 dumpa senza problemi anche server piu' vecchi: il pin non lega le mani al rollback.
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS dbbackup
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main" \
+         > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-18 \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /out/dbbackup .

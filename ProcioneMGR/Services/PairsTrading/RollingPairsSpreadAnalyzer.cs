@@ -78,7 +78,7 @@ public sealed class RollingPairsSpreadAnalyzer
             }
         }
 
-        var zScore = ComputeCausalZScore(spread, zScoreLookback);
+        var zScore = PairsSpreadSeries.CausalZScore(spread, zScoreLookback);
         return new RollingPairsAnalysis { HedgeRatio = hedgeRatio, Spread = spread, ZScore = zScore };
     }
 
@@ -97,21 +97,4 @@ public sealed class RollingPairsSpreadAnalyzer
             ? Math.Log((double)price)
             : throw new ArgumentException($"Prezzo non positivo ({price}): il log-spread richiede prezzi strettamente positivi.");
 
-    /// <summary>Z-score rolling causale su uno spread con warm-up (null iniziale): riusa la stessa finestra di <see cref="PairsSpreadAnalyzer.RollingZScore"/> sulla parte densa.</summary>
-    private static IReadOnlyList<double?> ComputeCausalZScore(double?[] spread, int lookback)
-    {
-        var n = spread.Length;
-        var firstValid = Array.FindIndex(spread, v => v.HasValue);
-        if (firstValid < 0) return new double?[n];
-
-        var dense = spread.Skip(firstValid).Select(v => v!.Value).ToList();
-        var denseZ = PairsSpreadAnalyzer.RollingZScore(dense, lookback);
-
-        var result = new double?[n];
-        for (var k = 0; k < denseZ.Count; k++)
-        {
-            result[firstValid + k] = denseZ[k];
-        }
-        return result;
-    }
 }

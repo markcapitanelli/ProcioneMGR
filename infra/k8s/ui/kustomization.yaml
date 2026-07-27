@@ -38,4 +38,4 @@ configMapGenerator:
 
 images:
   - name: ghcr.io/markcapitanelli/procionemgr
-    newTag: latest
+    newTag: f59845c4897420ff64a33fc2c36eb3ea5429cd9c

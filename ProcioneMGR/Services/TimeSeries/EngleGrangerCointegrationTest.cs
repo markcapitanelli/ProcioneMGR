@@ -92,6 +92,23 @@ public sealed class EngleGrangerCointegrationTest : ICointegrationTest
                 $"La cointegrazione gira sui log dei prezzi: servono valori strettamente positivi, trovato {price}.", paramName);
 
     /// <summary>
+    /// [C2] ADF (auto-lag per AIC) su una serie GIÀ data — ad es. lo spread out-of-sample prodotto
+    /// da un estimatore di hedge ratio, per confrontarne la stazionarietà con un altro. Più negativa
+    /// = più stazionaria. NB: statistica descrittiva di CONFRONTO, non un giudizio di cointegrazione
+    /// (per quello serve <see cref="Test"/> coi valori critici MacKinnon sulla regressione stimata).
+    /// </summary>
+    public static (double Statistic, int Lags) AdfStatisticOnSeries(IReadOnlyList<double> series)
+    {
+        ArgumentNullException.ThrowIfNull(series);
+        if (series.Count < 30)
+        {
+            throw new ArgumentException("Servono almeno 30 osservazioni per una statistica ADF sensata.", nameof(series));
+        }
+        var v = Vector<double>.Build.Dense(series.Count, i => series[i]);
+        return AugmentedDickeyFullerAutoLag(v, MaxLags(series.Count));
+    }
+
+    /// <summary>
     /// Valori critici di MacKinnon (2010) per il test di cointegrazione Engle-Granger, caso "con
     /// costante, senza trend", n=2 variabili I(1). Superficie di risposta CV(T) = β∞ + β1/T + β2/T²,
     /// sensibilmente più severa dei valori ADF standard (al 5%: ≈ −3.34 vs −2.86).

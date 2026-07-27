@@ -333,9 +333,16 @@ public sealed class BacktestPageService(
     // --- Suggerimento SL/TP dai dati -----------------------------------------------------------
 
     /// <summary>
-    /// Calcola SL e TP dai dati della coppia/timeframe nella finestra selezionata (media dei
-    /// percentili 95° di escursione avversa/favorevole tra long e short). Livelli ampi che scattano
-    /// solo sugli outlier: proteggono senza tagliare le operazioni normali.
+    /// Calcola SL e TP dai dati della coppia/timeframe nella finestra selezionata, sull'ORIZZONTE DI
+    /// DETENZIONE della strategia (MAE/MFE condizionati per regime di volatilità), mediati fra long e
+    /// short. Livelli ampi che scattano solo sugli outlier: proteggono senza tagliare le operazioni
+    /// normali.
+    ///
+    /// L'orizzonte NON è un dettaglio: fino al 2026-07-27 qui si usavano i percentili di escursione
+    /// della SINGOLA candela, e su una strategia che tiene le posizioni per giorni producevano stop
+    /// microscopici — misurato su DOT/USDT 15m: stop 0,38% / target 1,12% trasformavano un +24,6% in
+    /// un -45,8%, perché ogni trade veniva chiuso dal rumore della prima barra. La distribuzione
+    /// giusta è quella dell'escursione accumulata su quante barre il trade vive davvero.
     /// </summary>
     public async Task<BracketSuggestion> SuggestBracketAsync(BacktestConfigSnapshot cfg, CancellationToken ct = default)
     {
@@ -352,19 +359,50 @@ public sealed class BacktestPageService(
         if (candles.Count < 100)
             return new BracketSuggestion($"Dati insufficienti ({candles.Count} candele) per suggerire SL/TP.", IsError: true, null, null);
 
-        var sl = excursion.SuggestStopLoss(candles);
-        var tp = excursion.SuggestTakeProfit(candles);
+        var (horizon, source) = MedianHoldBars(cfg.Timeframe);
+        var longBracket = excursion.SuggestAdaptiveBracket(candles, Trading.OrderSide.Buy, horizon);
+        var shortBracket = excursion.SuggestAdaptiveBracket(candles, Trading.OrderSide.Sell, horizon);
         static decimal Avg(decimal a, decimal b)
         {
             var v = new[] { a, b }.Where(x => x > 0m).ToList();
             return v.Count > 0 ? Math.Round(v.Average(), 2) : 0m;
         }
-        var stopLoss = Avg(sl.LongStopPercentile95, sl.ShortStopPercentile95);
-        var takeProfit = Avg(tp.LongTakeProfitPercentile95, tp.ShortTakeProfitPercentile95);
+        var stopLoss = Avg(longBracket.StopLossPercent, shortBracket.StopLossPercent);
+        var takeProfit = Avg(longBracket.TakeProfitPercent, shortBracket.TakeProfitPercent);
         return new BracketSuggestion(
-            $"SL/TP suggeriti dai dati (percentile 95° di escursione su {candles.Count} candele): "
-            + $"stop {stopLoss:0.##}%, target {takeProfit:0.##}%. Modificabili prima di lanciare.",
+            $"SL/TP suggeriti dai dati (MAE/MFE al 95° percentile su un orizzonte di {horizon} barre — {source}, "
+            + $"{candles.Count} candele): stop {stopLoss:0.##}%, target {takeProfit:0.##}%. Modificabili prima di lanciare.",
             IsError: false, stopLoss, takeProfit);
+    }
+
+    /// <summary>
+    /// Orizzonte di detenzione in BARRE per il calcolo del bracket: durata mediana dei trade
+    /// dell'ultimo backtest, se c'è (è la misura vera di quanto vive una posizione di QUESTA
+    /// strategia); altrimenti un default prudente di 10 barre, che è comunque un ordine di grandezza
+    /// più vicino al vero della singola candela. Ritorna anche la provenienza, per dirlo in chiaro
+    /// a chi legge il suggerimento.
+    /// </summary>
+    private (int Horizon, string Source) MedianHoldBars(string timeframe)
+    {
+        const int fallback = 10;
+        var closed = Result?.Trades?.Where(t => t.ExitTime.HasValue).ToList();
+        if (closed is not { Count: > 0 } || !Timeframes.Supported.TryGetValue(timeframe, out var barLength) || barLength <= TimeSpan.Zero)
+        {
+            return (fallback, "default: nessun backtest di riferimento");
+        }
+
+        var durations = closed
+            .Select(t => (t.ExitTime!.Value - t.EntryTime).TotalMinutes / barLength.TotalMinutes)
+            .Where(b => b > 0)
+            .OrderBy(b => b)
+            .ToList();
+        if (durations.Count == 0) return (fallback, "default: durate non calcolabili");
+
+        var median = durations[durations.Count / 2];
+        // Tetto a 500 barre: oltre, la finestra di campionamento MAE/MFE mangerebbe tutto lo storico
+        // e i campioni per regime diventerebbero troppo pochi per un percentile stabile.
+        var horizon = Math.Clamp((int)Math.Round(median), 1, 500);
+        return (horizon, $"durata mediana di {closed.Count} trade del backtest");
     }
 
     // --- Strategie salvate ---------------------------------------------------------------------

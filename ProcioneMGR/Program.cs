@@ -31,6 +31,15 @@ AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Asset statici quando si gira DA SORGENTE con ASPNETCORE_ENVIRONMENT=Production (run-postgres.ps1):
+// il manifest degli Static Web Assets viene caricato in automatico solo in Development, e senza di
+// esso MapStaticAssets risponde 500 proprio sugli asset impronta-digitalizzati (blazor.web.js, il
+// bundle CSS scoped) mentre i file "semplici" di wwwroot rispondono 200 — l'app parte e sembra sana,
+// ma il CSS dei componenti manca e NESSUN circuito interattivo si avvia. È il warning esplicito di
+// StaticAssetsInvoker a suggerire questa chiamata. Sull'output PUBBLICATO (immagini Docker) il
+// manifest runtime non esiste e la chiamata è un no-op: il pod non cambia comportamento.
+builder.WebHost.UseStaticWebAssets();
+
 // Add services to the container.
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -257,8 +266,12 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSyncWorker
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>());
 
 // --- [E3] Forward test del carry delta-neutro (default OFF, mai Live per costruzione) ---
-builder.Services.Configure<ProcioneMGR.Services.Carry.CarryOptions>(builder.Configuration.GetSection("Carry"));
-builder.Services.AddHostedService<ProcioneMGR.Services.Carry.CarryWorker>();
+// [B3 core caldo] Il CarryWorker NON è più registrato qui: vive nell'host del MOTORE (AddTradingLanes,
+// ramo !useRemote) — è operatività che deve sopravvivere ai riavvii del guscio. Con
+// Trading:UseRemoteTrading=false resta in questo processo come sempre; con true gira dentro
+// procionemgr-trading. NB: il funding che il carry legge (SentimentMetricPoints) lo scrive il
+// SentimentSyncWorker, che RESTA nel guscio per scelta (PRD §2): a guscio giù il carry conserva lo
+// stato e riprende a decidere quando il funding torna fresco.
 
 // --- [F4] Accumulo liquidazioni (stream pubblico Binance futures, keyless) ---
 // Default ON: il dato non è ricostruibile a posteriori, ogni giorno spento è storia persa.

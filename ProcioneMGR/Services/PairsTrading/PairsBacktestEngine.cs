@@ -32,8 +32,12 @@ public sealed class PairsBacktestEngine : IPairsBacktestEngine
         var closesY = alignedY.Select(c => c.Close).ToList();
         var closesX = alignedX.Select(c => c.Close).ToList();
 
-        var analyzer = new RollingPairsSpreadAnalyzer();
-        var analysis = analyzer.Analyze(closesY, closesX, config.LookbackWindow, config.RecalibrationInterval, config.ZScoreLookback);
+        // [C2] Stesso motore, estimatore commutabile: l'unica differenza fra i due rami è COME
+        // nascono hedge ratio e spread (finestra OLS vs filtro di Kalman); segnale, filtri e
+        // contabilità restano identici — è il requisito perché l'A/B misuri solo l'estimatore.
+        var analysis = config.HedgeRatioEstimator == PairsHedgeRatioEstimator.Kalman
+            ? new KalmanPairsSpreadAnalyzer().Analyze(closesY, closesX, config.LookbackWindow, config.KalmanDelta, config.ZScoreLookback)
+            : new RollingPairsSpreadAnalyzer().Analyze(closesY, closesX, config.LookbackWindow, config.RecalibrationInterval, config.ZScoreLookback);
 
         // [E1] Rapporto causale vol-recente / vol-di-base dello spread, per il filtro di volatilità.
         // Null dove una delle due finestre non è ancora piena: in quel caso il filtro non vincola.
