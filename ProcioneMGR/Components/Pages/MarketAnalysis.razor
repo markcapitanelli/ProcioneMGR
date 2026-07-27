@@ -18,7 +18,9 @@
 @inject CandlestickPatternDetector CandleDetector
 @inject SupportResistanceAnalyzer SupportResistance
 @inject ChartPatternDetector ChartPatterns
+@using ProcioneMGR.Services.Discovery.Dtw
 @inject VolumeAnalyzer Volume
+@inject IDtwPatternAnalysisService DtwAnalysis
 
 <PageTitle>Analisi serie</PageTitle>
 
@@ -453,6 +455,88 @@
     </div>
 }
 
+@* [D4] Ricerca di pattern per FORMA (DTW) sulle candele appena analizzate. Vive qui perché qui la
+   serie e il periodo sono già scelti, ed è dove si esplorano i dati storici. *@
+@if (_candles is { Count: > 0 })
+{
+    <div class="card mb-3" id="dtw-panel">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Ricerca di pattern per forma (DTW)</span>
+            @if (_dtwAnalysis is { IsUsable: true } d)
+            {
+                <span class="badge @(d.IsPredictive ? "bg-success" : "bg-secondary")">
+                    @(d.IsPredictive ? "il pattern anticipa" : "nessun segnale operabile")
+                </span>
+            }
+        </div>
+        <div class="card-body">
+            <div class="alert alert-warning py-2 small mb-3">
+                Si sceglie una finestra della serie come <strong>modello</strong> e si cercano le occorrenze
+                simili per forma, non per livello di prezzo. Il verdetto confronta ciò che succede dopo con
+                ciò che producono <strong>forme qualunque cercate allo stesso modo</strong>: è l'unico
+                confronto onesto, perché selezionare finestre per forma induce da sola una deriva nelle
+                barre successive che un placebo a date casuali non saprebbe smascherare.
+            </div>
+
+            <div class="row g-2 align-items-end mb-3">
+                <div class="col-auto">
+                    <label class="form-label">Inizio del modello (barra)</label>
+                    <input type="number" class="form-control" style="width: 10rem;" min="0"
+                           max="@(Math.Max(0, _candles.Count - 4))" @bind="_dtwTemplateStart" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Lunghezza (barre)</label>
+                    <input type="number" class="form-control" style="width: 9rem;" min="3" max="200"
+                           @bind="_dtwTemplateLength" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Distanza massima</label>
+                    <input type="number" step="0.1" class="form-control" style="width: 9rem;" min="0.05" max="10"
+                           @bind="_dtwMaxDistance" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Forme casuali (nullo)</label>
+                    <input type="number" class="form-control" style="width: 9rem;" min="10" max="200"
+                           @bind="_dtwNullSamples" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-primary" @onclick="RunDtwAsync" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                        Cerca il pattern
+                    </button>
+                </div>
+            </div>
+
+            @if (_dtwAnalysis is { IsUsable: true } a)
+            {
+                <div class="row g-3 mb-3">
+                    <div class="col-auto"><Stat Label="Occorrenze" Value="@a.MatchCount.ToString()" /></div>
+                    <div class="col-auto"><Stat Label="Al mese" Value="@a.OccurrencesPerMonth.ToString("N1")" /></div>
+                    <div class="col-auto"><Stat Label="Distanza media" Value="@a.MeanDistance.ToString("N3")" /></div>
+                    @if (a.Study is { } st)
+                    {
+                        <div class="col-auto"><Stat Label="Rend. anormale dopo" Value="@st.CaarPost.ToString("P2")" /></div>
+                        <div class="col-auto"><Stat Label="…prima (sospetto)" Value="@st.CaarPre.ToString("P2")" /></div>
+                    }
+                    @if (a.ShapeNull is { IsUsable: true } sn)
+                    {
+                        <div class="col-auto"><Stat Label="p nullo per forma" Value="@sn.PValue.ToString("N3")" /></div>
+                        <div class="col-auto"><Stat Label="95° del nullo" Value="@sn.NullPercentile95.ToString("P2")" /></div>
+                    }
+                </div>
+
+                <div class="alert @(a.IsPredictive ? "alert-success" : "alert-secondary") py-2 mb-0">
+                    @a.Verdict
+                </div>
+            }
+            else if (_dtwAnalysis is { } failed)
+            {
+                <div class="alert alert-secondary py-2 mb-0">@failed.Verdict</div>
+            }
+        </div>
+    </div>
+}
+
 @code {
     private string _symbol = "BTC/USDT";
     private string _timeframe = "1d";
@@ -481,6 +565,14 @@
     private VolumeConfirmation? _volumeConfirmation;
     private int _candleCount;
 
+    // [D4] Ricerca di pattern per forma sulle candele dell'ultima analisi.
+    private List<OhlcvData>? _candles;
+    private DtwPatternAnalysis? _dtwAnalysis;
+    private int _dtwTemplateStart;
+    private int _dtwTemplateLength = 20;
+    private double _dtwMaxDistance = 1.0;
+    private int _dtwNullSamples = 60;
+
     private string? _userId;
     private ConfigPresets? _presets;
 
@@ -508,6 +600,52 @@
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+    }
+
+    /// <summary>
+    /// [D4] Cerca nella serie le occorrenze della forma selezionata e ne misura il valore
+    /// predittivo. CPU-bound (scansione + nullo per forma ripetuto N volte), quindi fuori dal
+    /// thread del circuito Blazor.
+    /// </summary>
+    private async Task RunDtwAsync()
+    {
+        if (_candles is null || _candles.Count == 0)
+        {
+            _status = "Esegui prima l'analisi: la ricerca di pattern usa le stesse candele.";
+            _isError = true;
+            return;
+        }
+
+        var start = Math.Clamp(_dtwTemplateStart, 0, Math.Max(0, _candles.Count - 4));
+        var length = Math.Clamp(_dtwTemplateLength, 3, Math.Min(200, _candles.Count - start));
+        if (length < 3)
+        {
+            _status = "Finestra del pattern troppo corta o oltre la fine della serie.";
+            _isError = true;
+            return;
+        }
+
+        _busy = true;
+        _isError = false;
+        _status = null;
+        try
+        {
+            var candles = _candles;
+            var template = candles.Skip(start).Take(length).Select(c => c.Close).ToList();
+            var config = new DtwConfig
+            {
+                MaxDistance = Math.Clamp(_dtwMaxDistance, 0.05, 10),
+                BandPercent = 20,
+            };
+            var nullSamples = Math.Clamp(_dtwNullSamples, 10, 200);
+
+            _dtwAnalysis = await Task.Run(() => DtwAnalysis.Analyze(candles, template, config, null, nullSamples));
+            _status = _dtwAnalysis.Verdict;
+            // Un verdetto negativo NON e' un errore: il pannello lo colora per quello che e'.
+            _isError = !_dtwAnalysis.IsUsable;
+        }
+        catch (Exception ex) { _status = $"Ricerca pattern fallita: {ex.Message}"; _isError = true; }
+        finally { _busy = false; }
     }
 
     private async Task RunAsync()
@@ -562,6 +700,10 @@
             }
 
             _candleCount = candles.Count;
+            // [D4] Le candele restano in memoria: il pannello DTW lavora sulle STESSE, senza rifare
+            // la query e senza rischiare di analizzare un periodo diverso da quello mostrato.
+            _candles = candles;
+            _dtwAnalysis = null;
             _gapReport = GapLap.Analyze(candles);
             _gapEvents = GapLap.ClassifyGaps(candles);
             _stopLoss = Excursion.SuggestStopLoss(candles);

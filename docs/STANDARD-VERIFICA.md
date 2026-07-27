@@ -79,7 +79,7 @@ Nessun test unitario avrebbe potuto vedere né l'uno né l'altro.
 | **D1** SHAP | ✅ Shapley per forza bruta + ricostruzione | ✅ feature inerte → esattamente 0 | ✅ via `MlLabService` | ✅ `/ml`, BTC/USDT 1h, efficienza verificata a mano sui numeri a schermo |
 | **D2** Deriva fattori | ✅ serie a risposta nota | ✅ 40 semi di rumore, 0 allarmi | ✅ via pagina | ✅ `/feature-selection`, 3 fattori spenti trovati su dati reali |
 | **C4** Triple-barrier + meta-labeling | ✅ 4 esiti + ambiguità intra-barra + pesi | ✅ edge piantato recuperato; 20 semi di rumore | ✅ `MetaLabelingAnalysisServiceTests` (componenti reali + fallimenti) | ✅ `/backtest`, 8.886 segnali reali analizzati |
-| **D4** DTW pattern discovery | ✅ LB_Keogh vero limite inferiore su 3.000 coppie; dilatazione temporale; input degeneri | ✅ pattern piantato ritrovato **e** rumore respinto; fuzzing 300 prove; stress 50.000 barre | ✅ `DtwPatternAnalysisTests` (catena forma→occorrenze→event-study→verdetto) | ⏳ pannello UI da fare |
+| **D4** DTW pattern discovery | ✅ LB_Keogh vero limite inferiore su 3.000 coppie; dilatazione temporale; input degeneri | ✅ pattern piantato ritrovato **e** rumore respinto; fuzzing 300 prove; stress 50.000 barre | ✅ `DtwPatternAnalysisTests` (catena forma→occorrenze→event-study→verdetto) | ✅ `/market-analysis`, SOL/USDT 15m su 54.984 candele fino a oggi: 500 occorrenze, verdetto **nessun segnale** (p 0,366) |
 
 Le fasi precedenti a questa sessione non sono state ri-verificate contro questo standard: la tabella
 dice quello che è stato controllato, non quello che si presume.
