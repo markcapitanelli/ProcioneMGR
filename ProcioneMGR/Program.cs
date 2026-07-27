@@ -176,6 +176,8 @@ builder.Services.AddScoped<IStrategyComposer, StrategyComposer>();
 // --- Alpha factor research (libreria fattori + valutazione Information Coefficient) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IAlphaFactorFactory, ProcioneMGR.Services.Alpha.AlphaFactorFactory>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorEvaluator, ProcioneMGR.Services.Alpha.FactorEvaluator>();
+// [D2] Monitor di deriva dei fattori: puro/deterministico come il valutatore, quindi Singleton.
+builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorDriftAnalyzer, ProcioneMGR.Services.Alpha.FactorDriftAnalyzer>();
 
 // --- Formulaic alpha mining (programmazione genetica, C# puro). Rif. docs/archive/ROADMAP-QLIB.md §1.7. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.AlphaMining.GeneticAlphaMiner>();

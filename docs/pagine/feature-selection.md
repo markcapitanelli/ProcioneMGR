@@ -35,6 +35,7 @@ Metriche complementari (dal `GuidaPanel`, righe 28–46):
 | Bottone + conteggio | 119–126 | "Valuta fattori" + numero di candidati correnti |
 | Grafico |IC| | 136–142 | Bar chart orizzontale dei top 25 fattori (verde = IC positivo, rosso = negativo) |
 | Classifica | 144–169 | Tabella completa: IC, |IC|, Info Ratio, consistenza, osservazioni, flag "Tenuto" (riga verde) |
+| **Deriva nel tempo** | 172–260 | **[D2]** IC finestra per finestra con sparkline, riferimento vs recente, verdetto per fattore |
 
 ## Come funziona (flusso del codice)
 
@@ -53,6 +54,35 @@ dei candidati è mostrato sotto il bottone.
 4. Aggiorna tabella, set `_kept` e grafico (`_chartPending` → `OnAfterRenderAsync` →
    `barh` di charts.js).
 
+### Deriva nel tempo — `AnalyzeDriftAsync` — **[D2]**
+
+L'IC full-sample della classifica qui sopra è **una media su tutto il periodo**: un fattore che
+informava bene nel 2024 e ha smesso nel 2026 può ancora mostrare un |IC| dignitoso. Questo pannello
+guarda la stessa misura **finestra per finestra**, e dà un verdetto: stabile / si è spento / segno
+invertito / dati insufficienti.
+
+**Il pavimento di rumore è il concetto centrale.** L'errore standard di una correlazione attorno a
+zero vale circa `1,96/√n`: su 250 osservazioni è 0,124, su 2500 è 0,039. Confrontare l'IC con la
+soglia economica 0,02 senza tenerne conto significa promuovere il caso a segnale — e produrre
+allarmi, comprese finte "inversioni di segno", ogni volta che il rumore gira storto. La soglia
+operativa è quindi `max(0,02, pavimento)`, mostrata in chiaro accanto al bottone e in una colonna
+della tabella.
+
+**Ampiezza della finestra**: proposta automaticamente perché produca ~10 finestre sui dati
+disponibili (`SuggestDriftWindow`). È un baratto dichiarato — finestre larghe vedono segnali più
+deboli ma danno meno punti nel tempo — e resta modificabile.
+
+**Finestre non sovrapposte**: pochi punti indipendenti invece di molti punti correlati per
+costruzione, coerente con la lezione già pagata dalla piattaforma sulla significatività fabbricata.
+
+**Nessuna persistenza e nessuna azione automatica**: l'IC storico è una funzione deterministica
+delle candele, quindi si ricalcola invece di essere salvato (nessuna migrazione, nessuno stato da
+tenere allineato); e il pannello segnala soltanto, come `StrategyDecayMonitor`.
+
+Misura dal vivo (BTC/USDT 1h, 26.929 candele, finestra 2500): **MeanReversion** 0,050 → 0,027 e
+**RSI** −0,049 → −0,029 sono scesi sotto il pavimento; gli altri otto fattori non hanno mai
+superato la soglia in nessun periodo.
+
 ### Preset (righe 219–247)
 `PageConfig` serializza l'intero form; `ApplyConfigJson` è difensivo (enum/timeframe
 validati, JSON malformato ignorato).
@@ -62,6 +92,7 @@ validati, JSON malformato ignorato).
 | Dipendenza | Ruolo | File |
 |---|---|---|
 | `IIcFeatureSelector` | Rank/Select dei fattori per IC con IR e consistenza | [`Services/ML/IcFeatureSelector.cs`](../../ProcioneMGR/Services/ML/IcFeatureSelector.cs) |
+| `IFactorDriftAnalyzer` | **[D2]** IC rolling, pavimento di rumore, verdetto di deriva | [`Services/Alpha/FactorDriftAnalyzer.cs`](../../ProcioneMGR/Services/Alpha/FactorDriftAnalyzer.cs) |
 | `IAlphaFactorFactory` | Prototipi dei fattori alpha (nome, parametri, default) | [`Services/Alpha/AlphaFactorFactory.cs`](../../ProcioneMGR/Services/Alpha/AlphaFactorFactory.cs) |
 | `Alpha158Catalog` | Catalogo esteso di fattori in stile Qlib Alpha158 | [`Services/Alpha/Alpha158/Alpha158Catalog.cs`](../../ProcioneMGR/Services/Alpha/Alpha158/Alpha158Catalog.cs) |
 | `FactorEvaluator` (via selector) | Calcolo IC/IR per singolo fattore | [`Services/Alpha/FactorEvaluator.cs`](../../ProcioneMGR/Services/Alpha/FactorEvaluator.cs) |

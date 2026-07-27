@@ -16,6 +16,7 @@
 @implements IAsyncDisposable
 
 @inject IIcFeatureSelector Selector
+@inject IFactorDriftAnalyzer DriftAnalyzer
 @inject IAlphaFactorFactory Factory
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IJSRuntime JS
@@ -167,6 +168,99 @@
             </table>
         </div>
     </div>
+
+    @* [D2] Deriva dei fattori: un IC full-sample alto può nascondere un fattore che informava e
+       ha smesso. Qui si guarda la stessa misura NEL TEMPO. *@
+    <div class="card mt-3" id="drift-panel">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Deriva nel tempo — un fattore che informava può aver smesso</span>
+            @if (_drift is not null)
+            {
+                var alerts = _drift.Count(d => d.IsAlert);
+                <span class="badge @(alerts > 0 ? "bg-warning text-dark" : "bg-success")">
+                    @(alerts > 0 ? $"{alerts} in allarme" : "nessun allarme")
+                </span>
+            }
+        </div>
+        <div class="card-body">
+            <div class="row g-2 align-items-end mb-3">
+                <div class="col-auto">
+                    <label class="form-label">Fattori da analizzare (i primi per |IC|)</label>
+                    <input type="number" class="form-control" style="width: 8rem;" min="1" max="50" @bind="_driftTopN" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Ampiezza finestra (osservazioni)</label>
+                    <input type="number" class="form-control" style="width: 10rem;" min="50" max="5000" step="50" @bind="_driftWindow" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-primary" @onclick="AnalyzeDriftAsync" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                        Analizza deriva
+                    </button>
+                </div>
+                <div class="col-auto">
+                    <span class="form-text">
+                        Pavimento di rumore a questa finestra:
+                        <strong>@FactorDriftAnalyzer.NoiseFloorFor(Math.Max(10, _driftWindow)).ToString("F3")</strong>
+                        — sotto questo valore un IC non è distinguibile da zero.
+                    </span>
+                </div>
+            </div>
+
+            @if (_drift is not null)
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Fattore</th>
+                                <th>IC nel tempo</th>
+                                <th class="text-end">riferimento</th>
+                                <th class="text-end">recente</th>
+                                <th class="text-end">soglia</th>
+                                <th>Verdetto</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var d in _drift)
+                            {
+                                <tr class="@(d.Status switch {
+                                    FactorDriftStatus.SignFlip => "table-danger",
+                                    FactorDriftStatus.Weakening => "table-warning",
+                                    _ => "" })">
+                                    <td>@d.FeatureName</td>
+                                    <td>@IcSparkline(d)</td>
+                                    <td class="text-end font-monospace">@d.ReferenceIc.ToString("F3")</td>
+                                    <td class="text-end font-monospace">@d.RecentIc.ToString("F3")</td>
+                                    <td class="text-end font-monospace text-body-secondary">@d.NoiseFloor.ToString("F3")</td>
+                                    <td>
+                                        <span class="badge @(d.Status switch {
+                                            FactorDriftStatus.SignFlip => "bg-danger",
+                                            FactorDriftStatus.Weakening => "bg-warning text-dark",
+                                            FactorDriftStatus.Insufficient => "bg-secondary",
+                                            _ => "bg-success" })">@DriftLabel(d.Status)</span>
+                                        <div class="small text-body-secondary">@d.StatusMessage</div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="form-text mt-2">
+                    Le finestre sono <strong>non sovrapposte</strong>: pochi punti indipendenti invece di molti
+                    punti che si assomigliano per costruzione. La soglia mostrata è il massimo fra il minimo
+                    economico (0,02) e il pavimento di rumore statistico della finestra scelta — allargare la
+                    finestra abbassa la soglia e rende visibili segnali più deboli, al prezzo di meno punti.
+                </div>
+            }
+            else
+            {
+                <div class="text-body-secondary small">
+                    Non ancora calcolata. L'analisi riusa le candele della valutazione qui sopra.
+                </div>
+            }
+        </div>
+    </div>
 }
 
 @code {
@@ -196,6 +290,13 @@
     private IReadOnlyList<ScoredFactor>? _ranked;
     private HashSet<string> _kept = new();
     private int _observations;
+
+    // [D2] Deriva dei fattori. Le candele dell'ultima valutazione restano in memoria per non
+    // rifare la stessa query quando si chiede l'analisi nel tempo sugli stessi dati.
+    private List<OhlcvData>? _candles;
+    private IReadOnlyList<FactorDriftReport>? _drift;
+    private int _driftTopN = 12;
+    private int _driftWindow = 250;
 
     private bool _busy;
     private bool _isError;
@@ -260,7 +361,7 @@
         // Memoria dell'ultima configurazione usata (best-effort, mai bloccante).
         if (_presets is not null) await _presets.SaveLastUsedAsync();
 
-        _busy = true; _isError = false; _status = null; _ranked = null;
+        _busy = true; _isError = false; _status = null; _ranked = null; _drift = null; _candles = null;
         try
         {
             List<OhlcvData> candles;
@@ -298,7 +399,9 @@
             });
 
             _ranked = ranked;
+            _candles = candles;
             _kept = selected.Select(s => s.FeatureName).ToHashSet();
+            _driftWindow = SuggestDriftWindow(ranked);
             _observations = ranked.Count > 0 ? ranked.Max(s => s.Evaluation.Observations) : 0;
             _chartPending = true;
             SetStatus($"Valutati {ranked.Count} fattori su {candles.Count} candele: {_kept.Count} superano i filtri.", false);
@@ -306,6 +409,144 @@
         catch (Exception ex) { SetStatus($"Errore: {ex.Message}", true); }
         finally { _busy = false; }
     }
+
+    /// <summary>
+    /// [D2] Ampiezza di finestra proposta dopo una valutazione: quella che produce ~10 finestre
+    /// sui dati effettivamente disponibili.
+    ///
+    /// Non è un dettaglio estetico. Il pavimento di rumore dell'IC va come <c>1,96/√n</c>: con la
+    /// finestra fissa a 250 che questa pagina proponeva all'inizio, la soglia risulta 0,124 e
+    /// **nessun fattore reale la supera** — misurato dal vivo su BTC/USDT 1h, dove tutti e dieci i
+    /// fattori finivano in "non informava già" e il pannello non diceva nulla di utile. Con ~2500
+    /// osservazioni la soglia scende a 0,039 e la stessa serie mostra due fattori che si sono
+    /// spenti davvero. Il compromesso è dichiarato: finestre più larghe vedono segnali più deboli
+    /// ma danno meno punti nel tempo, e chi vuole l'altro lato del baratto cambia il numero.
+    /// </summary>
+    private static int SuggestDriftWindow(IReadOnlyList<ScoredFactor> ranked)
+    {
+        var observations = ranked.Count > 0 ? ranked.Max(s => s.Evaluation.Observations) : 0;
+        if (observations <= 0) return 250;
+        return Math.Clamp(observations / 10, 250, 3000);
+    }
+
+    /// <summary>
+    /// [D2] Analizza la deriva nel tempo dei primi fattori per |IC|. Si limita ai primi N perché
+    /// col catalogo Alpha158 attivo i candidati sono centinaia, e la domanda "questo fattore si sta
+    /// spegnendo?" ha senso su quelli che stavi per usare, non su tutti.
+    /// </summary>
+    private async Task AnalyzeDriftAsync()
+    {
+        if (_ranked is null || _candles is null)
+        {
+            SetStatus("Esegui prima 'Valuta fattori': la deriva si calcola sulle stesse candele.", true);
+            return;
+        }
+
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            var specs = _ranked.Take(Math.Clamp(_driftTopN, 1, 50)).Select(s => s.Spec).ToList();
+            var config = new FactorDriftConfig
+            {
+                ForwardHorizon = _forwardHorizon,
+                WindowSize = Math.Clamp(_driftWindow, 50, 5000),
+                MinAbsIc = _minAbsIc,
+            };
+            var candles = _candles;
+
+            // CPU-bound come la valutazione: fuori dal thread del circuito.
+            _drift = await Task.Run(() => DriftAnalyzer.AnalyzeMany(specs, candles, config));
+
+            var alerts = _drift.Count(d => d.IsAlert);
+            var insufficient = _drift.Count(d => d.Status == FactorDriftStatus.Insufficient);
+            var message = $"Deriva analizzata su {_drift.Count} fattori: {alerts} in allarme.";
+            if (insufficient > 0)
+            {
+                message += $" {insufficient} senza finestre sufficienti: allarga il periodo o riduci l'ampiezza della finestra.";
+            }
+            SetStatus(message, false);
+        }
+        catch (Exception ex) { SetStatus($"Errore nell'analisi di deriva: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private static string DriftLabel(FactorDriftStatus status) => status switch
+    {
+        FactorDriftStatus.SignFlip => "segno invertito",
+        FactorDriftStatus.Weakening => "si è spento",
+        FactorDriftStatus.Insufficient => "dati insufficienti",
+        _ => "stabile",
+    };
+
+    /// <summary>
+    /// Sparkline SVG dell'IC finestra per finestra, con lo zero come riferimento e la banda del
+    /// rumore ombreggiata: senza quella banda una spezzata che oscilla sembrerebbe raccontare
+    /// qualcosa anche quando sta solo rimbalzando dentro l'errore di misura.
+    /// </summary>
+    private static RenderFragment IcSparkline(FactorDriftReport report) => builder =>
+    {
+        const double w = 130, h = 28;
+        var series = report.Series;
+        if (series.Count < 2)
+        {
+            builder.OpenElement(0, "span");
+            builder.AddAttribute(1, "class", "text-body-secondary small");
+            builder.AddContent(2, "—");
+            builder.CloseElement();
+            return;
+        }
+
+        var scale = Math.Max(series.Max(p => Math.Abs(p.InformationCoefficient)), report.NoiseFloor);
+        if (scale <= 0) scale = 1;
+
+        double Y(double ic) => h / 2 - ic / scale * (h / 2 - 2);
+        var points = string.Join(" ", series.Select((p, i) =>
+        {
+            var x = series.Count == 1 ? 0 : i * w / (series.Count - 1);
+            return FormattableString.Invariant($"{x:F1},{Y(p.InformationCoefficient):F1}");
+        }));
+
+        var bandTop = Y(report.NoiseFloor);
+        var bandHeight = Y(-report.NoiseFloor) - bandTop;
+
+        builder.OpenElement(0, "svg");
+        builder.AddAttribute(1, "width", w);
+        builder.AddAttribute(2, "height", h);
+        builder.AddAttribute(3, "role", "img");
+        builder.AddAttribute(4, "aria-label",
+            FormattableString.Invariant($"IC per finestra, da {series[0].InformationCoefficient:F3} a {series[^1].InformationCoefficient:F3}"));
+
+        // Banda del rumore.
+        builder.OpenElement(10, "rect");
+        builder.AddAttribute(11, "x", "0");
+        builder.AddAttribute(12, "y", FormattableString.Invariant($"{bandTop:F1}"));
+        builder.AddAttribute(13, "width", FormattableString.Invariant($"{w:F0}"));
+        builder.AddAttribute(14, "height", FormattableString.Invariant($"{bandHeight:F1}"));
+        builder.AddAttribute(15, "fill", "currentColor");
+        builder.AddAttribute(16, "opacity", "0.08");
+        builder.CloseElement();
+
+        // Linea dello zero.
+        builder.OpenElement(20, "line");
+        builder.AddAttribute(21, "x1", "0");
+        builder.AddAttribute(22, "y1", FormattableString.Invariant($"{h / 2:F1}"));
+        builder.AddAttribute(23, "x2", FormattableString.Invariant($"{w:F0}"));
+        builder.AddAttribute(24, "y2", FormattableString.Invariant($"{h / 2:F1}"));
+        builder.AddAttribute(25, "stroke", "currentColor");
+        builder.AddAttribute(26, "opacity", "0.25");
+        builder.AddAttribute(27, "stroke-width", "1");
+        builder.CloseElement();
+
+        // Spezzata dell'IC.
+        builder.OpenElement(30, "polyline");
+        builder.AddAttribute(31, "points", points);
+        builder.AddAttribute(32, "fill", "none");
+        builder.AddAttribute(33, "stroke", report.IsAlert ? "var(--bs-danger)" : "var(--bs-primary)");
+        builder.AddAttribute(34, "stroke-width", "1.5");
+        builder.CloseElement();
+
+        builder.CloseElement();
+    };
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
