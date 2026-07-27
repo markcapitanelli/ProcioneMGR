@@ -38,6 +38,17 @@
         "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-launch-profile -c Release"
       ],
       "port": 5199
+    },
+    {
+      "_comment": "Come procione-reale ma su porta 5210, per il worktree del filone D (scoperta pattern). Serve perche' il 2026-07-27 la 5199 era gia' occupata da un'istanza del worktree roadmap-b1-b2-8649ea: due worktree diversi sulla stessa porta sono esattamente l'incidente descritto sopra per la 5256. Regola che ne discende: ogni worktree che va verificato col login reale si prende la SUA porta.",
+      "name": "procione-d",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5210'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-launch-profile -c Release"
+      ],
+      "port": 5210
     }
   ]
 }
