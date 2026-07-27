@@ -61,11 +61,15 @@ public sealed class BacktestPageService(
     PerformanceControlService perfControl,
     KellyCalculator kelly,
     LeverageAdvisor levAdvisor,
-    ExcursionAnalyzer excursion)
+    ExcursionAnalyzer excursion,
+    ProcioneMGR.Services.ML.Labeling.IMetaLabelingAnalysisService metaLabeling)
 {
     // --- Stato caricato / del run corrente (letto dal markup, mai scritto dal componente) ------
 
     public IReadOnlyList<string> KnownSymbols { get; private set; } = [];
+
+    /// <summary>[C4] Esito dell'ultima analisi di meta-labeling sulla strategia corrente.</summary>
+    public ProcioneMGR.Services.ML.Labeling.MetaLabelingAnalysis? MetaLabeling { get; private set; }
 
     public BacktestResult? Result { get; private set; }
     public TradeReport? TradeReport { get; private set; }
@@ -344,6 +348,36 @@ public sealed class BacktestPageService(
     /// un -45,8%, perché ogni trade veniva chiuso dal rumore della prima barra. La distribuzione
     /// giusta è quella dell'escursione accumulata su quante barre il trade vive davvero.
     /// </summary>
+    /// <summary>
+    /// [C4] Analisi di meta-labeling sulla strategia e sul periodo correnti: estrae i segnali
+    /// primari veri, li etichetta col triple-barrier e addestra il meta-modello out-of-fold.
+    /// È il consumo della libreria di etichettatura — senza questo C4 resterebbe codice mai
+    /// chiamato da nessuno.
+    /// </summary>
+    public async Task<BacktestActionResult> RunMetaLabelingAsync(
+        BacktestConfigSnapshot cfg, int verticalBarrierBars, double threshold, CancellationToken ct = default)
+    {
+        MetaLabeling = null;
+
+        if (string.IsNullOrWhiteSpace(cfg.Symbol) || cfg.To <= cfg.From)
+            return BacktestActionResult.Error("Controlla symbol e intervallo date.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var from = cfg.From.Date;
+        var to = cfg.To.Date.AddDays(1).AddSeconds(-1);
+        var candles = await db.OhlcvData
+            .Where(c => c.Symbol == cfg.Symbol && c.Timeframe == cfg.Timeframe && c.TimestampUtc >= from && c.TimestampUtc <= to)
+            .OrderBy(c => c.TimestampUtc)
+            .ToListAsync(ct);
+
+        var strategy = strategyFactory.Create(cfg.StrategyName);
+        MetaLabeling = await metaLabeling.RunAsync(strategy, cfg.Parameters, candles, verticalBarrierBars, threshold, ct);
+
+        return MetaLabeling.IsUsable
+            ? BacktestActionResult.Ok(MetaLabeling.Verdict)
+            : BacktestActionResult.Error(MetaLabeling.Verdict);
+    }
+
     public async Task<BracketSuggestion> SuggestBracketAsync(BacktestConfigSnapshot cfg, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(cfg.Symbol) || cfg.To <= cfg.From)

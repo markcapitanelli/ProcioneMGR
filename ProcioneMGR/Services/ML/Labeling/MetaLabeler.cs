@@ -64,12 +64,44 @@ public sealed record MetaLabelingReport(
     public double SurvivalRate => PrimaryCount > 0 ? (double)FilteredCount / PrimaryCount : 0;
 
     /// <summary>
-    /// Il filtro migliora davvero? Serve che la precision salga E che resti un campione non
-    /// ridicolo (almeno 30 operazioni e un quinto dei segnali originali). Le due condizioni
-    /// insieme sono il minimo per non farsi ingannare da un campione ritagliato.
+    /// Quanti errori standard separano i vincenti osservati nel sottoinsieme filtrato da quelli
+    /// che ci si aspetterebbe pescando A CASO lo stesso numero di operazioni.
+    ///
+    /// Questo è il cuore del verdetto, ed è nato da un test fallito: la prima versione dichiarava
+    /// "miglioramento" per una precision che saliva da 0,477 a 0,529 su dati di **puro rumore** —
+    /// perché confrontava due stime puntuali senza chiedersi se la differenza fosse distinguibile
+    /// dal caso. Un filtro che tiene k operazioni su N, di cui K vincenti, sotto l'ipotesi di
+    /// selezione casuale segue una ipergeometrica: media <c>k·K/N</c> e varianza
+    /// <c>k·(K/N)·(1−K/N)·(N−k)/(N−1)</c>. Il rapporto fra scarto osservato e deviazione standard
+    /// dice se il filtro sta scegliendo o sta tirando a sorte.
+    ///
+    /// È lo stesso principio del pavimento di rumore del monitor di deriva e del gemello nullo:
+    /// non "il numero è più alto", ma "il numero è più alto di quanto il caso spiegherebbe".
+    /// </summary>
+    public double SelectionZScore
+    {
+        get
+        {
+            double n = PrimaryCount, k = FilteredCount, K = PrimaryWins;
+            if (n < 2 || k <= 0 || k >= n || K <= 0 || K >= n) return 0;
+            var p = K / n;
+            var expected = k * p;
+            var variance = k * p * (1 - p) * (n - k) / (n - 1);
+            return variance <= 0 ? 0 : (FilteredWins - expected) / Math.Sqrt(variance);
+        }
+    }
+
+    /// <summary>
+    /// Il filtro migliora davvero? Servono TRE cose insieme: che la precision salga, che resti un
+    /// campione non ridicolo (almeno 30 operazioni e un quinto dei segnali), e che il guadagno
+    /// superi quanto una selezione casuale produrrebbe (<see cref="SelectionZScore"/> ≥ 1,96).
+    /// Senza la terza condizione il verdetto scatta sul rumore — misurato, non temuto.
     /// </summary>
     public bool IsImprovement =>
-        FilteredPrecision > PrimaryPrecision && FilteredCount >= 30 && SurvivalRate >= 0.2;
+        FilteredPrecision > PrimaryPrecision
+        && FilteredCount >= 30
+        && SurvivalRate >= 0.2
+        && SelectionZScore >= 1.96;
 }
 
 /// <summary>

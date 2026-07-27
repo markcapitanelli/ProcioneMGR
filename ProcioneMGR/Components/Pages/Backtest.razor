@@ -232,6 +232,116 @@
     </div>
 </div>
 
+@* [C4] Meta-labeling: il meta-modello dice QUALI segnali di questa strategia valga la pena
+   eseguire. Vive qui perché qui strategia, serie e periodo sono già scelti. *@
+<div class="card mb-3" id="meta-labeling-panel">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Meta-labeling — quali segnali di questa strategia vale la pena eseguire</span>
+        @if (Svc.MetaLabeling is { IsUsable: true } mlBadge)
+        {
+            <span class="badge @(mlBadge.Report.IsImprovement ? "bg-success" : "bg-secondary")">
+                @(mlBadge.Report.IsImprovement ? "il filtro migliora" : "nessun miglioramento")
+            </span>
+        }
+    </div>
+    <div class="card-body">
+        <div class="alert alert-warning py-2 small mb-3">
+            <strong>Il meta-labeling amplifica un edge, non lo crea.</strong> Applicato a una regola morta
+            alza la precision buttando via operazioni a caso — e la precision di un campione più piccolo è
+            più rumorosa, non più vera. Ha senso solo sopra un segnale che ha già passato i gate.
+        </div>
+
+        <div class="row g-2 align-items-end mb-3">
+            <div class="col-auto">
+                <label class="form-label">Barriera verticale (barre)</label>
+                <input type="number" class="form-control" style="width: 10rem;" min="2" max="200"
+                       @bind="_metaHorizon" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Soglia di probabilità</label>
+                <input type="number" step="0.05" class="form-control" style="width: 9rem;" min="0.05" max="0.95"
+                       @bind="_metaThreshold" disabled="@_busy" />
+            </div>
+            <div class="col-auto">
+                <button type="button" class="btn btn-primary" @onclick="RunMetaLabelingAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Analizza i segnali
+                </button>
+            </div>
+            <div class="col-auto">
+                <span class="form-text">
+                    Le barriere di profitto e stop vengono dalle escursioni reali della serie, non da numeri scelti a mano.
+                </span>
+            </div>
+        </div>
+
+        @if (Svc.MetaLabeling is { IsUsable: true } analysis)
+        {
+            var r = analysis.Report;
+            <div class="row g-3 mb-3">
+                <div class="col-auto">@MetricCard("Segnali primari", $"{analysis.PrimarySignalCount}")</div>
+                <div class="col-auto">@MetricCard("Valutati out-of-fold", $"{analysis.SamplesScored}")</div>
+                <div class="col-auto">@MetricCard("Barriere", $"+{analysis.ProfitTakePercent:0.##}% / -{analysis.StopLossPercent:0.##}%")</div>
+                <div class="col-auto">@MetricCard("Orizzonte", $"{analysis.VerticalBarrierBars} barre")</div>
+            </div>
+
+            <div class="table-responsive mb-3">
+                <table class="table table-sm align-middle" style="max-width: 46rem;">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th class="text-end">operazioni</th>
+                            <th class="text-end">vincenti</th>
+                            <th class="text-end">precision</th>
+                            <th class="text-end">rendimento medio</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Strategia da sola</td>
+                            <td class="text-end">@r.PrimaryCount</td>
+                            <td class="text-end">@r.PrimaryWins</td>
+                            <td class="text-end">@r.PrimaryPrecision.ToString("P1")</td>
+                            <td class="text-end @(r.PrimaryMeanReturnPercent >= 0 ? "text-success" : "text-danger")">
+                                @r.PrimaryMeanReturnPercent.ToString("0.###")%
+                            </td>
+                        </tr>
+                        <tr class="@(r.IsImprovement ? "table-success" : "")">
+                            <td>Con il filtro del meta-modello</td>
+                            <td class="text-end">@r.FilteredCount</td>
+                            <td class="text-end">@r.FilteredWins</td>
+                            <td class="text-end fw-semibold">@r.FilteredPrecision.ToString("P1")</td>
+                            <td class="text-end @(r.FilteredMeanReturnPercent >= 0 ? "text-success" : "text-danger")">
+                                @r.FilteredMeanReturnPercent.ToString("0.###")%
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="row g-3 mb-3">
+                <div class="col-auto">@MetricCard("Segnali conservati", $"{r.SurvivalRate:P0}")</div>
+                <div class="col-auto">@MetricCard("Vincenti conservati", $"{r.Recall:P0}")</div>
+                <div class="col-auto">@MetricCard("Contro selezione casuale", $"{r.SelectionZScore:F2} s")</div>
+            </div>
+
+            <div class="alert @(r.IsImprovement ? "alert-success" : "alert-secondary") py-2 mb-0">
+                @analysis.Verdict
+            </div>
+            <div class="form-text mt-2">
+                Le probabilità sono <strong>out-of-fold</strong> con purga di @analysis.VerticalBarrierBars barre:
+                ogni segnale è giudicato da un modello che non l'ha mai visto, e la purga copre l'intera finestra su
+                cui l'etichetta si risolve. La colonna "contro selezione casuale" è il confronto che conta: un filtro
+                che tiene N operazioni deve battere il pescarne N a caso, altrimenti la precision più alta è rumore.
+            </div>
+        }
+        else if (Svc.MetaLabeling is { } failed)
+        {
+            <div class="alert alert-secondary py-2 mb-0">@failed.Verdict</div>
+        }
+    </div>
+</div>
+
 @if (Svc.Result is { } result)
 {
     <div class="row g-3 mb-3">
@@ -508,6 +618,10 @@
     // symbol+timeframe correnti, quindi il Run è disabilitato con motivo visibile.
     private bool _hasData = true;
 
+    // [C4] Parametri del pannello di meta-labeling.
+    private int _metaHorizon = 10;
+    private double _metaThreshold = 0.5;
+
     private ConfigPresets? _presets;
 
     /// <summary>Fotografia corrente del form, passata al service per run/preset/handoff.</summary>
@@ -569,6 +683,32 @@
             SetStatus(res.Message, res.IsError);
         }
         catch (Exception ex) { SetStatus($"Suggerimento SL/TP fallito: {ex.Message}", error: true); }
+    }
+
+    /// <summary>
+    /// [C4] Lancia la catena triple-barrier + meta-modello sui segnali VERI della strategia
+    /// corrente. CPU-bound (una CV a 5 fold con alberi), quindi fuori dal thread del circuito.
+    /// </summary>
+    private async Task RunMetaLabelingAsync()
+    {
+        _busy = true;
+        _isError = false;
+        try
+        {
+            var snapshot = Snapshot();
+            var horizon = Math.Clamp(_metaHorizon, 2, 200);
+            var threshold = Math.Clamp(_metaThreshold, 0.05, 0.95);
+            var res = await Task.Run(() => Svc.RunMetaLabelingAsync(snapshot, horizon, threshold));
+
+            // Il banner in alto segnala SOLO i fallimenti. Un verdetto negativo ("il filtro non
+            // migliora") è un risultato valido, non un errore: mostrarlo qui lo colorerebbe di
+            // verde-successo — bug visto in browser alla prima verifica, dove "il filtro scarta il
+            // 98% dei segnali" compariva come se fosse una buona notizia. Il verdetto vive nel
+            // pannello, che lo colora per quello che è.
+            SetStatus(res.IsError ? res.Message : string.Empty, res.IsError);
+        }
+        catch (Exception ex) { SetStatus($"Analisi di meta-labeling fallita: {ex.Message}", error: true); }
+        finally { _busy = false; }
     }
 
     private sealed class ParamInput

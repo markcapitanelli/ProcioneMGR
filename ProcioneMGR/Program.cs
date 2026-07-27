@@ -190,6 +190,9 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorDriftAnalyzer, P
 // [C4] Etichettatura triple-barrier + meta-labeling: puri e deterministici, quindi Singleton.
 builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.ITripleBarrierLabeler, ProcioneMGR.Services.ML.Labeling.TripleBarrierLabeler>();
 builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.IMetaLabeler, ProcioneMGR.Services.ML.Labeling.MetaLabeler>();
+builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.IMetaModelTrainer, ProcioneMGR.Services.ML.Labeling.MetaModelTrainer>();
+// Il consumo: catena completa (segnali reali -> etichette -> meta-modello) dietro la pagina Backtest.
+builder.Services.AddScoped<ProcioneMGR.Services.ML.Labeling.IMetaLabelingAnalysisService, ProcioneMGR.Services.ML.Labeling.MetaLabelingAnalysisService>();
 
 // --- Formulaic alpha mining (programmazione genetica, C# puro). Rif. docs/archive/ROADMAP-QLIB.md §1.7. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.AlphaMining.GeneticAlphaMiner>();

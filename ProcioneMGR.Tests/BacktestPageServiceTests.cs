@@ -83,7 +83,15 @@ public sealed class BacktestPageServiceTests : IAsyncDisposable
             new PerformanceControlService(),
             new KellyCalculator(),
             new LeverageAdvisor(),
-            new ExcursionAnalyzer());
+            new ExcursionAnalyzer(),
+            // [C4] Il servizio VERO, non un finto: e' puro, deterministico e non tocca il DB, quindi
+            // usarlo qui costa nulla e tiene il test aderente alla composizione di produzione.
+            new ProcioneMGR.Services.ML.Labeling.MetaLabelingAnalysisService(
+                new ProcioneMGR.Services.ML.Labeling.TripleBarrierLabeler(),
+                new ProcioneMGR.Services.ML.Labeling.MetaLabeler(),
+                new ProcioneMGR.Services.ML.Labeling.MetaModelTrainer(),
+                new ProcioneMGR.Services.Alpha.AlphaFactorFactory(),
+                new ProcioneMGR.Services.Indicators.TechnicalIndicatorsService()));
         return (svc, dbFactory);
     }
 
