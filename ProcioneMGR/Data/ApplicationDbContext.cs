@@ -87,6 +87,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>Esiti dei check di drift feature (uno per modello per tick del FeatureDriftWorker).</summary>
     public DbSet<ProcioneMGR.Services.Monitoring.Drift.DriftCheckResult> DriftCheckResults => Set<ProcioneMGR.Services.Monitoring.Drift.DriftCheckResult>();
 
+    /// <summary>[D2] Storia dell'IC per fattore: una riga per finestra, scritta dal FactorDriftWorker.</summary>
+    public DbSet<ProcioneMGR.Services.Alpha.FactorIcWindow> FactorIcWindows => Set<ProcioneMGR.Services.Alpha.FactorIcWindow>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         // IMPORTANTISSIMO: lasciare che Identity configuri le sue tabelle
@@ -461,6 +464,22 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // La UI legge "gli ultimi N" globali o per modello; il prune cancella per data.
             e.HasIndex(x => x.CheckedAtUtc);
             e.HasIndex(x => new { x.ModelId, x.CheckedAtUtc });
+        });
+
+        builder.Entity<ProcioneMGR.Services.Alpha.FactorIcWindow>(e =>
+        {
+            e.ToTable("FactorIcWindows");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Symbol).HasMaxLength(32);
+            e.Property(x => x.Timeframe).HasMaxLength(8);
+            e.Property(x => x.FactorName).HasMaxLength(64);
+            // UNICO: la stessa finestra ricalcolata dal worker deve aggiornare la riga, non
+            // aggiungerne una. Senza questo vincolo un giro ogni 12 ore duplicherebbe per sempre.
+            e.HasIndex(x => new { x.Symbol, x.Timeframe, x.FactorName, x.ForwardHorizon, x.WindowSize, x.WindowEndUtc })
+                .IsUnique()
+                .HasDatabaseName("IX_FactorIcWindows_Serie_Fattore_Finestra");
+            // La lettura tipica è "la storia di questa serie", per il pannello e per l'idratazione.
+            e.HasIndex(x => new { x.Symbol, x.Timeframe, x.WindowEndUtc });
         });
 
         // --- Adattamenti specifici PostgreSQL ---

@@ -156,7 +156,10 @@ switch (phase)
     case "relative": await RelativeMarketsAsync(); break;
     case "lanes": await LanesAsync(args.Length > 1 && args[1].Equals("clean", StringComparison.OrdinalIgnoreCase)); break;
     case "discover": await DiscoverAsync(); break;
-    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover"); break;
+    case "ofi": await OfiAsync(
+        args.Length > 1 ? args[1] : "BTCUSDT,ETHUSDT,SOLUSDT",
+        args.Length > 2 && int.TryParse(args[2], out var ofiDays) ? ofiDays : 30); break;
+    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover | ofi"); break;
 }
 
 // ------------------------------------------------------------------ STATS (read-only)
@@ -5284,6 +5287,285 @@ async Task<List<DiscoveryCandidate>> RunDiscovery(
     var result = await discovery.DiscoverAsync(config, progress, CancellationToken.None);
     Console.WriteLine($"     Run {label}: {result.CombinationsTested} combos, {result.Candidates.Count} candidati");
     return result.Candidates;
+}
+
+// ------------------------------------------------------------------ OFI (D3 / C5 passo 3.3)
+// Il book aggiunge informazione predittiva OLTRE al proxy trade-flow che abbiamo gia' gratis dalle
+// klines? Il piano C5 prevedeva 90 giorni di raccolta dal vivo prima di poter rispondere; i dump
+// pubblici di Binance contengono tape e profondita' storici, quindi si misura ORA e senza lasciare
+// alcun costo permanente sulla piattaforma.
+//
+// Cosa gira, in ordine:
+//   1. scarico (con cache su disco fuori dal repo) di aggTrades + bookDepth + klines 1m, futures USD-M
+//      -- futures perche' e' il SOLO mercato per cui Binance pubblica la profondita' del book;
+//   2. VERIFICA DI INTEGRITA' su dati veri: il volume taker-buy ricostruito dal tape deve coincidere
+//      con quello dichiarato dalle klines. E' un riferimento indipendente sul parser: se sbagliassi
+//      il segno di is_buyer_maker o l'unita' del timestamp, questo confronto lo direbbe subito;
+//   3. costruzione dei candidati (tre dal tape sotto il minuto, tre dal book) e del proxy;
+//   4. gate: IC incrementale sopra il proxy, nullo a rotazione del migliore, pavimento economico.
+async Task OfiAsync(string symbolsCsv, int days)
+{
+    var symbols = symbolsCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var lastDay = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-2)); // i dump del giorno sono pubblicati con ritardo
+    var firstDay = lastDay.AddDays(-(days - 1));
+
+    Console.WriteLine("=== D3 / C5 3.3 -- IL BOOK AGGIUNGE INFORMAZIONE OLTRE AL PROXY TRADE-FLOW? ===");
+    Console.WriteLine($"    Mercato: futures USD-M (l'unico con profondita' storica). Periodo: {firstDay} -> {lastDay} ({days} giorni).");
+    Console.WriteLine($"    Simboli: {string.Join(", ", symbols)}");
+    Console.WriteLine("    Proxy (controllo) = sbilanciamento taker per candela, quello che le klines danno gratis.");
+    Console.WriteLine("    Candidati = tre dal tape SOTTO il minuto + tre dal book. Il gate misura l'IC PARZIALE.\n");
+
+    using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+    var downloader = new ProcioneMGR.Services.Microstructure.BinanceDumpDownloader(http);
+    Console.WriteLine($"    Cache: {downloader.CacheDirectory}\n");
+
+    foreach (var symbol in symbols)
+    {
+        Console.WriteLine($"--- {symbol} ---");
+
+        var klines = new List<OhlcvData>();
+        var tape = new List<ProcioneMGR.Services.Microstructure.TapeBar>();
+        var book = new List<ProcioneMGR.Services.Microstructure.BookDepthSnapshot>();
+        var malformed = 0;
+        var missingBook = 0;
+        var missingTape = 0;
+
+        for (var day = firstDay; day <= lastDay; day = day.AddDays(1))
+        {
+            var dayStart = day.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            var dayEnd = dayStart.AddDays(1);
+
+            // Klines 1m: la spina dorsale (proxy + rendimenti forward).
+            var kPath = await downloader.EnsureAsync(
+                ProcioneMGR.Services.Microstructure.BinanceDumpDownloader.KlinesUrl(
+                    ProcioneMGR.Services.Microstructure.DumpMarket.FuturesUm, symbol, "1m", day));
+            if (kPath is not null)
+            {
+                var parser = new ProcioneMGR.Services.Microstructure.BinanceDumpParser();
+                using var reader = ProcioneMGR.Services.Microstructure.BinanceDumpDownloader.OpenCsv(kPath);
+                klines.AddRange(parser.ReadKlines(reader, symbol, "1m"));
+                malformed += parser.MalformedLines;
+            }
+
+            // Tape: aggregato a 10 secondi all'origine, come prescrive C5 9.2.
+            var tPath = await downloader.EnsureAsync(
+                ProcioneMGR.Services.Microstructure.BinanceDumpDownloader.AggTradesUrl(
+                    ProcioneMGR.Services.Microstructure.DumpMarket.FuturesUm, symbol, day));
+            if (tPath is null) { missingTape++; }
+            else
+            {
+                var parser = new ProcioneMGR.Services.Microstructure.BinanceDumpParser();
+                using var reader = ProcioneMGR.Services.Microstructure.BinanceDumpDownloader.OpenCsv(tPath);
+                tape.AddRange(ProcioneMGR.Services.Microstructure.TapeAggregator.Aggregate(
+                    parser.ReadAggTrades(reader), TimeSpan.FromSeconds(10), dayStart, dayEnd));
+                malformed += parser.MalformedLines;
+            }
+
+            // Book: snapshot di profondita' ogni 30 secondi.
+            var bPath = await downloader.EnsureAsync(
+                ProcioneMGR.Services.Microstructure.BinanceDumpDownloader.BookDepthUrl(symbol, day));
+            if (bPath is null) { missingBook++; }
+            else
+            {
+                var parser = new ProcioneMGR.Services.Microstructure.BinanceDumpParser();
+                using var reader = ProcioneMGR.Services.Microstructure.BinanceDumpDownloader.OpenCsv(bPath);
+                book.AddRange(parser.ReadBookDepth(reader));
+                malformed += parser.MalformedLines;
+            }
+        }
+
+        klines = klines.OrderBy(k => k.TimestampUtc).ToList();
+        Console.WriteLine($"    Dati: {klines.Count:N0} candele 1m, {tape.Count:N0} barre da 10s, {book.Count:N0} snapshot di book.");
+        Console.WriteLine($"    Buchi: {missingTape} giorni di tape, {missingBook} giorni di book. Righe malformate: {malformed}.");
+        Console.WriteLine($"    Rete: {downloader.DownloadedBytes / 1024.0 / 1024.0:F1} MB scaricati, {downloader.CacheHits} file da cache.");
+        if (klines.Count < 2000 || tape.Count == 0)
+        {
+            Console.WriteLine("    Dati insufficienti per un verdetto: si salta.\n");
+            continue;
+        }
+
+        // --- 2. Verifica di integrita' contro un riferimento indipendente -------------------------
+        // Il volume taker-buy ricostruito dal tape deve coincidere con quello dichiarato dalle
+        // klines. Sono due file diversi, prodotti da due pipeline diverse di Binance.
+        var tapeByMinute = tape
+            .GroupBy(b => new DateTime(b.StartUtc.Ticks - b.StartUtc.Ticks % TimeSpan.TicksPerMinute, DateTimeKind.Utc))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var errors = new List<double>();
+        foreach (var k in klines)
+        {
+            if (!tapeByMinute.TryGetValue(k.TimestampUtc, out var bars)) continue;
+            if (k.TakerBuyVolume is not decimal declared || declared <= 0m) continue;
+            var reconstructed = bars.Sum(b => b.BuyVolume);
+            errors.Add(Math.Abs((double)(reconstructed - declared) / (double)declared));
+        }
+        if (errors.Count > 0)
+        {
+            errors.Sort();
+            var median = errors[errors.Count / 2];
+            var p95 = errors[(int)(errors.Count * 0.95)];
+            var within = errors.Count(e => e < 0.001) * 100.0 / errors.Count;
+            Console.WriteLine($"    INTEGRITA' tape-vs-klines su {errors.Count:N0} minuti: errore relativo mediano {median:P4}, "
+                              + $"95mo {p95:P4}, entro lo 0,1% nel {within:F1}% dei minuti.");
+        }
+
+        // --- 3. Candidati e proxy ------------------------------------------------------------------
+        var n = klines.Count;
+        var proxy = new double[n];
+        var fwd1 = new double[n];
+        var fwd5 = new double[n];
+        var last10s = new double[n];
+        var dispersion = new double[n];
+        var accel = new double[n];
+        var bookImb02 = new double[n];
+        var bookImb1 = new double[n];
+        var bookOfi02 = new double[n];
+
+        // Il proxy si calcola col fattore VERO della piattaforma (Lookback = 1: lo sbilanciamento
+        // della candela, cioe' esattamente l'informazione che le klines regalano).
+        var takerFactor = new ProcioneMGR.Services.Alpha.TakerImbalanceFactor();
+        var proxyValues = takerFactor.Compute(klines, new Dictionary<string, decimal> { ["Lookback"] = 1m });
+
+        var bookByMinute = book
+            .GroupBy(s => new DateTime(s.TimestampUtc.Ticks - s.TimestampUtc.Ticks % TimeSpan.TicksPerMinute, DateTimeKind.Utc))
+            .ToDictionary(g => g.Key, g => g.OrderBy(s => s.TimestampUtc).ToList());
+
+        for (var i = 0; i < n; i++)
+        {
+            proxy[i] = proxyValues[i] is decimal pv ? (double)pv : double.NaN;
+
+            fwd1[i] = i + 1 < n && klines[i].Close > 0m ? (double)((klines[i + 1].Close - klines[i].Close) / klines[i].Close) : double.NaN;
+            fwd5[i] = i + 5 < n && klines[i].Close > 0m ? (double)((klines[i + 5].Close - klines[i].Close) / klines[i].Close) : double.NaN;
+
+            last10s[i] = dispersion[i] = accel[i] = double.NaN;
+            if (tapeByMinute.TryGetValue(klines[i].TimestampUtc, out var bars) && bars.Count >= 2)
+            {
+                var ordered = bars.OrderBy(b => b.StartUtc).ToList();
+                // (a) ultimi 10 secondi: il flusso piu' recente dentro la candela.
+                last10s[i] = ordered[^1].Imbalance is decimal li ? (double)li : double.NaN;
+
+                // (b) dispersione del flusso dentro il minuto: un minuto tutto d'un pezzo e uno che
+                //     sbanda avanti e indietro hanno lo stesso sbilanciamento aggregato.
+                var inner = ordered.Where(b => b.Imbalance is not null).Select(b => (double)b.Imbalance!.Value).ToList();
+                if (inner.Count >= 3)
+                {
+                    var mean = inner.Average();
+                    dispersion[i] = Math.Sqrt(inner.Sum(v => (v - mean) * (v - mean)) / inner.Count);
+                }
+
+                // (c) accelerazione: gli ultimi 20 secondi contro tutto il minuto.
+                var tail = ProcioneMGR.Services.Microstructure.TapeAggregator.Imbalance(ordered.TakeLast(2).ToList());
+                var whole = ProcioneMGR.Services.Microstructure.TapeAggregator.Imbalance(ordered);
+                if (tail is decimal t2 && whole is decimal w) accel[i] = (double)(t2 - w);
+            }
+
+            bookImb02[i] = bookImb1[i] = bookOfi02[i] = double.NaN;
+            if (bookByMinute.TryGetValue(klines[i].TimestampUtc, out var snaps) && snaps.Count >= 1)
+            {
+                // Stato del book alla fine della candela: nessuno sguardo al futuro (l'ultimo
+                // snapshot del minuto i precede il rendimento fra i e i+1).
+                var lastSnap = snaps[^1];
+                if (lastSnap.Imbalance(0.2m) is decimal b02) bookImb02[i] = (double)b02;
+                if (lastSnap.Imbalance(1m) is decimal b1) bookImb1[i] = (double)b1;
+                if (snaps.Count >= 2
+                    && ProcioneMGR.Services.Microstructure.OrderFlowImbalance.DepthBandOfi(snaps[0], lastSnap, 0.2m) is decimal ofi)
+                {
+                    bookOfi02[i] = (double)ofi;
+                }
+            }
+        }
+
+        // IC del solo proxy, sulle barre dove proxy e rendimento esistono entrambi: e' il metro di
+        // paragone: se il proxy da solo non informa, "aggiungere qualcosa al proxy" cambia domanda.
+        var proxyPairs = Enumerable.Range(0, n)
+            .Where(i => !double.IsNaN(proxy[i]) && !double.IsNaN(fwd1[i]))
+            .ToList();
+        var proxyIc1 = ProcioneMGR.Services.Alpha.Correlation.Spearman(
+            [.. proxyPairs.Select(i => proxy[i])],
+            [.. proxyPairs.Select(i => fwd1[i])]);
+        Console.WriteLine($"    IC grezzo del solo proxy: {proxyIc1:F4} su {proxyPairs.Count:N0} barre (orizzonte 1 barra).");
+
+        // --- 4. Il gate ---------------------------------------------------------------------------
+        // DUE controlli, non uno. Il secondo (rendimento del minuto appena chiuso) esiste per un
+        // artefatto preciso: lo sbilanciamento di profondita' cambia quando il prezzo si muove,
+        // quindi un candidato di book potrebbe risultare informativo solo perche' e' il rendimento
+        // recente travestito -- cioe' il reversal di brevissimo periodo, effetto noto e gia' misurato
+        // come non redditizio dopo i costi. Con questo controllo dentro, "aggiunge informazione"
+        // significa "oltre al flusso taker E oltre al movimento appena avvenuto".
+        var pastReturn = new double[n];
+        for (var i = 0; i < n; i++)
+        {
+            pastReturn[i] = i > 0 && klines[i - 1].Close > 0m
+                ? (double)((klines[i].Close - klines[i - 1].Close) / klines[i - 1].Close)
+                : double.NaN;
+        }
+
+        var report = ProcioneMGR.Services.Microstructure.IncrementalIcGate.Run(
+            [
+                new ProcioneMGR.Services.Microstructure.IcCandidate("proxy taker", proxy),
+                new ProcioneMGR.Services.Microstructure.IcCandidate("rendimento recente", pastReturn),
+            ],
+            new Dictionary<int, IReadOnlyList<double>> { [1] = fwd1, [5] = fwd5 },
+            [
+                new ProcioneMGR.Services.Microstructure.IcCandidate("tape ultimi 10s", last10s),
+                new ProcioneMGR.Services.Microstructure.IcCandidate("tape dispersione", dispersion),
+                new ProcioneMGR.Services.Microstructure.IcCandidate("tape accelerazione", accel),
+                new ProcioneMGR.Services.Microstructure.IcCandidate("book imbalance 0,2%", bookImb02),
+                new ProcioneMGR.Services.Microstructure.IcCandidate("book imbalance 1%", bookImb1),
+                new ProcioneMGR.Services.Microstructure.IcCandidate("book OFI 0,2%", bookOfi02),
+            ]);
+
+        Console.WriteLine($"\n    Barre utilizzabili: {report.Observations:N0} · candidati {report.Candidates} × orizzonti {report.Horizons} "
+                          + $"= {report.Candidates * report.Horizons} test · nullo {report.NullDraws} giri (soglia del migliore {report.NullBestPercentile:F4})");
+        Console.WriteLine("    Controlli: sbilanciamento taker della candela + rendimento del minuto appena chiuso.");
+        Console.WriteLine($"    {"candidato",-22} {"h",3} {"IC grezzo",10} {"IC parziale",12} {"rho col proxy",14} {"p-value",9} {"soglia",8}  esito");
+        foreach (var o in report.Outcomes)
+        {
+            Console.WriteLine($"    {o.Candidate,-22} {o.HorizonBars,3} {o.RawIc,10:F4} {o.PartialIc,12:F4} "
+                              + $"{o.CorrelationWithProxy,14:F3} {o.NullPValue,9:F4} {o.Threshold,8:F4}  "
+                              + (o.AddsInformation ? "AGGIUNGE" : "-"));
+        }
+        // --- 5. Traduzione in soldi: un IC significativo non e' ancora un edge -------------------
+        // Un |IC| statisticamente solido su 43.000 barre puo' essere economicamente irrilevante, e a
+        // orizzonte di minuti lo e' quasi sempre: il pavimento 0,02 che il gate usa arriva da
+        // /feature-selection, dove le barre sono ore o giorni. Qui si calcola il pavimento VERO:
+        // quanto |IC| serve perche' l'edge lordo di un segnale a 1 sigma paghi un giro completo.
+        // Senza questo passaggio un "AGGIUNGE" verrebbe letto come "si puo' operare".
+        const double makerRoundTripBps = 4.0;   // 0,02% per lato, tariffa maker Binance USD-M
+        const double takerRoundTripBps = 10.0;  // 0,05% per lato, tariffa taker
+        Console.WriteLine("    Rilevanza economica (edge lordo al segnale 1 sigma vs costo di andata e ritorno):");
+        foreach (var h in new[] { 1, 5 })
+        {
+            var rets = Enumerable.Range(0, n)
+                .Where(i => !double.IsNaN(h == 1 ? fwd1[i] : fwd5[i]))
+                .Select(i => h == 1 ? fwd1[i] : fwd5[i])
+                .ToList();
+            if (rets.Count < 100) continue;
+
+            var mean = rets.Average();
+            var sigma = Math.Sqrt(rets.Sum(r => (r - mean) * (r - mean)) / rets.Count);
+            var sigmaBps = sigma * 10_000;
+
+            var best = report.Outcomes.Where(o => o.HorizonBars == h)
+                .OrderByDescending(o => Math.Abs(o.PartialIc)).FirstOrDefault();
+            if (best is null) continue;
+
+            var edgeBps = Math.Abs(best.PartialIc) * sigmaBps;
+            Console.WriteLine($"      h={h}: sigma dei rendimenti {sigmaBps:F2} bp · miglior |IC parziale| {Math.Abs(best.PartialIc):F4} "
+                              + $"⇒ edge lordo {edgeBps:F2} bp");
+            Console.WriteLine($"            per pagare {makerRoundTripBps:F0} bp (maker) servirebbe |IC| ≥ {makerRoundTripBps / sigmaBps:F3}"
+                              + $" · per {takerRoundTripBps:F0} bp (taker) ≥ {takerRoundTripBps / sigmaBps:F3}"
+                              + $" ⇒ manca un fattore {makerRoundTripBps / edgeBps:F0}× (maker)");
+        }
+
+        Console.WriteLine($"\n    VERDETTO: {report.Verdict}\n");
+    }
+
+    Console.WriteLine("    Lettura onesta: il book storicamente disponibile e' la PROFONDITA' a bande ogni 30 secondi,");
+    Console.WriteLine("    non il top-of-book tick per tick. Un esito negativo dice che quel book non aggiunge nulla al");
+    Console.WriteLine("    proxy trade-flow -- non che l'OFI di Cont-Kukanov-Stoikov sia impossibile. La formula esatta e'");
+    Console.WriteLine("    implementata e verificata (OrderFlowImbalance.TopOfBookOfi) e aspetta, se mai servira', le size");
+    Console.WriteLine("    di bookTicker che il feed R1 riceve gia' e oggi butta via.");
 }
 
 sealed class PassthroughEncryption : ProcioneMGR.Services.Security.IEncryptionService

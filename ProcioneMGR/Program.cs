@@ -190,6 +190,9 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorDriftAnalyzer, P
 // Fotografia in memoria + job che la aggiorna: senza, l'alert vivrebbe solo per chi apre il
 // pannello. Nessuna azione automatica, solo segnalazione (PRD §5e).
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.FactorDriftSnapshot>();
+// Storia dell'IC su tabella: il worker la scrive, la Home la ritrova già pronta dopo un riavvio
+// del guscio e il pannello può mostrare quando un fattore si è spento senza ricalcolare.
+builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorIcHistoryStore, ProcioneMGR.Services.Alpha.FactorIcHistoryStore>();
 builder.Services.AddHostedService<ProcioneMGR.Services.Alpha.FactorDriftWorker>();
 // [C4] Etichettatura triple-barrier + meta-labeling: puri e deterministici, quindi Singleton.
 builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.ITripleBarrierLabeler, ProcioneMGR.Services.ML.Labeling.TripleBarrierLabeler>();

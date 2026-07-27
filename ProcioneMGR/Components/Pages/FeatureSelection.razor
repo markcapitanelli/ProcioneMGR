@@ -17,6 +17,8 @@
 
 @inject IIcFeatureSelector Selector
 @inject IFactorDriftAnalyzer DriftAnalyzer
+@inject IFactorIcHistoryStore IcHistory
+@inject IConfiguration Config
 @inject IAlphaFactorFactory Factory
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IJSRuntime JS
@@ -128,6 +130,99 @@
         @if (!string.IsNullOrEmpty(_status))
         {
             <div class="alert @(_isError ? "alert-danger" : "alert-info") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@* [D2, persistenza] La storia REGISTRATA dal job periodico. Sta FUORI dal blocco che richiede una
+   valutazione perché è il pezzo che si deve vedere appena si apre la pagina, senza calcolare niente:
+   è la differenza fra un monitor che risponde a chi lo interroga e uno che si fa trovare. Il verdetto
+   qui è ricostruito dalle finestre registrate con lo stesso Judge del calcolo fresco. *@
+<div class="card mb-3" id="drift-recorded">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        @* Si mostra la serie EFFETTIVAMENTE caricata, non quella selezionata nel form: cambiare la
+           tendina senza ricaricare lascerebbe altrimenti un'intestazione che mente sui dati sotto. *@
+        <span>Storia registrata dal job — @(_recorded is not null ? $"{_recorded.Symbol} {_recorded.Timeframe}" : $"{_symbol} {_timeframe}")</span>
+        <span class="d-flex align-items-center gap-2">
+            @if (_recorded is not null)
+            {
+                var recordedAlerts = _recorded.Alerts.Count;
+                <span class="badge @(recordedAlerts > 0 ? "bg-warning text-dark" : "bg-success")">
+                    @(recordedAlerts > 0 ? $"{recordedAlerts} in allarme" : "nessun allarme")
+                </span>
+            }
+            <button class="btn btn-sm btn-outline-secondary" @onclick="LoadRecordedAsync" disabled="@_recordedBusy">
+                @if (_recordedBusy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Ricarica
+            </button>
+        </span>
+    </div>
+    <div class="card-body">
+        @if (_recorded is null)
+        {
+            <div class="text-body-secondary small">
+                Il job non ha ancora registrato questa serie. Calcola la deriva delle serie della
+                <strong>watchlist</strong> ogni @_recordedIntervalHours ore e scrive una riga per finestra:
+                se qui non c'è nulla, o la serie non è in watchlist, o il job non ha ancora fatto il primo giro
+                (parte 2 minuti dopo l'avvio).
+            </div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Fattore</th>
+                            <th>IC nel tempo</th>
+                            <th class="text-end">riferimento</th>
+                            <th class="text-end">recente</th>
+                            <th class="text-end">soglia</th>
+                            <th class="text-end">finestre</th>
+                            <th>Verdetto</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in _recorded.Reports)
+                        {
+                            <tr class="@(r.Status switch {
+                                FactorDriftStatus.SignFlip => "table-danger",
+                                FactorDriftStatus.Weakening => "table-warning",
+                                _ => "" })">
+                                <td>@r.FeatureName</td>
+                                <td>@IcSparkline(r)</td>
+                                <td class="text-end font-monospace">@r.ReferenceIc.ToString("F3")</td>
+                                <td class="text-end font-monospace">@r.RecentIc.ToString("F3")</td>
+                                <td class="text-end font-monospace text-body-secondary">@r.NoiseFloor.ToString("F3")</td>
+                                <td class="text-end font-monospace text-body-secondary">
+                                    @r.Series.Count × @(r.Series.Count > 0 ? r.Series[^1].Observations : 0)
+                                </td>
+                                <td>
+                                    <span class="badge @(r.Status switch {
+                                        FactorDriftStatus.SignFlip => "bg-danger",
+                                        FactorDriftStatus.Weakening => "bg-warning text-dark",
+                                        FactorDriftStatus.Insufficient => "bg-secondary",
+                                        _ => "bg-success" })">@DriftLabel(r.Status)</span>
+                                    <div class="small text-body-secondary">@r.StatusMessage</div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="form-text mt-2">
+                Ultimo calcolo del job: <strong>@_recorded.ComputedAtUtc.ToString("yyyy-MM-dd HH:mm") UTC</strong>
+                @if (_recorded.Reports.Count > 0 && _recorded.Reports[0].Series.Count > 0)
+                {
+                    <text> · periodo coperto dalle finestre registrate:
+                    @_recorded.Reports.Min(r => r.Series.Count > 0 ? r.Series[0].WindowStartUtc : DateTime.MaxValue).ToString("yyyy-MM-dd")
+                    → @_recorded.Reports.Max(r => r.Series.Count > 0 ? r.Series[^1].WindowEndUtc : DateTime.MinValue).ToString("yyyy-MM-dd")</text>
+                }
+                . Le righe vengono <strong>riscritte, non duplicate</strong>, quando il job ricalcola la stessa
+                finestra. Qui non compare l'IC full-sample: dalle finestre registrate non è ricostruibile, e
+                mostrarne una media spacciata per ricalcolo sarebbe un numero falso — per quello c'è il
+                pannello qui sotto, che ricalcola davvero.
+            </div>
         }
     </div>
 </div>
@@ -305,6 +400,12 @@
     private IJSObjectReference? _chartModule;
     private bool _chartPending;
 
+    // [D2, persistenza] Storia registrata dal job per la serie selezionata. Non è un calcolo: è una
+    // lettura di tabella, quindi si può fare al caricamento della pagina senza far aspettare nessuno.
+    private FactorDriftSeriesSnapshot? _recorded;
+    private bool _recordedBusy;
+    private int _recordedIntervalHours = 12;
+
     protected override async Task OnInitializedAsync()
     {
         var state = await AuthProvider.GetAuthenticationStateAsync();
@@ -312,6 +413,26 @@
         _alpha158Count = Factory.Prototypes.Count(IsAlpha158);
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+
+        _recordedIntervalHours = Math.Max(1, Config.GetValue("FactorDrift:IntervalHours", 12));
+        await LoadRecordedAsync();
+    }
+
+    /// <summary>
+    /// Rilegge la storia registrata per la serie selezionata. Mai bloccante: se la tabella non è
+    /// ancora stata creata (migrazione non applicata) il pannello resta vuoto invece di rompere la
+    /// pagina — la deriva è advisory, non un ingranaggio del percorso operativo.
+    /// </summary>
+    private async Task LoadRecordedAsync()
+    {
+        _recordedBusy = true;
+        try
+        {
+            _recorded = await IcHistory.LoadSnapshotAsync(
+                _symbol.Trim(), _timeframe, new FactorDriftConfig { ForwardHorizon = 1 });
+        }
+        catch { _recorded = null; }
+        finally { _recordedBusy = false; }
     }
 
     private string? _userId;
@@ -405,6 +526,10 @@
             _observations = ranked.Count > 0 ? ranked.Max(s => s.Evaluation.Observations) : 0;
             _chartPending = true;
             SetStatus($"Valutati {ranked.Count} fattori su {candles.Count} candele: {_kept.Count} superano i filtri.", false);
+
+            // La serie può essere cambiata rispetto al caricamento della pagina: la storia registrata
+            // segue la serie che si sta guardando.
+            await LoadRecordedAsync();
         }
         catch (Exception ex) { SetStatus($"Errore: {ex.Message}", true); }
         finally { _busy = false; }

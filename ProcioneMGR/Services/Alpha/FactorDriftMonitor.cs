@@ -13,13 +13,14 @@ namespace ProcioneMGR.Services.Alpha;
 //  a chi va a cercarlo — ma il senso del monitor è accorgersi di un fattore che si spegne SENZA
 //  doverci pensare, come già fa StrategyDecayMonitor per le gambe dell'ensemble.
 //
-//  PERCHÉ IN MEMORIA E NON SU TABELLA. Il PRD ipotizzava una tabella o il riuso di ExperimentRuns.
-//  Qui si tiene una sola fotografia in memoria, aggiornata dal worker, per una ragione precisa:
-//  l'IC storico è una funzione DETERMINISTICA delle candele, quindi persisterlo sarebbe una cache,
-//  non un'osservazione — e costerebbe una migrazione sul DB reale. Ciò che serviva davvero non era
-//  la storia, ma che il calcolo avvenisse SENZA che l'utente lo chieda: quello lo dà il job. Al
-//  riavvio la fotografia riparte vuota e si ricostruisce al primo giro; è un costo accettabile per
-//  non aggiungere schema.
+//  MEMORIA **E** TABELLA (secondo giro, 2026-07-28). Il primo giro teneva solo una fotografia in
+//  memoria, con l'argomento che l'IC storico è deterministico dalle candele. La fotografia resta —
+//  è ciò che la Home legge senza toccare il DB — ma ora è ALIMENTATA anche dalla tabella
+//  FactorIcWindows: il worker scrive le finestre che calcola e, all'avvio, ricostruisce la
+//  fotografia da quanto già registrato. Le due ragioni per cui la sola memoria non bastava stanno
+//  in testa a FactorIcHistory.cs: il guscio si riavvia di continuo (e l'alert in Home resterebbe
+//  vuoto proprio quando serve) e le candele non sono eterne (quando la finestra fine verrà ruotata,
+//  la storia dell'IC non sarà più ricalcolabile — allora è un'osservazione, non una cache).
 //
 //  NESSUNA AZIONE AUTOMATICA: si segnala e basta, come il fratello maggiore.
 // =============================================================================================
@@ -73,10 +74,14 @@ public sealed class FactorDriftWorker(
     IServiceScopeFactory scopeFactory,
     IFactorDriftAnalyzer analyzer,
     IAlphaFactorFactory factorFactory,
+    IFactorIcHistoryStore history,
     FactorDriftSnapshot snapshot,
     IConfiguration configuration,
     ILogger<FactorDriftWorker> logger) : BackgroundService
 {
+    /// <summary>Orizzonte forward del monitor periodico: una barra, come il pannello.</summary>
+    private const int ForwardHorizon = 1;
+
     /// <summary>
     /// Solo i fattori scritti a mano, non il catalogo Alpha158: 158 fattori × N serie × finestre
     /// rolling trasformerebbero un monitor in un consumo di CPU permanente. Chi vuole guardare
@@ -93,6 +98,12 @@ public sealed class FactorDriftWorker(
         var hours = Math.Max(1, configuration.GetValue("FactorDrift:IntervalHours", 12));
         logger.LogInformation("FactorDriftWorker avviato (ogni {Hours}h, Enabled={Enabled}).",
             hours, configuration.GetValue("FactorDrift:Enabled", true));
+
+        // IDRATAZIONE: prima di qualunque calcolo, la fotografia si ricostruisce da ciò che è già
+        // registrato. È il pezzo che rende l'alert in Home presente SUBITO dopo un riavvio del
+        // guscio, invece di comparire soltanto dopo il primo giro (cioè dopo i 2 minuti di ritardo
+        // qui sotto più il tempo di macinare gli IC).
+        await HydrateAsync(stoppingToken);
 
         // Ritardo iniziale: all'avvio l'app ha di meglio da fare che macinare IC.
         try { await Task.Delay(TimeSpan.FromMinutes(2), stoppingToken); }
@@ -122,6 +133,63 @@ public sealed class FactorDriftWorker(
     {
         try { return await timer.WaitForNextTickAsync(ct); }
         catch (OperationCanceledException) { return false; }
+    }
+
+    /// <summary>
+    /// Ricostruisce la fotografia dalla storia registrata. Non fallisce mai in modo rumoroso: se il
+    /// DB non è raggiungibile si riparte a vuoto, esattamente come prima che la tabella esistesse —
+    /// un monitor advisory non deve poter impedire l'avvio dell'app.
+    /// </summary>
+    public async Task HydrateAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var all = await history.LoadSnapshotsAsync(new FactorDriftConfig { ForwardHorizon = ForwardHorizon }, ct);
+            if (all.Count == 0) return;
+
+            // Solo le serie ANCORA in watchlist. La storia di una serie rimossa resta in tabella (è
+            // un'osservazione vera, e cancellarla sarebbe perdere il passato), ma non deve tornare a
+            // farsi vedere in Home dopo un riavvio: sarebbe un allarme su qualcosa che non si segue
+            // più, cioè rumore in un pannello che deve restare leggibile.
+            using var scope = scopeFactory.CreateScope();
+            var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var tracked = (await db.TrackedSeries
+                    .Where(s => s.Enabled)
+                    .Select(s => new { s.Symbol, s.Timeframe })
+                    .ToListAsync(ct))
+                .Select(s => $"{s.Symbol}|{s.Timeframe}")
+                .ToHashSet(StringComparer.Ordinal);
+
+            var snapshots = all.Where(s => tracked.Contains($"{s.Symbol}|{s.Timeframe}")).ToList();
+            if (snapshots.Count == 0) return;
+
+            snapshot.Replace(snapshots, snapshots.Max(s => s.ComputedAtUtc));
+            logger.LogInformation(
+                "Deriva fattori: fotografia ricostruita dalla storia registrata ({Series} serie, {Alerts} in allarme, ultimo calcolo {At:u}).",
+                snapshots.Count, snapshots.Sum(s => s.Alerts.Count), snapshots.Max(s => s.ComputedAtUtc));
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Storia della deriva non leggibile all'avvio: si riparte dalla fotografia vuota.");
+        }
+    }
+
+    /// <summary>
+    /// Ampiezza della finestra per una serie, QUANTIZZATA a passi di 250 osservazioni.
+    ///
+    /// La regola di fondo è quella del pannello (~10 finestre sui dati disponibili, così il pavimento
+    /// di rumore 1,96/√n resta basso abbastanza da rendere il verdetto utile). La quantizzazione è il
+    /// pezzo che serve alla PERSISTENZA: senza, ogni candela nuova cambierebbe di poco l'ampiezza, e
+    /// una serie storica la cui finestra si sposta a ogni giro non è una serie storica — sarebbe una
+    /// collezione di misure incomparabili, ognuna con un pavimento di rumore diverso.
+    /// </summary>
+    internal static int WindowSizeFor(int candleCount)
+    {
+        var target = candleCount / 10;
+        var quantized = (int)Math.Round(target / 250.0, MidpointRounding.AwayFromZero) * 250;
+        return Math.Clamp(quantized, 250, 3000);
     }
 
     /// <summary>Un giro completo. Pubblico per poterlo esercitare nei test senza aspettare il timer.</summary>
@@ -170,14 +238,32 @@ public sealed class FactorDriftWorker(
 
             var config = new FactorDriftConfig
             {
-                ForwardHorizon = 1,
-                // Stessa regola della UI: ~10 finestre sui dati disponibili, così il pavimento di
-                // rumore resta basso abbastanza da rendere il verdetto utile.
-                WindowSize = Math.Clamp(candles.Count / 10, 250, 3000),
+                ForwardHorizon = ForwardHorizon,
+                WindowSize = WindowSizeFor(candles.Count),
             };
 
             var reports = analyzer.AnalyzeMany(specs, candles, config);
-            results.Add(new FactorDriftSeriesSnapshot(s.Symbol, s.Timeframe, DateTime.UtcNow, reports));
+            var computedAt = DateTime.UtcNow;
+            results.Add(new FactorDriftSeriesSnapshot(s.Symbol, s.Timeframe, computedAt, reports));
+
+            // La storia si registra qui, serie per serie: se il giro viene interrotto a metà, ciò che
+            // è stato calcolato resta. La scrittura è un upsert sulle finestre, quindi rilanciare il
+            // worker non duplica nulla.
+            try
+            {
+                var inserted = await history.SaveAsync(s.Symbol, s.Timeframe, ForwardHorizon, reports, computedAt, ct);
+                if (inserted > 0)
+                {
+                    logger.LogInformation("Deriva fattori: {Rows} finestre nuove registrate per {Symbol} {Tf}.",
+                        inserted, s.Symbol, s.Timeframe);
+                }
+            }
+            catch (Exception ex)
+            {
+                // La fotografia in memoria vale anche senza scrittura: un errore di DB degrada la
+                // storia, non il monitor.
+                logger.LogWarning(ex, "Storia della deriva non scritta per {Symbol} {Tf}.", s.Symbol, s.Timeframe);
+            }
         }
 
         snapshot.Replace(results, DateTime.UtcNow);

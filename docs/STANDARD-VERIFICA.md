@@ -80,7 +80,7 @@ spegnimento improvviso, `/trading` è rimasta in errore perché il profilo di av
 port-forward verso il core in-cluster — logica che esisteva solo dentro `scripts/run-postgres.ps1`.
 Ora è estratta in `scripts/ensure-trading-portforward.ps1`, richiamabile da chiunque.
 
-## Stato per fase (aggiornato 2026-07-27)
+## Stato per fase (aggiornato 2026-07-28)
 
 | Fase | 1 Unità | 2 Controllo | 3 Integrazione | 4 Operativo |
 |---|---|---|---|---|
@@ -88,6 +88,8 @@ Ora è estratta in `scripts/ensure-trading-portforward.ps1`, richiamabile da chi
 | **D2** Deriva fattori | ✅ serie a risposta nota; snapshot e ordinamento allarmi | ✅ 40 semi di rumore, 0 allarmi; job che **trova** un fattore piantato che si spegne | ✅ `FactorDriftWorkerTests` con Postgres vero (tetto serie, serie disabilitate, candele insufficienti) | ✅ `/feature-selection` (3 fattori spenti) **e** widget in Home alimentato dal job (RsiFactor su ETH/USDT 1h) |
 | **C4** Triple-barrier + meta-labeling | ✅ 4 esiti + ambiguità intra-barra + pesi | ✅ edge piantato recuperato; 20 semi di rumore | ✅ `MetaLabelingAnalysisServiceTests` (componenti reali + fallimenti) | ✅ `/backtest`, 8.886 segnali reali analizzati |
 | **D4** DTW pattern discovery | ✅ LB_Keogh vero limite inferiore su 3.000 coppie; dilatazione temporale; input degeneri | ✅ pattern piantato ritrovato **e** rumore respinto; fuzzing 300 prove; stress 50.000 barre | ✅ `DtwPatternAnalysisTests` (catena forma→occorrenze→event-study→verdetto) | ✅ `/market-analysis`, SOL/USDT 15m su 54.984 candele fino a oggi: 500 occorrenze, verdetto **nessun segnale** (p 0,366) |
+| **D2.b** Persistenza IC | ✅ verdetto ricostruito dalla tabella **identico** a quello calcolato dalle candele (4 scenari); soglia presa dall'ampiezza registrata, non dalla config | ✅ rumore puro: la storia si registra ma non nasce alcun allarme; upsert che non duplica; quantizzazione stabile a +500 candele | ✅ `FactorDriftWorkerTests` + `FactorIcHistoryStoreTests` su Postgres vero, incluso il **riavvio del guscio** (fotografia vuota → `HydrateAsync` → stessi allarmi) | ✅ `/feature-selection` e Home sulla 5199 dopo migrazione applicata al DB reale |
+| **D3** OFI / microstruttura | ✅ formula CKS caso per caso contro il calcolo a mano (bid fermo/migliorato/ritirato + i tre simmetrici) e antisimmetria bid↔ask; correlazione parziale per **due strade indipendenti**; conservazione dei volumi nell'aggregazione | ✅ 30 semi di rumore puro: tasso di falsi positivi al livello nominale — **e un difetto trovato qui**: il 99° percentile di 200 giri dava 3,3% di falsi positivi, sostituito dal p-value empirico con correzione +1 | ✅ integrità su **dati veri**: il volume taker ricostruito dal tape coincide con quello dichiarato dalle klines (due file, due pipeline diverse di Binance) | ✅ misura da riga di comando (`ofi`) su 3 simboli × 30 giorni di dump reali — dettaglio in [REPORT-D3-OFI](REPORT-D3-OFI-2026-07-28.md) |
 
 Le fasi precedenti a questa sessione non sono state ri-verificate contro questo standard: la tabella
 dice quello che è stato controllato, non quello che si presume.

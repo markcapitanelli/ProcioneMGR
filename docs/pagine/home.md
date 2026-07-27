@@ -32,6 +32,7 @@ bottoni Login / Registrati (righe 86–97).
 | Card statistiche | 31–38 | 4 `StatCard` renderizzate da `_stats` (record `HomeStats`) |
 | Alert "nessun dato" | 40–46 | Mostrato solo se `TrackedSeries == 0`: invita ad andare in Watchlist |
 | Alert decadimento | 48–63 | Se `_decayAlerts` non è vuoto: elenco gambe ensemble in alert con Sharpe realizzato vs atteso e link a `ensemble#decay-monitor` |
+| **Alert deriva fattori** | 66–95 | **[D2]** Se `_factorDriftAlerts` non è vuoto: fattori che si sono spenti o hanno invertito il segno, con IC da/a e soglia, link a `feature-selection#drift-panel`. Il gradino sotto al decadimento delle strategie: qui si guarda il *fattore*, non la gamba |
 | Percorso piattaforma | 66–74 | 5 `WorkflowStep` numerati, ognuno linka la pagina corrispondente |
 | Strumenti avanzati | 76–84 | 6 `ToolCard`: Discovery, Regimi, ML Lab, Pairs, Volatilità, Sentiment |
 
@@ -50,6 +51,13 @@ Tutto avviene in `OnInitializedAsync` (righe 107–132):
 3. Chiama `IEnsembleManager.GetDecayReportsAsync()` e filtra i soli report con `IsAlert == true`.
    La chiamata è dentro un `try/catch` vuoto: il widget è **non bloccante** — se il decay monitor
    fallisce la Home resta comunque utilizzabile (riga 131).
+4. **[D2]** Legge `FactorDriftSnapshot.Alerts` — una fotografia **in memoria**, nessun calcolo sul
+   caricamento della Home. La riempie `FactorDriftWorker` (job ogni 12 ore sulle serie della
+   watchlist), e dal 2026-07-28 il worker la **ricostruisce dalla tabella `FactorIcWindows` all'avvio**
+   (`HydrateAsync`): prima l'alert compariva solo dopo il primo giro del job, cioè restava invisibile
+   proprio nei minuti dopo un riavvio del guscio. L'idratazione tiene solo le serie **ancora in
+   watchlist**: la storia di una serie rimossa resta in tabella ma non torna a farsi vedere qui.
+   Stesso `try/catch` non bloccante del punto 3.
 
 I tre helper `StatCard`, `WorkflowStep` e `ToolCard` (righe 134–197) sono `RenderFragment`
 costruiti a mano: piccole factory di markup che tengono il template della pagina compatto.
@@ -62,6 +70,7 @@ costruiti a mano: piccole factory di markup che tengono il template della pagina
 | `AuthenticationStateProvider` | Nome utente e userId per personalizzare saluto e conteggio strategie | (framework ASP.NET Identity) |
 | `IEnsembleManager` | `GetDecayReportsAsync()` per l'alert di decadimento delle gambe ensemble | [`Services/Ensemble/EnsembleManager.cs`](../../ProcioneMGR/Services/Ensemble/EnsembleManager.cs) |
 | `DecayReport` (modello) | Sharpe realizzato vs atteso per gamba, flag `IsAlert` | [`Services/Monitoring/StrategyDecayMonitor.cs`](../../ProcioneMGR/Services/Monitoring/StrategyDecayMonitor.cs) |
+| `FactorDriftSnapshot` | **[D2]** Fotografia in memoria degli allarmi di deriva dei fattori (scritta dal job, letta qui) | [`Services/Alpha/FactorDriftMonitor.cs`](../../ProcioneMGR/Services/Alpha/FactorDriftMonitor.cs) |
 
 ## Dati letti / scritti
 
