@@ -136,6 +136,34 @@ esattamente il tipo di cosa che D2 doveva rendere visibile e che prima non si ve
 parte: nella classifica full-sample MeanReversion, RSI e Momentum restano ai primi tre posti, con
 |IC| 0,044 / 0,041 / 0,031 e consistenza di segno 83-94%.
 
+### 4.3 Il rendimento effettivo, e perché è la parte più interessante
+
+Rieseguito il flusso completo di ML Lab dopo le modifiche (train → SHAP → backtest OOS), stesso
+modello, per verificare di non aver rotto il percorso esistente e per avere un numero vero:
+
+| | |
+|---|---|
+| Correlazione **in-sample** | **0,460** |
+| Rendimento **out-of-sample** (8.083 candele mai viste) | **−1,10%** |
+| Win rate | 48,5% |
+| Max drawdown | 3,26% |
+| Operazioni | 33 (16W / 17L) |
+
+Correlazione in-sample 0,46 e rendimento fuori campione negativo: la firma da manuale del
+sovra-adattamento. Ma il punto non è il numero — è che **tre strumenti indipendenti hanno detto la
+stessa cosa prima di vederlo**:
+
+1. **SHAP** (D1): coerenza direzionale 6-39% su tutti e cinque i fattori — nessuna spinta stabile in
+   una direzione.
+2. **Deriva** (D2): i tre fattori che informavano su questa serie sono scesi sotto il pavimento di
+   rumore nel periodo recente, cioè proprio quello su cui il backtest gira.
+3. **Il backtest**: −1,10%.
+
+È esattamente il valore che D1 e D2 dovevano avere: dire *prima*, guardando la struttura, ciò che il
+backtest dice *dopo*, guardando il risultato. Nessuno dei due è un giudice — restano strumenti di
+lettura, e il verdetto continua a spettare a DSR/PBO/holdout — ma su questo caso concreto la loro
+diagnosi e l'esito realizzato coincidono.
+
 ## 5. Deviazioni dal PRD, con la ragione
 
 1. **La lente di D1 è la volatilità, non il regime K-means.** Il PRD prometteva la rottura per
@@ -172,3 +200,16 @@ Una nota di priorità dopo aver visto i numeri di D1: la coerenza direzionale al
 di questa serie è un argomento **in più** per non aspettarsi molto da D4. Il modello, guardato da
 dentro, non trova una direzione stabile da nessuna parte; un motore di forme che cerca la stessa
 cosa in un altro modo parte dallo stesso posto.
+
+## 8. Come rivedere il lavoro
+
+App di verifica sulla porta **5210** (profilo `procione-d` in `.claude/launch.json` — porta dedicata
+perché la 5199 era occupata da un altro worktree). Login già attivo con l'utente reale.
+
+- **D1**: `/ml` → modello Gradient Boosting o Random Forest → *2. Addestra* → *Calcola SHAP*.
+  Lo slider in fondo spiega una singola barra.
+- **D2**: `/feature-selection` → *Valuta fattori* → *Analizza deriva* (l'ampiezza della finestra è
+  già proposta in base ai dati).
+
+Tre commit sul branch `claude/pattern-discovery-framework-eb8e83`, **non pushati**: il repo è
+pubblico e il push resta una decisione del proprietario.
