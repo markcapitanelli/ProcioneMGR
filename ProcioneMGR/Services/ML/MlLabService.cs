@@ -8,6 +8,7 @@ using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Experiments;
 using ProcioneMGR.Services.Indicators;
+using ProcioneMGR.Services.ML.Shap;
 using ProcioneMGR.Services.Optimization;
 
 namespace ProcioneMGR.Services.ML;
@@ -84,6 +85,35 @@ public sealed class MlLabService(
     public BacktestResult? Result { get; private set; }
     public TearsheetMetrics? Tearsheet { get; private set; }
     public List<IndicatorSeries> EquitySeries { get; private set; } = [];
+
+    // --- [D1] SHAP -----------------------------------------------------------------------------
+
+    /// <summary>Righe/nomi/timestamp del dataset di TRAINING: sono il background rispetto a cui SHAP definisce "feature assente".</summary>
+    private List<float[]> _shapBackground = [];
+    private List<string> _shapFeatureNames = [];
+    private List<DateTime> _shapTimestamps = [];
+    private List<OhlcvData> _shapCandles = [];
+
+    /// <summary>
+    /// True se il modello in sessione è ad alberi (RandomForest/GradientBoosting): solo per questi
+    /// TreeSHAP è definito. Per gli altri la UI resta sulla permutation importance senza fingere.
+    /// </summary>
+    public bool ShapAvailable { get; private set; }
+
+    /// <summary>Analisi SHAP calcolata su richiesta (mai automaticamente: costa, e non serve sempre).</summary>
+    public ShapAnalysisResult? ShapAnalysis { get; private set; }
+
+    /// <summary>Spiegazione locale della riga selezionata (waterfall).</summary>
+    public ShapExplanation? ShapLocal { get; private set; }
+
+    /// <summary>Indice della riga spiegata localmente, per mostrarne la data in UI.</summary>
+    public int ShapLocalRowIndex { get; private set; } = -1;
+
+    public DateTime? ShapLocalTimestamp =>
+        ShapLocalRowIndex >= 0 && ShapLocalRowIndex < _shapTimestamps.Count ? _shapTimestamps[ShapLocalRowIndex] : null;
+
+    /// <summary>Numero di righe di training disponibili per la spiegazione locale.</summary>
+    public int ShapRowCount => _shapBackground.Count;
 
     /// <summary>[1.V fase 2] Esito della valutazione vol (QLIKE/MSE vs EWMA/naive) del modello in sessione.</summary>
     public VolForecastEvaluation? VolEvaluation { get; private set; }
@@ -205,6 +235,15 @@ public sealed class MlLabService(
             FeatureImportance = predictor.ComputeFeatureImportance(mlContext, trainDataView, mlData.FeatureNames).ToList();
             SessionTargetKind = cfg.TargetKind;
             SessionForwardHorizon = cfg.ForwardHorizon;
+
+            // [D1] Background per SHAP: le righe di TRAINING, che sono la distribuzione rispetto a
+            // cui il modello ha imparato e quindi quella rispetto a cui "assenza di feature" ha un
+            // significato. Tenute in sessione perché l'analisi si lancia dopo, su richiesta.
+            _shapBackground = mlData.Rows.Select(r => r.Features).ToList();
+            _shapFeatureNames = [.. mlData.FeatureNames];
+            _shapTimestamps = [.. mlData.Timestamps];
+            _shapCandles = trainCandles;
+            ShapAvailable = predictor is IShapExplainable se && se.TryBuildShapEnsemble(_shapBackground) is not null;
         }
         catch
         {
@@ -366,6 +405,65 @@ public sealed class MlLabService(
             ? "il modello batte l'EWMA out-of-sample: l'instradamento nel vol-targeting è giustificabile."
             : "il modello NON batte l'EWMA: il vol-targeting deve restare sulla misura semplice.";
         return Task.FromResult(MlActionResult.Ok($"Valutazione su {rows} barre di test: {verdict}"));
+    }
+
+    // --- [D1] Analisi SHAP ----------------------------------------------------------------------
+
+    /// <summary>
+    /// Calcola l'analisi SHAP del modello in sessione: sintesi globale (importanza media con segno)
+    /// e rottura per contesto di volatilità. Su richiesta esplicita, mai automatica: è esatta ma
+    /// costa, e la permutation importance basta finché non si vuole capire il PERCHÉ di una
+    /// singola predizione.
+    /// </summary>
+    public MlActionResult ComputeShapAnalysis()
+    {
+        ShapAnalysis = null;
+        ShapLocal = null;
+        ShapLocalRowIndex = -1;
+
+        if (_predictor is null)
+            return MlActionResult.Error("Nessun modello in sessione da spiegare.");
+        if (_predictor is not IShapExplainable explainable)
+            return MlActionResult.Error("Questo tipo di modello non è ad alberi: TreeSHAP non si applica. Usa la feature importance per permutazione.");
+
+        var ensemble = explainable.TryBuildShapEnsemble(_shapBackground);
+        if (ensemble is null)
+            return MlActionResult.Error("Il modello in sessione non espone una struttura ad alberi (lineare, MLP, attention o stacking): usa la feature importance per permutazione.");
+        if (_shapBackground.Count == 0)
+            return MlActionResult.Error("Nessuna riga di training in sessione: riaddestra il modello prima di spiegarlo.");
+
+        ShapAnalysis = ShapAnalyzer.Analyze(
+            ensemble, _shapBackground, _shapTimestamps, _shapFeatureNames, _shapCandles);
+
+        return MlActionResult.Ok(
+            $"SHAP calcolato su {ShapAnalysis.RowsAnalyzed} righe di training e {ShapAnalysis.TreeCount} alberi. " +
+            "Ricorda: SHAP misura la correlazione che il modello ha sfruttato, non la causalità.");
+    }
+
+    /// <summary>
+    /// Spiegazione locale di una singola riga di training: quanto ciascun fattore ha spostato
+    /// QUELLA predizione rispetto alla baseline. <paramref name="rowIndex"/> viene serrato
+    /// nell'intervallo valido invece di sollevare: la UI lo pilota con uno slider.
+    /// </summary>
+    public MlActionResult ExplainRow(int rowIndex)
+    {
+        ShapLocal = null;
+        ShapLocalRowIndex = -1;
+
+        if (_predictor is not IShapExplainable explainable)
+            return MlActionResult.Error("Nessun modello ad alberi in sessione.");
+        if (_shapBackground.Count == 0)
+            return MlActionResult.Error("Nessuna riga di training in sessione.");
+
+        var ensemble = explainable.TryBuildShapEnsemble(_shapBackground);
+        if (ensemble is null)
+            return MlActionResult.Error("Il modello in sessione non è ad alberi.");
+
+        var index = Math.Clamp(rowIndex, 0, _shapBackground.Count - 1);
+        var explainer = new TreeShapExplainer(ensemble);
+        ShapLocal = explainer.ExplainRow(_shapBackground[index], _shapFeatureNames);
+        ShapLocalRowIndex = index;
+        return MlActionResult.Ok($"Spiegazione della riga {index + 1} di {_shapBackground.Count}.");
     }
 
     // --- Persistenza modelli -------------------------------------------------------------------
@@ -606,6 +704,17 @@ public sealed class MlLabService(
         FeatureImportance = [];
         SessionTargetKind = MlTargetKind.ForwardReturn;
         SessionForwardHorizon = 0;
+
+        // [D1] Lo stato SHAP appartiene al modello: cade con lui, altrimenti la UI mostrerebbe la
+        // spiegazione di un modello che non è più in sessione.
+        _shapBackground = [];
+        _shapFeatureNames = [];
+        _shapTimestamps = [];
+        _shapCandles = [];
+        ShapAvailable = false;
+        ShapAnalysis = null;
+        ShapLocal = null;
+        ShapLocalRowIndex = -1;
     }
 
     private void ResetBacktest()

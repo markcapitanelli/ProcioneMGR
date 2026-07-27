@@ -384,6 +384,215 @@
     </div>
 }
 
+@* [D1] SHAP: perché il modello ha deciso così. Solo per i modelli ad alberi, e solo dopo un
+   addestramento in questa sessione — SHAP ha bisogno della distribuzione di training come
+   riferimento, e un modello caricato da disco non se la porta dietro. *@
+@if (Svc.HasTrainedModel && Svc.ShapAvailable)
+{
+    <div class="card mb-3" id="shap-panel">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Spiegazione del modello (SHAP)</span>
+            @if (Svc.ShapAnalysis is { } sa)
+            {
+                <span class="text-body-secondary small">
+                    baseline @sa.Baseline.ToString("F5") · @sa.RowsAnalyzed righe · @sa.TreeCount alberi
+                </span>
+            }
+        </div>
+        <div class="card-body">
+            <div class="alert alert-warning py-2 small mb-3">
+                <strong>SHAP misura la correlazione che il modello ha sfruttato, non la causalità.</strong>
+                Un fattore può risultare dominante perché fa da proxy a qualcosa che non abbiamo misurato.
+                Prima di trarne una conclusione economica, chiediti se ha senso <em>anche</em> senza il modello.
+            </div>
+
+            <button class="btn btn-primary mb-3" @onclick="ComputeShapAsync" disabled="@_busy">
+                @if (_busy && _stage == Stage.Explaining)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Calcola SHAP
+            </button>
+
+            @if (Svc.ShapAnalysis is { } shap)
+            {
+                var maxAbs = shap.Global.Count > 0 ? shap.Global.Max(g => g.MeanAbsShap) : 0d;
+
+                <div class="mb-4">
+                    <label class="form-label d-block">Importanza globale — media dei contributi per fattore</label>
+                    <table class="table table-sm align-middle" style="max-width: 48rem;">
+                        <thead>
+                            <tr>
+                                <th>Fattore</th>
+                                <th style="width: 12rem;">|SHAP| medio</th>
+                                <th class="text-end">valore</th>
+                                <th class="text-end">SHAP medio con segno</th>
+                                <th class="text-end" title="|media| / media|·| — vicino a 1 la feature spinge sempre dalla stessa parte; vicino a 0 cambia verso col contesto">coerenza</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var g in shap.Global.Take(15))
+                            {
+                                <tr>
+                                    <td>@g.FeatureName</td>
+                                    <td>
+                                        <div class="progress" style="height: .6rem;">
+                                            <div class="progress-bar bg-primary"
+                                                 style="width: @((maxAbs > 0 ? g.MeanAbsShap / maxAbs * 100 : 0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                        </div>
+                                    </td>
+                                    <td class="text-end font-monospace">@g.MeanAbsShap.ToString("F5")</td>
+                                    <td class="text-end font-monospace @(g.MeanShap >= 0 ? "text-success" : "text-danger")">
+                                        @g.MeanShap.ToString("+0.00000;-0.00000;0")
+                                    </td>
+                                    <td class="text-end">@g.DirectionalConsistency.ToString("P0")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                @if (shap.Contexts.Count > 0)
+                {
+                    var cellMax = shap.ByContext.Count > 0 ? shap.ByContext.Max(c => c.MeanAbsShap) : 0d;
+                    var topFeatures = shap.Global.Take(8).Select(g => g.FeatureName).ToList();
+
+                    <div class="mb-4">
+                        <label class="form-label d-block">
+                            Importanza per contesto di volatilità — il modello cambia idea quando il mercato si agita?
+                        </label>
+                        <div style="overflow-x: auto;">
+                            <table class="table table-sm table-bordered" style="max-width: 40rem;">
+                                <thead>
+                                    <tr>
+                                        <th>Fattore</th>
+                                        @foreach (var ctx in shap.Contexts)
+                                        {
+                                            var n = shap.ByContext.FirstOrDefault(c => c.Context == ctx)?.Rows ?? 0;
+                                            <th class="text-end">@ctx <span class="text-body-secondary fw-normal">(@n)</span></th>
+                                        }
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var name in topFeatures)
+                                    {
+                                        <tr>
+                                            <td>@name</td>
+                                            @foreach (var ctx in shap.Contexts)
+                                            {
+                                                var cell = shap.ByContext.FirstOrDefault(c => c.Context == ctx && c.FeatureName == name);
+                                                var v = cell?.MeanAbsShap ?? 0d;
+                                                var intensity = cellMax > 0 ? v / cellMax : 0d;
+                                                <td class="text-end font-monospace"
+                                                    style="background-color: rgba(13,110,253,@intensity.ToString("F2", System.Globalization.CultureInfo.InvariantCulture));">
+                                                    @v.ToString("F5")
+                                                </td>
+                                            }
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="form-text">
+                            I tre contesti sono i terzili della volatilità realizzata a 20 barre del periodo di
+                            training — non i regimi K-means di <a href="regimes">/regimes</a>, che richiedono un
+                            modello attivo della stessa serie e che il gate C1 ha misurato non discriminanti.
+                            Qui la lente serve solo a descrivere, non a decidere.
+                        </div>
+                    </div>
+                }
+
+                <hr />
+
+                <div class="row g-2 align-items-end mb-3">
+                    <div class="col-auto">
+                        <label class="form-label">Spiega una singola barra (riga di training)</label>
+                        <input type="range" class="form-range" style="width: 22rem;"
+                               min="0" max="@(Math.Max(0, Svc.ShapRowCount - 1))" step="1"
+                               @bind="_shapRowIndex" @bind:event="oninput" disabled="@_busy" />
+                    </div>
+                    <div class="col-auto">
+                        <input type="number" class="form-control" style="width: 8rem;"
+                               min="0" max="@(Math.Max(0, Svc.ShapRowCount - 1))" @bind="_shapRowIndex" disabled="@_busy" />
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-outline-primary" @onclick="ExplainRowAsync" disabled="@_busy">Spiega questa barra</button>
+                    </div>
+                </div>
+
+                @if (Svc.ShapLocal is { } local)
+                {
+                    <div class="mb-2">
+                        <span class="me-3">
+                            Riga <strong>@(Svc.ShapLocalRowIndex + 1)</strong> di @Svc.ShapRowCount
+                            @if (Svc.ShapLocalTimestamp is { } lts)
+                            {
+                                <span class="text-body-secondary">— @lts.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                            }
+                        </span>
+                        <span class="badge bg-secondary">baseline @local.Baseline.ToString("F5")</span>
+                        <span class="badge bg-dark">predizione @local.Prediction.ToString("F5")</span>
+                    </div>
+                    <table class="table table-sm align-middle" style="max-width: 44rem;">
+                        <thead>
+                            <tr>
+                                <th>Fattore</th>
+                                <th class="text-end">valore del fattore</th>
+                                <th class="text-end">contributo</th>
+                                <th style="width: 14rem;">spinta</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @{
+                                var localMax = local.Contributions.Count > 0 ? local.Contributions.Max(c => Math.Abs(c.Value)) : 0d;
+                            }
+                            @foreach (var c in local.Contributions.Take(12))
+                            {
+                                var pct = localMax > 0 ? Math.Abs(c.Value) / localMax * 50 : 0d;
+                                <tr>
+                                    <td>@c.FeatureName</td>
+                                    <td class="text-end font-monospace">@c.FeatureValue.ToString("F5")</td>
+                                    <td class="text-end font-monospace @(c.Value >= 0 ? "text-success" : "text-danger")">
+                                        @c.Value.ToString("+0.00000;-0.00000;0")
+                                    </td>
+                                    <td>
+                                        @* Barra divergente attorno alla metà: a destra spinge in su, a sinistra in giù. *@
+                                        <div style="position: relative; height: .7rem; background: var(--bs-tertiary-bg);">
+                                            <div style="position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--bs-border-color);"></div>
+                                            @if (c.Value >= 0)
+                                            {
+                                                <div style="position: absolute; left: 50%; top: 0; bottom: 0; width: @pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)%; background: var(--bs-success);"></div>
+                                            }
+                                            else
+                                            {
+                                                <div style="position: absolute; right: 50%; top: 0; bottom: 0; width: @pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)%; background: var(--bs-danger);"></div>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="form-text">
+                        I contributi sommano esattamente alla differenza fra predizione e baseline
+                        (@((local.Prediction - local.Baseline).ToString("F5"))): è la proprietà di efficienza dei
+                        valori di Shapley, verificata dai test contro il calcolo esatto per forza bruta.
+                    </div>
+                }
+            }
+        </div>
+    </div>
+}
+else if (Svc.HasTrainedModel)
+{
+    <div class="alert alert-secondary py-2 small mb-3">
+        <strong>SHAP non disponibile per questo modello.</strong> TreeSHAP si applica ai modelli ad alberi
+        (Random Forest, Gradient Boosting) addestrati in questa sessione. Per gli altri tipi — e per i modelli
+        ricaricati da disco, che non portano con sé la distribuzione di training — resta la feature importance
+        per permutazione qui sopra.
+    </div>
+}
+
 @if (Svc.VolEvaluation is { } vol)
 {
     <div class="card mb-3">
@@ -500,7 +709,7 @@
 }
 
 @code {
-    private enum Stage { Idle, Training, Backtesting }
+    private enum Stage { Idle, Training, Backtesting, Explaining }
 
     private ExchangeName _exchange = ExchangeName.Binance;
     private string _symbol = "BTC/USDT";
@@ -526,6 +735,9 @@
     private int _attnEmbed = 16;
 
     private Stage _stage = Stage.Idle;
+
+    /// <summary>[D1] Riga di training di cui mostrare la spiegazione locale SHAP.</summary>
+    private int _shapRowIndex;
     private bool _busy;
 
     // Aggiornato dal componente DataAvailability (gating dell'addestramento).
@@ -648,6 +860,54 @@
         catch (Exception ex)
         {
             SetStatus($"Errore nel backtest: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+            _stage = Stage.Idle;
+        }
+    }
+
+    /// <summary>
+    /// [D1] Calcola l'analisi SHAP del modello in sessione. CPU-bound (alberi × righe), quindi
+    /// fuori dal thread del circuito Blazor con Task.Run — stesso trattamento del training.
+    /// </summary>
+    private async Task ComputeShapAsync()
+    {
+        _busy = true;
+        _stage = Stage.Explaining;
+        _isError = false;
+        try
+        {
+            var res = await Task.Run(() => Svc.ComputeShapAnalysis());
+            SetStatus(res.Message, res.IsError);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore nel calcolo SHAP: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _busy = false;
+            _stage = Stage.Idle;
+        }
+    }
+
+    /// <summary>[D1] Spiegazione locale della barra selezionata dallo slider.</summary>
+    private async Task ExplainRowAsync()
+    {
+        _busy = true;
+        _stage = Stage.Explaining;
+        _isError = false;
+        try
+        {
+            var index = _shapRowIndex;
+            var res = await Task.Run(() => Svc.ExplainRow(index));
+            SetStatus(res.Message, res.IsError);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Errore nella spiegazione: {ex.Message}", error: true);
         }
         finally
         {

@@ -1,5 +1,6 @@
 using Microsoft.ML;
 using Microsoft.ML.Data;
+using ProcioneMGR.Services.ML.Shap;
 
 namespace ProcioneMGR.Services.ML;
 
@@ -10,13 +11,28 @@ internal sealed class PredictedReturn
 }
 
 /// <summary>
+/// [D1] Modelli di cui si può estrarre la struttura ad alberi per TreeSHAP. Interfaccia separata
+/// da <see cref="IReturnPredictor"/> di proposito: SHAP ad albero non si applica ai modelli
+/// lineari, MLP o attention, e mettere il metodo sull'astrazione generale costringerebbe metà
+/// delle implementazioni a dichiarare "non supportato".
+/// </summary>
+public interface IShapExplainable
+{
+    /// <summary>
+    /// Ensemble di alberi in forma neutra, con la copertura dei nodi misurata su
+    /// <paramref name="background"/>; <c>null</c> se il modello addestrato non è ad alberi.
+    /// </summary>
+    ShapTreeEnsemble? TryBuildShapEnsemble(IReadOnlyList<float[]> background);
+}
+
+/// <summary>
 /// Infrastruttura comune a tutti i predittori di rendimento basati su un singolo
 /// <c>ITransformer</c> di regressione ML.NET con colonne Features/Label: gestione schema
 /// (vettore a dimensione dinamica), prediction engine, persistenza, permutation feature
 /// importance. Le sottoclassi implementano solo <see cref="BuildPipeline"/> — la scelta del
 /// trainer (SDCA, FastForest, LightGBM, ...) è l'unica cosa che le distingue.
 /// </summary>
-public abstract class RegressionPredictorBase : IReturnPredictor
+public abstract class RegressionPredictorBase : IReturnPredictor, IShapExplainable
 {
     public abstract string Name { get; }
     public bool IsFitted { get; private set; }
@@ -118,6 +134,14 @@ public abstract class RegressionPredictorBase : IReturnPredictor
             results.Add(new FeatureImportance(featureNames[f], mean, Math.Sqrt(variance)));
         }
         return results.OrderByDescending(r => r.MeanDecreaseInRSquared).ToList();
+    }
+
+    /// <inheritdoc/>
+    public ShapTreeEnsemble? TryBuildShapEnsemble(IReadOnlyList<float[]> background)
+    {
+        ArgumentNullException.ThrowIfNull(background);
+        if (!IsFitted || _model is null) return null;
+        return MlNetTreeExtractor.TryExtract(_model, background, _featureCount);
     }
 
     private double EvaluateRSquared(MLContext mlContext, IDataView data)
