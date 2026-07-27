@@ -39,6 +39,7 @@ Modelli disponibili (select alle righe 108–117):
 | `AdvancedPanel` | 207–218 | % Train (10–90) e orizzonte forward |
 | Modelli salvati | 239–275 | Tabella con azioni: **Ottimizza →** (handoff a Optimization), Carica, Elimina |
 | Modello addestrato | 277–352 | KPI train, **feature importance** (permutation: calo R² se il fattore viene confuso), soglie Long/Short, parametri backtest, salvataggio |
+| **Spiegazione SHAP** | 387–540 | **[D1]** Importanza globale con segno, matrice per contesto di volatilità, waterfall della singola barra |
 | Risultato backtest | 354–428 | KPI, **tearsheet** (Sharpe, Sortino, Calmar, Omega, VaR/CVaR 95%, durata max DD, esposizione), equity OOS, trade list |
 
 ## Come funziona (flusso del codice)
@@ -62,6 +63,29 @@ importance. Il training viene tracciato anche in [Esperimenti](experiments.md) v
 Simula le operazioni **solo sul periodo Test**: il modello predice il rendimento, e si apre
 Long/Short solo se la predizione supera la soglia corrispondente. Produce anche il
 tearsheet completo. È questo il risultato che conta, non la correlazione in-sample.
+
+### Spiegazione SHAP — `ComputeShapAsync` / `ExplainRowAsync` — **[D1]**
+
+**A cosa risponde**: la permutation importance dice quali fattori contano *in media*; SHAP dice
+quanto ciascun fattore ha spostato *quella singola predizione*, con segno, e i contributi sommano
+esattamente alla predizione (proprietà di efficienza).
+
+**Come**: TreeSHAP esatto (Lundberg, algoritmo polinomiale) su una rappresentazione neutra
+dell'ensemble estratta da ML.NET. La copertura dei nodi — che ML.NET non espone — viene misurata
+passando le righe di training attraverso gli alberi, quindi è esatta e non stimata.
+
+**Limiti dichiarati in UI, non nascosti**:
+- Solo modelli **ad alberi** (Random Forest, Gradient Boosting). Lineare/MLP/Attention/Stacking
+  mostrano un avviso e restano sulla permutation importance.
+- Solo dopo un **addestramento in sessione**: un modello ricaricato da disco non porta con sé la
+  distribuzione di training, che è il riferimento rispetto a cui SHAP definisce "feature assente".
+- **SHAP misura correlazione, non causalità** — avviso fisso in cima al pannello.
+
+**Matrice per contesto**: i tre contesti sono i **terzili di volatilità realizzata a 20 barre**
+del periodo di training, non i regimi K-means di [/regimes](regimes.md). Scelta deliberata: i
+regimi K-means richiedono un modello attivo della stessa serie (quasi mai disponibile qui) e il
+gate C1 ha misurato che non discriminano la performance — appoggiarci una lente descrittiva
+suggerirebbe un significato che la misura non sostiene.
 
 ### Salva / Carica / Elimina modello (righe 585–626)
 `SaveModelAsync` persiste il modello addestrato (tabella `MlModels`) per riusarlo senza

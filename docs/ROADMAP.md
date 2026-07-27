@@ -1,8 +1,10 @@
-# ROADMAP — Integrazione e core caldo (viva, 2026-07-26)
+# ROADMAP — Integrazione, core caldo e scoperta pattern (viva, 2026-07-27)
 
 *Questa è l'unica roadmap corrente. Le otto precedenti sono in `docs/archive/` — chiuse o
 assorbite qui. Il dettaglio architetturale del filone B sta nel
-[PRD-INTEGRAZIONE-CORE-CALDO](PRD-INTEGRAZIONE-CORE-CALDO.md).*
+[PRD-INTEGRAZIONE-CORE-CALDO](PRD-INTEGRAZIONE-CORE-CALDO.md); quello del filone D (nato dalla
+revisione di un report esterno sull'utente) sta nel
+[PRD-SCOPERTA-PATTERN-ANTIOVERFITTING](PRD-SCOPERTA-PATTERN-ANTIOVERFITTING.md).*
 
 ## Da dove nasce (audit 2026-07-26)
 
@@ -67,6 +69,41 @@ motore. Confermate le bocciature: RL (QLIB-5), SOR (una venue sola).
 | C4 | M1+M2 **insieme** (triple-barrier + meta-labeling sopra le barre informative già in `BarBuilder`) | la letteratura premia la combinazione, non i pezzi; aspettative tarate sul "modesto" | da roadmap intraday (archiviata, item assorbito qui) |
 | C5 | Pilota microstruttura a termine (Fase 3 rivista: aggrega all'origine, misura il valore predittivo incrementale) | il tape grezzo di 3 simboli = 124× lo storico | da roadmap architetture (archiviata, item assorbito qui) |
 
+## Filone D — Scoperta di pattern e interpretabilità (dal report anti-overfitting, guscio freddo)
+
+Nato dalla revisione di un report esterno ("Dalla Ricerca di Pattern alla Validazione
+Anti-Overfitting", 2026-07-27): confronto punto per punto e requisiti nel
+[PRD-SCOPERTA-PATTERN-ANTIOVERFITTING](PRD-SCOPERTA-PATTERN-ANTIOVERFITTING.md). Verdetto sintetico:
+9 delle ~14 tecniche proposte esistono già (alcune oltre il report — DSR, PBO, gemello sintetico
+non sono nemmeno nominati); la proposta di punta (Walk-Forward condizionata ai regimi) è la stessa
+domanda già chiusa dal gate C1 con esito negativo. Restano 3-4 pezzi genuinamente assenti. Nessun
+item tocca il percorso live: tutto guscio freddo (ricerca/UI), nessun nuovo scrittore.
+
+| # | Cosa | Priorità | Gate / verifica |
+|---|---|---|---|
+| D1 | **SHAP-lite** — TreeSHAP esatto sui modelli ad alberi di ML Lab, importanza globale con segno, matrice per contesto di volatilità, waterfall della singola barra | **FATTO 2026-07-27** | ✅ verificato contro **Shapley esatto per forza bruta** (enumerazione di tutti i 2ⁿ sottoinsiemi) e contro le predizioni del modello ML.NET vero; efficienza confermata anche dal vivo in browser su BTC/USDT 1h (Σφ = predizione − baseline al centesimo di millesimo) |
+| D2 | **Factor drift monitor** — IC finestra per finestra, pavimento di rumore, verdetto stabile/spento/invertito in `/feature-selection` | **FATTO 2026-07-27** | ✅ 12 test, incluso "40 semi di puro rumore ⇒ zero allarmi"; misurato dal vivo: MeanReversion 0,050→0,027 e RSI −0,049→−0,029 si sono spenti su BTC/USDT 1h |
+| D3 | **OFI vero**: formula (imbalance firmato al top-of-book) da innestare nello step 3.3 del pilota C5 già pianificato, confrontata contro il proxy `TakerImbalanceFactor` già esistente | eredita quella di C5 | stesso gate di C5: se non aggiunge IC oltre al proxy, si spegne a fine pilota — esito negativo valido |
+| D4 | **DTW** pattern-matching su forma: genera trigger evento per il motore Discovery esistente, non una strategia propria | media, rischio alto (altro angolo di edge direzionale-tecnico, classe già a otto zeri) | **non negoziabile**: controllo con pattern sintetico piantato PRIMA di fidarsi di un risultato su dati reali (stesso principio della fase `control` di PlatformExpand); poi lo stesso collaudo CPCV+DSR+PBO+gemello di sempre |
+| D5 | **SAX** + mining di sequenze, come pre-filtro economico di D4 (non un motore parallelo) | bassa, condizionata | si costruisce SOLO se D4 supera il controllo sintetico E mostra un segnale che sopravvive a holdout+DSR+PBO su un angolo non esaurito |
+
+**Non-obiettivi di questo filone** (dettaglio nel PRD): non riaprire il regime-conditional (chiuso
+da C1); non ri-cacciare pattern direzionali-tecnici su majors 1h/4h (otto zeri + consenso di
+letteratura); non costruire LOB reale prima del verdetto di C5; DTW/SAX restano generatori di
+candidati per il collaudo esistente, non una quarta pista di validazione.
+
+**Due deviazioni dal PRD, entrambe misurate e documentate** (§ dettaglio nel
+[report di esecuzione](REPORT-FILONE-D-2026-07-27.md)):
+
+1. **La lente di D1 è la volatilità, non il regime K-means.** Il PRD prometteva la rottura SHAP per
+   regime; in pratica il modello K-means dev'essere attivo E della stessa serie del modello ML
+   (quasi mai vero, pannello vuoto quasi sempre), e il gate C1 ha già misurato che quei regimi non
+   discriminano. I terzili di volatilità realizzata sono sempre disponibili e rispondono alla stessa
+   domanda utile senza suggerire un significato che la misura non sostiene.
+2. **D2 non persiste nulla.** L'IC storico è una funzione deterministica delle candele: salvarlo
+   sarebbe una cache, non un'osservazione — con in più una migrazione da applicare al DB reale. Si
+   ricalcola su richiesta. Nessuna modifica di schema in tutto il filone.
+
 ## Ordine di esecuzione
 
 **Fatto il 2026-07-26:** A1, A2, A3, A5, B0 (PR #54) · C1 chiuso senza cablaggio (gate fallito
@@ -103,8 +140,18 @@ remoto; 4 minuti di orfanità senza un errore; resta il confronto tick-vs-candle
   multiple testing. Lezione trasversale: **guardare selezione e holdout insieme** — un holdout che
   esplode su una selezione piatta (INJ 4h: 0,06 → 1,85) è un allarme, non una promozione.
 
+**Fatto il 2026-07-27 (secondo blocco): Filone D, D1 e D2.** SHAP esatto sui modelli ad alberi di
+ML Lab (verificato contro Shapley per forza bruta) e monitor di deriva dei fattori con pavimento di
+rumore in `/feature-selection`. Suite 1641/1641, nessuna modifica di schema, nessuna riga sul
+percorso di trading. Due difetti trovati **dai test prima della UI** — la foresta che media invece
+di sommare, e una soglia IC sotto il pavimento di rumore che etichettava il puro caso come "segno
+invertito" — nel [report](REPORT-FILONE-D-2026-07-27.md).
+
 **Poi, in ordine:** osservazione B3 (tick-vs-candle → R1 pieno) · confronto forward-vs-predizione
 sulle tre corsie (AAVE/XLM holdout coerente, DOT dato per perdente dal CPCV) · B4/B5 · A6 · C4/C5.
+**Filone D residuo:** D3 segue i tempi di C5; D4 (e l'eventuale D5) dopo C4/C5 — e dopo la misura di
+D1, che dà un argomento in più per non aspettarsi molto dal direzionale (coerenza direzionale 6-39%
+su tutti i fattori della serie provata).
 
 *Il carry Paper resta ON (unica classe con edge misurato positivo). Il router di regime resta in
 osservazione per misura (esito C1.b), non per prudenza.*
