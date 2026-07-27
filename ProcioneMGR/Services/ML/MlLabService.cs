@@ -10,6 +10,7 @@ using ProcioneMGR.Services.Experiments;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.ML.Shap;
 using ProcioneMGR.Services.Optimization;
+using ProcioneMGR.Services.Regime;
 
 namespace ProcioneMGR.Services.ML;
 
@@ -51,12 +52,21 @@ public sealed record MlLoadResult(string Message, bool IsError, string? Symbol, 
 /// train→backtest→save, non stato di UI. Registrato Scoped: in Blazor Server uno scope = un circuito,
 /// quindi un'istanza per sessione utente, come il componente che la consuma.
 /// </summary>
+/// <param name="regimeDetector">
+/// [D1] Opzionale di proposito, stesso motivo per cui lo sono i parametri sentiment di
+/// <see cref="AlphaFactorFactory"/>: i call-site che costruiscono il servizio a mano nei test
+/// continuano a funzionare senza, e in DI viene iniettato. Serve solo alla LENTE della matrice
+/// SHAP — se manca, l'analisi ripiega sui terzili di volatilità e lo dichiara.
+/// </param>
+/// <param name="featureExtractor">Come sopra: estrae le feature di mercato da etichettare col modello di regime.</param>
 public sealed class MlLabService(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IBacktestEngine engine,
     IAlphaFactorFactory factorFactory,
     IDatasetBuilder datasetBuilder,
-    IExperimentTracker tracker) : IDisposable
+    IExperimentTracker tracker,
+    ProcioneMGR.Services.Regime.IRegimeDetector? regimeDetector = null,
+    ProcioneMGR.Services.Regime.IMarketFeatureExtractor? featureExtractor = null) : IDisposable
 {
     // --- Stato caricato / di sessione (letto dal markup, mai scritto dal componente) -----------
 
@@ -411,11 +421,10 @@ public sealed class MlLabService(
 
     /// <summary>
     /// Calcola l'analisi SHAP del modello in sessione: sintesi globale (importanza media con segno)
-    /// e rottura per contesto di volatilità. Su richiesta esplicita, mai automatica: è esatta ma
-    /// costa, e la permutation importance basta finché non si vuole capire il PERCHÉ di una
-    /// singola predizione.
+    /// e rottura per contesto. Su richiesta esplicita, mai automatica: è esatta ma costa, e la
+    /// permutation importance basta finché non si vuole capire il PERCHÉ di una singola predizione.
     /// </summary>
-    public MlActionResult ComputeShapAnalysis()
+    public async Task<MlActionResult> ComputeShapAnalysisAsync(CancellationToken ct = default)
     {
         ShapAnalysis = null;
         ShapLocal = null;
@@ -432,12 +441,82 @@ public sealed class MlLabService(
         if (_shapBackground.Count == 0)
             return MlActionResult.Error("Nessuna riga di training in sessione: riaddestra il modello prima di spiegarlo.");
 
+        var lens = await TryBuildRegimeLensAsync(ct);
         ShapAnalysis = ShapAnalyzer.Analyze(
-            ensemble, _shapBackground, _shapTimestamps, _shapFeatureNames, _shapCandles);
+            ensemble, _shapBackground, _shapTimestamps, _shapFeatureNames, _shapCandles, lens: lens);
 
         return MlActionResult.Ok(
             $"SHAP calcolato su {ShapAnalysis.RowsAnalyzed} righe di training e {ShapAnalysis.TreeCount} alberi. " +
+            $"Lente della matrice: {ShapAnalysis.LensName}. " +
             "Ricorda: SHAP misura la correlazione che il modello ha sfruttato, non la causalità.");
+    }
+
+    /// <summary>
+    /// [D1] Lente PREFERITA per la matrice: i regimi K-means di <c>/regimes</c>, se esiste un modello
+    /// ATTIVO della stessa serie del modello ML. Restituisce <c>null</c> — e il chiamante ripiega sui
+    /// terzili di volatilità — quando il modello manca, le dipendenze non sono state iniettate, o
+    /// qualunque cosa va storta.
+    ///
+    /// Il ripiego è silenzioso di proposito: questa è una lente DESCRITTIVA, un asse di
+    /// raggruppamento per un grafico. Non deve mai far fallire il calcolo SHAP, che è la cosa che
+    /// l'utente ha chiesto. Quale lente sia finita in uso lo dice
+    /// <see cref="ShapAnalysisResult.LensName"/>, quindi il ripiego non è mai nascosto.
+    /// </summary>
+    private async Task<ShapContextLens?> TryBuildRegimeLensAsync(CancellationToken ct)
+    {
+        if (regimeDetector is null || featureExtractor is null || _shapCandles.Count == 0) return null;
+
+        try
+        {
+            var symbol = _shapCandles[0].Symbol;
+            var timeframe = _shapCandles[0].Timeframe;
+
+            var model = await regimeDetector.LoadActiveModelAsync(symbol, timeframe, ct);
+            if (model is null) return null;
+
+            var features = featureExtractor.ComputeFeatures(_shapCandles, timeframe, ct);
+            if (features.Count == 0) return null;
+
+            // Overload PER SERIE, non quello generico: etichettare con i centroidi di un'altra
+            // coppia produrrebbe numeri ben formati e privi di senso — è la stessa trappola che il
+            // router di corsia evita rifiutandosi di classificare una serie diversa dalla propria.
+            var labelled = await regimeDetector.LabelFeaturesAsync(features, symbol, timeframe, ct);
+
+            // Nomi leggibili dai profili del modello (stessa fonte della timeline in /regimes);
+            // se un profilo manca si usa "Regime N" invece di lasciare la colonna senza nome.
+            var profiles = JsonSerializer.Deserialize<List<RegimeProfile>>(model.RegimeProfilesJson) ?? [];
+            var nameById = profiles
+                .Where(p => !string.IsNullOrWhiteSpace(p.SuggestedLabel))
+                .ToDictionary(p => p.RegimeId, p => p.SuggestedLabel);
+
+            var byTimestamp = new Dictionary<DateTime, string>(labelled.Count);
+            var seenIds = new SortedSet<int>();
+            foreach (var f in labelled)
+            {
+                if (f.RegimeId is not int id) continue;
+                seenIds.Add(id);
+                byTimestamp[f.Timestamp] = nameById.TryGetValue(id, out var label) ? label : $"Regime {id}";
+            }
+            if (byTimestamp.Count == 0) return null;
+
+            // Ordine per RegimeId: stabile fra esecuzioni, e coerente con come /regimes li elenca.
+            var ordered = seenIds
+                .Select(id => nameById.TryGetValue(id, out var label) ? label : $"Regime {id}")
+                .Distinct()
+                .ToList();
+
+            return new ShapContextLens(byTimestamp, ordered,
+                $"Regimi K-means — {symbol} {timeframe}, {ordered.Count} stati");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // Modello corrotto, JSON illeggibile, feature non calcolabili: si ripiega.
+            return null;
+        }
     }
 
     /// <summary>

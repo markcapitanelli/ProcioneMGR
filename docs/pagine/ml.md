@@ -81,11 +81,21 @@ passando le righe di training attraverso gli alberi, quindi è esatta e non stim
   distribuzione di training, che è il riferimento rispetto a cui SHAP definisce "feature assente".
 - **SHAP misura correlazione, non causalità** — avviso fisso in cima al pannello.
 
-**Matrice per contesto**: i tre contesti sono i **terzili di volatilità realizzata a 20 barre**
-del periodo di training, non i regimi K-means di [/regimes](regimes.md). Scelta deliberata: i
-regimi K-means richiedono un modello attivo della stessa serie (quasi mai disponibile qui) e il
-gate C1 ha misurato che non discriminano la performance — appoggiarci una lente descrittiva
-suggerirebbe un significato che la misura non sostiene.
+**Matrice per contesto — quale lente**: la lente preferita sono i **regimi K-means** di
+[/regimes](regimes.md), usati quando esiste un modello **attivo e della stessa serie** del modello
+ML. Quando non c'è, si ripiega sui **terzili di volatilità realizzata a 20 barre**. La lente in uso
+è sempre scritta in un badge accanto al titolo della matrice: un pannello che mostra numeri senza
+dire come sono raggruppati sarebbe peggio di un pannello assente.
+
+L'etichettatura usa l'overload **per serie** di `LabelFeaturesAsync` (symbol + timeframe): quello
+generico rischierebbe di classificare le candele coi centroidi di un'altra coppia, producendo
+numeri ben formati e privi di senso.
+
+**Qui il regime non decide nulla.** È un asse di raggruppamento descrittivo e non deve superare
+alcun gate di discriminazione — differenza sostanziale rispetto al `LaneRegimeRouter`, che usa gli
+stessi regimi per filtrare le operazioni ed è rimasto in osservazione dopo l'esito del gate C1.
+Un guasto della lente (modello corrotto, JSON illeggibile) non fa mai fallire il calcolo SHAP:
+si ripiega e lo si dichiara.
 
 ### Salva / Carica / Elimina modello (righe 585–626)
 `SaveModelAsync` persiste il modello addestrato (tabella `MlModels`) per riusarlo senza

@@ -8,6 +8,7 @@ using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Experiments;
 using ProcioneMGR.Services.Indicators;
 using ProcioneMGR.Services.ML;
+using ProcioneMGR.Services.ML.Shap;
 using ProcioneMGR.Services.Security;
 using ProcioneMGR.Tests.Infrastructure;
 
@@ -48,9 +49,66 @@ public sealed class MlLabServiceTests : IAsyncDisposable
         public string Decrypt(string ciphertext) => ciphertext;
     }
 
+    /// <summary>
+    /// [D1] Rilevatore di regimi finto: decide se esiste un modello attivo e con quali etichette,
+    /// così i test esercitano sia la lente K-means sia il ripiego senza addestrare un K-means vero.
+    /// </summary>
+    private sealed class FakeRegimeDetector(
+        ProcioneMGR.Services.Regime.RegimeModel? activeModel,
+        Func<List<ProcioneMGR.Services.Regime.MarketFeatures>, List<ProcioneMGR.Services.Regime.MarketFeatures>>? labeller = null,
+        bool throwOnLoad = false) : ProcioneMGR.Services.Regime.IRegimeDetector
+    {
+        public Task<ProcioneMGR.Services.Regime.RegimeModel> TrainAsync(
+            ProcioneMGR.Services.Regime.TrainingConfiguration config, bool activate = true, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task ActivateModelAsync(ProcioneMGR.Services.Regime.RegimeModel model, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task<List<ProcioneMGR.Services.Regime.MarketFeatures>> LabelFeaturesAsync(
+            List<ProcioneMGR.Services.Regime.MarketFeatures> features, CancellationToken ct = default)
+            => Task.FromResult(labeller?.Invoke(features) ?? features);
+
+        public Task<List<ProcioneMGR.Services.Regime.MarketFeatures>> LabelFeaturesAsync(
+            List<ProcioneMGR.Services.Regime.MarketFeatures> features,
+            string symbol, string timeframe, CancellationToken ct = default)
+            => LabelFeaturesAsync(features, ct);
+
+        public Task<ProcioneMGR.Services.Regime.RegimeModel?> LoadLatestModelAsync(CancellationToken ct = default)
+            => Task.FromResult(activeModel);
+
+        public Task<ProcioneMGR.Services.Regime.RegimeModel?> LoadActiveModelAsync(
+            string symbol, string timeframe, CancellationToken ct = default)
+            => throwOnLoad
+                ? throw new InvalidOperationException("modello di regime illeggibile")
+                : Task.FromResult(activeModel);
+    }
+
+    /// <summary>
+    /// [D1] Estrattore finto: una <c>MarketFeatures</c> per candela, con il timestamp giusto. Qui
+    /// interessa la SCELTA della lente, non il calcolo delle feature di mercato (che ha già i suoi test).
+    /// </summary>
+    private sealed class FakeFeatureExtractor : ProcioneMGR.Services.Regime.IMarketFeatureExtractor
+    {
+        public Task<List<ProcioneMGR.Services.Regime.MarketFeatures>> ExtractFeaturesAsync(
+            string exchangeName, string symbol, string timeframe, DateTime from, DateTime to, CancellationToken ct = default)
+            => Task.FromResult(new List<ProcioneMGR.Services.Regime.MarketFeatures>());
+
+        public List<ProcioneMGR.Services.Regime.MarketFeatures> ComputeFeatures(
+            IReadOnlyList<OhlcvData> candles, string timeframe, CancellationToken ct = default)
+            => candles.Select(c => new ProcioneMGR.Services.Regime.MarketFeatures
+            {
+                Timestamp = c.TimestampUtc,
+                Price = c.Close,
+            }).ToList();
+    }
+
     // --- Setup ---------------------------------------------------------------------------------
 
-    private async Task<(MlLabService Svc, IDbContextFactory<ApplicationDbContext> Db)> BuildAsync(bool ensureSchema = true)
+    private async Task<(MlLabService Svc, IDbContextFactory<ApplicationDbContext> Db)> BuildAsync(
+        bool ensureSchema = true,
+        ProcioneMGR.Services.Regime.IRegimeDetector? regimeDetector = null,
+        ProcioneMGR.Services.Regime.IMarketFeatureExtractor? featureExtractor = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
@@ -78,7 +136,9 @@ public sealed class MlLabServiceTests : IAsyncDisposable
             _provider.GetRequiredService<IBacktestEngine>(),
             _provider.GetRequiredService<IAlphaFactorFactory>(),
             new DatasetBuilder(),
-            new NoopTracker());
+            new NoopTracker(),
+            regimeDetector,
+            featureExtractor);
         return (svc, dbFactory);
     }
 
@@ -325,6 +385,105 @@ public sealed class MlLabServiceTests : IAsyncDisposable
         // Proprietario: cancellata.
         await svc.DeleteSavedModelAsync(aId, UserA);
         Assert.Empty(svc.SavedModels);
+    }
+
+    // --- [D1] Lente della matrice SHAP: regimi K-means con ripiego -------------------------------
+
+    /// <summary>Addestra un modello AD ALBERI (SHAP si applica solo a quelli) e restituisce il servizio.</summary>
+    private async Task<MlLabService> TrainTreeModelAsync(
+        ProcioneMGR.Services.Regime.IRegimeDetector? detector,
+        ProcioneMGR.Services.Regime.IMarketFeatureExtractor? extractor)
+    {
+        var (svc, db) = await BuildAsync(regimeDetector: detector, featureExtractor: extractor);
+        await SeedCandlesAsync(db, 400);
+        var res = await svc.TrainAsync(DefaultSnapshot() with { ModelType = "RandomForest" }, UserA);
+        Assert.False(res.IsError, res.Message);
+        Assert.True(svc.ShapAvailable, "il modello ad alberi deve esporre la struttura per SHAP");
+        return svc;
+    }
+
+    private static ProcioneMGR.Services.Regime.RegimeModel ModelWithProfiles(params (int Id, string Label)[] profiles) => new()
+    {
+        Symbol = "TEST/USDT",
+        Timeframe = "1h",
+        NumberOfRegimes = profiles.Length,
+        RegimeProfilesJson = System.Text.Json.JsonSerializer.Serialize(
+            profiles.Select(p => new ProcioneMGR.Services.Regime.RegimeProfile
+            {
+                RegimeId = p.Id,
+                SuggestedLabel = p.Label,
+            }).ToList()),
+    };
+
+    [Fact]
+    public async Task ComputeShap_WithAnActiveRegimeModel_UsesTheKMeansLens()
+    {
+        // Etichettatore finto: alterna due regimi noti, così le colonne attese sono deterministiche.
+        var detector = new FakeRegimeDetector(
+            ModelWithProfiles((0, "Laterale"), (1, "Tendenza")),
+            labeller: feats =>
+            {
+                for (var i = 0; i < feats.Count; i++)
+                {
+                    feats[i].RegimeId = i % 2;
+                    feats[i].RegimeLabel = i % 2 == 0 ? "Laterale" : "Tendenza";
+                }
+                return feats;
+            });
+
+        var svc = await TrainTreeModelAsync(detector, new FakeFeatureExtractor());
+        var res = await svc.ComputeShapAnalysisAsync();
+
+        Assert.False(res.IsError, res.Message);
+        Assert.NotNull(svc.ShapAnalysis);
+        Assert.StartsWith("Regimi K-means", svc.ShapAnalysis!.LensName);
+        Assert.Contains("Laterale", svc.ShapAnalysis.Contexts);
+        Assert.Contains("Tendenza", svc.ShapAnalysis.Contexts);
+        // Il messaggio all'operatore deve dire quale lente ha usato.
+        Assert.Contains("Regimi K-means", res.Message);
+    }
+
+    [Fact]
+    public async Task ComputeShap_WithNoActiveRegimeModel_FallsBackToVolatility()
+    {
+        var svc = await TrainTreeModelAsync(
+            new FakeRegimeDetector(activeModel: null),
+            new FakeFeatureExtractor());
+
+        var res = await svc.ComputeShapAnalysisAsync();
+
+        Assert.False(res.IsError, res.Message);
+        Assert.Equal(ShapAnalyzer.VolatilityLensName, svc.ShapAnalysis!.LensName);
+        Assert.All(svc.ShapAnalysis.Contexts, c => Assert.Contains(c, ShapAnalyzer.VolatilityLabels));
+    }
+
+    [Fact]
+    public async Task ComputeShap_WhenTheRegimeDetectorThrows_StillProducesTheAnalysis()
+    {
+        // La lente e' DESCRITTIVA: un suo guasto non deve mai far fallire il calcolo SHAP, che e' la
+        // cosa che l'utente ha chiesto. Si ripiega, e il nome della lente lo dichiara.
+        var svc = await TrainTreeModelAsync(
+            new FakeRegimeDetector(activeModel: null, throwOnLoad: true),
+            new FakeFeatureExtractor());
+
+        var res = await svc.ComputeShapAnalysisAsync();
+
+        Assert.False(res.IsError, res.Message);
+        Assert.NotNull(svc.ShapAnalysis);
+        Assert.Equal(ShapAnalyzer.VolatilityLensName, svc.ShapAnalysis!.LensName);
+    }
+
+    [Fact]
+    public async Task ComputeShap_WithoutRegimeDependencies_FallsBackWithoutThrowing()
+    {
+        // I call-site che costruiscono il servizio senza le dipendenze opzionali (test legacy, tool)
+        // devono continuare a funzionare: e' la ragione per cui sono opzionali.
+        var svc = await TrainTreeModelAsync(detector: null, extractor: null);
+
+        var res = await svc.ComputeShapAnalysisAsync();
+
+        Assert.False(res.IsError, res.Message);
+        Assert.Equal(ShapAnalyzer.VolatilityLensName, svc.ShapAnalysis!.LensName);
     }
 
     public async ValueTask DisposeAsync()
