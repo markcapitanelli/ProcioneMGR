@@ -3,11 +3,13 @@
 @using System.Security.Claims
 @using Microsoft.EntityFrameworkCore
 @using ProcioneMGR.Data
+@using ProcioneMGR.Services.Alpha
 @using ProcioneMGR.Services.Ensemble
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject AuthenticationStateProvider AuthProvider
 @inject IEnsembleManager EnsembleMgr
+@inject FactorDriftSnapshot FactorDrift
 
 <PageTitle>ProcioneMGR</PageTitle>
 
@@ -61,6 +63,35 @@
                     <a href="ensemble#decay-monitor" class="alert-link">Vedi il dettaglio in Ensemble →</a>
                 </div>
             }
+
+            @* [D2] Deriva dei FATTORI, il gradino sotto al decadimento delle strategie: un fattore
+               che smette di informare si vede qui senza doverlo andare a cercare. *@
+            @if (_factorDriftAlerts.Count > 0)
+            {
+                <div class="alert alert-warning">
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <i class="bi bi-graph-down-arrow fs-5"></i>
+                        <strong>
+                            @_factorDriftAlerts.Count fattor@(_factorDriftAlerts.Count == 1 ? "e" : "i") in deriva
+                        </strong>
+                    </div>
+                    <ul class="mb-2 small">
+                        @foreach (var alert in _factorDriftAlerts.Take(6))
+                        {
+                            <li>
+                                <strong>@alert.Report.FeatureName</strong> su @alert.Series.Symbol @alert.Series.Timeframe —
+                                @(alert.Report.Status == FactorDriftStatus.SignFlip ? "segno invertito" : "si è spento"):
+                                IC da @alert.Report.ReferenceIc.ToString("F3") a @alert.Report.RecentIc.ToString("F3")
+                                (soglia @alert.Report.NoiseFloor.ToString("F3"))
+                            </li>
+                        }
+                    </ul>
+                    <a href="feature-selection#drift-panel" class="alert-link">Vedi il dettaglio in Feature Selection →</a>
+                    <div class="form-text mt-1">
+                        Segnalazione soltanto: nessun fattore viene escluso in automatico.
+                    </div>
+                </div>
+            }
         }
 
         <h5 class="mb-3">Il percorso della piattaforma</h5>
@@ -102,6 +133,10 @@
     private HomeStats? _stats;
     private List<ProcioneMGR.Services.Monitoring.DecayReport> _decayAlerts = new();
 
+    // [D2] Deriva dei fattori: lettura della fotografia in memoria aggiornata dal worker — nessun
+    // calcolo sul caricamento della Home, che deve restare veloce.
+    private IReadOnlyList<(FactorDriftSeriesSnapshot Series, FactorDriftReport Report)> _factorDriftAlerts = [];
+
     private sealed record HomeStats(int TrackedSeries, long TotalCandles, int MyStrategies, string TradingModeLabel, bool TradingRunning);
 
     protected override async Task OnInitializedAsync()
@@ -129,6 +164,11 @@
             _decayAlerts = (await EnsembleMgr.GetDecayReportsAsync()).Where(r => r.IsAlert).ToList();
         }
         catch { /* widget non bloccante: se il monitor fallisce, la home resta comunque utilizzabile */ }
+
+        // Sola lettura in memoria: se il worker non ha ancora girato la lista è vuota e il widget
+        // non compare, senza far aspettare nessuno.
+        try { _factorDriftAlerts = FactorDrift.Alerts; }
+        catch { /* stesso principio del widget sopra */ }
     }
 
     private RenderFragment StatCard(string label, string value, string icon, bool? highlight = null) => builder =>
