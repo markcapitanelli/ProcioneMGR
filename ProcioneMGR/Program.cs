@@ -194,6 +194,10 @@ builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.IMetaModelTrainer
 // Il consumo: catena completa (segnali reali -> etichette -> meta-modello) dietro la pagina Backtest.
 builder.Services.AddScoped<ProcioneMGR.Services.ML.Labeling.IMetaLabelingAnalysisService, ProcioneMGR.Services.ML.Labeling.MetaLabelingAnalysisService>();
 
+// [D4] Ricerca di pattern per forma (DTW) + misura del valore predittivo col nullo per forma.
+builder.Services.AddSingleton<ProcioneMGR.Services.Discovery.Dtw.IDtwMatcher, ProcioneMGR.Services.Discovery.Dtw.DtwMatcher>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Discovery.Dtw.IDtwPatternAnalysisService, ProcioneMGR.Services.Discovery.Dtw.DtwPatternAnalysisService>();
+
 // --- Formulaic alpha mining (programmazione genetica, C# puro). Rif. docs/archive/ROADMAP-QLIB.md §1.7. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.AlphaMining.GeneticAlphaMiner>();
 

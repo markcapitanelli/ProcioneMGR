@@ -35,10 +35,21 @@ Un singolo seme non basta: si misura il **tasso** di falsi positivi su molti sem
 - Edge **piantato** (C4, e la fase `control` di PlatformExpand) → il complemento: se l'edge c'è, la
   catena deve trovarlo. Senza questo, un esito negativo direbbe solo "gli strumenti non funzionano".
 
-*Cosa becca che gli altri non beccano*: le soglie che stanno sotto il rumore. Due volte in un
-giorno: la soglia IC a 0,02 su finestre da 300 (pavimento reale 0,058) etichettava il caso come
-«segno invertito»; e `IsImprovement` dichiarava miglioramento per una precision da 0,477 a 0,529 su
-dati casuali. Entrambi corretti aggiungendo il confronto con ciò che il caso produrrebbe.
+*Cosa becca che gli altri non beccano*: le soglie che stanno sotto il rumore, **e i nulli
+sbagliati**. Tre volte in un giorno:
+- la soglia IC a 0,02 su finestre da 300 (pavimento reale 0,058) etichettava il caso come «segno
+  invertito»;
+- `IsImprovement` dichiarava miglioramento per una precision da 0,477 a 0,529 su dati casuali;
+- **il più insidioso**: in D4 il placebo a *date casuali* assolveva pattern casuali su rumore puro
+  8 volte su 15, perché selezionare finestre per FORMA induce da sola una deriva nelle barre
+  successive e un nullo a date casuali non riproduce quel meccanismo. **Un nullo deve conservare
+  il meccanismo di selezione che si vuole smentire** — altrimenti confronta mele con pere e assolve
+  tutto. È la stessa lezione del t = 141 sugli asset correlati, in veste nuova.
+
+Corollario emerso lo stesso giorno: **significatività e rilevanza sono due domande diverse**. Un
+effetto dello 0,48% può battere il suo nullo ed essere comunque inutile, perché fee e slippage di
+andata e ritorno valgono ~0,30%. Ogni verdetto operativo ha bisogno anche di un pavimento
+economico, non solo statistico.
 
 ### 3. Integrazione — i pezzi veri, montati insieme
 
@@ -68,6 +79,7 @@ Nessun test unitario avrebbe potuto vedere né l'uno né l'altro.
 | **D1** SHAP | ✅ Shapley per forza bruta + ricostruzione | ✅ feature inerte → esattamente 0 | ✅ via `MlLabService` | ✅ `/ml`, BTC/USDT 1h, efficienza verificata a mano sui numeri a schermo |
 | **D2** Deriva fattori | ✅ serie a risposta nota | ✅ 40 semi di rumore, 0 allarmi | ✅ via pagina | ✅ `/feature-selection`, 3 fattori spenti trovati su dati reali |
 | **C4** Triple-barrier + meta-labeling | ✅ 4 esiti + ambiguità intra-barra + pesi | ✅ edge piantato recuperato; 20 semi di rumore | ✅ `MetaLabelingAnalysisServiceTests` (componenti reali + fallimenti) | ✅ `/backtest`, 8.886 segnali reali analizzati |
+| **D4** DTW pattern discovery | ✅ LB_Keogh vero limite inferiore su 3.000 coppie; dilatazione temporale; input degeneri | ✅ pattern piantato ritrovato **e** rumore respinto; fuzzing 300 prove; stress 50.000 barre | ✅ `DtwPatternAnalysisTests` (catena forma→occorrenze→event-study→verdetto) | ⏳ pannello UI da fare |
 
 Le fasi precedenti a questa sessione non sono state ri-verificate contro questo standard: la tabella
 dice quello che è stato controllato, non quello che si presume.
