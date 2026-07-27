@@ -83,6 +83,68 @@ public class FactorDriftAnalyzerTests
         });
     }
 
+    // --- Verdetto sulla storia REGISTRATA (D2, persistenza) --------------------------------------
+    //
+    //  La Home, dopo un riavvio del guscio, giudica finestre lette da tabella invece di ricalcolarle
+    //  dalle candele. Questi test dicono che le due strade danno lo STESSO verdetto: se divergessero
+    //  avremmo due monitor diversi con lo stesso nome, e l'alert in Home potrebbe contraddire il
+    //  pannello di /feature-selection sulla stessa serie.
+
+    [Theory]
+    [InlineData(1, 0)]   // si spegne
+    [InlineData(1, -1)]  // si capovolge
+    [InlineData(1, 1)]   // resta stabile
+    [InlineData(0, 0)]   // non ha mai informato
+    public void JudgeSeries_ReproducesTheVerdictOfAFreshAnalysis(int firstHalfSign, int secondHalfSign)
+    {
+        var fresh = Run(firstHalfSign, secondHalfSign);
+        var config = new FactorDriftConfig { ForwardHorizon = 1, WindowSize = 300, RecentWindows = 2 };
+
+        // Solo le finestre sopravvivono al giro in tabella: il verdetto si ricostruisce da quelle.
+        var rebuilt = FactorDriftAnalyzer.JudgeSeries("scripted", "Fattore pilotato", fresh.Series, config);
+
+        Assert.Equal(fresh.Status, rebuilt.Status);
+        Assert.Equal(fresh.ReferenceIc, rebuilt.ReferenceIc, 12);
+        Assert.Equal(fresh.RecentIc, rebuilt.RecentIc, 12);
+        Assert.Equal(fresh.NoiseFloor, rebuilt.NoiseFloor, 12);
+        Assert.Equal(fresh.StatusMessage, rebuilt.StatusMessage);
+    }
+
+    [Fact]
+    public void JudgeSeries_TakesTheWindowSizeFromTheSeries_NotFromTheConfig()
+    {
+        // La soglia è max(minimo economico, 1,96/√n): leggere n dalla config invece che dai punti
+        // registrati significherebbe giudicare finestre da 2000 osservazioni col pavimento di
+        // finestre da 250 — cioè promuovere rumore a segnale, l'errore che i test del primo giro
+        // avevano già trovato una volta.
+        var points = Enumerable.Range(0, 10)
+            .Select(i => new FactorIcPoint(
+                new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddDays(i),
+                new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddDays(i + 1),
+                0.05, Observations: 2500))
+            .ToList();
+
+        var report = FactorDriftAnalyzer.JudgeSeries("x", "x", points, new FactorDriftConfig { WindowSize = 250 });
+
+        Assert.Equal(FactorDriftAnalyzer.NoiseFloorFor(2500), report.NoiseFloor, 12);
+        Assert.True(report.NoiseFloor < FactorDriftAnalyzer.NoiseFloorFor(250));
+    }
+
+    [Fact]
+    public void JudgeSeries_WithTooFewPoints_SaysInsufficientInsteadOfGuessing()
+    {
+        var points = new List<FactorIcPoint>
+        {
+            new(new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc), 0.09, 500),
+            new(new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc), new DateTime(2024, 1, 3, 0, 0, 0, DateTimeKind.Utc), 0.01, 500),
+        };
+
+        var report = FactorDriftAnalyzer.JudgeSeries("x", "x", points, new FactorDriftConfig());
+
+        Assert.Equal(FactorDriftStatus.Insufficient, report.Status);
+        Assert.False(report.IsAlert);
+    }
+
     [Fact]
     public void FactorThatKeepsWorking_IsStable()
     {

@@ -195,7 +195,16 @@ pattern-shape senza sapere se la classe di idea regge sarebbe overengineering.
 
 ### 5d. OFI vero — innesto nel pilota già pianificato (Filone C, item C5)
 
-**Nessuna nuova fase.** Il contributo di questo PRD è specificare cosa calcolare nello step 3.3 del
+> **AGGIORNAMENTO DI ESECUZIONE (2026-07-28) — la dipendenza da C5 è caduta.** Questo paragrafo dava
+> per necessario aspettare i 90 giorni di raccolta del pilota. Non lo era: i dump pubblici di Binance
+> (`data.binance.vision`) contengono il **tape storico** e la **profondità del book storica**, quindi
+> la domanda «il book aggiunge IC oltre al proxy?» è stata misurata subito, su 30 giorni × 3 simboli,
+> **senza accendere alcuna raccolta e senza lasciare un costo permanente**. Un limite reale è emerso e
+> va tenuto presente: i file `bookTicker` non esistono (404), quindi il top-of-book tick per tick non
+> è ricostruibile e il book storicamente disponibile è la profondità a bande ogni 30 secondi. Verdetto,
+> metodo e limiti nel [report di D3](REPORT-D3-OFI-2026-07-28.md).
+
+Il contributo di questo PRD è specificare cosa calcolare nello step 3.3 del
 piano già scritto (`docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md` §9.3, ereditato come C5 in
 [ROADMAP.md](ROADMAP.md)):
 
@@ -228,6 +237,10 @@ cambia nel tempo, e oggi nessuno se ne accorge finché non si ri-passa a mano da
   rolling (es. 90 giorni) invece che su tutto il periodo.
 - Persistenza leggera di una serie storica di IC per fattore (nuova tabella minima, o riuso di
   `ExperimentRuns` come già fa il resto della piattaforma per non moltiplicare gli schemi).
+  → **Fatto il 2026-07-28** con la tabella minima `FactorIcWindows` (una riga per finestra, upsert
+  idempotente). Il primo giro aveva deviato da questo requisito tenendo solo una fotografia in
+  memoria; la deviazione è stata chiusa dal proprietario, e la ragione per cui l'argomento
+  «è solo una cache» non bastava sta nel [report del filone D](REPORT-FILONE-D-2026-07-27.md) §5.
 - Alert quando l'|IC| rolling scende sotto la soglia di sopravvivenza già in uso in
   `/feature-selection` (0.02) per un numero sufficiente di finestre, o quando il segno si inverte
   rispetto al periodo di selezione originale — stessa logica di soglia+persistenza di

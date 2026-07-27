@@ -7,9 +7,12 @@ valutazione del report esterno sulla scoperta di pattern
 ## In una riga
 
 D1 e D2 sono fatti, verificati contro riferimenti indipendenti e provati dal vivo nel browser su
-dati reali. Nessuna modifica di schema, nessuna riga sul percorso di trading. I test hanno trovato
-**due difetti reali nel mio codice** prima che arrivassero in UI, ed è la parte di questo lavoro
-che vale la pena leggere.
+dati reali. Nessuna riga sul percorso di trading. I test hanno trovato **due difetti reali nel mio
+codice** prima che arrivassero in UI, ed è la parte di questo lavoro che vale la pena leggere.
+
+*(Aggiornamento 2026-07-28: la frase «nessuna modifica di schema», vera quando questo report è stato
+scritto, non vale più — la persistenza dell'IC decisa dal proprietario ha aggiunto la tabella
+`FactorIcWindows`. Vedi §5.2.)*
 
 **Suite: 1641/1641 verdi** (23 test nuovi: 11 su TreeSHAP, 12 sulla deriva dei fattori), build senza
 warning nuovi.
@@ -164,52 +167,64 @@ backtest dice *dopo*, guardando il risultato. Nessuno dei due è un giudice — 
 lettura, e il verdetto continua a spettare a DSR/PBO/holdout — ma su questo caso concreto la loro
 diagnosi e l'esito realizzato coincidono.
 
-## 5. Deviazioni dal PRD, con la ragione
+## 5. Deviazioni dal PRD — le prime due sono state poi CHIUSE
 
-1. **La lente di D1 è la volatilità, non il regime K-means.** Il PRD prometteva la rottura per
-   regime. In pratica il modello K-means dev'essere *attivo* e *della stessa serie* del modello ML —
-   quasi mai vero, quindi pannello vuoto quasi sempre — e il gate C1 ha già misurato che quei regimi
-   non discriminano la performance. Appoggiarci una lente descrittiva avrebbe suggerito un
-   significato che la misura non sostiene. I terzili di volatilità realizzata sono sempre
-   disponibili, si calcolano dai dati che il modello ha già, e rispondono alla stessa domanda utile.
-   La UI lo dichiara esplicitamente e rimanda a `/regimes`.
-2. **D2 non persiste nulla.** Il PRD ipotizzava una tabella o il riuso di `ExperimentRuns`. Ma l'IC
-   storico è una funzione deterministica delle candele: salvarlo sarebbe una cache, non
-   un'osservazione, con in più una migrazione da applicare al DB reale. Si ricalcola su richiesta.
-   **Nessuna modifica di schema in tutto il filone.**
-3. **SHAP solo dopo un addestramento in sessione.** Un modello ricaricato da disco non porta con sé
-   la distribuzione di training, che è il riferimento rispetto a cui "feature assente" ha
+*Questa sezione è aggiornata al 2026-07-28: due delle tre deviazioni non esistono più, e vale la pena
+tenere scritto perché, invece di riscrivere la storia.*
+
+1. ~~**La lente di D1 è la volatilità, non il regime K-means.**~~ **Chiusa (D1.a, 2026-07-27, secondo
+   giro).** La matrice usa ora i regimi K-means di `/regimes` quando esiste un modello attivo della
+   stessa serie, e ripiega sui terzili di volatilità altrimenti, dichiarando sempre quale lente è in
+   uso. Uno dei due argomenti con cui avevo giustificato la sostituzione era **sbagliato**: «il gate
+   C1 ha misurato che i regimi non discriminano» vale per il `LaneRegimeRouter`, che deve *decidere*;
+   qui il regime è un asse di raggruppamento **descrittivo** e non deve superare alcun gate. L'altro
+   argomento (il pannello resta vuoto quasi sempre) era vero e si risolve col ripiego, non con la
+   rinuncia.
+2. ~~**D2 non persiste nulla.**~~ **Chiusa (2026-07-28, decisione del proprietario).** Tabella
+   `FactorIcWindows`, una riga per finestra, scritta dal job. L'argomento originale — l'IC storico è
+   deterministico dalle candele, quindi salvarlo è una cache — era vero **e incompleto**, per due
+   ragioni che si vedono solo guardando come la piattaforma vive: (a) il guscio si riavvia di
+   continuo, ed è il senso stesso di «core caldo / guscio freddo», quindi una fotografia in memoria
+   muore proprio nei minuti in cui uno apre la Home; (b) le candele non sono eterne, e quando la
+   finestra fine verrà ruotata quella storia non sarà più ricalcolabile — allora è un'osservazione.
+   È l'unica modifica di schema del filone, additiva.
+3. **SHAP solo dopo un addestramento in sessione.** (Resta.) Un modello ricaricato da disco non porta
+   con sé la distribuzione di training, che è il riferimento rispetto a cui "feature assente" ha
    significato. Usare le candele di test come background sarebbe stato possibile ma incoerente:
    meglio dirlo in UI che produrre numeri con un riferimento diverso da quello dichiarato.
 
 ## 6. Cosa NON è stato toccato
 
 - Nessuna riga in `TradingEngine`, `ExecutionJob`, o su un percorso di scrittura Live/Testnet.
-- Nessuna migrazione EF, nessuna modifica di schema.
 - Nessun default operativo cambiato: entrambi i pannelli si attivano solo su click esplicito.
 - Nessun nuovo criterio di validazione: D1 e D2 sono strumenti di lettura, non giudici.
+- *(Aggiornamento 2026-07-28: la riga «nessuna migrazione EF» non vale più — la persistenza dell'IC
+  ha aggiunto la tabella `FactorIcWindows`. È additiva, non tocca nessuna tabella esistente e non
+  compare su alcun percorso di trading.)*
 
-## 7. Resta aperto nel Filone D
+## 7. Stato del Filone D (aggiornato al 2026-07-28)
 
-- **D3** (OFI vero) — dipende dal pilota C5, non ancora avviato.
-- **D4** (DTW) — non iniziato. Il suo gate resta quello scritto: controllo con pattern sintetico
-  piantato *prima* di fidarsi di qualunque risultato su dati reali.
-- **D5** (SAX) — condizionato a un segnale minimo da D4.
+- **D3** (OFI vero) — **misurato**, senza aspettare i 90 giorni del pilota C5: i dump pubblici di
+  Binance contengono tape e profondità storici. Verdetto e metodo nel
+  [report di D3](REPORT-D3-OFI-2026-07-28.md).
+- **D4** (DTW) — **fatto, esito negativo** (nono zero consecutivo): il pattern si trova 26 volte al
+  mese su SOL/USDT 15m, ma il rendimento successivo rientra in quello che producono forme qualunque.
+  Dettaglio in ROADMAP D4.a-D4.c.
+- **D5** (SAX) — **non si fa**: la sua condizione era che D4 mostrasse un segnale sopravvissuto ai
+  gate. Il controllo sintetico l'ha superato, il segnale no.
 
-Una nota di priorità dopo aver visto i numeri di D1: la coerenza direzionale al 6-39% sui fattori
-di questa serie è un argomento **in più** per non aspettarsi molto da D4. Il modello, guardato da
-dentro, non trova una direzione stabile da nessuna parte; un motore di forme che cerca la stessa
-cosa in un altro modo parte dallo stesso posto.
+La nota di priorità scritta il 27 si è rivelata giusta: la coerenza direzionale al 6-39% sui fattori
+di questa serie era un argomento in più per non aspettarsi molto da D4, e D4 non ha dato niente.
 
 ## 8. Come rivedere il lavoro
 
-App di verifica sulla porta **5210** (profilo `procione-d` in `.claude/launch.json` — porta dedicata
-perché la 5199 era occupata da un altro worktree). Login già attivo con l'utente reale.
+App sulla porta **5199** (profilo `procione-main`, l'unica da tenere accesa dal consolidamento del
+2026-07-27: esegue il repo principale per percorso assoluto).
 
 - **D1**: `/ml` → modello Gradient Boosting o Random Forest → *2. Addestra* → *Calcola SHAP*.
-  Lo slider in fondo spiega una singola barra.
-- **D2**: `/feature-selection` → *Valuta fattori* → *Analizza deriva* (l'ampiezza della finestra è
-  già proposta in base ai dati).
-
-Tre commit sul branch `claude/pattern-discovery-framework-eb8e83`, **non pushati**: il repo è
-pubblico e il push resta una decisione del proprietario.
+  Lo slider in fondo spiega una singola barra. La matrice per contesto usa i regimi K-means se
+  `/regimes` ha un modello attivo per quella serie, altrimenti i terzili di volatilità.
+- **D2**: `/feature-selection` → il pannello **«storia registrata dal job»** si vede subito, senza
+  calcolare nulla; *Valuta fattori* → *Analizza deriva* ricalcola su richiesta.
+- **D3**: è una misura da riga di comando, non una pagina:
+  `dotnet run --project tools/PlatformExpand -- ofi BTCUSDT,ETHUSDT,SOLUSDT 30`.

@@ -35,7 +35,8 @@ Metriche complementari (dal `GuidaPanel`, righe 28–46):
 | Bottone + conteggio | 119–126 | "Valuta fattori" + numero di candidati correnti |
 | Grafico |IC| | 136–142 | Bar chart orizzontale dei top 25 fattori (verde = IC positivo, rosso = negativo) |
 | Classifica | 144–169 | Tabella completa: IC, |IC|, Info Ratio, consistenza, osservazioni, flag "Tenuto" (riga verde) |
-| **Deriva nel tempo** | 172–260 | **[D2]** IC finestra per finestra con sparkline, riferimento vs recente, verdetto per fattore |
+| **Storia registrata dal job** | 135–225 | **[D2]** Serie storica dell'IC letta da `FactorIcWindows`: visibile senza calcolare nulla, con verdetto ricostruito dalle finestre |
+| **Deriva nel tempo** | 265–355 | **[D2]** IC finestra per finestra con sparkline, riferimento vs recente, verdetto per fattore (calcolo su richiesta) |
 
 ## Come funziona (flusso del codice)
 
@@ -75,18 +76,37 @@ deboli ma danno meno punti nel tempo — e resta modificabile.
 **Finestre non sovrapposte**: pochi punti indipendenti invece di molti punti correlati per
 costruzione, coerente con la lezione già pagata dalla piattaforma sulla significatività fabbricata.
 
-**Nessuna persistenza e nessuna azione automatica**: l'IC storico è una funzione deterministica
-delle candele, quindi si ricalcola invece di essere salvato (nessuna migrazione, nessuno stato da
-tenere allineato); e il pannello segnala soltanto, come `StrategyDecayMonitor`.
+**Nessuna azione automatica**: il pannello segnala soltanto, come `StrategyDecayMonitor`.
 
 **Segnalazione anche senza aprire questa pagina** (`FactorDriftWorker`, `Services/Alpha/FactorDriftMonitor.cs`):
-un job periodico calcola la deriva sulle serie della watchlist e tiene una fotografia **in memoria**;
-gli allarmi compaiono in **Home**, accanto al widget di decadimento-strategia, con link a questo
-pannello. Config in `appsettings`: `FactorDrift:Enabled` (default true), `IntervalHours` (12),
-`MaxSeries` (5), `MaxCandles` (20000). Monitora **solo gli 8 fattori scritti a mano**, non il
-catalogo Alpha158: 158 fattori × serie × finestre rolling trasformerebbero un monitor in un consumo
-di CPU permanente — chi vuole guardare tutto lo fa su richiesta da qui. Al riavvio la fotografia
-riparte vuota e si ricostruisce al primo giro: costo accettato per non aggiungere schema.
+un job periodico calcola la deriva sulle serie della watchlist; gli allarmi compaiono in **Home**,
+accanto al widget di decadimento-strategia, con link a questo pannello. Config in `appsettings`:
+`FactorDrift:Enabled` (default true), `IntervalHours` (12), `MaxSeries` (5), `MaxCandles` (20000).
+Monitora **solo gli 8 fattori scritti a mano**, non il catalogo Alpha158: 158 fattori × serie ×
+finestre rolling trasformerebbero un monitor in un consumo di CPU permanente — chi vuole guardare
+tutto lo fa su richiesta da qui.
+
+### Storia registrata dal job — **[D2, persistenza 2026-07-28]**
+Pannello `#drift-recorded`, **sopra** quello di calcolo e fuori dal blocco che richiede una
+valutazione: si vede appena si apre la pagina, perché è una lettura di tabella e non un calcolo.
+
+Il job scrive ogni finestra che calcola in `FactorIcWindows` (`Services/Alpha/FactorIcHistory.cs`),
+con indice unico su (serie, fattore, orizzonte, ampiezza, fine finestra): ricalcolare la stessa
+finestra **aggiorna** la riga, non la duplica. All'avvio il worker **ricostruisce la fotografia dalla
+tabella** (`HydrateAsync`), quindi l'alert in Home c'è già al primo caricamento dopo un riavvio del
+guscio invece di comparire dopo il primo giro.
+
+Tre scelte che vale la pena conoscere:
+- **si persistono solo le finestre, non il verdetto**: il verdetto è funzione pura della serie più la
+  soglia e si ricostruisce con lo *stesso* `Judge` del calcolo fresco — due strade separate
+  potrebbero divergere e darebbero due monitor diversi con lo stesso nome;
+- **l'ampiezza della finestra è quantizzata** a passi di 250 (`FactorDriftWorker.WindowSizeFor`): una
+  serie storica la cui finestra si sposta a ogni giro non è una serie, sarebbe una collezione di
+  misure con pavimenti di rumore diversi. Quando l'ampiezza cambia comunque (lo storico cresce), il
+  pannello mostra **solo la griglia più recente**;
+- **l'IC full-sample non compare** in questo pannello: dalle finestre registrate non è ricostruibile
+  (una correlazione di rango sull'unione non è la media di quelle sui pezzi), e mostrarne una media
+  spacciata per ricalcolo sarebbe un numero falso.
 
 Misura dal vivo (BTC/USDT 1h, 26.929 candele, finestra 2500): **MeanReversion** 0,050 → 0,027 e
 **RSI** −0,049 → −0,029 sono scesi sotto il pavimento; gli altri otto fattori non hanno mai

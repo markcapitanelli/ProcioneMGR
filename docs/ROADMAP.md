@@ -87,7 +87,8 @@ item tocca il percorso live: tutto guscio freddo (ricerca/UI), nessun nuovo scri
 | D1 | **SHAP-lite** — TreeSHAP esatto sui modelli ad alberi di ML Lab, importanza globale con segno, matrice per contesto, waterfall della singola barra | **FATTO 2026-07-27** | ✅ verificato contro **Shapley esatto per forza bruta** (enumerazione di tutti i 2ⁿ sottoinsiemi) e contro le predizioni del modello ML.NET vero; efficienza confermata anche dal vivo in browser su BTC/USDT 1h (Σφ = predizione − baseline al centesimo di millesimo) |
 | D1.a | **Lente K-means COMPLETATA (2026-07-27, secondo giro)** — la matrice usa ora i **regimi K-means** di `/regimes` quando esiste un modello attivo della stessa serie, e ripiega sui terzili di volatilità altrimenti, dichiarando sempre in UI quale lente è in uso. Chiude una divergenza dal PRD §5a che avevo introdotto: avevo sostituito la lente adducendo anche che «il gate C1 ha misurato che i regimi non discriminano» — argomento **sbagliato in questo contesto**, perché qui il regime è un asse di raggruppamento descrittivo e non deve superare alcun gate (differenza sostanziale col `LaneRegimeRouter`). Etichettatura con l'overload **per serie** di `LabelFeaturesAsync`: quello generico classificherebbe le candele coi centroidi di un'altra coppia. Un guasto della lente non fa mai fallire il calcolo SHAP: si ripiega e lo si dichiara | fatto | ✅ 8 test unità + 4 integrazione; dal vivo: BTC/USDT 1h mostra i 4 regimi reali (Trend Up Low-Vol, Choppy/Volatile, Trend Up High-Vol, Sideways) e **RealizedVol pesa 4-5× di più nel regime Choppy** — informazione che i terzili non davano; SOL/USDT 1h (senza modello attivo) ripiega e spiega come ottenere la vista per regime |
 | D2 | **Factor drift monitor** — IC finestra per finestra, pavimento di rumore, verdetto stabile/spento/invertito in `/feature-selection` | **FATTO 2026-07-27** | ✅ 12 test, incluso "40 semi di puro rumore ⇒ zero allarmi"; misurato dal vivo: MeanReversion 0,050→0,027 e RSI −0,049→−0,029 si sono spenti su BTC/USDT 1h |
-| D2.a | **Job periodico + widget in Home COMPLETATI (2026-07-27, dopo ri-audit del PRD §5e)** — l'audit riga per riga ha trovato che mancavano due requisiti espliciti: l'alert «accanto al widget decadimento-strategia in Home» e il «job di calcolo periodico» che lo alimenta. Il pannello rispondeva solo a chi andava a cercarlo, mentre il senso del monitor è accorgersi di un fattore che si spegne **senza doverci pensare**. `FactorDriftWorker` calcola sulle serie della watchlist e tiene una fotografia **in memoria** (niente schema: l'IC storico è funzione deterministica delle candele, persisterlo sarebbe una cache; ciò che mancava non era la storia ma che il calcolo avvenisse da solo). Solo gli 8 fattori scritti a mano, tetto sulle serie, nessuna azione automatica | fatto | ✅ 10 test, incluso il controllo che il job **trovi davvero** un fattore piantato che si spegne, e che il tetto sulle serie e le serie disabilitate siano rispettati |
+| D2.a | **Job periodico + widget in Home COMPLETATI (2026-07-27, dopo ri-audit del PRD §5e)** — l'audit riga per riga ha trovato che mancavano due requisiti espliciti: l'alert «accanto al widget decadimento-strategia in Home» e il «job di calcolo periodico» che lo alimenta. Il pannello rispondeva solo a chi andava a cercarlo, mentre il senso del monitor è accorgersi di un fattore che si spegne **senza doverci pensare**. `FactorDriftWorker` calcola sulle serie della watchlist. Solo gli 8 fattori scritti a mano, tetto sulle serie, nessuna azione automatica | fatto | ✅ 10 test, incluso il controllo che il job **trovi davvero** un fattore piantato che si spegne, e che il tetto sulle serie e le serie disabilitate siano rispettati |
+| D2.b | **Persistenza della storia dell'IC (2026-07-28, decisione del proprietario)** — tabella `FactorIcWindows` (una riga per finestra per fattore per serie, indice unico ⇒ upsert idempotente), scritta dal job e **riletta all'avvio**: l'alert in Home c'è già al primo caricamento dopo un riavvio del guscio, invece di comparire dopo il primo giro (2 minuti + calcolo). Il verdetto sulla storia registrata passa dallo **stesso `Judge`** del calcolo fresco — due strade che possono divergere sarebbero due monitor diversi con lo stesso nome. Ampiezza della finestra **quantizzata** a passi di 250: una serie storica la cui finestra si sposta a ogni giro non è una serie, sarebbe una collezione di misure con pavimenti di rumore diversi. Nuovo pannello «storia registrata dal job» in `/feature-selection`, visibile senza calcolare nulla | fatto | ✅ 14 test nuovi (43 in tutto sul filone D2): verdetto ricostruito **identico** a quello calcolato dalle candele su 4 scenari, upsert che non duplica, riavvio del guscio che ritrova l'allarme, rumore puro che non lo inventa, quantizzazione stabile a +500 candele; migrazione applicata al DB reale e verificata in browser |
 | D3 | **OFI vero**: formula (imbalance firmato al top-of-book) da innestare nello step 3.3 del pilota C5 già pianificato, confrontata contro il proxy `TakerImbalanceFactor` già esistente | eredita quella di C5 | stesso gate di C5: se non aggiunge IC oltre al proxy, si spegne a fine pilota — esito negativo valido |
 | D4 | **DTW** pattern-matching su forma: genera trigger evento per il motore Discovery esistente, non una strategia propria | media, rischio alto (altro angolo di edge direzionale-tecnico, classe già a otto zeri) | **non negoziabile**: controllo con pattern sintetico piantato PRIMA di fidarsi di un risultato su dati reali (stesso principio della fase `control` di PlatformExpand); poi lo stesso collaudo CPCV+DSR+PBO+gemello di sempre |
 | D4.a | **Motore FATTO 2026-07-27, gate SUPERATO**: `DtwMatcher` (z-normalizzazione obbligatoria, banda di Sakoe-Chiba, pruning LB_Keogh, occorrenze non sovrapposte). 22 test: il **pattern piantato viene ritrovato** anche dilatato nel tempo, LB_Keogh verificato come vero limite inferiore su 3.000 coppie casuali (se non lo fosse, il pruning scarterebbe in silenzio le corrispondenze migliori), 50.000 barre scansionate in tempo utile, 300 prove di fuzzing | fatto | — |
@@ -100,17 +101,21 @@ da C1); non ri-cacciare pattern direzionali-tecnici su majors 1h/4h (otto zeri +
 letteratura); non costruire LOB reale prima del verdetto di C5; DTW/SAX restano generatori di
 candidati per il collaudo esistente, non una quarta pista di validazione.
 
-**Due deviazioni dal PRD, entrambe misurate e documentate** (§ dettaglio nel
+**Le due deviazioni dal PRD sono state entrambe CHIUSE** (2026-07-27/28; § dettaglio nel
 [report di esecuzione](REPORT-FILONE-D-2026-07-27.md)):
 
-1. **La lente di D1 è la volatilità, non il regime K-means.** Il PRD prometteva la rottura SHAP per
-   regime; in pratica il modello K-means dev'essere attivo E della stessa serie del modello ML
-   (quasi mai vero, pannello vuoto quasi sempre), e il gate C1 ha già misurato che quei regimi non
-   discriminano. I terzili di volatilità realizzata sono sempre disponibili e rispondono alla stessa
-   domanda utile senza suggerire un significato che la misura non sostiene.
-2. **D2 non persiste nulla.** L'IC storico è una funzione deterministica delle candele: salvarlo
-   sarebbe una cache, non un'osservazione — con in più una migrazione da applicare al DB reale. Si
-   ricalcola su richiesta. Nessuna modifica di schema in tutto il filone.
+1. ~~La lente di D1 è la volatilità, non il regime K-means.~~ **Chiusa da D1.a**: la matrice usa i
+   regimi K-means quando esiste un modello attivo della stessa serie e ripiega sui terzili di
+   volatilità altrimenti, dichiarando in UI quale lente è in uso. L'argomento con cui avevo
+   sostituito la lente («i regimi non discriminano, l'ha misurato C1») era sbagliato in quel
+   contesto: lì il regime è un asse di raggruppamento descrittivo e non deve superare alcun gate.
+2. ~~D2 non persiste nulla.~~ **Chiusa il 2026-07-28** (decisione del proprietario): tabella
+   `FactorIcWindows`, una riga per finestra, scritta dal job e riletta all'avvio. L'argomento
+   originale — «l'IC è deterministico dalle candele, salvarlo è una cache» — era vero e incompleto:
+   il guscio si riavvia di continuo (e l'alert in Home restava vuoto proprio nei minuti in cui uno
+   guarda la Home) e le candele non sono eterne (quando la finestra fine verrà ruotata, quella
+   storia non sarà più ricalcolabile — allora è un'osservazione). È **l'unica modifica di schema del
+   filone D**, additiva e già applicata al DB reale.
 
 ## Ordine di esecuzione
 
@@ -150,16 +155,21 @@ remoto; 4 minuti di orfanità senza un errore; resta il confronto tick-vs-candle
 
 **Fatto il 2026-07-27 (secondo blocco): Filone D, D1 e D2.** SHAP esatto sui modelli ad alberi di
 ML Lab (verificato contro Shapley per forza bruta) e monitor di deriva dei fattori con pavimento di
-rumore in `/feature-selection`. Suite 1641/1641, nessuna modifica di schema, nessuna riga sul
-percorso di trading. Due difetti trovati **dai test prima della UI** — la foresta che media invece
-di sommare, e una soglia IC sotto il pavimento di rumore che etichettava il puro caso come "segno
-invertito" — nel [report](REPORT-FILONE-D-2026-07-27.md).
+rumore in `/feature-selection`. Suite 1641/1641, nessuna riga sul percorso di trading. Due difetti
+trovati **dai test prima della UI** — la foresta che media invece di sommare, e una soglia IC sotto
+il pavimento di rumore che etichettava il puro caso come "segno invertito" — nel
+[report](REPORT-FILONE-D-2026-07-27.md).
+
+**Fatto il 2026-07-28: FILONE D CHIUSO** (D2.b persistenza + D3 misurato). La persistenza della
+storia dell'IC ha aggiunto l'**unica tabella** del filone (`FactorIcWindows`, additiva, applicata al
+DB reale). D3 non ha più aspettato C5: i dump pubblici di Binance contengono tape e profondità
+storici, quindi la domanda «il book aggiunge IC oltre al proxy?» è stata misurata su 30 giorni × 3
+simboli **senza accendere alcuna raccolta**. Verdetto, metodo e limiti nel
+[report di D3](REPORT-D3-OFI-2026-07-28.md); un difetto trovato dal test del rumore (il 99°
+percentile di 200 giri dava 3,3% di falsi positivi) è documentato lì.
 
 **Poi, in ordine:** osservazione B3 (tick-vs-candle → R1 pieno) · confronto forward-vs-predizione
 sulle tre corsie (AAVE/XLM holdout coerente, DOT dato per perdente dal CPCV) · B4/B5 · A6 · C4/C5.
-**Filone D residuo:** D3 segue i tempi di C5; D4 (e l'eventuale D5) dopo C4/C5 — e dopo la misura di
-D1, che dà un argomento in più per non aspettarsi molto dal direzionale (coerenza direzionale 6-39%
-su tutti i fattori della serie provata).
 
 *Il carry Paper resta ON (unica classe con edge misurato positivo). Il router di regime resta in
 osservazione per misura (esito C1.b), non per prudenza.*

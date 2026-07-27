@@ -21,10 +21,11 @@ namespace ProcioneMGR.Services.Alpha;
 //     qui si preferiscono pochi punti indipendenti a molti punti che si assomigliano per
 //     costruzione.
 //
-//  2. NIENTE PERSISTENZA. L'IC storico di un fattore è una FUNZIONE DETERMINISTICA delle candele:
-//     ricalcolarlo dà sempre lo stesso risultato. Salvarlo su una tabella sarebbe una cache, non
-//     un'osservazione — con in più una migrazione da applicare al DB reale e uno stato in più da
-//     tenere allineato. Si ricalcola su richiesta.
+//  2. QUESTA CLASSE NON PERSISTE NULLA, ed è pura: nessun DB, nessun orologio. La storia dell'IC
+//     viene registrata su tabella (vedi FactorIcHistory.cs, deciso il 2026-07-28) dal worker, non
+//     da qui — così il calcolo resta verificabile senza database e il verdetto sulla storia
+//     registrata passa dallo STESSO Judge del calcolo fresco: due strade che possono divergere
+//     sarebbero due monitor diversi con lo stesso nome.
 // =============================================================================================
 
 /// <summary>Un punto della serie storica dell'IC: una finestra temporale e il suo IC.</summary>
@@ -162,12 +163,42 @@ public sealed class FactorDriftAnalyzer : IFactorDriftAnalyzer
             series.Add(new FactorIcPoint(ts[start], ts[start + window - 1], Correlation.Spearman(wx, wy), window));
         }
 
+        return BuildReport(spec.FeatureName, spec.Factor.DisplayName, fullIc, series, window, config);
+    }
+
+    /// <summary>
+    /// Verdetto su una serie di finestre GIÀ CALCOLATE — è la strada che usa la storia registrata su
+    /// tabella dal worker (vedi <c>FactorIcHistory.cs</c>) per farsi giudicare senza ripassare dalle
+    /// candele. Deliberatamente lo stesso <c>Judge</c> del calcolo fresco.
+    ///
+    /// Nota di onestà sul solo campo non ricostruibile: l'IC full-sample non è ricavabile dagli IC
+    /// delle finestre (una correlazione di rango sull'unione non è la media delle correlazioni sui
+    /// pezzi), quindi qui vale la MEDIA delle finestre. Il verdetto non lo usa — riferimento,
+    /// recente e soglia sono tutti esatti — e la UI non lo mostra sulla storia registrata, proprio
+    /// per non spacciare una media per un ricalcolo.
+    /// </summary>
+    public static FactorDriftReport JudgeSeries(
+        string featureName, string displayName, IReadOnlyList<FactorIcPoint> series, FactorDriftConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(series);
+        config ??= new FactorDriftConfig();
+
+        var window = series.Count > 0 ? series[^1].Observations : config.WindowSize;
+        var meanIc = series.Count > 0 ? series.Average(p => p.InformationCoefficient) : 0d;
+        return BuildReport(featureName, displayName, meanIc, series, window, config);
+    }
+
+    /// <summary>Dalla serie di finestre al verdetto: unica strada, usata sia dal calcolo fresco sia dalla storia registrata.</summary>
+    private static FactorDriftReport BuildReport(
+        string featureName, string displayName, double fullIc,
+        IReadOnlyList<FactorIcPoint> series, int window, FactorDriftConfig config)
+    {
         // Soglia operativa: il più severo fra il minimo economico e il pavimento di rumore.
         var threshold = Math.Max(config.MinAbsIc, NoiseFloorFor(window, config.NoiseFloorZ));
 
         if (series.Count < Math.Max(2, config.MinWindows))
         {
-            return new FactorDriftReport(spec.FeatureName, spec.Factor.DisplayName, fullIc, 0, 0, threshold,
+            return new FactorDriftReport(featureName, displayName, fullIc, 0, 0, threshold,
                 FactorDriftStatus.Insufficient,
                 $"Finestre insufficienti ({series.Count}, ne servono {Math.Max(2, config.MinWindows)}): allarga il periodo o riduci l'ampiezza della finestra.",
                 series);
@@ -178,7 +209,7 @@ public sealed class FactorDriftAnalyzer : IFactorDriftAnalyzer
         var reference = series.Take(series.Count - recentCount).Average(p => p.InformationCoefficient);
 
         var (status, message) = Judge(reference, recent, threshold);
-        return new FactorDriftReport(spec.FeatureName, spec.Factor.DisplayName, fullIc, reference, recent, threshold, status, message, series);
+        return new FactorDriftReport(featureName, displayName, fullIc, reference, recent, threshold, status, message, series);
     }
 
     public IReadOnlyList<FactorDriftReport> AnalyzeMany(
