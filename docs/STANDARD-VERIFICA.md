@@ -85,7 +85,7 @@ Ora è estratta in `scripts/ensure-trading-portforward.ps1`, richiamabile da chi
 | Fase | 1 Unità | 2 Controllo | 3 Integrazione | 4 Operativo |
 |---|---|---|---|---|
 | **D1** SHAP | ✅ Shapley per forza bruta + ricostruzione; lente iniettabile e ripiego | ✅ feature inerte → esattamente 0; lente a stato unico → nessuna colonna fantasma | ✅ `MlLabServiceTests`: modello attivo → K-means, assente → ripiego, detector che solleva → ripiego senza far fallire SHAP | ✅ `/ml`, BTC/USDT 1h con 4 regimi reali **e** SOL/USDT 1h in ripiego |
-| **D2** Deriva fattori | ✅ serie a risposta nota | ✅ 40 semi di rumore, 0 allarmi | ✅ via pagina | ✅ `/feature-selection`, 3 fattori spenti trovati su dati reali |
+| **D2** Deriva fattori | ✅ serie a risposta nota; snapshot e ordinamento allarmi | ✅ 40 semi di rumore, 0 allarmi; job che **trova** un fattore piantato che si spegne | ✅ `FactorDriftWorkerTests` con Postgres vero (tetto serie, serie disabilitate, candele insufficienti) | ✅ `/feature-selection` (3 fattori spenti) **e** widget in Home alimentato dal job (RsiFactor su ETH/USDT 1h) |
 | **C4** Triple-barrier + meta-labeling | ✅ 4 esiti + ambiguità intra-barra + pesi | ✅ edge piantato recuperato; 20 semi di rumore | ✅ `MetaLabelingAnalysisServiceTests` (componenti reali + fallimenti) | ✅ `/backtest`, 8.886 segnali reali analizzati |
 | **D4** DTW pattern discovery | ✅ LB_Keogh vero limite inferiore su 3.000 coppie; dilatazione temporale; input degeneri | ✅ pattern piantato ritrovato **e** rumore respinto; fuzzing 300 prove; stress 50.000 barre | ✅ `DtwPatternAnalysisTests` (catena forma→occorrenze→event-study→verdetto) | ✅ `/market-analysis`, SOL/USDT 15m su 54.984 candele fino a oggi: 500 occorrenze, verdetto **nessun segnale** (p 0,366) |
 
