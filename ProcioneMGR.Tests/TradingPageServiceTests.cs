@@ -334,6 +334,60 @@ public class TradingPageServiceTests
         Assert.False(service.IsError);
     }
 
+    // --- Regressione: un errore non deve sopravvivere alla propria causa ------------------------
+
+    /// <summary>Valutatore che fallisce le prime N volte e poi funziona: simula un guasto transitorio.</summary>
+    private sealed class FlakyPromotionEvaluator(int failuresBeforeSuccess) : IPromotionEvaluator
+    {
+        private int _calls;
+
+        public Task<PromotionDecision> EvaluateLaneAsync(int laneId, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PromotionDecision>> EvaluateAllLanesAsync(CancellationToken ct = default)
+        {
+            if (_calls++ < failuresBeforeSuccess)
+            {
+                throw new InvalidOperationException("Error connecting to subchannel.");
+            }
+            IReadOnlyList<PromotionDecision> ok = [new PromotionDecision { LaneId = 0, Symbol = "AAVE/USDT" }];
+            return Task.FromResult(ok);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshPromotions_AfterAFailure_ClearsTheErrorOnTheNextSuccess()
+    {
+        // Difetto visto dal vivo il 2026-07-27: caduto il port-forward verso il core in-cluster la
+        // valutazione delle promozioni falliva; ristabilito il tunnel tutte le altre query tornavano
+        // a completare, ma il banner rosso restava a schermo perche' il messaggio non veniva mai
+        // azzerato. Un errore che sopravvive alla propria causa fa credere a un guasto ancora in corso.
+        var (service, _) = Build(promotionEval: new FlakyPromotionEvaluator(failuresBeforeSuccess: 1));
+
+        await service.RefreshPromotionsAsync();
+        Assert.True(service.PromoIsError);
+        Assert.Contains("Valutazione promozioni fallita", service.PromoMessage);
+
+        await service.RefreshPromotionsAsync();
+
+        Assert.False(service.PromoIsError);
+        Assert.Null(service.PromoMessage);
+        Assert.Single(service.Promotions);
+    }
+
+    [Fact]
+    public async Task RefreshPromotions_KeepsReportingWhileTheFailurePersists()
+    {
+        // Il complemento: azzerare l'esito precedente non deve nascondere un guasto ANCORA in corso.
+        var (service, _) = Build(promotionEval: new FlakyPromotionEvaluator(failuresBeforeSuccess: 5));
+
+        await service.RefreshPromotionsAsync();
+        await service.RefreshPromotionsAsync();
+
+        Assert.True(service.PromoIsError);
+        Assert.Contains("Valutazione promozioni fallita", service.PromoMessage);
+    }
+
     [Fact]
     public async Task SaveSafetyAsync_ValidValues_PersistsAndReportsSuccess()
     {

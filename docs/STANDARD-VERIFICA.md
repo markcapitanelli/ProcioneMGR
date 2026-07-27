@@ -68,9 +68,17 @@ reali. Screenshot o estrazione del testo del pannello, più il controllo di cons
 
 *Cosa becca che gli altri non beccano*: tutto ciò che vive fra il servizio e l'occhio. In questa
 sessione: un verdetto negativo mostrato in un banner **verde** di successo (la barra di stato
-segnalava "ha girato", non "è andata bene"); e la finestra di deriva da 250 barre, tecnicamente
-corretta ma che rendeva il pannello inutile perché nessun fattore reale superava il pavimento.
-Nessun test unitario avrebbe potuto vedere né l'uno né l'altro.
+segnalava "ha girato", non "è andata bene"); la finestra di deriva da 250 barre, tecnicamente
+corretta ma che rendeva il pannello inutile perché nessun fattore reale superava il pavimento; e
+in `/trading` **un banner d'errore che sopravviveva alla propria causa** — caduto il tunnel verso
+il core, la valutazione delle promozioni falliva; ristabilito il tunnel tutto tornava a funzionare
+ma il rosso restava a schermo, perché il messaggio non veniva azzerato al nuovo tentativo. Nessun
+test unitario avrebbe potuto vedere nessuno dei tre.
+
+**Corollario sull'infrastruttura**: al livello 4 appartiene anche *come si avvia l'app*. Dopo uno
+spegnimento improvviso, `/trading` è rimasta in errore perché il profilo di avvio non apriva il
+port-forward verso il core in-cluster — logica che esisteva solo dentro `scripts/run-postgres.ps1`.
+Ora è estratta in `scripts/ensure-trading-portforward.ps1`, richiamabile da chiunque.
 
 ## Stato per fase (aggiornato 2026-07-27)
 

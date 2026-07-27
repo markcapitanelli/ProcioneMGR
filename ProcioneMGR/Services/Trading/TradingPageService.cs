@@ -135,6 +135,14 @@ public sealed class TradingPageService(
     public async Task RefreshPromotionsAsync()
     {
         PromoBusy = true;
+        // L'esito PRECEDENTE va azzerato prima di riprovare, altrimenti un errore vecchio resta a
+        // schermo anche dopo un tentativo riuscito. Visto dal vivo il 2026-07-27: caduto il
+        // port-forward verso il core in-cluster la valutazione falliva; ristabilito il tunnel tutte
+        // le altre query tornavano a completare, ma il banner rosso delle promozioni restava lì,
+        // facendo credere a un guasto ancora in corso. Un messaggio d'errore che sopravvive alla
+        // propria causa è peggio di nessun messaggio.
+        PromoMessage = null;
+        PromoIsError = false;
         try
         {
             Promotions = (await promotionEval.EvaluateAllLanesAsync()).ToList();

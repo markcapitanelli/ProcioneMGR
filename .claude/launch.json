@@ -40,13 +40,13 @@
       "port": 5199
     },
     {
-      "_comment": "L'UNICA app da tenere accesa dal consolidamento del 2026-07-27: esegue il REPO PRINCIPALE sulla 5199 con percorso ASSOLUTO. Il percorso assoluto e' il punto: cosi' il profilo lancia sempre master anche se invocato dalla cartella di un worktree, che e' esattamente l'ambiguita' che quel giorno aveva prodotto due istanze diverse (worktree roadmap-b1-b2 sulla 5199 e worktree filone-D sulla 5210) e, prima ancora, l'incidente della 5256 descritto sopra. Preferire questo a procione-reale quando si lavora da un worktree; procione-reale resta valido se il terminale e' gia' nel repo principale.",
+      "_comment": "L'UNICA app da tenere accesa dal consolidamento del 2026-07-27: esegue il REPO PRINCIPALE sulla 5199 con percorso ASSOLUTO. Il percorso assoluto e' il punto: cosi' il profilo lancia sempre master anche se invocato dalla cartella di un worktree, che e' esattamente l'ambiguita' che quel giorno aveva prodotto due istanze diverse (worktree roadmap-b1-b2 sulla 5199 e worktree filone-D sulla 5210) e, prima ancora, l'incidente della 5256 descritto sopra. APRE ANCHE IL PORT-FORWARD 18092 verso il core di trading in-cluster, come fa scripts/run-postgres.ps1: senza, la pagina /trading mostra 'Unavailable' e 'DATI TRADING NON AGGIORNATI' perche' il guscio non raggiunge il motore (il quale continua a operare da solo -- e' il punto di B3). La prima versione di questo profilo lo ometteva, e dopo uno spegnimento improvviso del PC la pagina /trading e' rimasta in errore finche' non e' stato riaperto a mano. Preferire questo a procione-reale quando si lavora da un worktree.",
       "name": "procione-main",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [
         "-NoProfile",
         "-Command",
-        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project 'C:/Users/proci/Desktop/ProgettoP/ProcioneMGR/ProcioneMGR.csproj' --no-launch-profile -c Release"
+        "& 'C:/Users/proci/Desktop/ProgettoP/scripts/ensure-trading-portforward.ps1'; $env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project 'C:/Users/proci/Desktop/ProgettoP/ProcioneMGR/ProcioneMGR.csproj' --no-launch-profile -c Release"
       ],
       "port": 5199
     }
