@@ -79,6 +79,15 @@ costruzione, coerente con la lezione già pagata dalla piattaforma sulla signifi
 delle candele, quindi si ricalcola invece di essere salvato (nessuna migrazione, nessuno stato da
 tenere allineato); e il pannello segnala soltanto, come `StrategyDecayMonitor`.
 
+**Segnalazione anche senza aprire questa pagina** (`FactorDriftWorker`, `Services/Alpha/FactorDriftMonitor.cs`):
+un job periodico calcola la deriva sulle serie della watchlist e tiene una fotografia **in memoria**;
+gli allarmi compaiono in **Home**, accanto al widget di decadimento-strategia, con link a questo
+pannello. Config in `appsettings`: `FactorDrift:Enabled` (default true), `IntervalHours` (12),
+`MaxSeries` (5), `MaxCandles` (20000). Monitora **solo gli 8 fattori scritti a mano**, non il
+catalogo Alpha158: 158 fattori × serie × finestre rolling trasformerebbero un monitor in un consumo
+di CPU permanente — chi vuole guardare tutto lo fa su richiesta da qui. Al riavvio la fotografia
+riparte vuota e si ricostruisce al primo giro: costo accettato per non aggiungere schema.
+
 Misura dal vivo (BTC/USDT 1h, 26.929 candele, finestra 2500): **MeanReversion** 0,050 → 0,027 e
 **RSI** −0,049 → −0,029 sono scesi sotto il pavimento; gli altri otto fattori non hanno mai
 superato la soglia in nessun periodo.

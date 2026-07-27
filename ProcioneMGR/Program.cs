@@ -187,6 +187,10 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IAlphaFactorFactory, Pr
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorEvaluator, ProcioneMGR.Services.Alpha.FactorEvaluator>();
 // [D2] Monitor di deriva dei fattori: puro/deterministico come il valutatore, quindi Singleton.
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorDriftAnalyzer, ProcioneMGR.Services.Alpha.FactorDriftAnalyzer>();
+// Fotografia in memoria + job che la aggiorna: senza, l'alert vivrebbe solo per chi apre il
+// pannello. Nessuna azione automatica, solo segnalazione (PRD §5e).
+builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.FactorDriftSnapshot>();
+builder.Services.AddHostedService<ProcioneMGR.Services.Alpha.FactorDriftWorker>();
 // [C4] Etichettatura triple-barrier + meta-labeling: puri e deterministici, quindi Singleton.
 builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.ITripleBarrierLabeler, ProcioneMGR.Services.ML.Labeling.TripleBarrierLabeler>();
 builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.IMetaLabeler, ProcioneMGR.Services.ML.Labeling.MetaLabeler>();
