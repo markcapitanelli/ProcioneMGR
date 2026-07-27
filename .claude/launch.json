@@ -40,15 +40,15 @@
       "port": 5199
     },
     {
-      "_comment": "Come procione-reale ma su porta 5210, per il worktree del filone D (scoperta pattern). Serve perche' il 2026-07-27 la 5199 era gia' occupata da un'istanza del worktree roadmap-b1-b2-8649ea: due worktree diversi sulla stessa porta sono esattamente l'incidente descritto sopra per la 5256. Regola che ne discende: ogni worktree che va verificato col login reale si prende la SUA porta.",
-      "name": "procione-d",
+      "_comment": "L'UNICA app da tenere accesa dal consolidamento del 2026-07-27: esegue il REPO PRINCIPALE sulla 5199 con percorso ASSOLUTO. Il percorso assoluto e' il punto: cosi' il profilo lancia sempre master anche se invocato dalla cartella di un worktree, che e' esattamente l'ambiguita' che quel giorno aveva prodotto due istanze diverse (worktree roadmap-b1-b2 sulla 5199 e worktree filone-D sulla 5210) e, prima ancora, l'incidente della 5256 descritto sopra. Preferire questo a procione-reale quando si lavora da un worktree; procione-reale resta valido se il terminale e' gia' nel repo principale.",
+      "name": "procione-main",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [
         "-NoProfile",
         "-Command",
-        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5210'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-launch-profile -c Release"
+        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project 'C:/Users/proci/Desktop/ProgettoP/ProcioneMGR/ProcioneMGR.csproj' --no-launch-profile -c Release"
       ],
-      "port": 5210
+      "port": 5199
     }
   ]
 }
