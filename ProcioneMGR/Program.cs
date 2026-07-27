@@ -187,6 +187,9 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IAlphaFactorFactory, Pr
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorEvaluator, ProcioneMGR.Services.Alpha.FactorEvaluator>();
 // [D2] Monitor di deriva dei fattori: puro/deterministico come il valutatore, quindi Singleton.
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorDriftAnalyzer, ProcioneMGR.Services.Alpha.FactorDriftAnalyzer>();
+// [C4] Etichettatura triple-barrier + meta-labeling: puri e deterministici, quindi Singleton.
+builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.ITripleBarrierLabeler, ProcioneMGR.Services.ML.Labeling.TripleBarrierLabeler>();
+builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.IMetaLabeler, ProcioneMGR.Services.ML.Labeling.MetaLabeler>();
 
 // --- Formulaic alpha mining (programmazione genetica, C# puro). Rif. docs/archive/ROADMAP-QLIB.md §1.7. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.AlphaMining.GeneticAlphaMiner>();
