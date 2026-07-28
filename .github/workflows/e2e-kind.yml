@@ -72,20 +72,28 @@ jobs:
       - name: Segreti effimeri
         run: |
           CONN="Host=postgres.procionemgr-db.svc.cluster.local;Port=5432;Database=procionemgr;Username=procione;Password=e2e-usa-e-getta"
+          # Il nome della CHIAVE è il nome della variabile d'ambiente: i Deployment usano `envFrom`,
+          # che proietta le chiavi del Secret così come sono. Chiamarla `postgres-conn` come il
+          # Secret produce un pod che parte e muore con "Connection string 'PostgresConnection' non
+          # trovata" — trovato al quarto giro reale del workflow. Stessi nomi di
+          # scripts/k8s-postgres-secret.ps1, che è la fonte di verità.
           for ns in procionemgr-ingestion procionemgr-ml procionemgr-trading procionemgr-ui; do
             kubectl -n "$ns" create secret generic postgres-conn \
-              --from-literal=postgres-conn="$CONN" --dry-run=client -o yaml | kubectl apply -f -
+              --from-literal=ConnectionStrings__PostgresConnection="$CONN" \
+              --dry-run=client -o yaml | kubectl apply -f -
           done
           # La master key cifra le credenziali degli exchange. In CI non ne esiste nessuna — il
           # database nasce vuoto e muore col cluster — ma il servizio la pretende all'avvio e
           # `dotnet ef` la pretende a design-time: senza, il DbContext non si costruisce nemmeno.
           # Chiave usa-e-getta, generata a ogni giro: non protegge nulla e non deve sembrare che lo
           # faccia.
+          # Stessi nomi di chiave di scripts/k8s-trading-secret.ps1.
           MK="$(head -c 32 /dev/urandom | base64)"
           for ns in procionemgr-trading procionemgr-ui; do
             kubectl -n "$ns" create secret generic trading-secrets \
-              --from-literal=grpc-shared-secret=e2e-usa-e-getta \
+              --from-literal=ConnectionStrings__PostgresConnection="$CONN" \
               --from-literal=Security__MasterKey="$MK" \
+              --from-literal=Trading__GrpcSharedSecret=e2e-usa-e-getta \
               --dry-run=client -o yaml | kubectl apply -f -
           done
           echo "MASTER_KEY_E2E=$MK" >> "$GITHUB_ENV"
