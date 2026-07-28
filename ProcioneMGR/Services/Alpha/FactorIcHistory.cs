@@ -250,23 +250,47 @@ public sealed class FactorIcHistoryStore(IDbContextFactory<ApplicationDbContext>
     }
 
     /// <summary>
-    /// Di tutte le ampiezze di finestra presenti per un fattore tiene SOLO quella della griglia più
-    /// recente. Motivo: l'ampiezza si adatta ai dati disponibili (~10 finestre), quindi crescendo lo
-    /// storico può cambiare — e finestre di ampiezza diversa hanno pavimenti di rumore diversi.
-    /// Mescolarle darebbe una spezzata più lunga e un confronto senza senso; a parità di ampiezza,
-    /// vince la griglia che arriva più avanti nel tempo.
+    /// Ricostruisce una serie di finestre **NON SOVRAPPOSTE**, la più recente per prima e poi a
+    /// ritroso, scartando ciò che si accavalla.
+    ///
+    /// DUE RAGIONI, e la seconda l'ha trovata la pagina viva, non un test.
+    ///
+    /// 1. L'ampiezza si adatta ai dati disponibili, quindi crescendo lo storico può cambiare: finestre
+    ///    di ampiezza diversa hanno pavimenti di rumore diversi (1,96/√n) e mescolarle confronterebbe
+    ///    numeri con soglie diverse. Si tiene la sola ampiezza più recente.
+    ///
+    /// 2. **La griglia SI SPOSTA fra un giro e l'altro.** Il job carica le ULTIME <c>MaxCandles</c>
+    ///    candele: quando ne arrivano di nuove, l'inizio della fetta scivola in avanti e i confini
+    ///    delle finestre cadono altrove. Le righe dei due giri hanno la stessa ampiezza ma offset
+    ///    diverso, quindi in tabella si accumulano finestre **che si sovrappongono**. Visto dal vivo
+    ///    su ETH/USDT 1h: «18 × 2000» finestre là dove in 20.000 candele ce ne stanno 9. Punti che
+    ///    condividono dati sono correlati per costruzione e fanno sembrare la serie più stabile di
+    ///    quanto è — esattamente ciò che <c>FactorDriftAnalyzer</c> evita usando finestre non
+    ///    sovrapposte, aggirato dalla persistenza a sua insaputa.
+    ///
+    /// La catena si costruisce dalla finestra più recente all'indietro (la parte che interessa di più
+    /// è il presente) tenendo solo chi non tocca la precedente.
     /// </summary>
     private static IReadOnlyList<FactorIcPoint> SelectDominantGrid(IReadOnlyList<FactorIcWindow> rows)
     {
         if (rows.Count == 0) return [];
 
-        var chosen = rows
+        var sameWidth = rows
             .GroupBy(w => w.WindowSize)
             .OrderByDescending(g => g.Max(w => w.WindowEndUtc))
             .ThenByDescending(g => g.Key)
             .First();
 
-        return chosen
+        // Catena all'indietro dalla finestra più recente: si tiene una finestra solo se finisce prima
+        // (o esattamente all'inizio) di quella già tenuta. Greedy dal presente = si conserva sempre
+        // l'ultima misura, che è quella su cui si giudica il "recente".
+        var chain = new List<FactorIcWindow>();
+        foreach (var w in sameWidth.OrderByDescending(w => w.WindowEndUtc))
+        {
+            if (chain.Count == 0 || w.WindowEndUtc <= chain[^1].WindowStartUtc) chain.Add(w);
+        }
+
+        return chain
             .OrderBy(w => w.WindowEndUtc)
             .Select(w => new FactorIcPoint(w.WindowStartUtc, w.WindowEndUtc, w.InformationCoefficient, w.WindowSize))
             .ToList();

@@ -670,6 +670,50 @@ public sealed class FactorIcHistoryStoreTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task WindowsFromDifferentRounds_AreNeverReturnedOverlapping()
+    {
+        // Difetto trovato guardando la pagina viva: «18 × 2000» finestre là dove in 20.000 candele ce
+        // ne stanno 9. Il job carica le ULTIME N candele, quindi quando ne arrivano di nuove l'inizio
+        // della fetta scivola e i confini cadono altrove: due giri scrivono finestre della stessa
+        // ampiezza ma sfalsate, che in tabella si accumulano SOVRAPPOSTE. Punti che condividono dati
+        // sono correlati per costruzione e fanno sembrare la serie più stabile di quanto è — cioè
+        // esattamente ciò che l'analizzatore evita usando finestre non sovrapposte.
+        var (store, _) = await BuildAsync();
+
+        // Primo giro: finestre [0,1], [1,2], [2,3] giorni.
+        await store.SaveAsync("BTC/USDT", "1h", 1, [ReportWith("Momentum", 500, 3, 0.05)], DateTime.UtcNow);
+
+        // Secondo giro, griglia sfalsata di mezza giornata: [0.5,1.5], [1.5,2.5], [2.5,3.5].
+        var shifted = new FactorDriftReport("Momentum", "Momentum", 0.02, 0.02, 0.02, 0.04,
+            FactorDriftStatus.Stable, "…",
+            Enumerable.Range(0, 3)
+                .Select(i => new FactorIcPoint(
+                    Origin.AddDays(i).AddHours(12), Origin.AddDays(i + 1).AddHours(12), 0.02, 500))
+                .ToList());
+        await store.SaveAsync("BTC/USDT", "1h", 1, [shifted], DateTime.UtcNow);
+
+        var series = await store.LoadSeriesAsync("BTC/USDT", "1h", "Momentum");
+
+        Assert.Equal(6, await CountRowsAsync());               // in tabella ci sono tutte
+        Assert.True(series.Count < 6, "la serie restituita non può contenerle tutte: si sovrappongono");
+        for (var i = 1; i < series.Count; i++)
+        {
+            Assert.True(series[i].WindowStartUtc >= series[i - 1].WindowEndUtc,
+                $"finestre sovrapposte: [{series[i - 1].WindowStartUtc:o}, {series[i - 1].WindowEndUtc:o}] e [{series[i].WindowStartUtc:o}, {series[i].WindowEndUtc:o}]");
+        }
+        // La catena parte dal presente: l'ultima misura c'è sempre, perché è quella su cui si giudica
+        // il "recente".
+        Assert.Equal(Origin.AddDays(3).AddHours(12), series[^1].WindowEndUtc);
+    }
+
+    private async Task<int> CountRowsAsync()
+    {
+        var dbFactory = _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        await using var db = await dbFactory.CreateDbContextAsync();
+        return await db.FactorIcWindows.CountAsync();
+    }
+
+    [Fact]
     public async Task LoadSnapshot_ReturnsOnlyTheRequestedSeries()
     {
         var (store, _) = await BuildAsync();
