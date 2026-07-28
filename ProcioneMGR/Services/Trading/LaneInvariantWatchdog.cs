@@ -80,6 +80,57 @@ public sealed class LaneInvariantWatchdog(
 
             await QuarantineLaneAsync(laneId, state, positions.Count, violations, ct);
         }
+
+        await ReportOrphanPositionsAsync(db, ct);
+    }
+
+    /// <summary>Corsie orfane già segnalate: si allerta una volta per corsia, non a ogni tick.</summary>
+    private readonly HashSet<int> _orphanAlerted = [];
+
+    /// <summary>
+    /// Posizioni su corsie che NON ESISTONO PIÙ, cioè con <c>LaneId</c> oltre
+    /// <see cref="TradingLanes.Count"/>. Il ciclo qui sopra non può vederle: itera sulle corsie
+    /// configurate, e una corsia fuori range non è fra quelle.
+    ///
+    /// Trovato dal vivo il 2026-07-28: la corsia 3, rimasta da un assetto precedente a
+    /// `LaneCount=3`, teneva una posizione Paper aperta su DOT/USDT con stop, take profit e
+    /// trailing configurati e nessun motore che li valutasse — <c>CurrentPrice</c> fermo al prezzo
+    /// d'ingresso da un giorno. Il commento del ciclo («uno stato corrotto a corsia ferma non può
+    /// peggiorare, e verrà comunque azzerato dal prossimo StartAsync») non regge per una corsia che
+    /// non può più essere avviata: quel prossimo StartAsync non arriverà mai.
+    ///
+    /// Nessuna azione automatica, stessa filosofia della quarantena: su una posizione che non
+    /// capiamo, chiudere d'ufficio è il gesto irreversibile e quindi quello sbagliato. Si dice, e
+    /// decide un umano.
+    /// </summary>
+    private async Task ReportOrphanPositionsAsync(ApplicationDbContext db, CancellationToken ct)
+    {
+        var laneCount = TradingLanes.Count;
+        var orphans = await db.OpenPositions.AsNoTracking()
+            .Where(p => p.LaneId >= laneCount)
+            .ToListAsync(ct);
+
+        foreach (var group in orphans.GroupBy(p => p.LaneId))
+        {
+            if (!_orphanAlerted.Add(group.Key)) continue;
+
+            var detail = string.Join(", ", group.Select(p =>
+                $"{p.Symbol} {p.Side} {p.Quantity:0.####} @ {p.EntryPrice:0.####} dal {p.OpenedAtUtc:u}"));
+
+            logger.LogCritical(
+                "POSIZIONI ORFANE sulla corsia {Lane}, che non esiste più (LaneCount={Count}): {Detail}. "
+                + "Nessun motore ne valuta stop, target o trailing. Nessuna azione automatica: "
+                + "chiudile o archiviale a mano.",
+                group.Key, laneCount, detail);
+
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(Notifications.NotificationSeverity.Critical,
+                    $"Posizioni orfane sulla corsia {group.Key}",
+                    $"La corsia non esiste più (LaneCount={laneCount}) ma tiene {group.Count()} posizione/i aperte "
+                    + $"che nessun motore sorveglia: {detail}.", ct);
+            }
+        }
     }
 
     private async Task QuarantineLaneAsync(

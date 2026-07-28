@@ -105,6 +105,26 @@ la stessa formula usata per il router di regime dopo C1. Metodo, numeri e limiti
 Lezione da portarsi dietro per B4: un gate va scritto insieme allo **strumento** che lo misura,
 altrimenti resta aperto senza che nessuno sappia dire perché.
 
+### 5.b Nota su B4: il gate è bloccato a monte, non aperto
+
+La lezione di sopra si applica subito. Il gate di B4 chiede «parità dual-read su N settimane» e
+quelle settimane non hanno mai iniziato a contare — ma la causa non è il toggle spento:
+
+- il confronto scatta **solo** se la strategia in valutazione è il Champion e si risolve in una
+  `MlStrategy` (`TradingEngine.FireAndForgetMlComparison`);
+- le tre corsie vive girano `RegimeConditional` e `RsiOversold`;
+- e nel registry **non esiste alcun Champion**: i 53 modelli salvati sono tutti in `Staging`.
+
+Accendere `Ml:Enabled` produrrebbe una metrica ferma a zero che *sembra* un'osservazione in corso.
+È lo stesso inganno del `OK: 1 candele` di B2, in un altro punto della piattaforma, e per questo il
+toggle **non è stato acceso**.
+
+Sbloccare B4 richiede una decisione di prodotto — promuovere un modello a Champion e dedicargli una
+corsia — che sta al proprietario. La domanda *tecnica* sottostante («il binario remoto calcola le
+stesse cose del locale?») è invece separabile e chiudibile offline come B3 e D3: il servizio
+seleziona il modello per `model_id`, che ha precedenza sullo stage, quindi la parità si può misurare
+su un modello `Staging` senza toccare nulla di operativo.
+
 ## 6. Piano di prova
 
 - **Contract test** sui .proto (già esistono i test di composizione DI mutuamente esclusiva);
