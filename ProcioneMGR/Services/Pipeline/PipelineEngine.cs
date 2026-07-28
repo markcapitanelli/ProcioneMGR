@@ -468,6 +468,18 @@ public sealed class PipelineEngine(
                     if (best.DeflatedSharpe is double dsr && double.IsFinite(dsr))
                         pipelineMetrics["BestDeflatedSharpe"] = (decimal)Math.Clamp(dsr, -1e6, 1e6);
                 }
+                // [2026-07-28] L'IMBUTO, cioè DOVE muoiono i candidati. Fino a oggi si registrava
+                // solo "Candidates" e "Survivors": 32 run, 2.049 candidati, zero sopravvissuti, e
+                // nessun modo di sapere se li stesse uccidendo lo Sharpe, il conteggio trade o
+                // l'anti-overfitting. Sono tre diagnosi opposte — un candidato bocciato per «solo 8
+                // trade in holdout» non dice niente sul mercato, dice che la finestra è troppo corta
+                // per la sua frequenza — e distinguerle è il primo passo per capire se «non
+                // consolida mai» sia un fatto o un artefatto.
+                foreach (var (motivo, quanti) in ClassifyRejections(ctx.Validated))
+                {
+                    pipelineMetrics[$"Rejected_{motivo}"] = quanti;
+                }
+
                 // Il PBO è del PANNELLO (comune a tutti i candidati): leggilo anche se non sono
                 // sopravvissuti candidati (un run che filtra tutto ha comunque un PBO informativo).
                 var panelPbo = ctx.Validated.FirstOrDefault(v => v.PanelPbo.HasValue)?.PanelPbo;
@@ -524,4 +536,37 @@ public sealed class PipelineEngine(
         if (ctx.Ensemble is not null) Add("EnsembleAssembly", "EnsembleProposal", ctx.Ensemble);
         if (ctx.Pairs is not null) Add("PairsScreening", "PairScreen", ctx.Pairs);
     }
+
+    /// <summary>
+    /// [2026-07-28] Raggruppa i motivi di scarto in CLASSI, non in stringhe: il motivo per esteso
+    /// contiene il valore misurato («DSR 0,677 ≤ 0,95»), quindi ogni candidato avrebbe una categoria
+    /// propria e il conteggio non direbbe niente. Le classi sono quelle che portano a decisioni
+    /// diverse:
+    ///
+    ///  - <b>SharpeHoldout</b>: il candidato perde davvero fuori campione. Nessuna azione: il gate
+    ///    ha ragione.
+    ///  - <b>ContoTrade</b>: il candidato GUADAGNA ma ha fatto pochi trade nella finestra. Non è un
+    ///    giudizio sul mercato — è la finestra troppo corta per la sua frequenza. Azione possibile:
+    ///    holdout più lungo, o timeframe più veloce.
+    ///  - <b>Dsr</b> / <b>Pbo</b>: guadagna e opera abbastanza, ma non è distinguibile dal miglior
+    ///    risultato che la ricerca produrrebbe per caso. Azione possibile: più dati, o meno tentativi.
+    ///  - <b>Rischio</b>: bocciato dal profilo Monte Carlo.
+    ///  - <b>Errore</b>: il backtest è fallito — non è un verdetto, è un guasto da guardare.
+    /// </summary>
+    internal static IEnumerable<(string Classe, decimal Quanti)> ClassifyRejections(
+        IReadOnlyList<ValidatedCandidate> validated)
+        => validated
+            .Where(v => !v.Survived)
+            .GroupBy(v => v.RejectReason switch
+            {
+                null => "Ignoto",
+                var r when r.StartsWith("Sharpe holdout", StringComparison.Ordinal) => "SharpeHoldout",
+                var r when r.StartsWith("Solo ", StringComparison.Ordinal) => "ContoTrade",
+                var r when r.StartsWith("DSR ", StringComparison.Ordinal) => "Dsr",
+                var r when r.Contains("PBO", StringComparison.OrdinalIgnoreCase) => "Pbo",
+                var r when r.StartsWith("MC ", StringComparison.Ordinal) => "Rischio",
+                var r when r.StartsWith("Backtest fallito", StringComparison.Ordinal) => "Errore",
+                _ => "Altro",
+            })
+            .Select(g => (g.Key, (decimal)g.Count()));
 }

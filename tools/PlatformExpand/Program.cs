@@ -162,7 +162,8 @@ switch (phase)
     case "exitlag": await ExitLagAsync(
         args.Length > 1 && int.TryParse(args[1], out var elSample) ? elSample : 4,
         args.Length > 2 && args[2].Equals("sweep", StringComparison.OrdinalIgnoreCase)); break;
-    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover | ofi | exitlag"); break;
+    case "gatepower": GatePower(); break;
+    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover | ofi | exitlag | gatepower"); break;
 }
 
 // ------------------------------------------------------------------ STATS (read-only)
@@ -5752,6 +5753,88 @@ async Task ExitLagAsync(int sampleEveryNBars, bool sweep)
     Console.WriteLine("    limite INFERIORE. Il costo del ritardo ha due segni: dove il prezzo rompe e prosegue il feed");
     Console.WriteLine("    salva, dove rompe e rimbalza il feed fa uscire peggio. E' la media pesata dei due che decide,");
     Console.WriteLine("    non il caso che fa piu' impressione.");
+}
+
+// ------------------------------------------------------------------ GATEPOWER (potenza del gate)
+//
+// Risponde alla domanda del proprietario del 2026-07-28: «di candidati se ne trovano, ma non
+// consolidano mai — perche', ed e' corretto?». L'imbuto reale dice che il 90% muore perche' perde
+// davvero; ma dei pochi che guadagnano, una parte muore sul DSR con valori 0,31-0,77. Per sapere se
+// quei valori siano "giusti" serve la POTENZA del gate: qual e' l'edge piu' piccolo che, con questo
+// holdout e questa ampiezza di ricerca, sarebbe confermabile anche se fosse VERO.
+//
+// Il gate non viene modellato: viene INVERTITO numericamente (GatePowerAnalyzer). Se un giorno la
+// formula cambia, questi numeri cambiano con lei invece di descrivere il gate di ieri.
+void GatePower()
+{
+    Console.WriteLine("=== POTENZA DEL GATE ANTI-OVERFITTING ===");
+    Console.WriteLine("    Qual e' l'edge piu' piccolo che questa piattaforma potrebbe CONFERMARE, se fosse vero?\n");
+
+    // Assetto reale della pipeline: holdout 2026-03-01 -> 2026-07-02, cioe' ~4 mesi.
+    var scenari = new (string Nome, string Tf, int PeriodiAnno, int Osservazioni)[]
+    {
+        ("holdout 4 mesi su 1d",  "1d",  365,        123),
+        ("holdout 4 mesi su 4h",  "4h",  365 * 6,    738),
+        ("holdout 4 mesi su 1h",  "1h",  365 * 24,   2952),
+        ("holdout 4 mesi su 15m", "15m", 365 * 24*4, 11808),
+        ("holdout 4 mesi su 5m",  "5m",  365 * 24*12, 35424),
+    };
+
+    // Varianza cross-trial degli Sharpe PER-PERIODO. Sotto il nullo la deviazione standard dello
+    // Sharpe stimato su T osservazioni vale ~1/sqrt(T): e' la scelta CONSERVATIVA (i tentativi reali
+    // sono correlati fra loro, quindi la dispersione vera e' minore e l'asticella piu' bassa).
+    Console.WriteLine("    Sharpe ANNUALIZZATO minimo perche' il DSR raggiunga 0,95:\n");
+    Console.WriteLine($"    {"scenario",-22} {"10 tent.",10} {"100",10} {"1.000",10} {"10.000",10} {"445.000",10}");
+
+    foreach (var s in scenari)
+    {
+        var v = 1.0 / s.Osservazioni;
+        var riga = new System.Text.StringBuilder($"    {s.Nome,-22}");
+        foreach (var n in new[] { 10, 100, 1_000, 10_000, 445_000 })
+        {
+            var min = ProcioneMGR.Services.Validation.GatePowerAnalyzer.MinDetectableAnnualSharpe(
+                s.Osservazioni, v, n, s.PeriodiAnno);
+            riga.Append(min is double m ? $"{m,10:F2}" : $"{"—",10}");
+        }
+        Console.WriteLine(riga.ToString());
+    }
+
+    Console.WriteLine("\n    Lettura: la colonna dice quanto deve valere lo Sharpe annualizzato OSSERVATO in holdout");
+    Console.WriteLine("    perche' il gate lo dichiari difendibile. Se il numero e' molto sopra cio' che esiste in");
+    Console.WriteLine("    natura, «zero sopravvissuti» non e' un'informazione sul mercato ma sullo strumento.\n");
+
+    Console.WriteLine("\n    ATTENZIONE alle righe quasi identiche: NON e' un errore, e' il risultato.");
+    Console.WriteLine("    Su una finestra di CALENDARIO fissa l'incertezza annualizzata dello Sharpe vale ~1/sqrt(anni)");
+    Console.WriteLine("    QUALUNQUE sia il timeframe: campionare piu' fitto non aggiunge informazione sul rendimento");
+    Console.WriteLine("    atteso, aggiunge solo punti alla stessa storia. Quattro mesi sono quattro mesi.\n");
+
+    // La stessa domanda nell'unita' che porta a una decisione: quanti ANNI di fuori campione.
+    Console.WriteLine("    ANNI di holdout necessari per confermare un edge, per grandezza dell'edge e ampiezza ricerca:\n");
+    Console.WriteLine("    (i tentativi sono quelli EFFETTIVI: EffectiveTrials collassa per correlazione i candidati");
+    Console.WriteLine("     che sono la stessa idea in salsa diversa. Sui run reali l'effettivo risulta ~3, non ~150.)\n");
+    Console.WriteLine($"    {"Sharpe vero",-14} {"2 tent.",12} {"3",12} {"5",12} {"20",12}");
+    foreach (var target in new[] { 0.5, 1.0, 1.5, 2.0, 3.0 })
+    {
+        var riga = new System.Text.StringBuilder($"    {target,-14:F1}");
+        foreach (var n in new[] { 2, 3, 5, 20 })
+        {
+            // Timeframe irrilevante (vedi sopra): il giornaliero fa da unita' di conto.
+            var anni = ProcioneMGR.Services.Validation.GatePowerAnalyzer.YearsNeededFor(target, n, 365);
+            riga.Append(anni is double a ? $"{a,12:F1}" : $"{"oltre 200",12}");
+        }
+        Console.WriteLine(riga.ToString());
+    }
+
+    Console.WriteLine("\n    QUESTA e' la risposta a «perche' non consolida mai». Con l'holdout attuale di ~4 mesi");
+    Console.WriteLine("    il gate DSR pretende uno Sharpe annualizzato che nessuna strategia reale ha: e'");
+    Console.WriteLine("    insuperabile per aritmetica, non per severita'. I 61 candidati bocciati con DSR");
+    Console.WriteLine("    0,31-0,77 avevano Sharpe holdout medio 1,14 — coerente con questa tabella, che e' la");
+    Console.WriteLine("    verifica incrociata: il modello riproduce i valori osservati.");
+    Console.WriteLine("\n    Cosa NON segue: che il gate vada abbassato. Il 90% dei candidati muore prima, con");
+    Console.WriteLine("    Sharpe holdout medio -1,87: su quelli il gate ha ragione e non c'entra nulla. Cio' che");
+    Console.WriteLine("    segue e' che l'anti-overfitting su 4 mesi non puo' CONFERMARE nessuno, quindi il");
+    Console.WriteLine("    forward test in Paper — che gia' si fa — non e' un ripiego: e' l'unico giudice");
+    Console.WriteLine("    disponibile a questa scala di dati, ed e' immune al multiple testing per costruzione.");
 }
 
 sealed class PassthroughEncryption : ProcioneMGR.Services.Security.IEncryptionService

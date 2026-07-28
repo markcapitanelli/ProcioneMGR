@@ -259,10 +259,33 @@ della modifica scritta quella mattina. Aggiunta la **CronJob mensile `exitlag-mo
 fallisce di proposito se il verdetto di B3 si rovescia: un controllo periodico che si limita a
 stampare finisce in log che nessuno rilegge.
 
-**Poi, in ordine:** chiudere/archiviare la posizione orfana della corsia 3 (il guardiano la segnala
-a ogni giro, e ha ragione) · misura di parità ML offline su un modello `Staging` (chiude la domanda
-tecnica di B4 senza toccare le corsie) · confronto forward-vs-predizione sulle tre corsie (AAVE/XLM
-holdout coerente, DOT dato per perdente dal CPCV) · B5 · A6 · C4/C5.
+**Fatto in serata (2026-07-28), revisione richiesta dal proprietario.** Due cose.
+
+*Integrazione.* Tutto il filone D risultava correttamente in pagina; **le tre cose costruite di corsa
+sui gate no** — la sentinella d'ombra scriveva su una tabella che nessuna query leggeva, l'allarme
+sulle posizioni orfane viveva solo nei log del pod, l'analizzatore del ritardo era raggiungibile solo
+da CLI. È la forma di C4 prima del suo consumo: verde a livello di classe, inesistente a livello di
+prodotto. Chiuso con un pannello unico in `/trading`. Aggiungere il servizio ha fatto **fallire 10
+render test** della pagina, trovati solo eseguendo le prove d'interfaccia.
+
+*Ricerca — perché non consolida mai.* Risposta doppia, in
+[REPORT-PERCHE-NON-CONSOLIDA](REPORT-PERCHE-NON-CONSOLIDA-2026-07-28.md). L'imbuto ricostruito su
+**3.472 candidati**: il 90,5% muore col Sharpe holdout medio a **−1,87** (e lì i gate hanno ragione:
+la fascia «appena sotto soglia» è 88 candidati su 3.472, e lo Sharpe crolla di 2,06 punti dalla
+selezione all'holdout — overfitting della selezione, non gate cattivo). Ma i ~100 che **guadagnano**
+incontrano un gate che sull'holdout di 4 mesi è **insuperabile per aritmetica**: invertendo
+numericamente il DSR, un edge di Sharpe 1,0 richiede **6,2 anni** di fuori campione, uno Sharpe 3 ne
+richiede 0,7. Non è severo, è mal dimensionato rispetto alla finestra — il che rende il **forward
+test in Paper non un ripiego ma l'unico giudice disponibile** a questa scala di dati. In più: il gate
+dei 10 trade butta via **232 candidati che guadagnano** (Sharpe +1,01), il 70% di quelli che passano
+il gate di Sharpe; e la ricerca spende il **4,4%** dello sforzo sui timeframe (5m/15m) che sono
+l'obiettivo dichiarato.
+
+**Poi, in ordine:** spostare la ricerca su 5m/15m (dove il gate del conteggio trade non morde e dove
+si vuole operare) · rendere il gate dei trade relativo alla frequenza invece che assoluto ·
+chiudere/archiviare la posizione orfana della corsia 3 · misura di parità ML offline su un modello
+`Staging` (chiude la domanda tecnica di B4 senza toccare le corsie) · confronto
+forward-vs-predizione sulle tre corsie · B5 · A6 · C4/C5.
 
 *Il carry Paper resta ON (unica classe con edge misurato positivo). Il router di regime resta in
 osservazione per misura (esito C1.b), non per prudenza.*
