@@ -356,4 +356,64 @@ public class BitgetClientTests
         Assert.Equal(0.04m, res.FilledQuantity);
         Assert.Equal(3, handler.RequestedUrls.Count); // place + 2 lookup, non di più
     }
+
+    // --- Errore 40034 sulla demo futures: il messaggio più insidioso di Bitget ------------------
+    //
+    // La demo ("paptrading") simula solo alcuni contratti major. Su un simbolo non simulato l'API
+    // risponde "40034 ... does not exist", che alla lettera dice "questo simbolo non esiste" — e si
+    // finisce a cercare un errore di mapping che non c'è. Qui si verifica che la traduzione avvenga
+    // dove serve e SOLO dove serve.
+
+    [Theory]
+    [InlineData("code=40034, msg=The symbol does not exist")]
+    [InlineData("Parameter SUIUSDT does not exist")]
+    public void DemoSymbolHint_OnTestnet_ExplainsThatTheDemoSimulatesFewContracts(string exchangeError)
+    {
+        var hint = BitgetClient.DemoSymbolHint(exchangeError, "SUI/USDT", testnet: true);
+
+        Assert.NotNull(hint);
+        Assert.Contains("SUI/USDT", hint);
+        Assert.Contains("demo", hint, StringComparison.OrdinalIgnoreCase);
+        // L'errore originale resta in coda: la diagnosi non si perde nella riscrittura.
+        Assert.Contains(exchangeError, hint);
+    }
+
+    [Fact]
+    public void DemoSymbolHint_OnLive_LeavesTheErrorAlone()
+    {
+        // In Live lo stesso codice significa DAVVERO simbolo inesistente: riscriverlo sarebbe
+        // fuorviante all'incontrario.
+        const string error = "code=40034, msg=The symbol does not exist";
+
+        Assert.Equal(error, BitgetClient.DemoSymbolHint(error, "SUI/USDT", testnet: false));
+    }
+
+    [Fact]
+    public void DemoSymbolHint_OnAnyOtherError_ChangesNothing()
+    {
+        const string error = "code=40762, msg=The order size is greater than the max open size";
+
+        Assert.Equal(error, BitgetClient.DemoSymbolHint(error, "BTC/USDT", testnet: true));
+        Assert.Null(BitgetClient.DemoSymbolHint(null, "BTC/USDT", testnet: true));
+    }
+
+    [Fact]
+    public async Task PlaceFuturesOrderAsync_OnDemoWithUnsupportedSymbol_ReturnsTheExplainedError()
+    {
+        // Il percorso vero, non solo la funzione: l'errore deve arrivare tradotto fino al chiamante.
+        var handler = new FakeHandler(HttpStatusCode.OK,
+            """{"code":"40034","msg":"Parameter SUIUSDT does not exist","data":null}""");
+        var client = new BitgetClient(new HttpClient(handler), NullLogger<BitgetClient>.Instance);
+
+        var res = await client.PlaceFuturesOrderAsync(new PlaceOrderRequest
+        {
+            Symbol = "SUI/USDT", Side = "BUY", Type = "MARKET", Quantity = 1m,
+            ClientOrderId = "cid-demo", Credentials = Creds,   // Creds è testnet
+        }, reduceOnly: false);
+
+        Assert.False(res.Success);
+        Assert.NotNull(res.Error);
+        Assert.Contains("demo", res.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SUI/USDT", res.Error);
+    }
 }

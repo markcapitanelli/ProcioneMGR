@@ -48,3 +48,9 @@ AppData/
 ProcioneMGR.Ingestion/Properties/
 ProcioneMGR.Ml/Properties/
 ProcioneMGR.Trading/Properties/
+
+# Libri e PDF: in un repository PUBBLICO sono un problema di copyright prima ancora che di peso.
+# Regola scritta dopo il caso reale: la copia del libro di Jansen (28 MB) è finita nel repo e ci
+# resta nella storia git — la pulizia da 7,9 GB a 961 MB non l'ha potuta cancellare.
+docs/*.pdf
+*.pdf
