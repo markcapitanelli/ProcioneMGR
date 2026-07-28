@@ -62,8 +62,35 @@ public sealed class MarketDataSyncService(
             var result = await ingestion.IngestHistoricalDataAsync(
                 series.Exchange.ToString(), series.Symbol, series.Timeframe, from, to, progress: null, ct);
 
-            series.LastSyncUtc = DateTime.UtcNow;
-            series.LastSyncStatus = $"OK: {result.CandlesProcessed} candele";
+            // [B2] L'esito NON si deduce dal numero di candele processate. Su una serie ferma il
+            // cursore ri-chiede l'ultima candela nota, l'exchange la restituisce e l'upsert la
+            // riscrive: "OK: 1 candele" a ogni giro, per sempre — che è come MKR/USDT ha
+            // attraversato dieci mesi dichiarandosi sana. Conta dove è arrivata la serie, non
+            // quante righe ha toccato il giro.
+            var lastAfter = await db.OhlcvData
+                .Where(c => c.Symbol == series.Symbol && c.Timeframe == series.Timeframe)
+                .MaxAsync(c => (DateTime?)c.TimestampUtc, ct);
+
+            var now = DateTime.UtcNow;
+            var tolerance = configuration.GetValue("MarketData:StaleAfterBars", SeriesFreshness.DefaultToleranceBars);
+
+            series.LastSyncUtc = now;
+            series.LastSyncStatus = SeriesFreshness.Describe(
+                series.Timeframe, lastAfter, now, result.CandlesProcessed, tolerance);
+
+            if (SeriesFreshness.IsStale(series.Timeframe, lastAfter, now, tolerance))
+            {
+                // A voce alta: una serie ferma che nessuno nota è un buco nei dati che diventa un
+                // buco nelle decisioni. Il worker non la disabilita da solo — potrebbe essere un
+                // guasto temporaneo dell'exchange, e spegnere una serie è una scelta umana.
+                logger.LogWarning(
+                    "Serie FERMA: {Symbol} {Timeframe} su {Exchange} — ultima candela {Last}, {Behind} barre indietro. "
+                    + "La sync riesce ma non porta dati nuovi: simbolo delistato, rinominato o sospeso?",
+                    series.Symbol, series.Timeframe, series.Exchange,
+                    lastAfter?.ToString("u") ?? "nessuna",
+                    SeriesFreshness.BarsBehind(series.Timeframe, lastAfter, now)?.ToString() ?? "?");
+            }
+
             await db.SaveChangesAsync(ct);
             return (int)result.CandlesProcessed;
         }

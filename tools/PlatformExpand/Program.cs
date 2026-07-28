@@ -159,7 +159,10 @@ switch (phase)
     case "ofi": await OfiAsync(
         args.Length > 1 ? args[1] : "BTCUSDT,ETHUSDT,SOLUSDT",
         args.Length > 2 && int.TryParse(args[2], out var ofiDays) ? ofiDays : 30); break;
-    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover | ofi"); break;
+    case "exitlag": await ExitLagAsync(
+        args.Length > 1 && int.TryParse(args[1], out var elSample) ? elSample : 4,
+        args.Length > 2 && args[2].Equals("sweep", StringComparison.OrdinalIgnoreCase)); break;
+    default: Console.WriteLine($"Fase sconosciuta '{phase}'. Usa: stats | ingest | ingest1m | costprofile | expand2 | hunt | discover | ofi | exitlag"); break;
 }
 
 // ------------------------------------------------------------------ STATS (read-only)
@@ -3127,6 +3130,31 @@ async Task CoverageAsync()
     }
     if (flagged == 0) Console.WriteLine("      nessuna: tutte le serie sono dense.");
 
+    // --- Freschezza (B2) ---------------------------------------------------------------------
+    // La copertura qui sopra misura le candele presenti sull'intervallo [prima, ultima] della serie
+    // STESSA: una serie che ha smesso di avanzare ha copertura 100% del proprio passato e passa
+    // indisturbata. E' la cecita' che ha lasciato MKR/USDT dichiararsi sana per dieci mesi. Il
+    // riferimento giusto e' ADESSO, l'unico che non si sposta insieme al guasto.
+    Console.WriteLine("\n    Serie ABILITATE ferme (ultima candela troppo indietro rispetto a ora):");
+    var nowUtc = DateTime.UtcNow;
+    var tracked = await db.TrackedSeries.AsNoTracking().Where(s => s.Enabled).ToListAsync();
+    var lastBySeries = ohlcv.ToDictionary(x => (x.Symbol, x.Timeframe), x => x.To);
+
+    var stale = 0;
+    foreach (var s in tracked.OrderBy(s => s.Symbol).ThenBy(s => TfMinutes(s.Timeframe)))
+    {
+        var last = lastBySeries.TryGetValue((s.Symbol, s.Timeframe), out var t) ? t : (DateTime?)null;
+        if (!ProcioneMGR.Services.Ingestion.SeriesFreshness.IsStale(s.Timeframe, last, nowUtc)) continue;
+
+        var behind = ProcioneMGR.Services.Ingestion.SeriesFreshness.BarsBehind(s.Timeframe, last, nowUtc);
+        Console.WriteLine($"      {s.Symbol,-11} {s.Timeframe,-4} ultima {(last?.ToString("yyyy-MM-dd HH:mm") ?? "mai"),-16} "
+            + $"{behind?.ToString("N0") ?? "?",8} barre indietro   [{s.LastSyncStatus}]");
+        stale++;
+    }
+    Console.WriteLine(stale == 0
+        ? "      nessuna: tutte le serie abilitate sono fresche."
+        : $"      --- {stale} serie ferme su {tracked.Count} abilitate: il gate B2 non e' verde finche' restano cosi'.");
+
     // --- Metriche sentiment ------------------------------------------------------------------
     var sm = await db.SentimentMetricPoints.AsNoTracking()
         .GroupBy(s => s.Metric)
@@ -5541,6 +5569,189 @@ async Task OfiAsync(string symbolsCsv, int days)
     Console.WriteLine("    proxy trade-flow -- non che l'OFI di Cont-Kukanov-Stoikov sia impossibile. La formula esatta e'");
     Console.WriteLine("    implementata e verificata (OrderFlowImbalance.TopOfBookOfi) e aspetta, se mai servira', le size");
     Console.WriteLine("    di bookTicker che il feed R1 riceve gia' e oggi butta via.");
+}
+
+// ------------------------------------------------------------------ EXITLAG (B3: quanto costa il ritardo)
+//
+// Sblocca il gate B3. Il gate chiedeva di confrontare 'source=tick' e 'source=candle' sulla metrica
+// procione.trading.protective_exits, ma in assetto osservativo i tick sono scartati e quella serie
+// non puo' esistere: il confronto che doveva autorizzare l'accensione ne richiedeva una gia' fatta.
+// Qui la domanda si chiude offline, con le candele fini come surrogato dei tick, sulle corsie VERE e
+// coi loro bracket VERI letti dal DB -- non con parametri inventati per l'occasione.
+async Task ExitLagAsync(int sampleEveryNBars, bool sweep)
+{
+    await using var db = await dbFactory.CreateDbContextAsync();
+
+    // Le candidate come risoluzione fine, dalla piu' fine alla piu' grossa: si prende la prima
+    // strettamente piu' fine della corsia per cui esistono davvero i dati.
+    string[] fineCandidates = ["1m", "5m", "15m", "30m"];
+
+    var lanes = await db.EnsembleStates.AsNoTracking().OrderBy(e => e.LaneId).ToListAsync();
+    var running = await db.TradingEngineStates.AsNoTracking()
+        .Where(s => s.IsRunning).Select(s => s.LaneId).ToListAsync();
+
+    Console.WriteLine("=== EXITLAG (B3): quanto ritardo, e quanto prezzo, costa uscire a barra chiusa ===");
+    Console.WriteLine($"    Corsie in esecuzione: {string.Join(", ", running)} · campionamento ingressi: 1 ogni {sampleEveryNBars} barre\n");
+
+    var analyzer = new ProtectiveExitLagAnalyzer();
+    var verdicts = new List<(int LaneId, string Symbol, double MedianCostBps)>();
+
+    foreach (var lane in lanes)
+    {
+        if (!running.Contains(lane.LaneId))
+        {
+            continue;   // una corsia spenta non ha un'operativita' di cui misurare il ritardo
+        }
+
+        using var doc = JsonDocument.Parse(lane.ConfigurationJson);
+        var root = doc.RootElement;
+        var symbol = root.GetProperty("symbol").GetString()!;
+        var laneTf = root.GetProperty("timeframe").GetString()!;
+        var strat = root.GetProperty("strategies").EnumerateArray().FirstOrDefault();
+
+        decimal Pct(string name) =>
+            strat.ValueKind == JsonValueKind.Object
+            && strat.TryGetProperty(name, out var v)
+            && v.ValueKind == JsonValueKind.Number ? v.GetDecimal() : 0m;
+
+        var sl = Pct("stopLossPercent");
+        var tp = Pct("takeProfitPercent");
+        var trail = Pct("trailingStopPercent");
+
+        Console.WriteLine($"--- Corsia {lane.LaneId}: {symbol} {laneTf} · SL {sl:0.##}% · TP {(tp > 0m ? $"{tp:0.##}%" : "assente")} · trailing {(trail > 0m ? $"{trail:0.##}%" : "assente")}");
+
+        if (sl <= 0m)
+        {
+            Console.WriteLine("    Nessuno stop configurato: non c'e' uscita protettiva di cui misurare il ritardo.\n");
+            continue;
+        }
+
+        var laneStep = ProtectiveExitLagAnalyzer.Step(laneTf);
+        var laneBars = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == symbol && c.Timeframe == laneTf)
+            .OrderBy(c => c.TimestampUtc)
+            .ToListAsync();
+
+        // La risoluzione fine deve coprire lo stesso periodo, altrimenti si confronterebbero due
+        // storie diverse e la differenza sarebbe di campione, non di risoluzione.
+        List<OhlcvData>? fineBars = null;
+        string? fineTf = null;
+        foreach (var cand in fineCandidates)
+        {
+            if (ProtectiveExitLagAnalyzer.Step(cand) >= laneStep) break;
+
+            var bars = await db.OhlcvData.AsNoTracking()
+                .Where(c => c.Symbol == symbol && c.Timeframe == cand)
+                .OrderBy(c => c.TimestampUtc)
+                .ToListAsync();
+
+            if (bars.Count == 0) continue;
+            fineBars = bars;
+            fineTf = cand;
+            break;
+        }
+
+        if (fineBars is null || fineTf is null)
+        {
+            Console.WriteLine($"    Nessuna risoluzione piu' fine di {laneTf} disponibile per {symbol}: non misurabile.\n");
+            continue;
+        }
+
+        // Periodo comune: si tagliano le barre di corsia a dove i dati fini iniziano davvero.
+        var from = fineBars[0].TimestampUtc;
+        laneBars = laneBars.Where(c => c.TimestampUtc >= from).ToList();
+
+        Console.WriteLine($"    Surrogato dei tick: {fineTf} ({fineBars.Count:N0} barre) su {laneBars.Count:N0} barre di corsia dal {from:yyyy-MM-dd}");
+
+        var report = analyzer.Measure(laneBars, fineBars, new ProtectiveExitLagRequest
+        {
+            Symbol = symbol,
+            LaneTimeframe = laneTf,
+            FineTimeframe = fineTf,
+            StopLossPercent = sl,
+            TakeProfitPercent = tp > 0m ? tp : null,
+            TrailingStopPercent = trail > 0m ? trail : null,
+            MaxHoldBars = 96,
+            SampleEveryNBars = sampleEveryNBars,
+        });
+
+        Console.WriteLine($"    Posizioni simulate {report.PositionsSimulated:N0} · uscite su entrambi i percorsi {report.BothExited:N0}"
+            + $" · solo fine {report.OnlyFineExited:N0} · solo candela {report.OnlyCandleExited:N0} · nessuna {report.NeitherExited:N0}");
+        Console.WriteLine($"    Disaccordi sul motivo dell'uscita: {report.ReasonDisagreements:N0}");
+        Console.WriteLine($"    ANTICIPO   mediana {report.MedianLeadSeconds / 60d,8:F1} min · media {report.MeanLeadSeconds / 60d,8:F1} min · p90 {report.P90LeadSeconds / 60d,8:F1} min");
+        Console.WriteLine($"    COSTO RIT. mediana {report.MedianDelayCostBps,8:F1} bps · media {report.MeanDelayCostBps,8:F1} bps · p10 {report.P10DelayCostBps,8:F1} · p90 {report.P90DelayCostBps,8:F1}");
+        Console.WriteLine($"               il ritardo CONVIENE nel {report.AdverseShare * 100d:F1}% dei casi (li' il feed avrebbe fatto uscire peggio)");
+        verdicts.Add((lane.LaneId, symbol, report.MedianDelayCostBps));
+
+        Console.WriteLine($"    SCARTO del fill registrato: mediana {report.MedianCandleFillOptimismBps,8:F1} bps · media {report.MeanCandleFillOptimismBps,8:F1} bps");
+        Console.WriteLine("               (positivo = il motore REGISTRA meglio di quanto sia ottenibile alla chiusura della barra)");
+
+        if (!sweep)
+        {
+            Console.WriteLine();
+            continue;
+        }
+
+        // SENSIBILITA' ALLA LARGHEZZA DELLO STOP. Un verdetto misurato su UN bracket vale per quel
+        // bracket. Lo stop stretto e' proprio il caso in cui il ritardo dovrebbe fare piu' male:
+        // se il segno non cambia nemmeno li', la conclusione regge; se cambia, il verdetto ha una
+        // frontiera e va detta invece che nascosta dietro una media.
+        Console.WriteLine("\n    Sensibilita' alla larghezza dello stop (stesso TP e trailing della corsia):");
+        Console.WriteLine("      SL%     uscite   anticipo med.   costo mediano   costo medio   ritardo conviene");
+        foreach (var slTry in new[] { 0.5m, 1m, 2m, 3m, 5m, 8m, 12m, 17m })
+        {
+            var r = analyzer.Measure(laneBars, fineBars, new ProtectiveExitLagRequest
+            {
+                Symbol = symbol,
+                LaneTimeframe = laneTf,
+                FineTimeframe = fineTf,
+                StopLossPercent = slTry,
+                TakeProfitPercent = tp > 0m ? tp : null,
+                TrailingStopPercent = trail > 0m ? trail : null,
+                MaxHoldBars = 96,
+                SampleEveryNBars = sampleEveryNBars,
+            });
+
+            Console.WriteLine($"      {slTry,5:0.##}  {r.BothExited,7:N0}  {r.MedianLeadSeconds / 60d,10:F1} min  {r.MedianDelayCostBps,10:F1} bps  {r.MeanDelayCostBps,9:F1} bps  {r.AdverseShare * 100d,10:F1}%");
+        }
+        Console.WriteLine();
+    }
+
+    // VERDETTO, e un CODICE DI USCITA. Questa fase e' pensata anche per girare schedulata (CronJob
+    // mensile): un controllo periodico che si limita a stampare finisce in log che nessuno rilegge e
+    // che ruotano via. Uscendo diverso da zero quando il segno si ROVESCIA, il fallimento del Job e'
+    // il segnale — visibile in `kubectl get jobs` e da qualunque monitoraggio, senza nuova
+    // impalcatura. Soglia piccola ma non nulla: una mediana appena sopra lo zero e' rumore, non un
+    // rovesciamento.
+    var flipThresholdBps = ProtectiveExitLagAnalyzer.VerdictFlipThresholdBps;
+    var flipped = verdicts.Where(v => ProtectiveExitLagAnalyzer.IsVerdictFlipped(v.MedianCostBps)).ToList();
+
+    Console.WriteLine("\n=== VERDETTO ===");
+    foreach (var v in verdicts)
+    {
+        var esito = ProtectiveExitLagAnalyzer.IsVerdictFlipped(v.MedianCostBps) ? "ROVESCIATO" : "confermato";
+        Console.WriteLine($"    Corsia {v.LaneId} {v.Symbol,-11} mediana {v.MedianCostBps,8:F1} bps  -> {esito}");
+    }
+
+    if (flipped.Count == 0)
+    {
+        Console.WriteLine($"\n    Verdetto di B3 CONFERMATO su {verdicts.Count} corsie: uscire al tocco resta");
+        Console.WriteLine("    peggio che uscire a barra chiusa. Nessuna azione.");
+    }
+    else
+    {
+        Console.WriteLine($"\n    ATTENZIONE: su {flipped.Count} corsie su {verdicts.Count} il segno si e' ROVESCIATO");
+        Console.WriteLine($"    (mediana sopra +{flipThresholdBps:F0} bps a favore del feed). Il verdetto di B3 e' stato preso");
+        Console.WriteLine("    su dati fino al 2026-07: se questo persiste, DriveProtectiveExits va rimisurato.");
+        Console.WriteLine("    Dettaglio del metodo in docs/REPORT-B3-EXITLAG-2026-07-28.md.");
+        Environment.ExitCode = 2;
+    }
+
+    Console.WriteLine("\n    Lettura onesta: le barre fini sono un surrogato CONSERVATIVO dei tick — la scoperta e'");
+    Console.WriteLine("    datata alla chiusura della barra fine, non al tick esatto, quindi l'anticipo misurato e' un");
+    Console.WriteLine("    limite INFERIORE. Il costo del ritardo ha due segni: dove il prezzo rompe e prosegue il feed");
+    Console.WriteLine("    salva, dove rompe e rimbalza il feed fa uscire peggio. E' la media pesata dei due che decide,");
+    Console.WriteLine("    non il caso che fa piu' impressione.");
 }
 
 sealed class PassthroughEncryption : ProcioneMGR.Services.Security.IEncryptionService

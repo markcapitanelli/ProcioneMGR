@@ -73,7 +73,10 @@ public sealed class RealtimePriceWorker(
         }
 
         logger.LogInformation("Feed real-time avviato per {N} exchange (uscite protettive: {Drive}).",
-            feeds.Count, options.CurrentValue.DriveProtectiveExits ? "guidate dai tick" : "SOLO OSSERVAZIONE");
+            feeds.Count,
+            options.CurrentValue.DriveProtectiveExits
+                ? "guidate dai tick"
+                : "guidate dalle candele — i tick osservano soltanto (sentinella d'ombra B3)");
 
         var tasks = new List<Task>();
         tasks.AddRange(feeds.Select(f => f.RunAsync(stoppingToken)));
@@ -211,11 +214,12 @@ public sealed class RealtimePriceWorker(
     {
         await foreach (var tick in _ticks.Reader.ReadAllAsync(ct))
         {
-            if (!options.CurrentValue.DriveProtectiveExits)
-            {
-                continue; // modalità osservativa: si misura il feed, non gli si dà potere
-            }
-
+            // [B3] I tick vengono SEMPRE instradati, anche in assetto osservativo. Prima venivano
+            // scartati qui, ed è la ragione per cui il gate B3 chiedeva un confronto tick-vs-candela
+            // che nessuno poteva produrre: senza tick al motore non esiste un lato "tick" da
+            // confrontare. È il MOTORE a decidere cosa farne — esegue l'uscita se
+            // DriveProtectiveExits è acceso, altrimenti la osserva soltanto (sentinella d'ombra,
+            // rigorosamente in sola lettura sullo stato delle posizioni).
             foreach (var route in _routes)
             {
                 if (route.Exchange != tick.Exchange

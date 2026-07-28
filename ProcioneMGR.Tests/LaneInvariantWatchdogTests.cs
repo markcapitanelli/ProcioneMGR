@@ -332,4 +332,119 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         var status = await engine.GetStatusAsync();
         Assert.True(status.IsRunning);
     }
+
+    // --- Test: posizioni su corsie che non esistono più ---------------------------------------
+
+    /// <summary>
+    /// Il caso reale trovato a database il 2026-07-28: dopo che le corsie sono state riorganizzate
+    /// e <c>LaneCount</c> è tornato a 3, la corsia 3 è rimasta con una posizione Paper aperta su
+    /// DOT/USDT — stop, take profit e trailing configurati, e nessun motore a valutarli. Il
+    /// <c>CurrentPrice</c> era fermo al prezzo d'ingresso da più di un giorno.
+    ///
+    /// Il ciclo principale del watchdog non poteva vederla: itera su <c>0..LaneCount-1</c>, e una
+    /// corsia fuori range non è fra quelle. Il suo commento — «uno stato corrotto a corsia ferma
+    /// non può peggiorare, e verrà comunque azzerato dal prossimo StartAsync» — non vale per una
+    /// corsia che non può più essere avviata: quel prossimo StartAsync non arriverà mai.
+    /// </summary>
+    [Fact]
+    public async Task Tick_PosizioneSuCorsiaFuoriRange_AllertaSenzaChiudereNulla()
+    {
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            db.OpenPositions.Add(new OpenPosition
+            {
+                LaneId = TradingLanes.Count,        // la corsia appena oltre l'ultima configurata
+                Symbol = "DOT/USDT",
+                Side = OrderSide.Buy,
+                Quantity = 980.39215m,
+                EntryPrice = 0.816m,
+                CurrentPrice = 0.816m,              // mai aggiornato: nessuno la marca a mercato
+                StopLoss = 0.7856448m,
+                TakeProfit = 0.9002112m,
+                TrailingStopPercent = 8m,
+                OpenedInMode = TradingMode.Paper,
+                OpenedAtUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await watchdog.TickAsync(CancellationToken.None);
+
+        var alert = Assert.Single(notifier.Sent);
+        Assert.Equal(ProcioneMGR.Services.Notifications.NotificationSeverity.Critical, alert.Severity);
+        Assert.Contains("orfane", alert.Title);
+
+        await using var check = await dbFactory.CreateDbContextAsync();
+
+        // NESSUNA azione automatica: la posizione resta dov'è, nessuna quarantena inventata su una
+        // corsia che non esiste, nessun motore fermato. Stessa filosofia della difesa inversa —
+        // su uno stato che non capiamo, il gesto irreversibile è quello sbagliato.
+        Assert.Single(await check.OpenPositions.AsNoTracking().ToListAsync());
+        Assert.Empty(await check.LaneQuarantines.AsNoTracking().ToListAsync());
+        Assert.All(engines, e => Assert.Equal(0, e.StopCalls));
+    }
+
+    /// <summary>
+    /// L'allarme non si ripete a ogni tick. Un critico che arriva ogni trenta secondi smette di
+    /// essere letto entro il primo pomeriggio, e allora tanto vale non averlo (stessa regola del
+    /// watchdog di staleness del feed, che allerta una volta per transizione).
+    /// </summary>
+    [Fact]
+    public async Task Tick_PosizioneOrfana_AllertaUnaVoltaSola()
+    {
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, _) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            db.OpenPositions.Add(new OpenPosition
+            {
+                LaneId = TradingLanes.Count, Symbol = "DOT/USDT", Side = OrderSide.Buy,
+                Quantity = 1m, EntryPrice = 1m, CurrentPrice = 1m,
+                OpenedInMode = TradingMode.Paper, OpenedAtUtc = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await watchdog.TickAsync(CancellationToken.None);
+        await watchdog.TickAsync(CancellationToken.None);
+        await watchdog.TickAsync(CancellationToken.None);
+
+        Assert.Single(notifier.Sent);
+    }
+
+    /// <summary>
+    /// Il controllo nuovo non deve inventare allarmi su una piattaforma sana: posizioni sulle
+    /// corsie configurate, per quanto numerose, non sono orfane.
+    /// </summary>
+    [Fact]
+    public async Task Tick_PosizioniSulleCorsieConfigurate_NessunAllarmeDiOrfane()
+    {
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, _) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            for (var lane = 0; lane < TradingLanes.Count; lane++)
+            {
+                db.OpenPositions.Add(new OpenPosition
+                {
+                    LaneId = lane, Symbol = "BTC/USDT", Side = OrderSide.Buy,
+                    Quantity = 0.01m, EntryPrice = 60_000m, CurrentPrice = 60_000m,
+                    OpenedInMode = TradingMode.Paper, OpenedAtUtc = DateTime.UtcNow,
+                });
+            }
+            await db.SaveChangesAsync();
+        }
+
+        await watchdog.TickAsync(CancellationToken.None);
+
+        Assert.Empty(notifier.Sent);
+    }
 }

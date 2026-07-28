@@ -90,6 +90,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[D2] Storia dell'IC per fattore: una riga per finestra, scritta dal FactorDriftWorker.</summary>
     public DbSet<ProcioneMGR.Services.Alpha.FactorIcWindow> FactorIcWindows => Set<ProcioneMGR.Services.Alpha.FactorIcWindow>();
 
+    /// <summary>[B3] Confronti d'ombra fra il tick e la candela sulle uscite protettive.</summary>
+    public DbSet<ProcioneMGR.Services.Trading.ProtectiveExitShadow> ProtectiveExitShadows => Set<ProcioneMGR.Services.Trading.ProtectiveExitShadow>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         // IMPORTANTISSIMO: lasciare che Identity configuri le sue tabelle
@@ -480,6 +483,19 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .HasDatabaseName("IX_FactorIcWindows_Serie_Fattore_Finestra");
             // La lettura tipica è "la storia di questa serie", per il pannello e per l'idratazione.
             e.HasIndex(x => new { x.Symbol, x.Timeframe, x.WindowEndUtc });
+        });
+
+        builder.Entity<ProcioneMGR.Services.Trading.ProtectiveExitShadow>(e =>
+        {
+            e.ToTable("ProtectiveExitShadows");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Symbol).HasMaxLength(32);
+            e.Property(x => x.PositionId).HasMaxLength(64);
+            e.Property(x => x.DetectedReason).HasMaxLength(16);
+            e.Property(x => x.ActualReason).HasMaxLength(16);
+            // La lettura tipica è "gli ultimi confronti di questa corsia" — e, sulla sentinella,
+            // "i peggiori": entrambe passano da qui.
+            e.HasIndex(x => new { x.LaneId, x.ActualExitAtUtc });
         });
 
         // --- Adattamenti specifici PostgreSQL ---

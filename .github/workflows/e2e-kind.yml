@@ -1,0 +1,120 @@
+name: E2E su kind
+
+# [PRD-INTEGRAZIONE-CORE-CALDO §6] "Smoke e2e su kind in CI per la classe di bug che TestServer non
+# vede (h2c, doppio worker, ConfigMap non applicato — tutti trovati solo eseguendo, mai dai test
+# in-process)". Le asserzioni vivono in scripts/e2e-smoke.ps1, che gira contro QUALUNQUE cluster:
+# qui si costruisce il cluster, là si controlla che stia bene. Separati di proposito, così le
+# asserzioni si possono provare contro il cluster kind locale senza passare dalla CI (ed è così che
+# sono state verificate la prima volta, il 2026-07-28).
+#
+# ⚠ SOLO MANUALE finché non è verde almeno una volta. Un workflow nuovo che gira su ogni push e
+# fallisce per ragioni sue insegna a ignorare il rosso, che è il danno peggiore che possa fare un
+# test. Quando questo passa, si aggiunge il trigger `push`.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- Cluster ---------------------------------------------------------------------------
+      # Calico, non il kindnet di default: senza un CNI che le implementi, le NetworkPolicy vengono
+      # accettate dall'API server e IGNORATE in silenzio. Il controllo 7 dello smoke verifica che il
+      # confine sul trading esista davvero, e su kindnet fallirebbe — correttamente, perché lì il
+      # confine non c'è. Stessa scelta di scripts/k8s-bootstrap.ps1.
+      - name: Crea il cluster kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: procionemgr-e2e
+          config: infra/k8s/kind-e2e.yaml
+
+      - name: Installa Calico
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+      # --- Database --------------------------------------------------------------------------
+      # In CI non esiste il Postgres dell'host: se ne mette uno effimero DENTRO il cluster. È una
+      # differenza dichiarata rispetto all'assetto reale (dove il DB sta sull'host), e riguarda solo
+      # il "dove": la classe di bug che questo smoke insegue è di rete e di configurazione, non di
+      # persistenza.
+      - name: Postgres effimero nel cluster
+        run: |
+          kubectl apply -f infra/k8s/namespaces/00-namespaces.yaml
+          kubectl apply -f infra/k8s/ci/postgres-ephemeral.yaml
+          kubectl -n procionemgr-db rollout status deployment/postgres --timeout=300s
+
+      # --- Immagini --------------------------------------------------------------------------
+      - name: Costruisci le immagini
+        run: |
+          for target in procionemgr procionemgr-ingestion procionemgr-ml procionemgr-trading; do
+            docker build --target "$target" -t "ghcr.io/${{ github.repository_owner }}/$target:e2e" .
+          done
+
+      - name: Carica le immagini nel cluster
+        run: |
+          for target in procionemgr procionemgr-ingestion procionemgr-ml procionemgr-trading; do
+            kind load docker-image "ghcr.io/${{ github.repository_owner }}/$target:e2e" --name procionemgr-e2e
+          done
+
+      # --- Segreti e schema ------------------------------------------------------------------
+      # Credenziali FINTE e usa-e-getta, valide solo per il Postgres effimero di sopra: nessun
+      # segreto reale entra mai in CI (il repository è pubblico).
+      - name: Segreti effimeri
+        run: |
+          CONN="Host=postgres.procionemgr-db.svc.cluster.local;Port=5432;Database=procionemgr;Username=procione;Password=e2e-usa-e-getta"
+          for ns in procionemgr-ingestion procionemgr-ml procionemgr-trading procionemgr-ui; do
+            kubectl -n "$ns" create secret generic postgres-conn \
+              --from-literal=postgres-conn="$CONN" --dry-run=client -o yaml | kubectl apply -f -
+          done
+          kubectl -n procionemgr-trading create secret generic trading-secrets \
+            --from-literal=grpc-shared-secret=e2e-usa-e-getta --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n procionemgr-ui create secret generic trading-secrets \
+            --from-literal=grpc-shared-secret=e2e-usa-e-getta --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Applica lo schema
+        run: |
+          dotnet tool install --global dotnet-ef
+          kubectl -n procionemgr-db port-forward svc/postgres 5432:5432 &
+          sleep 8
+          ConnectionStrings__PostgresConnection="Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=e2e-usa-e-getta" \
+            dotnet ef database update --project ProcioneMGR.Migrations.Postgres --startup-project ProcioneMGR
+
+      # --- Deploy ----------------------------------------------------------------------------
+      - name: Applica i manifest
+        run: |
+          for k in shared ingestion ml trading; do
+            kubectl apply -k "infra/k8s/$k"
+          done
+          for d in procionemgr-ingestion/procionemgr-ingestion procionemgr-ml/procionemgr-ml procionemgr-trading/procionemgr-trading; do
+            ns="${d%%/*}"; name="${d#*/}"
+            kubectl -n "$ns" set image "deployment/$name" \
+              "$(kubectl -n "$ns" get deploy "$name" -o jsonpath='{.spec.template.spec.containers[0].name}')=ghcr.io/${{ github.repository_owner }}/$name:e2e"
+            kubectl -n "$ns" rollout status "deployment/$name" --timeout=300s
+          done
+
+      # --- Smoke -----------------------------------------------------------------------------
+      # Lo stesso identico script che si usa a mano sul cluster locale. Se un giorno diverge, il
+      # test in CI smette di dire qualcosa sul cluster vero.
+      - name: Smoke e2e
+        shell: pwsh
+        run: ./scripts/e2e-smoke.ps1
+
+      - name: Diagnostica in caso di fallimento
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide
+          kubectl get events -A --sort-by=.lastTimestamp | tail -50
+          for ns in procionemgr-ingestion procionemgr-ml procionemgr-trading; do
+            echo "=== $ns ==="
+            kubectl -n "$ns" logs --tail=100 --all-containers=true --selector=app.kubernetes.io/part-of=procionemgr || true
+          done

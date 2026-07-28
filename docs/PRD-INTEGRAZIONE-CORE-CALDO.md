@@ -84,15 +84,74 @@ sposta nel core con B3, perché è operatività che deve sopravvivere ai riavvii
 | B0 | Lease advisory per corsia (codice, subito) | test di conflitto verdi | è additivo: nessuno |
 | B1 | Monolite in K8s (baseline di Fase 3 rivalidata) | app su, login sopravvive al riavvio del pod (keyring su PVC), backup/restore provato | si spegne il cluster, si torna a `dotnet run` |
 | B2 | Ingestion remota ON | 7 giorni senza buchi nelle candele (query di copertura già in PlatformExpand `stats`) | toggle a `false` + riavvio |
-| B3 | Trading remoto ON, R1 nel core (prima `DriveProtectiveExits=false`) | **chaos test**: kill del pod guscio con posizioni Paper aperte → protezioni scattano; poi R1 pieno dopo confronto tick-vs-candle nelle metriche | toggle a `false` + spegnere il Deployment trading (mai entrambi vivi) |
+| B3 | Trading remoto ON, R1 nel core (prima `DriveProtectiveExits=false`) | **chaos test** ✓ (2026-07-26) · confronto tick-vs-candle ✓ (2026-07-28, **esito negativo**: vedi nota sotto) | toggle a `false` + spegnere il Deployment trading (mai entrambi vivi) |
 | B4 | ML remoto | parità dual-read su N settimane (`procione.ml.comparisons`) — se non arriva, resta in-process **per misura, non per rinuncia** | toggle |
 | B5 | Ritiro del ramo in-process del motore dal monolite | B3 stabile da ≥ 1 mese; suite adattata | git revert (il ramo è isolato in `TradingServiceCollectionExtensions`) |
+
+### 5.a Nota su B3: il gate come era scritto non si poteva soddisfare
+
+Il gate di B3 chiedeva il confronto `source=tick` contro `source=candle` sulla metrica
+`procione.trading.protective_exits`. In assetto osservativo quel confronto **non è producibile**: i
+tick vengono scartati prima di raggiungere il motore, e la metrica conta solo le uscite realmente
+scattate — quindi `source=tick` compare solo dopo l'accensione che il confronto doveva autorizzare.
+
+La domanda è stata chiusa il 2026-07-28 **offline**, con le candele a risoluzione fine come
+surrogato dei tick (`ProtectiveExitLagAnalyzer`), e la risposta è **no**: uscire al momento del
+tocco è risultato peggiore che uscire alla chiusura della barra su tutte e 24 le configurazioni
+provate. `DriveProtectiveExits` resta quindi `false` **per misura, non in attesa di una misura** —
+la stessa formula usata per il router di regime dopo C1. Metodo, numeri e limiti dichiarati in
+[REPORT-B3-EXITLAG](REPORT-B3-EXITLAG-2026-07-28.md).
+
+Lezione da portarsi dietro per B4: un gate va scritto insieme allo **strumento** che lo misura,
+altrimenti resta aperto senza che nessuno sappia dire perché.
+
+### 5.b Nota su B4: il gate è bloccato a monte, non aperto
+
+La lezione di sopra si applica subito. Il gate di B4 chiede «parità dual-read su N settimane» e
+quelle settimane non hanno mai iniziato a contare — ma la causa non è il toggle spento:
+
+- il confronto scatta **solo** se la strategia in valutazione è il Champion e si risolve in una
+  `MlStrategy` (`TradingEngine.FireAndForgetMlComparison`);
+- le tre corsie vive girano `RegimeConditional` e `RsiOversold`;
+- e nel registry **non esiste alcun Champion**: i 53 modelli salvati sono tutti in `Staging`.
+
+Accendere `Ml:Enabled` produrrebbe una metrica ferma a zero che *sembra* un'osservazione in corso.
+È lo stesso inganno del `OK: 1 candele` di B2, in un altro punto della piattaforma, e per questo il
+toggle **non è stato acceso**.
+
+Sbloccare B4 richiede una decisione di prodotto — promuovere un modello a Champion e dedicargli una
+corsia. La domanda *tecnica* sottostante («il binario remoto calcola le stesse cose del locale?») è
+invece separabile e chiudibile offline come B3 e D3: il servizio seleziona il modello per
+`model_id`, che ha precedenza sullo stage, quindi la parità si può misurare su un modello `Staging`
+senza toccare nulla di operativo.
+
+**Decisione presa il 2026-07-28** (proprietario: «procedi come meglio credi»): **nessun modello
+viene promosso a Champion.** Non per prudenza generica, ma perché promuovere per sbloccare un gate
+sarebbe la stessa cosa che questa giornata ha corretto tre volte — una forma dichiarata che non
+corrisponde alla sostanza. I 53 modelli sono in `Staging` perché non hanno attraversato il percorso
+di promozione che la piattaforma già possiede (`PromotionEvaluator`, `LanePromoter`); sceglierne uno
+a mano per far partire un cronometro metterebbe un modello non validato a decidere su una corsia di
+forward test, e il numero che ne uscirebbe misurerebbe la parità di un'inferenza che non avremmo
+comunque il diritto di eseguire.
+
+Quindi B4 resta **bloccato e dichiarato tale**, e il prossimo passo tecnico è la misura di parità
+offline — che risponde alla domanda del gate senza chiederne il permesso a nessuna corsia.
 
 ## 6. Piano di prova
 
 - **Contract test** sui .proto (già esistono i test di composizione DI mutuamente esclusiva);
 - **Smoke e2e su kind in CI** per la classe di bug che TestServer non vede (h2c, doppio worker,
-  ConfigMap non applicato — tutti trovati solo eseguendo, mai dai test in-process);
+  ConfigMap non applicato — tutti trovati solo eseguendo, mai dai test in-process).
+  **Fatto a metà, 2026-07-28, e la metà fatta è quella che conta.** Le asserzioni vivono in
+  `scripts/e2e-smoke.ps1` e girano contro qualunque cluster: **9 controlli, tutti verdi contro il
+  cluster kind reale**. Il workflow `.github/workflows/e2e-kind.yml` costruisce il cluster in CI ed
+  è per ora **solo manuale** (`workflow_dispatch`): un workflow nuovo che gira su ogni push e
+  fallisce per ragioni sue insegna a ignorare il rosso. Va promosso a `push` dopo il primo verde.
+  Il controllo più prezioso è emerso per caso ed è **negativo**: la porta 8080 del trading — quella
+  di `ConfirmOrder` e `StartLane(LIVE)` — deve risultare IRRAGGIUNGIBILE da un namespace non
+  autorizzato. Una NetworkPolicy senza un CNI che la implementi viene accettata e ignorata in
+  silenzio, ed è già successo su questo cluster con kindnet: l'unico modo di sapere che il confine
+  esiste è provare a passarlo e vedersi rifiutare;
 - **Chaos test manuale scriptato** (B3): kill del guscio, verifica protezioni; kill del core,
   verifica che il guscio lo dichiari (banner UI + notifica) invece di fingere;
 - **Drill di restore** dal backup pg_dump prima di B3.

@@ -206,7 +206,12 @@ public static class TradingServiceCollectionExtensions
                     // [Fase 2] Singleton condiviso fra le corsie: il limite è per definizione
                     // trasversale, e la cache delle correlazioni va condivisa, non replicata.
                     sp.GetRequiredService<Risk.ICorrelatedExposureGuard>(),
-                    sp.GetRequiredService<Regime.ILaneRegimeRouter>()));
+                    sp.GetRequiredService<Regime.ILaneRegimeRouter>(),
+                    // [B3, sentinella] Le opzioni del feed dicono al motore se il tick DECIDE o
+                    // OSSERVA. Registrate solo qui, accanto al motore locale: dove il motore non
+                    // vive, il tick non arriva.
+                    sp.GetRequiredService<IOptionsMonitor<MarketData.RealtimeFeedOptions>>(),
+                    sp.GetRequiredService<IProtectiveExitShadowRecorder>()));
 
                 services.AddSingleton<IHostedService>(sp => new TradingWorker(
                     sp.GetRequiredKeyedService<ITradingEngine>(laneId),
@@ -255,6 +260,9 @@ public static class TradingServiceCollectionExtensions
             services.Configure<MarketData.RealtimeFeedOptions>(
                 configuration.GetSection(MarketData.RealtimeFeedOptions.SectionName));
             services.TryAddSingleton<MarketData.IWebSocketTransportFactory, MarketData.ClientWebSocketTransportFactory>();
+            // [B3] Sentinella d'ombra: vive dove vive il motore, come il feed che la alimenta.
+            services.Configure<ProtectiveExitShadowOptions>(configuration.GetSection("Trading:ProtectiveExitShadow"));
+            services.TryAddSingleton<IProtectiveExitShadowRecorder, ProtectiveExitShadowRecorder>();
             services.TryAddEnumerable(ServiceDescriptor.Singleton<MarketData.IExchangeStreamMapper, MarketData.BinanceStreamMapper>());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<MarketData.IExchangeStreamMapper, MarketData.BitgetStreamMapper>());
             services.AddHostedService<MarketData.RealtimePriceWorker>();

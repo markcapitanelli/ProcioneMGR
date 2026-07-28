@@ -1,0 +1,66 @@
+# [B3] Ri-misura mensile del ritardo delle uscite protettive.
+#
+# Il verdetto di B3 — uscire al tocco è peggio che uscire a barra chiusa — è stato preso il
+# 2026-07-28 su dati fino a quella data (docs/REPORT-B3-EXITLAG-2026-07-28.md). È un verdetto sul
+# comportamento del MERCATO, non su una proprietà del codice: può cambiare, e se cambia va saputo.
+#
+# Perché qui e non nella sentinella dal vivo: la sentinella vede 3-6 uscite protettive al mese sulle
+# tre corsie, troppo poche perché una mediana significhi qualcosa — serve a cogliere il caso singolo
+# fuori scala. È QUESTO job ad avere la potenza statistica: rigira l'intero replay su migliaia di
+# posizioni simulate, con i dati freschi dell'ultimo mese. Se il segno si rovescia, si vede prima
+# qui.
+#
+# ⚠ IL JOB FALLISCE DI PROPOSITO quando il verdetto si rovescia (uscita 2 dalla fase `exitlag`). Un
+# controllo periodico che si limita a stampare finisce in log che nessuno rilegge e che ruotano via;
+# un Job rosso in `kubectl get jobs` è un segnale che si vede senza nuova impalcatura. Rosso qui NON
+# significa guasto: significa "il mercato non si comporta più come quando abbiamo deciso".
+#
+# Read-only: legge corsie, bracket e candele, non scrive nulla. Riusa l'immagine strategyhunter, che
+# è PlatformExpand containerizzato (stesso binario, fase diversa).
+# Prerequisito: Secret postgres-conn nel namespace (vedi infra/k8s/README.md, non committato).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: exitlag-monthly
+  namespace: procionemgr-pipeline
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+    app.kubernetes.io/component: exitlag
+spec:
+  # Primo giorno del mese alle 04:00: dopo il backup notturno, prima che qualcuno guardi.
+  schedule: "0 4 1 * *"
+  concurrencyPolicy: Forbid
+  # Dodici mesi di storia: la serie dei verdetti è essa stessa l'informazione — un rovesciamento
+  # isolato e uno persistente sono due cose diverse, e distinguerle richiede i giri precedenti.
+  successfulJobsHistoryLimit: 12
+  failedJobsHistoryLimit: 12
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600   # 1h: la misura completa gira in minuti, questo è solo il tetto
+      # Nessun ritentativo: un fallimento qui è un VERDETTO, non un errore transitorio, e ritentarlo
+      # lo ripeterebbe identico nascondendolo dietro un secondo tentativo.
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: procionemgr
+            app.kubernetes.io/component: exitlag
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: exitlag
+              image: ghcr.io/markcapitanelli/strategyhunter:latest
+              # Campionamento 1 ingresso ogni 4 barre di corsia, più la sensibilità alla larghezza
+              # dello stop: gli stessi parametri della misura originale, così i numeri di un mese
+              # sono confrontabili con quelli del mese prima e con il report.
+              args: ["exitlag", "4", "sweep"]
+              envFrom:
+                - secretRef:
+                    name: postgres-conn   # fornisce ConnectionStrings__PostgresConnection
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "2"
+                  memory: "2Gi"

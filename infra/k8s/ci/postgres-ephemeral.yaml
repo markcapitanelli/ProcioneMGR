@@ -1,0 +1,89 @@
+# Postgres USA-E-GETTA, solo per lo smoke e2e in CI (.github/workflows/e2e-kind.yml).
+#
+# NON è l'assetto reale: in produzione il database sta sull'host e i pod lo raggiungono via SNAT
+# (vedi kind-config.yaml e il bug del podSubnet di B1). In CI quell'host non esiste, quindi il
+# database va dentro il cluster. È una differenza dichiarata, e riguarda solo il DOVE: la classe di
+# bug che lo smoke insegue — rete del cluster, ConfigMap non applicati, doppio esecutore, confini di
+# NetworkPolicy — non dipende da dove vive Postgres.
+#
+# emptyDir e non un PVC: il cluster muore con il job, e un volume persistente sarebbe una promessa
+# che nessuno mantiene.
+#
+# La password qui è in chiaro ed è giusto così: vale per un database che esiste per otto minuti
+# dentro un cluster effimero, non è raggiungibile da fuori il runner, e il repository è pubblico —
+# metterla in un secret di GitHub darebbe l'impressione che protegga qualcosa.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: procionemgr-db
+  labels:
+    app.kubernetes.io/part-of: procionemgr
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: procionemgr-db
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: procionemgr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: procionemgr
+    spec:
+      containers:
+        - name: postgres
+          # Stessa major del server reale (18.x): un e2e su una major diversa non direbbe nulla
+          # sulle differenze di dialetto che invece hanno già morso una volta (pg_dump 16 contro
+          # server 18.4, B1).
+          image: postgres:18-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: procionemgr
+            - name: POSTGRES_USER
+              value: procione
+            - name: POSTGRES_PASSWORD
+              value: e2e-usa-e-getta
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "procione", "-d", "procionemgr"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: procionemgr-db
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: procionemgr
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
