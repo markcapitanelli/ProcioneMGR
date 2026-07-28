@@ -97,11 +97,11 @@ public interface IFactorIcHistoryStore
     /// caricamento dopo un riavvio del guscio.
     /// </summary>
     Task<IReadOnlyList<FactorDriftSeriesSnapshot>> LoadSnapshotsAsync(
-        FactorDriftConfig config, CancellationToken ct = default);
+        FactorDriftConfig? config, CancellationToken ct = default);
 
     /// <summary>La fotografia registrata di UNA serie (null se il job non l'ha mai calcolata).</summary>
     Task<FactorDriftSeriesSnapshot?> LoadSnapshotAsync(
-        string symbol, string timeframe, FactorDriftConfig config, CancellationToken ct = default);
+        string symbol, string timeframe, FactorDriftConfig? config, CancellationToken ct = default);
 }
 
 /// <inheritdoc cref="IFactorIcHistoryStore"/>
@@ -178,7 +178,7 @@ public sealed class FactorIcHistoryStore(IDbContextFactory<ApplicationDbContext>
     }
 
     public async Task<IReadOnlyList<FactorDriftSeriesSnapshot>> LoadSnapshotsAsync(
-        FactorDriftConfig config, CancellationToken ct = default)
+        FactorDriftConfig? config, CancellationToken ct = default)
     {
         var horizon = Math.Max(1, (config ?? new FactorDriftConfig()).ForwardHorizon);
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -189,7 +189,7 @@ public sealed class FactorIcHistoryStore(IDbContextFactory<ApplicationDbContext>
     }
 
     public async Task<FactorDriftSeriesSnapshot?> LoadSnapshotAsync(
-        string symbol, string timeframe, FactorDriftConfig config, CancellationToken ct = default)
+        string symbol, string timeframe, FactorDriftConfig? config, CancellationToken ct = default)
     {
         var horizon = Math.Max(1, (config ?? new FactorDriftConfig()).ForwardHorizon);
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -200,7 +200,7 @@ public sealed class FactorIcHistoryStore(IDbContextFactory<ApplicationDbContext>
     }
 
     private static IReadOnlyList<FactorDriftSeriesSnapshot> BuildSnapshots(
-        IReadOnlyList<FactorIcWindow> rows, FactorDriftConfig config)
+        IReadOnlyList<FactorIcWindow> rows, FactorDriftConfig? config)
     {
         config ??= new FactorDriftConfig();
         if (rows.Count == 0) return [];
