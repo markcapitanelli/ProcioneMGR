@@ -59,6 +59,105 @@ public sealed class ProtectiveExitDiagnosticsService(
     }
 
     /// <summary>
+    /// Chiude una posizione ORFANA e ne registra il trade. Esiste perché la situazione si ripresenta
+    /// a ogni riduzione di <c>Trading:LaneCount</c>, e finora l'unico rimedio era SQL scritto a mano
+    /// sulle tabelle di trading — cioè la cosa che su queste tabelle non va fatta a mano.
+    ///
+    /// Tre scelte che non sono dettagli:
+    ///
+    ///  1. <b>Rifiuta se la posizione NON è orfana.</b> Il controllo è sul server e non sulla UI: un
+    ///     comando che chiude posizioni sarebbe altrimenti un modo per aggirare il motore su una
+    ///     corsia viva, che è esattamente ciò che l'invariante «un solo esecutore» vieta.
+    ///  2. <b>Chiude al prezzo ATTUALE, non al livello dello stop.</b> Registrare il fill al livello
+    ///     sarebbe la stessa finzione misurata in B3: il motore non c'era, quel prezzo non lo ha
+    ///     ottenuto nessuno. Si chiude adesso, al prezzo di adesso, e il motivo lo dice.
+    ///  3. <b>Scrive un audit con l'utente.</b> Una chiusura fuori dal motore deve lasciare traccia
+    ///     di chi l'ha decisa.
+    /// </summary>
+    public async Task<(bool Ok, string Message)> CloseOrphanAsync(
+        string positionId, string? userId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(positionId)) return (false, "PositionId mancante.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var pos = await db.OpenPositions.FirstOrDefaultAsync(p => p.PositionId == positionId, ct);
+        if (pos is null) return (false, "Posizione non trovata (forse già chiusa).");
+
+        var laneCount = TradingLanes.Count;
+        if (pos.LaneId < laneCount)
+        {
+            // Non è un caso limite: è il confine di sicurezza di questo comando.
+            return (false, $"La corsia {pos.LaneId} ESISTE (LaneCount={laneCount}): questa posizione ha un motore "
+                           + "che la sorveglia e va chiusa da lì, non da qui.");
+        }
+
+        var last = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == pos.Symbol)
+            .OrderByDescending(c => c.TimestampUtc)
+            .Select(c => (decimal?)c.Close)
+            .FirstOrDefaultAsync(ct);
+
+        if (last is not decimal exitPrice || exitPrice <= 0m)
+        {
+            return (false, $"Nessun prezzo recente per {pos.Symbol}: non si chiude a un prezzo che non si conosce.");
+        }
+
+        var now = DateTime.UtcNow;
+        var sign = pos.Side == OrderSide.Buy ? 1m : -1m;
+        var pnl = (exitPrice - pos.EntryPrice) * pos.Quantity * sign;
+
+        db.TradeRecords.Add(new TradeRecord
+        {
+            LaneId = pos.LaneId,
+            PositionId = pos.PositionId,
+            StrategyId = pos.StrategyId,
+            Symbol = pos.Symbol,
+            Side = pos.Side,
+            EntryPrice = pos.EntryPrice,
+            ExitPrice = exitPrice,
+            Quantity = pos.Quantity,
+            Pnl = pnl,
+            PnlPercent = pos.EntryPrice > 0m ? pnl / (pos.Quantity * pos.EntryPrice) * 100m : 0m,
+            OpenedAtUtc = pos.OpenedAtUtc,
+            ClosedAtUtc = now,
+            Duration = now - pos.OpenedAtUtc,
+            ExitReason = "OrphanClosed",
+            Mode = pos.OpenedInMode,
+            Leverage = pos.Leverage,
+        });
+
+        // Contabilità della corsia dismessa, per coerenza: lasciare il PnL scollegato dai trade
+        // produrrebbe lo stesso stato incoerente che LaneInvariantWatchdog esiste per intercettare.
+        var state = await db.TradingEngineStates.FirstOrDefaultAsync(s => s.LaneId == pos.LaneId, ct);
+        if (state is not null)
+        {
+            state.RealizedPnl += pnl;
+            state.AvailableCapital += exitPrice * pos.Quantity;
+            state.UpdatedAtUtc = now;
+        }
+
+        db.TradingAuditLogs.Add(new TradingAuditLog
+        {
+            LaneId = pos.LaneId,
+            TimestampUtc = now,
+            Action = "OrphanPositionClosed",
+            Details = $"{pos.Symbol} {pos.Side} {pos.Quantity:0.####} da {pos.EntryPrice:0.####} a {exitPrice:0.####} "
+                      + $"(PnL {pnl:0.##}); corsia fuori da LaneCount={laneCount}, nessun motore la sorvegliava.",
+            UserId = userId,
+            Mode = pos.OpenedInMode,
+        });
+
+        db.OpenPositions.Remove(pos);
+        await db.SaveChangesAsync(ct);
+
+        logger.LogWarning(
+            "Posizione ORFANA chiusa a mano da {User}: corsia {Lane} {Symbol}, da {Entry} a {Exit}, PnL {Pnl:0.##}.",
+            userId ?? "(ignoto)", pos.LaneId, pos.Symbol, pos.EntryPrice, exitPrice, pnl);
+
+        return (true, $"Chiusa {pos.Symbol} della corsia {pos.LaneId} a {exitPrice:0.####} (PnL {pnl:0.##}).");
+    }
+
+    /// <summary>
     /// Misura del ritardo su richiesta, per la corsia indicata: le candele fini fanno da surrogato
     /// dei tick contro le barre di corsia, coi bracket VERI letti dalla configurazione dell'ensemble.
     /// È lo stesso <see cref="ProtectiveExitLagAnalyzer"/> della fase CLI e del CronJob mensile —

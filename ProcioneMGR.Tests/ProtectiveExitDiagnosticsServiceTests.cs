@@ -132,6 +132,118 @@ public sealed class ProtectiveExitDiagnosticsServiceTests : IAsyncDisposable
         Assert.Empty(await svc.OrphanPositionsAsync());
     }
 
+    // ------------------------------------------------------------------ chiusura delle orfane
+
+    /// <summary>
+    /// IL CONFINE DI SICUREZZA. Il comando deve RIFIUTARE su una corsia che esiste davvero: quella
+    /// posizione ha un motore che la sorveglia, e chiuderla da qui sarebbe un secondo scrittore sulla
+    /// stessa corsia — cioe' l'invariante numero uno del PRD, aggirata da un pulsante di diagnostica.
+    /// Il controllo sta sul SERVER, non sulla UI che nasconde il bottone.
+    /// </summary>
+    [Fact]
+    public async Task Non_chiude_una_posizione_di_una_corsia_che_esiste()
+    {
+        var (svc, db) = await BuildAsync();
+        await using (var ctx = await db.CreateDbContextAsync())
+        {
+            ctx.OpenPositions.Add(new OpenPosition
+            {
+                LaneId = 0, PositionId = "viva", Symbol = "BTC/USDT", Side = OrderSide.Buy,
+                Quantity = 1m, EntryPrice = 100m, OpenedInMode = TradingMode.Paper, OpenedAtUtc = DateTime.UtcNow,
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        var (ok, message) = await svc.CloseOrphanAsync("viva", "admin");
+
+        Assert.False(ok);
+        Assert.Contains("ESISTE", message);
+
+        await using var check = await db.CreateDbContextAsync();
+        Assert.Single(await check.OpenPositions.AsNoTracking().ToListAsync());   // intatta
+        Assert.Empty(await check.TradeRecords.AsNoTracking().ToListAsync());
+    }
+
+    /// <summary>
+    /// Percorso felice: la posizione orfana si chiude AL PREZZO ATTUALE, non al livello dello stop.
+    /// Registrare il fill al livello sarebbe la stessa finzione misurata in B3 — il motore non
+    /// c'era, quel prezzo non lo ha ottenuto nessuno.
+    /// </summary>
+    [Fact]
+    public async Task Chiude_lorfana_al_prezzo_attuale_e_lascia_traccia()
+    {
+        var (svc, db) = await BuildAsync();
+        var oltre = TradingLanes.Count;
+
+        await using (var ctx = await db.CreateDbContextAsync())
+        {
+            ctx.OpenPositions.Add(new OpenPosition
+            {
+                LaneId = oltre, PositionId = "orfana", Symbol = "DOT/USDT", Side = OrderSide.Buy,
+                Quantity = 1000m, EntryPrice = 0.816m, StopLoss = 0.7856m,
+                OpenedInMode = TradingMode.Paper, OpenedAtUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            ctx.TradingEngineStates.Add(new TradingEngineState
+            {
+                LaneId = oltre, Mode = TradingMode.Paper, Symbol = "DOT/USDT",
+                TotalCapital = 10_000m, AvailableCapital = 9_000m, RealizedPnl = 0m,
+                UpdatedAtUtc = DateTime.UtcNow,
+            });
+            // Prezzo attuale 0,766: SOTTO lo stop, che e' proprio il caso reale della corsia 3.
+            ctx.OhlcvData.Add(new OhlcvData
+            {
+                Symbol = "DOT/USDT", Timeframe = "5m", TimestampUtc = DateTime.UtcNow,
+                Open = 0.766m, High = 0.766m, Low = 0.766m, Close = 0.766m, Volume = 1m,
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        var (ok, _) = await svc.CloseOrphanAsync("orfana", "admin");
+        Assert.True(ok);
+
+        await using var check = await db.CreateDbContextAsync();
+        Assert.Empty(await check.OpenPositions.AsNoTracking().ToListAsync());
+
+        var trade = Assert.Single(await check.TradeRecords.AsNoTracking().ToListAsync());
+        Assert.Equal(0.766m, trade.ExitPrice);                 // prezzo attuale, NON lo stop 0,7856
+        Assert.Equal(-50m, trade.Pnl);                          // (0,766 - 0,816) x 1000
+        Assert.Equal("OrphanClosed", trade.ExitReason);
+
+        // Traccia di chi ha deciso: una chiusura fuori dal motore non puo' essere anonima.
+        var audit = Assert.Single(await check.TradingAuditLogs.AsNoTracking()
+            .Where(a => a.Action == "OrphanPositionClosed").ToListAsync());
+        Assert.Equal("admin", audit.UserId);
+
+        // Contabilita' allineata: lasciare il PnL scollegato dai trade e' lo stato incoerente che il
+        // watchdog degli invarianti esiste per intercettare.
+        var state = await check.TradingEngineStates.AsNoTracking().FirstAsync(s => s.LaneId == oltre);
+        Assert.Equal(-50m, state.RealizedPnl);
+    }
+
+    /// <summary>Senza un prezzo recente non si chiude: non si sceglie un prezzo che non si conosce.</summary>
+    [Fact]
+    public async Task Senza_prezzo_recente_non_chiude()
+    {
+        var (svc, db) = await BuildAsync();
+        await using (var ctx = await db.CreateDbContextAsync())
+        {
+            ctx.OpenPositions.Add(new OpenPosition
+            {
+                LaneId = TradingLanes.Count, PositionId = "senzaprezzo", Symbol = "IGNOTO/USDT",
+                Side = OrderSide.Buy, Quantity = 1m, EntryPrice = 1m,
+                OpenedInMode = TradingMode.Paper, OpenedAtUtc = DateTime.UtcNow,
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        var (ok, message) = await svc.CloseOrphanAsync("senzaprezzo", "admin");
+
+        Assert.False(ok);
+        Assert.Contains("prezzo", message, StringComparison.OrdinalIgnoreCase);
+        await using var check = await db.CreateDbContextAsync();
+        Assert.Single(await check.OpenPositions.AsNoTracking().ToListAsync());
+    }
+
     // ------------------------------------------------------------------ misura su richiesta
 
     /// <summary>

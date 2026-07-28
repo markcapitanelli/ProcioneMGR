@@ -547,9 +547,13 @@
                 Restano da quando il numero di corsie è stato ridotto. <strong>Nessuna azione automatica</strong>:
                 su una posizione che non capiamo, il gesto irreversibile è quello sbagliato — la decisione è tua.
             </p>
+            @if (_orphanMessage is not null)
+            {
+                <div class="alert @(_orphanIsError ? "alert-danger" : "alert-success") py-2 small">@_orphanMessage</div>
+            }
             <div class="table-responsive">
                 <table class="table table-sm table-hover mb-0">
-                    <thead><tr><th>Corsia</th><th>Simbolo</th><th>Lato</th><th class="text-end">Quantità</th><th class="text-end">Ingresso</th><th class="text-end">SL</th><th class="text-end">TP</th><th>Aperta il</th></tr></thead>
+                    <thead><tr><th>Corsia</th><th>Simbolo</th><th>Lato</th><th class="text-end">Quantità</th><th class="text-end">Ingresso</th><th class="text-end">SL</th><th class="text-end">TP</th><th>Aperta il</th><th></th></tr></thead>
                     <tbody>
                         @foreach (var p in _orphans)
                         {
@@ -562,6 +566,15 @@
                                 <td class="text-end">@(p.StopLoss?.ToString("0.####") ?? "—")</td>
                                 <td class="text-end">@(p.TakeProfit?.ToString("0.####") ?? "—")</td>
                                 <td>@p.OpenedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                                <td class="text-end">
+                                    <AuthorizeView Roles="@AppRoles.Admin" Context="orphanAuth">
+                                        <button class="btn btn-outline-danger btn-sm"
+                                                @onclick="() => CloseOrphanAsync(p.PositionId)"
+                                                disabled="@_orphanBusy">
+                                            Chiudi al prezzo attuale
+                                        </button>
+                                    </AuthorizeView>
+                                </td>
                             </tr>
                         }
                     </tbody>
@@ -805,6 +818,39 @@
             // Una diagnostica che rompe la pagina da cui si guarda il motore è peggio di una
             // diagnostica assente: si logga e si prosegue.
             Logger.LogWarning(ex, "Caricamento della diagnostica uscite protettive fallito.");
+        }
+    }
+
+    private bool _orphanBusy;
+    private string? _orphanMessage;
+    private bool _orphanIsError;
+
+    /// <summary>
+    /// Chiusura di una posizione orfana. Il servizio RIFIUTA se la corsia esiste davvero: il confine
+    /// sta sul server e non su questo bottone, perché un comando che chiude posizioni sarebbe
+    /// altrimenti un modo per scavalcare il motore di una corsia viva.
+    /// </summary>
+    private async Task CloseOrphanAsync(string positionId)
+    {
+        _orphanBusy = true;
+        StateHasChanged();
+        try
+        {
+            var (ok, message) = await Diagnostics.CloseOrphanAsync(positionId, _userId);
+            _orphanMessage = message;
+            _orphanIsError = !ok;
+            await LoadExitDiagnosticsAsync();
+        }
+        catch (Exception ex)
+        {
+            _orphanMessage = $"Chiusura fallita: {ex.Message}";
+            _orphanIsError = true;
+            Logger.LogError(ex, "Chiusura della posizione orfana {PositionId} fallita.", positionId);
+        }
+        finally
+        {
+            _orphanBusy = false;
+            StateHasChanged();
         }
     }
 
