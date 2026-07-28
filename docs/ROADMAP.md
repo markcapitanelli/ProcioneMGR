@@ -245,9 +245,15 @@ La lezione trasversale, che vale per i gate futuri: **un gate va scritto insieme
 lo misura.** Tre di questi sono rimasti fermi per giorni senza che nessuno potesse dire perché, e in
 due casi lo stato dichiarato era attivamente falso.
 
-**Poi, in ordine:** disabilitare le 7 serie morte (chiude B2) · confronto forward-vs-predizione
-sulle tre corsie (AAVE/XLM holdout coerente, DOT dato per perdente dal CPCV) · promuovere il primo
-Champion se si vuole sbloccare B4, oppure misurarne la parità offline · B5 · A6 · C4/C5.
+**Chiuso in serata (2026-07-28):** le 7 serie morte sono **disabilitate** (221 attive, `coverage`
+dice «tutte fresche»: **gate B2 verde**) · **sentinella d'ombra** costruita e schema applicato
+(B3.b) · su B4 la decisione è **non promuovere alcun Champion**: promuovere per sbloccare un gate
+sarebbe la stessa forma-senza-sostanza corretta tre volte oggi.
+
+**Poi, in ordine:** redeploy dell'immagine di trading (accende la sentinella nel core) · misura di
+parità ML offline su un modello `Staging` (chiude la domanda tecnica di B4 senza toccare le corsie) ·
+confronto forward-vs-predizione sulle tre corsie (AAVE/XLM holdout coerente, DOT dato per perdente
+dal CPCV) · ri-esecuzione periodica di `exitlag` sui dati freschi · B5 · A6 · C4/C5.
 
 *Il carry Paper resta ON (unica classe con edge misurato positivo). Il router di regime resta in
 osservazione per misura (esito C1.b), non per prudenza.*

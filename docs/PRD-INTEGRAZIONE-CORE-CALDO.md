@@ -120,10 +120,22 @@ Accendere `Ml:Enabled` produrrebbe una metrica ferma a zero che *sembra* un'osse
 toggle **non è stato acceso**.
 
 Sbloccare B4 richiede una decisione di prodotto — promuovere un modello a Champion e dedicargli una
-corsia — che sta al proprietario. La domanda *tecnica* sottostante («il binario remoto calcola le
-stesse cose del locale?») è invece separabile e chiudibile offline come B3 e D3: il servizio
-seleziona il modello per `model_id`, che ha precedenza sullo stage, quindi la parità si può misurare
-su un modello `Staging` senza toccare nulla di operativo.
+corsia. La domanda *tecnica* sottostante («il binario remoto calcola le stesse cose del locale?») è
+invece separabile e chiudibile offline come B3 e D3: il servizio seleziona il modello per
+`model_id`, che ha precedenza sullo stage, quindi la parità si può misurare su un modello `Staging`
+senza toccare nulla di operativo.
+
+**Decisione presa il 2026-07-28** (proprietario: «procedi come meglio credi»): **nessun modello
+viene promosso a Champion.** Non per prudenza generica, ma perché promuovere per sbloccare un gate
+sarebbe la stessa cosa che questa giornata ha corretto tre volte — una forma dichiarata che non
+corrisponde alla sostanza. I 53 modelli sono in `Staging` perché non hanno attraversato il percorso
+di promozione che la piattaforma già possiede (`PromotionEvaluator`, `LanePromoter`); sceglierne uno
+a mano per far partire un cronometro metterebbe un modello non validato a decidere su una corsia di
+forward test, e il numero che ne uscirebbe misurerebbe la parità di un'inferenza che non avremmo
+comunque il diritto di eseguire.
+
+Quindi B4 resta **bloccato e dichiarato tale**, e il prossimo passo tecnico è la misura di parità
+offline — che risponde alla domanda del gate senza chiederne il permesso a nessuna corsia.
 
 ## 6. Piano di prova
 
