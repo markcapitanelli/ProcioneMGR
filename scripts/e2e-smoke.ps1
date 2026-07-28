@@ -74,6 +74,18 @@ function KubectlExec {
     & $KubectlExe @full 2>&1
 }
 
+# Stato delle repliche di un Deployment, distinguendo ASSENTE da PRESENTE-A-ZERO. kubectl scrive
+# "NotFound" su stderr, che qui arriva come oggetto errore: un cast a intero su quello esplode con un
+# messaggio che non c'entra nulla con la domanda posta.
+function ReplicaState {
+    param([string]$Deployment, [string]$Ns)
+    $raw = "$(Kubectl get deploy $Deployment -n $Ns -o jsonpath='{.status.readyReplicas}')".Trim()
+    if ($raw -match 'NotFound|not found') { return [pscustomobject]@{ Exists = $false; Ready = 0 } }
+    $ready = 0
+    if (-not [int]::TryParse($raw, [ref]$ready)) { $ready = 0 }   # esiste ma nessuna replica pronta
+    return [pscustomobject]@{ Exists = $true; Ready = $ready }
+}
+
 function Check {
     param([string]$Name, [scriptblock]$Body)
     $script:checks++
@@ -143,6 +155,13 @@ wget -q -S -O /dev/null -T 8 '$urlTradingGrpc' > /tmp/d 2>&1
 grep -m1 'HTTP/' /tmp/d > /tmp/e
 if [ -s /tmp/e ]; then printf 'COMANDI RAGGIUNGIBILI '; cat /tmp/e; else echo 'COMANDI BLOCCATI'; fi
 "@
+
+# I RITORNI A CAPO VANNO TOLTI. Su Windows git consegna questo file con terminatori CRLF, quindi
+# ogni riga dello script qui sopra finirebbe dentro `sh` con un \r in coda: la shell lo considera
+# parte del comando e muore con "unexpected end of file (expecting fi)". Non si vede in CI, dove il
+# checkout e' LF — cioe' e' un difetto che il test in CI non puo' trovare, e che si manifesta solo a
+# chi lo lancia a mano dal proprio repo. Ironico, per uno smoke.
+$probeScript = $probeScript -replace "`r", ""
 
 Write-Host "  ... sonda in-cluster (pod busybox effimero)" -ForegroundColor DarkGray
 $probeName = "e2e-smoke-probe-$(Get-Random -Maximum 99999)"
@@ -235,9 +254,21 @@ Check "Le chiavi di trading-config.env sono nell'ambiente del pod" {
 # prima e meglio da qui: se il motore vive nel servizio di trading, il pod ui NON deve essere vivo
 # con il toggle a false, e viceversa. Si legge l'assetto, non lo si assume.
 Check "Nessuna corsia ha due host di esecuzione" {
-    $uiReplicas = (Kubectl get deploy procionemgr-ui -n "$NsPrefix-ui" -o jsonpath='{.status.readyReplicas}')
-    $uiReplicas = if ([string]::IsNullOrWhiteSpace($uiReplicas)) { 0 } else { [int]$uiReplicas }
-    $tradingReplicas = [int](Kubectl get deploy procionemgr-trading -n "$NsPrefix-trading" -o jsonpath='{.status.readyReplicas}')
+    # Lettura DIFENSIVA: kubectl scrive l'errore "NotFound" su stderr, che la funzione cattura e
+    # restituisce come oggetto — un [int] su quello esplode con un messaggio incomprensibile invece
+    # di dire "il Deployment non c'e'". E "non c'e'" e "c'e' con zero repliche" NON sono la stessa
+    # cosa: la prima e' l'assetto della CI (la ui non viene nemmeno deployata), la seconda e'
+    # l'assetto reale dal 2026-07-26. Confonderle nasconderebbe una ui sparita da un cluster dove
+    # dovrebbe esserci.
+    $uiState = ReplicaState -Deployment procionemgr-ui -Ns "$NsPrefix-ui"
+    $tradingState = ReplicaState -Deployment procionemgr-trading -Ns "$NsPrefix-trading"
+
+    if (-not $tradingState.Exists) {
+        throw "il Deployment procionemgr-trading non esiste: senza motore non c'e' niente da sorvegliare"
+    }
+
+    $uiReplicas = $uiState.Ready
+    $tradingReplicas = $tradingState.Ready
 
     if ($tradingReplicas -gt 1) {
         throw "il servizio di trading ha $tradingReplicas repliche: il motore deve essere replicas:1 (PRD §2)"
@@ -250,7 +281,8 @@ Check "Nessuna corsia ha due host di esecuzione" {
             throw "ui e trading entrambi vivi ma la ui non ha Trading__UseRemoteTrading=true: due motori sulla stessa corsia"
         }
     }
-    "trading $tradingReplicas replica/e, ui $uiReplicas"
+    $uiDetail = if (-not $uiState.Exists) { "ui non deployata" } else { "ui $uiReplicas repliche" }
+    "trading $tradingReplicas replica/e, $uiDetail"
 }
 
 # --- Esito ---------------------------------------------------------------------------------------
