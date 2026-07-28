@@ -21,6 +21,10 @@
 *.bak
 *.bak-shm
 *.bak-wal
+# I backup datati NON erano coperti: "appsettings.json.bak-20260726-015604" non corrisponde a *.bak.
+# Restavano quindi non tracciati ma VISIBILI a `git status`, cioè a un `git add -A` di distanza dal
+# finire in un repo PUBBLICO — e quei file contengono la master key e la stringa di connessione.
+*.bak-*
 backup/
 
 # ---- Local config & secrets ----
@@ -36,3 +40,11 @@ secrets.json
 
 # ---- Misc ----
 *.log
+
+# Artefatti che si materializzano nella radice del repo quando un tool gira con HOME sbagliata
+# (cartella AppData/Local/Temp vuota) e launchSettings.json generati da dotnet nei progetti
+# satellite: rumore in `git status`, che è il modo migliore per non accorgersi di ciò che conta.
+AppData/
+ProcioneMGR.Ingestion/Properties/
+ProcioneMGR.Ml/Properties/
+ProcioneMGR.Trading/Properties/

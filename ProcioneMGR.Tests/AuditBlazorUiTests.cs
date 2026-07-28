@@ -19,21 +19,23 @@ namespace ProcioneMGR.Tests;
 ///     SENZA invocare il servizio di ingestione.
 /// </summary>
 /// <remarks>
-/// NELLA COLLECTION "TradingLanes" per una ragione di isolamento, non di risorse condivise.
-/// <see cref="TradingLanes.Count"/> è uno stato STATICO DI PROCESSO, e <c>TradingLanesCountTests</c>
-/// lo cambia (Configure(8), Configure(5), ResetForTests). Queste prove renderizzano la pagina Trading
-/// costruendo un motore finto per corsia: se il conteggio cambia mentre il componente sta
-/// renderizzando, i pulsanti trovati non sono più quelli attesi e un <c>Single(...)</c> esplode.
-/// Senza attributo, xUnit metteva questa classe in una collection propria e quindi **in parallelo**
-/// con chi muta il contatore.
+/// UN FALLIMENTO INTERMITTENTE CON CAUSA **NON IDENTIFICATA** (2026-07-28), annotato qui perché chi lo
+/// rivedrà non ricominci da zero. <c>Trading_ConfirmPendingOrder_CallsEngine_WithCorrectOrderId</c> è
+/// fallito **una volta** in una suite intera (1832/1833) e non si è più ripresentato in tre suite
+/// successive; non è riproducibile da solo, con la sua classe, né forzando la concorrenza con le
+/// classi sospette.
 ///
-/// Onestà su come è stata trovata: un fallimento isolato di
-/// <c>Trading_ConfirmPendingOrder_CallsEngine_WithCorrectOrderId</c> in una suite intera (1832/1833),
-/// non riproducibile né da solo né lanciando le due classi insieme cinque volte — la finestra è di
-/// microsecondi e si allarga solo sotto carico. Il meccanismo però è documentato e sufficiente; questa
-/// riga lo rimuove. Se il fallimento tornasse, l'ipotesi era sbagliata e va cercata altrove.
+/// **Ipotesi già ESCLUSA, non ripercorrerla**: «<see cref="TradingLanes.Count"/> è uno static di
+/// processo che <c>TradingLanesCountTests</c> cambia mentre questa classe renderizza». Non può
+/// accadere: quella collezione è dichiarata con <c>DisableParallelization = true</c> (vedi
+/// <c>TradingLanesCollection</c>), quindi non gira insieme a nessun'altra. Ci ero cascato, e la
+/// verifica del meccanismo — non la sua plausibilità — l'ha smentita.
+///
+/// **Sospetto residuo, non verificato**: qui si fa <c>Render</c> e subito
+/// <c>FindAll("button").Single(...)</c>. Se sotto carico un render asincrono non fosse ancora
+/// completo, <c>Single</c> troverebbe zero elementi ed esploderebbe esattamente così. La strada, se
+/// tornasse, è <c>WaitForAssertion</c> al posto del click immediato.
 /// </remarks>
-[Collection("TradingLanes")]
 public class AuditBlazorUiTests : BunitContext
 {
     public AuditBlazorUiTests()
