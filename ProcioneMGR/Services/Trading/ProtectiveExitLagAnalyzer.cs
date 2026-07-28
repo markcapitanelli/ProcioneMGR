@@ -1,4 +1,5 @@
 using ProcioneMGR.Data;
+using ProcioneMGR.Services.Exchanges;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Trading.Internal;
 
@@ -31,20 +32,15 @@ namespace ProcioneMGR.Services.Trading;
 public sealed class ProtectiveExitLagAnalyzer
 {
     /// <summary>
-    /// Passo di un timeframe. Deliberatamente SENZA ripiego su un valore di comodo: un passo
-    /// sbagliato falserebbe in silenzio proprio la grandezza che si sta misurando (il tempo).
+    /// Passo di un timeframe, dalla tabella canonica <see cref="Timeframes.Supported"/> — non da
+    /// una seconda copia locale, che potrebbe divergere. Deliberatamente SENZA ripiego su un valore
+    /// di comodo: un passo sbagliato falserebbe in silenzio proprio la grandezza che si sta
+    /// misurando, il tempo.
     /// </summary>
-    public static TimeSpan Step(string timeframe) => timeframe switch
-    {
-        "1m" => TimeSpan.FromMinutes(1),
-        "5m" => TimeSpan.FromMinutes(5),
-        "15m" => TimeSpan.FromMinutes(15),
-        "30m" => TimeSpan.FromMinutes(30),
-        "1h" => TimeSpan.FromHours(1),
-        "4h" => TimeSpan.FromHours(4),
-        "1d" => TimeSpan.FromDays(1),
-        _ => throw new ArgumentOutOfRangeException(nameof(timeframe), timeframe, "Timeframe non riconosciuto."),
-    };
+    public static TimeSpan Step(string timeframe) =>
+        Timeframes.Supported.TryGetValue(timeframe, out var span)
+            ? span
+            : throw new ArgumentOutOfRangeException(nameof(timeframe), timeframe, "Timeframe non riconosciuto.");
 
     /// <summary>
     /// Simula posizioni sulle barre di corsia e le fa vivere DUE VOLTE: una col solo percorso a

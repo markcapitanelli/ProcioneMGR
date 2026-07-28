@@ -3130,6 +3130,31 @@ async Task CoverageAsync()
     }
     if (flagged == 0) Console.WriteLine("      nessuna: tutte le serie sono dense.");
 
+    // --- Freschezza (B2) ---------------------------------------------------------------------
+    // La copertura qui sopra misura le candele presenti sull'intervallo [prima, ultima] della serie
+    // STESSA: una serie che ha smesso di avanzare ha copertura 100% del proprio passato e passa
+    // indisturbata. E' la cecita' che ha lasciato MKR/USDT dichiararsi sana per dieci mesi. Il
+    // riferimento giusto e' ADESSO, l'unico che non si sposta insieme al guasto.
+    Console.WriteLine("\n    Serie ABILITATE ferme (ultima candela troppo indietro rispetto a ora):");
+    var nowUtc = DateTime.UtcNow;
+    var tracked = await db.TrackedSeries.AsNoTracking().Where(s => s.Enabled).ToListAsync();
+    var lastBySeries = ohlcv.ToDictionary(x => (x.Symbol, x.Timeframe), x => x.To);
+
+    var stale = 0;
+    foreach (var s in tracked.OrderBy(s => s.Symbol).ThenBy(s => TfMinutes(s.Timeframe)))
+    {
+        var last = lastBySeries.TryGetValue((s.Symbol, s.Timeframe), out var t) ? t : (DateTime?)null;
+        if (!ProcioneMGR.Services.Ingestion.SeriesFreshness.IsStale(s.Timeframe, last, nowUtc)) continue;
+
+        var behind = ProcioneMGR.Services.Ingestion.SeriesFreshness.BarsBehind(s.Timeframe, last, nowUtc);
+        Console.WriteLine($"      {s.Symbol,-11} {s.Timeframe,-4} ultima {(last?.ToString("yyyy-MM-dd HH:mm") ?? "mai"),-16} "
+            + $"{behind?.ToString("N0") ?? "?",8} barre indietro   [{s.LastSyncStatus}]");
+        stale++;
+    }
+    Console.WriteLine(stale == 0
+        ? "      nessuna: tutte le serie abilitate sono fresche."
+        : $"      --- {stale} serie ferme su {tracked.Count} abilitate: il gate B2 non e' verde finche' restano cosi'.");
+
     // --- Metriche sentiment ------------------------------------------------------------------
     var sm = await db.SentimentMetricPoints.AsNoTracking()
         .GroupBy(s => s.Metric)
