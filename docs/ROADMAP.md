@@ -219,8 +219,34 @@ che li trovasse l'uso:
    l'OFI non si misura da lì (i dati di book non sono nel database) e riporta l'esito col comando per
    rifare la misura.
 
-**Poi, in ordine:** osservazione B3 (tick-vs-candle → R1 pieno) · confronto forward-vs-predizione
-sulle tre corsie (AAVE/XLM holdout coerente, DOT dato per perdente dal CPCV) · B4/B5 · A6 · C4/C5.
+**Fatto il 2026-07-28 (secondo blocco): ripresa del filone B, e il filo conduttore è uno solo.**
+Chiusa la Fase D, il PRD del core caldo è stato ripreso misurandolo invece che rileggendolo — e
+**tre gate su quattro non potevano essere soddisfatti per come erano scritti**, ciascuno perché
+nessuno aveva costruito lo strumento che li misura:
+
+- **B3** chiedeva un confronto tick-vs-candela che l'assetto osservativo non poteva produrre.
+  Chiuso offline, **esito negativo**: uscire al tocco è peggio che uscire a barra chiusa, 24
+  configurazioni su 24 (B3.a).
+- **B2** aveva due strumenti entrambi ciechi alle serie ferme, perché guardavano la serie contro sé
+  stessa. Ora la freschezza si misura contro adesso: **7 serie morte su 228** trovate al primo giro,
+  MKR e TON, entrambe in stato `BREAK` su Binance (B2.a).
+- **B4** non è aperto ma **bloccato**: il dual-read scatta solo su una `MlStrategy` Champion, le
+  corsie vive girano altro e nel registry non esiste alcun Champion. Accendere il toggle avrebbe
+  dato una metrica ferma a zero che *sembra* osservazione (B4.a).
+- **§6 del PRD** (smoke e2e) fatto per la metà che conta: 9 asserzioni verdi contro il cluster vero,
+  fra cui la prova che la NetworkPolicy davanti agli ordini Live è **davvero applicata** e non solo
+  accettata dall'API server.
+- Trovata e chiusa anche una **posizione Paper orfana** sulla corsia 3, che non esiste più da quando
+  `LaneCount` è tornato a 3: stop e trailing configurati e nessun motore a valutarli. Il watchdog non
+  poteva vederla perché itera sulle corsie *configurate*; ora guarda anche fuori.
+
+La lezione trasversale, che vale per i gate futuri: **un gate va scritto insieme allo strumento che
+lo misura.** Tre di questi sono rimasti fermi per giorni senza che nessuno potesse dire perché, e in
+due casi lo stato dichiarato era attivamente falso.
+
+**Poi, in ordine:** disabilitare le 7 serie morte (chiude B2) · confronto forward-vs-predizione
+sulle tre corsie (AAVE/XLM holdout coerente, DOT dato per perdente dal CPCV) · promuovere il primo
+Champion se si vuole sbloccare B4, oppure misurarne la parità offline · B5 · A6 · C4/C5.
 
 *Il carry Paper resta ON (unica classe con edge misurato positivo). Il router di regime resta in
 osservazione per misura (esito C1.b), non per prudenza.*
