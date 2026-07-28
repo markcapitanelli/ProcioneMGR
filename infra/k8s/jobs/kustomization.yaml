@@ -18,7 +18,10 @@ resources:
   - exitlag-cronjob.yaml
 
 images:
+  # [B3, 2026-07-28] Bump NECESSARIO, non cosmetico: la CronJob mensile `exitlag-monthly` invoca una
+  # fase che nel tag precedente non esiste. Con 5ad93ae il job sarebbe partito puntuale e avrebbe
+  # stampato "Fase sconosciuta" con uscita 0 — verde, mensile e inutile.
   - name: ghcr.io/markcapitanelli/strategyhunter
-    newTag: 5ad93ae73c53dc5390a147b3a004f7cbb2210314
+    newTag: 562b359db3733aec8f222d76fad59c18ff7aefdd
   - name: ghcr.io/markcapitanelli/dbbackup
     newTag: 5ad93ae73c53dc5390a147b3a004f7cbb2210314

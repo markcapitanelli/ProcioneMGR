@@ -25,4 +25,8 @@ configMapGenerator:
 
 images:
   - name: ghcr.io/markcapitanelli/procionemgr-trading
-    newTag: 05104828036fc8634b4ad615b9f145b129a676f1
+    # [B3, 2026-07-28] Sentinella d'ombra: in assetto osservativo i tick non vengono piu' scartati
+    # dal worker, il motore li OSSERVA e registra il confronto col percorso a candele. Nessun cambio
+    # di comportamento operativo — le uscite restano guidate dalle candele
+    # (DriveProtectiveExits=false, ora per misura: vedi docs/REPORT-B3-EXITLAG-2026-07-28.md).
+    newTag: 562b359db3733aec8f222d76fad59c18ff7aefdd
