@@ -383,6 +383,63 @@ public class IncrementalIcGateTests
     }
 
     [Fact]
+    public void RanksOfARotatedSeries_AreTheRotatedRanks()
+    {
+        // È l'identità su cui poggia il precalcolo del nullo: se non valesse, il gate ottimizzato
+        // misurerebbe qualcosa di diverso da quello ingenuo — e nessun test di determinismo se ne
+        // accorgerebbe, perché sarebbe deterministicamente sbagliato.
+        var rnd = new Random(17);
+        var values = Enumerable.Range(0, 500).Select(_ => Gauss(rnd)).ToArray();
+        const int shift = 137;
+
+        var rotatedThenRanked = Correlation.Ranks(
+            Enumerable.Range(0, values.Length).Select(i => values[(i + shift) % values.Length]).ToArray(), values.Length);
+
+        var ranked = Correlation.Ranks(values, values.Length);
+        var rankedThenRotated = Enumerable.Range(0, values.Length)
+            .Select(i => ranked[(i + shift) % values.Length]).ToArray();
+
+        Assert.Equal(rankedThenRotated, rotatedThenRanked);
+    }
+
+    [Fact]
+    public void TheOptimisedNull_GivesTheSameNumbersAsTheStraightforwardOne()
+    {
+        // Riferimento indipendente per l'ottimizzazione: il nullo precalcolato deve produrre le stesse
+        // soglie della via lenta (ranghi ricalcolati a ogni giro), altrimenti si è comprata velocità
+        // con un risultato diverso.
+        var (proxy, candidate, forward) = Build(1500, 0.4, 0.2, seed: 71);
+        var controls = new List<IReadOnlyList<double>> { proxy };
+        var rnd = new Random(20260728);
+
+        var report = IncrementalIcGate.Run(proxy,
+            new Dictionary<int, IReadOnlyList<double>> { [1] = forward },
+            [new IcCandidate("c", candidate)],
+            new IncrementalIcConfig { Seed = 20260728, NullDraws = 25, RoundTripCostBps = null });
+
+        // Via lenta, scritta qui a mano con lo stesso seme e la stessa sequenza di spostamenti.
+        var slow = new List<double>();
+        for (var draw = 0; draw < 25; draw++)
+        {
+            var shift = rnd.Next(1, report.Observations);
+            var rotated = Enumerable.Range(0, candidate.Length)
+                .Select(i => candidate[(i + shift) % candidate.Length]).ToArray();
+            slow.Add(Math.Abs(IncrementalIcGate.PartialSpearmanMulti(rotated, forward, controls)));
+        }
+
+        // Stesso percentile interpolato del gate: prendere l'elemento troncato darebbe una differenza
+        // che non c'entra nulla con l'ottimizzazione (ci sono cascato scrivendo questo test).
+        var sorted = slow.OrderBy(v => v).ToList();
+        var rank = 0.99 * (sorted.Count - 1);
+        var lower = (int)Math.Floor(rank);
+        var upper = Math.Min(sorted.Count - 1, lower + 1);
+        var frac = rank - lower;
+        var slowThreshold = sorted[lower] * (1 - frac) + sorted[upper] * frac;
+
+        Assert.Equal(slowThreshold, report.NullBestPercentile, 10);
+    }
+
+    [Fact]
     public void TheGateIsDeterministic_SameInputSameVerdict()
     {
         var (proxy, candidate, forward) = Build(2500, 0.4, 0.25, seed: 8);
