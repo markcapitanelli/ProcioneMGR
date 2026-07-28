@@ -372,6 +372,34 @@
             }
         </div>
     </div>
+
+    @* [D3] Deviazione dichiarata invece che nascosta. Il PRD §5d chiedeva che il confronto fra OFI e
+       proxy trade-flow passasse "dallo stesso /feature-selection". Non passa di qui, e la ragione non
+       è pigrizia: i dati di microstruttura NON stanno nel database — il pilota di raccolta è
+       deliberatamente spento perché la misura ha detto che non conviene accenderlo. Chi arriva qui con
+       quella domanda merita di trovare la risposta, non il silenzio. *@
+    <div class="card mt-3">
+        <div class="card-header">Microstruttura (OFI) — perché non si misura da questa pagina</div>
+        <div class="card-body small text-body-secondary">
+            <p class="mb-2">
+                La domanda «il <strong>book</strong> aggiunge informazione oltre allo sbilanciamento taker
+                che vedi qui?» è stata misurata il <strong>2026-07-28</strong> su 30 giorni × 3 simboli di
+                dump storici Binance, non da qui: i dati di book <strong>non sono nel database</strong>, e
+                la raccolta dal vivo resta spenta proprio perché la misura ha detto che non conviene
+                accenderla.
+            </p>
+            <p class="mb-2">
+                Esito, in una riga: lo sbilanciamento di profondità <strong>aggiunge</strong> informazione
+                (|IC parziale| 0,040-0,046 a 5 minuti, p 0,005, su 3 simboli su 3) ma
+                <strong>non paga il giro</strong> — edge lordo ~0,7 punti base contro 4 di andata e
+                ritorno. Il tape aggregato <em>sotto</em> il minuto non aggiunge nulla.
+            </p>
+            <p class="mb-0">
+                Per rifarla: <code>dotnet run --project tools/PlatformExpand -- ofi BTCUSDT,ETHUSDT,SOLUSDT 30</code>.
+                Metodo, limiti e numeri completi in <code>docs/REPORT-D3-OFI-2026-07-28.md</code>.
+            </p>
+        </div>
+    </div>
 }
 
 @code {

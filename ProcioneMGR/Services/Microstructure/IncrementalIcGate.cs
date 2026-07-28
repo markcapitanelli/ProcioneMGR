@@ -193,24 +193,32 @@ public static class IncrementalIcGate
         foreach (var c in controls) n = Math.Min(n, c.Count);
         if (n < 3) return 0d;
 
+        var basis = BuildBasis(controls, n);
+        var residX = ResidualizeAgainst(Correlation.Ranks(x, n), basis, n);
+        var residY = ResidualizeAgainst(Correlation.Ranks(y, n), basis, n);
+        return Correlation.Pearson(residX, residY);
+    }
+
+    /// <summary>
+    /// Base ortogonale dei controlli (Gram-Schmidt sui ranghi). Estratta perché nel nullo la si
+    /// costruisce **una volta sola** invece che a ogni giro: i controlli non cambiano mai.
+    /// </summary>
+    private static List<double[]> BuildBasis(IReadOnlyList<IReadOnlyList<double>> controls, int n)
+    {
         var basis = new List<double[]>(controls.Count);
         foreach (var c in controls)
         {
             var vector = Correlation.Ranks(c, n);
-            // Ortogonalizzazione contro i controlli già accettati.
             foreach (var b in basis) vector = Residualize(vector, b, n);
             if (Norm(vector, n) > 1e-9) basis.Add(vector); // un controllo ridondante non aggiunge nulla
         }
+        return basis;
+    }
 
-        var residX = Correlation.Ranks(x, n);
-        var residY = Correlation.Ranks(y, n);
-        foreach (var b in basis)
-        {
-            residX = Residualize(residX, b, n);
-            residY = Residualize(residY, b, n);
-        }
-
-        return Correlation.Pearson(residX, residY);
+    private static double[] ResidualizeAgainst(double[] vector, List<double[]> basis, int n)
+    {
+        foreach (var b in basis) vector = Residualize(vector, b, n);
+        return vector;
     }
 
     private static double Norm(double[] v, int n)
@@ -310,18 +318,34 @@ public static class IncrementalIcGate
         var fwd = horizons.ToDictionary(h => h, h => keep.Select(i => forwardByHorizon[h][i]).ToArray());
 
         // --- Nullo del MIGLIORE: stesso spostamento per tutta la famiglia a ogni giro ---
+        //
+        // PRECALCOLO. La versione ingenua rifaceva a ogni giro tutto il lavoro: ranghi dei controlli,
+        // ranghi del rendimento, ranghi del candidato ruotato. Su 43.000 barre × 200 giri × 12 coppie
+        // sono ~14.000 ordinamenti, cioè un quarto d'ora per simbolo. Qui:
+        //  · la base dei controlli e i residui del rendimento non dipendono dal giro → una volta sola;
+        //  · **i ranghi di una serie RUOTATA sono i ranghi ruotati**: il rango dipende solo
+        //    dall'ordine relativo, e una rotazione è una permutazione delle posizioni. Quindi si
+        //    ordina il candidato una volta e nel ciclo si ruota il vettore dei ranghi.
+        // Restano O(n) per giro invece di O(n log n) ripetuto: misurato, 62 secondi contro ~15 minuti
+        // per simbolo. Che i numeri siano gli STESSI non è una speranza: un test confronta questo
+        // nullo con quello ingenuo (ranghi ricalcolati a ogni giro) e pretende la stessa soglia —
+        // un'ottimizzazione che cambia il risultato è un bug, non un'ottimizzazione.
+        var basis = BuildBasis(ctrl, obs);
+        var residY = horizons.ToDictionary(h => h, h => ResidualizeAgainst(Correlation.Ranks(fwd[h], obs), basis, obs));
+        var candRanks = cands.Select(c => Correlation.Ranks(c.Values, obs)).ToList();
+
         var rnd = new Random(config.Seed);
         var nullBest = new List<double>(config.NullDraws);
         for (var draw = 0; draw < config.NullDraws; draw++)
         {
             var shift = rnd.Next(1, obs);
             var best = 0d;
-            foreach (var (_, values) in cands)
+            foreach (var ranks in candRanks)
             {
-                var rotated = Rotate(values, shift);
+                var residX = ResidualizeAgainst(Rotate(ranks, shift), basis, obs);
                 foreach (var h in horizons)
                 {
-                    var ic = Math.Abs(PartialSpearmanMulti(rotated, fwd[h], ctrl));
+                    var ic = Math.Abs(Correlation.Pearson(residX, residY[h]));
                     if (ic > best) best = ic;
                 }
             }

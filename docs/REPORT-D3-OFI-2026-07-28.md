@@ -287,7 +287,7 @@ a orizzonte di minuti. La raccolta permanente resta **spenta**: non serviva acce
 
 ## 7. Test
 
-**49 test nuovi** per D3, più 24 per la persistenza di D2 (suite intera **1820/1820**), suddivisi per livello secondo
+**53 test nuovi** per D3 (49 + 4 aggiunti col consolidamento), più 32 per la persistenza di D2, suddivisi per livello secondo
 [STANDARD-VERIFICA](STANDARD-VERIFICA.md):
 
 | Livello | Cosa |
@@ -302,6 +302,20 @@ a orizzonte di minuti. La raccolta permanente resta **spenta**: non serviva acce
 ```bash
 dotnet run --project tools/PlatformExpand -- ofi BTCUSDT,ETHUSDT,SOLUSDT 30
 ```
+
+**Un minuto a simbolo, non un quarto d'ora** (consolidamento 2026-07-28). La prima versione del nullo
+rifaceva a ogni giro tutto il lavoro — ranghi dei controlli, del rendimento e del candidato ruotato —
+cioè ~14.000 ordinamenti su 43.000 barre per simbolo. Adesso: base dei controlli e residui del
+rendimento calcolati **una volta sola**, e soprattutto l'osservazione che **i ranghi di una serie
+ruotata sono i ranghi ruotati** (il rango dipende solo dall'ordine relativo, e una rotazione è una
+permutazione), quindi nel ciclo non si ordina più niente. Misurato: **62 secondi** contro ~15 minuti,
+con numeri **identici** — e c'è un test che confronta il nullo veloce con quello ingenuo, perché
+un'ottimizzazione che cambia il risultato è un bug, non un'ottimizzazione.
+
+**Perché la misura non vive in `/feature-selection`**, come invece chiedeva il PRD §5d: i dati di
+microstruttura non stanno nel database — non persisterli è la conclusione della misura stessa, non una
+scorciatoia. La pagina però **dichiara la deviazione** e riporta l'esito con il comando qui sopra: chi
+arriva lì con quella domanda trova la risposta invece del silenzio.
 
 La cache dei dump sta fuori dal repo (variabile `PROCIONE_MICROSTRUCTURE_CACHE`, default nella
 temp di sistema): rilanciare non riscarica, e i file restano ispezionabili a mano. Il repo è pubblico
