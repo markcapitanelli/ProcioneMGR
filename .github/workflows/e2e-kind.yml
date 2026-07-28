@@ -84,6 +84,10 @@ jobs:
       - name: Applica lo schema
         run: |
           dotnet tool install --global dotnet-ef
+          # Il restore serve: le immagini sono state costruite da Docker, quindi sul RUNNER non
+          # esiste alcun obj/project.assets.json e `dotnet ef` fallisce con NETSDK1004 prima ancora
+          # di provare a connettersi. Trovato al primo giro reale del workflow.
+          dotnet restore ProcioneMGR.sln
           kubectl -n procionemgr-db port-forward svc/postgres 5432:5432 &
           sleep 8
           ConnectionStrings__PostgresConnection="Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=e2e-usa-e-getta" \
