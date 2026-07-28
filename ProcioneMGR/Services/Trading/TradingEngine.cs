@@ -63,7 +63,13 @@ public sealed class TradingEngine(
     ProcioneMGR.Services.Risk.ICorrelatedExposureGuard? correlatedExposure = null,
     // [Fase 4] Router di regime: filtra QUALI strategie possono operare nel regime corrente.
     // Opzionale e default-spento nelle sue opzioni: assente ⇒ comportamento identico a prima.
-    ProcioneMGR.Services.Regime.ILaneRegimeRouter? regimeRouter = null) : ITradingEngine
+    ProcioneMGR.Services.Regime.ILaneRegimeRouter? regimeRouter = null,
+    // [B3, sentinella] Opzioni del feed real-time e destinatario dei confronti d'ombra. ASSENTI ⇒ il
+    // motore si comporta come prima di questa modifica, cioè esegue le uscite sul tick: è il
+    // comportamento su cui contano backtest e test esistenti, e cambiarlo di default sarebbe un
+    // cambio silenzioso di semantica per ogni chiamante che non sa nulla del feed.
+    IOptionsMonitor<MarketData.RealtimeFeedOptions>? realtimeOptions = null,
+    IProtectiveExitShadowRecorder? shadowRecorder = null) : ITradingEngine
 {
     public int LaneId => laneId;
 
@@ -600,10 +606,81 @@ public sealed class TradingEngine(
             }
 
             var ts = DateTime.SpecifyKind(tsUtc, DateTimeKind.Utc);
+
+            // [B3] Con le uscite NON guidate dai tick, il tick non decide: OSSERVA. Prima di questa
+            // modifica veniva scartato dal worker, e il gate B3 chiedeva un confronto tick-vs-candela
+            // che quindi nessuno poteva produrre.
+            if (realtimeOptions is not null && !realtimeOptions.CurrentValue.DriveProtectiveExits)
+            {
+                ObserveProtectiveExits(price, ts);
+                return;
+            }
+
             await ApplyProtectiveExitsAsync(price, price, price, price, ts, "tick", ct);
         }
         finally { _gate.Release(); }
     }
+
+    /// <summary>
+    /// [B3, sentinella] Rilevazione d'ombra: si guarda se il tick FAREBBE scattare un'uscita, e non
+    /// si fa nient'altro. Il confronto vero e proprio nasce dopo, quando il percorso a candele chiude
+    /// davvero quella posizione (vedi <see cref="CloseAndCountAsync"/>).
+    ///
+    /// RIGOROSAMENTE IN SOLA LETTURA sullo stato della posizione, e in particolare senza toccare
+    /// <c>BestPriceSinceEntry</c>: aggiornarlo col ritmo dei tick sposterebbe il livello di trailing
+    /// del percorso a candele, cioè darebbe al feed esattamente il potere che l'assetto osservativo
+    /// gli nega — dalla porta di servizio e senza che nessun toggle lo dica. Conseguenza dichiarata:
+    /// l'anticipo misurato è un limite INFERIORE, perché con le uscite guidate dai tick anche il
+    /// trailing ratchetterebbe più fine.
+    ///
+    /// Solo la PRIMA rilevazione per posizione: su un mercato che rompe il livello e ci resta, un
+    /// tick al secondo ne produrrebbe migliaia, tutte della stessa uscita.
+    /// </summary>
+    private void ObserveProtectiveExits(decimal price, DateTime ts)
+    {
+        if (shadowRecorder is null) return;
+
+        // Potatura: una posizione chiusa per un motivo NON protettivo (inversione del segnale,
+        // chiusura manuale) non incontrerà mai la sua risoluzione, e la sua rilevazione resterebbe
+        // qui per sempre. Poche voci, controllo banale, nessuna perdita silenziosa di memoria.
+        if (_shadowDetections.Count > 0)
+        {
+            foreach (var orphan in _shadowDetections.Keys
+                         .Where(id => _positions.All(p => p.PositionId != id)).ToList())
+            {
+                _shadowDetections.Remove(orphan);
+            }
+        }
+
+        var isFutures = _state.MarketType == MarketType.Futures;
+
+        foreach (var pos in _positions)
+        {
+            if (_shadowDetections.ContainsKey(pos.PositionId)) continue;
+
+            var exit = Internal.ProtectiveExitEvaluator.EvaluateLiquidation(pos, price, price, isFutures);
+            if (!exit.ShouldClose)
+            {
+                exit = Internal.ProtectiveExitEvaluator.EvaluateStopAndTarget(pos, price, price, price);
+            }
+            if (!exit.ShouldClose) continue;
+
+            _shadowDetections[pos.PositionId] = new ShadowDetection(ts, price, exit.Reason, exit.FillPrice);
+            logger.LogDebug(
+                "Lane {Lane}: ombra R1 — il tick {Price} a {Ts:u} avrebbe fatto scattare {Reason} su {Symbol}.",
+                laneId, price, ts, exit.Reason, pos.Symbol);
+        }
+    }
+
+    /// <summary>Rilevazione d'ombra in attesa che il percorso a candele chiuda la stessa posizione.</summary>
+    private readonly record struct ShadowDetection(DateTime AtUtc, decimal Price, string Reason, decimal FillPrice);
+
+    /// <summary>
+    /// In memoria e non a database: se il core si riavvia si perdono le rilevazioni in volo. È una
+    /// rinuncia dichiarata — raddoppiare lo schema per non perdere una manciata di rilevazioni su
+    /// una sentinella non vale il suo costo, e i confronti COMPLETATI sono persistiti.
+    /// </summary>
+    private readonly Dictionary<string, ShadowDetection> _shadowDetections = [];
 
     /// <summary>
     /// Mark-to-market e applicazione delle uscite protettive a tutte le posizioni aperte della
@@ -656,9 +733,66 @@ public sealed class TradingEngine(
         OpenPosition pos, Internal.ProtectiveExit exit, string source, DateTime ts, CancellationToken ct)
     {
         await ClosePositionAsync(pos, exit.FillPrice, exit.Reason, ts, ct);
-        if (!_positions.Contains(pos))
+        if (_positions.Contains(pos))
         {
-            metrics?.RecordProtectiveExit(source, exit.Reason);
+            return;
+        }
+
+        metrics?.RecordProtectiveExit(source, exit.Reason);
+        await ResolveShadowAsync(pos, exit, source, ts, ct);
+    }
+
+    /// <summary>
+    /// [B3, sentinella] Chiude il confronto: la rilevazione d'ombra su questa posizione incontra
+    /// l'uscita che è scattata davvero, e ne nasce UNA riga.
+    ///
+    /// Il costo del ritardo usa la stessa convenzione di <see cref="ProtectiveExitLagAnalyzer"/> —
+    /// positivo = il feed avrebbe fatto uscire meglio — perché i due numeri devono essere
+    /// confrontabili: la sentinella dal vivo serve proprio a dire se il mercato continua a
+    /// comportarsi come nel replay, e due convenzioni di segno diverse renderebbero il confronto un
+    /// esercizio di traduzione.
+    ///
+    /// Non fa mai fallire la chiusura: la posizione è già chiusa e l'ordine è già andato: un errore
+    /// di osservabilità non deve propagarsi dentro il percorso operativo.
+    /// </summary>
+    private async Task ResolveShadowAsync(
+        OpenPosition pos, Internal.ProtectiveExit exit, string source, DateTime ts, CancellationToken ct)
+    {
+        if (!_shadowDetections.Remove(pos.PositionId, out var detection)) return;
+        if (shadowRecorder is null) return;
+
+        // Se l'uscita è già arrivata dal tick, non c'è ritardo da misurare: i due lati coincidono.
+        if (source == "tick") return;
+
+        try
+        {
+            var isLong = pos.Side == OrderSide.Buy;
+            var diff = isLong
+                ? detection.FillPrice - exit.FillPrice
+                : exit.FillPrice - detection.FillPrice;
+
+            await shadowRecorder.RecordAsync(new ProtectiveExitShadow
+            {
+                LaneId = laneId,
+                Symbol = pos.Symbol,
+                Mode = _state.Mode,
+                PositionId = pos.PositionId,
+                Side = pos.Side,
+                EntryPrice = pos.EntryPrice,
+                DetectedAtUtc = detection.AtUtc,
+                DetectedPrice = detection.Price,
+                DetectedReason = detection.Reason,
+                ShadowFillPrice = detection.FillPrice,
+                ActualExitAtUtc = ts,
+                ActualFillPrice = exit.FillPrice,
+                ActualReason = exit.Reason,
+                LeadSeconds = Math.Max(0d, (ts - detection.AtUtc).TotalSeconds),
+                DelayCostBps = pos.EntryPrice > 0m ? (double)(diff / pos.EntryPrice) * 10_000d : 0d,
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Lane {Lane}: confronto d'ombra non registrato (la chiusura è comunque avvenuta).", laneId);
         }
     }
 

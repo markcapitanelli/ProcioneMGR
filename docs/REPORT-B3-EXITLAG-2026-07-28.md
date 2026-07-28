@@ -120,7 +120,40 @@ misurata e non paga.
 Riaprirebbe il tema una sola cosa: una corsia **Futures a leva**, dove la coda della liquidazione
 cambia il conto e va misurata a parte.
 
-## 7. Come rifare la misura
+## 7. La sentinella dal vivo, e perché non è una seconda misura
+
+Il §5 dice cosa questa misura non può vedere. Due di quelle cose si possono guardare solo dal vivo:
+il momento vero del tick, e il crollo con gap che nella finestra non c'è stato. Da qui la
+**sentinella d'ombra**: in assetto osservativo i tick non vengono più scartati, il motore guarda se
+FAREBBERO scattare un'uscita, e quando il percorso a candele chiude davvero quella posizione nasce
+una riga in `ProtectiveExitShadows`.
+
+**Non è una seconda misura, ed è importante non usarla come tale.** Le tre corsie producono 3-6
+uscite protettive al mese: per distinguere una mediana di −6 bps da zero servirebbero centinaia di
+osservazioni, cioè anni. La domanda «quanto costa in media» è già chiusa qui sopra, su migliaia di
+posizioni.
+
+Il meccanismo è la **soglia**: sopra 200 bps *a sfavore del ritardo* si allerta sul caso **singolo**.
+A quella grandezza non si sta più misurando l'effetto dell'ombra sullo stop, si sta guardando un
+salto di prezzo dentro la barra — cioè esattamente lo scenario che la finestra del replay non
+conteneva, e che con n = 1 è già una notizia. Sotto soglia, e nel caso opposto (il ritardo conviene),
+silenzio: è il verdetto già noto.
+
+Due proprietà da non perdere di vista:
+
+- **La sentinella è inerte.** Non chiude nulla e non tocca `BestPriceSinceEntry`. Se lo toccasse, il
+  livello di trailing del percorso a candele si sposterebbe col ritmo dei tick: il feed deciderebbe
+  le uscite senza che nessun toggle lo dica, e l'effetto si vedrebbe solo come uno stop scattato «un
+  po' prima» del previsto — cioè non si vedrebbe. Un test lo verifica esplicitamente.
+- **Il segno è lo stesso di questo report** (positivo = il feed avrebbe fatto uscire meglio), perché
+  il senso della sentinella è dire se il mercato continua a comportarsi come nel replay: due
+  convenzioni diverse renderebbero il confronto un esercizio di traduzione.
+
+**Per la potenza statistica, il posto giusto resta il replay**, ri-eseguito sui dati freschi: 30
+simboli invece di 3, migliaia di posizioni invece di una manciata, e nessun rischio operativo. È lì
+che un cambio di verdetto si vedrebbe per primo.
+
+## 8. Come rifare la misura
 
 ```bash
 dotnet run --project tools/PlatformExpand -c Release -- exitlag 4 sweep
