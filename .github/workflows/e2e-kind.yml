@@ -76,10 +76,19 @@ jobs:
             kubectl -n "$ns" create secret generic postgres-conn \
               --from-literal=postgres-conn="$CONN" --dry-run=client -o yaml | kubectl apply -f -
           done
-          kubectl -n procionemgr-trading create secret generic trading-secrets \
-            --from-literal=grpc-shared-secret=e2e-usa-e-getta --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n procionemgr-ui create secret generic trading-secrets \
-            --from-literal=grpc-shared-secret=e2e-usa-e-getta --dry-run=client -o yaml | kubectl apply -f -
+          # La master key cifra le credenziali degli exchange. In CI non ne esiste nessuna — il
+          # database nasce vuoto e muore col cluster — ma il servizio la pretende all'avvio e
+          # `dotnet ef` la pretende a design-time: senza, il DbContext non si costruisce nemmeno.
+          # Chiave usa-e-getta, generata a ogni giro: non protegge nulla e non deve sembrare che lo
+          # faccia.
+          MK="$(head -c 32 /dev/urandom | base64)"
+          for ns in procionemgr-trading procionemgr-ui; do
+            kubectl -n "$ns" create secret generic trading-secrets \
+              --from-literal=grpc-shared-secret=e2e-usa-e-getta \
+              --from-literal=Security__MasterKey="$MK" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          done
+          echo "MASTER_KEY_E2E=$MK" >> "$GITHUB_ENV"
 
       - name: Applica lo schema
         run: |
@@ -99,7 +108,11 @@ jobs:
 
           kubectl -n procionemgr-db port-forward svc/postgres 5432:5432 &
           sleep 8
+          # PROCIONE_MGR_MASTER_KEY: la fabbrica a design-time costruisce il DbContext vero, che la
+          # esige. Stessa chiave usa-e-getta del Secret, così il pod e la migrazione parlano dello
+          # stesso database cifrato allo stesso modo.
           ConnectionStrings__PostgresConnection="Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=e2e-usa-e-getta" \
+          PROCIONE_MGR_MASTER_KEY="$MASTER_KEY_E2E" \
             dotnet ef database update --project ProcioneMGR.Migrations.Postgres --startup-project ProcioneMGR --no-build
 
       # --- Deploy ----------------------------------------------------------------------------
