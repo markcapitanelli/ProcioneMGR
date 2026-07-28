@@ -5518,46 +5518,21 @@ async Task OfiAsync(string symbolsCsv, int days)
         Console.WriteLine($"\n    Barre utilizzabili: {report.Observations:N0} · candidati {report.Candidates} × orizzonti {report.Horizons} "
                           + $"= {report.Candidates * report.Horizons} test · nullo {report.NullDraws} giri (soglia del migliore {report.NullBestPercentile:F4})");
         Console.WriteLine("    Controlli: sbilanciamento taker della candela + rendimento del minuto appena chiuso.");
-        Console.WriteLine($"    {"candidato",-22} {"h",3} {"IC grezzo",10} {"IC parziale",12} {"rho col proxy",14} {"p-value",9} {"soglia",8}  esito");
+        Console.WriteLine($"    {"candidato",-22} {"h",3} {"IC grezzo",10} {"IC parziale",12} {"p-value",9} {"soglia",8} {"edge bp",9} {"serve |IC|",11}  esito");
         foreach (var o in report.Outcomes)
         {
+            // L'esito e' quello a DUE livelli del gate: informa / informa ma non paga / niente.
+            var esito = o.IsTradable ? "AGGIUNGE E PAGA" : o.AddsInformation ? "aggiunge, non paga" : "-";
             Console.WriteLine($"    {o.Candidate,-22} {o.HorizonBars,3} {o.RawIc,10:F4} {o.PartialIc,12:F4} "
-                              + $"{o.CorrelationWithProxy,14:F3} {o.NullPValue,9:F4} {o.Threshold,8:F4}  "
-                              + (o.AddsInformation ? "AGGIUNGE" : "-"));
+                              + $"{o.NullPValue,9:F4} {o.Threshold,8:F4} {o.GrossEdgeBps,9:F2} {o.IcRequiredByCosts,11:F3}  {esito}");
         }
-        // --- 5. Traduzione in soldi: un IC significativo non e' ancora un edge -------------------
-        // Un |IC| statisticamente solido su 43.000 barre puo' essere economicamente irrilevante, e a
-        // orizzonte di minuti lo e' quasi sempre: il pavimento 0,02 che il gate usa arriva da
-        // /feature-selection, dove le barre sono ore o giorni. Qui si calcola il pavimento VERO:
-        // quanto |IC| serve perche' l'edge lordo di un segnale a 1 sigma paghi un giro completo.
-        // Senza questo passaggio un "AGGIUNGE" verrebbe letto come "si puo' operare".
-        const double makerRoundTripBps = 4.0;   // 0,02% per lato, tariffa maker Binance USD-M
-        const double takerRoundTripBps = 10.0;  // 0,05% per lato, tariffa taker
-        Console.WriteLine("    Rilevanza economica (edge lordo al segnale 1 sigma vs costo di andata e ritorno):");
-        foreach (var h in new[] { 1, 5 })
-        {
-            var rets = Enumerable.Range(0, n)
-                .Where(i => !double.IsNaN(h == 1 ? fwd1[i] : fwd5[i]))
-                .Select(i => h == 1 ? fwd1[i] : fwd5[i])
-                .ToList();
-            if (rets.Count < 100) continue;
-
-            var mean = rets.Average();
-            var sigma = Math.Sqrt(rets.Sum(r => (r - mean) * (r - mean)) / rets.Count);
-            var sigmaBps = sigma * 10_000;
-
-            var best = report.Outcomes.Where(o => o.HorizonBars == h)
-                .OrderByDescending(o => Math.Abs(o.PartialIc)).FirstOrDefault();
-            if (best is null) continue;
-
-            var edgeBps = Math.Abs(best.PartialIc) * sigmaBps;
-            Console.WriteLine($"      h={h}: sigma dei rendimenti {sigmaBps:F2} bp · miglior |IC parziale| {Math.Abs(best.PartialIc):F4} "
-                              + $"⇒ edge lordo {edgeBps:F2} bp");
-            Console.WriteLine($"            per pagare {makerRoundTripBps:F0} bp (maker) servirebbe |IC| ≥ {makerRoundTripBps / sigmaBps:F3}"
-                              + $" · per {takerRoundTripBps:F0} bp (taker) ≥ {takerRoundTripBps / sigmaBps:F3}"
-                              + $" ⇒ manca un fattore {makerRoundTripBps / edgeBps:F0}× (maker)");
-        }
-
+        Console.WriteLine($"    sigma dei rendimenti: {string.Join(" · ", report.Outcomes
+            .GroupBy(o => o.HorizonBars).OrderBy(g => g.Key)
+            .Select(g => $"h={g.Key}: {g.First().ForwardSigmaBps:F2} bp"))}");
+        // La rilevanza economica NON si ricalcola qui: e' dentro il verdetto del gate (secondo
+        // livello). Prima era duplicata in questo file, dieci righe sotto il verdetto informativo --
+        // due risposte separate che si leggevano a distanza di un rigo, e chi leggeva solo la prima
+        // capiva "si puo' operare".
         Console.WriteLine($"\n    VERDETTO: {report.Verdict}\n");
     }
 

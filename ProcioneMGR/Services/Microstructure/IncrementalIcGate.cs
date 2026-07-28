@@ -73,6 +73,23 @@ public sealed class IncrementalIcConfig
 
     /// <summary>Minimo di osservazioni sotto cui non si emette verdetto.</summary>
     public int MinObservations { get; set; } = 500;
+
+    /// <summary>
+    /// Costo di un giro completo (entrata + uscita) in punti base. Attiva il SECONDO LIVELLO del
+    /// verdetto: non «questo candidato informa?» ma «informa abbastanza da pagarsi il giro?».
+    ///
+    /// PERCHÉ È NEL GATE E NON NEL CHIAMANTE. Nella prima versione il gate diceva "AGGIUNGE" e la
+    /// traduzione in punti base la faceva la fase CLI, dieci righe più in basso: due verdetti separati
+    /// che si leggono a distanza di un rigo, e chi legge solo il primo capisce «si può operare». Su
+    /// dati veri i due dicevano cose opposte — |IC| 0,04 con p-value 0,005 (informa) ed edge lordo
+    /// 0,45 bp contro 4 bp di costo (non paga, manca un fattore 9). Adesso è un verdetto solo, a due
+    /// livelli.
+    ///
+    /// Default 4 bp = 0,02% per lato, tariffa maker Binance USD-M. <c>null</c> disattiva il livello
+    /// economico: va usato quando i rendimenti forward NON sono in unità di rendimento (per esempio
+    /// nei test sintetici), perché lì «punti base» non vuol dire niente.
+    /// </summary>
+    public double? RoundTripCostBps { get; set; } = 4.0;
 }
 
 /// <summary>Esito per un candidato su un orizzonte.</summary>
@@ -88,7 +105,23 @@ public sealed record IncrementalIcOutcome(
     double NullBestPercentile,
     double NullPValue,
     bool AddsInformation,
-    string Message);
+    string Message)
+{
+    /// <summary>Deviazione standard dei rendimenti a questo orizzonte, in punti base (0 se non calcolabile).</summary>
+    public double ForwardSigmaBps { get; init; }
+
+    /// <summary>Edge lordo atteso per un segnale a 1σ, in punti base: |IC parziale| × σ.</summary>
+    public double GrossEdgeBps { get; init; }
+
+    /// <summary>|IC| che servirebbe perché l'edge lordo pareggi il costo del giro (0 = livello economico spento).</summary>
+    public double IcRequiredByCosts { get; init; }
+
+    /// <summary>
+    /// Vero solo se il candidato informa **e** l'edge lordo copre il costo del giro. È il secondo
+    /// livello: senza, un "AGGIUNGE" statistico si legge come "si può operare".
+    /// </summary>
+    public bool IsTradable { get; init; }
+}
 
 /// <summary>Verdetto complessivo del gate.</summary>
 public sealed record IncrementalIcReport(
@@ -99,7 +132,11 @@ public sealed record IncrementalIcReport(
     double NullBestPercentile,
     IReadOnlyList<IncrementalIcOutcome> Outcomes,
     bool AnyAddsInformation,
-    string Verdict);
+    string Verdict)
+{
+    /// <summary>Vero se almeno un candidato supera anche il livello economico.</summary>
+    public bool AnyTradable { get; init; }
+}
 
 /// <summary>Misura l'informazione INCREMENTALE di uno o più candidati sopra un proxy già disponibile.</summary>
 public static class IncrementalIcGate
@@ -293,6 +330,11 @@ public static class IncrementalIcGate
         var nullThreshold = Percentile(nullBest, config.NullPercentile);
 
         var floor = Math.Max(config.MinAbsIc, config.NoiseFloorZ / Math.Sqrt(obs));
+
+        // Scala dei rendimenti per orizzonte: è ciò che trasforma un IC in punti base. Si misura sui
+        // dati, non si assume — la volatilità a 1 minuto e quella a 5 non stanno in rapporto fisso.
+        var sigmaBps = horizons.ToDictionary(h => h, h => StdDev(fwd[h]) * 10_000);
+
         var outcomes = new List<IncrementalIcOutcome>(cands.Count * horizons.Count);
 
         foreach (var (name, values) in cands)
@@ -313,26 +355,71 @@ public static class IncrementalIcGate
                 var beatsNull = pValue <= config.MaxNullPValue;
                 var adds = beatsFloor && beatsNull;
 
+                // --- Secondo livello: quel che informa si paga il giro? ---
+                var sigma = sigmaBps[h];
+                var edgeBps = Math.Abs(partial) * sigma;
+                var icRequired = config.RoundTripCostBps is { } cost && sigma > 0 ? cost / sigma : 0d;
+                var tradable = adds && icRequired > 0 && Math.Abs(partial) >= icRequired;
+
+                var economics = config.RoundTripCostBps is { } c && sigma > 0
+                    ? tradable
+                        ? $" E PAGA IL GIRO: edge lordo {edgeBps:F2} bp contro {c:F0} bp di costo."
+                        : $" ma NON paga il giro: edge lordo {edgeBps:F2} bp contro {c:F0} bp di costo (servirebbe |IC| ≥ {icRequired:F3}, manca un fattore {(edgeBps > 0 ? c / edgeBps : 0):F0}×)."
+                    : string.Empty;
+
                 var message = adds
-                    ? $"AGGIUNGE informazione: |IC parziale| {Math.Abs(partial):F4} sopra la soglia {floor:F4}, p-value del nullo {pValue:F4} ≤ {config.MaxNullPValue:F3}."
+                    ? $"AGGIUNGE informazione: |IC parziale| {Math.Abs(partial):F4} sopra la soglia {floor:F4}, p-value del nullo {pValue:F4} ≤ {config.MaxNullPValue:F3}.{economics}"
                     : !beatsFloor
                         ? $"Non aggiunge: |IC parziale| {Math.Abs(partial):F4} sotto la soglia operativa {floor:F4} (max fra minimo economico {config.MinAbsIc:F3} e pavimento di rumore {config.NoiseFloorZ / Math.Sqrt(obs):F4})."
                         : $"Non aggiunge: |IC parziale| {Math.Abs(partial):F4} dentro ciò che produce il caso (p-value {pValue:F4} > {config.MaxNullPValue:F3}; {config.NullPercentile:F0}° percentile del nullo del migliore {nullThreshold:F4}).";
 
                 outcomes.Add(new IncrementalIcOutcome(
-                    name, h, obs, raw, proxyIc, partial, withProxy, floor, nullThreshold, pValue, adds, message));
+                    name, h, obs, raw, proxyIc, partial, withProxy, floor, nullThreshold, pValue, adds, message)
+                {
+                    ForwardSigmaBps = sigma,
+                    GrossEdgeBps = edgeBps,
+                    IcRequiredByCosts = icRequired,
+                    IsTradable = tradable,
+                });
             }
         }
 
         var ordered = outcomes.OrderByDescending(o => Math.Abs(o.PartialIc)).ToList();
         var any = ordered.Any(o => o.AddsInformation);
-        var verdict = any
-            ? "POSITIVO: almeno un candidato di microstruttura aggiunge informazione oltre il proxy trade-flow."
-            : $"NEGATIVO: nessun candidato aggiunge informazione oltre il proxy. Il migliore è {ordered[0].Candidate} "
-              + $"a {ordered[0].HorizonBars} barre con |IC parziale| {Math.Abs(ordered[0].PartialIc):F4} "
-              + $"(p-value {ordered[0].NullPValue:F4}), contro soglia {floor:F4}.";
+        var anyTradable = ordered.Any(o => o.IsTradable);
 
-        return new IncrementalIcReport(obs, cands.Count, horizons.Count, config.NullDraws, nullThreshold, ordered, any, verdict);
+        // VERDETTO A DUE LIVELLI. Le tre uscite sono deliberatamente distinte, perché "informa" e
+        // "conviene" sono due domande diverse e confonderle è il modo classico di schierare una
+        // strategia che perde: su dati veri il primo livello è passato e il secondo no, di 9 volte.
+        var strongest = ordered[0];
+        var verdict = !any
+            ? $"NEGATIVO: nessun candidato aggiunge informazione oltre i controlli. Il migliore è {strongest.Candidate} "
+              + $"a {strongest.HorizonBars} barre con |IC parziale| {Math.Abs(strongest.PartialIc):F4} "
+              + $"(p-value {strongest.NullPValue:F4}), contro soglia {floor:F4}."
+            : anyTradable
+                ? $"POSITIVO E OPERABILE: {ordered.First(o => o.IsTradable).Candidate} aggiunge informazione "
+                  + $"e l'edge lordo copre il costo del giro. Da confermare col collaudo di sempre (holdout, DSR, PBO)."
+                : $"INFORMA MA NON È OPERABILE: {ordered.First(o => o.AddsInformation).Candidate} aggiunge informazione "
+                  + $"oltre i controlli, però l'edge lordo ({ordered.First(o => o.AddsInformation).GrossEdgeBps:F2} bp) "
+                  + $"non paga il giro ({config.RoundTripCostBps:F0} bp). Utile per l'ESECUZIONE, dove il giro è già "
+                  + $"pagato; non per decidere un ingresso.";
+
+        return new IncrementalIcReport(obs, cands.Count, horizons.Count, config.NullDraws, nullThreshold, ordered, any, verdict)
+        {
+            AnyTradable = anyTradable,
+        };
+    }
+
+    /// <summary>Deviazione standard di popolazione, per portare l'IC in punti base.</summary>
+    private static double StdDev(IReadOnlyList<double> values)
+    {
+        if (values.Count < 2) return 0d;
+        double mean = 0;
+        foreach (var v in values) mean += v;
+        mean /= values.Count;
+        double sum = 0;
+        foreach (var v in values) { var d = v - mean; sum += d * d; }
+        return Math.Sqrt(sum / values.Count);
     }
 
     private static double[] Rotate(double[] values, int shift)

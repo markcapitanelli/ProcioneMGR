@@ -126,6 +126,28 @@ public sealed class FactorDriftAnalyzer : IFactorDriftAnalyzer
     public static double NoiseFloorFor(int windowSize, double z = 1.96)
         => windowSize < 4 ? double.PositiveInfinity : z / Math.Sqrt(windowSize);
 
+    /// <summary>
+    /// AMPIEZZA DI FINESTRA CONSIGLIATA per <paramref name="observations"/> osservazioni utilizzabili:
+    /// circa un decimo del campione (≈10 finestre non sovrapposte), **quantizzato a passi di 250** e
+    /// tenuto fra 250 e 3000.
+    ///
+    /// Questa funzione esiste in UN SOLO posto per una ragione trovata guardando l'app dal vivo: il
+    /// job periodico e il pannello di <c>/feature-selection</c> avevano due regole diverse (uno
+    /// quantizzava, l'altro no) e sulla STESSA serie producevano finestre diverse — quindi soglie
+    /// diverse (1,96/√n) e quindi **verdetti diversi**: su BTC/USDT 1h lo stesso fattore risultava
+    /// "si è spento" per uno e "non ha mai informato" per l'altro. Entrambi corretti, incoerenti fra
+    /// loro, e nulla è più veloce a far perdere fiducia in un pannello.
+    ///
+    /// La quantizzazione serve alla persistenza: una serie storica la cui finestra si sposta a ogni
+    /// giro non è una serie, è una collezione di misure con pavimenti di rumore diversi.
+    /// </summary>
+    public static int SuggestWindowSize(int observations)
+    {
+        var target = observations / 10;
+        var quantized = (int)Math.Round(target / 250.0, MidpointRounding.AwayFromZero) * 250;
+        return Math.Clamp(quantized, 250, 3000);
+    }
+
     public FactorDriftReport Analyze(FactorSpec spec, IReadOnlyList<OhlcvData> candles, FactorDriftConfig config)
     {
         ArgumentNullException.ThrowIfNull(spec);

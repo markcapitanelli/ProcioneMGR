@@ -235,6 +235,28 @@ Va detto che questa è anche una **correzione al pavimento del gate**: la soglia
 1-2 ordini di grandezza più alto, e un «AGGIUNGE» letto senza la tabella qui sopra sarebbe stato
 frainteso come «si può operare».
 
+> **Correzione applicata subito dopo (2026-07-28, consolidamento).** Nella prima versione questa
+> tabella la produceva la **fase CLI**, dieci righe sotto il verdetto del gate: due risposte separate,
+> lette a distanza di un rigo, e chi si fermava alla prima capiva «si può operare». Ora la traduzione
+> in punti base è **dentro il gate** e il verdetto è **a due livelli**: `NEGATIVO` /
+> `INFORMA MA NON È OPERABILE` / `POSITIVO E OPERABILE`. Su questi dati il verdetto stampato è il
+> secondo, che è la sola lettura corretta e la sola che sopravvive alla lettura frettolosa di fra sei
+> mesi. Ogni riga della tabella espone anche σ, edge lordo e |IC| richiesto dai costi. Ecco com'è
+> uscito rilanciando su BTC (finestra scorsa di un giorno, quindi numeri leggermente diversi da quelli
+> qui sopra — è la stessa misura, non un altro esperimento):
+>
+> ```
+> candidato                h  IC grezzo  IC parziale   p-value   soglia   edge bp  serve |IC|  esito
+> book imbalance 1%        5     0,0388       0,0378    0,0050   0,0200      0,41       0,370  aggiunge, non paga
+> book imbalance 0,2%      5     0,0358       0,0319    0,0050   0,0200      0,34       0,370  aggiunge, non paga
+> book OFI 0,2%            5     0,0090       0,0018    1,0000   0,0200      0,02       0,370  -
+> sigma dei rendimenti: h=1: 4,97 bp · h=5: 10,80 bp
+>
+> VERDETTO: INFORMA MA NON È OPERABILE: book imbalance 1% aggiunge informazione oltre i controlli,
+> però l'edge lordo (0,41 bp) non paga il giro (4 bp). Utile per l'ESECUZIONE, dove il giro è già
+> pagato; non per decidere un ingresso.
+> ```
+
 ## 6. Cosa significa, e cosa non significa
 
 **Significa** che il book porta informazione che il flusso taker non ha: lo sbilanciamento di

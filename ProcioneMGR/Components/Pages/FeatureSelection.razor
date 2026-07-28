@@ -210,6 +210,22 @@
                     </tbody>
                 </table>
             </div>
+            @* Le tre cose che rendono confrontabili (o no) questo pannello e quello sotto: orizzonte,
+               ampiezza della finestra e quante candele ha visto il job. Senza dirle, due verdetti
+               diversi sulla stessa serie sembrano una contraddizione invece che due misure diverse. *@
+            <div class="alert alert-light border small mt-2 mb-2 py-2">
+                Orizzonte forward: <strong>1 barra</strong> (quello del job).
+                @if (_forwardHorizon != 1)
+                {
+                    <span class="text-danger">
+                        Il form qui sopra è impostato su @_forwardHorizon: i numeri dei due pannelli
+                        <strong>non sono confrontabili</strong>.
+                    </span>
+                }
+                Il job calcola sulle ultime <strong>@_recordedMaxCandles.ToString("N0")</strong> candele
+                (tetto <code>FactorDrift:MaxCandles</code>): se qui sotto valuti un periodo più lungo, la
+                finestra proposta è più ampia e la soglia più bassa — stessa regola, campione diverso.
+            </div>
             <div class="form-text mt-2">
                 Ultimo calcolo del job: <strong>@_recorded.ComputedAtUtc.ToString("yyyy-MM-dd HH:mm") UTC</strong>
                 @if (_recorded.Reports.Count > 0 && _recorded.Reports[0].Series.Count > 0)
@@ -405,6 +421,7 @@
     private FactorDriftSeriesSnapshot? _recorded;
     private bool _recordedBusy;
     private int _recordedIntervalHours = 12;
+    private int _recordedMaxCandles = 20_000;
 
     protected override async Task OnInitializedAsync()
     {
@@ -415,6 +432,7 @@
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
 
         _recordedIntervalHours = Math.Max(1, Config.GetValue("FactorDrift:IntervalHours", 12));
+        _recordedMaxCandles = Math.Clamp(Config.GetValue("FactorDrift:MaxCandles", 20_000), 1_000, 200_000);
         await LoadRecordedAsync();
     }
 
@@ -551,7 +569,9 @@
     {
         var observations = ranked.Count > 0 ? ranked.Max(s => s.Evaluation.Observations) : 0;
         if (observations <= 0) return 250;
-        return Math.Clamp(observations / 10, 250, 3000);
+        // Regola CONDIVISA col job periodico: sulla stessa numerosità i due devono proporre la stessa
+        // finestra, altrimenti la stessa serie riceve soglie diverse e verdetti che si contraddicono.
+        return FactorDriftAnalyzer.SuggestWindowSize(observations);
     }
 
     /// <summary>
