@@ -535,6 +535,18 @@
    le posizioni orfane e i confronti registrati sono letture su Postgres, e vanno viste soprattutto
    quando il core NON risponde — cioè quando il resto di questa pagina è vuoto.
    --------------------------------------------------------------------------------------------- *@
+@* L'esito sta FUORI dal blocco delle orfane, e non e' un dettaglio di impaginazione: quando la
+   chiusura riesce la lista si svuota, il blocco sparisce, e con lui sparirebbe la conferma —
+   l'operatore vedrebbe la riga svanire senza sapere a che prezzo e' stata chiusa. Trovato
+   cliccando il pulsante sul serio, non leggendo il codice. *@
+@if (_orphanMessage is not null)
+{
+    <div class="alert @(_orphanIsError ? "alert-danger" : "alert-success") d-flex justify-content-between align-items-center">
+        <span>@_orphanMessage</span>
+        <button type="button" class="btn-close" @onclick="() => _orphanMessage = null"></button>
+    </div>
+}
+
 @if (_orphans.Count > 0)
 {
     <div class="card mb-3 border-danger">
@@ -547,10 +559,6 @@
                 Restano da quando il numero di corsie è stato ridotto. <strong>Nessuna azione automatica</strong>:
                 su una posizione che non capiamo, il gesto irreversibile è quello sbagliato — la decisione è tua.
             </p>
-            @if (_orphanMessage is not null)
-            {
-                <div class="alert @(_orphanIsError ? "alert-danger" : "alert-success") py-2 small">@_orphanMessage</div>
-            }
             <div class="table-responsive">
                 <table class="table table-sm table-hover mb-0">
                     <thead><tr><th>Corsia</th><th>Simbolo</th><th>Lato</th><th class="text-end">Quantità</th><th class="text-end">Ingresso</th><th class="text-end">SL</th><th class="text-end">TP</th><th>Aperta il</th><th></th></tr></thead>

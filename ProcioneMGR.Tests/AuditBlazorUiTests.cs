@@ -513,4 +513,39 @@ public class AuditBlazorUiTests : BunitContext
 
         Assert.DoesNotContain("Posizioni orfane", cut.Markup);
     }
+
+    /// <summary>
+    /// REGRESSIONE trovata cliccando il pulsante sul serio, non leggendo il codice. L'esito della
+    /// chiusura stava DENTRO il blocco delle posizioni orfane: quando la chiusura riesce la lista si
+    /// svuota, il blocco sparisce, e con lui la conferma — l'operatore vedeva la riga svanire senza
+    /// sapere a che prezzo fosse stata chiusa, ne' se fosse stata chiusa affatto.
+    ///
+    /// Il markup del messaggio deve quindi stare FUORI dal condizionale sulla lista.
+    /// </summary>
+    [Fact]
+    public void Trading_EsitoDellaChiusuraOrfana_NonVive_DentroIlBloccoCheSparisce()
+    {
+        var sorgente = System.IO.File.ReadAllText(TrovaTradingRazor());
+
+        var inizioBlocco = sorgente.IndexOf("@if (_orphans.Count > 0)", StringComparison.Ordinal);
+        var posizioneMessaggio = sorgente.IndexOf("_orphanMessage is not null", StringComparison.Ordinal);
+
+        Assert.True(inizioBlocco > 0, "blocco delle orfane non trovato");
+        Assert.True(posizioneMessaggio > 0, "messaggio d'esito non trovato");
+        Assert.True(posizioneMessaggio < inizioBlocco,
+            "l'esito della chiusura deve stare PRIMA del blocco condizionato alla presenza di orfane: "
+            + "dentro, sparirebbe proprio quando l'operazione riesce.");
+    }
+
+    private static string TrovaTradingRazor()
+    {
+        var dir = AppContext.BaseDirectory;
+        for (var i = 0; i < 8 && dir is not null; i++)
+        {
+            var candidato = System.IO.Path.Combine(dir, "ProcioneMGR", "Components", "Pages", "Trading.razor");
+            if (System.IO.File.Exists(candidato)) return candidato;
+            dir = System.IO.Directory.GetParent(dir)?.FullName;
+        }
+        throw new System.IO.FileNotFoundException("Trading.razor non trovato risalendo dall'output dei test.");
+    }
 }
