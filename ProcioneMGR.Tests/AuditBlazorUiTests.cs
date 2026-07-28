@@ -18,6 +18,22 @@ namespace ProcioneMGR.Tests;
 ///  3. Il form dati della Dashboard valida lato client (intervallo invertito, symbol mancante)
 ///     SENZA invocare il servizio di ingestione.
 /// </summary>
+/// <remarks>
+/// NELLA COLLECTION "TradingLanes" per una ragione di isolamento, non di risorse condivise.
+/// <see cref="TradingLanes.Count"/> è uno stato STATICO DI PROCESSO, e <c>TradingLanesCountTests</c>
+/// lo cambia (Configure(8), Configure(5), ResetForTests). Queste prove renderizzano la pagina Trading
+/// costruendo un motore finto per corsia: se il conteggio cambia mentre il componente sta
+/// renderizzando, i pulsanti trovati non sono più quelli attesi e un <c>Single(...)</c> esplode.
+/// Senza attributo, xUnit metteva questa classe in una collection propria e quindi **in parallelo**
+/// con chi muta il contatore.
+///
+/// Onestà su come è stata trovata: un fallimento isolato di
+/// <c>Trading_ConfirmPendingOrder_CallsEngine_WithCorrectOrderId</c> in una suite intera (1832/1833),
+/// non riproducibile né da solo né lanciando le due classi insieme cinque volte — la finestra è di
+/// microsecondi e si allarga solo sotto carico. Il meccanismo però è documentato e sufficiente; questa
+/// riga lo rimuove. Se il fallimento tornasse, l'ipotesi era sbagliata e va cercata altrove.
+/// </remarks>
+[Collection("TradingLanes")]
 public class AuditBlazorUiTests : BunitContext
 {
     public AuditBlazorUiTests()
