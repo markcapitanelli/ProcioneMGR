@@ -84,9 +84,26 @@ sposta nel core con B3, perché è operatività che deve sopravvivere ai riavvii
 | B0 | Lease advisory per corsia (codice, subito) | test di conflitto verdi | è additivo: nessuno |
 | B1 | Monolite in K8s (baseline di Fase 3 rivalidata) | app su, login sopravvive al riavvio del pod (keyring su PVC), backup/restore provato | si spegne il cluster, si torna a `dotnet run` |
 | B2 | Ingestion remota ON | 7 giorni senza buchi nelle candele (query di copertura già in PlatformExpand `stats`) | toggle a `false` + riavvio |
-| B3 | Trading remoto ON, R1 nel core (prima `DriveProtectiveExits=false`) | **chaos test**: kill del pod guscio con posizioni Paper aperte → protezioni scattano; poi R1 pieno dopo confronto tick-vs-candle nelle metriche | toggle a `false` + spegnere il Deployment trading (mai entrambi vivi) |
+| B3 | Trading remoto ON, R1 nel core (prima `DriveProtectiveExits=false`) | **chaos test** ✓ (2026-07-26) · confronto tick-vs-candle ✓ (2026-07-28, **esito negativo**: vedi nota sotto) | toggle a `false` + spegnere il Deployment trading (mai entrambi vivi) |
 | B4 | ML remoto | parità dual-read su N settimane (`procione.ml.comparisons`) — se non arriva, resta in-process **per misura, non per rinuncia** | toggle |
 | B5 | Ritiro del ramo in-process del motore dal monolite | B3 stabile da ≥ 1 mese; suite adattata | git revert (il ramo è isolato in `TradingServiceCollectionExtensions`) |
+
+### 5.a Nota su B3: il gate come era scritto non si poteva soddisfare
+
+Il gate di B3 chiedeva il confronto `source=tick` contro `source=candle` sulla metrica
+`procione.trading.protective_exits`. In assetto osservativo quel confronto **non è producibile**: i
+tick vengono scartati prima di raggiungere il motore, e la metrica conta solo le uscite realmente
+scattate — quindi `source=tick` compare solo dopo l'accensione che il confronto doveva autorizzare.
+
+La domanda è stata chiusa il 2026-07-28 **offline**, con le candele a risoluzione fine come
+surrogato dei tick (`ProtectiveExitLagAnalyzer`), e la risposta è **no**: uscire al momento del
+tocco è risultato peggiore che uscire alla chiusura della barra su tutte e 24 le configurazioni
+provate. `DriveProtectiveExits` resta quindi `false` **per misura, non in attesa di una misura** —
+la stessa formula usata per il router di regime dopo C1. Metodo, numeri e limiti dichiarati in
+[REPORT-B3-EXITLAG](REPORT-B3-EXITLAG-2026-07-28.md).
+
+Lezione da portarsi dietro per B4: un gate va scritto insieme allo **strumento** che lo misura,
+altrimenti resta aperto senza che nessuno sappia dire perché.
 
 ## 6. Piano di prova
 
