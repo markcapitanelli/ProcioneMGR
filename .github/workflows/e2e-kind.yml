@@ -84,14 +84,23 @@ jobs:
       - name: Applica lo schema
         run: |
           dotnet tool install --global dotnet-ef
-          # Il restore serve: le immagini sono state costruite da Docker, quindi sul RUNNER non
-          # esiste alcun obj/project.assets.json e `dotnet ef` fallisce con NETSDK1004 prima ancora
-          # di provare a connettersi. Trovato al primo giro reale del workflow.
+          # Il restore serve: le immagini le costruisce Docker, quindi sul RUNNER non esiste alcun
+          # obj/project.assets.json e `dotnet ef` fallisce con NETSDK1004 prima ancora di provare a
+          # connettersi. Trovato al primo giro reale del workflow.
           dotnet restore ProcioneMGR.sln
+
+          # E poi la procedura documentata in docs/POSTGRES_MIGRATION.md: ProcioneMGR NON referenzia
+          # il progetto delle migrazioni (la dipendenza va nell'altro verso), quindi la sua DLL non
+          # finisce nel bin dell'host e `dotnet ef` non la trova. Va costruita e copiata a mano.
+          # Non è un accorgimento di CI: è lo stesso passo che serve sulla macchina di sviluppo.
+          dotnet build ProcioneMGR.Migrations.Postgres -c Debug
+          cp ProcioneMGR.Migrations.Postgres/bin/Debug/net10.0/ProcioneMGR.Migrations.Postgres.dll \
+             ProcioneMGR/bin/Debug/net10.0/
+
           kubectl -n procionemgr-db port-forward svc/postgres 5432:5432 &
           sleep 8
           ConnectionStrings__PostgresConnection="Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=e2e-usa-e-getta" \
-            dotnet ef database update --project ProcioneMGR.Migrations.Postgres --startup-project ProcioneMGR
+            dotnet ef database update --project ProcioneMGR.Migrations.Postgres --startup-project ProcioneMGR --no-build
 
       # --- Deploy ----------------------------------------------------------------------------
       - name: Applica i manifest
