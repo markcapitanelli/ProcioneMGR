@@ -480,6 +480,13 @@ builder.Services.AddHostedService<PromotionWorker>();
 // circuito, quindi un'istanza per sessione utente, come il componente che la consuma.
 builder.Services.AddScoped<ProcioneMGR.Services.Trading.TradingPageService>();
 
+// [B3] Diagnostica delle uscite protettive: confronti d'ombra, posizioni orfane, misura del
+// ritardo su richiesta. Registrata SEMPRE, anche col trading remoto — sono letture su Postgres e
+// non toccano il motore, quindi restano disponibili proprio quando il core non risponde, che è il
+// momento in cui uno vuole sapere cosa è successo. L'analizzatore è senza stato: singleton.
+builder.Services.AddSingleton<ProcioneMGR.Services.Trading.ProtectiveExitLagAnalyzer>();
+builder.Services.AddScoped<ProcioneMGR.Services.Trading.ProtectiveExitDiagnosticsService>();
+
 // [R3] Modalità Semplice (/bot): stessa granularità Scoped delle altre page service.
 builder.Services.AddScoped<ProcioneMGR.Services.Risk.BotPageService>();
 builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.CampaignPageService>();

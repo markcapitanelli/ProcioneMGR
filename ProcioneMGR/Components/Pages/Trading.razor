@@ -12,6 +12,7 @@
 @inject AuthenticationStateProvider AuthProvider
 @inject ILogger<Trading> Logger
 @inject ILaneDirectory LaneDirectory
+@inject ProtectiveExitDiagnosticsService Diagnostics
 
 <PageTitle>Trading</PageTitle>
 <h1>Trading
@@ -529,6 +530,167 @@
     </AuthorizeView>
 }
 
+@* ---------------------------------------------------------------------------------------------
+   [B3] Diagnostica delle uscite protettive. FUORI dal blocco condizionato allo stato del motore:
+   le posizioni orfane e i confronti registrati sono letture su Postgres, e vanno viste soprattutto
+   quando il core NON risponde — cioè quando il resto di questa pagina è vuoto.
+   --------------------------------------------------------------------------------------------- *@
+@if (_orphans.Count > 0)
+{
+    <div class="card mb-3 border-danger">
+        <div class="card-header bg-danger text-white fw-bold">
+            ⚠️ Posizioni orfane — @_orphans.Count su corsie che non esistono più (LaneCount=@TradingLanes.Count)
+        </div>
+        <div class="card-body">
+            <p class="mb-2 small">
+                Nessun motore valuta stop, target o trailing di queste posizioni, e nessuno le chiuderà da solo.
+                Restano da quando il numero di corsie è stato ridotto. <strong>Nessuna azione automatica</strong>:
+                su una posizione che non capiamo, il gesto irreversibile è quello sbagliato — la decisione è tua.
+            </p>
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead><tr><th>Corsia</th><th>Simbolo</th><th>Lato</th><th class="text-end">Quantità</th><th class="text-end">Ingresso</th><th class="text-end">SL</th><th class="text-end">TP</th><th>Aperta il</th></tr></thead>
+                    <tbody>
+                        @foreach (var p in _orphans)
+                        {
+                            <tr>
+                                <td><span class="badge bg-danger">@p.LaneId</span></td>
+                                <td>@p.Symbol</td>
+                                <td>@p.Side</td>
+                                <td class="text-end">@p.Quantity.ToString("0.####")</td>
+                                <td class="text-end">@p.EntryPrice.ToString("0.####")</td>
+                                <td class="text-end">@(p.StopLoss?.ToString("0.####") ?? "—")</td>
+                                <td class="text-end">@(p.TakeProfit?.ToString("0.####") ?? "—")</td>
+                                <td>@p.OpenedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>🕯️ Ritardo delle uscite protettive — corsia @_laneId</span>
+        <small class="text-muted">il feed osserva, le candele decidono</small>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-secondary py-2 small">
+            <strong>Cosa dice questo pannello, e cosa no.</strong>
+            Le uscite protettive sono guidate dalle <strong>candele chiuse</strong>, non dai tick, e non per
+            prudenza: misurato il 2026-07-28 su 24 configurazioni, uscire al momento del tocco è risultato
+            <strong>peggio</strong> che uscire a barra chiusa — è lo stop preso sull'ombra.
+            Il feed real-time resta acceso e <em>osserva</em>: quando avrebbe fatto scattare un'uscita, se ne
+            prende nota, e quando la candela la fa scattare davvero nasce un confronto.
+            <br />
+            Le righe qui sotto sono <strong>una sentinella, non una misura</strong>: su questa corsia le uscite
+            protettive sono poche al mese, troppo poche perché una media significhi qualcosa. Servono a cogliere
+            il <strong>caso singolo fuori scala</strong> — un salto di prezzo dentro la barra, che è lo scenario
+            che il replay storico non conteneva. Per la media c'è il pulsante qui sotto, che gira su migliaia di
+            posizioni simulate. Dettaglio in <code>docs/REPORT-B3-EXITLAG-2026-07-28.md</code>.
+        </div>
+
+        <div class="d-flex align-items-center gap-2 mb-3">
+            <button class="btn btn-outline-primary btn-sm" @onclick="MeasureLagAsync" disabled="@_lagBusy">
+                @(_lagBusy ? "Misura in corso…" : "Misura il ritardo su questa corsia")
+            </button>
+            <small class="text-muted">read-only: simula posizioni sulle barre storiche, non tocca nulla di operativo</small>
+        </div>
+
+        @if (_lagError is not null)
+        {
+            <div class="alert alert-warning py-2 small">@_lagError</div>
+        }
+
+        @if (_lag is not null)
+        {
+            <div class="row g-2 mb-3">
+                <div class="col-md-3">
+                    <div class="border rounded p-2">
+                        <div class="text-muted small">Anticipo mediano del feed</div>
+                        <div class="fs-5">@((_lag.MedianLeadSeconds / 60d).ToString("0.#")) min</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="border rounded p-2">
+                        <div class="text-muted small">Costo mediano del ritardo</div>
+                        <div class="fs-5 @(_lag.MedianDelayCostBps > 0 ? "text-danger" : "text-success")">
+                            @_lag.MedianDelayCostBps.ToString("0.#") bps
+                        </div>
+                        <div class="text-muted small">
+                            @(_lag.MedianDelayCostBps > 0 ? "il ritardo costa" : "aspettare conviene")
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="border rounded p-2">
+                        <div class="text-muted small">Uscite confrontate</div>
+                        <div class="fs-5">@_lag.BothExited.ToString("N0")</div>
+                        <div class="text-muted small">su @_lag.PositionsSimulated.ToString("N0") simulate</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="border rounded p-2">
+                        <div class="text-muted small">Verdetto di B3</div>
+                        <div class="fs-5 @(ProtectiveExitLagAnalyzer.IsVerdictFlipped(_lag.MedianDelayCostBps) ? "text-danger" : "text-success")">
+                            @(ProtectiveExitLagAnalyzer.IsVerdictFlipped(_lag.MedianDelayCostBps) ? "ROVESCIATO" : "confermato")
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="small text-muted">
+                Surrogato dei tick: @_lag.FineTimeframe su barre @_lag.LaneTimeframe ·
+                bracket reali SL @_lag.StopLossPercent.ToString("0.##")%
+                @(_lag.TakeProfitPercent is decimal t ? $"· TP {t:0.##}%" : "")
+                @(_lag.TrailingStopPercent is decimal tr ? $"· trailing {tr:0.##}%" : "") ·
+                il ritardo conviene nel @((_lag.AdverseShare * 100d).ToString("0.#"))% dei casi.
+                L'anticipo è un limite <em>inferiore</em>: la scoperta è datata alla chiusura della barra fine,
+                non al tick esatto.
+            </div>
+        }
+
+        <h6 class="mt-3">Confronti registrati dal vivo (@_shadows.Count)</h6>
+        @if (_shadows.Count == 0)
+        {
+            <p class="text-muted small mb-0">
+                Nessuno ancora. Se ne registra uno ogni volta che un'uscita protettiva scatta su una posizione
+                che il feed aveva già visto rompere il livello — su questa corsia sono pochi eventi al mese.
+                Un pannello vuoto qui significa «non è ancora successo», non «non funziona».
+            </p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Uscita</th><th>Simbolo</th><th>Motivo</th><th class="text-end">Anticipo</th><th class="text-end">Al tocco</th><th class="text-end">A barra chiusa</th><th class="text-end">Differenza</th></tr></thead>
+                    <tbody>
+                        @foreach (var s in _shadows)
+                        {
+                            <tr>
+                                <td>@s.ActualExitAtUtc.ToString("MM-dd HH:mm")</td>
+                                <td>@s.Symbol</td>
+                                <td>@s.ActualReason</td>
+                                <td class="text-end">@((s.LeadSeconds / 60d).ToString("0.#")) min</td>
+                                <td class="text-end">@s.ShadowFillPrice.ToString("0.####")</td>
+                                <td class="text-end">@s.ActualFillPrice.ToString("0.####")</td>
+                                <td class="text-end @(s.DelayCostBps > 0 ? "text-danger fw-bold" : "text-success")">
+                                    @s.DelayCostBps.ToString("+0.#;-0.#;0") bps
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="form-text">
+                Differenza positiva = il feed avrebbe fatto uscire meglio. Stessa convenzione di segno della
+                misura storica, così i due numeri sono confrontabili.
+            </div>
+        }
+    </div>
+</div>
+
 <style>
     @@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
 </style>
@@ -554,6 +716,7 @@
         Service.ReloadSafety();
         await RefreshAsync();
         AdoptLaneMode();
+        await LoadExitDiagnosticsAsync();
         await Service.RefreshPromotionsAsync();
         _timer = new PollingTimer(TimeSpan.FromSeconds(2), () => InvokeAsync(RefreshAsync), Logger);
     }
@@ -581,8 +744,11 @@
     private async Task OnLaneSelectedAsync(int laneId)
     {
         _laneId = laneId;
+        _lag = null;          // la misura vale per la corsia su cui è stata fatta, non per la prossima
+        _lagError = null;
         await RefreshAsync();
         AdoptLaneMode();
+        await LoadExitDiagnosticsAsync();
     }
 
     /// <summary>
@@ -612,6 +778,53 @@
         // dire come stanno le cose adesso, non com'erano al primo caricamento della pagina.
         _lanes = await LaneDirectory.ListAsync();
         StateHasChanged();
+    }
+
+    // ---------------------------------------------------------------- [B3] diagnostica uscite
+
+    private IReadOnlyList<ProtectiveExitShadow> _shadows = [];
+    private IReadOnlyList<OpenPosition> _orphans = [];
+    private ProtectiveExitLagReport? _lag;
+    private string? _lagError;
+    private bool _lagBusy;
+
+    /// <summary>
+    /// Caricata all'avvio e al cambio corsia, NON dal timer da 2 secondi: sono due query su Postgres
+    /// che rispondono a domande che cambiano nell'arco di giorni, non di secondi. Metterle nel
+    /// polling significherebbe 1.800 query all'ora per vedere quasi sempre lo stesso risultato.
+    /// </summary>
+    private async Task LoadExitDiagnosticsAsync()
+    {
+        try
+        {
+            _shadows = await Diagnostics.RecentShadowsAsync(_laneId);
+            _orphans = await Diagnostics.OrphanPositionsAsync();
+        }
+        catch (Exception ex)
+        {
+            // Una diagnostica che rompe la pagina da cui si guarda il motore è peggio di una
+            // diagnostica assente: si logga e si prosegue.
+            Logger.LogWarning(ex, "Caricamento della diagnostica uscite protettive fallito.");
+        }
+    }
+
+    private async Task MeasureLagAsync()
+    {
+        _lagBusy = true;
+        _lag = null;
+        _lagError = null;
+        StateHasChanged();
+        try
+        {
+            var (report, reason) = await Diagnostics.MeasureLagAsync(_laneId);
+            _lag = report;
+            _lagError = reason;
+        }
+        finally
+        {
+            _lagBusy = false;
+            StateHasChanged();
+        }
     }
 
     private async Task StartAsync()
