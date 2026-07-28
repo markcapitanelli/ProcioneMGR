@@ -199,7 +199,9 @@ Nato come **monolite modulare** Blazor Server, il progetto è stato progressivam
    ```powershell
    dotnet ef database update --project ProcioneMGR.Migrations.Postgres --startup-project ProcioneMGR
    ```
-   (L'app applica comunque le migrazioni automaticamente al primo avvio.)
+   ⚠️ Passo **obbligatorio**: l'app **non** applica le migrazioni all'avvio (pattern
+   migrate-on-deploy). All'avvio crea soltanto i ruoli Identity — vedi `DbInitializer`, che lo
+   dichiara esplicitamente. Saltarlo lascia un database senza tabelle.
 
 3. **Avvio:**
    ```powershell

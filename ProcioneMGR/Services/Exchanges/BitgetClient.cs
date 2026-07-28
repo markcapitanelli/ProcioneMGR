@@ -446,7 +446,31 @@ public sealed class BitgetClient(
             leverage = leverage.ToString(CultureInfo.InvariantCulture),
         });
         var (ok, resp, _, error) = await SignedAsync(HttpMethod.Post, "/api/v2/mix/account/set-leverage", string.Empty, leverageBody, credentials, ct);
-        return new SetLeverageResult { Success = ok, Leverage = leverage, Error = error };
+        return new SetLeverageResult { Success = ok, Leverage = leverage, Error = DemoSymbolHint(error, symbol, credentials.IsTestnet) };
+    }
+
+    /// <summary>
+    /// Traduce l'errore più insidioso della **demo futures** Bitget ("paptrading"): l'ambiente
+    /// simulato espone solo un sottoinsieme di contratti (pochi major), e chiedere leva o ordini su
+    /// un simbolo non simulato risponde <c>40034 ... does not exist</c>. Alla lettera sembra che il
+    /// simbolo non esista sull'exchange — e si finisce a cercare un errore di mapping che non c'è.
+    ///
+    /// Vale **solo** su testnet: in Live lo stesso codice significherebbe davvero simbolo inesistente,
+    /// e riscriverlo lì sarebbe fuorviante all'incontrario. Nessuna logica cambia, solo il messaggio;
+    /// l'errore originale resta in coda perché la diagnosi non si perda.
+    /// </summary>
+    internal static string? DemoSymbolHint(string? error, string symbol, bool testnet)
+    {
+        if (!testnet || string.IsNullOrEmpty(error)) return error;
+
+        var looksLikeMissingContract =
+            error.Contains("40034", StringComparison.Ordinal) ||
+            error.Contains("does not exist", StringComparison.OrdinalIgnoreCase);
+        if (!looksLikeMissingContract) return error;
+
+        return $"Simbolo {symbol} non disponibile sulla demo futures Bitget: l'ambiente simulato "
+             + "offre solo alcuni contratti major (es. BTC/USDT, ETH/USDT). Scegli un simbolo "
+             + $"supportato dalla demo, oppure passa a Paper. (Errore dell'exchange: {error})";
     }
 
     public async Task<PlaceOrderResult> PlaceFuturesOrderAsync(PlaceOrderRequest request, bool reduceOnly, CancellationToken ct = default)
@@ -471,7 +495,12 @@ public sealed class BitgetClient(
         var (ok, resp, uncertain, error) = await SignedAsync(HttpMethod.Post, "/api/v2/mix/order/place-order", string.Empty, body, request.Credentials, ct);
         if (!ok)
         {
-            return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = error };
+            return new PlaceOrderResult
+            {
+                Success = false,
+                NetworkUncertain = uncertain,
+                Error = DemoSymbolHint(error, request.Symbol, request.Credentials.IsTestnet),
+            };
         }
         PlaceOrderResult result;
         using (var doc = JsonDocument.Parse(resp))
@@ -553,7 +582,14 @@ public sealed class BitgetClient(
         var (ok, resp, uncertain, error) = await SignedAsync(HttpMethod.Post, "/api/v2/mix/order/place-plan-order", string.Empty, body, request.Credentials, ct);
         if (!ok)
         {
-            return new PlaceOrderResult { Success = false, NetworkUncertain = uncertain, Error = error };
+            // Anche qui: il percorso trigger non esisteva quando l'aiuto fu scritto la prima volta,
+            // ed è proprio quello che si esercita provando gli stop resting sulla demo.
+            return new PlaceOrderResult
+            {
+                Success = false,
+                NetworkUncertain = uncertain,
+                Error = DemoSymbolHint(error, request.Symbol, request.Credentials.IsTestnet),
+            };
         }
         using var doc = JsonDocument.Parse(resp);
         var data = doc.RootElement.TryGetProperty("data", out var d) ? d : default;
