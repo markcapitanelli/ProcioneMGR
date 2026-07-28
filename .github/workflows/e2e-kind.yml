@@ -7,10 +7,33 @@ name: E2E su kind
 # asserzioni si possono provare contro il cluster kind locale senza passare dalla CI (ed è così che
 # sono state verificate la prima volta, il 2026-07-28).
 #
-# ⚠ SOLO MANUALE finché non è verde almeno una volta. Un workflow nuovo che gira su ogni push e
-# fallisce per ragioni sue insegna a ignorare il rosso, che è il danno peggiore che possa fare un
-# test. Quando questo passa, si aggiunge il trigger `push`.
+# È stato SOLO MANUALE fino al primo verde (2026-07-28, run 30392794291: 9 controlli su 9 da un
+# cluster creato da zero). Un workflow nuovo che gira su ogni push e fallisce per ragioni sue
+# insegna a ignorare il rosso, che è il danno peggiore che possa fare un test — quindi il trigger
+# `push` è stato aggiunto DOPO, non prima.
+#
+# Sei difetti trovati prima di diventare verde, e nessuno era un capriccio di CI: `dotnet restore`
+# mancante (le immagini le costruisce Docker, sul runner non ci sono gli asset), la DLL delle
+# migrazioni da copiare a mano nel bin dell'host, la master key richiesta anche a design-time, e i
+# nomi delle chiavi dei Secret — che con `envFrom` SONO i nomi delle variabili d'ambiente. Nessuno
+# dei quattro era scritto da qualche parte come "cosa serve per tirare su la piattaforma da zero".
+#
+# Solo su `master` e sui percorsi che toccano davvero il deploy: dieci minuti di cluster su ogni
+# push di ogni branch sarebbero una tassa senza contropartita, visto che il test parla dell'assetto
+# che va in esercizio.
 on:
+  push:
+    branches: [ "master" ]
+    paths:
+      - "Dockerfile"
+      - "ProcioneMGR/**"
+      - "ProcioneMGR.Contracts/**"
+      - "ProcioneMGR.Ingestion/**"
+      - "ProcioneMGR.Ml/**"
+      - "ProcioneMGR.Trading/**"
+      - "infra/k8s/**"
+      - "scripts/e2e-smoke.ps1"
+      - ".github/workflows/e2e-kind.yml"
   workflow_dispatch:
 
 permissions:

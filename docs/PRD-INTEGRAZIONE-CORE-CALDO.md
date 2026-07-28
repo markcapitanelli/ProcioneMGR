@@ -142,11 +142,19 @@ offline — che risponde alla domanda del gate senza chiederne il permesso a nes
 - **Contract test** sui .proto (già esistono i test di composizione DI mutuamente esclusiva);
 - **Smoke e2e su kind in CI** per la classe di bug che TestServer non vede (h2c, doppio worker,
   ConfigMap non applicato — tutti trovati solo eseguendo, mai dai test in-process).
-  **Fatto a metà, 2026-07-28, e la metà fatta è quella che conta.** Le asserzioni vivono in
-  `scripts/e2e-smoke.ps1` e girano contro qualunque cluster: **9 controlli, tutti verdi contro il
-  cluster kind reale**. Il workflow `.github/workflows/e2e-kind.yml` costruisce il cluster in CI ed
-  è per ora **solo manuale** (`workflow_dispatch`): un workflow nuovo che gira su ogni push e
-  fallisce per ragioni sue insegna a ignorare il rosso. Va promosso a `push` dopo il primo verde.
+  **FATTO, 2026-07-28.** Le asserzioni vivono in `scripts/e2e-smoke.ps1` e girano contro qualunque
+  cluster; `.github/workflows/e2e-kind.yml` costruisce il cluster. **9 controlli su 9 verdi sia
+  contro il cluster reale sia in CI da un cluster creato da zero** (run 30392794291), e il trigger
+  `push` è stato aggiunto SOLO DOPO quel verde: un workflow nuovo che gira su ogni push e fallisce
+  per ragioni sue insegna a ignorare il rosso.
+  **Sei difetti trovati prima di diventare verde**, nessuno un capriccio di CI: `dotnet restore`
+  mancante, la DLL delle migrazioni da copiare a mano nel bin dell'host (procedura già in
+  [POSTGRES_MIGRATION](POSTGRES_MIGRATION.md) e che nessuno aveva trascritto qui), la master key
+  richiesta anche a design-time, i nomi delle chiavi dei Secret — che con `envFrom` **sono** i nomi
+  delle variabili d'ambiente — più due dello script stesso: «assente» confuso con «0 repliche», e i
+  CRLF di Windows che uccidevano la sonda `sh`. Quest'ultimo è un difetto che **la CI non può
+  trovare**, perché su Linux il checkout è LF: si è visto solo rieseguendo lo smoke a mano dal repo
+  principale.
   Il controllo più prezioso è emerso per caso ed è **negativo**: la porta 8080 del trading — quella
   di `ConfirmOrder` e `StartLane(LIVE)` — deve risultare IRRAGGIUNGIBILE da un namespace non
   autorizzato. Una NetworkPolicy senza un CNI che la implementi viene accettata e ignorata in
