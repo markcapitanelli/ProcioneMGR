@@ -129,7 +129,17 @@ su un modello `Staging` senza toccare nulla di operativo.
 
 - **Contract test** sui .proto (già esistono i test di composizione DI mutuamente esclusiva);
 - **Smoke e2e su kind in CI** per la classe di bug che TestServer non vede (h2c, doppio worker,
-  ConfigMap non applicato — tutti trovati solo eseguendo, mai dai test in-process);
+  ConfigMap non applicato — tutti trovati solo eseguendo, mai dai test in-process).
+  **Fatto a metà, 2026-07-28, e la metà fatta è quella che conta.** Le asserzioni vivono in
+  `scripts/e2e-smoke.ps1` e girano contro qualunque cluster: **9 controlli, tutti verdi contro il
+  cluster kind reale**. Il workflow `.github/workflows/e2e-kind.yml` costruisce il cluster in CI ed
+  è per ora **solo manuale** (`workflow_dispatch`): un workflow nuovo che gira su ogni push e
+  fallisce per ragioni sue insegna a ignorare il rosso. Va promosso a `push` dopo il primo verde.
+  Il controllo più prezioso è emerso per caso ed è **negativo**: la porta 8080 del trading — quella
+  di `ConfirmOrder` e `StartLane(LIVE)` — deve risultare IRRAGGIUNGIBILE da un namespace non
+  autorizzato. Una NetworkPolicy senza un CNI che la implementi viene accettata e ignorata in
+  silenzio, ed è già successo su questo cluster con kindnet: l'unico modo di sapere che il confine
+  esiste è provare a passarlo e vedersi rifiutare;
 - **Chaos test manuale scriptato** (B3): kill del guscio, verifica protezioni; kill del core,
   verifica che il guscio lo dichiari (banner UI + notifica) invece di fingere;
 - **Drill di restore** dal backup pg_dump prima di B3.

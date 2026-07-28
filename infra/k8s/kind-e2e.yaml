@@ -1,0 +1,21 @@
+# Cluster kind per lo smoke e2e in CI (.github/workflows/e2e-kind.yml).
+#
+# Gemello di kind-config.yaml con due differenze, entrambe volute:
+#  - nessun extraPortMappings: in CI non c'è un host a cui pubblicare nulla, si parla col cluster
+#    da kubectl e basta;
+#  - podSubnet 10.244.0.0/16 come il locale, ma qui per uniformità e non per necessità: il runner
+#    GitHub non ha Docker Desktop né host.docker.internal, quindi la collisione che ha bruciato B1
+#    non può presentarsi. Tenerli uguali serve a che il cluster di CI non sia un ambiente diverso
+#    da quello su cui si sviluppa.
+#
+# disableDefaultCNI resta VERO: senza Calico le NetworkPolicy verrebbero accettate e ignorate, e il
+# controllo 7 dello smoke — l'unico che verifica il confine davanti agli ordini Live — passerebbe
+# per finta. Un test di sicurezza che non può fallire non è un test.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: procionemgr-e2e
+networking:
+  disableDefaultCNI: true
+  podSubnet: "10.244.0.0/16"
+nodes:
+  - role: control-plane
