@@ -5594,6 +5594,7 @@ async Task ExitLagAsync(int sampleEveryNBars, bool sweep)
     Console.WriteLine($"    Corsie in esecuzione: {string.Join(", ", running)} · campionamento ingressi: 1 ogni {sampleEveryNBars} barre\n");
 
     var analyzer = new ProtectiveExitLagAnalyzer();
+    var verdicts = new List<(int LaneId, string Symbol, double MedianCostBps)>();
 
     foreach (var lane in lanes)
     {
@@ -5680,6 +5681,8 @@ async Task ExitLagAsync(int sampleEveryNBars, bool sweep)
         Console.WriteLine($"    ANTICIPO   mediana {report.MedianLeadSeconds / 60d,8:F1} min · media {report.MeanLeadSeconds / 60d,8:F1} min · p90 {report.P90LeadSeconds / 60d,8:F1} min");
         Console.WriteLine($"    COSTO RIT. mediana {report.MedianDelayCostBps,8:F1} bps · media {report.MeanDelayCostBps,8:F1} bps · p10 {report.P10DelayCostBps,8:F1} · p90 {report.P90DelayCostBps,8:F1}");
         Console.WriteLine($"               il ritardo CONVIENE nel {report.AdverseShare * 100d:F1}% dei casi (li' il feed avrebbe fatto uscire peggio)");
+        verdicts.Add((lane.LaneId, symbol, report.MedianDelayCostBps));
+
         Console.WriteLine($"    SCARTO del fill registrato: mediana {report.MedianCandleFillOptimismBps,8:F1} bps · media {report.MeanCandleFillOptimismBps,8:F1} bps");
         Console.WriteLine("               (positivo = il motore REGISTRA meglio di quanto sia ottenibile alla chiusura della barra)");
 
@@ -5714,7 +5717,37 @@ async Task ExitLagAsync(int sampleEveryNBars, bool sweep)
         Console.WriteLine();
     }
 
-    Console.WriteLine("    Lettura onesta: le barre fini sono un surrogato CONSERVATIVO dei tick — la scoperta e'");
+    // VERDETTO, e un CODICE DI USCITA. Questa fase e' pensata anche per girare schedulata (CronJob
+    // mensile): un controllo periodico che si limita a stampare finisce in log che nessuno rilegge e
+    // che ruotano via. Uscendo diverso da zero quando il segno si ROVESCIA, il fallimento del Job e'
+    // il segnale — visibile in `kubectl get jobs` e da qualunque monitoraggio, senza nuova
+    // impalcatura. Soglia piccola ma non nulla: una mediana appena sopra lo zero e' rumore, non un
+    // rovesciamento.
+    var flipThresholdBps = ProtectiveExitLagAnalyzer.VerdictFlipThresholdBps;
+    var flipped = verdicts.Where(v => ProtectiveExitLagAnalyzer.IsVerdictFlipped(v.MedianCostBps)).ToList();
+
+    Console.WriteLine("\n=== VERDETTO ===");
+    foreach (var v in verdicts)
+    {
+        var esito = ProtectiveExitLagAnalyzer.IsVerdictFlipped(v.MedianCostBps) ? "ROVESCIATO" : "confermato";
+        Console.WriteLine($"    Corsia {v.LaneId} {v.Symbol,-11} mediana {v.MedianCostBps,8:F1} bps  -> {esito}");
+    }
+
+    if (flipped.Count == 0)
+    {
+        Console.WriteLine($"\n    Verdetto di B3 CONFERMATO su {verdicts.Count} corsie: uscire al tocco resta");
+        Console.WriteLine("    peggio che uscire a barra chiusa. Nessuna azione.");
+    }
+    else
+    {
+        Console.WriteLine($"\n    ATTENZIONE: su {flipped.Count} corsie su {verdicts.Count} il segno si e' ROVESCIATO");
+        Console.WriteLine($"    (mediana sopra +{flipThresholdBps:F0} bps a favore del feed). Il verdetto di B3 e' stato preso");
+        Console.WriteLine("    su dati fino al 2026-07: se questo persiste, DriveProtectiveExits va rimisurato.");
+        Console.WriteLine("    Dettaglio del metodo in docs/REPORT-B3-EXITLAG-2026-07-28.md.");
+        Environment.ExitCode = 2;
+    }
+
+    Console.WriteLine("\n    Lettura onesta: le barre fini sono un surrogato CONSERVATIVO dei tick — la scoperta e'");
     Console.WriteLine("    datata alla chiusura della barra fine, non al tick esatto, quindi l'anticipo misurato e' un");
     Console.WriteLine("    limite INFERIORE. Il costo del ritardo ha due segni: dove il prezzo rompe e prosegue il feed");
     Console.WriteLine("    salva, dove rompe e rimbalza il feed fa uscire peggio. E' la media pesata dei due che decide,");

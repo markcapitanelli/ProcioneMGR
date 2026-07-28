@@ -43,6 +43,23 @@ public sealed class ProtectiveExitLagAnalyzer
             : throw new ArgumentOutOfRangeException(nameof(timeframe), timeframe, "Timeframe non riconosciuto.");
 
     /// <summary>
+    /// Soglia oltre la quale il verdetto di B3 si considera ROVESCIATO. Piccola ma non nulla: una
+    /// mediana appena sopra lo zero è rumore, non un rovesciamento.
+    /// </summary>
+    public const double VerdictFlipThresholdBps = 5d;
+
+    /// <summary>
+    /// Il verdetto di B3 si è rovesciato su questa serie? Vive qui, e non nella fase CLI che la
+    /// consuma, per un motivo solo: quella che può essere sbagliata è la CONVENZIONE DI SEGNO, non
+    /// il confronto. Positivo = il feed avrebbe fatto uscire MEGLIO, quindi un valore positivo e
+    /// grande è ciò che contraddice il verdetto («uscire al tocco è peggio»). Invertirla farebbe
+    /// suonare l'allarme esattamente quando tutto va come previsto — un guasto che si scopre solo
+    /// dopo mesi di rossi ignorati, o peggio di verdi rassicuranti.
+    /// </summary>
+    public static bool IsVerdictFlipped(double medianDelayCostBps, double thresholdBps = VerdictFlipThresholdBps) =>
+        medianDelayCostBps > thresholdBps;
+
+    /// <summary>
     /// Simula posizioni sulle barre di corsia e le fa vivere DUE VOLTE: una col solo percorso a
     /// candela di corsia, una col percorso a risoluzione fine. Ogni posizione è aperta alla
     /// chiusura di una barra di corsia — non si sceglie quando entrare perché la domanda non

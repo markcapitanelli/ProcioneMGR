@@ -453,6 +453,31 @@ public sealed class ProtectiveExitLagAnalyzerTests
             $"sul rumore il costo del ritardo dovrebbe essere zero, invece vale {mean:F2} bps (errore standard {stdErr:F2}): la misura ha un segno suo.");
     }
 
+    // ------------------------------------------------------------------ il verdetto del job mensile
+
+    /// <summary>
+    /// La regola che fa fallire il CronJob mensile, ancorata ai NUMERI VERI del 2026-07-28: le tre
+    /// corsie misurate devono risultare «confermato», e solo un valore positivo e sopra soglia deve
+    /// risultare «rovesciato».
+    ///
+    /// Non è un test tautologico su un maggiore-di: quello che può essere sbagliato è la
+    /// CONVENZIONE DI SEGNO, e invertirla farebbe suonare l'allarme esattamente quando tutto va come
+    /// previsto — un guasto che si scoprirebbe solo dopo mesi di rossi ignorati, o peggio di verdi
+    /// rassicuranti mentre il mercato è cambiato.
+    /// </summary>
+    [Theory]
+    [InlineData(-67.2d, false)]   // AAVE/USDT 1d, misura reale
+    [InlineData(-6.3d, false)]    // DOT/USDT 15m, misura reale
+    [InlineData(-4.9d, false)]    // XLM/USDT 1h, misura reale
+    [InlineData(0d, false)]       // nessuna differenza: non è un rovesciamento
+    [InlineData(5d, false)]       // esattamente sulla soglia: ancora rumore
+    [InlineData(5.1d, true)]      // appena oltre: rovesciato
+    [InlineData(400d, true)]      // il caso che il feed salverebbe davvero
+    public void Il_verdetto_si_rovescia_solo_col_segno_giusto(double medianBps, bool flipped)
+    {
+        Assert.Equal(flipped, ProtectiveExitLagAnalyzer.IsVerdictFlipped(medianBps));
+    }
+
     // ------------------------------------------------------------------ guardie
 
     [Fact]
