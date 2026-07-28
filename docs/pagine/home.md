@@ -32,7 +32,7 @@ bottoni Login / Registrati (righe 86–97).
 | Card statistiche | 31–38 | 4 `StatCard` renderizzate da `_stats` (record `HomeStats`) |
 | Alert "nessun dato" | 40–46 | Mostrato solo se `TrackedSeries == 0`: invita ad andare in Watchlist |
 | Alert decadimento | 48–63 | Se `_decayAlerts` non è vuoto: elenco gambe ensemble in alert con Sharpe realizzato vs atteso e link a `ensemble#decay-monitor` |
-| **Alert deriva fattori** | 66–95 | **[D2]** Se `_factorDriftAlerts` non è vuoto: fattori che si sono spenti o hanno invertito il segno, con IC da/a e soglia, link a `feature-selection#drift-panel`. Il gradino sotto al decadimento delle strategie: qui si guarda il *fattore*, non la gamba |
+| **Alert deriva fattori** | 66–105 | **[D2]** Se `_factorDriftAlerts` non è vuoto: fattori che si sono spenti o hanno invertito il segno, con IC da/a e soglia, link a `feature-selection#drift-panel`. Il gradino sotto al decadimento delle strategie: qui si guarda il *fattore*, non la gamba. Se non ci sono allarmi ma il job ha già calcolato qualcosa, compare comunque una riga sobria con la **copertura**: "nessun allarme" senza sapere su quante serie si legge come un via libera sull'intera watchlist |
 | Percorso piattaforma | 66–74 | 5 `WorkflowStep` numerati, ognuno linka la pagina corrispondente |
 | Strumenti avanzati | 76–84 | 6 `ToolCard`: Discovery, Regimi, ML Lab, Pairs, Volatilità, Sentiment |
 

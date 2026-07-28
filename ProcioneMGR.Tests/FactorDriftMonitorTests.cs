@@ -472,6 +472,107 @@ public sealed class FactorDriftWorkerTests : IAsyncDisposable
         Assert.Equal(expected, FactorDriftWorker.WindowSizeFor(candles));
     }
 
+    [Theory]
+    [InlineData(8000)]
+    [InlineData(20_000)]
+    [InlineData(26_929)]
+    public void TheJobAndThePanel_ProposeTheSameWindowOnTheSameSample(int observations)
+    {
+        // Difetto trovato guardando l'app dal vivo: il job quantizzava e il pannello no, quindi sulla
+        // STESSA serie uscivano finestre diverse ⇒ soglie diverse (1,96/√n) ⇒ verdetti che si
+        // contraddicevano ("si è spento" contro "non ha mai informato"). Ora la regola è una sola:
+        // questo test è il guardiano che resti tale.
+        Assert.Equal(FactorDriftAnalyzer.SuggestWindowSize(observations), FactorDriftWorker.WindowSizeFor(observations));
+    }
+
+    // --- Rotazione e copertura -------------------------------------------------------------------
+
+    [Fact]
+    public async Task TheJobRotates_TheSecondRoundPicksTheSeriesItHasNotSeenYet()
+    {
+        // Prima si prendevano sempre le prime N per Id: con una watchlist da centinaia di serie il
+        // monitor guardava per sempre lo stesso 2%, e "nessun allarme" voleva dire "non ho guardato".
+        var (worker, _, db, _) = await BuildFullAsync(new Dictionary<string, string?>
+        {
+            ["FactorDrift:MaxSeries"] = "1",
+        });
+        await SeedAsync(db, "AAA/USDT", "1h", 6000);
+        await SeedAsync(db, "BBB/USDT", "1h", 6000);
+
+        await worker.RunOnceAsync();
+        await worker.RunOnceAsync();
+
+        await using var check = await db.CreateDbContextAsync();
+        var seen = await check.FactorIcWindows.Select(w => w.Symbol).Distinct().ToListAsync();
+
+        Assert.Equal(2, seen.Count);   // entrambe viste in due giri, non una sola due volte
+        Assert.Contains("AAA/USDT", seen);
+        Assert.Contains("BBB/USDT", seen);
+    }
+
+    [Fact]
+    public async Task ASeriesThatCannotBeComputed_DoesNotStarveTheOthers()
+    {
+        // Una serie con troppe poche candele viene saltata e non scrive nulla in tabella: ordinando
+        // per solo "ultimo calcolo" resterebbe in cima alla coda PER SEMPRE e occuperebbe un posto a
+        // ogni giro. Con un solo posto per giro, la serie buona non verrebbe mai calcolata.
+        var (worker, _, db, _) = await BuildFullAsync(new Dictionary<string, string?>
+        {
+            ["FactorDrift:MaxSeries"] = "1",
+        });
+        await SeedAsync(db, "AAA-TINY/USDT", "1h", 200);   // sotto il minimo di 500: sempre saltata
+        await SeedAsync(db, "BBB/USDT", "1h", 6000);
+
+        await worker.RunOnceAsync();   // tocca la prima (in ordine alfabetico), che viene saltata
+        await worker.RunOnceAsync();   // deve passare alla seconda, non riprovare la prima
+
+        await using var check = await db.CreateDbContextAsync();
+        var seen = await check.FactorIcWindows.Select(w => w.Symbol).Distinct().ToListAsync();
+
+        Assert.Equal("BBB/USDT", Assert.Single(seen));
+    }
+
+    [Fact]
+    public async Task AfterARotatedRound_TheSnapshotStillShowsTheSeriesOfPreviousRounds()
+    {
+        // Con la rotazione, sostituire la fotografia con i soli risultati del giro corrente farebbe
+        // sparire dalla Home gli allarmi delle serie viste il giro prima. La fotografia si ricostruisce
+        // dalla tabella, che le contiene tutte.
+        var (worker, snapshot, db, _) = await BuildFullAsync(new Dictionary<string, string?>
+        {
+            ["FactorDrift:MaxSeries"] = "1",
+        });
+        await SeedAsync(db, "AAA/USDT", "1h", 8000);
+        await SeedAsync(db, "BBB/USDT", "1h", 8000);
+
+        await worker.RunOnceAsync();
+        Assert.Single(snapshot.All);
+
+        await worker.RunOnceAsync();
+
+        Assert.Equal(2, snapshot.All.Count);
+        Assert.Equal(2, snapshot.TrackedSeriesCount);
+    }
+
+    [Fact]
+    public async Task TheSnapshotDeclaresHowManySeriesAreInTheWatchlist()
+    {
+        // "1 fattore in deriva" su 5 serie di 228 è vero e fuorviante: la UI deve poter dire su
+        // quante serie è basato ciò che mostra.
+        var (worker, snapshot, db, _) = await BuildFullAsync(new Dictionary<string, string?>
+        {
+            ["FactorDrift:MaxSeries"] = "2",
+        });
+        await SeedAsync(db, "AAA/USDT", "1h", 6000);
+        await SeedAsync(db, "BBB/USDT", "1h", 6000);
+        await SeedAsync(db, "CCC/USDT", "1h", 6000);
+
+        await worker.RunOnceAsync();
+
+        Assert.Equal(2, snapshot.All.Count);          // calcolate in questo giro
+        Assert.Equal(3, snapshot.TrackedSeriesCount); // dichiarate in watchlist
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();

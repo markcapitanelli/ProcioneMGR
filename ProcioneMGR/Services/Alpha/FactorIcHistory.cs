@@ -102,6 +102,14 @@ public interface IFactorIcHistoryStore
     /// <summary>La fotografia registrata di UNA serie (null se il job non l'ha mai calcolata).</summary>
     Task<FactorDriftSeriesSnapshot?> LoadSnapshotAsync(
         string symbol, string timeframe, FactorDriftConfig? config, CancellationToken ct = default);
+
+    /// <summary>
+    /// Quando ogni serie è stata calcolata l'ultima volta, per chiave <c>"SIMBOLO|TF"</c>. È ciò che
+    /// permette al job di girare **a rotazione** sulle serie più vecchie invece di macinare sempre le
+    /// stesse prime N: senza, con una watchlist da centinaia di serie il monitor guarderebbe per
+    /// sempre lo stesso 2%.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, DateTime>> LoadLastComputedAsync(CancellationToken ct = default);
 }
 
 /// <inheritdoc cref="IFactorIcHistoryStore"/>
@@ -197,6 +205,17 @@ public sealed class FactorIcHistoryStore(IDbContextFactory<ApplicationDbContext>
             .Where(w => w.Symbol == symbol && w.Timeframe == timeframe && w.ForwardHorizon == horizon)
             .ToListAsync(ct);
         return BuildSnapshots(rows, config).FirstOrDefault();
+    }
+
+    public async Task<IReadOnlyDictionary<string, DateTime>> LoadLastComputedAsync(CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var rows = await db.FactorIcWindows.AsNoTracking()
+            .GroupBy(w => new { w.Symbol, w.Timeframe })
+            .Select(g => new { g.Key.Symbol, g.Key.Timeframe, Last = g.Max(w => w.ComputedAtUtc) })
+            .ToListAsync(ct);
+
+        return rows.ToDictionary(r => $"{r.Symbol}|{r.Timeframe}", r => r.Last, StringComparer.Ordinal);
     }
 
     private static IReadOnlyList<FactorDriftSeriesSnapshot> BuildSnapshots(

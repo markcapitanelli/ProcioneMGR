@@ -82,6 +82,14 @@ costruzione, coerente con la lezione già pagata dalla piattaforma sulla signifi
 un job periodico calcola la deriva sulle serie della watchlist; gli allarmi compaiono in **Home**,
 accanto al widget di decadimento-strategia, con link a questo pannello. Config in `appsettings`:
 `FactorDrift:Enabled` (default true), `IntervalHours` (12), `MaxSeries` (5), `MaxCandles` (20000).
+
+**Il job ruota** sulle serie ordinandole per *ultimo calcolo* (le più vecchie prima, quelle mai viste
+per prime): con `MaxSeries` = 5 e una watchlist da 228 serie, prima il monitor guardava per sempre le
+stesse 5 — un «nessun allarme» che voleva dire «non ho guardato». A regime la copertura è completa in
+⌈serie ÷ MaxSeries⌉ giri, a costo costante per giro; alzare `MaxSeries` la accelera pagando più CPU e
+più letture di candele. La Home **dichiara la copertura** («N serie già calcolate su M in watchlist»),
+e la fotografia si ricostruisce dalla tabella a fine giro — altrimenti, con la rotazione, mostrerebbe
+solo l'ultimo gruppo.
 Monitora **solo gli 8 fattori scritti a mano**, non il catalogo Alpha158: 158 fattori × serie ×
 finestre rolling trasformerebbero un monitor in un consumo di CPU permanente — chi vuole guardare
 tutto lo fa su richiesta da qui.
@@ -95,6 +103,16 @@ con indice unico su (serie, fattore, orizzonte, ampiezza, fine finestra): ricalc
 finestra **aggiorna** la riga, non la duplica. All'avvio il worker **ricostruisce la fotografia dalla
 tabella** (`HydrateAsync`), quindi l'alert in Home c'è già al primo caricamento dopo un riavvio del
 guscio invece di comparire dopo il primo giro.
+
+**Perché i due pannelli possono dare verdetti diversi sulla stessa serie** (e come si legge la
+differenza): l'ampiezza della finestra segue **una sola regola condivisa**
+(`FactorDriftAnalyzer.SuggestWindowSize`: ~10 finestre, quantizzata a 250), quindi *a parità di
+numerosità* propongono lo stesso numero. Resta una differenza legittima: il job guarda solo le ultime
+`FactorDrift:MaxCandles` candele (20.000 di default), il pannello sotto guarda il periodo che scegli
+tu. Più campione ⇒ finestra più ampia ⇒ soglia più bassa (1,96/√n) ⇒ un fattore può risultare "si è
+spento" per uno e "non ha mai informato" per l'altro. Il pannello lo dichiara in testa, insieme
+all'orizzonte forward usato dal job (1 barra), e avvisa se il form è impostato su un orizzonte
+diverso — nel qual caso i due numeri **non sono confrontabili**.
 
 Tre scelte che vale la pena conoscere:
 - **si persistono solo le finestre, non il verdetto**: il verdetto è funzione pura della serie più la

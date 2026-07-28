@@ -255,6 +255,77 @@ public class IncrementalIcGateTests
             [new IcCandidate("x", candidate)]));
     }
 
+    // --- Il secondo livello: informa vs conviene ---------------------------------------------------
+
+    /// <summary>
+    /// Come <see cref="Build"/>, ma coi rendimenti in UNITÀ DI RENDIMENTO realistiche (σ ≈ 11 bp, la
+    /// volatilità a 5 minuti misurata su BTC perp): serve perché "punti base" abbia un significato.
+    /// </summary>
+    private static (double[] Proxy, double[] Candidate, double[] Forward) BuildWithRealisticScale(
+        int n, double proxyWeight, double candidateWeight, int seed, double sigma = 0.001135)
+    {
+        var (proxy, candidate, forward) = Build(n, proxyWeight, candidateWeight, seed);
+        var mean = forward.Average();
+        var sd = Math.Sqrt(forward.Sum(v => (v - mean) * (v - mean)) / forward.Length);
+        var scaled = forward.Select(v => (v - mean) / sd * sigma).ToArray();
+        return (proxy, candidate, scaled);
+    }
+
+    [Fact]
+    public void ASignalThatInformsButCannotPayTheRoundTrip_IsNotCalledTradable()
+    {
+        // È il caso reale di D3: |IC parziale| 0,04 con p-value 0,005 (informa, t≈8) ed edge lordo
+        // 0,45 bp contro 4 bp di costo. Prima il gate diceva "POSITIVO" e la traduzione in punti base
+        // stava dieci righe più in basso, in un altro file: chi leggeva la prima riga capiva "si può
+        // operare".
+        var (proxy, candidate, forward) = BuildWithRealisticScale(20_000, 0.4, 0.30, seed: 55);
+
+        var report = Run(proxy, candidate, forward);
+
+        var outcome = report.Outcomes[0];
+        Assert.True(report.AnyAddsInformation, report.Verdict);
+        Assert.False(report.AnyTradable, report.Verdict);
+        Assert.False(outcome.IsTradable);
+        Assert.Contains("INFORMA MA NON È OPERABILE", report.Verdict);
+        Assert.Contains("ESECUZIONE", report.Verdict);
+        // I numeri del secondo livello sono esposti, non solo raccontati.
+        Assert.True(outcome.ForwardSigmaBps > 10 && outcome.ForwardSigmaBps < 13, $"σ attesa ~11 bp: {outcome.ForwardSigmaBps:F2}");
+        Assert.True(outcome.GrossEdgeBps < 4.0);
+        Assert.True(outcome.IcRequiredByCosts > Math.Abs(outcome.PartialIc));
+    }
+
+    [Fact]
+    public void WithNoCostModel_TheSecondLevelIsSilentInsteadOfInventingNumbers()
+    {
+        // Coi rendimenti sintetici (adimensionali) i "punti base" non vogliono dire niente: meglio
+        // spegnere il livello economico che stampare un numero senza unità.
+        var (proxy, candidate, forward) = Build(4000, 0.5, 0.35, seed: 21);
+
+        var report = IncrementalIcGate.Run(proxy,
+            new Dictionary<int, IReadOnlyList<double>> { [1] = forward },
+            [new IcCandidate("candidato", candidate)],
+            new IncrementalIcConfig { RoundTripCostBps = null });
+
+        Assert.True(report.AnyAddsInformation);
+        Assert.False(report.AnyTradable);
+        Assert.Equal(0d, report.Outcomes[0].IcRequiredByCosts);
+        Assert.DoesNotContain("bp", report.Outcomes[0].Message);
+    }
+
+    [Fact]
+    public void AnEdgeBigEnoughToPayTheRoundTrip_IsCalledTradable()
+    {
+        // Controllo speculare: se l'edge c'è davvero ed è grosso, il secondo livello deve accendersi —
+        // altrimenti il gate direbbe sempre "non operabile" e non misurerebbe nulla.
+        var (proxy, candidate, forward) = BuildWithRealisticScale(20_000, 0.4, 0.30, seed: 55, sigma: 0.05);
+
+        var report = Run(proxy, candidate, forward);
+
+        Assert.True(report.AnyTradable, report.Verdict);
+        Assert.Contains("POSITIVO E OPERABILE", report.Verdict);
+        Assert.Contains("holdout", report.Verdict); // e resta il collaudo di sempre
+    }
+
     // --- Struttura del nullo ----------------------------------------------------------------------
 
     [Fact]

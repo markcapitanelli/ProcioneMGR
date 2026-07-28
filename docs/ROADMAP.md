@@ -184,6 +184,24 @@ il pavimento di rumore che etichettava il puro caso come "segno invertito" — n
   Verdetto, metodo e limiti nel [report di D3](REPORT-D3-OFI-2026-07-28.md); il difetto trovato dal
   test del rumore (il 99° percentile di 200 giri dava 3,3% di falsi positivi) è documentato lì.
 
+**Consolidamento (stessa giornata, su richiesta del proprietario: chiudere i debiti prima di
+proseguire).** Quattro difetti del lavoro appena fatto, trovati rileggendolo invece che aspettando
+che li trovasse l'uso:
+1. **Due regole per l'ampiezza della finestra** — il job quantizzava, il pannello no: sulla stessa
+   serie uscivano soglie diverse e quindi verdetti che si contraddicevano ("si è spento" contro "non
+   ha mai informato"). Ora la regola è una sola (`FactorDriftAnalyzer.SuggestWindowSize`), con un test
+   che lo tiene tale; la differenza residua e legittima (il job guarda le ultime `MaxCandles` candele)
+   è **dichiarata in UI** invece che subita.
+2. **Il monitor guardava 5 serie su 228, per sempre le stesse** — un «nessun allarme» che voleva dire
+   «non ho guardato». Ora il job **ruota** ordinando per ultimo calcolo (le mai viste per prime), la
+   fotografia si ricostruisce dalla tabella a fine giro (altrimenti la rotazione farebbe sparire gli
+   allarmi del giro precedente) e la Home **dichiara la copertura**.
+3. **Verdetto del gate a due livelli** — la traduzione in punti base era nella fase CLI, dieci righe
+   sotto il verdetto: ora è dentro il gate, che dice `NEGATIVO` / `INFORMA MA NON È OPERABILE` /
+   `POSITIVO E OPERABILE`. Un «AGGIUNGE» non si può più leggere come «si può operare».
+4. **Orizzonte dichiarato** nel pannello della storia registrata, con avviso quando il form sopra è
+   impostato su un orizzonte diverso: i due numeri non sarebbero confrontabili.
+
 **Poi, in ordine:** osservazione B3 (tick-vs-candle → R1 pieno) · confronto forward-vs-predizione
 sulle tre corsie (AAVE/XLM holdout coerente, DOT dato per perdente dal CPCV) · B4/B5 · A6 · C4/C5.
 
