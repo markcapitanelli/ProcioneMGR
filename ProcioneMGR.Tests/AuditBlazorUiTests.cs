@@ -207,6 +207,13 @@ public class AuditBlazorUiTests : BunitContext
         Services.AddSingleton<ILaneDirectory>(new FakeLaneDirectory());
         Services.AddSingleton<ProcioneMGR.Services.Security.IMasterKeyProbe>(new Infrastructure.FakeMasterKeyProbe());
         Services.AddScoped<TradingPageService>();
+        // [B3] Diagnostica delle uscite protettive. La factory di DbContext qui LANCIA, ed e'
+        // voluto: cosi' ogni render della pagina verifica anche che una diagnostica rotta non porti
+        // giu' la pagina da cui si comanda il motore — la proprieta' che conta piu' del contenuto
+        // del pannello, e che il servizio garantisce catturando e loggando.
+        Services.AddSingleton<Microsoft.EntityFrameworkCore.IDbContextFactory<ApplicationDbContext>>(new ThrowingDbFactory());
+        Services.AddSingleton<ProtectiveExitLagAnalyzer>();
+        Services.AddScoped<ProtectiveExitDiagnosticsService>();
         return (writer, engines);
     }
 
@@ -458,5 +465,52 @@ public class AuditBlazorUiTests : BunitContext
 
         Assert.Equal(0, writer.Calls);
         Assert.Contains("Valori non validi", cut.Markup);
+    }
+
+    // --- [B3] Diagnostica delle uscite protettive ------------------------------------------------
+
+    /// <summary>
+    /// Il pannello deve esserci ANCHE quando la diagnostica non riesce a leggere niente (qui la
+    /// factory di DbContext lancia), e deve dire che il verdetto di B3 e' quello misurato: le uscite
+    /// sono guidate dalle candele per MISURA, non in attesa di una misura.
+    ///
+    /// Il pannello vuoto e' un caso legittimo e frequente — su queste corsie le uscite protettive
+    /// sono pochi eventi al mese — quindi deve distinguersi da un guasto: "non e' ancora successo"
+    /// non e' "non funziona".
+    /// </summary>
+    [Fact]
+    public void Trading_PannelloRitardoUscite_CePureSenzaDati_ESpiegaIlVerdetto()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        RegisterTradingServices();
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+
+        Assert.Contains("Ritardo delle uscite protettive", cut.Markup);
+        Assert.Contains("guidate dalle", cut.Markup);
+        Assert.Contains("peggio", cut.Markup);                    // il verdetto misurato, non un forse
+        Assert.Contains("non e' ancora successo".Replace("e'", "è"), cut.Markup);
+        Assert.NotNull(cut.FindAll("button").FirstOrDefault(b => b.TextContent.Contains("Misura il ritardo")));
+    }
+
+    /// <summary>
+    /// La pagina NON deve inventare un allarme di posizioni orfane quando non ce ne sono: la
+    /// diagnostica qui fallisce (DB che lancia) e il blocco rosso non deve comparire lo stesso.
+    /// Un allarme che appare per un errore di lettura e' peggio di nessun allarme, perche' insegna
+    /// a ignorarlo.
+    /// </summary>
+    [Fact]
+    public void Trading_SenzaOrfane_NessunBloccoRosso()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        RegisterTradingServices();
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+
+        Assert.DoesNotContain("Posizioni orfane", cut.Markup);
     }
 }
