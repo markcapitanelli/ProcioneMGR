@@ -25,8 +25,19 @@ configMapGenerator:
 
 images:
   - name: ghcr.io/markcapitanelli/procionemgr-trading
-    # [B3, 2026-07-28] Sentinella d'ombra: in assetto osservativo i tick non vengono piu' scartati
-    # dal worker, il motore li OSSERVA e registra il confronto col percorso a candele. Nessun cambio
-    # di comportamento operativo — le uscite restano guidate dalle candele
-    # (DriveProtectiveExits=false, ora per misura: vedi docs/REPORT-B3-EXITLAG-2026-07-28.md).
-    newTag: 562b359db3733aec8f222d76fad59c18ff7aefdd
+    # [2026-07-29] Configurazione del motore leggibile e scrivibile dal guscio via gRPC
+    # (GetEngineConfig/SetEngineConfig). Serviva perche' il file condiviso su PVC — l'unico canale
+    # previsto finora — resta vuoto quando il guscio NON gira nel cluster, e i pannelli mostravano
+    # cosi' la configurazione del guscio invece di quella applicata dal motore. Con questa build
+    # l'assetto operativo del core esce dalla ConfigMap e passa al file, che ora la UI sa scrivere.
+    #
+    # ATTENZIONE AL TAG: e' una build LOCALE (docker build + kind load), non un'immagine pubblicata
+    # su GHCR come tutte le altre pinnate qui. Un rollout la riusa perche' e' gia' nel nodo, ma un
+    # cluster ricreato da zero NON la troverebbe. Prima di considerarla definitiva va pubblicata e
+    # ripinnata sul digest.
+    #
+    # [B3, 2026-07-28] Assetto precedente (562b359db3733aec8f222d76fad59c18ff7aefdd): sentinella
+    # d'ombra, tick osservati invece che scartati. INVARIATO in questa build — le uscite restano
+    # guidate dalle candele (DriveProtectiveExits=false per MISURA, vedi
+    # docs/REPORT-B3-EXITLAG-2026-07-28.md).
+    newTag: audit-20260729

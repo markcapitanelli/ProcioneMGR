@@ -148,12 +148,32 @@ public sealed class EngineConfigService(
         if (error is not null) throw new InvalidOperationException(error);
 
         await writer.SaveSectionAsync(section, options, ct);
-        logger.LogInformation("Configurazione del motore aggiornata: sezione '{Section}'.", section);
 
-        // Rilettura: chiude il cerchio senza costringere il chiamante a fidarsi della scrittura.
-        // NB: il provider JSON ha reloadOnChange, ma la rilettura è asincrona rispetto alla
-        // scrittura — il valore riletto qui può essere ancora quello precedente. Il warning sulla
-        // sorgente è la parte che conta davvero, ed è calcolato sui provider, non sui valori.
+        // RILETTURA ESPLICITA, non "aspettiamo che il file watcher se ne accorga".
+        //
+        // Il disegno originale contava su reloadOnChange: si scrive il file, il provider JSON nota
+        // la modifica e IOptionsMonitor propaga entro ~1s. Verificato dal vivo il 2026-07-29 che
+        // DENTRO IL POD non succede: il file sta su un PVC, e la notifica di modifica (inotify) non
+        // attraversa quel mount. Il file conteneva Realtime:Enabled=false e il motore continuava a
+        // rispondere true — cioè la configurazione era scritta e non applicata, che dal punto di
+        // vista di chi guarda il pannello è identico al non aver salvato affatto.
+        //
+        // Qui non serve alcun watcher: chi scrive SA di aver scritto. Reload() ricarica i provider
+        // e fa scattare i change token, quindi IOptionsMonitor dei worker vede il valore nuovo
+        // subito e in modo deterministico, su qualunque tipo di volume.
+        if (configuration is IConfigurationRoot root)
+        {
+            root.Reload();
+        }
+        else
+        {
+            logger.LogWarning(
+                "Configurazione non ricaricabile (non è un IConfigurationRoot): la sezione '{Section}' è " +
+                "sul disco ma potrebbe non essere applicata finché il processo non riparte.", section);
+        }
+
+        logger.LogInformation("Configurazione del motore aggiornata e ricaricata: sezione '{Section}'.", section);
+
         return new EngineConfigWriteResult(SerializeSection(section), OverrideWarning(section));
     }
 

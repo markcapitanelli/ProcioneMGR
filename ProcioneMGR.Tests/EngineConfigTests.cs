@@ -247,6 +247,31 @@ public sealed class EngineConfigTests : IDisposable
     }
 
     [Fact]
+    public async Task Write_MakesTheNewValueVisibleImmediately_WithoutRelyingOnAFileWatcher()
+    {
+        // IL difetto trovato dal vivo il 2026-07-29 dentro il pod: il file conteneva
+        // Realtime:Enabled=false e il motore continuava a rispondere true, perché reloadOnChange si
+        // appoggia a inotify e inotify NON attraversa il mount di un PVC. Configurazione scritta e
+        // non applicata: per chi guarda il pannello è identico al non aver salvato.
+        //
+        // Il test costruisce la configurazione SENZA reloadOnChange, così il file watcher non può
+        // "salvare" il risultato per caso: se WriteAsync non ricarica esplicitamente, la rilettura
+        // restituisce il valore vecchio e il test fallisce — che è esattamente ciò che accadeva.
+        var service = Build("""{ "MarketData": { "Realtime": { "Enabled": true } } }""");
+
+        var result = await service.WriteAsync("MarketData:Realtime",
+            JsonSerializer.Serialize(new RealtimeFeedOptions { Enabled = false }));
+
+        var applied = JsonSerializer.Deserialize<RealtimeFeedOptions>(result.AppliedJson)!;
+        Assert.False(applied.Enabled);
+
+        // E una lettura successiva, indipendente, vede lo stesso valore.
+        var reread = JsonSerializer.Deserialize<RealtimeFeedOptions>(
+            service.Read(["MarketData:Realtime"]).Single().Json)!;
+        Assert.False(reread.Enabled);
+    }
+
+    [Fact]
     public async Task Write_PreservesSiblingSections()
     {
         var service = Build("""{ "Trading": { "Safety": { "MaxLeverageAllowed": 5 } }, "Carry": { "Enabled": false } }""");
