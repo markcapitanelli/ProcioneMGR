@@ -107,8 +107,31 @@
     "EvaluationIntervalHours": 6
   },
   "Registry": {
-    "_comment": "Ciclo di vita dei modelli ML. MinChampionDeflatedSharpe: soglia assoluta di Deflated Sharpe (Bailey-Lopez de Prado) perche' un modello possa diventare Champion, non solo battere l'incumbent. 0.95 = significativita' difendibile. Il DSR viene calcolato e salvato sul modello al salvataggio (/ml) e in HoldoutValidation (pipeline).",
+    "_comment": "Ciclo di vita dei modelli ML. MinChampionDeflatedSharpe: soglia assoluta di Deflated Sharpe (Bailey-Lopez de Prado) perche' un modello possa diventare Champion, non solo battere l'incumbent. 0.95 = significativita' difendibile. Il DSR viene calcolato e salvato sul modello al salvataggio (/ml) e in HoldoutValidation (pipeline). Modificabile da /admin/autonomy (vale dal prossimo riavvio).",
     "MinChampionDeflatedSharpe": 0.95
+  },
+  "Drift": {
+    "_comment": "Drift monitor delle feature ML (PSI/KS/Page-Hinkley) sui modelli salvati. Default OFF: il drift resta comunque valutabile on-demand dalla UI. RetireChampionOnAlert e' governance dei record (ritira il Champion dal registry e marca la richiesta di retrain): nessun retrain automatico, nessun impatto sul trading. Pannello: /admin/autonomy.",
+    "Enabled": false,
+    "IntervalHours": 6,
+    "RecentCandles": 200,
+    "RetireChampionOnAlert": true,
+    "MinAlertsToRetire": 1
+  },
+  "Execution": {
+    "_comment": "Modello di costo dell'esecuzione a fette (TWAP/VWAP/Iceberg/Adaptive), usato dal simulatore di /execution. ImpactModel 'SquareRoot' e' la legge empirica di Almgren (raddoppiare la quantita' NON raddoppia l'impatto); 'Linear' e' l'alternativa. Valori indicativi da calibrare in Paper: il confronto RELATIVO fra algoritmi e' il punto, non il valore assoluto. Pannello 'Modello di costo' in /execution.",
+    "MaxSlices": 12,
+    "IcebergClipFraction": 0.1,
+    "ImpactCoefficient": 0.1,
+    "ImpactModel": "SquareRoot",
+    "MaxImpactPct": 0.10,
+    "HalfSpreadPct": 0.0005,
+    "ReferenceVolatility": 0.01,
+    "DecayBaseRate": 0.15
+  },
+  "FactorCache": {
+    "_comment": "Cache trasparente delle serie di fattori alpha, condivisa fra training (DatasetBuilder) e inferenza (MlStrategy nel backtest): gli stessi input riusano la stessa serie calcolata. E' solo memoria/prestazioni — non cambia alcun risultato — quindi non ha pannello UI: si tara qui se il processo consuma troppa RAM.",
+    "MaxEntries": 512
   },
   "MarketData": {
     "_comment_UseRemoteIngestion": "Fase 1 microservizi. false (default): la sync watchlist gira in-process nel monolite (MarketDataSyncWorker). true: il monolite delega le sync puntuali al servizio ProcioneMGR.Ingestion via HTTP (RemoteIngestionUrl obbligatorio) e NON avvia il worker locale (lo scheduling periodico vive nel servizio remoto). RICHIEDE RIAVVIO (non hot-reload come Enabled): la scelta avviene una sola volta a startup. NON esporre in /admin/autonomy.",
@@ -195,6 +218,11 @@
       "DefaultWindowMinutes": 5,
       "WorkerTickSeconds": 15,
       "AbandonGraceMinutes": 5
+    },
+    "ProtectiveExitShadow": {
+      "_comment": "[B3, sentinella] Per ogni uscita protettiva registra il confronto fra quando l'avrebbe fatta scattare il feed real-time e quando e' scattata davvero sul percorso a candele. OSSERVA e basta: non chiude nulla. Serve a vedere il caso SINGOLO (un crollo con gap) che la media non mostra. Richiede MarketData:Realtime:Enabled. AlertAboveBps: si allerta sul singolo evento sopra questo costo, e solo quando il ritardo COSTA. Pannello: /admin/protections.",
+      "Enabled": true,
+      "AlertAboveBps": 200
     },
     "LaneInvariants": {
       "_comment": "Watchdog invarianti contabili per corsia (Fase 0-A3, PRD Autonomia). Tripwire per stati ASSURDI (es. il PnL -1,8M su capitale 10k del bug B1), non un duplicato del SafetyChecker: soglie lasche apposta. Violazione => corsia in QUARANTENA (stop trading, posizioni lasciate aperte, riavvio bloccato finche' un Admin non rimuove la quarantena in /trading). Default ON: spegnerlo e' la scelta da motivare.",

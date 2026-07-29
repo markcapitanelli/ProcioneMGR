@@ -255,13 +255,21 @@ public static class TradingServiceCollectionExtensions
         // La registrazione è incondizionata ma il worker si autospegne se
         // MarketData:Realtime:Enabled è false (default): a feature spenta non apre alcuna
         // connessione e la piattaforma resta sul solo percorso a candele REST.
+        // Il BINDING delle opzioni del feed e della sentinella è incondizionato, la loro ESECUZIONE
+        // no (vedi sotto). Motivo: col trading remoto il monolite non ospita il feed ma ne ospita
+        // ancora il pannello di configurazione (/admin/protections), e un pannello che legge i
+        // default invece del file mostrerebbe all'operatore uno stato che non è quello vero.
+        services.Configure<MarketData.RealtimeFeedOptions>(
+            configuration.GetSection(MarketData.RealtimeFeedOptions.SectionName));
+        services.Configure<ProtectiveExitShadowOptions>(configuration.GetSection("Trading:ProtectiveExitShadow"));
+        // Stesso motivo per il carry: il forward test gira dove gira il motore, il suo interruttore
+        // sta nel guscio (/admin/autonomy).
+        services.Configure<Carry.CarryOptions>(configuration.GetSection("Carry"));
+
         if (!useRemote)
         {
-            services.Configure<MarketData.RealtimeFeedOptions>(
-                configuration.GetSection(MarketData.RealtimeFeedOptions.SectionName));
             services.TryAddSingleton<MarketData.IWebSocketTransportFactory, MarketData.ClientWebSocketTransportFactory>();
             // [B3] Sentinella d'ombra: vive dove vive il motore, come il feed che la alimenta.
-            services.Configure<ProtectiveExitShadowOptions>(configuration.GetSection("Trading:ProtectiveExitShadow"));
             services.TryAddSingleton<IProtectiveExitShadowRecorder, ProtectiveExitShadowRecorder>();
             services.TryAddEnumerable(ServiceDescriptor.Singleton<MarketData.IExchangeStreamMapper, MarketData.BinanceStreamMapper>());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<MarketData.IExchangeStreamMapper, MarketData.BitgetStreamMapper>());
@@ -284,8 +292,9 @@ public static class TradingServiceCollectionExtensions
             // (CarryWorker rifiuta tutto tranne Paper/Testnet, e Testnet degrada a Paper). Il
             // funding che legge (SentimentMetricPoints) lo scrive il SentimentSyncWorker del
             // guscio: a guscio giù lo stato resta, le decisioni riprendono col funding fresco.
-            services.Configure<Carry.CarryOptions>(configuration.GetSection("Carry"));
-            services.AddHostedService<Carry.CarryWorker>();
+            // Il binding di CarryOptions è più su, incondizionato (serve anche al solo pannello).
+            services.AddSingleton<Carry.CarryWorker>();
+            services.AddHostedService(sp => sp.GetRequiredService<Carry.CarryWorker>());
         }
 
         // Fallback non-keyed: risolve sempre la corsia 0. Serve ai consumer non ancora aggiornati con

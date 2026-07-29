@@ -289,3 +289,42 @@ forward-vs-predizione sulle tre corsie · B5 · A6 · C4/C5.
 
 *Il carry Paper resta ON (unica classe con edge misurato positivo). Il router di regime resta in
 osservazione per misura (esito C1.b), non per prudenza.*
+
+---
+
+## Audit backend↔frontend (2026-07-29)
+
+Scansione della mappatura 1:1 fra ciò che il backend fa e ciò che l'interfaccia permette di
+governare — la regola d'oro della piattaforma. Il codice è risultato **sano**: nessuno stub,
+nessuna funzione vuota, nessun servizio orfano (i tre candidati sospetti erano consumati
+internamente). Il debito era tutto di **esposizione**.
+
+**Quattordici sezioni di configurazione governavano funzioni vive e si toccavano solo editando
+`appsettings.json` a mano** — fra queste il feed real-time con il suo potere di chiudere posizioni,
+il limite di esposizione correlata fra corsie, il router di regime con le sue regole, il watchdog
+degli invarianti, il canale Telegram, il forward test del carry. È la stessa forma del difetto
+trovato la sera del 28: verde a livello di classe, inesistente a livello di prodotto.
+
+**Un bug di perdita dati.** Il pannello *Sync dati* di `/admin/autonomy` salva la sezione
+`MarketData` con un POCO di tre scalari; `MarketData:Realtime` è una sottosezione che quel POCO non
+modella, e il writer — che sostituisce la sezione intera — **la cancellava**. Salvare la cadenza
+del sync azzerava la configurazione del feed, in silenzio. I test coprivano le sezioni sorelle e le
+sottosezioni sorelle, non il padre che ne contiene una.
+
+| Cosa | Dove |
+|---|---|
+| Sottosezioni non modellate preservate dal writer | `AppConfigWriter` + 2 test |
+| Validazione lato server dei pannelli admin (i `min=` HTML non vincolano `@bind`) | `AdminConfigRules` + 22 test |
+| Feed real-time, sentinella d'ombra, esposizione correlata, router di regime (con editor delle regole), watchdog invarianti | **nuova** `/admin/protections` |
+| Campagne+trigger, soglie di consolidamento, carry (con stato dal vivo), liquidazioni, notifiche (con invio di prova), dual-read ML, export OTLP | `/admin/autonomy`, da 6 a 13 pannelli |
+| Modello di costo (impatto, spread, fette) | pannello in `/execution` |
+| Interruttori resi davvero a caldo (prima uscivano a startup e restavano morti) | `CarryWorker`, `LiquidationSyncWorker` |
+
+La regressione è chiusa da `ConfigurationUiCoverageTests`, che scandisce i sorgenti e pretende che
+ogni sezione letta dal codice abbia **o** una pagina che la espone **o** una ragione dichiarata per
+non averla. Sette sezioni restano deliberatamente fuori dalla UI: sei scelgono la topologia del
+processo (chi ospita cosa, vincolato al deploy — `Trading:UseRemoteTrading` col valore sbagliato
+significa due esecutori sulla stessa corsia) e una è solo memoria (`FactorCache`).
+
+*Non verificato dal vivo:* il browser. Il lavoro è in un worktree e la regola è una sola app dal
+repo principale — le prove sono i test di rendering bUnit.

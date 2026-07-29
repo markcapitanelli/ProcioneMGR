@@ -108,7 +108,8 @@ public sealed class LiquidationAccumulationTests : IAsyncDisposable
 
         var worker = new LiquidationSyncWorker(
             new NeverConnectFactory(), dbFactory,
-            Options.Create(new LiquidationsOptions()), NullLogger<LiquidationSyncWorker>.Instance);
+            new StaticOptionsMonitor<LiquidationsOptions>(new LiquidationsOptions()),
+            NullLogger<LiquidationSyncWorker>.Instance);
         return (worker, dbFactory);
     }
 

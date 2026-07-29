@@ -6,10 +6,16 @@
 @using Microsoft.Extensions.Options
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Agents
+@using ProcioneMGR.Services.Carry
 @using ProcioneMGR.Services.Config
+@using ProcioneMGR.Services.Ensemble
 @using ProcioneMGR.Services.Llm
+@using ProcioneMGR.Services.MarketData
+@using ProcioneMGR.Services.ML
 @using ProcioneMGR.Services.Monitoring.Drift
+@using ProcioneMGR.Services.Notifications
 @using ProcioneMGR.Services.Pipeline
+@using ProcioneMGR.Services.Registry
 @using ProcioneMGR.Services.Trading
 @attribute [Authorize(Roles = AppRoles.Admin)]
 
@@ -27,6 +33,16 @@
 @inject FeatureDriftWorker DriftWorker
 @inject IOptionsMonitor<ProcioneMGR.Services.Sentiment.SentimentOptions> SentimentMonitor
 @inject ProcioneMGR.Services.Sentiment.SentimentSyncWorker SentimentWorker
+@inject IOptionsMonitor<NotificationOptions> NotificationMonitor
+@inject INotifier Notifier
+@inject IOptionsMonitor<CampaignOptions> CampaignMonitor
+@inject IOptionsMonitor<RegimeTriggerOptions> RegimeTriggerMonitor
+@inject EnsembleComparatorOptions ComparatorOptions
+@inject ModelRegistryOptions RegistryOptions
+@inject IOptionsMonitor<MlComparisonOptions> MlMonitor
+@inject IOptionsMonitor<CarryOptions> CarryMonitor
+@inject IOptionsMonitor<LiquidationsOptions> LiquidationsMonitor
+@inject IServiceProvider Services
 
 <PageTitle>Autonomia</PageTitle>
 
@@ -48,9 +64,29 @@
         portare una corsia in <strong>Live</strong> (la promozione arriva al massimo a Testnet, il
         Live resta manuale con conferma per-ordine); il layer AI è solo advisory e può al massimo
         porre un <em>veto</em>; la ri-applica scrive solo configurazione. Questi limiti sono nel
-        codice, non in configurazione.
+        codice, non in configurazione. Le protezioni che filtrano o fermano le
+        <em>operazioni</em> (feed real-time, esposizione correlata, router di regime, watchdog)
+        stanno in <a href="admin/protections">Protezioni</a>.
     </p>
 </GuidaPanel>
+
+@* Indice: dodici pannelli sono troppi per scorrerli a occhio ogni volta. *@
+<nav class="mb-3 small">
+    <span class="text-muted me-2">Vai a:</span>
+    <a class="me-2" href="#p-exec">Esecuzione a fette</a>
+    <a class="me-2" href="#p-reapply">Ri-applica</a>
+    <a class="me-2" href="#p-promo">Promozione corsie</a>
+    <a class="me-2" href="#p-llm">Supervisione AI</a>
+    <a class="me-2" href="#p-veto">Supervisore veto</a>
+    <a class="me-2" href="#p-campaign">Campagne</a>
+    <a class="me-2" href="#p-sentiment">Sentiment</a>
+    <a class="me-2" href="#p-drift">Drift feature</a>
+    <a class="me-2" href="#p-carry">Carry</a>
+    <a class="me-2" href="#p-liq">Liquidazioni</a>
+    <a class="me-2" href="#p-sync">Sync &amp; regimi</a>
+    <a class="me-2" href="#p-notif">Notifiche</a>
+    <a class="me-2" href="#p-diag">Diagnostica</a>
+</nav>
 
 @if (!string.IsNullOrEmpty(_status))
 {
@@ -58,7 +94,7 @@
 }
 
 @* ============================ 1. Esecuzione live a fette ============================ *@
-<div class="card mb-3">
+<div class="card mb-3" id="p-exec">
     <div class="card-header d-flex justify-content-between">
         <span><i class="bi bi-stack me-1"></i>Esecuzione live "a fette" (TWAP/VWAP/Iceberg)</span>
         <span>@StateBadge(_liveExec.Enabled)</span>
@@ -93,7 +129,7 @@
 </div>
 
 @* ============================ 2. Ri-applica automatica ============================ *@
-<div class="card mb-3">
+<div class="card mb-3" id="p-reapply">
     <div class="card-header d-flex justify-content-between">
         <span><i class="bi bi-arrow-repeat me-1"></i>Ri-applica automatica dell'ensemble</span>
         <span>@StateBadge(_autoReapply.Enabled)</span>
@@ -125,7 +161,7 @@
 </div>
 
 @* ============================ 3. Promozione corsie ============================ *@
-<div class="card mb-3">
+<div class="card mb-3" id="p-promo">
     <div class="card-header d-flex justify-content-between">
         <span><i class="bi bi-ladder me-1"></i>Promozione corsie (Paper → Testnet, mai Live)</span>
         <span>@StateBadge(_promotion.AutoPromoteToTestnet)</span>
@@ -185,7 +221,7 @@
 </div>
 
 @* ============================ 4. Supervisione AI (LLM) ============================ *@
-<div class="card mb-3">
+<div class="card mb-3" id="p-llm">
     <div class="card-header d-flex justify-content-between">
         <span><i class="bi bi-robot me-1"></i>Supervisione AI dei run (advisory)</span>
         <span>
@@ -250,7 +286,7 @@
 </div>
 
 @* ============================ 4b. Supervisore veto (ri-applica) ============================ *@
-<div class="card mb-3">
+<div class="card mb-3" id="p-veto">
     <div class="card-header d-flex justify-content-between">
         <span><i class="bi bi-shield-check me-1"></i>Supervisore veto del ciclo di ri-applica</span>
         <span>
@@ -287,7 +323,7 @@
 </div>
 
 @* ============================ 4c. Sentiment 2.0 (raccolta + composite) ============================ *@
-<div class="card mb-3">
+<div class="card mb-3" id="p-sentiment">
     <div class="card-header d-flex justify-content-between">
         <span><i class="bi bi-emoji-neutral me-1"></i>Sentiment (mood di mercato)</span>
         <span>@StateBadge(_sentiment.Enabled)</span>
@@ -346,7 +382,7 @@
 </div>
 
 @* ============================ 5. Drift feature ============================ *@
-<div class="card mb-3">
+<div class="card mb-3" id="p-drift">
     <div class="card-header d-flex justify-content-between">
         <span><i class="bi bi-graph-down-arrow me-1"></i>Drift monitor delle feature ML</span>
         <span>@StateBadge(_drift.Enabled)</span>
@@ -426,7 +462,7 @@
 </div>
 
 @* ============================ 6. Sync dati & retraining regime ============================ *@
-<div class="card mb-4">
+<div class="card mb-3" id="p-sync">
     <div class="card-header"><i class="bi bi-cloud-arrow-down me-1"></i>Sync dati di mercato &amp; retraining regime</div>
     <div class="card-body">
         <p class="text-muted small">
@@ -467,6 +503,409 @@
     </div>
 </div>
 
+@* ============================ 7. Campagne + trigger contestuale ============================ *@
+<div class="card mb-3" id="p-campaign">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-bullseye me-1"></i>Campagne di ricerca (rotazione automatica)</span>
+        <span>@StateBadge(_campaign.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            <strong>È IL cambio di natura da strumento ad agente</strong>, ed è per questo che il
+            gate globale nasce spento: con l'interruttore giù le campagne definite in
+            <a href="campaign">/campaign</a> si preparano ma nessun run parte da solo. L'applica dei
+            risultati passa comunque dalla stessa catena della ri-applica (isteresi + veto del
+            supervisore); le corsie vengono avviate al massimo in Paper, le configurazioni Live
+            sempre saltate.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="cp_en" @bind="_campaign.Enabled" />
+                <label class="form-check-label" for="cp_en">Planner abilitato ⚠️ @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Tick planner (s) @Restart()</label>
+                <input type="number" class="form-control" @bind="_campaign.TickSeconds" min="10" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("Campaign", _campaign, "Campagne")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        <hr />
+        <p class="text-muted small mb-2">
+            <strong>Trigger contestuale.</strong> Sveglia il planner quando il cluster K-means
+            corrente cambia rispetto all'ultimo run della campagna, o quando la volatilità realizzata
+            esce dalla banda [forecast/k, forecast×k] del forecast GARCH di quel run. Non lancia
+            <em>mai</em> run direttamente: parla solo col planner, ed è quindi inerte se il gate qui
+            sopra è spento.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="rt_tr_en" @bind="_regimeTrigger.Enabled" />
+                <label class="form-check-label" for="rt_tr_en">Trigger abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Controllo ogni (min) @Restart()</label>
+                <input type="number" class="form-control" @bind="_regimeTrigger.CheckIntervalMinutes" min="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Cooldown (ore) @Hot()</label>
+                <input type="number" class="form-control" @bind="_regimeTrigger.CooldownHours" min="0" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Banda volatilità (k) @Hot()</label>
+                <input type="number" step="0.1" class="form-control" @bind="_regimeTrigger.VolBandMultiple" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("RegimeTrigger", _regimeTrigger, "Trigger contestuale")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 8. Soglie di consolidamento ============================ *@
+<div class="card mb-3" id="p-thresholds">
+    <div class="card-header">
+        <i class="bi bi-rulers me-1"></i>Soglie di consolidamento (quando un candidato è «meglio»)
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Sono i numeri che decidono se un ensemble nuovo sostituisce quello in corsia e se un
+            modello ML può diventare <strong>Champion</strong>. Alzarli rende la piattaforma più
+            difficile da convincere; abbassarli la rende più reattiva al rumore — che è il modo
+            classico di scambiare fortuna per edge. Valgono dal prossimo riavvio: queste due sezioni
+            si leggono una sola volta all'avvio.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Sharpe migliore di almeno (%) @Restart()</label>
+                <input type="number" step="1" class="form-control" @bind="_comparator.MinSharpeImprovementPercent" style="width: 10rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Fattore di rischio migliore di (%) @Restart()</label>
+                <input type="number" step="1" class="form-control" @bind="_comparator.MinRiskFactorImprovementPercent" style="width: 10rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Gambe minime @Restart()</label>
+                <input type="number" class="form-control" @bind="_comparator.MinLegs" min="1" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Simboli distinti minimi @Restart()</label>
+                <input type="number" class="form-control" @bind="_comparator.MinDistinctSymbols" min="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">z di significatività @Restart()</label>
+                <input type="number" step="0.1" class="form-control" @bind="_comparator.MinSharpeSignificanceZ" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("EnsembleComparator", _comparator, "Comparatore ensemble")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        <hr />
+        <div class="row g-3 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Deflated Sharpe minimo per Champion @Restart()</label>
+                <input type="number" step="0.01" class="form-control" @bind="_registry.MinChampionDeflatedSharpe" min="0" max="1" style="width: 10rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("Registry", _registry, "Registry modelli")' disabled="@_busy">Salva</button>
+            </div>
+            <div class="col-12">
+                <span class="text-muted small">
+                    Soglia ASSOLUTA (Bailey–López de Prado), non solo «batte l'incumbent»: 0,95 =
+                    significatività difendibile. Il DSR si calcola al salvataggio del modello in
+                    <a href="ml">/ml</a> e nella validazione holdout della pipeline.
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 9. Carry forward test ============================ *@
+<div class="card mb-3" id="p-carry">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-cash-coin me-1"></i>Forward test del carry delta-neutro</span>
+        <span>
+            @* Parentesi obbligatorie: un'espressione implicita Razor si ferma prima di ??, e il
+               fallback finirebbe nella pagina come testo letterale. *@
+            <span class="badge bg-light text-dark border me-1">@(CarryWorkerInstance?.EffectiveMode.ToString() ?? "Paper")</span>
+            @StateBadge(_carry.Enabled)
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Long spot + short perp sullo stesso simbolo: l'edge è il <strong>funding incassato</strong>
+            dallo short quando è positivo — un flusso, non una previsione — e la componente
+            direzionale si elide fra le due gambe. Apre sopra la soglia di ingresso, chiude sotto
+            quella di uscita (l'isteresi fra le due impedisce di aprire e chiudere nella stessa
+            valutazione). Il funding lo legge dalle stesse serie del Sentiment.
+        </p>
+        <div class="alert alert-secondary py-2 small mb-3">
+            <strong>Live è irrappresentabile:</strong> non esiste come valore, quindi nessun percorso
+            di codice e nessuna configurazione può portare il carry a operare con denaro reale.
+            Testnet è accettato ma degrada a Paper finché l'executor Bitget demo non è attivo.
+        </div>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="ca_en" @bind="_carry.Enabled" />
+                <label class="form-check-label" for="ca_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Modalità @Hot()</label>
+                <select class="form-select" @bind="_carry.Mode" style="width: 9rem;">
+                    <option value="Paper">Paper</option>
+                    <option value="Testnet">Testnet</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Simboli (csv) @Hot()</label>
+                <input class="form-control" @bind="_carrySymbolsCsv" style="width: 18rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Valutazione (min) @Restart()</label>
+                <input type="number" class="form-control" @bind="_carry.EvaluationMinutes" min="5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Entra sopra (% annuo) @Hot()</label>
+                <input type="number" step="0.5" class="form-control" @bind="_carry.EnterAnnualFundingPercent" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Esce sotto (% annuo) @Hot()</label>
+                <input type="number" step="0.5" class="form-control" @bind="_carry.ExitAnnualFundingPercent" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Eventi funding in media @Hot()</label>
+                <input type="number" class="form-control" @bind="_carry.TrailingFundingEvents" min="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Size per gamba (%) @Hot()</label>
+                <input type="number" step="5" class="form-control" @bind="_carry.PositionSizePercent" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary me-2" @onclick="SaveCarryAsync" disabled="@_busy">Salva</button>
+                <button class="btn btn-outline-secondary" @onclick="RunCarryNowAsync" disabled="@(_busy || CarryWorkerInstance is null)">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Valuta ora
+                </button>
+            </div>
+        </div>
+
+        @if (CarryWorkerInstance is null)
+        {
+            <p class="text-muted small mb-0 mt-3">
+                <em>Il forward test gira nell'host del motore: con <code>Trading:UseRemoteTrading=true</code>
+                vive in <code>procionemgr-trading</code>, non qui. La configurazione salvata da questa
+                pagina è comunque quella che quel processo legge.</em>
+            </p>
+        }
+        else
+        {
+            <h6 class="mt-3">
+                Stato del forward test
+                @if (CarryWorkerInstance.LastEvaluationUtc is { } last)
+                {
+                    <span class="text-muted small fw-normal">— ultima valutazione @last.ToString("dd/MM HH:mm") UTC</span>
+                }
+            </h6>
+            @if (CarryWorkerInstance.States.Count == 0)
+            {
+                <p class="text-muted small mb-0">
+                    <em>Nessuna valutazione ancora: serve il carry abilitato e almeno
+                    @_carry.TrailingFundingEvents punti di funding per simbolo (li raccoglie il worker Sentiment).</em>
+                </p>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped mb-0">
+                        <thead>
+                            <tr><th>Simbolo</th><th>Stato</th><th>Aperto da (UTC)</th><th class="text-end">Nozionale/gamba</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var (symbol, state) in CarryWorkerInstance.States.OrderBy(kv => kv.Key))
+                            {
+                                <tr>
+                                    <td>@symbol</td>
+                                    <td>
+                                        @if (state.InPosition)
+                                        { <span class="badge bg-success">in posizione</span> }
+                                        else
+                                        { <span class="badge bg-secondary">fuori</span> }
+                                    </td>
+                                    <td>@(state.OpenedUtc?.ToString("dd/MM HH:mm") ?? "—")</td>
+                                    <td class="text-end tabular-nums">@(state.InPosition ? state.NotionalQuote.ToString("N0") : "—")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            @if (CarryWorkerInstance.SymbolsWithoutData.Count > 0)
+            {
+                <p class="text-muted small mb-0 mt-2">
+                    Senza storia di funding sufficiente: @string.Join(", ", CarryWorkerInstance.SymbolsWithoutData).
+                </p>
+            }
+        }
+    </div>
+</div>
+
+@* ============================ 10. Accumulo liquidazioni ============================ *@
+<div class="card mb-3" id="p-liq">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-lightning-charge me-1"></i>Accumulo liquidazioni (stream pubblico Binance)</span>
+        <span>
+            @if (LiquidationWorker.IsConnected)
+            { <span class="badge bg-success me-1">connesso · @LiquidationWorker.TotalMessages msg</span> }
+            else if (_liquidations.Enabled)
+            { <span class="badge bg-warning text-dark me-1">non connesso</span> }
+            @StateBadge(_liquidations.Enabled)
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Accumula le liquidazioni forzate del mercato futures in sola lettura (stream keyless).
+            <strong>Default acceso perché il dato non è ricostruibile a posteriori</strong>: ogni
+            giorno spento è storia persa. Oggi non decide nulla — è un investimento per l'event-study
+            e per le future feature di fragilità, che passeranno dal gate come ogni altra ipotesi.
+        </p>
+        @if (_liquidations.Enabled && !LiquidationWorker.IsConnected && LiquidationWorker.TotalMessages == 0)
+        {
+            <div class="alert alert-warning py-2 small">
+                Nessun messaggio ricevuto finora. Se persiste, la causa probabile è il blocco EEA/MiCA
+                del market-data derivati Binance da questa postazione: il socket si apre ma non
+                consegna nulla, e il worker passa da solo a un retry lungo.
+            </div>
+        }
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="lq_en" @bind="_liquidations.Enabled" />
+                <label class="form-check-label" for="lq_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Flush su DB (min) @Hot()</label>
+                <input type="number" class="form-control" @bind="_liquidations.FlushMinutes" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Silenzio = guasto (s) @Hot()</label>
+                <input type="number" class="form-control" @bind="_liquidations.StaleSeconds" min="60" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Retry se bloccato (min) @Hot()</label>
+                <input type="number" class="form-control" @bind="_liquidations.BlockedRetryMinutes" min="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("Liquidations", _liquidations, "Accumulo liquidazioni")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 11. Notifiche all'operatore ============================ *@
+<div class="card mb-3" id="p-notif">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-bell me-1"></i>Notifiche all'operatore</span>
+        <span>
+            @if (_notifications.Enabled && _notifications.Provider == "Telegram")
+            { <span class="badge bg-info text-dark me-1">Telegram</span> }
+            else if (_notifications.Enabled)
+            { <span class="badge bg-secondary me-1">solo log</span> }
+            @StateBadge(_notifications.Enabled)
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Il contrario dell'autonomia cieca: il modo di <strong>chiamare l'umano</strong> quando
+            serve. Producer già cablati: quarantena di una corsia, esiti delle campagne, run del
+            pipeline falliti, promozioni Paper→Testnet, breaker del layer AI. Il rate-limit non
+            perde niente — l'eccesso viene conteggiato e riportato nel primo messaggio successivo.
+        </p>
+        <div class="alert alert-secondary py-2 small">
+            Il <strong>token</strong> del bot Telegram non si mette qui e non passa da questa pagina:
+            si legge solo dalla variabile d'ambiente <code>TELEGRAM_BOT_TOKEN</code>. Il ChatId non è
+            un segreto ed è l'unico dato di recapito che serve.
+        </div>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="nt_en" @bind="_notifications.Enabled" />
+                <label class="form-check-label" for="nt_en">Abilitate @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Provider @Hot()</label>
+                <select class="form-select" @bind="_notifications.Provider" style="width: 10rem;">
+                    <option value="Logging">Logging</option>
+                    <option value="Telegram">Telegram</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Chat id Telegram @Hot()</label>
+                <input class="form-control" @bind="_notifications.ChatId" style="width: 14rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Max messaggi/ora @Hot()</label>
+                <input type="number" class="form-control" @bind="_notifications.MaxPerHour" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Notifications", _notifications, "Notifiche")' disabled="@_busy">Salva</button>
+                <button class="btn btn-outline-secondary" @onclick="SendTestNotificationAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Invia notifica di prova
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 12. Diagnostica ============================ *@
+<div class="card mb-4" id="p-diag">
+    <div class="card-header"><i class="bi bi-activity me-1"></i>Diagnostica (osservativa, non decide nulla)</div>
+    <div class="card-body">
+        <p class="text-muted small">
+            <strong>Dual-read ML.</strong> Il motore decide i trade col modello in-process; con questo
+            acceso confronta <em>anche</em> il segnale del servizio remoto <code>procionemgr-ml</code>
+            e ne registra le divergenze (log + metrica), senza mai prendere una decisione da quel
+            confronto. Se l'URL è vuoto il client non viene nemmeno registrato: confronto
+            staticamente spento, zero overhead.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="ml_en" @bind="_ml.Enabled" />
+                <label class="form-check-label" for="ml_en">Confronto abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">URL servizio ML @Restart()</label>
+                <input class="form-control" @bind="_ml.RemoteUrl" placeholder="http://localhost:18091" style="width: 18rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeout (ms) @Hot()</label>
+                <input type="number" class="form-control" @bind="_ml.TimeoutMs" min="50" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("Ml", _ml, "Dual-read ML")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        <hr />
+        <p class="text-muted small mb-2">
+            <strong>Export OpenTelemetry.</strong> Spedisce metriche e log a un collector OTLP. La
+            dashboard <a href="metrics">/metrics</a> funziona comunque, anche a export spento: qui si
+            decide solo se la telemetria esce anche verso l'esterno.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="ob_en" @bind="_observability.Enabled" />
+                <label class="form-check-label" for="ob_en">Export abilitato @Restart()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Endpoint OTLP @Restart()</label>
+                <input class="form-control" @bind="_observability.OtlpEndpoint" placeholder="http://localhost:4317" style="width: 18rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("Observability", _observability, "Export OTLP")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 @code {
     // Copie LOCALI modificabili: si parte da CurrentValue e si scrive solo al Salva — così i campi
     // non "saltano" sotto le dita dell'utente quando il monitor ricarica il file appena scritto.
@@ -480,12 +919,32 @@
     private DriftMonitorOptions _drift = new();
     private MarketDataConfig _marketData = new();
     private MarketRegimeConfig _marketRegime = new();
+    private NotificationOptions _notifications = new();
+    private CampaignOptions _campaign = new();
+    private RegimeTriggerOptions _regimeTrigger = new();
+    private EnsembleComparatorOptions _comparator = new();
+    private ModelRegistryOptions _registry = new();
+    private MlComparisonOptions _ml = new();
+    private CarryOptions _carry = new();
+    private string _carrySymbolsCsv = "";
+    private LiquidationsOptions _liquidations = new();
+    private ObservabilityConfig _observability = new();
 
     private List<DriftCheckResult> _driftResults = new();
 
     private bool _busy;
     private bool _isError;
     private string? _status;
+
+    /// <summary>
+    /// Il worker del carry vive nell'host del MOTORE: con <c>Trading:UseRemoteTrading=true</c> non
+    /// è registrato qui. GetService (non Required) perché "assente" è uno stato legittimo da
+    /// mostrare, non un errore da far esplodere in faccia a chi apre la pagina.
+    /// </summary>
+    private CarryWorker? CarryWorkerInstance => Services.GetService<CarryWorker>();
+
+    /// <summary>L'accumulo liquidazioni vive sempre nel guscio: qui il servizio c'è per definizione.</summary>
+    private LiquidationSyncWorker LiquidationWorker => Services.GetRequiredService<LiquidationSyncWorker>();
 
     /// <summary>Sezione MarketData di appsettings (nessun POCO esistente: il worker legge IConfiguration).</summary>
     private sealed class MarketDataConfig
@@ -506,6 +965,13 @@
     {
         public bool Enabled { get; set; } = true;
         public int RetrainingIntervalDays { get; set; } = 7;
+    }
+
+    /// <summary>Sezione Observability (l'export OTLP si compone a startup, senza POCO di opzioni).</summary>
+    private sealed class ObservabilityConfig
+    {
+        public bool Enabled { get; set; }
+        public string OtlpEndpoint { get; set; } = "http://localhost:4317";
     }
 
     protected override async Task OnInitializedAsync()
@@ -532,6 +998,23 @@
             Enabled = Config.GetValue("MarketRegime:Enabled", true),
             RetrainingIntervalDays = Config.GetValue("MarketRegime:RetrainingIntervalDays", 7),
         };
+        _notifications = Clone(NotificationMonitor.CurrentValue);
+        _campaign = Clone(CampaignMonitor.CurrentValue);
+        _regimeTrigger = Clone(RegimeTriggerMonitor.CurrentValue);
+        // Comparatore e Registry sono POCO singleton letti una volta al boot (nessun IOptionsMonitor
+        // dietro): l'istanza iniettata È il valore in vigore, ed è per questo che i loro campi sono
+        // marcati ⟳ invece di ✅.
+        _comparator = Clone(ComparatorOptions);
+        _registry = Clone(RegistryOptions);
+        _ml = Clone(MlMonitor.CurrentValue);
+        _carry = Clone(CarryMonitor.CurrentValue);
+        _carrySymbolsCsv = string.Join(", ", _carry.Symbols);
+        _liquidations = Clone(LiquidationsMonitor.CurrentValue);
+        _observability = new ObservabilityConfig
+        {
+            Enabled = Config.GetValue("Observability:Enabled", false),
+            OtlpEndpoint = Config.GetValue("Observability:OtlpEndpoint", "http://localhost:4317")!,
+        };
         await LoadDriftResultsAsync();
     }
 
@@ -547,11 +1030,21 @@
             .ToListAsync();
     }
 
-    private async Task SaveAsync<T>(string section, T model, string label)
+    private async Task SaveAsync<T>(string section, T model, string label) where T : notnull
     {
         _busy = true; _isError = false; _status = null;
         try
         {
+            // Validazione lato SERVER prima di toccare il file: l'attributo min= dell'HTML non
+            // vincola @bind, quindi senza questo controllo un intervallo a 0 (PeriodicTimer che
+            // esplode all'avvio) o soglie invertite finirebbero dritti in appsettings.json.
+            var error = AdminConfigRules.Validate(model);
+            if (error is not null)
+            {
+                SetStatus($"{label}: {error}", true);
+                return;
+            }
+
             await ConfigWriter.SaveSectionAsync(section, model);
             SetStatus($"{label}: salvato in appsettings.json — i campi ✅ valgono entro ~1s, quelli ⟳ dal prossimo riavvio.", false);
         }
@@ -594,6 +1087,60 @@
             SetStatus($"Sentiment: tick eseguito — {metrics} punti metrici e {news} notizie nuove; snapshot e salute fonti in /sentiment.", false);
         }
         catch (Exception ex) { SetStatus($"Sentiment: tick fallito — {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private async Task SaveCarryAsync()
+    {
+        _carry.Symbols = _carrySymbolsCsv
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => s.ToUpperInvariant())
+            .Distinct()
+            .ToList();
+        _carrySymbolsCsv = string.Join(", ", _carry.Symbols);
+        await SaveAsync("Carry", _carry, "Carry");
+    }
+
+    private async Task RunCarryNowAsync()
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            var worker = CarryWorkerInstance;
+            if (worker is null)
+            {
+                SetStatus("Carry: il worker non gira in questo processo (trading remoto) — la valutazione avviene lì.", true);
+                return;
+            }
+
+            var evaluated = await worker.TickAsync(CancellationToken.None);
+            SetStatus(evaluated > 0
+                ? $"Carry: valutati {evaluated} simboli — stato aggiornato nella tabella qui sotto."
+                : "Carry: nessun simbolo valutato (carry spento, oppure storia di funding ancora insufficiente).", false);
+        }
+        catch (Exception ex) { SetStatus($"Carry: valutazione fallita — {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private async Task SendTestNotificationAsync()
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            // Passa dal dispatcher vero (gate + rate-limit + provider corrente): una prova che
+            // scavalcasse quella catena direbbe che "funziona" anche quando l'utente ha lasciato
+            // Enabled=false, che è esattamente l'errore che si sta cercando di scoprire.
+            await Notifier.NotifyAsync(NotificationSeverity.Info,
+                "Notifica di prova",
+                "Se leggi questo messaggio, il canale configurato in /admin/autonomy recapita.",
+                CancellationToken.None);
+
+            var live = NotificationMonitor.CurrentValue;
+            SetStatus(live.Enabled
+                ? $"Notifica inviata via provider «{live.Provider}». Se non è arrivata, controlla ChatId e TELEGRAM_BOT_TOKEN (gli errori di recapito non vengono propagati: sono nel log)."
+                : "Notifiche SPENTE: il dispatcher ha scartato il messaggio. Abilita e salva prima di riprovare.", !live.Enabled);
+        }
+        catch (Exception ex) { SetStatus($"Invio di prova fallito: {ex.Message}", true); }
         finally { _busy = false; }
     }
 

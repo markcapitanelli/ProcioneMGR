@@ -53,26 +53,45 @@ public sealed class LiquidationsOptions
 public sealed class LiquidationSyncWorker(
     IWebSocketTransportFactory transportFactory,
     IDbContextFactory<ApplicationDbContext> dbFactory,
-    IOptions<LiquidationsOptions> options,
+    IOptionsMonitor<LiquidationsOptions> options,
     ILogger<LiquidationSyncWorker> logger) : BackgroundService
 {
+    /// <summary>Attesa fra due controlli quando l'accumulo è spento: nessuna connessione aperta.</summary>
+    private static readonly TimeSpan DisabledPollInterval = TimeSpan.FromSeconds(30);
+
     internal LiquidationAggregator Aggregator { get; } = new();
+
+    /// <summary>Vero quando il socket è aperto e sta accumulando (lo legge il pannello /admin/autonomy).</summary>
+    public bool IsConnected { get; private set; }
+
+    /// <summary>Messaggi ricevuti da quando l'applicazione è partita.</summary>
+    public long TotalMessages { get; private set; }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        var opt = options.Value;
-        if (!opt.Enabled)
-        {
-            logger.LogInformation("Accumulo liquidazioni disabilitato (Liquidations:Enabled=false).");
-            return;
-        }
-
         var backoff = TimeSpan.FromSeconds(5);
         var totalMessagesEver = 0L;
         var consecutiveSilentConnects = 0;
         var blockAnnounced = false;
+        var idleAnnounced = false;
         while (!ct.IsCancellationRequested)
         {
+            // Enabled si rilegge a ogni giro, non una sola volta a startup: l'interruttore di
+            // /admin/autonomy deve poter spegnere e RIACCENDERE l'accumulo senza riavviare l'app.
+            // A feature spenta non si apre alcun socket — si attende e basta.
+            var opt = options.CurrentValue;
+            if (!opt.Enabled)
+            {
+                if (!idleAnnounced)
+                {
+                    logger.LogInformation("Accumulo liquidazioni disabilitato (Liquidations:Enabled=false): nessuna connessione aperta.");
+                    idleAnnounced = true;
+                }
+                try { await Task.Delay(DisabledPollInterval, ct); } catch (OperationCanceledException) { break; }
+                continue;
+            }
+            idleAnnounced = false;
+
             var messagesThisConnection = 0;
             try
             {
@@ -80,9 +99,10 @@ public sealed class LiquidationSyncWorker(
                 await transport.ConnectAsync(new Uri(BinanceLiquidationMapper.StreamUri), ct);
                 logger.LogInformation("Accumulo liquidazioni: connesso a {Uri}.", BinanceLiquidationMapper.StreamUri);
                 backoff = TimeSpan.FromSeconds(5); // connessione riuscita: il backoff riparte
+                IsConnected = true;
 
                 var lastFlush = DateTime.UtcNow;
-                while (!ct.IsCancellationRequested)
+                while (!ct.IsCancellationRequested && options.CurrentValue.Enabled)
                 {
                     // Staleness = BACKSTOP, non liveness primaria: la liveness vera è il ping/pong del
                     // protocollo. Soglia larga (15 min di default) perché su questo feed di eventi
@@ -103,6 +123,7 @@ public sealed class LiquidationSyncWorker(
 
                     messagesThisConnection++;
                     totalMessagesEver++;
+                    TotalMessages = totalMessagesEver;
                     ProcessMessage(message);
 
                     if (DateTime.UtcNow - lastFlush >= TimeSpan.FromMinutes(Math.Max(1, opt.FlushMinutes)))
@@ -120,8 +141,21 @@ public sealed class LiquidationSyncWorker(
             {
                 logger.LogWarning(ex, "Accumulo liquidazioni: errore di canale, riconnessione fra {Backoff}.", backoff);
             }
+            finally
+            {
+                IsConnected = false;
+            }
 
             if (ct.IsCancellationRequested) break;
+
+            // Spento mentre il socket era aperto: si è appena chiuso, si salva quel che c'è e si
+            // torna in attesa senza consumare il backoff (non è un guasto, è una scelta).
+            if (!options.CurrentValue.Enabled)
+            {
+                try { await FlushAsync(ct); }
+                catch (Exception ex) { logger.LogWarning(ex, "Accumulo liquidazioni: flush allo spegnimento fallito."); }
+                continue;
+            }
 
             // [2026-07-24, trovato dal vivo] Connesso ma PERENNEMENTE MUTO: gli stream futures Binance
             // (fstream) NON consegnano dati da alcune postazioni EEA — la restrizione MiCA sui derivati

@@ -31,6 +31,16 @@ massimo porre **veto**; la ri-applica scrive solo configurazione.
 | 4c | Sentiment 2.0 | `Sentiment` | Enable (default **ON**: le serie Binance pubbliche esistono solo 30 giorni — spento = buchi irrecuperabili nei baseline), cadenze metriche/news ⟳, simboli CSV, soglia z estremi, soglie F&G, **Feature ML ⚠️** (opt-in esplicito: cambia cosa vedono i modelli); bottone "Esegui ora" |
 | 5 | Drift monitor | `Drift` | Enable, intervallo ⟳, candele recenti, **ritiro automatico del Champion in alert** (solo governance dei record: nessun retrain automatico, nessun impatto sul trading), alert minimi per ritiro; tabella **ultimi 20 esiti** con severità e top feature; bottone "Esegui check ora" |
 | 6 | Sync dati & retraining regime | `MarketData` / `MarketRegime` | Enable e cadenze del sync watchlist e del retraining del modello di regime (attivato solo se il Silhouette migliora) |
+| 7 | Campagne + trigger contestuale | `Campaign` / `RegimeTrigger` | Gate globale del planner (default **OFF**: è IL cambio di natura da strumento ad agente) e tick ⟳; trigger che sveglia il planner al cambio di cluster K-means o all'uscita dalla banda di volatilità GARCH — non lancia mai run direttamente |
+| 8 | Soglie di consolidamento | `EnsembleComparator` / `Registry` | Di quanto un ensemble nuovo deve battere il corrente (isteresi anti-rumore), gambe e simboli minimi, z di significatività; soglia assoluta di **Deflated Sharpe** per diventare Champion. Tutti ⟳: queste due sezioni si leggono una sola volta all'avvio |
+| 9 | Carry forward test | `Carry` | Enable, modalità (**Paper/Testnet, mai Live**), simboli, cadenza ⟳, soglie di ingresso/uscita del funding annualizzato, eventi in media, size per gamba; **tabella dello stato per simbolo** e bottone "Valuta ora" |
+| 10 | Accumulo liquidazioni | `Liquidations` | Enable (default **ON**: il dato non è ricostruibile a posteriori), flush su DB, soglia di silenzio, retry se l'endpoint risulta bloccato; badge di connessione e conteggio messaggi |
+| 11 | Notifiche all'operatore | `Notifications` | Enable, provider **Logging/Telegram**, ChatId, rate-limit orario; bottone **"Invia notifica di prova"** che passa dal dispatcher vero (gate + rate-limit compresi) |
+| 12 | Diagnostica | `Ml` / `Observability` | Dual-read ML osservativo verso `procionemgr-ml` (log e metrica, **mai** una decisione) ed export OTLP opt-in — la dashboard `/metrics` funziona comunque a export spento |
+
+Le protezioni che filtrano o fermano le **operazioni** — feed real-time, esposizione
+correlata, router di regime, watchdog degli invarianti — stanno invece in
+[Protezioni](admin-protections.md).
 
 ## Come funziona (flusso del codice)
 
@@ -41,7 +51,24 @@ sotto le dita" quando il monitor ricarica il file appena scritto.
 `IAppConfigWriter.SaveSectionAsync(section, model)` **sostituisce l'intera sezione** in
 `appsettings.json`: per questo i POCO locali (`MarketDataConfig`) includono anche i toggle
 non esposti nel form (`UseRemoteIngestion`, `RemoteIngestionUrl`) — senza il round-trip, un
-salvataggio da questa pagina li cancellerebbe dal file (commento alle righe 497–501).
+salvataggio da questa pagina li cancellerebbe dal file.
+
+Il round-trip però copre solo gli **scalari** che il POCO conosce, e questo non bastava: la
+sezione `MarketData` contiene la **sottosezione** `Realtime` (l'intera configurazione del feed
+WebSocket, compreso se i tick possono chiudere posizioni), che il POCO del form non modella.
+Fino all'audit del 2026-07-29 il salvataggio della card 6 la **cancellava**, e il feed tornava
+ai default in silenzio. Il writer ora preserva le sottosezioni che il payload non nomina —
+un oggetto annidato che il POCO non conosce appartiene a un altro pannello, non è una
+proprietà dimenticata.
+
+### Validazione lato server
+Ogni Salva passa da
+[`AdminConfigRules.Validate`](../../ProcioneMGR/Services/Config/AdminConfigRules.cs) prima di
+toccare il file: l'attributo `min=` dell'HTML non vincola `@bind`, quindi senza quel controllo
+un `Llm:MaxTokens=0` o un `Drift:IntervalHours=0` (che fa esplodere il `PeriodicTimer` del
+worker al riavvio successivo, uccidendo la funzione in silenzio) finivano dritti in
+`appsettings.json`. Nessuna correzione silenziosa dei valori: un numero cambiato sotto le dita
+di chi lo ha appena scritto è peggio di un rifiuto esplicito.
 
 ### Azioni "esegui ora"
 Ogni worker espone `TickAsync` invocabile on-demand:

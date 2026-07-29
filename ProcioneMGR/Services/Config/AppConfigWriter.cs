@@ -25,6 +25,12 @@ public sealed class AppConfigWriter(IHostEnvironment env, ILogger<AppConfigWrite
     // farebbero read-modify-write incrociati perdendo una delle due scritture.
     private static readonly SemaphoreSlim FileLock = new(1, 1);
 
+    // Gli enum si scrivono col NOME, non con l'ordinale. Il binder della configurazione accetta
+    // entrambi, quindi non è una questione di correttezza: è che appsettings.json lo legge anche un
+    // umano, e "ImpactModel": 1 non dice nulla mentre "SquareRoot" sì.
+    private static readonly JsonSerializerOptions SerializeOptions =
+        new() { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
+
     public async Task SaveSectionAsync<T>(string sectionPath, T options, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sectionPath);
@@ -56,13 +62,29 @@ public sealed class AppConfigWriter(IHostEnvironment env, ILogger<AppConfigWrite
             // qui per costruzione). Le chiavi di documentazione "_comment*" della sezione
             // esistente vengono preservate: sono per il lettore umano del file, non per il binder.
             var leaf = segments[^1];
-            var serialized = JsonSerializer.SerializeToNode(options)?.AsObject()
+            var serialized = JsonSerializer.SerializeToNode(options, SerializeOptions)?.AsObject()
                              ?? throw new InvalidOperationException($"Serializzazione della sezione '{sectionPath}' fallita.");
             if (parent[leaf] is JsonObject existing)
             {
-                foreach (var (key, value) in existing.Where(kv => kv.Key.StartsWith('_')))
+                foreach (var (key, value) in existing)
                 {
-                    serialized[key] = value?.DeepClone();
+                    // Documentazione per il lettore umano del file: mai toccata dal binder, mai persa.
+                    var isComment = key.StartsWith('_');
+
+                    // SOTTOSEZIONI DI ALTRI: un oggetto annidato che il POCO non modella appartiene a
+                    // un altro pannello, non è una proprietà che il POCO ha dimenticato. Senza questa
+                    // riga, salvare "MarketData" dal pannello Sync (POCO di tre scalari) CANCELLAVA
+                    // "MarketData:Realtime" — l'intera configurazione del feed WebSocket, comprese le
+                    // uscite protettive guidate dai tick — e il file tornava ai default in silenzio.
+                    // La regola è precisa: si preserva solo ciò che è un OGGETTO e che il payload non
+                    // nomina. Una proprietà del POCO valorizzata a null compare comunque fra le chiavi
+                    // serializzate, quindi continua a sovrascrivere come deve.
+                    var isForeignSubsection = value is JsonObject && !serialized.ContainsKey(key);
+
+                    if (isComment || isForeignSubsection)
+                    {
+                        serialized[key] = value?.DeepClone();
+                    }
                 }
             }
             parent[leaf] = serialized;
