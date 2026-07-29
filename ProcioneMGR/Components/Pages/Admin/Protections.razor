@@ -18,6 +18,7 @@
 @inject IOptionsMonitor<RegimeRoutingOptions> RoutingMonitor
 @inject IOptionsMonitor<LaneInvariantOptions> InvariantMonitor
 @inject IStrategyFactory Strategies
+@inject IConfiguration Config
 
 <PageTitle>Protezioni</PageTitle>
 
@@ -39,6 +40,33 @@
         strategia. Un limite tarato male non protegge — paralizza.
     </p>
 </GuidaPanel>
+
+@if (_remoteTrading)
+{
+    @* Verificato dal vivo il 2026-07-29: col motore in-cluster il pod legge la PROPRIA
+       configurazione (ConfigMap trading-config + un appsettings.json su PVC che, se il monolite non
+       gira nel cluster, nessuno popola mai — trovato a "{}"). Un pannello che tacesse su questo
+       mostrerebbe valori che l'operatore crede in vigore mentre il motore ne applica altri: l'esatto
+       opposto del motivo per cui questa pagina esiste. *@
+    <div class="alert alert-warning">
+        <strong>⚠️ Il motore di trading gira FUORI da questo processo</strong>
+        (<code>Trading:UseRemoteTrading = true</code>).
+        <p class="mb-1 mt-2">
+            Tutte le protezioni di questa pagina vivono <em>dove vive il motore</em>. I valori qui
+            sotto sono quelli di <strong>questo guscio</strong>, e salvarli scrive nel suo
+            <code>appsettings.json</code>:
+            <strong>non sono quelli che il motore sta applicando</strong>. Il motore legge la propria
+            configurazione — in Kubernetes la ConfigMap <code>trading-config</code> e il file sul PVC
+            condiviso — che si cambia dal deploy, non da qui.
+        </p>
+        <p class="mb-0">
+            Restano utili per due cose reali: preparare la configurazione per quando il motore
+            tornasse in-process, e leggere in modo comprensibile cosa contiene il file di questo
+            processo. Per sapere cosa sta facendo il motore <em>adesso</em>:
+            <a href="trading" class="alert-link">/trading</a> e i log del pod.
+        </p>
+    </div>
+}
 
 @if (!string.IsNullOrEmpty(_status))
 {
@@ -393,8 +421,15 @@
     private bool _isError;
     private string? _status;
 
+    /// <summary>
+    /// Il motore vive in un altro processo: tutto ciò che questa pagina configura è ospitato LÌ,
+    /// quindi i valori mostrati qui non sono quelli in vigore. Vedi il banner in cima.
+    /// </summary>
+    private bool _remoteTrading;
+
     protected override void OnInitialized()
     {
+        _remoteTrading = Config.GetValue<bool>("Trading:UseRemoteTrading");
         _realtime = Clone(RealtimeMonitor.CurrentValue);
         _shadow = Clone(ShadowMonitor.CurrentValue);
         _correlated = Clone(CorrelatedMonitor.CurrentValue);

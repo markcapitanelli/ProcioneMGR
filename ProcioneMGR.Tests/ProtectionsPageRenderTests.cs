@@ -1,4 +1,5 @@
 using Bunit;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Components.Layout;
 using ProcioneMGR.Data;
@@ -40,11 +41,18 @@ public class ProtectionsPageRenderTests : BunitContext
     private RecordingConfigWriter RegisterServices(
         RealtimeFeedOptions? realtime = null,
         RegimeRoutingOptions? routing = null,
-        CorrelatedExposureOptions? correlated = null)
+        CorrelatedExposureOptions? correlated = null,
+        bool remoteTrading = false)
     {
         var writer = new RecordingConfigWriter();
         Services.AddLogging();
         Services.AddSingleton<IAppConfigWriter>(writer);
+        Services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Trading:UseRemoteTrading"] = remoteTrading ? "true" : "false",
+            })
+            .Build());
         Services.AddSingleton<Microsoft.Extensions.Options.IOptionsMonitor<RealtimeFeedOptions>>(
             new StaticOptionsMonitor<RealtimeFeedOptions>(realtime ?? new RealtimeFeedOptions()));
         Services.AddSingleton<Microsoft.Extensions.Options.IOptionsMonitor<ProtectiveExitShadowOptions>>(
@@ -157,6 +165,35 @@ public class ProtectionsPageRenderTests : BunitContext
 
         Assert.Empty(writer.Saved);
         Assert.Contains("alert-danger", cut.Markup);
+    }
+
+    [Fact]
+    public void RemoteTrading_ThePageSaysTheseValuesAreNotTheOnesInForce()
+    {
+        // Verificato dal vivo il 2026-07-29: col motore in-cluster il pod legge la PROPRIA
+        // configurazione (ConfigMap + PVC, quest'ultimo trovato a "{}"), quindi quanto si salva da
+        // qui NON lo raggiunge. Una pagina di protezioni che tacesse su questo mostrerebbe valori
+        // che l'operatore crede in vigore mentre il motore ne applica altri.
+        Authorize();
+        RegisterServices(remoteTrading: true);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Admin.Protections>();
+
+        Assert.Contains("gira FUORI da questo processo", cut.Markup);
+        Assert.Contains("non sono quelli che il motore sta applicando", cut.Markup);
+    }
+
+    [Fact]
+    public void LocalTrading_NoMisleadingBanner()
+    {
+        // Col motore in-process i valori mostrati SONO quelli in vigore: l'avviso sarebbe rumore
+        // che insegna a ignorare gli avvisi.
+        Authorize();
+        RegisterServices(remoteTrading: false);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Admin.Protections>();
+
+        Assert.DoesNotContain("gira FUORI da questo processo", cut.Markup);
     }
 
     [Fact]

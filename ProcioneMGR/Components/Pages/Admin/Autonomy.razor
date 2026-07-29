@@ -694,11 +694,19 @@
 
         @if (CarryWorkerInstance is null)
         {
-            <p class="text-muted small mb-0 mt-3">
-                <em>Il forward test gira nell'host del motore: con <code>Trading:UseRemoteTrading=true</code>
-                vive in <code>procionemgr-trading</code>, non qui. La configurazione salvata da questa
-                pagina è comunque quella che quel processo legge.</em>
-            </p>
+            @* La prima versione di questo testo diceva "la configurazione salvata da questa pagina
+               è comunque quella che quel processo legge". È FALSO, verificato dal vivo il
+               2026-07-29: il pod ha la propria ConfigMap e un appsettings.json su PVC che, col
+               monolite fuori dal cluster, nessuno popola (trovato a "{}"). Rassicurare a vuoto su
+               dove finisce una configurazione è peggio che non dire nulla. *@
+            <div class="alert alert-warning py-2 small mb-0 mt-3">
+                <strong>Il forward test non gira in questo processo.</strong>
+                Con <code>Trading:UseRemoteTrading=true</code> vive in
+                <code>procionemgr-trading</code>, insieme al motore, e legge la <em>propria</em>
+                configurazione (ConfigMap <code>trading-config</code> + file su PVC). Quello che
+                salvi qui vale per questo guscio: <strong>non raggiunge quel processo</strong>, e lo
+                stato dal vivo del carry si legge nei log del pod.
+            </div>
         }
         else
         {
