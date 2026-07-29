@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Components.Layout;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Backtesting;
+using System.Text.Json;
 using ProcioneMGR.Services.Config;
 using ProcioneMGR.Services.MarketData;
 using ProcioneMGR.Services.Regime;
@@ -27,45 +28,60 @@ public class ProtectionsPageRenderTests : BunitContext
 {
     public ProtectionsPageRenderTests() => JSInterop.Mode = JSRuntimeMode.Loose;
 
-    private sealed class RecordingConfigWriter : IAppConfigWriter
+    /// <summary>
+    /// Store di prova: tiene le sezioni in memoria e registra le scritture. Sostituisce sia il
+    /// percorso locale che quello gRPC — alla pagina non interessa quale sia, ed è il punto
+    /// dell'astrazione.
+    /// </summary>
+    private sealed class FakeEngineConfigStore(bool remote = false, bool reachable = true) : IEngineConfigStore
     {
+        public bool IsRemote => remote;
         public readonly List<(string Section, object Options)> Saved = [];
+        public readonly Dictionary<string, string> Sections = new(StringComparer.OrdinalIgnoreCase);
+        public string? WarningToReturn { get; set; }
 
-        public Task SaveSectionAsync<T>(string sectionPath, T options, CancellationToken ct = default)
+        public Task<EngineConfigSnapshot> ReadAsync(IEnumerable<string>? sections = null, CancellationToken ct = default)
         {
-            Saved.Add((sectionPath, options!));
-            return Task.CompletedTask;
+            if (!reachable)
+            {
+                return Task.FromResult(new EngineConfigSnapshot([], string.Empty, false, false, "motore non raggiungibile"));
+            }
+            var views = Sections
+                .Select(kv => new EngineConfigSectionView(kv.Key, kv.Value, Writable: true, Source: "appsettings.json"))
+                .ToList();
+            return Task.FromResult(new EngineConfigSnapshot(views, "/app/appsettings.json", Writable: true));
+        }
+
+        public Task<EngineConfigWriteResult> WriteAsync(string section, object options, CancellationToken ct = default)
+        {
+            Saved.Add((section, options));
+            Sections[section] = JsonSerializer.Serialize(options, EngineConfigSnapshot.JsonOptions);
+            return Task.FromResult(new EngineConfigWriteResult(Sections[section], WarningToReturn));
         }
     }
 
-    private RecordingConfigWriter RegisterServices(
+    private FakeEngineConfigStore RegisterServices(
         RealtimeFeedOptions? realtime = null,
         RegimeRoutingOptions? routing = null,
         CorrelatedExposureOptions? correlated = null,
-        bool remoteTrading = false)
+        bool remoteTrading = false,
+        bool reachable = true)
     {
-        var writer = new RecordingConfigWriter();
+        var store = new FakeEngineConfigStore(remoteTrading, reachable);
+        Seed(store, RealtimeFeedOptions.SectionName, realtime ?? new RealtimeFeedOptions());
+        Seed(store, "Trading:ProtectiveExitShadow", new ProtectiveExitShadowOptions());
+        Seed(store, "Trading:CorrelatedExposure", correlated ?? new CorrelatedExposureOptions());
+        Seed(store, "Trading:RegimeRouting", routing ?? new RegimeRoutingOptions());
+        Seed(store, "Trading:LaneInvariants", new LaneInvariantOptions());
+
         Services.AddLogging();
-        Services.AddSingleton<IAppConfigWriter>(writer);
-        Services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Trading:UseRemoteTrading"] = remoteTrading ? "true" : "false",
-            })
-            .Build());
-        Services.AddSingleton<Microsoft.Extensions.Options.IOptionsMonitor<RealtimeFeedOptions>>(
-            new StaticOptionsMonitor<RealtimeFeedOptions>(realtime ?? new RealtimeFeedOptions()));
-        Services.AddSingleton<Microsoft.Extensions.Options.IOptionsMonitor<ProtectiveExitShadowOptions>>(
-            new StaticOptionsMonitor<ProtectiveExitShadowOptions>(new ProtectiveExitShadowOptions()));
-        Services.AddSingleton<Microsoft.Extensions.Options.IOptionsMonitor<CorrelatedExposureOptions>>(
-            new StaticOptionsMonitor<CorrelatedExposureOptions>(correlated ?? new CorrelatedExposureOptions()));
-        Services.AddSingleton<Microsoft.Extensions.Options.IOptionsMonitor<RegimeRoutingOptions>>(
-            new StaticOptionsMonitor<RegimeRoutingOptions>(routing ?? new RegimeRoutingOptions()));
-        Services.AddSingleton<Microsoft.Extensions.Options.IOptionsMonitor<LaneInvariantOptions>>(
-            new StaticOptionsMonitor<LaneInvariantOptions>(new LaneInvariantOptions()));
+        Services.AddSingleton<IEngineConfigStore>(store);
         Services.AddSingleton<IStrategyFactory, StrategyFactory>();
-        return writer;
+        return store;
     }
+
+    private static void Seed<T>(FakeEngineConfigStore store, string section, T options) =>
+        store.Sections[section] = JsonSerializer.Serialize(options, EngineConfigSnapshot.JsonOptions);
 
     private void Authorize()
     {
@@ -150,7 +166,7 @@ public class ProtectionsPageRenderTests : BunitContext
         // La validazione lato server è l'intero motivo per cui AdminConfigRules esiste: qui si
         // verifica che sia CABLATA, non solo che esista.
         Authorize();
-        var writer = RegisterServices(correlated: new CorrelatedExposureOptions
+        var store = RegisterServices(correlated: new CorrelatedExposureOptions
         {
             // Finestra più corta delle barre sovrapposte richieste: nessuna correlazione sarebbe
             // mai stimabile, e il guard sembrerebbe acceso lasciando passare tutto.
@@ -163,37 +179,89 @@ public class ProtectionsPageRenderTests : BunitContext
                                                      && b.ParentElement?.ParentElement?.TextContent.Contains("ρ") == true);
         await cut.InvokeAsync(() => save.Click());
 
-        Assert.Empty(writer.Saved);
+        Assert.Empty(store.Saved);
         Assert.Contains("alert-danger", cut.Markup);
     }
 
     [Fact]
-    public void RemoteTrading_ThePageSaysTheseValuesAreNotTheOnesInForce()
+    public void RemoteTrading_ThePageSaysWhereItIsWriting()
     {
-        // Verificato dal vivo il 2026-07-29: col motore in-cluster il pod legge la PROPRIA
-        // configurazione (ConfigMap + PVC, quest'ultimo trovato a "{}"), quindi quanto si salva da
-        // qui NON lo raggiunge. Una pagina di protezioni che tacesse su questo mostrerebbe valori
-        // che l'operatore crede in vigore mentre il motore ne applica altri.
+        // Il banner ha cambiato SIGNIFICATO il 2026-07-29 (secondo giro): prima avvisava che i
+        // valori mostrati non erano quelli in vigore, perché il guscio leggeva il proprio file.
+        // Ora la pagina interroga il motore, quindi i valori SONO quelli applicati e il banner
+        // spiega dove si sta scrivendo — che resta un fatto da sapere prima di premere Salva.
         Authorize();
         RegisterServices(remoteTrading: true);
 
         var cut = Render<ProcioneMGR.Components.Pages.Admin.Protections>();
 
-        Assert.Contains("gira FUORI da questo processo", cut.Markup);
-        Assert.Contains("non sono quelli che il motore sta applicando", cut.Markup);
+        Assert.Contains("Stai configurando il motore remoto", cut.Markup);
+        Assert.Contains("sta applicando adesso", cut.Markup);
+        Assert.Contains("/app/appsettings.json", cut.Markup); // dice SU COSA scrive il motore
     }
 
     [Fact]
-    public void LocalTrading_NoMisleadingBanner()
+    public void LocalTrading_NoBannerAtAll()
     {
-        // Col motore in-process i valori mostrati SONO quelli in vigore: l'avviso sarebbe rumore
-        // che insegna a ignorare gli avvisi.
+        // Col motore in-process non c'è nulla di sorprendente da dire: l'avviso sarebbe rumore che
+        // insegna a ignorare gli avvisi.
         Authorize();
         RegisterServices(remoteTrading: false);
 
         var cut = Render<ProcioneMGR.Components.Pages.Admin.Protections>();
 
-        Assert.DoesNotContain("gira FUORI da questo processo", cut.Markup);
+        Assert.DoesNotContain("Stai configurando il motore remoto", cut.Markup);
+    }
+
+    [Fact]
+    public void UnreachableEngine_ShowsDefaultsAndSaysSo_InsteadOfPassingThemOffAsTruth()
+    {
+        // Il caso che conta quando il core è giù: la pagina deve restare apribile (è il momento in
+        // cui uno vuole guardarla) SENZA spacciare i default per la configurazione del motore.
+        Authorize();
+        RegisterServices(remoteTrading: true, reachable: false);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Admin.Protections>();
+
+        Assert.Contains("Configurazione del motore non leggibile", cut.Markup);
+        Assert.Contains("default del codice", cut.Markup);
+        // Non basta mostrarli: la pagina deve dire che NON sono quelli in vigore.
+        Assert.Contains("non quelli in vigore", cut.Markup);
+    }
+
+    [Fact]
+    public async Task SaveGoesToTheEngineStore_NotToTheLocalFile()
+    {
+        // La regressione da impedire: che qualcuno ricablasse il pannello su IAppConfigWriter,
+        // riportandolo a scrivere nel file del guscio — cioè al bug di partenza.
+        Authorize();
+        var store = RegisterServices(remoteTrading: true);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Admin.Protections>();
+        var save = cut.FindAll("button").Single(b => b.TextContent.Contains("Salva")
+                                                     && b.ParentElement?.ParentElement?.TextContent.Contains("ρ") == true);
+        await cut.InvokeAsync(() => save.Click());
+
+        var saved = Assert.Single(store.Saved);
+        Assert.Equal("Trading:CorrelatedExposure", saved.Section);
+    }
+
+    [Fact]
+    public async Task WhenTheEngineWarnsThatAnEnvOverridesTheFile_ThePanelRepeatsIt()
+    {
+        // Un salvataggio che riesce e non cambia nulla è il difetto che questo lavoro combatte:
+        // l'avvertimento del motore deve arrivare all'operatore, non fermarsi nel payload.
+        Authorize();
+        var store = RegisterServices(remoteTrading: true);
+        store.WarningToReturn = "Enabled arriva da variabili d'ambiente, che ha la precedenza sul file";
+
+        var cut = Render<ProcioneMGR.Components.Pages.Admin.Protections>();
+        var save = cut.FindAll("button").Single(b => b.TextContent.Contains("Salva")
+                                                     && b.ParentElement?.ParentElement?.TextContent.Contains("ρ") == true);
+        await cut.InvokeAsync(() => save.Click());
+
+        Assert.Contains("precedenza sul file", cut.Markup);
+        Assert.Contains("alert-danger", cut.Markup); // non un successo verde: il valore NON è in vigore
     }
 
     [Fact]

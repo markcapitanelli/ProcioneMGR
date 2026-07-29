@@ -39,6 +39,19 @@ public class TradingServiceCollectionExtensionsTests
     }
 
     /// <summary>
+    /// Host finto: serve solo il ContentRootPath, e punta a una cartella temporanea perché nessun
+    /// test di composizione possa scrivere sull'appsettings.json del repository.
+    /// </summary>
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = "Development";
+        public string ApplicationName { get; set; } = "ProcioneMGR.Tests";
+        public string ContentRootPath { get; set; } = Path.GetTempPath();
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; }
+            = new Microsoft.Extensions.FileProviders.NullFileProvider();
+    }
+
+    /// <summary>
     /// Il cono di dipendenze del TradingEngine, registrato come nell'host reale. Connection string
     /// fittizia: Npgsql non si connette a startup e nessun test qui tocca il DB.
     /// </summary>
@@ -55,6 +68,11 @@ public class TradingServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddOptions();
+        // Servizi che in produzione arrivano dall'host: il config store locale legge la
+        // configurazione e scrive nel ContentRootPath, quindi in un provider costruito a mano
+        // vanno forniti esplicitamente.
+        services.AddSingleton<IConfiguration>(config);
+        services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
         services.Configure<SafetyConfiguration>(config.GetSection("Trading:Safety"));
         services.Configure<LiveExecutionOptions>(config.GetSection("Trading:LiveExecution"));
 
@@ -206,6 +224,36 @@ public class TradingServiceCollectionExtensionsTests
         using (var tradingHost = BuildProvider(useRemoteTrading: true, isTradingServiceHost: true))
         {
             Assert.Single(tradingHost.GetServices<IHostedService>().OfType<ProcioneMGR.Services.MarketData.RealtimePriceWorker>());
+        }
+    }
+
+    [Fact]
+    public void EngineConfigStore_FollowsWhereTheEngineActuallyLives()
+    {
+        // [2026-07-29] La configurazione ospitata dal motore va letta e scritta DOVE il motore la
+        // legge. Col trading remoto il file di questo processo non è il suo — verificato dal vivo
+        // su un PVC rimasto a "{}", con ogni soglia mostrata in UI diversa da quella applicata.
+        // La scelta è per COSTRUZIONE, come tutto il resto di AddTradingLanes: se fosse un ramo
+        // dentro il pannello, prima o poi un pannello nuovo se lo dimenticherebbe.
+        using (var remote = BuildProvider(useRemoteTrading: true))
+        {
+            var store = remote.GetRequiredService<IEngineConfigStore>();
+            Assert.IsType<RemoteEngineConfigStore>(store);
+            Assert.True(store.IsRemote);
+        }
+
+        using (var local = BuildProvider(useRemoteTrading: false))
+        {
+            var store = local.GetRequiredService<IEngineConfigStore>();
+            Assert.IsType<LocalEngineConfigStore>(store);
+            Assert.False(store.IsRemote);
+        }
+
+        // Il servizio di trading standalone È il motore: scrive sul proprio file, mai via rete
+        // (altrimenti punterebbe a se stesso).
+        using (var tradingHost = BuildProvider(useRemoteTrading: true, isTradingServiceHost: true))
+        {
+            Assert.IsType<LocalEngineConfigStore>(tradingHost.GetRequiredService<IEngineConfigStore>());
         }
     }
 

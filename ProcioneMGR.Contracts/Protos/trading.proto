@@ -39,6 +39,28 @@ service TradingCommandService {
   // server (header x-trading-shared-secret, fail-closed se il segreto non è configurato).
   rpc ConfirmOrder(ConfirmOrderRequest) returns (ConfirmOrderResponse);
   rpc RejectOrder(RejectOrderRequest) returns (RejectOrderResponse);
+
+  // --- Configurazione DEL MOTORE (2026-07-29) --------------------------------------------------
+  // Il disegno originale prevedeva che guscio e motore condividessero UN SOLO appsettings.json su
+  // PVC: il guscio scrive dal pannello, il motore rilegge a caldo. Verificato dal vivo che non
+  // regge quando il guscio NON gira nel cluster (deployment ui a 0 repliche, monolite sul
+  // desktop): il file sul PVC era rimasto a "{}" dal giorno in cui l'init container l'aveva
+  // creato, e ogni soglia mostrata in /trading e /admin/protections era quella del guscio, non
+  // quella applicata dal motore. Una manopola che non muove nulla e' peggio di una manopola
+  // assente, perche' fa credere di aver agito.
+  //
+  // Questi due rpc chiudono il buco per la via che NON dipende dalla topologia: il guscio chiede al
+  // motore la sua configurazione e gliela riscrive. Il file condiviso resta possibile ma non e' piu'
+  // un prerequisito.
+  //
+  // CONFINE DI SICUREZZA: SetEngineConfig scrive su un processo che firma ordini veri. La sezione
+  // richiesta passa da una ALLOW-LIST CHIUSA lato server e dalla stessa validazione dei pannelli.
+  // Non e' un'API di configurazione generica: connection string, master key, segreto gRPC, numero
+  // di corsie e i toggle di topologia NON sono raggiungibili da qui, per costruzione e non per
+  // convenzione. Vale comunque l'autorizzazione di ogni altro rpc (SharedSecretAuthInterceptor +
+  // NetworkPolicy).
+  rpc GetEngineConfig(GetEngineConfigRequest) returns (GetEngineConfigResponse);
+  rpc SetEngineConfig(SetEngineConfigRequest) returns (SetEngineConfigResponse);
 }
 
 // --- Enum di dominio -------------------------------------------------------------------------
@@ -275,4 +297,57 @@ message TradeRecord {
   MarketType market_type = 17;
   int32 leverage = 18;
   bool was_liquidated = 19;
+}
+
+// --- Configurazione del motore ----------------------------------------------------------------
+// Il payload e' JSON e non un message tipato per sezione: le opzioni sono POCO che cambiano spesso
+// (una proprieta' nuova non deve richiedere una modifica di contratto e un redeploy coordinato di
+// due processi), e il modello "una sezione intera alla volta" e' gia' quello di AppConfigWriter --
+// stesso significato ai due capi. Cio' che NON e' aperto e' QUALI sezioni si possono toccare:
+// quello e' un elenco chiuso lato server.
+
+message GetEngineConfigRequest {
+  // Sezioni richieste ("Trading:Safety", "MarketData:Realtime", ...). Vuoto = tutte quelle
+  // dell'allow-list, che e' il caso d'uso normale del pannello.
+  repeated string sections = 1;
+}
+
+message GetEngineConfigResponse {
+  repeated EngineConfigSection sections = 1;
+  // Dove il motore scrive davvero. Diagnostica onesta: se il pannello dice "salvato" e' bene poter
+  // vedere SU COSA, soprattutto quando il file e' montato da un PVC.
+  string config_path = 2;
+  // false = il motore puo' LEGGERE la sua configurazione ma non riscriverla (file in sola lettura,
+  // es. montato da ConfigMap). Il pannello lo dice PRIMA, invece di far scoprire il rifiuto al
+  // primo salvataggio.
+  bool writable = 3;
+}
+
+message EngineConfigSection {
+  string path = 1;
+  // Oggetto JSON della sezione come il motore la vede ORA (valori effettivi: file + variabili
+  // d'ambiente + default del codice, gia' fusi dal provider di configurazione). Vuoto se la
+  // sezione non esiste da nessuna parte.
+  string json = 2;
+  // false = la sezione si legge ma non si scrive (non e' nell'allow-list di scrittura).
+  bool writable = 3;
+  // Sorgente prevalente, per spiegare all'operatore perche' un valore non cambia salvando il file
+  // (in Kubernetes le env della ConfigMap VINCONO su appsettings.json).
+  string source = 4;
+}
+
+message SetEngineConfigRequest {
+  string section = 1;
+  // Oggetto JSON completo della sezione (stessa semantica di AppConfigWriter: sostituisce l'intera
+  // sezione, le sottosezioni non modellate vengono preservate dal writer).
+  string json = 2;
+}
+
+message SetEngineConfigResponse {
+  // La sezione come risulta DOPO la scrittura, riletta dal motore: chiude il cerchio senza
+  // costringere il chiamante a fidarsi.
+  string applied_json = 1;
+  // Avvertimento non bloccante: tipicamente "una variabile d'ambiente sovrascrive questa chiave,
+  // il valore salvato non avra' effetto finche' quella resta".
+  string warning = 2;
 }

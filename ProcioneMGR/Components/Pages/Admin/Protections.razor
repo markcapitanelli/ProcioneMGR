@@ -11,14 +11,10 @@
 @using ProcioneMGR.Services.Trading
 @attribute [Authorize(Roles = AppRoles.Admin)]
 
-@inject IAppConfigWriter ConfigWriter
-@inject IOptionsMonitor<RealtimeFeedOptions> RealtimeMonitor
-@inject IOptionsMonitor<ProtectiveExitShadowOptions> ShadowMonitor
-@inject IOptionsMonitor<CorrelatedExposureOptions> CorrelatedMonitor
-@inject IOptionsMonitor<RegimeRoutingOptions> RoutingMonitor
-@inject IOptionsMonitor<LaneInvariantOptions> InvariantMonitor
+@* Non IOptionsMonitor: quello riflette la configurazione di QUESTO processo, che col motore
+   remoto non è quella applicata. Lo store la chiede a chi esegue. *@
+@inject IEngineConfigStore Store
 @inject IStrategyFactory Strategies
-@inject IConfiguration Config
 
 <PageTitle>Protezioni</PageTitle>
 
@@ -41,29 +37,43 @@
     </p>
 </GuidaPanel>
 
-@if (_remoteTrading)
+@if (!_snapshot.Reachable)
 {
-    @* Verificato dal vivo il 2026-07-29: col motore in-cluster il pod legge la PROPRIA
-       configurazione (ConfigMap trading-config + un appsettings.json su PVC che, se il monolite non
-       gira nel cluster, nessuno popola mai — trovato a "{}"). Un pannello che tacesse su questo
-       mostrerebbe valori che l'operatore crede in vigore mentre il motore ne applica altri: l'esatto
-       opposto del motivo per cui questa pagina esiste. *@
-    <div class="alert alert-warning">
-        <strong>⚠️ Il motore di trading gira FUORI da questo processo</strong>
-        (<code>Trading:UseRemoteTrading = true</code>).
-        <p class="mb-1 mt-2">
-            Tutte le protezioni di questa pagina vivono <em>dove vive il motore</em>. I valori qui
-            sotto sono quelli di <strong>questo guscio</strong>, e salvarli scrive nel suo
-            <code>appsettings.json</code>:
-            <strong>non sono quelli che il motore sta applicando</strong>. Il motore legge la propria
-            configurazione — in Kubernetes la ConfigMap <code>trading-config</code> e il file sul PVC
-            condiviso — che si cambia dal deploy, non da qui.
+    @* Il motore non risponde: si mostrano i default DICENDOLO. Un pannello che presentasse i
+       default come "la configurazione del motore" mentirebbe proprio quando l'operatore ha più
+       bisogno di sapere come stanno le cose. *@
+    <div class="alert alert-danger">
+        <strong>Configurazione del motore non leggibile.</strong> @_snapshot.Error
+        <p class="mb-0 mt-2">
+            I valori qui sotto sono i <em>default del codice</em>, non quelli in vigore: non
+            salvare finché il motore non risponde.
+            <button class="btn btn-sm btn-outline-light ms-2" @onclick="LoadAsync" disabled="@_busy">Riprova</button>
         </p>
-        <p class="mb-0">
-            Restano utili per due cose reali: preparare la configurazione per quando il motore
-            tornasse in-process, e leggere in modo comprensibile cosa contiene il file di questo
-            processo. Per sapere cosa sta facendo il motore <em>adesso</em>:
-            <a href="trading" class="alert-link">/trading</a> e i log del pod.
+    </div>
+}
+else if (_remoteTrading)
+{
+    @* Dal 2026-07-29 questo banner dice una cosa diversa da prima: allora avvisava che i valori
+       mostrati NON erano quelli in vigore (il guscio leggeva il proprio file, il motore un altro).
+       Ora la pagina interroga il motore, quindi il banner spiega DOVE si sta scrivendo — che resta
+       un fatto che l'operatore ha il diritto di sapere prima di premere Salva. *@
+    <div class="alert alert-info">
+        <strong>Stai configurando il motore remoto</strong>
+        (<code>Trading:UseRemoteTrading = true</code>).
+        <p class="mb-0 mt-2">
+            Questi valori sono letti da <code>procionemgr-trading</code> via gRPC e sono quelli che
+            <strong>sta applicando adesso</strong>; salvando si scrive là.
+            @if (!string.IsNullOrEmpty(_snapshot.ConfigPath))
+            {
+                <text>Il motore scrive in <code>@_snapshot.ConfigPath</code>.</text>
+            }
+            @if (!_snapshot.Writable)
+            {
+                <text>
+                    <br /><strong>Attenzione:</strong> quel file non è scrivibile dal motore
+                    (di solito un montaggio in sola lettura): il salvataggio verrà rifiutato.
+                </text>
+            }
         </p>
     </div>
 }
@@ -421,26 +431,31 @@
     private bool _isError;
     private string? _status;
 
-    /// <summary>
-    /// Il motore vive in un altro processo: tutto ciò che questa pagina configura è ospitato LÌ,
-    /// quindi i valori mostrati qui non sono quelli in vigore. Vedi il banner in cima.
-    /// </summary>
-    private bool _remoteTrading;
+    /// <summary>Configurazione del motore com'è adesso, con la diagnostica su origine e scrivibilità.</summary>
+    private EngineConfigSnapshot _snapshot = new([], string.Empty, Writable: false);
 
-    protected override void OnInitialized()
+    private bool _remoteTrading => Store.IsRemote;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    /// <summary>
+    /// Legge la configurazione DAL MOTORE, non dal file di questo processo. Con motore in-process
+    /// i due coincidono; con motore remoto no, ed è la ragione per cui questa pagina è passata da
+    /// IOptionsMonitor (che riflette il guscio) a IEngineConfigStore (che riflette chi esegue).
+    /// </summary>
+    private async Task LoadAsync()
     {
-        _remoteTrading = Config.GetValue<bool>("Trading:UseRemoteTrading");
-        _realtime = Clone(RealtimeMonitor.CurrentValue);
-        _shadow = Clone(ShadowMonitor.CurrentValue);
-        _correlated = Clone(CorrelatedMonitor.CurrentValue);
-        _routing = Clone(RoutingMonitor.CurrentValue);
-        _invariants = Clone(InvariantMonitor.CurrentValue);
+        _snapshot = await Store.ReadAsync();
+
+        _realtime = _snapshot.Bind<RealtimeFeedOptions>(RealtimeFeedOptions.SectionName);
+        _shadow = _snapshot.Bind<ProtectiveExitShadowOptions>("Trading:ProtectiveExitShadow");
+        _correlated = _snapshot.Bind<CorrelatedExposureOptions>("Trading:CorrelatedExposure");
+        _routing = _snapshot.Bind<RegimeRoutingOptions>("Trading:RegimeRouting");
+        _invariants = _snapshot.Bind<LaneInvariantOptions>("Trading:LaneInvariants");
 
         _correlatedCacheHours = Math.Max(1, (int)_correlated.CacheTtl.TotalHours);
         _routingTtlMinutes = Math.Max(1, (int)_routing.ModelCheckTtl.TotalMinutes);
     }
-
-    private static T Clone<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
 
     private void AddRoutingRule()
     {
@@ -477,8 +492,9 @@
         _busy = true; _isError = false; _status = null;
         try
         {
-            // Validazione lato SERVER: gli attributi min= dell'HTML non vincolano @bind, quindi
-            // senza questo controllo un valore fuori range finirebbe dritto in appsettings.json.
+            // Validazione lato client PRIMA di occupare la rete: gli attributi min= dell'HTML non
+            // vincolano @bind. Il motore rivalida comunque con le STESSE regole — questa è cortesia
+            // verso l'operatore, non il controllo di sicurezza (quello è dall'altra parte).
             var error = AdminConfigRules.Validate(model);
             if (error is not null)
             {
@@ -486,8 +502,16 @@
                 return;
             }
 
-            await ConfigWriter.SaveSectionAsync(section, model);
-            SetStatus($"{label}: salvato in appsettings.json — i campi ✅ valgono entro ~1s, quelli ⟳ dal prossimo riavvio.", false);
+            var result = await Store.WriteAsync(section, model);
+            var dove = Store.IsRemote ? "sul motore" : "in appsettings.json";
+            SetStatus(result.Warning is { } warning
+                ? $"{label}: salvato {dove}, MA — {warning}"
+                : $"{label}: salvato {dove} — i campi ✅ valgono entro ~1s, quelli ⟳ dal prossimo riavvio.",
+                result.Warning is not null);
+
+            // Rilettura dal motore: il pannello mostra ciò che è in vigore, non ciò che si è
+            // digitato. Se le due cose divergono — una env che vince sul file — si vede subito.
+            await LoadAsync();
         }
         catch (Exception ex) { SetStatus($"{label}: salvataggio fallito — {ex.Message}", true); }
         finally { _busy = false; }

@@ -141,6 +141,21 @@ public static class TradingServiceCollectionExtensions
                 // conteggio vero resta in total_trades), quindi il payload non cresce più con l'età
                 // della lane e il default gRPC basta di nuovo.
                 .AddInterceptor(() => new ProcioneMGR.Contracts.Grpc.SharedSecretClientInterceptor(sharedSecret));
+
+            // [2026-07-29] La configurazione ospitata dal motore si chiede AL MOTORE: il suo file
+            // non è il nostro. Vedi IEngineConfigStore.
+            services.TryAddSingleton<IEngineConfigStore, RemoteEngineConfigStore>();
+        }
+        else
+        {
+            // Motore in-process: il file di questo processo è quello che il motore legge, quindi
+            // si scrive direttamente — nessuna rete, nessun caso di irraggiungibilità.
+            // Il writer si registra QUI e non solo in Program.cs: chi compone le corsie in locale
+            // ne ha bisogno per forza, e lasciarlo al chiamante è una dipendenza implicita che
+            // esplode al primo resolve invece che alla composizione.
+            services.TryAddSingleton<Config.IAppConfigWriter, Config.AppConfigWriter>();
+            services.TryAddSingleton<EngineConfigService>();
+            services.TryAddSingleton<IEngineConfigStore, LocalEngineConfigStore>();
         }
 
         for (var lane = 0; lane < TradingLanes.Count; lane++)

@@ -42,7 +42,9 @@
 @inject EnsembleComparatorOptions ComparatorOptions
 @inject ModelRegistryOptions RegistryOptions
 @inject IOptionsMonitor<MlComparisonOptions> MlMonitor
-@inject IOptionsMonitor<CarryOptions> CarryMonitor
+@* Il carry vive nell'host del MOTORE: la sua configurazione si legge e si scrive dove il motore la
+   legge, non nel file di questo processo. Vedi IEngineConfigStore. *@
+@inject IEngineConfigStore EngineConfig
 @inject IOptionsMonitor<LiquidationsOptions> LiquidationsMonitor
 @inject IServiceProvider Services
 
@@ -694,18 +696,22 @@
 
         @if (CarryWorkerInstance is null)
         {
-            @* La prima versione di questo testo diceva "la configurazione salvata da questa pagina
-               è comunque quella che quel processo legge". È FALSO, verificato dal vivo il
-               2026-07-29: il pod ha la propria ConfigMap e un appsettings.json su PVC che, col
-               monolite fuori dal cluster, nessuno popola (trovato a "{}"). Rassicurare a vuoto su
-               dove finisce una configurazione è peggio che non dire nulla. *@
-            <div class="alert alert-warning py-2 small mb-0 mt-3">
-                <strong>Il forward test non gira in questo processo.</strong>
-                Con <code>Trading:UseRemoteTrading=true</code> vive in
-                <code>procionemgr-trading</code>, insieme al motore, e legge la <em>propria</em>
-                configurazione (ConfigMap <code>trading-config</code> + file su PVC). Quello che
-                salvi qui vale per questo guscio: <strong>non raggiunge quel processo</strong>, e lo
-                stato dal vivo del carry si legge nei log del pod.
+            @* Storia di questo riquadro, perché non venga "semplificato" all'indietro: prima
+               affermava che la config salvata qui fosse quella letta dal motore (falso), poi che
+               non lo raggiungesse affatto (vero ma inutile). Ora la raggiunge davvero, via gRPC. *@
+            <div class="alert alert-info py-2 small mb-0 mt-3">
+                <strong>Il forward test gira nell'host del motore</strong>
+                (<code>procionemgr-trading</code>), non qui: lo stato dal vivo delle posizioni si
+                legge nei log del pod. La <em>configurazione</em> qui sopra è invece quella vera —
+                letta dal motore e riscritta su di lui.
+                @if (!string.IsNullOrEmpty(_engineSnapshot.ConfigPath))
+                {
+                    <text> Il motore scrive in <code>@_engineSnapshot.ConfigPath</code>.</text>
+                }
+                @if (_engineSnapshot.SourceOf("Carry") is { } source)
+                {
+                    <text> Sorgente attuale: <code>@source</code>.</text>
+                }
             </div>
         }
         else
@@ -959,6 +965,9 @@
     private MlComparisonOptions _ml = new();
     private CarryOptions _carry = new();
     private string _carrySymbolsCsv = "";
+
+    /// <summary>Configurazione letta dal motore (per ora solo la sezione Carry di questa pagina).</summary>
+    private EngineConfigSnapshot _engineSnapshot = new([], string.Empty, Writable: false);
     private LiquidationsOptions _liquidations = new();
     private ObservabilityConfig _observability = new();
 
@@ -1039,7 +1048,9 @@
         _comparator = Clone(ComparatorOptions);
         _registry = Clone(RegistryOptions);
         _ml = Clone(MlMonitor.CurrentValue);
-        _carry = Clone(CarryMonitor.CurrentValue);
+        // Dal motore, non dal file locale: col trading remoto sono due cose diverse.
+        _engineSnapshot = await EngineConfig.ReadAsync(["Carry"]);
+        _carry = _engineSnapshot.Bind<CarryOptions>("Carry");
         _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
         _liquidations = Clone(LiquidationsMonitor.CurrentValue);
         _observability = new ObservabilityConfig
@@ -1142,7 +1153,26 @@
     {
         _carry.Symbols = CsvToSymbols(_carrySymbolsCsv);
         _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
-        await SaveAsync("Carry", _carry, "Carry");
+
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            var error = AdminConfigRules.Validate(_carry);
+            if (error is not null) { SetStatus($"Carry: {error}", true); return; }
+
+            // Passa dallo store, non da ConfigWriter: il carry gira dove gira il motore.
+            var result = await EngineConfig.WriteAsync("Carry", _carry);
+            var dove = EngineConfig.IsRemote ? "sul motore" : "in appsettings.json";
+            SetStatus(result.Warning is { } warning
+                ? $"Carry: salvato {dove}, MA — {warning}"
+                : $"Carry: salvato {dove}.", result.Warning is not null);
+
+            _engineSnapshot = await EngineConfig.ReadAsync(["Carry"]);
+            _carry = _engineSnapshot.Bind<CarryOptions>("Carry");
+            _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
+        }
+        catch (Exception ex) { SetStatus($"Carry: salvataggio fallito — {ex.Message}", true); }
+        finally { _busy = false; }
     }
 
     private async Task RunCarryNowAsync()

@@ -106,6 +106,13 @@ builder.Services.AddProcioneNotifications(builder.Configuration);
 
 builder.Services.AddProcioneObservability(builder.Configuration);
 
+// Configurazione del motore leggibile/scrivibile dal guscio (2026-07-29). È il servizio dietro
+// GetEngineConfig/SetEngineConfig: il file condiviso su PVC resta possibile ma non è più il solo
+// modo perché i pannelli mostrino e cambino ciò che il motore applica davvero. La scrittura passa
+// dall'allow-list chiusa di EngineConfigSections, non da questo registro.
+builder.Services.AddSingleton<ProcioneMGR.Services.Config.IAppConfigWriter, ProcioneMGR.Services.Config.AppConfigWriter>();
+builder.Services.AddSingleton<EngineConfigService>();
+
 // P1-6 (audit consolidamento 2026-07-17): SharedSecretAuthInterceptor applica un'autorizzazione
 // applicativa a OGNI rpc di questo servizio, in aggiunta alla NetworkPolicy K8s (confine di rete,
 // non applicativo). Registrato globalmente su AddGrpc: un solo servizio gRPC in questo host

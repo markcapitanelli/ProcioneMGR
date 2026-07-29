@@ -176,4 +176,74 @@ public sealed class TradingCommandServiceImpl(
             await Engine(request.LaneId).RejectOrderAsync(request.OrderId, userId, context.CancellationToken);
             return new RejectOrderResponse();
         }, "RejectOrder", request.LaneId);
+
+    // ----------------------------------------------------------------- configurazione del motore
+
+    /// <summary>
+    /// Il guscio chiede al motore la SUA configurazione. Fino al 2026-07-29 la mostrava indovinando
+    /// dal proprio file, che con guscio e motore in processi diversi non è lo stesso.
+    /// </summary>
+    public override Task<GetEngineConfigResponse> GetEngineConfig(GetEngineConfigRequest request, ServerCallContext context)
+    {
+        var service = serviceProvider.GetRequiredService<EngineConfigService>();
+        var response = new GetEngineConfigResponse
+        {
+            ConfigPath = service.ConfigPath,
+            Writable = service.IsWritable(),
+        };
+        foreach (var view in service.Read(request.Sections))
+        {
+            response.Sections.Add(new EngineConfigSection
+            {
+                Path = view.Path,
+                Json = view.Json,
+                Writable = view.Writable,
+                Source = view.Source,
+            });
+        }
+        return Task.FromResult(response);
+    }
+
+    /// <summary>
+    /// Scrittura di UNA sezione, filtrata dall'allow-list chiusa di
+    /// <see cref="EngineConfigSections"/> e validata con le stesse regole dei pannelli. Un rifiuto
+    /// è una precondizione violata, non un guasto: va sul filo come PermissionDenied (sezione non
+    /// consentita) o InvalidArgument (valore non valido), mai come Unknown con stack trace.
+    /// </summary>
+    public override async Task<SetEngineConfigResponse> SetEngineConfig(SetEngineConfigRequest request, ServerCallContext context)
+    {
+        var service = serviceProvider.GetRequiredService<EngineConfigService>();
+
+        // Il rifiuto per allow-list è distinto da quello per valore invalido: sono due errori
+        // diversi per chi chiama, e collassarli renderebbe indistinguibile "non puoi toccarla" da
+        // "l'hai scritta male".
+        if (!EngineConfigSections.IsWritable(request.Section))
+        {
+            logger.LogWarning("Scrittura RIFIUTATA sulla sezione '{Section}': fuori dall'allow-list.", request.Section);
+            throw new RpcException(new Status(StatusCode.PermissionDenied,
+                $"Sezione '{request.Section}' non scrivibile da questo canale. " +
+                $"Consentite: {string.Join(", ", EngineConfigSections.Writable)}."));
+        }
+
+        try
+        {
+            var result = await service.WriteAsync(request.Section, request.Json, context.CancellationToken);
+            return new SetEngineConfigResponse
+            {
+                AppliedJson = result.AppliedJson,
+                Warning = result.Warning ?? string.Empty,
+            };
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        catch (IOException ex)
+        {
+            // File in sola lettura o PVC non montato: stato dell'ambiente, non input errato.
+            logger.LogError(ex, "Scrittura della configurazione del motore fallita.");
+            throw new RpcException(new Status(StatusCode.FailedPrecondition,
+                $"Il motore non ha potuto scrivere la propria configurazione: {ex.Message}"));
+        }
+    }
 }

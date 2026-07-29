@@ -29,8 +29,16 @@ public sealed class RealtimePriceWorker(
     IOptionsMonitor<RealtimeFeedOptions> options,
     ILogger<RealtimePriceWorker> logger,
     ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null,
-    INotifier? notifier = null) : BackgroundService
+    INotifier? notifier = null,
+    TimeSpan? switchPollInterval = null) : BackgroundService
 {
+    /// <summary>
+    /// Ogni quanto si rilegge l'interruttore. Parametro (con default) e non costante: i test del
+    /// ciclo acceso→spento→acceso devono poter girare in millisecondi invece che in decine di
+    /// secondi, senza introdurre stato statico mutabile condiviso fra test paralleli.
+    /// </summary>
+    private readonly TimeSpan _switchPoll = switchPollInterval ?? TimeSpan.FromSeconds(5);
+
     /// <summary>
     /// Coda dei tick: LIMITATA e a scarto del più VECCHIO. Un tick vecchio non ha alcun valore —
     /// decidere un'uscita su un prezzo di dieci secondi fa è peggio che saltarlo — e una coda
@@ -53,15 +61,69 @@ public sealed class RealtimePriceWorker(
     private volatile IReadOnlyList<LaneRoute> _routes = [];
     private readonly HashSet<ExchangeName> _staleAlerted = [];
 
+    /// <summary>Vero mentre una sessione di feed è attiva (lo legge il pannello /admin/protections).</summary>
+    public bool IsRunning { get; private set; }
+
+    /// <summary>
+    /// Ciclo esterno: sorveglia l'INTERRUTTORE e apre/chiude una sessione di feed di conseguenza.
+    ///
+    /// <para>Prima del 2026-07-29 questo metodo usciva subito con <c>Enabled=false</c> e non
+    /// tornava più: accendere il feed richiedeva un riavvio del processo — cioè, col motore in
+    /// cluster, un riavvio del pod che sta operando. Una manopola che per funzionare pretende di
+    /// riavviare il motore non è una manopola.</para>
+    ///
+    /// <para>La sessione ha un suo <see cref="CancellationTokenSource"/> figlio: spegnere il feed
+    /// cancella quello e lascia intatto lo <paramref name="stoppingToken"/> dell'host. Le code
+    /// vengono SVUOTATE alla fine di ogni sessione — un tick sopravvissuto allo spegnimento
+    /// arriverebbe al motore con un prezzo vecchio di minuti, ed è esattamente il tipo di dato con
+    /// cui non si decide un'uscita.</para>
+    /// </summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.CurrentValue.Enabled)
+        var announcedOff = false;
+        while (!stoppingToken.IsCancellationRequested)
         {
-            logger.LogInformation(
-                "Feed real-time DISATTIVATO (MarketData:Realtime:Enabled=false): la piattaforma resta sul solo percorso a candele REST.");
-            return;
-        }
+            if (!options.CurrentValue.Enabled)
+            {
+                if (!announcedOff)
+                {
+                    logger.LogInformation(
+                        "Feed real-time DISATTIVATO (MarketData:Realtime:Enabled=false): la piattaforma resta sul solo percorso a candele REST.");
+                    announcedOff = true;
+                }
+                if (!await DelayAsync(_switchPoll, stoppingToken)) break;
+                continue;
+            }
+            announcedOff = false;
 
+            using var session = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            var run = RunSessionAsync(session.Token);
+
+            // Si resta qui finché l'interruttore regge, l'host non si ferma e la sessione è viva.
+            while (!stoppingToken.IsCancellationRequested && options.CurrentValue.Enabled && !run.IsCompleted)
+            {
+                if (!await DelayAsync(_switchPoll, stoppingToken)) break;
+            }
+
+            await session.CancelAsync();
+            try { await run; }
+            catch (OperationCanceledException) { /* chiusura richiesta: non è un guasto */ }
+            finally
+            {
+                IsRunning = false;
+                DrainQueues();
+            }
+
+            if (!stoppingToken.IsCancellationRequested && !options.CurrentValue.Enabled)
+            {
+                logger.LogInformation("Feed real-time FERMATO su richiesta: connessioni chiuse, code svuotate.");
+            }
+        }
+    }
+
+    /// <summary>Una sessione di feed: connessioni, consumatori, refresh delle sottoscrizioni.</summary>
+    private async Task RunSessionAsync(CancellationToken ct)
+    {
         var feeds = mappers
             .Select(m => new WebSocketPriceFeed(m, transportFactory, options, logger, metrics))
             .ToList();
@@ -77,21 +139,40 @@ public sealed class RealtimePriceWorker(
             options.CurrentValue.DriveProtectiveExits
                 ? "guidate dai tick"
                 : "guidate dalle candele — i tick osservano soltanto (sentinella d'ombra B3)");
+        IsRunning = true;
 
         var tasks = new List<Task>();
-        tasks.AddRange(feeds.Select(f => f.RunAsync(stoppingToken)));
-        tasks.Add(ConsumeTicksAsync(stoppingToken));
-        tasks.Add(ConsumeBarsAsync(stoppingToken));
-        tasks.Add(RefreshLoopAsync(feeds, stoppingToken));
+        tasks.AddRange(feeds.Select(f => f.RunAsync(ct)));
+        tasks.Add(ConsumeTicksAsync(ct));
+        tasks.Add(ConsumeBarsAsync(ct));
+        tasks.Add(RefreshLoopAsync(feeds, ct));
 
         try
         {
             await Task.WhenAll(tasks);
         }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // shutdown ordinato
+            // chiusura ordinata della sessione (host che si ferma o interruttore abbassato)
         }
+    }
+
+    /// <summary>
+    /// Svuota le code fra due sessioni. Non è igiene generica: un tick rimasto in coda mentre il
+    /// feed era spento verrebbe consumato alla riaccensione con un prezzo ormai vecchio, e con
+    /// <c>DriveProtectiveExits</c> acceso quel prezzo può chiudere una posizione.
+    /// </summary>
+    private void DrainQueues()
+    {
+        while (_ticks.Reader.TryRead(out _)) { }
+        while (_bars.Reader.TryRead(out _)) { }
+    }
+
+    /// <summary>Attesa che restituisce false quando l'host si sta fermando (invece di lanciare).</summary>
+    private static async Task<bool> DelayAsync(TimeSpan delay, CancellationToken ct)
+    {
+        try { await Task.Delay(delay, ct); return true; }
+        catch (OperationCanceledException) { return false; }
     }
 
     // ------------------------------------------------------------------ sottoscrizioni e salute
