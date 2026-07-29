@@ -168,9 +168,10 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Optimization.Bayesian.Bayesia
 //     "Immediate" riproduce il comportamento odierno. Rif. docs/archive/ROADMAP-QLIB.md §1.2. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Execution.IExecutionAlgorithmFactory, ProcioneMGR.Services.Execution.ExecutionAlgorithmFactory>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Execution.IExecutionSimulator, ProcioneMGR.Services.Execution.ExecutionSimulator>();
-var executionParams = builder.Configuration.GetSection("Execution").Get<ProcioneMGR.Services.Execution.ExecutionParameters>()
-                      ?? new ProcioneMGR.Services.Execution.ExecutionParameters();
-builder.Services.AddSingleton(executionParams);
+// Options (non POCO singleton catturato al boot): il pannello "Modello di costo" di /execution li
+// modifica a caldo, e senza IOptionsMonitor il confronto fra algoritmi avrebbe continuato a girare
+// con i parametri letti all'avvio — cioè un pannello che sembra funzionare e non cambia nulla.
+builder.Services.Configure<ProcioneMGR.Services.Execution.ExecutionParameters>(builder.Configuration.GetSection("Execution"));
 
 // --- Strategy discovery (sweep strategia × coppia × timeframe) ---
 builder.Services.AddScoped<IStrategyDiscovery, StrategyDiscoveryEngine>();
@@ -297,7 +298,10 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Servic
 // TryAdd: la factory WebSocket è la stessa del feed real-time R1 (registrata lì quando attivo).
 builder.Services.Configure<ProcioneMGR.Services.MarketData.LiquidationsOptions>(builder.Configuration.GetSection("Liquidations"));
 builder.Services.TryAddSingleton<ProcioneMGR.Services.MarketData.IWebSocketTransportFactory, ProcioneMGR.Services.MarketData.ClientWebSocketTransportFactory>();
-builder.Services.AddHostedService<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>();
+// Anche singleton risolvibile: il pannello /admin/autonomy legge stato di connessione e messaggi
+// ricevuti dalla STESSA istanza del hosted service (pattern MetricsCollector/SentimentSyncWorker).
+builder.Services.AddSingleton<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>());
 
 // --- Portfolio optimization (Mean-Variance, Risk Parity, HRP) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.MeanVarianceOptimizer>();

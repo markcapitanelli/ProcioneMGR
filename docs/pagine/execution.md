@@ -28,6 +28,7 @@ registrato negli [Esperimenti](experiments.md).
 | GuidaPanel | 24–36 | Scopo e limiti del modello |
 | Form | 38–81 | Symbol, timeframe di esecuzione (5m/15m/1h), lato Buy/Sell, quantità, finestra in candele; `ConfigPresets` silenzioso (`PageKey="execution"`) |
 | Tabella confronto | 83–122 | Per algoritmo, ordinato dal migliore: ordini figli, prezzo medio, shortfall (bps), delta vs Immediate; il migliore ha 🏆 e riga verde |
+| Modello di costo | `AdvancedPanel` sotto il form | Forma dell'impatto (**√partecipazione** di Almgren o lineare), coefficiente, tetto per fetta, mezzo spread, fette massime, clip Iceberg, volatilità di riferimento e decadimento base di Adaptive. Salva nella sezione `Execution`, effetto entro ~1s |
 
 ## Come funziona (flusso del codice)
 
@@ -51,14 +52,20 @@ registrato negli [Esperimenti](experiments.md).
 | `IExecutionAlgorithmFactory` | Tutti gli algoritmi disponibili (Immediate, TWAP, VWAP, Iceberg, Adaptive) | [`Services/Execution/ExecutionAlgorithmFactory.cs`](../../ProcioneMGR/Services/Execution/ExecutionAlgorithmFactory.cs) |
 | Algoritmi concreti | Piani a fette; l'Adaptive usa la forma chiusa Almgren-Chriss | [`Services/Execution/ExecutionAlgorithms.cs`](../../ProcioneMGR/Services/Execution/ExecutionAlgorithms.cs) |
 | `IExecutionSimulator` | Simula i fill del piano sulle candele con modello di impatto | [`Services/Execution/ExecutionSimulator.cs`](../../ProcioneMGR/Services/Execution/ExecutionSimulator.cs) |
-| `ExecutionParameters` | Parametri del modello (partecipazione, impatto) da configurazione | [`Services/Execution/ExecutionModels.cs`](../../ProcioneMGR/Services/Execution/ExecutionModels.cs) |
+| `IOptionsMonitor<ExecutionParameters>` | Parametri del modello di costo, hot-reload dalla sezione `Execution` | [`Services/Execution/ExecutionModels.cs`](../../ProcioneMGR/Services/Execution/ExecutionModels.cs) |
+| `IAppConfigWriter` + `AdminConfigRules` | Salvataggio e validazione del modello di costo | [`Services/Config/`](../../ProcioneMGR/Services/Config) |
 | `IExperimentTracker` | Registrazione del confronto | [`Services/Experiments/ExperimentTracker.cs`](../../ProcioneMGR/Services/Experiments/ExperimentTracker.cs) |
 | `ExecutionWorker` (contesto) | Chi esegue davvero i piani su Testnet/Live (default-off, solo aperture) | [`Services/Trading/ExecutionWorker.cs`](../../ProcioneMGR/Services/Trading/ExecutionWorker.cs) |
 
 ## Dati letti / scritti
 
-- **Legge**: `OhlcvData` (finestra recente).
-- **Scrive**: `ExperimentRuns` (un run "Execution" per confronto), `UserPageConfigs`.
+- **Legge**: `OhlcvData` (finestra recente), sezione `Execution` di `appsettings.json`.
+- **Scrive**: `ExperimentRuns` (un run "Execution" per confronto), `UserPageConfigs`, sezione
+  `Execution` di `appsettings.json` (pannello "Modello di costo").
+
+Il confronto usa sempre i parametri **vivi** del monitor, non la copia di lavoro del form: un
+valore digitato ma non salvato falserebbe un risultato che finisce negli Esperimenti, dove
+dev'esserci ciò che la piattaforma userebbe davvero.
 
 ## Collegamenti con le altre pagine
 

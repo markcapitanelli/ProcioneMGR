@@ -65,6 +65,7 @@ La suddivisione segue la navigazione della piattaforma (fonte unica:
 | Credenziali Exchange | `/settings/exchanges` | [settings-exchanges.md](settings-exchanges.md) |
 | Supervisione AI | `/admin/ai-supervisor` | [admin-ai-supervisor.md](admin-ai-supervisor.md) |
 | Autonomia | `/admin/autonomy` | [admin-autonomy.md](admin-autonomy.md) |
+| Protezioni | `/admin/protections` | [admin-protections.md](admin-protections.md) |
 | Gestione Utenti | `/admin/users` | [admin-users.md](admin-users.md) |
 | Backup Database | `/admin/backup` | [admin-backup.md](admin-backup.md) |
 

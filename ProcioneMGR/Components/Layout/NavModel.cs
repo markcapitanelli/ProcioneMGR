@@ -141,6 +141,8 @@ public static class NavModel
                 "Advisory layer Claude sulla pipeline (solo consultivo).", ManagerAndAdmin),
             new NavItem("admin/autonomy", "Autonomia", "bi-toggles",
                 "Controlli del livello di autonomia: auto-reapply, promozioni, drift.", AdminOnly),
+            new NavItem("admin/protections", "Protezioni", "bi-shield-shaded",
+                "Feed real-time, esposizione correlata, router di regime, watchdog corsie.", AdminOnly),
             new NavItem("admin/users", "Gestione Utenti", "bi-people-fill",
                 "Utenti e ruoli della piattaforma.", AdminOnly),
             new NavItem("admin/backup", "Backup Database", "bi-database-fill-down",

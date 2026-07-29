@@ -132,4 +132,40 @@ public class CarryEngineTests
         var r = paper.OpenAsync("BTC/USDT", 5_000m, CancellationToken.None).GetAwaiter().GetResult();
         Assert.True(r.Success);
     }
+
+    // --- Risoluzione della modalità dalla configurazione (audit 2026-07-29) ---------------------
+    // La logica era annidata dentro ExecuteAsync, quindi verificabile solo avviando il worker; ora
+    // che l'interruttore del carry è esposto in /admin/autonomy vale la pena fissarne il contratto:
+    // qualunque cosa arrivi dalla configurazione, il risultato non può essere denaro reale.
+
+    [Theory]
+    [InlineData("Paper")]
+    [InlineData("paper")]
+    public void ResolveMode_Paper_IsAcceptedSilently(string configured)
+    {
+        var (mode, warning) = CarryWorker.ResolveMode(configured);
+        Assert.Equal(CarryMode.Paper, mode);
+        Assert.Null(warning);
+    }
+
+    [Fact]
+    public void ResolveMode_Testnet_DegradesToPaper_AndSaysWhy()
+    {
+        // L'executor Bitget demo non esiste ancora: degradare in silenzio farebbe credere
+        // all'operatore di stare girando su testnet.
+        var (mode, warning) = CarryWorker.ResolveMode("Testnet");
+        Assert.Equal(CarryMode.Paper, mode);
+        Assert.NotNull(warning);
+    }
+
+    [Theory]
+    [InlineData("Live")]
+    [InlineData("")]
+    [InlineData("qualunque-cosa")]
+    public void ResolveMode_AnythingElse_FallsBackToPaper(string configured)
+    {
+        var (mode, warning) = CarryWorker.ResolveMode(configured);
+        Assert.Equal(CarryMode.Paper, mode);
+        Assert.NotNull(warning);
+    }
 }

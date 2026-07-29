@@ -121,6 +121,89 @@ public sealed class AppConfigWriterTests : IDisposable
     }
 
     [Fact]
+    public async Task ParentSection_KeepsNestedSubsectionsThePocoDoesNotModel()
+    {
+        // IL CASO REALE (audit 2026-07-29). Il pannello "Sync dati" di /admin/autonomy salva la
+        // sezione MarketData con un POCO di tre scalari; MarketData:Realtime — l'intera
+        // configurazione del feed WebSocket, compreso se i tick possono CHIUDERE posizioni — è una
+        // sottosezione che quel POCO non conosce. Prima del fix il salvataggio la cancellava, e il
+        // feed tornava ai default senza che nessuno lo dicesse.
+        await File.WriteAllTextAsync(SettingsPath, """
+            {
+              "MarketData": {
+                "Enabled": true,
+                "SyncIntervalMinutes": 5,
+                "Realtime": { "Enabled": true, "DriveProtectiveExits": false, "MaxSpreadPercent": 2 }
+              }
+            }
+            """);
+
+        await Writer().SaveSectionAsync("MarketData", new SampleOptions { Enabled = false, IntervalHours = 9 });
+
+        var marketData = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!["MarketData"]!.AsObject();
+        Assert.False(marketData["Enabled"]!.GetValue<bool>());          // il POCO ha scritto
+        Assert.Equal(9, marketData["IntervalHours"]!.GetValue<int>());  // il POCO ha scritto
+
+        var realtime = marketData["Realtime"]!.AsObject();              // la sottosezione è SOPRAVVISSUTA
+        Assert.True(realtime["Enabled"]!.GetValue<bool>());
+        Assert.False(realtime["DriveProtectiveExits"]!.GetValue<bool>());
+        Assert.Equal(2, realtime["MaxSpreadPercent"]!.GetValue<int>());
+    }
+
+    private sealed class OptionsWithNested
+    {
+        public bool Enabled { get; set; }
+        public NestedChild? Child { get; set; }
+    }
+
+    private sealed class NestedChild
+    {
+        public int Value { get; set; }
+    }
+
+    [Fact]
+    public async Task NestedObject_ThePocoDOESModel_IsOverwritten_NotPreserved()
+    {
+        // Il rovescio della medaglia: se la sottosezione è una PROPRIETÀ del POCO, il POCO è la sua
+        // fonte di verità e deve poterla riscrivere per intero — anche azzerandola. Senza questa
+        // distinzione, "preserva gli oggetti annidati" diventerebbe "certe proprietà non si possono
+        // più cambiare dalla UI".
+        await File.WriteAllTextAsync(SettingsPath, """
+            { "Section": { "Enabled": false, "Child": { "Value": 42 } } }
+            """);
+
+        await Writer().SaveSectionAsync("Section", new OptionsWithNested { Enabled = true, Child = new NestedChild { Value = 7 } });
+
+        var section = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!["Section"]!.AsObject();
+        Assert.Equal(7, section["Child"]!["Value"]!.GetValue<int>());
+
+        // E una proprietà annidata a null resta null: è comunque una chiave del payload.
+        await Writer().SaveSectionAsync("Section", new OptionsWithNested { Enabled = true, Child = null });
+        section = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!["Section"]!.AsObject();
+        Assert.Null(section["Child"]?.GetValue<object?>());
+    }
+
+    private enum SampleMode { First, Second }
+
+    private sealed class OptionsWithEnum
+    {
+        public SampleMode Mode { get; set; }
+    }
+
+    [Fact]
+    public async Task Enums_AreWrittenByName_NotByOrdinal()
+    {
+        // Il binder accetterebbe anche l'ordinale, quindi non è correttezza: è che appsettings.json
+        // lo legge anche un umano, e "Mode": 1 non dice nulla mentre "Second" sì.
+        await File.WriteAllTextAsync(SettingsPath, """{ "AllowedHosts": "*" }""");
+
+        await Writer().SaveSectionAsync("Execution", new OptionsWithEnum { Mode = SampleMode.Second });
+
+        var mode = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!["Execution"]!["Mode"]!;
+        Assert.Equal("Second", mode.GetValue<string>());
+    }
+
+    [Fact]
     public async Task InvalidJson_ThrowsWithoutDestroyingFile()
     {
         await File.WriteAllTextAsync(SettingsPath, "{ NON-json ");

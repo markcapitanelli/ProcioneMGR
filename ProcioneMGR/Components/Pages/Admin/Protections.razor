@@ -1,0 +1,474 @@
+@page "/admin/protections"
+@rendermode InteractiveServer
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.Extensions.Options
+@using ProcioneMGR.Services.Backtesting
+@using ProcioneMGR.Services.Config
+@using ProcioneMGR.Services.MarketData
+@using ProcioneMGR.Services.Regime
+@using ProcioneMGR.Services.Risk
+@using ProcioneMGR.Services.Trading
+@attribute [Authorize(Roles = AppRoles.Admin)]
+
+@inject IAppConfigWriter ConfigWriter
+@inject IOptionsMonitor<RealtimeFeedOptions> RealtimeMonitor
+@inject IOptionsMonitor<ProtectiveExitShadowOptions> ShadowMonitor
+@inject IOptionsMonitor<CorrelatedExposureOptions> CorrelatedMonitor
+@inject IOptionsMonitor<RegimeRoutingOptions> RoutingMonitor
+@inject IOptionsMonitor<LaneInvariantOptions> InvariantMonitor
+@inject IStrategyFactory Strategies
+
+<PageTitle>Protezioni</PageTitle>
+
+<h1>Protezioni di trading <span class="badge bg-secondary">Admin</span></h1>
+
+<GuidaPanel Title="Protezioni — cosa può fermare o filtrare un'operazione, e con quali soglie">
+    <p>
+        Le soglie del <a href="trading">pannello sicurezza</a> agiscono sul singolo ordine di una
+        singola corsia. Qui vivono i controlli <strong>trasversali</strong>, quelli che nessuna
+        soglia scalare può esprimere: il feed che accorcia i tempi di reazione delle uscite, il
+        limite sull'esposizione <em>correlata</em> fra corsie diverse, il router che decide in quale
+        regime una strategia può operare, il watchdog che manda in quarantena una corsia con la
+        contabilità impossibile.
+    </p>
+    <p class="mb-0">
+        Tre di questi hanno un interruttore <strong>separato</strong> fra <em>osservare</em> e
+        <em>decidere</em>. Non è ridondanza: si accende la misura, si guarda per settimane che i
+        numeri siano sani, e solo dopo le si dà il potere di chiudere una posizione o zittire una
+        strategia. Un limite tarato male non protegge — paralizza.
+    </p>
+</GuidaPanel>
+
+@if (!string.IsNullOrEmpty(_status))
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_status</div>
+}
+
+@* ============================ 1. Feed real-time ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-broadcast me-1"></i>Feed di prezzo real-time (WebSocket)</span>
+        <span>
+            @if (_realtime.Enabled && _realtime.DriveProtectiveExits)
+            { <span class="badge bg-danger me-1">GUIDA LE USCITE</span> }
+            else if (_realtime.Enabled)
+            { <span class="badge bg-info text-dark me-1">solo osservazione</span> }
+            @StateBadge(_realtime.Enabled)
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Market data <strong>pubblico</strong> (nessuna API key, nessun vincolo MiCA). Fa reagire
+            le uscite protettive — stop loss, take profit, trailing, liquidazione — in ~1 secondo
+            invece che alla chiusura della candela successiva. È <strong>additivo</strong>: la
+            sincronizzazione REST resta attiva, quindi spegnerlo riporta esattamente al
+            comportamento precedente. I tick non aprono <em>mai</em> posizioni: gli ingressi restano
+            governati dalle candele chiuse, l'unico percorso che il backtest valida.
+        </p>
+        <div class="alert alert-warning py-2 small">
+            <strong>Misurato il 2026-07-28:</strong> sulle configurazioni provate, uscire al tocco è
+            risultato <em>peggio</em> che a barra chiusa in 24 casi su 24. Accendere
+            «guida le uscite» è una scelta da rimisurare sui propri dati, non un miglioramento
+            gratuito — la sentinella d'ombra qui sotto serve proprio a raccogliere quel dato.
+        </div>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="rt_en" @bind="_realtime.Enabled" />
+                <label class="form-check-label" for="rt_en">Feed acceso @Restart()</label>
+            </div>
+            <div class="col-auto form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="rt_drive" @bind="_realtime.DriveProtectiveExits"
+                       disabled="@(!_realtime.Enabled)" />
+                <label class="form-check-label" for="rt_drive"
+                       title="Spento: il feed osserva e basta (log, metriche, sentinella d'ombra). Acceso: un tick può chiudere una posizione.">
+                    I tick guidano le uscite ⚠️ @Hot()
+                </label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Refresh sottoscrizioni (s) @Hot()</label>
+                <input type="number" class="form-control" @bind="_realtime.SubscriptionRefreshSeconds" min="5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Silenzio = stale (s) @Hot()</label>
+                <input type="number" class="form-control" @bind="_realtime.StaleAfterSeconds" min="5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Spread max accettato (%) @Hot()</label>
+                <input type="number" step="0.1" class="form-control" @bind="_realtime.MaxSpreadPercent" style="width: 8rem;" />
+            </div>
+            <div class="col-12">
+                <AdvancedPanel Title="Riconnessione"
+                               Summary="@($"backoff {_realtime.ReconnectInitialDelayMs} ms → {_realtime.ReconnectMaxDelayMs} ms")">
+                    <div class="row g-3 align-items-end">
+                        <div class="col-auto">
+                            <label class="form-label">Attesa iniziale (ms) @Hot()</label>
+                            <input type="number" class="form-control" @bind="_realtime.ReconnectInitialDelayMs" min="100" style="width: 9rem;" />
+                        </div>
+                        <div class="col-auto">
+                            <label class="form-label">Tetto backoff (ms) @Hot()</label>
+                            <input type="number" class="form-control" @bind="_realtime.ReconnectMaxDelayMs" min="100" style="width: 9rem;" />
+                        </div>
+                    </div>
+                </AdvancedPanel>
+            </div>
+            <div class="col-12">
+                <button class="btn btn-primary" @onclick='() => SaveAsync(RealtimeFeedOptions.SectionName, _realtime, "Feed real-time")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 2. Sentinella d'ombra ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-eye me-1"></i>Sentinella d'ombra delle uscite protettive</span>
+        <span>@StateBadge(_shadow.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Registra, per ogni uscita protettiva, il confronto fra <em>quando l'avrebbe fatta
+            scattare il feed</em> e <em>quando è scattata davvero</em> sul percorso a candele.
+            Osserva e basta: non chiude nulla. Serve a vedere il caso singolo — un crollo con gap,
+            dove aspettare la chiusura della barra non costa qualche punto base ma una categoria
+            diversa di danno. Gli esiti si leggono in <a href="trading">/trading</a>.
+            Richiede il feed acceso qui sopra.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="sh_en" @bind="_shadow.Enabled" />
+                <label class="form-check-label" for="sh_en">Abilitata @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Allerta sopra (bps) @Hot()</label>
+                <input type="number" step="10" class="form-control" @bind="_shadow.AlertAboveBps" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveShadowAsync" disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ============================ 3. Esposizione correlata ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-diagram-2 me-1"></i>Limite di esposizione correlata fra corsie</span>
+        <span>@StateBadge(_correlated.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Tutti gli altri limiti sono scalari e ciechi alla correlazione: tre corsie long su tre
+            altcoin che si muovono con BTC contano come tre scommesse indipendenti mentre sono una
+            sola scommessa di taglia tripla — e nei crash le correlazioni crypto tendono a 1. La
+            somma è <strong>con segno</strong>: un long e uno short correlati si compensano, quindi
+            una copertura genuina non viene punita. Se la correlazione non è stimabile (storico
+            corto, simbolo nuovo) il limite <strong>non blocca</strong>: lo registra e lascia
+            passare. Il guard isola per modalità: una posizione Paper non vincola una corsia Testnet.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="ce_en" @bind="_correlated.Enabled" />
+                <label class="form-check-label" for="ce_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Tetto esposizione correlata (%) @Hot()</label>
+                <input type="number" step="1" class="form-control" @bind="_correlated.MaxCorrelatedExposurePercent" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">|ρ| minima per contare @Hot()</label>
+                <input type="number" step="0.05" class="form-control" @bind="_correlated.MinCorrelationToCount" min="0" max="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeframe stima @Hot()</label>
+                <select class="form-select" @bind="_correlated.Timeframe" style="width: 7rem;">
+                    @foreach (var tf in Timeframes)
+                    {
+                        <option value="@tf">@tf</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Barre di lookback @Hot()</label>
+                <input type="number" class="form-control" @bind="_correlated.LookbackBars" min="2" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Barre sovrapposte min @Hot()</label>
+                <input type="number" class="form-control" @bind="_correlated.MinOverlappingBars" min="2" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Cache correlazioni (ore) @Hot()</label>
+                <input type="number" class="form-control" @bind="_correlatedCacheHours" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveCorrelatedAsync" disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        <p class="text-muted small mb-0 mt-2">
+            <strong>Taratura 2026-07-25:</strong> in spot l'esposizione correlata vale ~8% del
+            capitale aggregato e resta tale qualunque sia il numero di corsie (numeratore e
+            denominatore crescono insieme), quindi qualunque soglia sopra l'8% non scatta mai. Il
+            limite diventa vivo con la <strong>leva</strong> (8% × L): a 5× tre corsie correlate
+            fanno ~40%, due ~25%. Oggi in spot è protezione posizionata in anticipo.
+        </p>
+    </div>
+</div>
+
+@* ============================ 4. Router di regime ============================ *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-signpost-split me-1"></i>Router di regime (quali strategie operano, e quando)</span>
+        <span>
+            @if (_routing.Enabled && _routing.DriveDecisions)
+            { <span class="badge bg-danger me-1">FILTRA LE APERTURE</span> }
+            else if (_routing.Enabled)
+            { <span class="badge bg-info text-dark me-1">solo osservazione</span> }
+            @StateBadge(_routing.Enabled)
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Classifica il regime corrente col modello K-means di <a href="regimes">/regimes</a> e
+            lascia operare solo le strategie mappate a quel regime. È un <strong>filtro sulle
+            aperture</strong>, non una mutazione: non tocca le strategie dell'ensemble e non chiude
+            le posizioni già aperte quando il regime cambia. Serve un modello <em>attivo</em> per la
+            stessa serie della corsia, altrimenti il router si dichiara «non so» e lascia passare
+            tutto.
+        </p>
+        <div class="row g-3 align-items-end mb-3">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="rr_en" @bind="_routing.Enabled" />
+                <label class="form-check-label" for="rr_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="rr_drive" @bind="_routing.DriveDecisions"
+                       disabled="@(!_routing.Enabled)" />
+                <label class="form-check-label" for="rr_drive"
+                       title="Spento: il router classifica e registra i cambi di regime, senza impedire nulla.">
+                    Le regole filtrano davvero ⚠️ @Hot()
+                </label>
+            </div>
+            <div class="col-auto form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="rr_unmapped" @bind="_routing.AllowUnmappedRegimes" />
+                <label class="form-check-label" for="rr_unmapped"
+                       title="Un modello riaddestrato può avere più cluster di quanti ne conosca questa configurazione: permissivo di default, così non zittisce la corsia di soppiatto.">
+                    Regime senza regola = lascia passare @Hot()
+                </label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Candele minime @Hot()</label>
+                <input type="number" class="form-control" @bind="_routing.MinCandles" min="2" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">TTL controllo modello (min) @Hot()</label>
+                <input type="number" class="form-control" @bind="_routingTtlMinutes" min="1" style="width: 9rem;" />
+            </div>
+        </div>
+
+        <h6 class="mb-2">Regole per regime</h6>
+        <p class="text-muted small">
+            Una riga per regime (gli id sono quelli mostrati in <a href="regimes">/regimes</a>).
+            <strong>Nessuna strategia selezionata = in questo regime la corsia sta ferma</strong>:
+            è una decisione, non una configurazione mancante.
+        </p>
+        @if (_routing.Rules.Count == 0)
+        {
+            <p class="text-muted small"><em>Nessuna regola: con «lascia passare» acceso il router non filtra nulla.</em></p>
+        }
+        else
+        {
+            <div class="table-responsive mb-2">
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr><th style="width: 8rem;">Regime</th><th>Strategie ammesse</th><th style="width: 4rem;"></th></tr>
+                    </thead>
+                    <tbody>
+                        @* Indice della RIGA, non RegimeId, per gli id del DOM: RegimeId è editabile e
+                           due righe possono momentaneamente collidere mentre si digita — con id
+                           duplicati il click su un'etichetta commuterebbe la casella sbagliata. *@
+                        @for (var i = 0; i < _routing.Rules.Count; i++)
+                        {
+                            var row = i;
+                            var rule = _routing.Rules[row];
+                            <tr>
+                                <td>
+                                    <input type="number" class="form-control form-control-sm" @bind="rule.RegimeId" min="0" style="width: 6rem;" />
+                                </td>
+                                <td>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        @foreach (var proto in Strategies.Prototypes)
+                                        {
+                                            var name = proto.Name;
+                                            var id = $"rr_{row}_{name}";
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="@id"
+                                                       checked="@rule.Strategies.Contains(name)"
+                                                       @onchange="e => ToggleStrategy(rule, name, e)" />
+                                                <label class="form-check-label small" for="@id">@proto.DisplayName</label>
+                                            </div>
+                                        }
+                                    </div>
+                                    @if (rule.Strategies.Count == 0)
+                                    {
+                                        <span class="badge bg-warning text-dark">corsia ferma in questo regime</span>
+                                    }
+                                </td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => _routing.Rules.Remove(rule)" title="Rimuovi regola">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        <button class="btn btn-outline-secondary btn-sm me-2" @onclick="AddRoutingRule" disabled="@_busy">+ Aggiungi regime</button>
+        <button class="btn btn-primary" @onclick="SaveRoutingAsync" disabled="@_busy">Salva</button>
+    </div>
+</div>
+
+@* ============================ 5. Watchdog invarianti ============================ *@
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-shield-exclamation me-1"></i>Watchdog degli invarianti contabili</span>
+        <span>@StateBadge(_invariants.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Tripwire per stati contabili <strong>assurdi</strong> — non un duplicato del pannello
+            sicurezza, che resta il freno fine pre-ordine. Le soglie sono lasche apposta: esistono
+            per il caso reale del PnL a −1,8M su capitale 10k, non per il trade sfortunato. Una
+            violazione mette la corsia in <strong>quarantena</strong> (trading fermo, posizioni
+            lasciate aperte, riavvio bloccato) finché un Admin non la rimuove da
+            <a href="trading">/trading</a>. Default acceso: spegnerlo è la scelta da motivare.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="li_en" @bind="_invariants.Enabled" />
+                <label class="form-check-label" for="li_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Check ogni (s) @Restart()</label>
+                <input type="number" class="form-control" @bind="_invariants.CheckIntervalSeconds" min="5" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Tolleranza capitale @Hot()</label>
+                <input type="number" step="0.5" class="form-control" @bind="_invariants.AvailableCapitalTolerance" min="0" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Multiplo |PnL| @Hot()</label>
+                <input type="number" step="0.5" class="form-control" @bind="_invariants.MaxAbsPnlCapitalMultiple" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Multiplo esposizione @Hot()</label>
+                <input type="number" step="0.5" class="form-control" @bind="_invariants.MaxExposureCapitalMultiple" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("Trading:LaneInvariants", _invariants, "Watchdog invarianti")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    // Timeframe supportati per la stima delle correlazioni: gli stessi della watchlist.
+    private static readonly string[] Timeframes = ["5m", "15m", "1h", "4h", "1d"];
+
+    // Copie LOCALI modificabili (stesso patto di /admin/autonomy): si parte da CurrentValue e si
+    // scrive solo al Salva, così i campi non saltano sotto le dita quando il monitor ricarica.
+    private RealtimeFeedOptions _realtime = new();
+    private ProtectiveExitShadowOptions _shadow = new();
+    private CorrelatedExposureOptions _correlated = new();
+    private RegimeRoutingOptions _routing = new();
+    private LaneInvariantOptions _invariants = new();
+
+    // I TimeSpan si editano in unità intere: un campo "00:06:00" da digitare a mano è un invito
+    // all'errore di battitura, e il round-trip lo ricompone al salvataggio.
+    private int _correlatedCacheHours = 6;
+    private int _routingTtlMinutes = 5;
+
+    private bool _busy;
+    private bool _isError;
+    private string? _status;
+
+    protected override void OnInitialized()
+    {
+        _realtime = Clone(RealtimeMonitor.CurrentValue);
+        _shadow = Clone(ShadowMonitor.CurrentValue);
+        _correlated = Clone(CorrelatedMonitor.CurrentValue);
+        _routing = Clone(RoutingMonitor.CurrentValue);
+        _invariants = Clone(InvariantMonitor.CurrentValue);
+
+        _correlatedCacheHours = Math.Max(1, (int)_correlated.CacheTtl.TotalHours);
+        _routingTtlMinutes = Math.Max(1, (int)_routing.ModelCheckTtl.TotalMinutes);
+    }
+
+    private static T Clone<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
+
+    private void AddRoutingRule()
+    {
+        var nextId = _routing.Rules.Count == 0 ? 0 : _routing.Rules.Max(r => r.RegimeId) + 1;
+        _routing.Rules.Add(new RegimeRoutingRule { RegimeId = nextId });
+    }
+
+    private static void ToggleStrategy(RegimeRoutingRule rule, string name, ChangeEventArgs e)
+    {
+        var on = e.Value is bool b && b;
+        if (on && !rule.Strategies.Contains(name)) rule.Strategies.Add(name);
+        else if (!on) rule.Strategies.Remove(name);
+    }
+
+    // Metodo invece di lambda inline: l'apostrofo di "d'ombra" non sopravvive dentro un attributo
+    // @onclick delimitato da apici singoli.
+    private Task SaveShadowAsync()
+        => SaveAsync("Trading:ProtectiveExitShadow", _shadow, "Sentinella d'ombra");
+
+    private Task SaveCorrelatedAsync()
+    {
+        _correlated.CacheTtl = TimeSpan.FromHours(Math.Max(1, _correlatedCacheHours));
+        return SaveAsync("Trading:CorrelatedExposure", _correlated, "Esposizione correlata");
+    }
+
+    private Task SaveRoutingAsync()
+    {
+        _routing.ModelCheckTtl = TimeSpan.FromMinutes(Math.Max(1, _routingTtlMinutes));
+        return SaveAsync("Trading:RegimeRouting", _routing, "Router di regime");
+    }
+
+    private async Task SaveAsync<T>(string section, T model, string label) where T : notnull
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            // Validazione lato SERVER: gli attributi min= dell'HTML non vincolano @bind, quindi
+            // senza questo controllo un valore fuori range finirebbe dritto in appsettings.json.
+            var error = AdminConfigRules.Validate(model);
+            if (error is not null)
+            {
+                SetStatus($"{label}: {error}", true);
+                return;
+            }
+
+            await ConfigWriter.SaveSectionAsync(section, model);
+            SetStatus($"{label}: salvato in appsettings.json — i campi ✅ valgono entro ~1s, quelli ⟳ dal prossimo riavvio.", false);
+        }
+        catch (Exception ex) { SetStatus($"{label}: salvataggio fallito — {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    private void SetStatus(string text, bool error) { _status = text; _isError = error; }
+
+    private static RenderFragment Hot() => b => b.AddMarkupContent(0,
+        "<span class='badge bg-success' title='Effetto entro ~1 secondo, senza riavvio'>✅</span>");
+
+    // Nessun apostrofo nel title: l'attributo è delimitato da apici singoli, e un escape in stile C#
+    // non significa nulla per il parser HTML — chiuderebbe l'attributo a metà frase.
+    private static RenderFragment Restart() => b => b.AddMarkupContent(0,
+        "<span class='badge bg-warning text-dark' title='Salvato subito, ma vale dal prossimo riavvio applicativo'>⟳</span>");
+
+    private static RenderFragment StateBadge(bool enabled) => b => b.AddMarkupContent(0, enabled
+        ? "<span class='badge bg-success'>ATTIVO</span>"
+        : "<span class='badge bg-secondary'>SPENTO</span>");
+}
