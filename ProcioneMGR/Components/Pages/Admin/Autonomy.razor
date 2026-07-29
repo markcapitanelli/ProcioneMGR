@@ -34,7 +34,9 @@
 @inject IOptionsMonitor<ProcioneMGR.Services.Sentiment.SentimentOptions> SentimentMonitor
 @inject ProcioneMGR.Services.Sentiment.SentimentSyncWorker SentimentWorker
 @inject IOptionsMonitor<NotificationOptions> NotificationMonitor
-@inject INotifier Notifier
+@* Tipo CONCRETO e non INotifier: la prova ha bisogno dell'esito, che l'interfaccia non espone
+   di proposito (i producer non devono avere un risultato da controllare). *@
+@inject NotificationDispatcher Notifier
 @inject IOptionsMonitor<CampaignOptions> CampaignMonitor
 @inject IOptionsMonitor<RegimeTriggerOptions> RegimeTriggerMonitor
 @inject EnsembleComparatorOptions ComparatorOptions
@@ -1164,15 +1166,24 @@
             // Passa dal dispatcher vero (gate + rate-limit + provider corrente): una prova che
             // scavalcasse quella catena direbbe che "funziona" anche quando l'utente ha lasciato
             // Enabled=false, che è esattamente l'errore che si sta cercando di scoprire.
-            await Notifier.NotifyAsync(NotificationSeverity.Info,
+            var result = await Notifier.SendDiagnosticAsync(NotificationSeverity.Info,
                 "Notifica di prova",
                 "Se leggi questo messaggio, il canale configurato in /admin/autonomy recapita.",
                 CancellationToken.None);
 
             var live = NotificationMonitor.CurrentValue;
-            SetStatus(live.Enabled
-                ? $"Notifica inviata via provider «{live.Provider}». Se non è arrivata, controlla ChatId e TELEGRAM_BOT_TOKEN (gli errori di recapito non vengono propagati: sono nel log)."
-                : "Notifiche SPENTE: il dispatcher ha scartato il messaggio. Abilita e salva prima di riprovare.", !live.Enabled);
+            SetStatus(result.Outcome switch
+            {
+                NotificationOutcome.Delivered =>
+                    $"Notifica CONSEGNATA al provider «{live.Provider}»: controlla di averla ricevuta.",
+                NotificationOutcome.Disabled =>
+                    "Notifiche SPENTE: il messaggio è stato scartato. Abilita e salva prima di riprovare.",
+                NotificationOutcome.RateLimited =>
+                    $"Rate-limit raggiunto ({live.MaxPerHour}/ora): non recapitata ora, sarà conteggiata nel primo messaggio successivo.",
+                NotificationOutcome.UnknownProvider =>
+                    $"Provider non riconosciuto — {result.Detail}",
+                _ => $"Recapito FALLITO — {result.Detail}",
+            }, !result.IsDelivered);
         }
         catch (Exception ex) { SetStatus($"Invio di prova fallito: {ex.Message}", true); }
         finally { _busy = false; }

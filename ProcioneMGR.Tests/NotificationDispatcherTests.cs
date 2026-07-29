@@ -122,4 +122,81 @@ public class NotificationDispatcherTests
         Assert.Equal(2, provider.Sent.Count);
         Assert.Equal("3", provider.Sent[^1].Title);
     }
+
+    // --- Percorso di VERIFICA (SendDiagnosticAsync), audit 2026-07-29 ---------------------------
+    // Il "non propaga mai" è giusto per i producer e cieco per chi vuole sapere se il canale
+    // funziona: il pulsante "Invia notifica di prova" dichiarava successo mentre il recapito
+    // falliva per TELEGRAM_BOT_TOKEN assente. Una verifica che dice la cosa rassicurante
+    // indipendentemente dalla realtà è peggio di nessuna verifica.
+
+    [Fact]
+    public async Task Diagnostic_ReportsDelivered_WhenTheProviderAccepts()
+    {
+        var (dispatcher, provider, _) = Build();
+
+        var result = await dispatcher.SendDiagnosticAsync(NotificationSeverity.Info, "prova", "corpo");
+
+        Assert.True(result.IsDelivered);
+        Assert.Single(provider.Sent);
+    }
+
+    [Fact]
+    public async Task Diagnostic_ReportsFailure_WithTheReason_WhenTheProviderThrows()
+    {
+        var (dispatcher, provider, _) = Build();
+        provider.ThrowOnSend = new InvalidOperationException("env TELEGRAM_BOT_TOKEN assente");
+
+        var result = await dispatcher.SendDiagnosticAsync(NotificationSeverity.Info, "prova", "corpo");
+
+        Assert.False(result.IsDelivered);
+        Assert.Equal(NotificationOutcome.Failed, result.Outcome);
+        Assert.Contains("TELEGRAM_BOT_TOKEN", result.Detail);
+    }
+
+    [Fact]
+    public async Task Diagnostic_DistinguishesDisabled_FromDelivered()
+    {
+        var (dispatcher, provider, _) = Build(new NotificationOptions { Enabled = false, Provider = "Fake" });
+
+        var result = await dispatcher.SendDiagnosticAsync(NotificationSeverity.Info, "prova", "corpo");
+
+        Assert.Equal(NotificationOutcome.Disabled, result.Outcome);
+        Assert.Empty(provider.Sent);
+    }
+
+    [Fact]
+    public async Task Diagnostic_ReportsUnknownProvider_InsteadOfPretendingItWorked()
+    {
+        var (dispatcher, provider, _) = Build(new NotificationOptions { Enabled = true, Provider = "Piccione" });
+
+        var result = await dispatcher.SendDiagnosticAsync(NotificationSeverity.Info, "prova", "corpo");
+
+        Assert.Equal(NotificationOutcome.UnknownProvider, result.Outcome);
+        Assert.Contains("Fake", result.Detail); // elenca i provider realmente disponibili
+        Assert.Empty(provider.Sent);
+    }
+
+    [Fact]
+    public async Task Diagnostic_SharesTheRateLimitWithTheProducers_NotAParallelBudget()
+    {
+        // La prova deve attraversare la catena VERA: se avesse un contatore suo, direbbe
+        // "consegnato" mentre le notifiche dei producer stanno venendo soppresse.
+        var (dispatcher, _, _) = Build(new NotificationOptions { Enabled = true, Provider = "Fake", MaxPerHour = 1 });
+
+        await dispatcher.NotifyAsync(NotificationSeverity.Info, "dal producer", "b");
+        var result = await dispatcher.SendDiagnosticAsync(NotificationSeverity.Info, "prova", "b");
+
+        Assert.Equal(NotificationOutcome.RateLimited, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Producers_StillNeverSeeAnException_WhenTheProviderThrows()
+    {
+        // Il contratto storico non cambia: il refactor del percorso diagnostico non deve aver
+        // trasformato NotifyAsync in qualcosa che può far cadere un watchdog.
+        var (dispatcher, provider, _) = Build();
+        provider.ThrowOnSend = new InvalidOperationException("boom");
+
+        await dispatcher.NotifyAsync(NotificationSeverity.Critical, "quarantena", "corsia 2");
+    }
 }

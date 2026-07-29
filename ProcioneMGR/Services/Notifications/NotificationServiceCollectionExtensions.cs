@@ -20,7 +20,12 @@ public static class NotificationServiceCollectionExtensions
             .RemoveAllLoggers();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INotificationProvider, LoggingNotifier>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INotificationProvider, TelegramNotifier>());
-        services.TryAddSingleton<INotifier, NotificationDispatcher>();
+        // Risolvibile ANCHE per tipo concreto: il pannello di /admin/autonomy usa
+        // SendDiagnosticAsync, che l'interfaccia non espone di proposito (i producer non devono
+        // avere un esito da controllare). Stessa istanza, così la prova attraversa il rate-limit
+        // vero e non una copia parallela.
+        services.TryAddSingleton<NotificationDispatcher>();
+        services.TryAddSingleton<INotifier>(sp => sp.GetRequiredService<NotificationDispatcher>());
         return services;
     }
 }

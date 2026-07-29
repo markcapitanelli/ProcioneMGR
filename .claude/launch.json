@@ -40,13 +40,14 @@
       "port": 5199
     },
     {
+      "_comment_telegram": "CARICA IL TOKEN DEL BOT da ~/.procione/telegram.token, come faceva il profilo del worktree roadmap-autonomia-operativa dove Telegram fu verificato end-to-end il 2026-07-19. Il consolidamento del 27 luglio si e' portato dietro tutto TRANNE questa riga: dal 27 al 29 luglio ogni notifica dal guscio (quarantena corsie, esiti campagna, run falliti, promozioni, breaker AI) e' fallita in silenzio con 'env TELEGRAM_BOT_TOKEN assente', perche' il dispatcher per contratto non propaga mai l'errore al producer. Scoperto il 2026-07-29 premendo 'Invia notifica di prova' in /admin/autonomy -- cioe' dal primo pulsante che abbia mai chiesto al canale se funzionava.",
       "_comment": "L'UNICA app da tenere accesa dal consolidamento del 2026-07-27: esegue il REPO PRINCIPALE sulla 5199 con percorso ASSOLUTO. Il percorso assoluto e' il punto: cosi' il profilo lancia sempre master anche se invocato dalla cartella di un worktree, che e' esattamente l'ambiguita' che quel giorno aveva prodotto due istanze diverse (worktree roadmap-b1-b2 sulla 5199 e worktree filone-D sulla 5210) e, prima ancora, l'incidente della 5256 descritto sopra. APRE ANCHE IL PORT-FORWARD 18092 verso il core di trading in-cluster, come fa scripts/run-postgres.ps1: senza, la pagina /trading mostra 'Unavailable' e 'DATI TRADING NON AGGIORNATI' perche' il guscio non raggiunge il motore (il quale continua a operare da solo -- e' il punto di B3). La prima versione di questo profilo lo ometteva, e dopo uno spegnimento improvviso del PC la pagina /trading e' rimasta in errore finche' non e' stato riaperto a mano. Preferire questo a procione-reale quando si lavora da un worktree.",
       "name": "procione-main",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [
         "-NoProfile",
         "-Command",
-        "& 'C:/Users/proci/Desktop/ProgettoP/scripts/ensure-trading-portforward.ps1'; $env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project 'C:/Users/proci/Desktop/ProgettoP/ProcioneMGR/ProcioneMGR.csproj' --no-launch-profile -c Release"
+        "& 'C:/Users/proci/Desktop/ProgettoP/scripts/ensure-trading-portforward.ps1'; $tokFile = Join-Path $env:USERPROFILE '.procione/telegram.token'; if (Test-Path $tokFile) { $env:TELEGRAM_BOT_TOKEN = (Get-Content $tokFile -Raw).Trim() } else { Write-Host 'Telegram : nessun token in ~/.procione/telegram.token, le notifiche Telegram falliranno.' }; $env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project 'C:/Users/proci/Desktop/ProgettoP/ProcioneMGR/ProcioneMGR.csproj' --no-launch-profile -c Release"
       ],
       "port": 5199
     }

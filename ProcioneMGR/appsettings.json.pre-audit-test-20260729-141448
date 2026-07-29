@@ -1,0 +1,155 @@
+{
+  "ConnectionStrings": {
+    "PostgresConnection": "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure"
+  },
+  "Security": {
+    "_comment_MasterKey": "TODO(produzione): NON committare questo segreto. Spostarlo in User Secrets (dev) e in Azure Key Vault / env PROCIONE_MGR_MASTER_KEY (prod). Chiave AES-256 dev, base64 di 32 byte.",
+    "MasterKey": "s0wn5V/+rlKo9twCAtlqb8QzUcy/O/jtYpADF3HkGZ4="
+  },
+  "Llm": {
+    "_comment": "Layer AI di supervisione del ciclo di ricerca. La API key NON va qui: si legge SOLO dalla variabile d'ambiente ANTHROPIC_API_KEY (SDK Anthropic). Enabled=true: il layer parte SOLO se la env ANTHROPIC_API_KEY e' presente (se manca resta inattivo senza errori). Confine di sicurezza: il layer AI e' SOLO advisory, non puo' avviare Live ne' bypassare SafetyChecker.",
+    "Enabled": true,
+    "Model": "claude-opus-4-8",
+    "MaxTokens": 4096,
+    "PollIntervalMinutes": 5
+  },
+  "EnsembleComparator": {
+    "_comment": "Confronto oggettivo 'nuovo ensemble vs corrente' per la ri-applica automatica. MinSharpeImprovementPercent e' l'hysteresis: sotto questa soglia di miglioramento l'ensemble corrente resta (niente cambi per rumore).",
+    "MinSharpeImprovementPercent": 10,
+    "MinRiskFactorImprovementPercent": 15,
+    "MinLegs": 2,
+    "MinDistinctSymbols": 2
+  },
+  "AutoReapply": {
+    "_comment": "Ri-applica automatica dell'ensemble migliore trovato dai run schedulati. Enabled=true: lo scheduler, dopo ogni run schedulato completato, se il nuovo ensemble batte il corrente (comparatore con hysteresis) E il supervisore non pone veto, lo schiera da solo sulle corsie in Paper. Scrive solo configurazione: mai avvia trading, mai Live.",
+    "Enabled": true,
+    "LookbackDays": 7,
+    "MaxPerTick": 3
+  },
+  "PipelineSupervisor": {
+    "_comment": "Supervisore AI del ciclo di ri-applica. Provider 'Claude' usa ILlmClient + ANTHROPIC_API_KEY; se la key manca degrada in automatico ad 'approva' (decidono le metriche), senza errori. Il supervisore puo' solo porre un VETO a una sostituzione, mai forzarla, mai avviare trading. La API key NON va qui: solo env ANTHROPIC_API_KEY.",
+    "Provider": "Claude",
+    "TimeoutSeconds": 30
+  },
+  "Campaign": {
+    "Enabled": true,
+    "TickSeconds": 60
+  },
+  "Notifications": {
+    "Enabled": true,
+    "Provider": "Telegram",
+    "ChatId": "142600454",
+    "MaxPerHour": 20
+  },
+  "PromotionEvaluator": {
+    "_comment": "Auto-promozione Paper->Testnet quando una corsia performa bene abbastanza a lungo. MAI a Live (Testnet->Live resta manuale). AutoDemoteToPaper retrocede una corsia Testnet se l'edge svanisce.",
+    "MinSharpeRealized": 0.8,
+    "MinTradeCount": 30,
+    "MaxDrawdownPercent": 15,
+    "MinObservationWeeks": 3,
+    "MinWinRate": 0.45,
+    "AutoPromoteToTestnet": true,
+    "NotifyOnPromotion": true,
+    "HardMaxDrawdownPercent": 20,
+    "AutoDemoteToPaper": true,
+    "DemoteSharpeThreshold": 0.5,
+    "DemoteMinWeeks": 2,
+    "EvaluationIntervalHours": 6
+  },
+  "Registry": {
+    "_comment": "Ciclo di vita dei modelli ML. MinChampionDeflatedSharpe: soglia assoluta di Deflated Sharpe (Bailey-Lopez de Prado) perche' un modello possa diventare Champion, non solo battere l'incumbent. 0.95 = significativita' difendibile. Il DSR viene calcolato e salvato sul modello al salvataggio (/ml) e in HoldoutValidation (pipeline).",
+    "MinChampionDeflatedSharpe": 0.95
+  },
+  "MarketData": {
+    "Enabled": true,
+    "SyncIntervalMinutes": 5,
+    "DefaultBackfillDays": 7,
+    "_comment_UseRemoteIngestion": "[B2 2026-07-26] La sync OHLCV vive nel servizio ProcioneMGR.Ingestion nel cluster kind (worker schedulato ogni 5 min): questo monolite NON avvia il worker locale - mai due scrittori sulla stessa serie. La sync manuale passa dal port-forward 18080 (lo apre run-postgres.ps1 se il cluster e' su). Rollback: false + riavvio (e spegnere il Deployment ingestion nel cluster).",
+    "UseRemoteIngestion": true,
+    "RemoteIngestionUrl": "http://localhost:18080"
+  },
+  "MarketRegime": {
+    "Enabled": true,
+    "RetrainingIntervalDays": 7
+  },
+  "Trading": {
+    "_comment_UseRemoteTrading": "[B3 2026-07-26] Il motore vive nel servizio procionemgr-trading nel cluster kind (core caldo: feed R1 in osservazione + carry Paper dentro il servizio); questo processo e' il guscio freddo e comanda via gRPC dal port-forward 18092 (lo apre run-postgres.ps1). Rollback: false + riavvio + scale a 0 del Deployment trading (MAI entrambi i motori vivi).",
+    "UseRemoteTrading": true,
+    "_comment_LaneCount": "[2026-07-27] 3 corsie: 0 = RegimeConditional AAVE 1d (Macd gated, ~2 trade/mese), 1 = RsiOversold DOT 15m (intraday), 2 = RegimeConditional XLM 1h (Supertrend gated, ~9,8 trade/mese) — tutte forward test Paper con bracket verificati col backtest. Rimosse le 3 corsie PostSurge. DEVE combaciare con Trading__LaneCount del core in-cluster (trading-config.env).",
+    "LaneCount": 3,
+    "RemoteUrl": "http://localhost:18092",
+    "GrpcSharedSecret": "QWtrDNzj3CUwFauQvNKF1/XOxcHmYbrZZe/lx+UC9Sk=",
+    "Safety": {
+      "MaxPositionSizePercent": 10.0,
+      "MaxTotalExposurePercent": 50.0,
+      "MaxDailyLossPercent": 5.0,
+      "MaxDrawdownPercent": 20.0,
+      "MaxOpenPositions": 5,
+      "MinOrderIntervalSeconds": 10,
+      "RequireManualConfirmationForLive": true
+    },
+    "LiveExecution": {
+      "Enabled": false,
+      "DefaultWindowMinutes": 5,
+      "WorkerTickSeconds": 15,
+      "AbandonGraceMinutes": 5
+    },
+    "CorrelatedExposure": {
+      "_comment": "Limite di esposizione su posizioni CORRELATE fra corsie. Somma CON SEGNO: un long e uno short correlati si compensano, quindi una copertura genuina non viene punita. Se la correlazione non e' stimabile NON blocca (fail-safe verso il permesso).",
+      "_comment_taratura": "Soglia 30% scelta il 2026-07-25 sulla misura reale (fase 'calibrate'): in SPOT l'esposizione correlata vale ~8% del capitale aggregato e resta tale qualunque sia il numero di corsie, quindi oggi questo limite NON scatta mai. Diventa vivo con la leva: a 5x tre corsie correlate farebbero ~40% e verrebbero fermate, due ne farebbero ~25% e passerebbero. E' protezione posizionata in anticipo, non un filtro attivo adesso.",
+      "Enabled": true,
+      "MaxCorrelatedExposurePercent": 30.0,
+      "MinCorrelationToCount": 0.5,
+      "Timeframe": "1h",
+      "LookbackBars": 720,
+      "MinOverlappingBars": 100
+    },
+    "RegimeRouting": {
+      "_comment": "Router di regime: classifica il regime corrente col RegimeDetector K-means. Filtro sulle sole APERTURE, mai sulle chiusure; non tocca le posizioni gia' aperte; se non sa, lascia passare.",
+      "_comment_osservazione": "DriveDecisions=false = ACCESO MA NON DECIDENTE (stesso schema di MarketData:Realtime:DriveProtectiveExits). Motivo concreto: sul modello BTC 1h la strategia in uso (Composite) ha da 5 a 37 trade per regime, e scrivere regole su cinque trade sarebbe curve-fitting. In osservazione il router registra i CAMBI di regime nei log e accumula il dato che oggi manca. Le regole si accendono dopo, mettendo DriveDecisions=true.",
+      "_comment_una_sola_serie": "Il detector carica il modello attivo piu' RECENTE senza filtrare per serie: oggi e' BTC/USDT 1h, quindi solo la corsia 0 e' servita. Addestrare un modello per un'altra coppia toglierebbe il router alla corsia 0 — il router lo dice con un warning una volta sola, non si spegne in silenzio.",
+      "Enabled": true,
+      "DriveDecisions": false,
+      "AllowUnmappedRegimes": true,
+      "MinCandles": 60,
+      "Rules": []
+    }
+  },
+  "Logging": {
+    "LogLevel": {
+      "System.Net.Http.HttpClient.telegram-notifier": "Warning",
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "Carry": {
+    "_comment": "[R1 ROADMAP-RENDIMENTO 2026-07-25] Forward test del carry delta-neutro in PAPER: valuta il funding reale ogni ora e registra le decisioni senza toccare alcun exchange. Acceso perche' e' l'unica classe con edge positivo MISURATO (5-12% netto), coerente con la letteratura (5-15%). Mode=Live e' rifiutato dal parsing per costruzione.",
+    "Enabled": true,
+    "Mode": "Paper",
+    "Symbols": [
+      "BTC",
+      "ETH",
+      "SOL",
+      "BNB",
+      "XRP",
+      "DOGE"
+    ],
+    "EvaluationMinutes": 60,
+    "EnterAnnualFundingPercent": 5,
+    "ExitAnnualFundingPercent": 0,
+    "TrailingFundingEvents": 9,
+    "PositionSizePercent": 50
+  },
+  "Sentiment": {
+    "_comment_Symbols": "[R1] Estesi ai 6 simboli del carry: il worker del sentiment e' l'unica fonte che AGGIORNA il funding, e il carry decide sul funding — seguire solo BTC/ETH lasciava SOL/BNB/XRP/DOGE fermi all'ultimo backfill.",
+    "Symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "DOGEUSDT"
+    ]
+  }
+}
