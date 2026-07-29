@@ -755,8 +755,12 @@
     <div class="card-header d-flex justify-content-between">
         <span><i class="bi bi-lightning-charge me-1"></i>Accumulo liquidazioni (stream pubblico Binance)</span>
         <span>
-            @if (LiquidationWorker.IsConnected)
+            @* "Connesso" con zero messaggi NON è uno stato sano su questo feed: è la firma esatta
+               del blocco EEA/MiCA. Un badge verde lì sopra direbbe la cosa sbagliata. *@
+            @if (LiquidationWorker.IsConnected && LiquidationWorker.TotalMessages > 0)
             { <span class="badge bg-success me-1">connesso · @LiquidationWorker.TotalMessages msg</span> }
+            else if (LiquidationWorker.IsConnected)
+            { <span class="badge bg-warning text-dark me-1">connesso ma muto</span> }
             else if (_liquidations.Enabled)
             { <span class="badge bg-warning text-dark me-1">non connesso</span> }
             @StateBadge(_liquidations.Enabled)
@@ -769,12 +773,30 @@
             giorno spento è storia persa. Oggi non decide nulla — è un investimento per l'event-study
             e per le future feature di fragilità, che passeranno dal gate come ogni altra ipotesi.
         </p>
-        @if (_liquidations.Enabled && !LiquidationWorker.IsConnected && LiquidationWorker.TotalMessages == 0)
+        @* La condizione è "acceso e zero messaggi", NON "acceso e non connesso": il guasto vero è
+           proprio il socket che si apre e non consegna nulla, e la prima versione di questo avviso
+           lo escludeva — non compariva mai nell'unico caso per cui era stato scritto. Trovato
+           aprendo la pagina sull'app reale, dove il badge diceva "connesso · 0 msg". *@
+        @if (_liquidations.Enabled && LiquidationWorker.TotalMessages == 0)
         {
             <div class="alert alert-warning py-2 small">
-                Nessun messaggio ricevuto finora. Se persiste, la causa probabile è il blocco EEA/MiCA
-                del market-data derivati Binance da questa postazione: il socket si apre ma non
-                consegna nulla, e il worker passa da solo a un retry lungo.
+                <strong>Nessun messaggio ricevuto finora.</strong>
+                @if (LiquidationWorker.IsConnected)
+                {
+                    <text>
+                        Il socket è aperto e non consegna nulla: è la firma del blocco EEA/MiCA del
+                        market-data derivati Binance da questa postazione (verificabile con
+                        <code>streamdiag</code>: lo SPOT funziona, i FUTURES no). Il worker passa da
+                        solo a un retry lungo e riparte se l'app gira da una postazione non bloccata.
+                    </text>
+                }
+                else
+                {
+                    <text>
+                        Il canale non è ancora aperto. Se l'app è appena partita è normale: attendi
+                        qualche secondo e ricarica.
+                    </text>
+                }
             </div>
         }
         <div class="row g-3 align-items-end">
@@ -982,7 +1004,7 @@
         _llm = Clone(LlmMonitor.CurrentValue);
         _supervisorAgent = Clone(SupervisorAgentMonitor.CurrentValue);
         _sentiment = Clone(SentimentMonitor.CurrentValue);
-        _sentimentSymbolsCsv = string.Join(", ", _sentiment.Symbols);
+        _sentimentSymbolsCsv = SymbolsToCsv(_sentiment.Symbols);
         _drift = Clone(DriftMonitor.CurrentValue);
         _marketData = new MarketDataConfig
         {
@@ -1008,7 +1030,7 @@
         _registry = Clone(RegistryOptions);
         _ml = Clone(MlMonitor.CurrentValue);
         _carry = Clone(CarryMonitor.CurrentValue);
-        _carrySymbolsCsv = string.Join(", ", _carry.Symbols);
+        _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
         _liquidations = Clone(LiquidationsMonitor.CurrentValue);
         _observability = new ObservabilityConfig
         {
@@ -1066,15 +1088,31 @@
         finally { _busy = false; }
     }
 
+    /// <summary>
+    /// Normalizza una lista di simboli per il campo CSV: maiuscolo, senza vuoti, SENZA DUPLICATI.
+    /// <para>Il dedupe non è cosmesi. Il binder delle liste .NET <b>APPENDE</b> ai valori di default
+    /// invece di sostituirli, quindi una sezione che elenca gli stessi 6 simboli del default ne
+    /// produce 12: fino al 2026-07-29 i due campi CSV di questa pagina mostravano
+    /// «BTC, ETH, SOL, BNB, XRP, DOGE, BTC, ETH, SOL, BNB, XRP, DOGE» all'apertura. I worker
+    /// deduplicavano già per conto loro, quindi il comportamento era corretto e solo la
+    /// visualizzazione mentiva — che per un pannello di configurazione è comunque un difetto:
+    /// chi legge non può distinguere «il file è così» da «la pagina lo mostra male».</para>
+    /// </summary>
+    private static string SymbolsToCsv(IEnumerable<string> symbols) => string.Join(", ", symbols
+        .Select(s => s.Trim().ToUpperInvariant())
+        .Where(s => s.Length > 0)
+        .Distinct());
+
+    private static List<string> CsvToSymbols(string csv) => [.. csv
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(s => s.ToUpperInvariant())
+        .Distinct()];
+
     private async Task SaveSentimentAsync()
     {
-        _sentiment.Symbols = _sentimentSymbolsCsv
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(s => s.ToUpperInvariant())
-            .Distinct()
-            .ToList();
+        _sentiment.Symbols = CsvToSymbols(_sentimentSymbolsCsv);
         if (_sentiment.Symbols.Count == 0) _sentiment.Symbols = ["BTCUSDT", "ETHUSDT"];
-        _sentimentSymbolsCsv = string.Join(", ", _sentiment.Symbols);
+        _sentimentSymbolsCsv = SymbolsToCsv(_sentiment.Symbols);
         await SaveAsync("Sentiment", _sentiment, "Sentiment");
     }
 
@@ -1092,12 +1130,8 @@
 
     private async Task SaveCarryAsync()
     {
-        _carry.Symbols = _carrySymbolsCsv
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(s => s.ToUpperInvariant())
-            .Distinct()
-            .ToList();
-        _carrySymbolsCsv = string.Join(", ", _carry.Symbols);
+        _carry.Symbols = CsvToSymbols(_carrySymbolsCsv);
+        _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
         await SaveAsync("Carry", _carry, "Carry");
     }
 
