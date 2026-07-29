@@ -40,4 +40,4 @@ images:
     # d'ombra, tick osservati invece che scartati. INVARIATO in questa build — le uscite restano
     # guidate dalle candele (DriveProtectiveExits=false per MISURA, vedi
     # docs/REPORT-B3-EXITLAG-2026-07-28.md).
-    newTag: audit-20260729b
+    newTag: audit-20260729c

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Grpc.Core;
+using ProcioneMGR.Services.Notifications;
 using Proto = ProcioneMGR.Contracts.Trading.V1;
 
 namespace ProcioneMGR.Services.Trading;
@@ -26,6 +27,13 @@ public interface IEngineConfigStore
     /// leggibile se la sezione non è scrivibile, il valore non è valido, o il motore non risponde.
     /// </summary>
     Task<EngineConfigWriteResult> WriteAsync(string section, object options, CancellationToken ct = default);
+
+    /// <summary>
+    /// Prova il canale di notifica DEL MOTORE, non quello del guscio: sono due processi con
+    /// variabili d'ambiente diverse, e il motore può essere muto mentre il guscio recapita. È il
+    /// producer degli allarmi di quarantena, quindi il suo silenzio è il più costoso di tutti.
+    /// </summary>
+    Task<NotificationResult> SendTestNotificationAsync(CancellationToken ct = default);
 }
 
 /// <summary>Fotografia della configurazione del motore, con la diagnostica che la rende leggibile.</summary>
@@ -73,7 +81,16 @@ public sealed record EngineConfigSnapshot(
 /// Motore in-process: il file di questo processo È quello che il motore legge, quindi si scrive
 /// direttamente. Nessuna rete, nessun caso di irraggiungibilità.
 /// </summary>
-public sealed class LocalEngineConfigStore(EngineConfigService service) : IEngineConfigStore
+/// <param name="dispatcher">
+/// OPZIONALE, come per ogni altro consumatore di notifiche in questa composizione: il
+/// <c>LaneInvariantWatchdog</c> risolve <c>INotifier</c> con <c>GetService</c> e non con
+/// <c>GetRequired</c>, perché una corsia deve poter girare in un host che non ha composto alcun
+/// canale. Pretenderlo qui avrebbe rovesciato quell'invariante per un pulsante di diagnostica —
+/// e fatto fallire l'avvio invece di dire che il canale non c'è.
+/// </param>
+public sealed class LocalEngineConfigStore(
+    EngineConfigService service,
+    NotificationDispatcher? dispatcher = null) : IEngineConfigStore
 {
     public bool IsRemote => false;
 
@@ -82,6 +99,21 @@ public sealed class LocalEngineConfigStore(EngineConfigService service) : IEngin
 
     public Task<EngineConfigWriteResult> WriteAsync(string section, object options, CancellationToken ct = default)
         => service.WriteAsync(section, JsonSerializer.Serialize(options, EngineConfigSnapshot.JsonOptions), ct);
+
+    /// <summary>Motore in-process: il suo canale di notifica è questo, quindi si prova direttamente.</summary>
+    public Task<NotificationResult> SendTestNotificationAsync(CancellationToken ct = default)
+    {
+        if (dispatcher is null)
+        {
+            return Task.FromResult(new NotificationResult(NotificationOutcome.Failed,
+                "Nessun canale di notifica composto in questo host: non c'è nulla da provare."));
+        }
+
+        return dispatcher.SendDiagnosticAsync(NotificationSeverity.Info,
+            "Notifica di prova (motore)",
+            "Se leggi questo messaggio, gli allarmi del MOTORE — quarantena corsie compresa — ti raggiungono.",
+            ct);
+    }
 }
 
 /// <summary>
@@ -136,6 +168,29 @@ public sealed class RemoteEngineConfigStore(
             // I rifiuti di dominio del motore (allow-list, validazione) arrivano già con un
             // messaggio scritto per un umano: si ripropone quello, non un codice di stato.
             throw new InvalidOperationException(DescribeRpcFailure(ex), ex);
+        }
+    }
+
+    public async Task<NotificationResult> SendTestNotificationAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await client.SendTestNotificationAsync(
+                new Proto.SendTestNotificationRequest(), cancellationToken: ct);
+
+            // L'esito viaggia come stringa (il contratto non deve cambiare a ogni nuovo caso):
+            // parsing ESPLICITO, e un valore sconosciuto diventa Failed invece di scivolare nel
+            // vicino di enum — stessa regola degli altri enum di questo contratto.
+            var outcome = Enum.TryParse<NotificationOutcome>(response.Outcome, out var parsed)
+                ? parsed
+                : NotificationOutcome.Failed;
+
+            var detail = string.IsNullOrEmpty(response.Detail) ? null : response.Detail;
+            return new NotificationResult(outcome, detail);
+        }
+        catch (RpcException ex)
+        {
+            return new NotificationResult(NotificationOutcome.Failed, DescribeRpcFailure(ex));
         }
     }
 

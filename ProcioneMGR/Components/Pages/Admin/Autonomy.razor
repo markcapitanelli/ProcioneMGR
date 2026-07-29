@@ -885,9 +885,16 @@
             </div>
             <div class="col-auto">
                 <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Notifications", _notifications, "Notifiche")' disabled="@_busy">Salva</button>
-                <button class="btn btn-outline-secondary" @onclick="SendTestNotificationAsync" disabled="@_busy">
+                <button class="btn btn-outline-secondary me-2" @onclick="SendTestNotificationAsync" disabled="@_busy">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                    Invia notifica di prova
+                    Prova dal guscio
+                </button>
+                @* Due pulsanti e non uno: guscio e motore sono due processi con variabili d'ambiente
+                   diverse, e il motore puo' essere muto mentre il guscio recapita. Provare solo il
+                   guscio lascerebbe inosservabile proprio il silenzio degli allarmi di quarantena. *@
+                <button class="btn btn-outline-secondary" @onclick="SendEngineTestNotificationAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Prova dal motore
                 </button>
             </div>
         </div>
@@ -1224,6 +1231,34 @@
             }, !result.IsDelivered);
         }
         catch (Exception ex) { SetStatus($"Invio di prova fallito: {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    /// <summary>
+    /// Prova il canale del MOTORE. Il pulsante accanto prova quello del guscio: sembrano la stessa
+    /// cosa e non lo sono — il motore è un altro processo, con un altro ambiente, ed è lui a
+    /// emettere gli allarmi di quarantena. Che il guscio recapiti non dice nulla su di lui.
+    /// </summary>
+    private async Task SendEngineTestNotificationAsync()
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            var result = await EngineConfig.SendTestNotificationAsync();
+            SetStatus(result.Outcome switch
+            {
+                NotificationOutcome.Delivered =>
+                    "Motore: notifica CONSEGNATA — gli allarmi di quarantena ti raggiungono.",
+                NotificationOutcome.Disabled =>
+                    "Motore: notifiche SPENTE nella sua configurazione. Abilitale qui sopra e salva (si scrive sul motore).",
+                NotificationOutcome.RateLimited =>
+                    "Motore: rate-limit raggiunto, non recapitata ora — sarà conteggiata nel primo messaggio successivo.",
+                NotificationOutcome.UnknownProvider =>
+                    $"Motore: provider non riconosciuto — {result.Detail}",
+                _ => $"Motore: recapito FALLITO — {result.Detail}",
+            }, !result.IsDelivered);
+        }
+        catch (Exception ex) { SetStatus($"Motore: prova fallita — {ex.Message}", true); }
         finally { _busy = false; }
     }
 

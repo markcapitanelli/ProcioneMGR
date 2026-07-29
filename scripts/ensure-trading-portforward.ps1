@@ -12,8 +12,22 @@
 #  ovunque — inclusi i profili di .claude/launch.json, dove un blocco inline con virgolette
 #  annidate non veniva eseguito in modo affidabile.
 #
-#  Idempotente: se il tunnel c'e' gia' non fa nulla. Non fallisce mai in modo bloccante — se il
-#  cluster non c'e', lo dice e lascia partire l'app comunque (il resto della piattaforma funziona).
+#  Idempotente: se il tunnel c'e' gia' ED E' ANCORA BUONO non fa nulla. Non fallisce mai in modo
+#  bloccante — se il cluster non c'e', lo dice e lascia partire l'app comunque (il resto della
+#  piattaforma funziona).
+#
+#  --- LA PORTA IN ASCOLTO NON BASTA (2026-07-29) ----------------------------------------------
+#  Fino a oggi il controllo era "la 18092 e' in ascolto? allora c'e' gia'". E' insufficiente:
+#  quando il pod viene SOSTITUITO (deploy, OOM-kill, rollout) kubectl resta in ascolto sulla porta
+#  locale ma il tunnel punta a un pod che non esiste piu'. Lo script diceva "gia' attivo", il guscio
+#  otteneva Unavailable, e /trading e /admin/protections mostravano il motore irraggiungibile finche'
+#  qualcuno non ricreava il tunnel a mano. Successo DUE VOLTE lo stesso giorno, sui due deploy del
+#  motore.
+#
+#  Il rimedio NON e' una sonda di rete: una connessione TCP verso un forward morto viene accettata
+#  in locale e muore dopo, quindi qualunque euristica sul socket e' fragile. Si registra invece il
+#  POD a cui il tunnel e' stato aperto e lo si confronta con quello vivo adesso — confronto
+#  deterministico, nessuna inferenza sul comportamento della rete.
 # =============================================================================================
 
 $ErrorActionPreference = 'Continue'
@@ -23,13 +37,35 @@ $context = 'kind-procionemgr-dev'
 $namespace = 'procionemgr-trading'
 $service = 'svc/procionemgr-trading'
 
+# Traccia del pod servito dal tunnel corrente. In TEMP e non nel repo: e' stato di macchina, non
+# configurazione da versionare.
+$marker = Join-Path $env:TEMP 'procionemgr-trading-portforward.pod'
+
 function Test-PortListening([int]$p) {
     return [bool](Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue)
 }
 
-if (Test-PortListening $port) {
-    Write-Host "Trading  : port-forward $port gia' attivo (motore in-cluster)." -ForegroundColor Green
-    exit 0
+# Il selettore e' quello del SERVICE (app.kubernetes.io/component=trading), non un "app=..."
+# inventato: cosi' il pod che si misura e' esattamente quello a cui il port-forward instrada.
+function Get-CurrentPodName {
+    $name = kubectl get pods -n $namespace --context $context `
+        -l app.kubernetes.io/component=trading `
+        --field-selector status.phase=Running `
+        -o jsonpath='{.items[0].metadata.name}' 2>$null
+    if ([string]::IsNullOrWhiteSpace($name)) { return $null }
+    return "$name".Trim()
+}
+
+function Stop-StalePortForward([int]$p) {
+    foreach ($c in @(Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue)) {
+        try { Stop-Process -Id $c.OwningProcess -Force -ErrorAction Stop } catch { }
+    }
+    # Il socket impiega un istante a liberarsi: senza questa attesa il port-forward nuovo puo'
+    # trovare la porta ancora occupata e morire subito.
+    for ($i = 0; $i -lt 10; $i++) {
+        if (-not (Test-PortListening $p)) { return }
+        Start-Sleep -Milliseconds 300
+    }
 }
 
 if (-not (Get-Command kubectl -ErrorAction SilentlyContinue)) {
@@ -44,6 +80,22 @@ if (-not $svc) {
     exit 0
 }
 
+$currentPod = Get-CurrentPodName
+
+if (Test-PortListening $port) {
+    $servedPod = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { '' }
+
+    if ($currentPod -and $servedPod -eq $currentPod) {
+        Write-Host "Trading  : port-forward $port gia' attivo verso $currentPod." -ForegroundColor Green
+        exit 0
+    }
+
+    # Il caso che prima passava inosservato.
+    $detail = if ($servedPod) { "serviva $servedPod, ora c'e' $currentPod" } else { "pod servito sconosciuto" }
+    Write-Host "Trading  : port-forward $port STANTIO ($detail) - lo ricreo." -ForegroundColor Yellow
+    Stop-StalePortForward $port
+}
+
 Start-Process -WindowStyle Hidden kubectl -ArgumentList `
     'port-forward', '-n', $namespace, $service, "${port}:8080", '--context', $context
 
@@ -52,7 +104,10 @@ Start-Process -WindowStyle Hidden kubectl -ArgumentList `
 for ($i = 0; $i -lt 10; $i++) {
     Start-Sleep -Milliseconds 500
     if (Test-PortListening $port) {
-        Write-Host "Trading  : port-forward $port avviato (motore in-cluster)." -ForegroundColor Green
+        # Si annota QUALE pod sta servendo: e' il dato che al prossimo giro distingue "gia' attivo"
+        # da "attivo verso un pod che non c'e' piu'".
+        if ($currentPod) { Set-Content -Path $marker -Value $currentPod -Encoding utf8 }
+        Write-Host "Trading  : port-forward $port avviato verso $currentPod." -ForegroundColor Green
         exit 0
     }
 }

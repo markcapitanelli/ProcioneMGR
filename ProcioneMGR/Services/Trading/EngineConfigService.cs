@@ -66,6 +66,7 @@ public sealed class EngineConfigService(
         ["Trading:ProtectiveExitShadow"] = typeof(ProtectiveExitShadowOptions),
         ["MarketData:Realtime"] = typeof(RealtimeFeedOptions),
         ["Carry"] = typeof(CarryOptions),
+        ["Notifications"] = typeof(ProcioneMGR.Services.Notifications.NotificationOptions),
     };
 
     /// <summary>Dove il motore scrive: lo stesso file che <see cref="AppConfigWriter"/> tocca.</summary>

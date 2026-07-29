@@ -7,6 +7,7 @@ using ProcioneMGR.Services.Backtesting;
 using System.Text.Json;
 using ProcioneMGR.Services.Config;
 using ProcioneMGR.Services.MarketData;
+using ProcioneMGR.Services.Notifications;
 using ProcioneMGR.Services.Regime;
 using ProcioneMGR.Services.Risk;
 using ProcioneMGR.Services.Trading;
@@ -57,6 +58,17 @@ public class ProtectionsPageRenderTests : BunitContext
             Saved.Add((section, options));
             Sections[section] = JsonSerializer.Serialize(options, EngineConfigSnapshot.JsonOptions);
             return Task.FromResult(new EngineConfigWriteResult(Sections[section], WarningToReturn));
+        }
+
+        /// <summary>Esito della prova sul motore, pilotabile dal test.</summary>
+        public NotificationResult TestNotificationResult { get; set; } = new(NotificationOutcome.Delivered);
+
+        public int TestNotificationCalls { get; private set; }
+
+        public Task<NotificationResult> SendTestNotificationAsync(CancellationToken ct = default)
+        {
+            TestNotificationCalls++;
+            return Task.FromResult(TestNotificationResult);
         }
     }
 

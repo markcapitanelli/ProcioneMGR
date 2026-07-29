@@ -43,6 +43,16 @@ public static class EngineConfigSections
         "MarketData:Realtime",
         // Forward test del carry delta-neutro.
         "Carry",
+        // [2026-07-29] Canale di notifica DEL MOTORE. Aggiunto dopo aver scoperto che il canale del
+        // guscio era muto da due giorni senza che nessuno potesse accorgersene: il motore ha un suo
+        // producer — il watchdog che mette una corsia in QUARANTENA, cioè l'allarme più importante
+        // che la piattaforma possa emettere — e lasciarlo non configurabile e non verificabile
+        // avrebbe replicato lo stesso punto cieco un processo più in là.
+        //
+        // Il TOKEN resta fuori: si legge solo da TELEGRAM_BOT_TOKEN, non è in questa sezione e non
+        // passa da questo canale. Qui viaggiano interruttore, provider, ChatId (non un segreto) e
+        // rate-limit.
+        "Notifications",
     ];
 
     /// <summary>
@@ -68,7 +78,6 @@ public static class EngineConfigSections
         "Trading:GrpcSharedSecret",
         "Trading:RemoteUrl",
         "Llm",          // niente chiavi API di terzi, nemmeno indirettamente
-        "Notifications", // ChatId non è un segreto, ma il canale operatore non è del motore
     ];
 
     /// <summary>Vero se la sezione può essere riscritta dal guscio.</summary>

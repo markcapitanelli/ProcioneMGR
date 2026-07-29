@@ -80,6 +80,20 @@ public sealed class EngineConfigTests : IDisposable
         Assert.False(EngineConfigSections.IsWritable(section), $"'{section}' non deve essere scrivibile.");
     }
 
+    [Fact]
+    public void EngineNotifications_AreConfigurable_ButTheTokenNeverTravels()
+    {
+        // Il motore emette gli allarmi di quarantena: lasciarli non configurabili avrebbe replicato
+        // il punto cieco che ha tenuto Telegram muto per due giorni, un processo più in là.
+        Assert.True(EngineConfigSections.IsWritable("Notifications"));
+
+        // Ma il TOKEN non è in questa sezione e non passa da qui: vive solo in TELEGRAM_BOT_TOKEN.
+        // Il POCO lo dimostra — se un domani qualcuno ce lo aggiungesse, questo test cade.
+        var properties = typeof(ProcioneMGR.Services.Notifications.NotificationOptions)
+            .GetProperties().Select(p => p.Name).ToList();
+        Assert.DoesNotContain(properties, p => p.Contains("Token", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Theory]
     [InlineData("Trading:UseRemoteTrading")]
     [InlineData("Trading:LaneCount")]

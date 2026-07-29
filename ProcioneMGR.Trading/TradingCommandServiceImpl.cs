@@ -246,4 +246,33 @@ public sealed class TradingCommandServiceImpl(
                 $"Il motore non ha potuto scrivere la propria configurazione: {ex.Message}"));
         }
     }
+
+    /// <summary>
+    /// Prova il canale di notifica DI QUESTO processo. Il pulsante del guscio prova il canale del
+    /// guscio: sono due processi con variabili d'ambiente diverse, e il motore può essere muto
+    /// mentre il guscio recapita. Senza questa prova quel silenzio sarebbe inosservabile — ed è
+    /// proprio il silenzio degli allarmi di quarantena, i più importanti che la piattaforma emetta.
+    /// </summary>
+    public override async Task<SendTestNotificationResponse> SendTestNotification(
+        SendTestNotificationRequest request, ServerCallContext context)
+    {
+        var dispatcher = serviceProvider.GetRequiredService<ProcioneMGR.Services.Notifications.NotificationDispatcher>();
+        var options = serviceProvider
+            .GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Notifications.NotificationOptions>>();
+
+        var result = await dispatcher.SendDiagnosticAsync(
+            ProcioneMGR.Services.Notifications.NotificationSeverity.Info,
+            "Notifica di prova (motore)",
+            "Se leggi questo messaggio, gli allarmi del MOTORE — quarantena corsie compresa — ti raggiungono.",
+            context.CancellationToken);
+
+        logger.LogInformation("Prova del canale di notifica del motore: {Outcome}.", result.Outcome);
+
+        return new SendTestNotificationResponse
+        {
+            Outcome = result.Outcome.ToString(),
+            Detail = result.Detail ?? string.Empty,
+            Provider = options.CurrentValue.Provider ?? string.Empty,
+        };
+    }
 }

@@ -61,6 +61,9 @@ service TradingCommandService {
   // NetworkPolicy).
   rpc GetEngineConfig(GetEngineConfigRequest) returns (GetEngineConfigResponse);
   rpc SetEngineConfig(SetEngineConfigRequest) returns (SetEngineConfigResponse);
+
+  // Prova il canale di notifica DEL MOTORE (vedi SendTestNotificationRequest in fondo al file).
+  rpc SendTestNotification(SendTestNotificationRequest) returns (SendTestNotificationResponse);
 }
 
 // --- Enum di dominio -------------------------------------------------------------------------
@@ -350,4 +353,25 @@ message SetEngineConfigResponse {
   // Avvertimento non bloccante: tipicamente "una variabile d'ambiente sovrascrive questa chiave,
   // il valore salvato non avra' effetto finche' quella resta".
   string warning = 2;
+}
+
+// --- Verifica del canale di notifica DEL MOTORE (2026-07-29) -----------------------------------
+// Il guscio ha il suo pulsante "Invia notifica di prova", e serve: e' cosi' che si e' scoperto che
+// Telegram era muto da due giorni. Ma prova IL CANALE DEL GUSCIO. Il motore ha un producer suo — il
+// watchdog che mette una corsia in QUARANTENA, l'allarme piu' importante che la piattaforma emetta —
+// e quello vive in un altro processo, con altre variabili d'ambiente: puo' benissimo essere muto
+// mentre il guscio recapita. Senza questo rpc quel silenzio sarebbe inosservabile, che e' esattamente
+// la condizione da cui questo lavoro e' partito.
+//
+// Non manda nulla di operativo: un messaggio Info dichiarato come prova, attraverso la stessa catena
+// dei producer veri (gate, rate-limit condiviso, provider corrente), con l'esito restituito.
+message SendTestNotificationRequest {}
+
+message SendTestNotificationResponse {
+  // "Delivered" | "Disabled" | "RateLimited" | "UnknownProvider" | "Failed".
+  string outcome = 1;
+  // Motivo leggibile quando non e' Delivered (token assente, provider sconosciuto, rate-limit...).
+  string detail = 2;
+  // Provider che ha tentato il recapito, come lo vede il MOTORE.
+  string provider = 3;
 }
