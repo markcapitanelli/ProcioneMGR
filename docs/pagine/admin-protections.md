@@ -56,11 +56,33 @@ Sul feed la pagina riporta anche il verdetto già misurato
 **peggio** che a barra chiusa in 24 configurazioni su 24. Accendere `DriveProtectiveExits` è
 una scelta da rimisurare sui propri dati, non un miglioramento gratuito.
 
+## Da dove arrivano i valori (2026-07-29)
+
+La pagina **non legge la configurazione di questo processo**: la chiede al motore. Con
+`Trading:UseRemoteTrading=true` il guscio è un client puro e tutto ciò che questa pagina configura
+è ospitato in `procionemgr-trading` — mostrare il file locale significherebbe mostrare numeri che
+nessuno applica. È esattamente ciò che accadeva: il PVC che avrebbe dovuto condividere il file era
+rimasto a `{}`, e `CorrelatedExposure`/`RegimeRouting` risultavano attivi in UI e spenti nel motore.
+
+L'astrazione è `IEngineConfigStore`, con due implementazioni scelte **per costruzione** dallo stesso
+toggle che decide dove vive il motore (stesso patto di `IMarketDataSyncService`):
+
+| Motore | Implementazione | Cosa fa |
+|---|---|---|
+| in-process | `LocalEngineConfigStore` | scrive il file di questo processo, che è quello che il motore legge |
+| remoto | `RemoteEngineConfigStore` | `GetEngineConfig`/`SetEngineConfig` via gRPC |
+
+Il banner in cima lo dichiara, mostra il path su cui il motore scrive, e avvisa **prima** se quel
+file non è scrivibile. Se il motore non risponde la pagina non esplode: mostra i default *dicendo*
+che sono default, con un pulsante Riprova — un pannello che si rompe quando il core è giù è inutile
+proprio nel momento in cui serve guardarlo.
+
 ## Come funziona (flusso del codice)
 
-Stesso patto di [`/admin/autonomy`](admin-autonomy.md): copie **locali** delle opzioni (clone
-via JSON round-trip da `IOptionsMonitor<T>.CurrentValue`), scrittura solo al Salva via
-`IAppConfigWriter.SaveSectionAsync`, badge ✅/⟳ per campo.
+Stesso patto di [`/admin/autonomy`](admin-autonomy.md): copie **locali** delle opzioni, scrittura
+solo al Salva, badge ✅/⟳ per campo. Dopo ogni salvataggio la pagina **rilegge dal motore**: mostra
+ciò che è in vigore, non ciò che si è digitato, così una variabile d'ambiente che vince sul file si
+vede subito invece di restare invisibile.
 
 Due specificità:
 

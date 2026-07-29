@@ -180,21 +180,38 @@ kubectl run probe2 -n procionemgr-pipeline --rm -i --image=curlimages/curl --res
 Nota: `kubectl port-forward` passa dall'API server e **non** dalla rete dei pod — scavalca la
 NetworkPolicy. Comodo in sviluppo, da non scambiare per un accesso consentito.
 
-### `SafetyConfiguration`: PVC condiviso (limite noto)
+### Configurazione del motore: gRPC, non più il file condiviso (2026-07-29)
 
-`AppConfigWriter` scrive **letteralmente** su `<ContentRootPath>/appsettings.json` — non c'è un
-provider di configurazione astratto da ripuntare altrove senza refactor. Perché i limiti di
-sicurezza modificati dal pannello `/trading` (monolite) valgano anche nel motore (servizio), i due
-pod devono vedere **lo stesso file**: PVC `procionemgr-config` **ReadWriteMany** montato sullo
-stesso path assoluto in entrambi. Il monolite scrive, il trading rilegge a caldo (`reloadOnChange`,
-~1s).
+**Il guscio chiede la configurazione al motore e gliela riscrive** (`GetEngineConfig` /
+`SetEngineConfig` in `trading.proto`). `/admin/protections` e la scheda carry di `/admin/autonomy`
+mostrano quindi ciò che il motore **sta applicando**, non ciò che c'è nel file del guscio.
 
-Limiti da conoscere:
-- **RWX richiede una storage class che lo supporti** (NFS, CephFS, Azure Files…). La default di
-  kind (`local-path`) è **solo RWO**: in locale i due processi vanno puntati a mano sullo stesso
-  file su disco (scelta operativa, non codice).
-- Se i due file divergono, il servizio applica **limiti di sicurezza diversi da quelli mostrati in
-  UI** — e nessuno se ne accorge finché un ordine non viene rifiutato (o accettato) a sorpresa.
+Il disegno precedente — PVC `procionemgr-config` ReadWriteMany montato in entrambi i pod, il
+monolite scrive, il trading rilegge a caldo — è caduto sul campo per **due** motivi indipendenti,
+che vale la pena non riscoprire:
+
+1. **Il guscio spesso non è nel cluster.** Col deployment `ui` a 0 repliche e il monolite sul
+   desktop, il file sul PVC non lo scrive nessuno: trovato a `{}`. Il pannello mostrava allora la
+   configurazione del guscio mentre il motore ne applicava un'altra. Conseguenza misurata:
+   `Trading:CorrelatedExposure` e `Trading:RegimeRouting` erano `Enabled=true` nel file del guscio
+   e `false` (default del codice) nel motore. Le soglie di `Trading:Safety` coincidevano coi
+   default, quindi lì non è cambiato un numero — ma la postura dichiarata non era quella reale,
+   che è **il guasto previsto alla lettera dalla versione precedente di questa sezione**.
+2. **`reloadOnChange` non funziona su un mount PVC.** Si appoggia alla notifica del filesystem, e
+   inotify non attraversa quel mount: il file cambiava e il motore continuava a rispondere col
+   valore vecchio. Ora `EngineConfigService` chiama esplicitamente `IConfigurationRoot.Reload()`
+   dopo la scrittura — chi scrive sa di aver scritto, e non serve alcun watcher.
+
+Cosa resta vero del vecchio disegno: `AppConfigWriter` scrive **letteralmente** su
+`<ContentRootPath>/appsettings.json`, e il PVC serve ancora perché quel file **sopravviva ai
+riavvii del pod**. Non serve più come canale fra i due processi, quindi **RWX non è più un
+requisito**: la `local-path` di kind (solo RWO) basta.
+
+Confine di sicurezza del canale: `SetEngineConfig` scrive su un processo che firma ordini veri. Le
+sezioni toccabili sono un elenco **chiuso** in `EngineConfigSections.Writable`; connection string,
+master key, segreto gRPC, numero di corsie e i toggle di topologia non sono raggiungibili né in
+scrittura né in lettura. Vale in più l'autorizzazione di ogni altro rpc
+(`SharedSecretAuthInterceptor` + NetworkPolicy).
 
 ### Smoke test
 

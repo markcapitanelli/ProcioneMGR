@@ -326,5 +326,38 @@ non averla. Sette sezioni restano deliberatamente fuori dalla UI: sei scelgono l
 processo (chi ospita cosa, vincolato al deploy — `Trading:UseRemoteTrading` col valore sbagliato
 significa due esecutori sulla stessa corsia) e una è solo memoria (`FactorCache`).
 
-*Non verificato dal vivo:* il browser. Il lavoro è in un worktree e la regola è una sola app dal
-repo principale — le prove sono i test di rendering bUnit.
+### Verifica dal vivo (2026-07-29, sera)
+
+Lavoro integrato in master, guscio riavviato, **provato nel browser sul cluster vero**. La prova ha
+trovato cinque difetti che i test non potevano vedere, perché girano su configurazioni sintetiche
+mentre il guasto stava nel rapporto fra due processi.
+
+| Difetto | Perché i test non lo vedevano |
+|---|---|
+| Badge liquidazioni verde «connesso · 0 msg» mentre quello **è** il guasto (blocco EEA/MiCA) | l'avviso aveva la condizione «acceso E **non** connesso»: non compariva mai nel caso per cui era stato scritto |
+| Simboli carry e sentiment duplicati nei campi CSV | il binder delle liste .NET **appende** ai default; i worker deduplicavano già, mentiva solo la vista |
+| Telegram muto dal 2026-07-27 | il consolidamento aveva perso il caricamento di `TELEGRAM_BOT_TOKEN`; il dispatcher per contratto non propaga l'errore, quindi **nessuno poteva accorgersene** |
+| «Invia notifica di prova» dichiarava successo mentre il recapito falliva | passava da `NotifyAsync`, `void` per progetto — una verifica che rassicura sempre è peggio di nessuna verifica |
+| I pannelli configuravano un motore che non li leggeva | il file su PVC, unico canale previsto, resta vuoto quando il guscio non gira nel cluster |
+
+**Il difetto strutturale è l'ultimo**, e ha richiesto un contratto nuovo: `GetEngineConfig` /
+`SetEngineConfig`, con allow-list chiusa lato server. Provandolo è emerso il difetto sotto il
+difetto: **`reloadOnChange` non funziona su un mount PVC** (inotify non lo attraversa), quindi il
+motore scriveva la configurazione e continuava ad applicare quella vecchia. Rimedio: rilettura
+esplicita dopo la scrittura — chi scrive sa di aver scritto, e non serve alcun watcher.
+
+Conseguenza misurata: `Trading:CorrelatedExposure` e `Trading:RegimeRouting` erano `Enabled=true`
+nel file del guscio e **spenti nel motore**. Impatto pratico nullo — il limite di correlazione è
+inerte in spot sotto il 30%, il router era comunque in sola osservazione, e le soglie di
+`Trading:Safety` coincidevano coi default — ma la postura dichiarata non era quella reale.
+Riallineate dal pannello e verificate dentro il pod.
+
+L'interruttore del feed è stato provato **in entrambi i versi sul core in esercizio**: spento →
+«connessioni chiuse, code svuotate» entro 5s; riacceso → feed su 2 exchange. Senza riavviare il
+pod. Il ricontrollo dei log ha poi trovato un ultimo difetto: la watchdog di staleness allertava a
+ogni accensione («ultimo: mai»), cioè un falso allarme su Telegram a ogni toggle — corretto
+distinguendo «non ha ancora cominciato» da «ha smesso», senza perdere il caso dell'endpoint
+perennemente muto.
+
+Suite **2005/2005**. Debito aperto: l'immagine del motore è una build locale caricata in kind, da
+pubblicare su GHCR e ripinnare sul digest.
