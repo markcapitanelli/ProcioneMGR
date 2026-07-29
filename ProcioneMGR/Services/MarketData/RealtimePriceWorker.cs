@@ -61,6 +61,12 @@ public sealed class RealtimePriceWorker(
     private volatile IReadOnlyList<LaneRoute> _routes = [];
     private readonly HashSet<ExchangeName> _staleAlerted = [];
 
+    /// <summary>
+    /// Inizio della sessione di feed corrente: serve a distinguere "non ha ancora cominciato" da
+    /// "ha smesso di ricevere" nella watchdog di staleness. Si azzera a ogni riaccensione.
+    /// </summary>
+    private DateTime _sessionStartedUtc = DateTime.UtcNow;
+
     /// <summary>Vero mentre una sessione di feed è attiva (lo legge il pannello /admin/protections).</summary>
     public bool IsRunning { get; private set; }
 
@@ -124,6 +130,11 @@ public sealed class RealtimePriceWorker(
     /// <summary>Una sessione di feed: connessioni, consumatori, refresh delle sottoscrizioni.</summary>
     private async Task RunSessionAsync(CancellationToken ct)
     {
+        // Azzerato QUI, non nel costruttore: la grazia della watchdog vale per ogni riaccensione,
+        // non solo per la prima dopo l'avvio del processo.
+        _sessionStartedUtc = DateTime.UtcNow;
+        _staleAlerted.Clear();
+
         var feeds = mappers
             .Select(m => new WebSocketPriceFeed(m, transportFactory, options, logger, metrics))
             .ToList();
@@ -261,7 +272,7 @@ public sealed class RealtimePriceWorker(
                 continue;
             }
 
-            var stale = health.IsStale(threshold, now);
+            var stale = ShouldAlertStale(health, threshold, now, _sessionStartedUtc);
             if (stale && _staleAlerted.Add(feed.Exchange))
             {
                 logger.LogError("Feed {Exchange} STALE: nessun messaggio da oltre {Sec}s (ultimo: {Last}).",
@@ -277,6 +288,26 @@ public sealed class RealtimePriceWorker(
                     "I tick sono tornati: le uscite protettive sono di nuovo reattive.");
             }
         }
+    }
+
+    /// <summary>
+    /// Quando un canale silenzioso merita un allarme.
+    ///
+    /// <para>«Non ha ancora cominciato» NON è «ha smesso». Appena connesso, il primo messaggio può
+    /// tardare più della soglia in tutta legittimità — mercato calmo, handshake, sottoscrizioni
+    /// appena inviate — e allertare lì è un falso allarme garantito a ogni avvio. Da quando il feed
+    /// si accende e si spegne dal pannello, quel falso allarme scatterebbe a ogni singolo toggle,
+    /// con tanto di notifica all'operatore: rumore che insegna a ignorare gli allarmi veri.</para>
+    ///
+    /// <para>Si concede quindi una grazia pari alla soglia, contata dall'inizio della SESSIONE.
+    /// Senza buttare via il caso che conta: un endpoint che si connette e non consegna MAI è un
+    /// guasto reale (è il blocco EEA/MiCA visto sulle liquidazioni), e continua ad allertare — solo
+    /// dopo la grazia invece che subito.</para>
+    /// </summary>
+    internal static bool ShouldAlertStale(FeedHealth health, TimeSpan threshold, DateTime nowUtc, DateTime sessionStartedUtc)
+    {
+        if (health.LastMessageUtc is null && nowUtc - sessionStartedUtc < threshold) return false;
+        return health.IsStale(threshold, nowUtc);
     }
 
     private void Notify(NotificationSeverity severity, string title, string body)

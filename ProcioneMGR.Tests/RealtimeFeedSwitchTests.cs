@@ -23,6 +23,58 @@ namespace ProcioneMGR.Tests;
 /// </summary>
 public class RealtimeFeedSwitchTests
 {
+    // --- Grazia della watchdog di staleness (2026-07-29) ---------------------------------------
+    // Trovata guardando i log del motore dopo aver reso il feed accendibile a caldo: a OGNI avvio
+    // partiva "Feed STALE: nessun messaggio da oltre 60s (ultimo: mai)" come LogError PIÙ una
+    // notifica Warning all'operatore. Con l'interruttore nel pannello quel falso allarme sarebbe
+    // arrivato su Telegram a ogni singolo toggle — e un allarme che grida sempre insegna a
+    // ignorare quelli veri.
+
+    private static FeedHealth Health(DateTime? lastMessageUtc) =>
+        new(ExchangeName.Binance, IsConnected: true, lastMessageUtc, Reconnects: 0, MessagesReceived: 0, LastError: null);
+
+    [Fact]
+    public void JustConnected_WithNothingReceivedYet_IsNotAnAlarm()
+    {
+        var start = DateTime.UtcNow;
+
+        Assert.False(RealtimePriceWorker.ShouldAlertStale(
+            Health(null), TimeSpan.FromSeconds(60), start.AddSeconds(30), start));
+    }
+
+    [Fact]
+    public void ConnectedButMuteBeyondTheGrace_IsStillAnAlarm()
+    {
+        // Il caso che NON va perso: connesso e mai una consegna oltre la grazia è il guasto vero
+        // (è il blocco EEA/MiCA visto sulle liquidazioni). Allerta, solo più tardi invece che subito.
+        var start = DateTime.UtcNow;
+
+        Assert.True(RealtimePriceWorker.ShouldAlertStale(
+            Health(null), TimeSpan.FromSeconds(60), start.AddSeconds(61), start));
+    }
+
+    [Fact]
+    public void ReceivedThenWentSilent_IsAnAlarmWithNoGrace()
+    {
+        // Qui non c'è nessuna grazia da concedere: il canale ha DIMOSTRATO di funzionare e ha
+        // smesso. È l'allarme per cui la watchdog esiste.
+        var start = DateTime.UtcNow;
+        var now = start.AddMinutes(10);
+
+        Assert.True(RealtimePriceWorker.ShouldAlertStale(
+            Health(now.AddSeconds(-61)), TimeSpan.FromSeconds(60), now, start));
+    }
+
+    [Fact]
+    public void ReceivingNormally_IsNeverAnAlarm()
+    {
+        var start = DateTime.UtcNow;
+        var now = start.AddMinutes(10);
+
+        Assert.False(RealtimePriceWorker.ShouldAlertStale(
+            Health(now.AddSeconds(-5)), TimeSpan.FromSeconds(60), now, start));
+    }
+
     /// <summary>Monitor con valore MUTABILE: è il modo di simulare il salvataggio dal pannello.</summary>
     private sealed class MutableOptionsMonitor<T>(T value) : IOptionsMonitor<T>
     {
