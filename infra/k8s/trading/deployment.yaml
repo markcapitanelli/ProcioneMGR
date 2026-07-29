@@ -74,8 +74,16 @@ spec:
               containerPort: 8081
           envFrom:
             - secretRef:
-                # ConnectionStrings__PostgresConnection + Security__MasterKey.
-                # La master key NON sta in questo YAML né nell'immagine: solo nel Secret.
+                # ConnectionStrings__PostgresConnection + Security__MasterKey +
+                # Trading__GrpcSharedSecret + TELEGRAM_BOT_TOKEN (quest'ultimo opzionale).
+                # Nessuno di questi sta in questo YAML né nell'immagine: solo nel Secret.
+                #
+                # Il token Telegram è qui perché il producer più importante della piattaforma — il
+                # watchdog che mette una corsia in QUARANTENA — vive in QUESTO pod, non nel guscio.
+                # Senza token quegli allarmi non raggiungono nessuno, ed è rimasto così fino al
+                # 2026-07-29: il guscio aveva il suo canale e recapitava, il motore non l'ha mai
+                # avuto. Scoperto col pulsante "Prova dal motore" di /admin/autonomy, che è il primo
+                # modo mai esistito di CHIEDERE al canale se funziona invece di presumerlo.
                 name: trading-secrets
             - configMapRef:
                 # [B3] Assetto del core: feed R1 acceso in osservazione + carry Paper. Non

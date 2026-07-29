@@ -31,13 +31,18 @@ images:
     # cosi' la configurazione del guscio invece di quella applicata dal motore. Con questa build
     # l'assetto operativo del core esce dalla ConfigMap e passa al file, che ora la UI sa scrivere.
     #
-    # ATTENZIONE AL TAG: e' una build LOCALE (docker build + kind load), non un'immagine pubblicata
-    # su GHCR come tutte le altre pinnate qui. Un rollout la riusa perche' e' gia' nel nodo, ma un
-    # cluster ricreato da zero NON la troverebbe. Prima di considerarla definitiva va pubblicata e
-    # ripinnata sul digest.
+    # PINNATO SUL DIGEST, non sul tag. Un tag e' un'etichetta mobile: puo' essere spostato su
+    # un'altra immagine, o rimosso. Il digest E' l'immagine — e' l'hash del suo manifest, quindi
+    # dice senza ambiguita' quale binario sta operando sul mercato, ed e' verificabile dal registro.
+    # Il tag del commit resta scritto qui accanto perche' un umano possa risalire al sorgente.
+    #
+    # Provenienza: costruita da .github/workflows/docker-build.yml sul commit
+    # 01c74eea91377892c4e24f84b36abd683bed03df di master, DOPO la guardia che rifiuta immagini
+    # contenenti un appsettings.json reale. Le build locali usate durante l'audit
+    # (audit-20260729, ...b, ...c) erano tappe di verifica sul cluster di sviluppo e non vanno
+    # ripinnate: non esistono nel registro e un cluster ricreato non le troverebbe.
     #
     # [B3, 2026-07-28] Assetto precedente (562b359db3733aec8f222d76fad59c18ff7aefdd): sentinella
-    # d'ombra, tick osservati invece che scartati. INVARIATO in questa build — le uscite restano
-    # guidate dalle candele (DriveProtectiveExits=false per MISURA, vedi
-    # docs/REPORT-B3-EXITLAG-2026-07-28.md).
-    newTag: audit-20260729c
+    # d'ombra, tick osservati invece che scartati. INVARIATO — le uscite restano guidate dalle
+    # candele (DriveProtectiveExits=false per MISURA, vedi docs/REPORT-B3-EXITLAG-2026-07-28.md).
+    digest: sha256:300ca20d4ea52cc3d8ed3b08321c64e8bd3e1b578249aef5089a677a858d1d6a

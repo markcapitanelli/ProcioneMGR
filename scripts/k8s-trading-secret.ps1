@@ -30,15 +30,28 @@
     con un valore diverso ogni chiamata gRPC del monolite verso questo servizio viene rifiutata
     Unauthenticated da SharedSecretAuthInterceptor.
 
+.PARAMETER TelegramBotToken
+    OPZIONALE. Token del bot Telegram per le notifiche EMESSE DAL MOTORE. Se omesso, si legge da
+    $env:TELEGRAM_BOT_TOKEN; se manca anche quella, la chiave non viene scritta nel Secret e il
+    motore resta senza canale Telegram (le notifiche ripiegano sul log).
+
+    PERCHE' SERVE, scoperto il 2026-07-29: il producer piu' importante della piattaforma — il
+    watchdog che mette una corsia in QUARANTENA — vive in QUESTO processo, non nel guscio. Il
+    guscio aveva il suo token e recapitava; il motore non l'ha mai avuto, quindi quegli allarmi
+    non sono mai arrivati a nessuno. Nessuno se n'era accorto perche' il dispatcher per contratto
+    non propaga gli errori di recapito, e fino a quel giorno non esisteva un modo di CHIEDERE al
+    canale se funzionasse (ora c'e': "Prova dal motore" in /admin/autonomy).
+
 .NOTES
-    Uso (chiave dalla env, così non finisce nella cronologia):
+    Uso (chiavi dalle env, così non finiscono nella cronologia):
         $env:PROCIONE_MGR_MASTER_KEY = "<base64 32 byte>"
         $env:PROCIONE_MGR_TRADING_GRPC_SECRET = "<stringa casuale, es. openssl rand -base64 32>"
+        $env:TELEGRAM_BOT_TOKEN = Get-Content ~/.procione/telegram.token -Raw
         .\scripts\k8s-trading-secret.ps1 -ConnectionString "Host=host.docker.internal;Port=5432;..."
     Il namespace deve già esistere (scripts\k8s-bootstrap.ps1).
 #>
 
-param([string]$ConnectionString, [string]$MasterKey, [string]$GrpcSharedSecret)
+param([string]$ConnectionString, [string]$MasterKey, [string]$GrpcSharedSecret, [string]$TelegramBotToken)
 
 $ErrorActionPreference = "Stop"
 $clusterCtx = "kind-procionemgr-dev"
@@ -77,15 +90,25 @@ if (-not $GrpcSharedSecret) {
     exit 1
 }
 
+if (-not $TelegramBotToken) { $TelegramBotToken = $env:TELEGRAM_BOT_TOKEN }
+
 Write-Host "Creo/aggiorno Secret 'trading-secrets' in $namespace..." -ForegroundColor Cyan
 # --dry-run=client | apply: idempotente (crea o aggiorna senza errore se gia' esiste).
+$literals = @(
+    "--from-literal=ConnectionStrings__PostgresConnection=$ConnectionString",
+    "--from-literal=Security__MasterKey=$MasterKey",
+    "--from-literal=Trading__GrpcSharedSecret=$GrpcSharedSecret"
+)
+# Il token e' OPZIONALE: senza, il Secret si crea comunque e il motore ripiega sul log. Va
+# aggiunto solo se c'e', altrimenti si scriverebbe una chiave vuota che sembra configurata.
+if ($TelegramBotToken) { $literals += "--from-literal=TELEGRAM_BOT_TOKEN=$TelegramBotToken" }
+
 kubectl create secret generic trading-secrets `
     --namespace $namespace `
-    --from-literal=ConnectionStrings__PostgresConnection=$ConnectionString `
-    --from-literal=Security__MasterKey=$MasterKey `
-    --from-literal=Trading__GrpcSharedSecret=$GrpcSharedSecret `
+    @literals `
     --dry-run=client -o yaml --context $clusterCtx | kubectl apply --context $clusterCtx -f -
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Secret 'trading-secrets' pronto in $namespace (connection string + master key + segreto gRPC)." -ForegroundColor Green
+$telegramState = if ($TelegramBotToken) { "+ token Telegram" } else { "SENZA token Telegram (allarmi del motore solo nel log)" }
+Write-Host "Secret 'trading-secrets' pronto in $namespace (connection string + master key + segreto gRPC $telegramState)." -ForegroundColor Green
 Write-Host "Ricorda: solo questo namespace deve avere la master key." -ForegroundColor Yellow
