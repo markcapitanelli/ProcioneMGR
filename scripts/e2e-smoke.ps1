@@ -229,24 +229,53 @@ Check "La NetworkPolicy blocca i comandi di trading da un namespace non autorizz
     "8080 rifiutata da fuori, 8081 raggiungibile: enforcement attivo"
 }
 
-# --- 4. ConfigMap davvero applicato --------------------------------------------------------------
+# --- 4. ConfigMap applicato, e le chiavi della UI NON in ombra sul file ---------------------------
 # Non "il ConfigMap esiste": le variabili sono nell'ambiente del PROCESSO. Un ConfigMap aggiornato
 # senza sostituire il pod lascia in esecuzione il vecchio assetto.
+#
+# --- QUESTO CONTROLLO SI E' ROVESCIATO (2026-07-30) ----------------------------------------------
+# Fino all'audit backend<->frontend pretendeva MarketData__Realtime__* e Carry__* NELLE env, perche'
+# era la ConfigMap a possedere l'assetto operativo del core. Ora quelle sezioni le possiede la UI,
+# che le scrive sul motore via gRPC (Get/SetEngineConfig) e da lui nell'appsettings.json su PVC.
+#
+# Il punto, ed e' il motivo per cui il controllo va rovesciato e non solo accorciato: in .NET le
+# variabili d'ambiente VINCONO sul file. Se quelle chiavi tornassero nella ConfigMap, ogni
+# salvataggio dal pannello riuscirebbe senza cambiare nulla — un pulsante che dice "salvato" e non
+# muove niente, cioe' esattamente la classe di difetto che quell'audit e' nato per togliere. La loro
+# ASSENZA e' quindi l'invariante da difendere.
+#
+# Trading__LaneCount resta obbligatoria: non e' operativita' ma TOPOLOGIA — deve combaciare col
+# guscio, e il valore si congela alla prima lettura in entrambi gli host.
 $mustHave = @(
+    "Trading__LaneCount"
+)
+$mustNotHave = @(
     "MarketData__Realtime__Enabled",
     "MarketData__Realtime__DriveProtectiveExits",
     "Carry__Enabled",
-    "Trading__LaneCount"
+    "Notifications__Enabled"
 )
-Check "Le chiavi di trading-config.env sono nell'ambiente del pod" {
+Check "trading-config: topologia presente, chiavi della UI non in ombra" {
     $tradingPod = (Kubectl get pods -n "$NsPrefix-trading" -o jsonpath='{.items[0].metadata.name}')
     $env = KubectlExec -Ns "$NsPrefix-trading" -Pod $tradingPod -Container trading -ShellCommand "env"
+
     $missing = @()
     foreach ($k in $mustHave) {
         if ("$env" -notmatch [regex]::Escape($k)) { $missing += $k }
     }
-    if ($missing.Count -gt 0) { throw "chiavi assenti dall'ambiente: $($missing -join ', ')" }
-    "$($mustHave.Count) chiavi presenti"
+    if ($missing.Count -gt 0) { throw "chiavi di topologia assenti dall'ambiente: $($missing -join ', ')" }
+
+    $shadowing = @()
+    foreach ($k in $mustNotHave) {
+        if ("$env" -match [regex]::Escape($k)) { $shadowing += $k }
+    }
+    if ($shadowing.Count -gt 0) {
+        throw ("chiavi possedute dalla UI presenti nell'ambiente: $($shadowing -join ', ') - " +
+               "le env vincono sul file, quindi i salvataggi da /admin/protections e /admin/autonomy " +
+               "riuscirebbero senza avere effetto")
+    }
+
+    "topologia presente ($($mustHave.Count)), nessuna delle $($mustNotHave.Count) chiavi della UI in ombra"
 }
 
 # --- 5. Un solo esecutore per corsia -------------------------------------------------------------
