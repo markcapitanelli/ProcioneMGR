@@ -1042,8 +1042,15 @@
     private CarryOptions _carry = new();
     private string _carrySymbolsCsv = "";
 
-    /// <summary>Configurazione letta dal motore (per ora solo la sezione Carry di questa pagina).</summary>
+    /// <summary>Configurazione letta dal motore: la condividono la scheda carry e il canale di notifica.</summary>
     private EngineConfigSnapshot _engineSnapshot = new([], string.Empty, Writable: false);
+
+    /// <summary>
+    /// Le sezioni del motore che QUESTA pagina mostra. Costante e non elenco ripetuto a ogni
+    /// chiamata: <c>_engineSnapshot</c> è condiviso da due blocchi, e una rilettura che ne chiedesse
+    /// meno svuoterebbe l'altro — salvando il carry sparivano i dati del canale di notifica.
+    /// </summary>
+    private static readonly string[] EngineSections = ["Carry", "Notifications"];
     private LiquidationsOptions _liquidations = new();
     private ObservabilityConfig _observability = new();
 
@@ -1125,7 +1132,7 @@
         _registry = Clone(RegistryOptions);
         _ml = Clone(MlMonitor.CurrentValue);
         // Dal motore, non dal file locale: col trading remoto sono due cose diverse.
-        _engineSnapshot = await EngineConfig.ReadAsync(["Carry", "Notifications"]);
+        _engineSnapshot = await EngineConfig.ReadAsync(EngineSections);
         _carry = _engineSnapshot.Bind<CarryOptions>("Carry");
         _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
         _engineNotifications = _engineSnapshot.Bind<NotificationOptions>("Notifications");
@@ -1244,7 +1251,7 @@
                 ? $"Carry: salvato {dove}, MA — {warning}"
                 : $"Carry: salvato {dove}.", result.Warning is not null);
 
-            _engineSnapshot = await EngineConfig.ReadAsync(["Carry"]);
+            _engineSnapshot = await EngineConfig.ReadAsync(EngineSections);
             _carry = _engineSnapshot.Bind<CarryOptions>("Carry");
             _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
         }
@@ -1328,7 +1335,7 @@
                 : "Notifiche del motore: salvate. Usa «Prova dal motore» per verificare che recapiti davvero.",
                 result.Warning is not null);
 
-            _engineSnapshot = await EngineConfig.ReadAsync(["Carry", "Notifications"]);
+            _engineSnapshot = await EngineConfig.ReadAsync(EngineSections);
             _engineNotifications = _engineSnapshot.Bind<NotificationOptions>("Notifications");
         }
         catch (Exception ex) { SetStatus($"Notifiche del motore: salvataggio fallito — {ex.Message}", true); }

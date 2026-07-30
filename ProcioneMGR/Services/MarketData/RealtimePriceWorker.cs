@@ -67,7 +67,11 @@ public sealed class RealtimePriceWorker(
     /// </summary>
     private DateTime _sessionStartedUtc = DateTime.UtcNow;
 
-    /// <summary>Vero mentre una sessione di feed è attiva (lo legge il pannello /admin/protections).</summary>
+    /// <summary>
+    /// Vero mentre una sessione di feed è attiva. È l'osservabile con cui
+    /// <c>RealtimeFeedSwitchTests</c> verifica che l'interruttore apra e chiuda DAVVERO le
+    /// connessioni: senza, quella prova si ridurrebbe a «il metodo non ha lanciato eccezioni».
+    /// </summary>
     public bool IsRunning { get; private set; }
 
     /// <summary>
