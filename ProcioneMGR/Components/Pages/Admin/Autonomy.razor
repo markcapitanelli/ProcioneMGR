@@ -884,18 +884,80 @@
                 <input type="number" class="form-control" @bind="_notifications.MaxPerHour" min="1" style="width: 8rem;" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Notifications", _notifications, "Notifiche")' disabled="@_busy">Salva</button>
-                <button class="btn btn-outline-secondary me-2" @onclick="SendTestNotificationAsync" disabled="@_busy">
+                <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Notifications", _notifications, "Notifiche del guscio")' disabled="@_busy">Salva</button>
+                <button class="btn btn-outline-secondary" @onclick="SendTestNotificationAsync" disabled="@_busy">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                    Prova dal guscio
+                    Prova
                 </button>
-                @* Due pulsanti e non uno: guscio e motore sono due processi con variabili d'ambiente
-                   diverse, e il motore puo' essere muto mentre il guscio recapita. Provare solo il
-                   guscio lascerebbe inosservabile proprio il silenzio degli allarmi di quarantena. *@
+            </div>
+        </div>
+
+        @* ------------------------------------------------------------------ canale del MOTORE *@
+        @* Due canali distinti, non uno con due pulsanti: guscio e motore sono processi separati, con
+           configurazioni e variabili d'ambiente proprie. Il motore puo' essere muto mentre il guscio
+           recapita — ed e' cosi' che stava, scoperto il 2026-07-29. Tenerli in un unico blocco
+           avrebbe fatto credere che accendere qui accendesse la' . *@
+        <hr />
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>Canale del motore</strong>
+            <span>
+                @if (_engineNotifications.Enabled && _engineNotifications.Provider == "Telegram")
+                { <span class="badge bg-info text-dark me-1">Telegram</span> }
+                else if (_engineNotifications.Enabled)
+                { <span class="badge bg-secondary me-1">solo log</span> }
+                @StateBadge(_engineNotifications.Enabled)
+            </span>
+        </div>
+        <p class="text-muted small">
+            È <code>procionemgr-trading</code> a emettere l'allarme più importante della piattaforma:
+            la <strong>quarantena</strong> di una corsia, quando la sua contabilità diventa
+            impossibile. Quel producer vive là, non qui, e legge la <em>propria</em> configurazione:
+            questi campi sono letti dal motore e riscritti su di lui.
+            @if (_engineSnapshot.SourceOf("Notifications") is { } notifSource)
+            {
+                <text> Sorgente attuale: <code>@notifSource</code>.</text>
+            }
+        </p>
+        @if (!_engineSnapshot.Reachable)
+        {
+            <div class="alert alert-danger py-2 small">
+                Motore non raggiungibile: @_engineSnapshot.Error I valori qui sotto sono i default,
+                non salvare finché non risponde.
+            </div>
+        }
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="ent_en" @bind="_engineNotifications.Enabled" />
+                <label class="form-check-label" for="ent_en">Abilitate @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Provider @Hot()</label>
+                <select class="form-select" @bind="_engineNotifications.Provider" style="width: 10rem;">
+                    <option value="Logging">Logging</option>
+                    <option value="Telegram">Telegram</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Chat id Telegram @Hot()</label>
+                <input class="form-control" @bind="_engineNotifications.ChatId" style="width: 14rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Max messaggi/ora @Hot()</label>
+                <input type="number" class="form-control" @bind="_engineNotifications.MaxPerHour" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary me-2" @onclick="SaveEngineNotificationsAsync" disabled="@_busy">Salva sul motore</button>
                 <button class="btn btn-outline-secondary" @onclick="SendEngineTestNotificationAsync" disabled="@_busy">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Prova dal motore
                 </button>
+            </div>
+            <div class="col-12">
+                <span class="text-muted small">
+                    Il <strong>token</strong> del motore è una cosa sua: sta nel Secret
+                    <code>trading-secrets</code> come <code>TELEGRAM_BOT_TOKEN</code>, non in questa
+                    sezione e non in questa pagina. Se manca, la prova qui accanto lo dice.
+                </span>
             </div>
         </div>
     </div>
@@ -965,6 +1027,13 @@
     private MarketDataConfig _marketData = new();
     private MarketRegimeConfig _marketRegime = new();
     private NotificationOptions _notifications = new();
+
+    /// <summary>
+    /// Il canale del MOTORE, distinto da quello del guscio qui sopra: altro processo, altra
+    /// configurazione, altre variabili d'ambiente. Confonderli è il modo di credere di aver acceso
+    /// gli allarmi di quarantena mentre restano spenti.
+    /// </summary>
+    private NotificationOptions _engineNotifications = new();
     private CampaignOptions _campaign = new();
     private RegimeTriggerOptions _regimeTrigger = new();
     private EnsembleComparatorOptions _comparator = new();
@@ -1056,9 +1125,10 @@
         _registry = Clone(RegistryOptions);
         _ml = Clone(MlMonitor.CurrentValue);
         // Dal motore, non dal file locale: col trading remoto sono due cose diverse.
-        _engineSnapshot = await EngineConfig.ReadAsync(["Carry"]);
+        _engineSnapshot = await EngineConfig.ReadAsync(["Carry", "Notifications"]);
         _carry = _engineSnapshot.Bind<CarryOptions>("Carry");
         _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
+        _engineNotifications = _engineSnapshot.Bind<NotificationOptions>("Notifications");
         _liquidations = Clone(LiquidationsMonitor.CurrentValue);
         _observability = new ObservabilityConfig
         {
@@ -1239,6 +1309,32 @@
     /// cosa e non lo sono — il motore è un altro processo, con un altro ambiente, ed è lui a
     /// emettere gli allarmi di quarantena. Che il guscio recapiti non dice nulla su di lui.
     /// </summary>
+    /// <summary>
+    /// Scrive il canale del motore SUL MOTORE. Separata da <c>SaveAsync</c> perché quella passa dal
+    /// writer del guscio: usarla qui avrebbe salvato la configurazione nel processo sbagliato,
+    /// lasciando l'operatore convinto di aver acceso gli allarmi di quarantena.
+    /// </summary>
+    private async Task SaveEngineNotificationsAsync()
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            var error = AdminConfigRules.Validate(_engineNotifications);
+            if (error is not null) { SetStatus($"Notifiche del motore: {error}", true); return; }
+
+            var result = await EngineConfig.WriteAsync("Notifications", _engineNotifications);
+            SetStatus(result.Warning is { } warning
+                ? $"Notifiche del motore: salvate, MA — {warning}"
+                : "Notifiche del motore: salvate. Usa «Prova dal motore» per verificare che recapiti davvero.",
+                result.Warning is not null);
+
+            _engineSnapshot = await EngineConfig.ReadAsync(["Carry", "Notifications"]);
+            _engineNotifications = _engineSnapshot.Bind<NotificationOptions>("Notifications");
+        }
+        catch (Exception ex) { SetStatus($"Notifiche del motore: salvataggio fallito — {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
     private async Task SendEngineTestNotificationAsync()
     {
         _busy = true; _isError = false; _status = null;
@@ -1250,7 +1346,7 @@
                 NotificationOutcome.Delivered =>
                     "Motore: notifica CONSEGNATA — gli allarmi di quarantena ti raggiungono.",
                 NotificationOutcome.Disabled =>
-                    "Motore: notifiche SPENTE nella sua configurazione. Abilitale qui sopra e salva (si scrive sul motore).",
+                    "Motore: notifiche SPENTE nella SUA configurazione. Accendile nel blocco «Canale del motore» e premi «Salva sul motore» — il pannello del guscio qui sopra non le tocca.",
                 NotificationOutcome.RateLimited =>
                     "Motore: rate-limit raggiunto, non recapitata ora — sarà conteggiata nel primo messaggio successivo.",
                 NotificationOutcome.UnknownProvider =>

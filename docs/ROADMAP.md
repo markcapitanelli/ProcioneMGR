@@ -359,5 +359,37 @@ ogni accensione («ultimo: mai»), cioè un falso allarme su Telegram a ogni tog
 distinguendo «non ha ancora cominciato» da «ha smesso», senza perdere il caso dell'endpoint
 perennemente muto.
 
-Suite **2005/2005**. Debito aperto: l'immagine del motore è una build locale caricata in kind, da
-pubblicare su GHCR e ripinnare sul digest.
+### Chiusura dei tre punti sospesi (2026-07-30, notte)
+
+**Immagine del motore.** Non serviva alcuna credenziale locale: `docker-build.yml` esisteva già e
+pubblica con `GITHUB_TOKEN` dopo la guardia che rifiuta immagini contenenti un `appsettings.json`
+reale. Pushato master, entrambe le pipeline verdi — e `ci.yml` è la prima verifica della suite su
+una macchina che non è quella di sviluppo. Motore ora pinnato **sul digest**
+`sha256:300ca20d…`, non su un tag: un tag si può spostare, il digest *è* l'immagine. Il rollout
+l'ha scaricata da GHCR, quindi la provenienza è verificabile.
+
+**Port-forward stantio.** Il controllo era «la 18092 è in ascolto», insufficiente: alla
+sostituzione del pod kubectl resta in ascolto e instrada verso un pod morto — capitato due volte lo
+stesso giorno. Il rimedio non è una sonda di rete (una connessione verso un forward morto viene
+accettata in locale e muore dopo, quindi ogni euristica sul socket è fragile) ma registrare **quale
+pod** il tunnel serve e confrontarlo con quello vivo. Verificato sul caso reale.
+
+**Notifiche del motore — e la trappola che c'era sotto.** `Notifications` entra nell'allow-list
+scrivibile e nasce l'rpc `SendTestNotification`, eseguito *dal motore*. Al primo click ha risposto
+**notifiche SPENTE**: il motore non aveva né l'interruttore né il token, quindi gli allarmi di
+**quarantena** — i più importanti che la piattaforma emetta — non erano mai arrivati a nessuno. Il
+guscio recapitava, quindi sembrava tutto a posto.
+
+Ma il piano per accenderle era sbagliato, e lo si è visto solo aprendo il pannello: la scheda
+Notifiche leggeva e scriveva il canale del **guscio**, e il messaggio d'errore diceva «abilitale qui
+sopra e salva, si scrive sul motore» — falso. Metà del buco era chiusa: si sapeva diagnosticare il
+canale del motore, non configurarlo. Seguendo quelle istruzioni si sarebbe salvato sul guscio,
+visto un messaggio verde, e il motore sarebbe rimasto muto. Da qui un blocco **«Canale del
+motore»** separato: due canali distinti e non uno con due pulsanti, perché tenerli insieme è
+esattamente ciò che fa credere di aver acceso là accendendo qui.
+
+Chiuso end-to-end: token nel Secret (mai transitato per la UI né per un argomento di processo),
+pod riavviato, config scritta via gRPC e riletta, `Delivered`, **messaggio confermato ricevuto dal
+proprietario**.
+
+Suite **2005/2005** al momento del push; 2010 con i test aggiunti dopo.

@@ -31,9 +31,14 @@
     Unauthenticated da SharedSecretAuthInterceptor.
 
 .PARAMETER TelegramBotToken
-    OPZIONALE. Token del bot Telegram per le notifiche EMESSE DAL MOTORE. Se omesso, si legge da
-    $env:TELEGRAM_BOT_TOKEN; se manca anche quella, la chiave non viene scritta nel Secret e il
-    motore resta senza canale Telegram (le notifiche ripiegano sul log).
+    OPZIONALE. Token del bot Telegram per le notifiche EMESSE DAL MOTORE. Tre sorgenti in cascata:
+    questo parametro, poi $env:TELEGRAM_BOT_TOKEN, poi il file ~/.procione/telegram.token — la
+    stessa sorgente che usa il profilo di avvio in .claude/launch.json, cosi' il token vive in un
+    solo posto e nessuno deve ricordarsi di esportare una variabile.
+
+    Se nessuna sorgente ha un token MA il Secret sul cluster ne ha gia' uno, quello viene
+    PRESERVATO: questo script ricrea il Secret intero, quindi una chiave assente dai literal
+    verrebbe cancellata, e un rilancio distratto spegnerebbe gli allarmi di quarantena in silenzio.
 
     PERCHE' SERVE, scoperto il 2026-07-29: il producer piu' importante della piattaforma — il
     watchdog che mette una corsia in QUARANTENA — vive in QUESTO processo, non nel guscio. Il
@@ -46,8 +51,8 @@
     Uso (chiavi dalle env, così non finiscono nella cronologia):
         $env:PROCIONE_MGR_MASTER_KEY = "<base64 32 byte>"
         $env:PROCIONE_MGR_TRADING_GRPC_SECRET = "<stringa casuale, es. openssl rand -base64 32>"
-        $env:TELEGRAM_BOT_TOKEN = Get-Content ~/.procione/telegram.token -Raw
         .\scripts\k8s-trading-secret.ps1 -ConnectionString "Host=host.docker.internal;Port=5432;..."
+    Il token Telegram NON va esportato: lo script legge ~/.procione/telegram.token da se'.
     Il namespace deve già esistere (scripts\k8s-bootstrap.ps1).
 #>
 
@@ -90,7 +95,62 @@ if (-not $GrpcSharedSecret) {
     exit 1
 }
 
-if (-not $TelegramBotToken) { $TelegramBotToken = $env:TELEGRAM_BOT_TOKEN }
+# --- Token Telegram del MOTORE: tre sorgenti in cascata, e una rete di sicurezza --------------
+#
+# Perche' la cascata: il parametro serve agli script, la env serve alle sessioni interattive, ma
+# ENTRAMBI dipendono dal ricordarsene. Il FILE e' l'unica sorgente che non dipende dalla memoria di
+# nessuno, ed e' la stessa che usa il profilo di avvio dell'app (.claude/launch.json): un solo posto
+# dove il token vive, letto da tutti quelli che ne hanno bisogno.
+$telegramSource = $null
+if ($TelegramBotToken) { $telegramSource = 'parametro' }
+
+if (-not $TelegramBotToken -and $env:TELEGRAM_BOT_TOKEN) {
+    $TelegramBotToken = $env:TELEGRAM_BOT_TOKEN
+    $telegramSource = 'variabile d''ambiente'
+}
+
+if (-not $TelegramBotToken) {
+    $tokenFile = Join-Path $env:USERPROFILE '.procione\telegram.token'
+    if (Test-Path $tokenFile) {
+        $TelegramBotToken = (Get-Content $tokenFile -Raw).Trim()
+        $telegramSource = "file ~/.procione/telegram.token"
+    }
+}
+
+# LA RETE DI SICUREZZA, e il motivo per cui vale la pena di tutto questo.
+#
+# Questo script ricrea il Secret INTERO (create --dry-run | apply): una chiave assente dai literal
+# non resta com'era, VIENE CANCELLATA. Quindi un rilancio senza token — dopo aver cambiato macchina,
+# o con il file non ancora copiato — spegnerebbe le notifiche del motore in silenzio, e con esse gli
+# allarmi di QUARANTENA, esattamente il guasto scoperto il 2026-07-29 e appena chiuso.
+#
+# Se non c'e' alcuna sorgente ma il Secret sul cluster ha gia' un token, lo si RIUSA invece di
+# perderlo. Distruggere una configurazione funzionante non e' mai il comportamento giusto per
+# l'assenza di un input opzionale.
+if (-not $TelegramBotToken) {
+    $existing = kubectl get secret trading-secrets -n $namespace --context $clusterCtx `
+        -o "jsonpath={.data.TELEGRAM_BOT_TOKEN}" 2>$null
+    if ($existing) {
+        $TelegramBotToken = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($existing))
+        $telegramSource = 'Secret esistente (preservato)'
+        Write-Host "Telegram : nessun token fornito - PRESERVO quello gia' nel Secret." -ForegroundColor Yellow
+    }
+}
+
+if ($TelegramBotToken) {
+    # Solo forma, mai il valore: un token Telegram e' <id-numerico>:<segreto>.
+    if ($TelegramBotToken -notmatch '^[0-9]{6,}:[A-Za-z0-9_-]{30,}$') {
+        Write-Host "ERRORE: il token Telegram non ha la forma <id>:<segreto>. Sorgente: $telegramSource." -ForegroundColor Red
+        Write-Host "Meglio fermarsi che scrivere un token malformato: il motore fallirebbe ogni recapito in silenzio." -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "Telegram : token preso da $telegramSource (bot id $(($TelegramBotToken -split ':')[0]))." -ForegroundColor Green
+} else {
+    Write-Host "Telegram : NESSUN token, ne' fornito ne' presente nel Secret." -ForegroundColor Yellow
+    Write-Host "           Gli allarmi del motore (quarantena corsie) non raggiungeranno nessuno via Telegram." -ForegroundColor Yellow
+    Write-Host "           Metti il token in ~/.procione/telegram.token e rilancia; verificalo poi con" -ForegroundColor Yellow
+    Write-Host "           'Prova dal motore' in /admin/autonomy." -ForegroundColor Yellow
+}
 
 Write-Host "Creo/aggiorno Secret 'trading-secrets' in $namespace..." -ForegroundColor Cyan
 # --dry-run=client | apply: idempotente (crea o aggiorna senza errore se gia' esiste).

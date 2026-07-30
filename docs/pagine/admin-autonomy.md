@@ -35,12 +35,44 @@ massimo porre **veto**; la ri-applica scrive solo configurazione.
 | 8 | Soglie di consolidamento | `EnsembleComparator` / `Registry` | Di quanto un ensemble nuovo deve battere il corrente (isteresi anti-rumore), gambe e simboli minimi, z di significatività; soglia assoluta di **Deflated Sharpe** per diventare Champion. Tutti ⟳: queste due sezioni si leggono una sola volta all'avvio |
 | 9 | Carry forward test | `Carry` | Enable, modalità (**Paper/Testnet, mai Live**), simboli, cadenza ⟳, soglie di ingresso/uscita del funding annualizzato, eventi in media, size per gamba; **tabella dello stato per simbolo** e bottone "Valuta ora" |
 | 10 | Accumulo liquidazioni | `Liquidations` | Enable (default **ON**: il dato non è ricostruibile a posteriori), flush su DB, soglia di silenzio, retry se l'endpoint risulta bloccato; badge di connessione e conteggio messaggi |
-| 11 | Notifiche all'operatore | `Notifications` | Enable, provider **Logging/Telegram**, ChatId, rate-limit orario; bottone **"Invia notifica di prova"** che passa dal dispatcher vero (gate + rate-limit compresi) |
+| 11 | Notifiche all'operatore | `Notifications` (×2) | **DUE canali distinti**, non uno: quello del guscio e quello del motore. Enable, provider **Logging/Telegram**, ChatId, rate-limit orario per ciascuno, e una prova per ciascuno che passa dal dispatcher vero (gate + rate-limit compresi). Vedi sotto |
 | 12 | Diagnostica | `Ml` / `Observability` | Dual-read ML osservativo verso `procionemgr-ml` (log e metrica, **mai** una decisione) ed export OTLP opt-in — la dashboard `/metrics` funziona comunque a export spento |
 
 Le protezioni che filtrano o fermano le **operazioni** — feed real-time, esposizione
 correlata, router di regime, watchdog degli invarianti — stanno invece in
 [Protezioni](admin-protections.md).
+
+### Perché le notifiche sono DUE canali (2026-07-29)
+
+Guscio e motore sono processi separati, con configurazioni e variabili d'ambiente proprie. Il
+producer più importante della piattaforma — il watchdog che mette una corsia in **quarantena**
+quando la sua contabilità diventa impossibile — vive in `procionemgr-trading`, non nel guscio.
+
+Tenerli in un blocco solo sarebbe la trappola perfetta: si accende l'interruttore, si vede il
+messaggio verde, e gli allarmi che contano restano muti. È quello che è successo davvero — il
+guscio recapitava (dopo che gli era stato restituito il token, perso nel consolidamento del 27
+luglio) mentre il motore non aveva **né** l'interruttore acceso **né** il token, e quindi gli
+allarmi di quarantena non erano mai arrivati a nessuno. Nessuno poteva accorgersene: il dispatcher
+per contratto non propaga gli errori di recapito ai producer, e non esisteva un modo di *chiedere*
+al canale se funzionasse.
+
+Da qui il disegno:
+
+| | Legge/scrive | Prova |
+|---|---|---|
+| Canale del guscio | `IOptionsMonitor` + `IAppConfigWriter` locali | `NotificationDispatcher.SendDiagnosticAsync` in-process |
+| **Canale del motore** | `IEngineConfigStore` → gRPC `Get/SetEngineConfig` | rpc `SendTestNotification`, eseguito **dal motore** |
+
+Entrambe le prove attraversano la catena vera (gate, rate-limit condiviso, provider corrente) e ne
+restituiscono l'**esito** — `Delivered` / `Disabled` / `RateLimited` / `UnknownProvider` / `Failed`
+col motivo. La prima versione del pulsante mostrava un alert verde qualunque cosa fosse successo,
+perché passava da `NotifyAsync`, che è `void` per progetto: una verifica che rassicura sempre è
+peggio di nessuna verifica.
+
+Il **token** di ciascun canale non passa da questa pagina e non sta nelle sezioni di
+configurazione: per il guscio è `TELEGRAM_BOT_TOKEN` nell'ambiente del processo, per il motore la
+stessa variabile fornita dal Secret `trading-secrets` (vedi `scripts/k8s-trading-secret.ps1`). Se
+manca, la prova lo dice invece di tacere.
 
 ## Come funziona (flusso del codice)
 
