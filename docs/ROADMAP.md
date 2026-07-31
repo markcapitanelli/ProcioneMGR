@@ -476,12 +476,45 @@ Tutti e sette gli item **eseguiti in codice con test** (livelli 1-3 dello standa
   `SeriesFreshnessWatchWorker` nel guscio (15 min) che notifica la TRANSIZIONE, aggregata. 6 test,
   inclusi il caso-trappola della serie vuota e «più serie ferme insieme ⇒ un solo messaggio».
 
-**Livello 4 (browser sull'app vera): DA ESEGUIRE al prossimo avvio della 5199** — la checklist è:
-(1) `/trading` pannello sicurezza: leggere una soglia, cambiarla, verificarla dentro il pod con
-`GetEngineConfig`; il badge del battito accanto a RUNNING; (2) `/admin/autonomy` Esecuzione live e
-Dual-read ML: salvare e rileggere dal motore; card Sync dati coi campi disabilitati; le due spie
-del canale; (3) `/watchlist`: colonna di freschezza sulle 221 serie vere (le 7 disabilitate devono
-dire «non sincronizzata», non «FERMA»).
+**Livello 4 ESEGUITO la sera stessa (2026-07-31), sull'app vera collegata al cluster**, dopo aver
+messo in esercizio il motore nuovo (digest `df9899c3`, build di GitHub Actions sul commit del
+filone; il rilevatore di port-forward stantio ha suonato da solo sul cambio di pod — verifica dal
+vivo, sul caso reale, della modifica del 30/07):
+
+- **E1**: pannello sicurezza di `/trading` con header «letta e scritta sul MOTORE via gRPC ·
+  sorgente: default del codice»; `MinOrderIntervalSeconds` 10→11 dal pannello e **verificato dentro
+  il pod** (`/app/appsettings.json`: 11, con tutti i 19 campi — inclusi i due B1 che il vecchio
+  pannello avrebbe azzerato), poi ripristinato a 10 e ri-verificato.
+- **E6**: badge del battito accanto a RUNNING su corsia 1d («ultima candela 31/07 00:00 UTC · 0
+  barre indietro») **e** su corsia 15m («31/07 18:30 UTC · 0 barre indietro»).
+- **E2/E3**: entrambi i pannelli dichiarano l'host del motore e la sorgente, letti dal motore vero.
+- **E4**: card Sync dati con l'avviso di ingestion remota e i tre campi disabilitati.
+- **E5**: spia del guscio con recapito reale registrato; «Prova dal motore» → **CONSEGNATA** (rpc
+  nuovo sul filo, Telegram ricevuto) e spia del motore aggiornata all'istante («ultimo recapito
+  31/07 18:37 UTC»).
+- **E7**: colonna di freschezza viva sulle 221 serie reali (tutte «aggiornata», nessun banner); le
+  7 disabilitate dicono «non sincronizzata». Sistemata anche la **nota storica** di quelle 7
+  (`LastSyncStatus` iniziava con «FERMA: disabilitata…», scritto il 28/07 quando quello era l'unico
+  posto dove dirlo): ora dice solo il perché («disabilitata 2026-07-28 — Binance riporta stato
+  BREAK»), senza contraddire il verdetto vivo della colonna accanto.
+
+### La caccia densa, rieseguita con l'holdout allungato (2026-07-31)
+
+Con l'occasione la fase `huntdense` è stata rilanciata **estendendo l'holdout dal 2 al 31 luglio**:
+il mese di luglio non era mai stato visto da nessuna caccia, quindi l'estensione non costa nulla in
+purezza e regala un mese di trade in più sopra la soglia minima. Esito, in 27 minuti su 30 simboli:
+
+- **15m: zero candidati** oltre selezione+holdout (il timeframe dell'obiettivo dichiarato non
+  produce nemmeno un sopravvissuto ai primi due giudici);
+- **1h: 15 candidati** con 32-65 trade nell'holdout (la correzione del conteggio funziona), Sharpe
+  holdout 0,30-1,58 — e il **gemello sintetico li boccia tutti e otto** i top: su questi mesi il
+  puro caso arriva a Sharpe 2,2-2,9 al 99° percentile, e nessun candidato reale supera 1,58.
+
+È il **decimo esito negativo consecutivo** della classe direzionale-tecnica, stavolta con la
+finestra più lunga e il conteggio trade più onesto mai usati. La diagnosi della roadmap intraday
+regge: l'edge non è in questa classe. Ciò che ha edge misurato positivo e opera **oggi**: il carry
+delta-neutro (al riavvio del core ha riaperto BTC e BNB Paper a funding 8,9% annualizzato > soglia
+5%) e le tre corsie di forward test Paper, che restano l'unico giudice immune al multiple testing.
 
 **Non-obiettivi dichiarati**: cambiare la semantica dei probe K8s (vedi sopra); costruire l'API di
 configurazione remota dell'ingestion (E4, motivo nella riga); toccare i verdetti della RICERCA — i

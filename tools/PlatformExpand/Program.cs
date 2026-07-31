@@ -1102,7 +1102,10 @@ async Task HuntDenseAsync()
     var selFrom = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
     var selTo = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
     var holdFrom = selTo;
-    var holdTo = new DateTime(2026, 7, 2, 0, 0, 0, DateTimeKind.Utc);
+    // [2026-07-31] Esteso dal 2 al 31 luglio: il mese di luglio non è mai stato visto da NESSUNA
+    // caccia (nemmeno in selezione), quindi allungarlo non costa nulla in purezza e regala un mese
+    // di holdout in più — cioè più trade sopra la soglia minima, cioè un test che decide di più.
+    var holdTo = new DateTime(2026, 7, 31, 0, 0, 0, DateTimeKind.Utc);
 
     const int minHoldoutTrades = 25;   // la correzione che conta
 
