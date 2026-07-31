@@ -122,6 +122,12 @@ else
     builder.Services.AddHostedService<MarketDataSyncWorker>();
 }
 
+// [E7] Guardia di freschezza delle serie: SEMPRE nel guscio, con ingestion locale o remota — legge
+// solo il DB e notifica la transizione a ferma. È il sync l'imputato: la guardia non può stargli in
+// casa (MKR è rimasta ferma dieci mesi con il LogWarning nel posto che nessuno legge).
+builder.Services.AddSingleton<ProcioneMGR.Services.Ingestion.SeriesFreshnessWatchWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Ingestion.SeriesFreshnessWatchWorker>());
+
 // --- Indicatori tecnici (stateless) ---
 builder.Services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
 
@@ -135,10 +141,11 @@ builder.Services.AddHostedService<RegimeRetrainingWorker>();
 // NB: la safety si usa SOLO via SafetyChecker.Evaluate (statico, puro) dentro il TradingEngine:
 // nessuna registrazione DI — l'interfaccia istanza era codice morto mai risolto da nessuno.
 builder.Services.Configure<SafetyConfiguration>(builder.Configuration.GetSection("Trading:Safety"));
-// Writer generalizzato di sezioni appsettings (pannelli /trading e /admin/autonomy):
+// Writer generalizzato di sezioni appsettings (pannelli /admin/autonomy e /execution):
 // read-modify-write con lock sul file; reloadOnChange fa il resto (hot-reload ~1s).
+// [E1] Il pannello sicurezza di /trading NON passa più di qui: Trading:Safety la applica il
+// MOTORE, quindi si legge e si scrive via IEngineConfigStore (ISafetyConfigWriter rimosso).
 builder.Services.AddSingleton<ProcioneMGR.Services.Config.IAppConfigWriter, ProcioneMGR.Services.Config.AppConfigWriter>();
-builder.Services.AddSingleton<ISafetyConfigWriter, SafetyConfigWriter>();
 
 // --- Esecuzione live "a fette" (TWAP/VWAP/Iceberg su Testnet/Live). Master switch default-off
 //     (Trading:LiveExecution:Enabled). Rif. docs/archive/ROADMAP-QLIB.md §1.2. ---

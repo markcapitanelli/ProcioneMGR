@@ -90,6 +90,20 @@ builder.Services.AddSingleton<ProcioneMetrics>();
 // sicurezza diversi da quelli mostrati in /trading â€” vedi infra/k8s/README.md.
 builder.Services.Configure<SafetyConfiguration>(builder.Configuration.GetSection("Trading:Safety"));
 builder.Services.Configure<LiveExecutionOptions>(builder.Configuration.GetSection("Trading:LiveExecution"));
+// [E3, 2026-07-31] Dual-read ML: il consumatore (TradingEngine.FireAndForgetMlComparison) vive QUI,
+// ma binding e client mancavano — il motore risolveva IOptionsMonitor coi default del costruttore e
+// riceveva un client null: il toggle non era collegabile da nessuna strada, nemmeno editando il file
+// giusto a mano. Stessa composizione del monolite: se Ml:RemoteUrl è vuoto il client NON viene
+// registrato e il confronto è staticamente spento (zero overhead). L'URL richiede riavvio (il
+// canale gRPC si crea una volta sola); Ml:Enabled è hot-reload.
+builder.Services.Configure<ProcioneMGR.Services.ML.MlComparisonOptions>(builder.Configuration.GetSection("Ml"));
+var mlRemoteUrl = builder.Configuration["Ml:RemoteUrl"];
+if (!string.IsNullOrWhiteSpace(mlRemoteUrl))
+{
+    builder.Services.AddGrpcClient<ProcioneMGR.Contracts.Ml.V1.InferenceService.InferenceServiceClient>(o =>
+        o.Address = new Uri(mlRemoteUrl));
+    builder.Services.AddSingleton<ProcioneMGR.Services.ML.IMlComparisonClient, ProcioneMGR.Services.ML.MlComparisonClient>();
+}
 
 // --- Le corsie ------------------------------------------------------------------------------
 // isTradingServiceHost: true â†’ (1) ignora Trading:UseRemoteTrading e registra SEMPRE il ramo locale

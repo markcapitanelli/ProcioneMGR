@@ -393,3 +393,97 @@ pod riavviato, config scritta via gRPC e riletta, `Delivered`, **messaggio confe
 proprietario**.
 
 Suite **2005/2005** al momento del push; 2010 con i test aggiunti dopo.
+
+---
+
+## Filone E — Bonifica della classe «controlli che rassicurano» (2026-07-31)
+
+L'audit backend↔frontend si è chiuso con un bilancio netto: **sette difetti su sette trovati dal
+livello 4**, nessuno visibile ai test unitari, tutti della stessa forma — *un controllo che dice la
+cosa rassicurante indipendentemente dalla realtà*. Le due regole nuove sono in
+[STANDARD-VERIFICA](STANDARD-VERIFICA.md) (una verifica che non può fallire non è una verifica; chi
+scrive una configurazione remota deve verificare che l'altro l'abbia LETTA). Questo filone applica
+quelle regole **al resto della piattaforma**: i sette difetti sono corretti puntualmente, ma la
+classe non è bonificata finché ogni superficie che emette un verdetto non è stata interrogata.
+
+**Metodo del censimento** (2026-07-31, tre domande per ogni superficie):
+1. *Come fa a dire di no?* — se la catena sotto non può restituire un esito negativo, il controllo
+   mente sempre, e mente proprio quando serve.
+2. *Misura contro la realtà o contro sé stesso?* — «OK: 1 candele» era denso al 100% del proprio
+   passato; il riferimento che non si sposta col guasto è **adesso**.
+3. *Chi scrive, raggiunge chi legge?* — un pannello che salva sul processo sbagliato è una manopola
+   che non muove nulla, peggio di una manopola assente.
+
+**Censite**: le 33 pagine con indicatori di stato, i 17 pannelli di configurazione (Autonomy,
+Protections, ExecutionLab, Trading, Bot), i 4 endpoint `/health`, i probe K8s, i watchdog
+(invarianti, staleness feed, master key), il contratto delle notifiche, i percorsi di scrittura
+remota (motore gRPC, ingestion REST, GitOps). Superfici interrogate e giudicate **sane** (con la
+ragione): `MasterKeyProbe` (sa dire di no, allerta, banner che si aggiorna); il pannello Modalità
+Semplice (passa da DB + motore keyed, mai da file); ExecutionLab → sezione `Execution` (il
+consumatore è il guscio stesso: `ExecutionSlicePlanner` del motore costruisce i suoi parametri da
+sé); Carry e Notifiche-motore in Autonomy (già sullo store del motore); il banner di staleness di
+`/trading` (si azzera al nuovo tentativo — era il difetto, è stato corretto); il `catch {}` di
+`LaneExecutionLease.DisposeAsync` (dispose documentato, il rilascio è garantito dal server);
+liveness/readiness K8s su `/health` incondizionato — **dichiarato, non difetto**: il probe misura
+il processo, non il motore; la salute del motore la misura E6, nel posto dove un operatore guarda.
+Cambiare la semantica del probe rischierebbe crash-loop per guasti che non c'entrano col processo.
+
+### Le istanze vive trovate
+
+| # | Cosa | Perché è la classe | Correzione | Gate / verifica |
+|---|---|---|---|---|
+| E1 | **Il pannello Sicurezza di `/trading` parla col processo sbagliato.** `ReloadSafety` legge `IOptionsMonitor` del guscio, `SaveSafetyAsync` scrive il file del guscio («attiva entro pochi secondi») — ma la `SafetyChecker` che applica quelle soglie ordine per ordine vive nel motore in-cluster, e `Trading:Safety` è **già** nell'allow-list del motore, il cui commento dice testualmente «cambiarle sul guscio non avrebbe alcun effetto». È l'unica superficie UI per le soglie di sicurezza, ed è il difetto n. 5 dell'audit in un'altra pagina | regola 6: chi scrive non raggiunge chi legge | `TradingPageService` passa a `IEngineConfigStore` (lettura dal motore, scrittura con rilettura); `ISafetyConfigWriter` rimosso (sarebbe codice morto che invita al riuso sbagliato) | test: il servizio legge/scrive dallo store e riporta il warning di override; render test della pagina; livello 4 sull'app vera |
+| E2 | **Il pannello «Esecuzione live» di `/admin/autonomy` idem**: legge `LiveExecMonitor` (guscio) e salva via `ConfigWriter` (guscio), ma `ExecutionWorker`/`ExecutionSlicePlanner` girano accanto al motore. `Trading:LiveExecution` è già nell'allow-list | regola 6 | il pannello passa a `EngineConfig.WriteAsync`/`Bind` (stesso pattern del Carry, due righe sopra nello stesso file) | test su carico e salvataggio; livello 4 |
+| E3 | **Il dual-read ML non è collegabile, e il pannello non può saperlo.** Il pannello scrive la sezione `Ml` del guscio; il consumatore (`TradingEngine.FireAndForgetMlComparison`) vive nel core, dove la sezione **non è nemmeno nel binding** (`Program.cs` del Trading host non la configura): anche a scrivere il file giusto a mano, il core resterebbe coi default. Accendere il toggle dal pannello mostra «salvato» e non muove nulla — due bugie impilate | regola 6, più un binding assente | bind di `Ml` nel Trading host; `Ml` nell'allow-list (senza segreti: `RemoteUrl` e toggle, mai chiavi); pannello sullo store del motore | test di integrazione gRPC: la sezione si legge e si scrive sul host reale; il toggle scritto è quello che il motore rilegge |
+| E4 | **Il pannello «Sync dati» configura un worker che non esiste più in questo processo.** Con `MarketData:UseRemoteIngestion=true` (l'assetto corrente) lo scheduling vive nel servizio ingestion in-cluster, che legge la SUA config; il pannello scrive quella del guscio e promette «valgono entro ~1s». Tutti e tre gli scalari (Enabled, cadenza, backfill) sono letti solo dal servizio remoto | regola 6 | **onestà, non API nuova**: quando l'ingestion è remota il pannello disabilita i campi e dice dove vive la manopola vera (ConfigMap del deployment ingestion). L'API di configurazione remota dell'ingestion NON si costruisce, con motivo dichiarato: la cadenza non si cambia da settimane, il gate B2 è già chiuso, e un canale di scrittura verso un altro processo è superficie di sicurezza che si paga — la si costruisce quando il bisogno è reale | test: con `UseRemoteIngestion=true` i campi risultano disabilitati e il testo dice il posto giusto; con `false` tutto funziona come oggi |
+| E5 | **Il canale d'allarme non ha una spia di guasto.** `NotifyAsync` assorbe l'esito per contratto (giusto per i producer), quindi un recapito fallito vive solo nei log — è esattamente ciò che ha tenuto Telegram muto per due giorni. Se il token scade domani, gli allarmi di quarantena falliscono in silenzio di nuovo, e il canale rotto non può auto-denunciarsi via notifica per definizione | regola 5: il guasto del canale non ha nessun posto dove dire di no | il dispatcher registra in memoria ultimo recapito e ultimo fallimento (esito, motivo, quando); il pannello Notifiche del guscio li mostra; per il MOTORE, rpc `GetNotificationChannelStatus` che riporta lo stato del suo dispatcher — leggibile senza inviare nulla | test: dopo un fallimento la spia lo mostra col motivo; dopo un recapito torna pulita; integrazione gRPC sul host reale |
+| E6 | **`running=true` è un flag d'intento, non una prova di attività.** Se il DB muore o le candele smettono di arrivare, la corsia resta `running`, `/health` risponde ok, ArgoCD è verde — e stop/trailing non vengono valutati da nessuno. Nessun campo dice QUANDO il motore ha valutato l'ultima candela: è «OK: 1 candele» sul motore | regola 5 + riferimento sbagliato (il flag misura sé stesso) | `TradingEngineStatus.LastProcessedCandleUtc` (+ proto, additivo); `/trading` mostra il battito e lo colora **contro adesso** con la stessa regola unica di `SeriesFreshness` (due regole = due verdetti, il difetto di D2); il watchdog nel host del motore allerta UNA volta per transizione quando una corsia running è affamata — allarme, non quarantena: la corsia non è corrotta, è a digiuno | test: candela processata ⇒ battito aggiornato; corsia affamata oltre soglia ⇒ un solo allarme; corsia ferma ⇒ silenzio; livello 4 |
+| E7 | **La freschezza delle serie non è mai arrivata a livello di prodotto.** B2.a ha costruito la regola (`SeriesFreshness`) ma il suo esito vive in `LogWarning` e nel tool CLI `coverage`: `/watchlist` mostra «attiva» per una serie che può essere ferma da mesi (MKR lo è stata per dieci). È il verde a livello di classe, di nuovo | regola 3 dello standard + la lezione D2.a: accorgersi «senza doverci pensare» | colonna «ultima candela / ritardo» in `/watchlist` calcolata con la STESSA `SeriesFreshness`; worker di guardia nel guscio che notifica la TRANSIZIONE a stantia (una volta per serie, non a ogni giro) | test: serie ferma ⇒ una notifica sola; serie che torna fresca ⇒ reset; la colonna usa la regola condivisa, non una copia |
+
+**Ordine di esecuzione**: E1→E2→E3 (stesso pattern, stessa infrastruttura — il canale di
+configurazione del motore); E4 (onestà); E6 (battito); E5 (spia del canale); E7 (freschezza in
+prodotto). I primi quattro chiudono la regola 6 su tutta la piattaforma; gli ultimi tre danno alla
+regola 5 le superfici che le mancavano.
+
+### Esecuzione (2026-07-31, stessa giornata)
+
+Tutti e sette gli item **eseguiti in codice con test** (livelli 1-3 dello standard):
+
+- **E1**: `TradingPageService` sullo store del motore; `ISafetyConfigWriter` rimosso; scoperto e
+  chiuso in corsa un **difetto adiacente**: `ReloadSafety` copiava una lista fissa di campi e i due
+  parametri B1 (deviazione fill) non c'erano — un salvataggio dal pannello li avrebbe azzerati ai
+  default, la stessa famiglia del bug `MarketData:Realtime`. Il `Bind` dal JSON del motore lo chiude
+  per costruzione. Aggiunta anche la **regola server-side** per `Trading:Safety` in
+  `AdminConfigRules`: prima non esisteva, e la garanzia «un valore rifiutato in UI non entra da
+  un'altra porta» per le soglie del motore era vuota. Test: store finto condiviso
+  (`FakeEngineConfigStore` estratto in Infrastructure), motore irraggiungibile ⇒ default DICHIARATI,
+  warning di override riportato all'operatore, default di fabbrica che passano la regola nuova.
+- **E2/E3**: pannelli su `SaveEngineSectionAsync` (helper condiviso); `Ml` nell'allow-list, binding
+  **e client gRPC** aggiunti al Trading host (mancavano entrambi: il core riceveva un client null e
+  opzioni ai default del costruttore).
+- **E4**: con `UseRemoteIngestion=true` la card Sync dati disabilita i campi e dichiara dove vive la
+  manopola vera.
+- **E5**: `NotificationDispatcher.ChannelStatus` (ultimo recapito, ultimo fallimento col motivo,
+  fallimenti accumulati — Disabled e RateLimited NON contano come guasti: un falso allarme è la
+  stessa classe del falso verde); rpc `GetNotificationChannelStatus` per il motore; spie in
+  entrambi i blocchi del pannello Notifiche. 5 test.
+- **E6**: battito `LastProcessedCandleUtc` + `Timeframe` nello status e nel proto (campi 22/23,
+  additivi); badge in `/trading` giudicato con la regola unica di `SeriesFreshness`; allarme di
+  inedia nel `LaneInvariantWatchdog` col discriminatore **stantio-E-fermo** (il replay di avvio è
+  vecchio ma avanza: nessun falso critico a ogni riavvio). 5 test, incluso il replay che non
+  allerta e il riarmo dopo il recupero.
+- **E7**: colonna «Ultima candela / ritardo» in `/watchlist` + banner di conteggio ferme;
+  `SeriesFreshnessWatchWorker` nel guscio (15 min) che notifica la TRANSIZIONE, aggregata. 6 test,
+  inclusi il caso-trappola della serie vuota e «più serie ferme insieme ⇒ un solo messaggio».
+
+**Livello 4 (browser sull'app vera): DA ESEGUIRE al prossimo avvio della 5199** — la checklist è:
+(1) `/trading` pannello sicurezza: leggere una soglia, cambiarla, verificarla dentro il pod con
+`GetEngineConfig`; il badge del battito accanto a RUNNING; (2) `/admin/autonomy` Esecuzione live e
+Dual-read ML: salvare e rileggere dal motore; card Sync dati coi campi disabilitati; le due spie
+del canale; (3) `/watchlist`: colonna di freschezza sulle 221 serie vere (le 7 disabilitate devono
+dire «non sincronizzata», non «FERMA»).
+
+**Non-obiettivi dichiarati**: cambiare la semantica dei probe K8s (vedi sopra); costruire l'API di
+configurazione remota dell'ingestion (E4, motivo nella riga); toccare i verdetti della RICERCA — i
+gate statistici hanno già i loro nulli per costruzione (livello 2 dello standard), e questo filone
+riguarda i controlli OPERATIVI, dove il «no» non è una soglia ma un guasto da vedere.

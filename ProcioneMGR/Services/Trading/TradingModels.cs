@@ -83,6 +83,18 @@ public class TradingEngineStatus
     public DateTime? LastOrderUtc { get; set; }
     public bool IsEmergencyStopped { get; set; }
     public string? EmergencyStopReason { get; set; }
+
+    /// <summary>[E6] Timeframe della corsia: serve a chi legge il battito per giudicarlo con la regola di freschezza.</summary>
+    public string Timeframe { get; set; } = string.Empty;
+
+    /// <summary>
+    /// [E6] Apertura dell'ultima candela VALUTATA dal motore in questo avvio del processo (null =
+    /// nessuna ancora). È il battito che <c>IsRunning</c> non è: quel flag dichiara l'intenzione di
+    /// girare, questo timestamp prova l'attività — e si giudica contro ADESSO con la stessa regola
+    /// unica di <c>SeriesFreshness</c>, perché «running» con l'ultima candela di ieri significa
+    /// stop e trailing valutati da nessuno.
+    /// </summary>
+    public DateTime? LastProcessedCandleUtc { get; set; }
 }
 
 public class OpenPosition

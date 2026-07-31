@@ -109,6 +109,9 @@ public static class TradingContractMapper
         EmergencyStopped = s.IsEmergencyStopped,
         // proto3 non ha stringhe nullable: "" sul filo == null nel dominio (vedi FromProto).
         EmergencyStopReason = s.EmergencyStopReason ?? string.Empty,
+        // [E6] Il battito: assente sul filo = il motore non ha ancora valutato una candela.
+        Timeframe = s.Timeframe,
+        LastProcessedCandleUtc = ToProtoNullable(s.LastProcessedCandleUtc),
     };
 
     public static TradingEngineStatus FromProto(Proto.GetLaneStatusResponse r) => new()
@@ -133,6 +136,8 @@ public static class TradingContractMapper
         LastOrderUtc = FromProtoNullable(r.LastOrderUtc),
         IsEmergencyStopped = r.EmergencyStopped,
         EmergencyStopReason = string.IsNullOrEmpty(r.EmergencyStopReason) ? null : r.EmergencyStopReason,
+        Timeframe = r.Timeframe,
+        LastProcessedCandleUtc = FromProtoNullable(r.LastProcessedCandleUtc),
     };
 
     // ------------------------------------------------------------------------- posizioni

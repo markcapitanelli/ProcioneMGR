@@ -70,6 +70,10 @@ public class ProtectionsPageRenderTests : BunitContext
             TestNotificationCalls++;
             return Task.FromResult(TestNotificationResult);
         }
+
+        public Task<EngineNotificationChannelStatus> GetNotificationChannelStatusAsync(CancellationToken ct = default)
+            => Task.FromResult(new EngineNotificationChannelStatus(
+                Reachable: true, ChannelComposed: true, new NotificationChannelStatus(null, null, null, 0)));
     }
 
     private FakeEngineConfigStore RegisterServices(

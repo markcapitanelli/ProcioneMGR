@@ -41,11 +41,15 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         public int LaneId => laneId;
         public int StopCalls { get; private set; }
 
+        /// <summary>[E6] Status pilotabile per i test del battito; null = il fake non lo espone (come prima).</summary>
+        public TradingEngineStatus? StatusToReturn { get; set; }
+
         public Task StopAsync(CancellationToken ct = default) { StopCalls++; return Task.CompletedTask; }
 
         public Task StartAsync(TradingMode mode, CancellationToken ct = default) => throw new NotImplementedException();
         public Task EmergencyStopAsync(string reason, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<TradingEngineStatus> GetStatusAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<TradingEngineStatus> GetStatusAsync(CancellationToken ct = default) =>
+            StatusToReturn is { } s ? Task.FromResult(s) : throw new NotImplementedException();
         public Task<List<OpenPosition>> GetOpenPositionsAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task ClosePositionAsync(string positionId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task CloseAllPositionsAsync(string reason, CancellationToken ct = default) => throw new NotImplementedException();
@@ -446,5 +450,152 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         await watchdog.TickAsync(CancellationToken.None);
 
         Assert.Empty(notifier.Sent);
+    }
+
+    /// <summary>
+    /// [E6] Il battito sul motore VERO: null all'avvio (onestà: questo processo non ha ancora
+    /// valutato nulla — un valore ereditato rassicurerebbe su un'attività che non c'è), e uguale
+    /// all'apertura della candela dopo la prima valutazione. Lo status porta anche il timeframe,
+    /// senza il quale il ritardo non è interpretabile.
+    /// </summary>
+    [Fact]
+    public async Task ProcessCandle_AggiornaIlBattito_ELoStatusLoEspone()
+    {
+        var (_, dbFactory, _, _) = await BuildAsync();
+        var config = new EnsembleConfiguration
+        {
+            ExchangeName = "Binance", Symbol = "BTC/USDT", Timeframe = "1h", TotalCapital = 10_000m,
+            Strategies = [new EnsembleStrategy { StrategyId = "s1", StrategyName = "Hold", DisplayName = "Hold", IsActive = true }],
+        };
+        var engine = new TradingEngine(
+            0, dbFactory, new HoldStrategyFactory(), new TechnicalIndicatorsService(),
+            new ThrowingExchangeFactory(), new FakeEnsembleManager(config),
+            new SafetyConfiguration { PositionSizePercent = 8m, MaxPositionSizePercent = 50m, MaxTotalExposurePercent = 100m }.AsMonitor(),
+            new LiveExecutionOptions().AsMonitor(),
+            new ExecutionAlgorithmFactory(), NullLogger<TradingEngine>.Instance);
+
+        await engine.StartAsync(TradingMode.Paper);
+        var before = await engine.GetStatusAsync();
+        Assert.True(before.IsRunning);
+        Assert.Equal("1h", before.Timeframe);
+        Assert.Null(before.LastProcessedCandleUtc);
+
+        var ts = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-90), DateTimeKind.Utc);
+        await engine.ProcessCandleAsync(new OhlcvData
+        {
+            Symbol = "BTC/USDT", Timeframe = "1h", TimestampUtc = ts,
+            Open = 100m, High = 101m, Low = 99m, Close = 100m, Volume = 1m,
+        });
+
+        var after = await engine.GetStatusAsync();
+        Assert.Equal(ts, after.LastProcessedCandleUtc);
+    }
+
+    // --- [E6] Inedia di valutazione ------------------------------------------------------------
+    // `running=true` è un flag d'intento: se le candele smettono di arrivare la corsia resta verde
+    // ovunque mentre stop e trailing non li valuta nessuno. Il battito (LastProcessedCandleUtc) si
+    // giudica con la regola unica di SeriesFreshness, più il discriminatore stantio-E-fermo che
+    // distingue il digiuno dalla rincorsa del replay.
+
+    [Fact]
+    public async Task Tick_CorsiaRunningColBattitoStantioEFermo_AllertaUnaVolta_SenzaQuarantena()
+    {
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0)); // Timeframe default "1h"
+        engines[0].StatusToReturn = new TradingEngineStatus
+        {
+            IsRunning = true,
+            Timeframe = "1h",
+            LastProcessedCandleUtc = DateTime.UtcNow.AddHours(-10), // ben oltre le 3 barre di tolleranza
+        };
+
+        // Primo sguardo: si registra il battito, non si giudica (serve il confronto col giro prima).
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Empty(notifier.Sent);
+
+        // Secondo sguardo: stantio E fermo → un allarme.
+        await watchdog.TickAsync(CancellationToken.None);
+        var alert = Assert.Single(notifier.Sent);
+        Assert.Equal(ProcioneMGR.Services.Notifications.NotificationSeverity.Critical, alert.Severity);
+        Assert.Contains("affamata", alert.Title);
+
+        // Terzo sguardo: già detto, silenzio.
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Single(notifier.Sent);
+
+        // MAI quarantena né stop per inedia: la corsia non è corrotta, è a digiuno.
+        await using var check = await dbFactory.CreateDbContextAsync();
+        Assert.Empty(await check.LaneQuarantines.AsNoTracking().ToListAsync());
+        Assert.Equal(0, engines[0].StopCalls);
+    }
+
+    [Fact]
+    public async Task Tick_BattitoVecchioMaCheAvanza_EIlReplayDiAvvio_NonUnDigiuno()
+    {
+        // Dopo un riavvio la corsia Paper rigioca 30 giorni di candele: il battito è vecchissimo
+        // ma AVANZA a ogni giro. Allarmare qui significherebbe un falso critico a ogni riavvio.
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+
+        for (var giorniIndietro = 30; giorniIndietro >= 28; giorniIndietro--)
+        {
+            engines[0].StatusToReturn = new TradingEngineStatus
+            {
+                IsRunning = true,
+                Timeframe = "1h",
+                LastProcessedCandleUtc = DateTime.UtcNow.AddDays(-giorniIndietro),
+            };
+            await watchdog.TickAsync(CancellationToken.None);
+        }
+
+        Assert.Empty(notifier.Sent);
+    }
+
+    [Fact]
+    public async Task Tick_BattitoFresco_NessunAllarme_ERiarmoDopoIlRecupero()
+    {
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+
+        // Digiuno → allarme (due sguardi).
+        var stale = new TradingEngineStatus { IsRunning = true, Timeframe = "1h", LastProcessedCandleUtc = DateTime.UtcNow.AddHours(-10) };
+        engines[0].StatusToReturn = stale;
+        await watchdog.TickAsync(CancellationToken.None);
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Single(notifier.Sent);
+
+        // Recupero: battito fresco → nessun allarme nuovo, e l'allarme si RIARMA.
+        engines[0].StatusToReturn = new TradingEngineStatus { IsRunning = true, Timeframe = "1h", LastProcessedCandleUtc = DateTime.UtcNow };
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Single(notifier.Sent);
+
+        // Nuovo digiuno → nuovo allarme: la transizione è ripetibile, non un one-shot.
+        engines[0].StatusToReturn = stale;
+        await watchdog.TickAsync(CancellationToken.None);
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Equal(2, notifier.Sent.Count);
+    }
+
+    [Fact]
+    public async Task Tick_CorsiaRunningCheNonHaMaiValutato_AllertaDopoDueSguardi()
+    {
+        // running=true e battito null su due giri consecutivi: affamata dal principio (per esempio
+        // serie della corsia senza candele a database). Il null NON deve valere "aggiornata" —
+        // stessa trappola del confronto numerico chiusa in SeriesFreshness.
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+        engines[0].StatusToReturn = new TradingEngineStatus { IsRunning = true, Timeframe = "1h", LastProcessedCandleUtc = null };
+
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Empty(notifier.Sent);
+        await watchdog.TickAsync(CancellationToken.None);
+
+        var alert = Assert.Single(notifier.Sent);
+        Assert.Equal(ProcioneMGR.Services.Notifications.NotificationSeverity.Critical, alert.Severity);
+        Assert.Contains("affamata", alert.Title);
     }
 }

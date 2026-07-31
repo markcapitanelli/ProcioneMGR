@@ -44,6 +44,32 @@ public static class AdminConfigRules
     /// </summary>
     public static string? Validate(object options) => options switch
     {
+        // [E1] Le soglie pre-ordine del motore. Fino al 2026-07-31 questa sezione non aveva regola:
+        // la garanzia «un valore rifiutato in UI non entra da un'altra porta» per Trading:Safety era
+        // vuota, e il canale gRPC l'avrebbe accettata qualunque. Stessi vincoli del pannello, più
+        // gli invarianti che il pannello non esprimeva.
+        SafetyConfiguration o => Check(
+            (o.MaxPositionSizePercent > 0m, "La size massima per posizione dev'essere > 0."),
+            (o.PositionSizePercent > 0m, "La size per apertura dev'essere > 0."),
+            (o.MaxTotalExposurePercent > 0m, "L'esposizione totale massima dev'essere > 0."),
+            (o.MaxDailyLossPercent > 0m, "La perdita giornaliera massima dev'essere > 0: a 0 ogni ordine è rifiutato."),
+            (o.MaxDrawdownPercent > 0m, "Il drawdown massimo dev'essere > 0: a 0 l'emergency stop scatta subito."),
+            (o.MaxOpenPositions >= 1, "Serve almeno 1 posizione aperta consentita."),
+            (o.MinOrderIntervalSeconds >= 0, "L'intervallo minimo tra ordini non può essere negativo."),
+            (o.MaxLeverageAllowed >= 1, "La leva massima dev'essere almeno 1."),
+            (o.MaintenanceMarginPercent >= 0m, "Il margine di mantenimento non può essere negativo."),
+            (o.FeePercent >= 0m, "La fee non può essere negativa."),
+            (!o.VolatilityTargetingEnabled || o.TargetAnnualVolatilityPercent > 0m,
+                "Col dosaggio sulla volatilità acceso serve una volatilità obiettivo > 0: è il numeratore del fattore."),
+            (o.VolatilityLookbackBars >= 2, "Servono almeno 2 barre per stimare la volatilità."),
+            (o.MinExposureMultiplier >= 0m, "Il fattore minimo non può essere negativo."),
+            (o.MaxExposureMultiplier >= o.MinExposureMultiplier,
+                "Il fattore massimo dev'essere >= del minimo, altrimenti il dosaggio non ha un intervallo."),
+            (o.MaxFillPriceDeviationPercent > 0m,
+                "La banda di plausibilità del prezzo di fill dev'essere > 0: a 0 ogni fill è sospetto."),
+            (o.MaxFillQuantityDeviationPercent > 0m,
+                "La tolleranza sulla quantità di fill dev'essere > 0: a 0 ogni fill è sospetto.")),
+
         LiveExecutionOptions o => Check(
             (o.DefaultWindowMinutes >= 1, "La finestra di default dev'essere almeno 1 minuto."),
             (o.WorkerTickSeconds >= 5, "Il tick del worker dev'essere almeno 5 secondi."),

@@ -28,7 +28,22 @@ Concetti chiave spiegati nel `GuidaPanel` (righe 17–42):
 | GuidaPanel | 17–42 | Spiegazione di exchange/symbol/timeframe/stato/candele/azioni |
 | Form "Aggiungi serie" | 44–75 | Select exchange (enum `ExchangeName`), input symbol, select timeframe (`Timeframes.Supported`) |
 | Alert di stato | 77–80 | Esito dell'ultima azione (verde/rosso) |
-| Tabella "Serie tracciate" | 82–140 | Exchange, Symbol, TF, Stato + `LastSyncStatus`, conteggio candele, ultima sync, azioni per riga (Sync now / Abilita-Disabilita / Elimina) |
+| Tabella "Serie tracciate" | 82–140 | Exchange, Symbol, TF, Stato + `LastSyncStatus`, conteggio candele, **ultima candela / ritardo** (E7), ultima sync, azioni per riga (Sync now / Abilita-Disabilita / Elimina) |
+
+### La colonna di freschezza (E7, 2026-07-31)
+
+Fino a oggi la pagina diceva «Abilitata» per una serie che poteva essere ferma da mesi — MKR/USDT
+lo è stata per dieci, con `OK: 1 candele` a ogni giro. La colonna «Ultima candela / ritardo»
+giudica ogni serie **contro adesso** con la regola unica di
+[`SeriesFreshness`](../../ProcioneMGR/Services/Ingestion/SeriesFreshness.cs) (B2.a): badge rosso
+`FERMA · N barre indietro` oltre la tolleranza, e un banner sopra la tabella conta le serie
+abilitate ferme (una serie morta in fondo all'elenco non deve dipendere dallo scroll). Serie vuota
+= «nessuna candela», rosso se abilitata — il null non vale mai «aggiornata».
+
+In parallelo il `SeriesFreshnessWatchWorker` (guscio, ogni 15 minuti) **notifica la transizione** a
+ferma — una volta per serie, aggregata in un messaggio solo — così del guasto ci si accorge senza
+aprire questa pagina (lezione D2.a). Nessuna azione automatica: disabilitare resta una scelta umana
+(un BREAK può essere temporaneo, decisione B2.a).
 
 ## Come funziona (flusso del codice)
 

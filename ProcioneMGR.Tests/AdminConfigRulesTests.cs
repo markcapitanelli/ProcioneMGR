@@ -31,6 +31,7 @@ public class AdminConfigRulesTests
 {
     public static TheoryData<object> DefaultOptions() =>
     [
+        new SafetyConfiguration(),
         new LiveExecutionOptions(),
         new AutoReapplyOptions(),
         new PromotionEvaluatorOptions(),
@@ -76,6 +77,54 @@ public class AdminConfigRulesTests
     [Fact]
     public void Llm_MaxTokensTooSmall_IsRejected()
         => Assert.NotNull(AdminConfigRules.Validate(new LlmOptions { MaxTokens = 10 }));
+
+    // --- [E1] Trading:Safety: prima del 2026-07-31 questa sezione NON aveva regola — la garanzia
+    // «un valore rifiutato in UI non entra da un'altra porta» per le soglie del motore era vuota,
+    // e il canale gRPC avrebbe accettato qualunque payload. ------------------------------------
+
+    [Theory]
+    [InlineData(0, 50, 5, 5)]   // MaxPositionSizePercent <= 0
+    [InlineData(10, 0, 5, 5)]   // MaxTotalExposurePercent <= 0
+    [InlineData(10, 50, 0, 5)]  // MaxOpenPositions < 1
+    [InlineData(10, 50, 5, 0)]  // MaxLeverageAllowed < 1
+    public void Safety_PanelInvariants_AreAlsoEnforcedServerSide(
+        decimal maxPos, decimal maxExposure, int maxOpen, int maxLeverage)
+        => Assert.NotNull(AdminConfigRules.Validate(new SafetyConfiguration
+        {
+            MaxPositionSizePercent = maxPos,
+            MaxTotalExposurePercent = maxExposure,
+            MaxOpenPositions = maxOpen,
+            MaxLeverageAllowed = maxLeverage,
+        }));
+
+    [Fact]
+    public void Safety_NegativeFee_IsRejected()
+        => Assert.NotNull(AdminConfigRules.Validate(new SafetyConfiguration { FeePercent = -0.1m }));
+
+    [Fact]
+    public void Safety_VolTargetingOnWithZeroTarget_IsRejected()
+        => Assert.NotNull(AdminConfigRules.Validate(new SafetyConfiguration
+        {
+            VolatilityTargetingEnabled = true,
+            TargetAnnualVolatilityPercent = 0m,
+        }));
+
+    [Fact]
+    public void Safety_ExposureMultiplierRangeInverted_IsRejected()
+        => Assert.NotNull(AdminConfigRules.Validate(new SafetyConfiguration
+        {
+            MinExposureMultiplier = 1.0m,
+            MaxExposureMultiplier = 0.5m,
+        }));
+
+    [Fact]
+    public void Safety_ZeroFillDeviationBands_AreRejected()
+    {
+        // A 0 la banda di plausibilità marca OGNI fill come sospetto: il trading si ferma in
+        // silenzio, che è esattamente la classe di guasto per cui la regola esiste.
+        Assert.NotNull(AdminConfigRules.Validate(new SafetyConfiguration { MaxFillPriceDeviationPercent = 0m }));
+        Assert.NotNull(AdminConfigRules.Validate(new SafetyConfiguration { MaxFillQuantityDeviationPercent = 0m }));
+    }
 
     // --- Soglie in relazione fra loro: il gruppo di errori che un min= non può nemmeno esprimere -
 

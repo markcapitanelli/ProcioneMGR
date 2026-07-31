@@ -118,6 +118,8 @@ public sealed class TradingEngine(
     private readonly List<ExecutionJob> _executionJobs = new();
     private readonly List<OhlcvData> _buffer = new();
     private readonly List<EquityPoint> _equity = new();
+    /// <summary>[E6] Apertura dell'ultima candela valutata in QUESTO avvio (null = nessuna): il battito dietro lo status.</summary>
+    private DateTime? _lastProcessedCandleUtc;
     private List<EnsembleStrategy> _active = new();
     private bool _loaded;
     private TradingCredentials? _creds;   // valorizzate in Testnet/Live
@@ -468,6 +470,12 @@ public sealed class TradingEngine(
 
             var price = candle.Close;
             var ts = DateTime.SpecifyKind(candle.TimestampUtc, DateTimeKind.Utc);
+
+            // [E6] Battito di valutazione: l'ora della candela che stiamo per valutare. In memoria
+            // e non persistito di proposito — dopo un riavvio "null" è la verità (questo processo
+            // non ha ancora valutato nulla), e un valore ereditato dal processo precedente
+            // rassicurerebbe su un'attività che non c'è.
+            _lastProcessedCandleUtc = ts;
 
             // Futures Testnet/Live: rileva liquidazioni forzate dall'exchange (o chiusure
             // manuali fatte fuori dalla piattaforma) PRIMA di valutare qualsiasi altra cosa,
@@ -1310,6 +1318,8 @@ public sealed class TradingEngine(
                 LastOrderUtc = _state.LastOrderUtc,
                 IsEmergencyStopped = _state.IsEmergencyStopped,
                 EmergencyStopReason = _state.EmergencyStopReason,
+                Timeframe = _state.Timeframe,
+                LastProcessedCandleUtc = _lastProcessedCandleUtc,
             };
         }
         finally { _gate.Release(); }

@@ -199,4 +199,86 @@ public class NotificationDispatcherTests
 
         await dispatcher.NotifyAsync(NotificationSeverity.Critical, "quarantena", "corsia 2");
     }
+
+    // --- [E5] Spia di guasto del canale ---------------------------------------------------------
+    // NotifyAsync assorbe l'esito per contratto (giusto per i producer): un recapito fallito viveva
+    // SOLO nei log — è ciò che ha tenuto Telegram muto per due giorni. La spia deve ricordare
+    // l'ultimo esito reale, leggibile senza inviare nulla.
+
+    [Fact]
+    public async Task ChannelSpy_RecordsAFailedDelivery_WithReasonAndTime()
+    {
+        var (dispatcher, provider, _) = Build();
+        provider.ThrowOnSend = new HttpRequestException("401 Unauthorized (token scaduto)");
+
+        await dispatcher.NotifyAsync(NotificationSeverity.Critical, "quarantena", "corsia 2");
+
+        var spy = dispatcher.ChannelStatus;
+        Assert.Null(spy.LastDeliveredUtc);
+        Assert.NotNull(spy.LastFailureUtc);
+        Assert.Contains("token scaduto", spy.LastFailureDetail);
+        Assert.Equal(1, spy.FailuresSinceLastDelivery);
+    }
+
+    [Fact]
+    public async Task ChannelSpy_ConsecutiveFailures_Accumulate()
+    {
+        var (dispatcher, provider, _) = Build();
+        provider.ThrowOnSend = new HttpRequestException("giù");
+
+        await dispatcher.NotifyAsync(NotificationSeverity.Info, "1", "b");
+        await dispatcher.NotifyAsync(NotificationSeverity.Info, "2", "b");
+        await dispatcher.NotifyAsync(NotificationSeverity.Info, "3", "b");
+
+        Assert.Equal(3, dispatcher.ChannelStatus.FailuresSinceLastDelivery);
+    }
+
+    [Fact]
+    public async Task ChannelSpy_ADeliveryResetsTheFailureCounter_ButKeepsTheHistory()
+    {
+        var (dispatcher, provider, time) = Build();
+        provider.ThrowOnSend = new HttpRequestException("giù");
+        await dispatcher.NotifyAsync(NotificationSeverity.Info, "fallita", "b");
+
+        provider.ThrowOnSend = null;
+        time.Advance(TimeSpan.FromMinutes(5));
+        await dispatcher.NotifyAsync(NotificationSeverity.Info, "riuscita", "b");
+
+        var spy = dispatcher.ChannelStatus;
+        Assert.Equal(0, spy.FailuresSinceLastDelivery);       // il canale ha ripreso
+        Assert.NotNull(spy.LastDeliveredUtc);
+        Assert.NotNull(spy.LastFailureUtc);                    // la storia del guasto non sparisce
+        Assert.True(spy.LastDeliveredUtc > spy.LastFailureUtc);
+    }
+
+    [Fact]
+    public async Task ChannelSpy_UnknownProvider_CountsAsFailure()
+    {
+        // Un provider scritto male in config perde messaggi esattamente come un token scaduto:
+        // la spia deve vederlo, non trattarlo come un caso a parte.
+        var (dispatcher, _, _) = Build(new NotificationOptions { Enabled = true, Provider = "Piccione" });
+
+        await dispatcher.NotifyAsync(NotificationSeverity.Info, "T", "B");
+
+        Assert.Equal(1, dispatcher.ChannelStatus.FailuresSinceLastDelivery);
+        Assert.Contains("Piccione", dispatcher.ChannelStatus.LastFailureDetail);
+    }
+
+    [Fact]
+    public async Task ChannelSpy_DisabledAndRateLimited_AreNotFailures()
+    {
+        // Gate spento = scelta dell'operatore; rate-limit = coalescing dichiarato. Contarli come
+        // guasti farebbe gridare la spia per comportamenti corretti — il falso allarme è la stessa
+        // classe di difetto del falso verde.
+        var (disabled, _, _) = Build(new NotificationOptions { Enabled = false, Provider = "Fake" });
+        await disabled.NotifyAsync(NotificationSeverity.Info, "T", "B");
+        Assert.Equal(0, disabled.ChannelStatus.FailuresSinceLastDelivery);
+        Assert.Null(disabled.ChannelStatus.LastFailureUtc);
+
+        var (limited, _, _) = Build(new NotificationOptions { Enabled = true, Provider = "Fake", MaxPerHour = 1 });
+        await limited.NotifyAsync(NotificationSeverity.Info, "1", "b");
+        await limited.NotifyAsync(NotificationSeverity.Info, "2", "b"); // soppressa
+        Assert.Equal(0, limited.ChannelStatus.FailuresSinceLastDelivery);
+        Assert.Null(limited.ChannelStatus.LastFailureUtc);
+    }
 }

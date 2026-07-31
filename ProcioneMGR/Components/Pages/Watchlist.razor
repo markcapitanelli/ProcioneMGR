@@ -91,11 +91,23 @@
     }
     else
     {
+        @* [E7] Il conteggio delle ferme sta SOPRA la tabella: una serie morta in fondo all'elenco
+           non deve dipendere dallo scroll per farsi vedere — MKR è stata ferma dieci mesi con la
+           pagina che diceva «Abilitata». *@
+        @if (StaleEnabledCount() is > 0 and var staleCount)
+        {
+            <div class="alert alert-danger py-2 small mb-0 rounded-0">
+                ⚠️ <strong>@staleCount serie abilitat@(staleCount == 1 ? "a" : "e") FERM@(staleCount == 1 ? "A" : "E")</strong>:
+                l'ultima candela chiusa è più indietro della tolleranza
+                (@ProcioneMGR.Services.Ingestion.SeriesFreshness.DefaultToleranceBars barre). Il sync non le sta aggiornando:
+                verifica su exchange se il simbolo è sospeso (stato BREAK) e valuta se disabilitarle.
+            </div>
+        }
         <table class="table table-striped mb-0 align-middle">
             <thead>
                 <tr>
                     <th>Exchange</th><th>Symbol</th><th>TF</th><th>Stato</th>
-                    <th>Candele</th><th>Ultima sync</th><th class="text-end">Azioni</th>
+                    <th>Candele</th><th>Ultima candela / ritardo</th><th>Ultima sync</th><th class="text-end">Azioni</th>
                 </tr>
             </thead>
             <tbody>
@@ -117,6 +129,33 @@
                             <div class="small text-muted">@r.Series.LastSyncStatus</div>
                         </td>
                         <td>@r.CandleCount</td>
+                        <td>
+                            @* [E7] Freschezza misurata contro ADESSO con la regola unica di
+                               SeriesFreshness — non contro la serie stessa, che è il riferimento
+                               che si sposta col guasto (B2.a). *@
+                            @if (r.LastCandleUtc is DateTime last)
+                            {
+                                var behind = ProcioneMGR.Services.Ingestion.SeriesFreshness.BarsBehind(r.Series.Timeframe, last, DateTime.UtcNow);
+                                var stale = ProcioneMGR.Services.Ingestion.SeriesFreshness.IsStale(r.Series.Timeframe, last, DateTime.UtcNow);
+                                <div class="small">@last.ToString("u")</div>
+                                @if (!r.Series.Enabled)
+                                {
+                                    <span class="badge bg-light text-muted border">non sincronizzata</span>
+                                }
+                                else if (stale)
+                                {
+                                    <span class="badge bg-danger">FERMA · @(behind is int b ? $"{b} barre indietro" : "ritardo non misurabile")</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-success-subtle text-dark border">aggiornata</span>
+                                }
+                            }
+                            else
+                            {
+                                <span class="badge @(r.Series.Enabled ? "bg-danger" : "bg-light text-muted border")">nessuna candela</span>
+                            }
+                        </td>
                         <td>@(r.Series.LastSyncUtc?.ToString("u") ?? "—")</td>
                         <td class="text-end" style="white-space: nowrap;">
                             <button class="btn btn-sm btn-outline-primary"
@@ -149,9 +188,13 @@
     private bool _isError;
     private string? _status;
 
-    private sealed record Row(TrackedSeries Series, int CandleCount);
+    private sealed record Row(TrackedSeries Series, int CandleCount, DateTime? LastCandleUtc);
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    /// <summary>[E7] Serie ABILITATE la cui ultima candela è più indietro della tolleranza.</summary>
+    private int StaleEnabledCount() => _rows?.Count(r => r.Series.Enabled
+        && ProcioneMGR.Services.Ingestion.SeriesFreshness.IsStale(r.Series.Timeframe, r.LastCandleUtc, DateTime.UtcNow)) ?? 0;
 
     private async Task LoadAsync()
     {
@@ -163,13 +206,19 @@
         // Conteggio candele per (Symbol, Timeframe) in UNA sola query aggregata invece di una
         // CountAsync per serie: con molte serie e timeframe intraday (5m ~150k candele l'una) il
         // pattern N+1 diventava un collo di bottiglia a ogni caricamento pagina.
-        var counts = await db.OhlcvData
+        // [E7] La stessa query porta anche l'ULTIMA candela: è il dato da cui la freschezza si
+        // giudica contro adesso, e prima non arrivava mai a questa pagina.
+        var aggregates = await db.OhlcvData
             .GroupBy(c => new { c.Symbol, c.Timeframe })
-            .Select(g => new { g.Key.Symbol, g.Key.Timeframe, Count = g.Count() })
-            .ToDictionaryAsync(x => (x.Symbol, x.Timeframe), x => x.Count);
+            .Select(g => new { g.Key.Symbol, g.Key.Timeframe, Count = g.Count(), Last = (DateTime?)g.Max(c => c.TimestampUtc) })
+            .ToDictionaryAsync(x => (x.Symbol, x.Timeframe), x => (x.Count, x.Last));
 
         _rows = series
-            .Select(s => new Row(s, counts.GetValueOrDefault((s.Symbol, s.Timeframe))))
+            .Select(s =>
+            {
+                var (count, last) = aggregates.GetValueOrDefault((s.Symbol, s.Timeframe));
+                return new Row(s, count, last);
+            })
             .ToList();
     }
 

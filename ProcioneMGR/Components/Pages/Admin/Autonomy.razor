@@ -22,7 +22,6 @@
 @inject IAppConfigWriter ConfigWriter
 @inject IConfiguration Config
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
-@inject IOptionsMonitor<LiveExecutionOptions> LiveExecMonitor
 @inject IOptionsMonitor<AutoReapplyOptions> AutoReapplyMonitor
 @inject IOptionsMonitor<PromotionEvaluatorOptions> PromotionMonitor
 @inject IOptionsMonitor<LlmOptions> LlmMonitor
@@ -41,9 +40,8 @@
 @inject IOptionsMonitor<RegimeTriggerOptions> RegimeTriggerMonitor
 @inject EnsembleComparatorOptions ComparatorOptions
 @inject ModelRegistryOptions RegistryOptions
-@inject IOptionsMonitor<MlComparisonOptions> MlMonitor
-@* Il carry vive nell'host del MOTORE: la sua configurazione si legge e si scrive dove il motore la
-   legge, non nel file di questo processo. Vedi IEngineConfigStore. *@
+@* Carry, esecuzione live e dual-read ML vivono nell'host del MOTORE: la loro configurazione si
+   legge e si scrive dove il motore la legge, non nel file di questo processo. Vedi IEngineConfigStore. *@
 @inject IEngineConfigStore EngineConfig
 @inject IOptionsMonitor<LiquidationsOptions> LiquidationsMonitor
 @inject IServiceProvider Services
@@ -107,7 +105,20 @@
         <p class="text-muted small">
             Spezza gli ordini di apertura su Testnet/Live in fette temporali per ridurre l'impatto.
             Master switch default OFF: con l'interruttore spento nessun piano viene creato né avanzato.
+            L'<code>ExecutionWorker</code> che avanza le fette vive nell'host del <strong>motore</strong>:
+            questi campi sono letti dal motore e riscritti su di lui.
+            @if (_engineSnapshot.SourceOf("Trading:LiveExecution") is { } leSource)
+            {
+                <text> Sorgente attuale: <code>@leSource</code>.</text>
+            }
         </p>
+        @if (!_engineSnapshot.Reachable)
+        {
+            <div class="alert alert-danger py-2 small">
+                Motore non raggiungibile: @_engineSnapshot.Error I valori qui sotto sono i default,
+                non salvare finché non risponde.
+            </div>
+        }
         <div class="row g-3 align-items-end">
             <div class="col-auto form-check form-switch ms-2">
                 <input class="form-check-input" type="checkbox" id="le_en" @bind="_liveExec.Enabled" />
@@ -126,7 +137,7 @@
                 <input type="number" class="form-control" @bind="_liveExec.AbandonGraceMinutes" min="0" style="width: 8rem;" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" @onclick='() => SaveAsync("Trading:LiveExecution", _liveExec, "Esecuzione live")' disabled="@_busy">Salva</button>
+                <button class="btn btn-primary" @onclick="SaveLiveExecAsync" disabled="@_busy">Salva</button>
             </div>
         </div>
     </div>
@@ -473,21 +484,39 @@
             Il sync scarica le candele nuove per le serie abilitate della watchlist; il retraining
             riallena periodicamente il modello di regime (attivandolo solo se il Silhouette migliora).
         </p>
+        @if (_remoteIngestion)
+        {
+            @* [E4, 2026-07-31] Con MarketData:UseRemoteIngestion=true lo scheduling vive nel servizio
+               ingestion in-cluster, che legge la SUA configurazione: questi tre campi scriverebbero il
+               file del guscio, dove NESSUN worker li legge (il worker locale non è nemmeno registrato).
+               Salvare qui mostrerebbe un verde e non muoverebbe nulla — la stessa forma del difetto
+               dei pannelli che configuravano un motore che non li leggeva. Finché non esiste un canale
+               di configurazione verso l'ingestion (non giustificato oggi: la cadenza non si tocca da
+               settimane), la manopola si dichiara inerte invece di fingere. *@
+            <div class="alert alert-warning py-2 small">
+                <strong>Ingestion remota attiva</strong> (<code>MarketData:UseRemoteIngestion=true</code>):
+                lo scheduling del sync gira nel servizio <code>procionemgr-ingestion</code> in-cluster,
+                che legge la <em>propria</em> configurazione. Questi campi non lo raggiungono e sono
+                disabilitati: cadenza, interruttore e backfill si cambiano nella ConfigMap del
+                deployment ingestion (<code>infra/k8s/ingestion/</code>) e con un rollout. Le sync
+                puntuali da /watchlist funzionano comunque (delegate via REST).
+            </div>
+        }
         <div class="row g-3 align-items-end">
             <div class="col-auto form-check form-switch ms-2">
-                <input class="form-check-input" type="checkbox" id="md_en" @bind="_marketData.Enabled" />
+                <input class="form-check-input" type="checkbox" id="md_en" @bind="_marketData.Enabled" disabled="@_remoteIngestion" />
                 <label class="form-check-label" for="md_en">Sync abilitato @Hot()</label>
             </div>
             <div class="col-auto">
                 <label class="form-label">Intervallo sync (min) @Restart()</label>
-                <input type="number" class="form-control" @bind="_marketData.SyncIntervalMinutes" min="1" style="width: 9rem;" />
+                <input type="number" class="form-control" @bind="_marketData.SyncIntervalMinutes" min="1" style="width: 9rem;" disabled="@_remoteIngestion" />
             </div>
             <div class="col-auto">
                 <label class="form-label">Backfill default (giorni) @Hot()</label>
-                <input type="number" class="form-control" @bind="_marketData.DefaultBackfillDays" min="1" style="width: 9rem;" />
+                <input type="number" class="form-control" @bind="_marketData.DefaultBackfillDays" min="1" style="width: 9rem;" disabled="@_remoteIngestion" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" @onclick='() => SaveAsync("MarketData", _marketData, "Sync dati")' disabled="@_busy">Salva</button>
+                <button class="btn btn-primary" @onclick='() => SaveAsync("MarketData", _marketData, "Sync dati")' disabled="@(_busy || _remoteIngestion)">Salva</button>
             </div>
         </div>
         <hr />
@@ -892,6 +921,13 @@
             </div>
         </div>
 
+        @* [E5] La spia di guasto: NotifyAsync assorbe l'esito per contratto (giusto per i producer),
+           quindi un recapito fallito viveva SOLO nei log — è ciò che ha tenuto Telegram muto per due
+           giorni. Qui l'ultimo esito reale si legge, senza dover inviare nulla. *@
+        <div class="mt-2 small @(Notifier.ChannelStatus.FailuresSinceLastDelivery > 0 ? "text-danger fw-semibold" : "text-muted")">
+            Spia del canale (da questo avvio del guscio): @DescribeChannel(Notifier.ChannelStatus)
+        </div>
+
         @* ------------------------------------------------------------------ canale del MOTORE *@
         @* Due canali distinti, non uno con due pulsanti: guscio e motore sono processi separati, con
            configurazioni e variabili d'ambiente proprie. Il motore puo' essere muto mentre il guscio
@@ -959,6 +995,27 @@
                     sezione e non in questa pagina. Se manca, la prova qui accanto lo dice.
                 </span>
             </div>
+            <div class="col-12">
+                @* [E5] Stessa spia, per il canale del MOTORE: fra una prova e l'altra i suoi
+                   fallimenti finivano solo nei log del pod. *@
+                @if (_engineChannel is { } ch)
+                {
+                    @if (!ch.Reachable)
+                    {
+                        <span class="small text-warning">Spia del canale del motore non leggibile: @ch.Error</span>
+                    }
+                    else if (!ch.ChannelComposed)
+                    {
+                        <span class="small text-danger fw-semibold">Il motore non ha NESSUN canale di notifica composto: gli allarmi di quarantena non raggiungono nessuno.</span>
+                    }
+                    else if (ch.Status is { } st)
+                    {
+                        <span class="small @(st.FailuresSinceLastDelivery > 0 ? "text-danger fw-semibold" : "text-muted")">
+                            Spia del canale (da questo avvio del motore): @DescribeChannel(st)
+                        </span>
+                    }
+                }
+            </div>
         </div>
     </div>
 </div>
@@ -972,7 +1029,13 @@
             acceso confronta <em>anche</em> il segnale del servizio remoto <code>procionemgr-ml</code>
             e ne registra le divergenze (log + metrica), senza mai prendere una decisione da quel
             confronto. Se l'URL è vuoto il client non viene nemmeno registrato: confronto
-            staticamente spento, zero overhead.
+            staticamente spento, zero overhead. Il confronto lo fa il <strong>motore</strong>
+            (<code>TradingEngine</code>): fino al 2026-07-31 questi campi finivano nel file del
+            guscio, che il motore remoto non legge — ora sono letti dal motore e riscritti su di lui.
+            @if (_engineSnapshot.SourceOf("Ml") is { } mlSource)
+            {
+                <text> Sorgente attuale: <code>@mlSource</code>.</text>
+            }
         </p>
         <div class="row g-3 align-items-end">
             <div class="col-auto form-check form-switch ms-2">
@@ -988,7 +1051,7 @@
                 <input type="number" class="form-control" @bind="_ml.TimeoutMs" min="50" style="width: 8rem;" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" @onclick='() => SaveAsync("Ml", _ml, "Dual-read ML")' disabled="@_busy">Salva</button>
+                <button class="btn btn-primary" @onclick="SaveMlAsync" disabled="@_busy">Salva</button>
             </div>
         </div>
         <hr />
@@ -1025,6 +1088,9 @@
     private string _sentimentSymbolsCsv = "";
     private DriftMonitorOptions _drift = new();
     private MarketDataConfig _marketData = new();
+
+    /// <summary>[E4] Vero quando lo scheduling del sync vive nel servizio ingestion remoto: i campi qui sono inerti e vanno dichiarati tali.</summary>
+    private bool _remoteIngestion;
     private MarketRegimeConfig _marketRegime = new();
     private NotificationOptions _notifications = new();
 
@@ -1045,12 +1111,18 @@
     /// <summary>Configurazione letta dal motore: la condividono la scheda carry e il canale di notifica.</summary>
     private EngineConfigSnapshot _engineSnapshot = new([], string.Empty, Writable: false);
 
+    /// <summary>[E5] Spia del canale di notifica del motore (null = non ancora letta).</summary>
+    private EngineNotificationChannelStatus? _engineChannel;
+
     /// <summary>
     /// Le sezioni del motore che QUESTA pagina mostra. Costante e non elenco ripetuto a ogni
-    /// chiamata: <c>_engineSnapshot</c> è condiviso da due blocchi, e una rilettura che ne chiedesse
-    /// meno svuoterebbe l'altro — salvando il carry sparivano i dati del canale di notifica.
+    /// chiamata: <c>_engineSnapshot</c> è condiviso da più blocchi, e una rilettura che ne chiedesse
+    /// meno svuoterebbe gli altri — salvando il carry sparivano i dati del canale di notifica.
+    /// [E2/E3] Esecuzione live e dual-read ML aggiunte il 2026-07-31: i loro consumatori
+    /// (ExecutionWorker, TradingEngine) vivono nell'host del motore, e questi pannelli scrivevano
+    /// il file del guscio — la manopola non muoveva nulla.
     /// </summary>
-    private static readonly string[] EngineSections = ["Carry", "Notifications"];
+    private static readonly string[] EngineSections = ["Carry", "Notifications", "Trading:LiveExecution", "Ml"];
     private LiquidationsOptions _liquidations = new();
     private ObservabilityConfig _observability = new();
 
@@ -1100,7 +1172,6 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _liveExec = Clone(LiveExecMonitor.CurrentValue);
         _autoReapply = Clone(AutoReapplyMonitor.CurrentValue);
         _promotion = Clone(PromotionMonitor.CurrentValue);
         _llm = Clone(LlmMonitor.CurrentValue);
@@ -1117,6 +1188,9 @@
             UseRemoteIngestion = Config.GetValue("MarketData:UseRemoteIngestion", false),
             RemoteIngestionUrl = Config.GetValue<string?>("MarketData:RemoteIngestionUrl"),
         };
+        // [E4] Con l'ingestion remota questi campi non hanno NESSUN lettore in questo processo:
+        // il pannello li disabilita e dice dove vive la manopola vera, invece di fingere.
+        _remoteIngestion = _marketData.UseRemoteIngestion;
         _marketRegime = new MarketRegimeConfig
         {
             Enabled = Config.GetValue("MarketRegime:Enabled", true),
@@ -1130,12 +1204,15 @@
         // marcati ⟳ invece di ✅.
         _comparator = Clone(ComparatorOptions);
         _registry = Clone(RegistryOptions);
-        _ml = Clone(MlMonitor.CurrentValue);
         // Dal motore, non dal file locale: col trading remoto sono due cose diverse.
         _engineSnapshot = await EngineConfig.ReadAsync(EngineSections);
         _carry = _engineSnapshot.Bind<CarryOptions>("Carry");
         _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
         _engineNotifications = _engineSnapshot.Bind<NotificationOptions>("Notifications");
+        _liveExec = _engineSnapshot.Bind<LiveExecutionOptions>("Trading:LiveExecution");
+        _ml = _engineSnapshot.Bind<MlComparisonOptions>("Ml");
+        // [E5] Spia del canale del motore: si legge senza inviare nulla.
+        _engineChannel = await EngineConfig.GetNotificationChannelStatusAsync();
         _liquidations = Clone(LiquidationsMonitor.CurrentValue);
         _observability = new ObservabilityConfig
         {
@@ -1233,30 +1310,58 @@
         finally { _busy = false; }
     }
 
+    /// <summary>
+    /// Salvataggio di una sezione OSPITATA DAL MOTORE: validazione con le stesse regole dei
+    /// pannelli, scrittura via store (che riflette chi esegue, non questo processo) e rilettura
+    /// della fotografia condivisa. Restituisce falso se la validazione o la scrittura falliscono.
+    /// </summary>
+    private async Task<bool> SaveEngineSectionAsync<T>(string section, T model, string label) where T : notnull
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            var error = AdminConfigRules.Validate(model);
+            if (error is not null) { SetStatus($"{label}: {error}", true); return false; }
+
+            var result = await EngineConfig.WriteAsync(section, model);
+            var dove = EngineConfig.IsRemote ? "sul motore" : "in appsettings.json";
+            SetStatus(result.Warning is { } warning
+                ? $"{label}: salvato {dove}, MA — {warning}"
+                : $"{label}: salvato {dove}.", result.Warning is not null);
+
+            _engineSnapshot = await EngineConfig.ReadAsync(EngineSections);
+            return true;
+        }
+        catch (Exception ex) { SetStatus($"{label}: salvataggio fallito — {ex.Message}", true); return false; }
+        finally { _busy = false; }
+    }
+
     private async Task SaveCarryAsync()
     {
         _carry.Symbols = CsvToSymbols(_carrySymbolsCsv);
         _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
 
-        _busy = true; _isError = false; _status = null;
-        try
+        if (await SaveEngineSectionAsync("Carry", _carry, "Carry"))
         {
-            var error = AdminConfigRules.Validate(_carry);
-            if (error is not null) { SetStatus($"Carry: {error}", true); return; }
-
-            // Passa dallo store, non da ConfigWriter: il carry gira dove gira il motore.
-            var result = await EngineConfig.WriteAsync("Carry", _carry);
-            var dove = EngineConfig.IsRemote ? "sul motore" : "in appsettings.json";
-            SetStatus(result.Warning is { } warning
-                ? $"Carry: salvato {dove}, MA — {warning}"
-                : $"Carry: salvato {dove}.", result.Warning is not null);
-
-            _engineSnapshot = await EngineConfig.ReadAsync(EngineSections);
             _carry = _engineSnapshot.Bind<CarryOptions>("Carry");
             _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
         }
-        catch (Exception ex) { SetStatus($"Carry: salvataggio fallito — {ex.Message}", true); }
-        finally { _busy = false; }
+    }
+
+    private async Task SaveLiveExecAsync()
+    {
+        if (await SaveEngineSectionAsync("Trading:LiveExecution", _liveExec, "Esecuzione live"))
+        {
+            _liveExec = _engineSnapshot.Bind<LiveExecutionOptions>("Trading:LiveExecution");
+        }
+    }
+
+    private async Task SaveMlAsync()
+    {
+        if (await SaveEngineSectionAsync("Ml", _ml, "Dual-read ML"))
+        {
+            _ml = _engineSnapshot.Bind<MlComparisonOptions>("Ml");
+        }
     }
 
     private async Task RunCarryNowAsync()
@@ -1360,9 +1465,37 @@
                     $"Motore: provider non riconosciuto — {result.Detail}",
                 _ => $"Motore: recapito FALLITO — {result.Detail}",
             }, !result.IsDelivered);
+
+            // La prova ha appena mosso la spia del motore: rileggerla subito, o mostrerebbe
+            // lo stato di prima della prova.
+            _engineChannel = await EngineConfig.GetNotificationChannelStatusAsync();
         }
         catch (Exception ex) { SetStatus($"Motore: prova fallita — {ex.Message}", true); }
         finally { _busy = false; }
+    }
+
+    /// <summary>
+    /// [E5] La spia del canale in una riga: ultimo recapito, e — se ci sono — i fallimenti
+    /// accumulati col motivo. «Nessun recapito da questo avvio» non è un guasto (un canale sano può
+    /// non aver avuto nulla da dire), ma non va nemmeno spacciato per prova di funzionamento.
+    /// </summary>
+    private static string DescribeChannel(NotificationChannelStatus s)
+    {
+        var parts = new List<string>
+        {
+            s.LastDeliveredUtc is DateTime d
+                ? $"ultimo recapito {d:dd/MM HH:mm} UTC"
+                : "nessun recapito da questo avvio",
+        };
+        if (s.FailuresSinceLastDelivery > 0)
+        {
+            parts.Add($"{s.FailuresSinceLastDelivery} fallimenti dall'ultimo recapito — ultimo: {s.LastFailureDetail} ({s.LastFailureUtc:dd/MM HH:mm} UTC)");
+        }
+        else if (s.LastFailureUtc is DateTime f)
+        {
+            parts.Add($"ultimo fallimento {f:dd/MM HH:mm} UTC, poi il canale ha ripreso");
+        }
+        return string.Join(" · ", parts);
     }
 
     private async Task RunDriftNowAsync()

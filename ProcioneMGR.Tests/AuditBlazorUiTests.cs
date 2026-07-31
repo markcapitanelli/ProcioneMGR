@@ -113,18 +113,6 @@ public class AuditBlazorUiTests : BunitContext
         public Task ProcessDueExecutionSlicesAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingSafetyWriter : ISafetyConfigWriter
-    {
-        public SafetyConfiguration? Saved { get; private set; }
-        public int Calls { get; private set; }
-
-        public Task SaveAsync(SafetyConfiguration cfg, CancellationToken ct = default)
-        {
-            Saved = cfg;
-            Calls++;
-            return Task.CompletedTask;
-        }
-    }
 
     private static PromotionDecision ReadyPaperLane(int lane = 0) => new()
     {
@@ -179,7 +167,7 @@ public class AuditBlazorUiTests : BunitContext
                     .Select(i => new LaneSummary(i, "BTC/USDT", "1h", "Paper", false))]);
     }
 
-    private (RecordingSafetyWriter Writer, FakeTradingEngine[] Engines) RegisterTradingServices()
+    private (Infrastructure.FakeEngineConfigStore Store, FakeTradingEngine[] Engines) RegisterTradingServices()
     {
         Services.AddLogging();
         Services.AddMediator();
@@ -189,14 +177,15 @@ public class AuditBlazorUiTests : BunitContext
             engines[lane] = new FakeTradingEngine(lane);
             Services.AddKeyedSingleton<ITradingEngine>(lane, engines[lane]);
         }
-        // Soglie di default sane (>0) così l'apertura del pannello non è già in stato invalido.
-        Services.AddSingleton(new SafetyConfiguration
+        // [E1] Le soglie arrivano dallo store del MOTORE, non più da IOptionsMonitor del guscio.
+        // Default sani (>0) così l'apertura del pannello non è già in stato invalido.
+        var store = new Infrastructure.FakeEngineConfigStore();
+        store.Seed("Trading:Safety", new SafetyConfiguration
         {
             MaxPositionSizePercent = 10m, MaxTotalExposurePercent = 50m, MaxDailyLossPercent = 5m,
             MaxDrawdownPercent = 20m, MaxOpenPositions = 5, MaxLeverageAllowed = 5,
-        }.AsMonitor());
-        var writer = new RecordingSafetyWriter();
-        Services.AddSingleton<ISafetyConfigWriter>(writer);
+        });
+        Services.AddSingleton<IEngineConfigStore>(store);
         Services.AddSingleton<IPromotionEvaluator>(new FakePromotionEvaluator([
             ReadyPaperLane(0), ReadyPaperLane(1), ReadyPaperLane(2),
         ]));
@@ -214,7 +203,7 @@ public class AuditBlazorUiTests : BunitContext
         Services.AddSingleton<Microsoft.EntityFrameworkCore.IDbContextFactory<ApplicationDbContext>>(new ThrowingDbFactory());
         Services.AddSingleton<ProtectiveExitLagAnalyzer>();
         Services.AddScoped<ProtectiveExitDiagnosticsService>();
-        return (writer, engines);
+        return (store, engines);
     }
 
     private sealed class ThrowingPromoter : ILanePromoter
@@ -435,18 +424,19 @@ public class AuditBlazorUiTests : BunitContext
         var auth = AddAuthorization();
         auth.SetAuthorized("auditor");
         auth.SetRoles(AppRoles.Admin);
-        var (writer, _) = RegisterTradingServices();
+        var (store, _) = RegisterTradingServices();
 
         var cut = Render<ProcioneMGR.Components.Pages.Trading>();
 
-        // Modifica la soglia di drawdown e salva: il writer deve ricevere ESATTAMENTE il nuovo valore.
+        // Modifica la soglia di drawdown e salva: lo store del MOTORE deve ricevere ESATTAMENTE
+        // il nuovo valore sulla sezione giusta (E1: niente più file del guscio).
         cut.Find("#safety_maxdd").Change("12.5");
         cut.FindAll("button").Single(b => b.TextContent.Contains("Salva configurazione")).Click();
 
-        Assert.Equal(1, writer.Calls);
-        Assert.NotNull(writer.Saved);
-        Assert.Equal(12.5m, writer.Saved!.MaxDrawdownPercent);
-        Assert.Contains("salvata", cut.Markup);
+        var (section, options) = Assert.Single(store.Saved);
+        Assert.Equal("Trading:Safety", section);
+        Assert.Equal(12.5m, ((SafetyConfiguration)options).MaxDrawdownPercent);
+        Assert.Contains("salvate", cut.Markup);
     }
 
     [Fact]
@@ -455,7 +445,7 @@ public class AuditBlazorUiTests : BunitContext
         var auth = AddAuthorization();
         auth.SetAuthorized("auditor");
         auth.SetRoles(AppRoles.Admin);
-        var (writer, _) = RegisterTradingServices();
+        var (store, _) = RegisterTradingServices();
 
         var cut = Render<ProcioneMGR.Components.Pages.Trading>();
 
@@ -463,7 +453,7 @@ public class AuditBlazorUiTests : BunitContext
         cut.Find("#safety_maxpos").Change("0");
         cut.FindAll("button").Single(b => b.TextContent.Contains("Salva configurazione")).Click();
 
-        Assert.Equal(0, writer.Calls);
+        Assert.Empty(store.Saved);
         Assert.Contains("Valori non validi", cut.Markup);
     }
 

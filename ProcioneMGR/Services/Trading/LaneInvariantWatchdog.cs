@@ -66,7 +66,13 @@ public sealed class LaneInvariantWatchdog(
 
             // Corsia mai avviata o ferma: niente da sorvegliare (uno stato corrotto a corsia
             // ferma non può peggiorare, e verrà comunque azzerato dal prossimo StartAsync).
-            if (state is null || !state.IsRunning) continue;
+            // Il tracciamento del battito si azzera: da ferma, "nessuna candela" è la normalità.
+            if (state is null || !state.IsRunning)
+            {
+                _lastSeenHeartbeat.Remove(laneId);
+                _starvationAlerted.Remove(laneId);
+                continue;
+            }
 
             // Già in quarantena: la riga esistente conserva l'evidenza, non si accumulano duplicati.
             if (await db.LaneQuarantines.AsNoTracking().AnyAsync(q => q.LaneId == laneId, ct)) continue;
@@ -76,12 +82,86 @@ public sealed class LaneInvariantWatchdog(
                 .Where(p => p.LaneId == laneId && p.OpenedInMode == state.Mode).ToListAsync(ct);
 
             var violations = LaneInvariantChecker.Check(state, positions, opts);
-            if (violations.Count == 0) continue;
+            if (violations.Count > 0)
+            {
+                await QuarantineLaneAsync(laneId, state, positions.Count, violations, ct);
+                continue;
+            }
 
-            await QuarantineLaneAsync(laneId, state, positions.Count, violations, ct);
+            await CheckEvaluationHeartbeatAsync(laneId, state.Timeframe, ct);
         }
 
         await ReportOrphanPositionsAsync(db, ct);
+    }
+
+    // --- [E6] Inedia di valutazione ------------------------------------------------------------
+
+    /// <summary>Ultimo battito visto per corsia al giro precedente: serve a distinguere «ferma» da «in rincorsa».</summary>
+    private readonly Dictionary<int, DateTime?> _lastSeenHeartbeat = new();
+
+    /// <summary>Corsie già allertate per inedia: una notifica per transizione, non una per tick.</summary>
+    private readonly HashSet<int> _starvationAlerted = [];
+
+    /// <summary>
+    /// [E6] Una corsia <c>running</c> il cui motore non valuta candele è una corsia i cui stop e
+    /// trailing non li guarda nessuno — e ogni superficie la mostra verde, perché <c>IsRunning</c>
+    /// è un flag d'intento, non una prova di attività (è l'«OK: 1 candele» di B2.a, sul motore).
+    ///
+    /// Il verdetto usa la regola UNICA di <see cref="Ingestion.SeriesFreshness"/> (misura contro
+    /// ADESSO) più un discriminatore che la freschezza da sola non ha: durante il replay di avvio
+    /// il battito è legittimamente vecchio ma AVANZA a ogni giro, quindi si allerta solo quando è
+    /// stantio E fermo rispetto al giro precedente. Allarme, non quarantena: la corsia non è
+    /// corrotta, è a digiuno — e fermarla d'ufficio toglierebbe anche la valutazione che riprenderà
+    /// da sola quando le candele tornano.
+    /// </summary>
+    private async Task CheckEvaluationHeartbeatAsync(int laneId, string timeframe, CancellationToken ct)
+    {
+        DateTime? heartbeat;
+        try
+        {
+            var status = await serviceProvider.GetRequiredKeyedService<ITradingEngine>(laneId).GetStatusAsync(ct);
+            heartbeat = status.LastProcessedCandleUtc;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            // Host senza motore keyed (composizione di test) o motore che non risponde: il battito
+            // non è misurabile da qui, e inventare un verdetto sarebbe il difetto che stiamo togliendo.
+            logger.LogDebug(ex, "Corsia {Lane}: battito di valutazione non leggibile in questo host.", laneId);
+            return;
+        }
+
+        var hadPrevious = _lastSeenHeartbeat.TryGetValue(laneId, out var previous);
+        _lastSeenHeartbeat[laneId] = heartbeat;
+
+        if (!Ingestion.SeriesFreshness.IsStale(timeframe, heartbeat, DateTime.UtcNow))
+        {
+            _starvationAlerted.Remove(laneId);
+            return;
+        }
+        if (hadPrevious && heartbeat != previous)
+        {
+            // Stantio ma in movimento: è la rincorsa del replay, non un digiuno. Si riarma.
+            _starvationAlerted.Remove(laneId);
+            return;
+        }
+        if (!hadPrevious) return;              // primo sguardo: il verdetto al prossimo giro
+        if (!_starvationAlerted.Add(laneId)) return;
+
+        var ultima = heartbeat is DateTime hb ? $"{hb:yyyy-MM-dd HH:mm} UTC" : "MAI (da questo avvio)";
+        logger.LogCritical(
+            "CORSIA {Lane} AFFAMATA: running ma il motore non valuta candele — ultima valutata: {Ultima} "
+            + "(timeframe {Timeframe}). Stop e trailing non vengono valutati da nessuno. Cause tipiche: "
+            + "sync dati fermo, database irraggiungibile, serie della corsia ferma.",
+            laneId, ultima, timeframe);
+
+        if (notifier is not null)
+        {
+            await notifier.NotifyAsync(Notifications.NotificationSeverity.Critical,
+                $"Corsia {laneId} affamata (running senza candele)",
+                $"Il motore risulta in esecuzione ma non valuta candele: ultima valutata {ultima}, "
+                + $"timeframe {timeframe}. Stop e trailing non vengono valutati. Verifica sync dati e database.", ct);
+        }
     }
 
     /// <summary>Corsie orfane già segnalate: si allerta una volta per corsia, non a ogni tick.</summary>

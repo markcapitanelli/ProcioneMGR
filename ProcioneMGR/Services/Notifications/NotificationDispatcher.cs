@@ -28,6 +28,24 @@ public sealed record NotificationResult(NotificationOutcome Outcome, string? Det
 }
 
 /// <summary>
+/// [E5] La spia di guasto del canale: ultimo recapito riuscito, ultimo fallimento col motivo, e
+/// quanti fallimenti si sono accumulati dall'ultimo recapito. Esiste perché <c>NotifyAsync</c>
+/// assorbe l'esito per contratto (giusto per i producer) e quindi un canale rotto falliva SOLO nei
+/// log — è ciò che ha tenuto Telegram muto per due giorni senza che nessuno potesse accorgersene.
+/// Un canale rotto non può auto-denunciarsi via notifica per definizione: serve una superficie che
+/// si legge, non un messaggio che non partirà.
+/// </summary>
+/// <param name="LastDeliveredUtc">Ultimo recapito accettato dal provider (null = mai da questo avvio).</param>
+/// <param name="LastFailureUtc">Ultimo fallimento di recapito o provider sconosciuto (null = mai da questo avvio).</param>
+/// <param name="LastFailureDetail">Motivo leggibile dell'ultimo fallimento.</param>
+/// <param name="FailuresSinceLastDelivery">Fallimenti consecutivi dall'ultimo recapito riuscito: &gt; 0 = il canale sta perdendo messaggi ADESSO.</param>
+public sealed record NotificationChannelStatus(
+    DateTime? LastDeliveredUtc,
+    DateTime? LastFailureUtc,
+    string? LastFailureDetail,
+    int FailuresSinceLastDelivery);
+
+/// <summary>
 /// L'<see cref="INotifier"/> registrato in DI: gate (<c>Notifications:Enabled</c>, default OFF,
 /// hot-reload), rate-limit a finestra scorrevole con coalescing (i messaggi soppressi vengono
 /// conteggiati e riportati nel primo messaggio successivo, mai persi in silenzio) e selezione
@@ -51,6 +69,44 @@ public sealed class NotificationDispatcher(
     private readonly object _gate = new();
     private readonly Queue<DateTimeOffset> _sentInWindow = new();
     private int _suppressed;
+
+    // [E5] Spia di guasto del canale (vedi NotificationChannelStatus). Aggiornata sotto _gate.
+    private DateTime? _lastDeliveredUtc;
+    private DateTime? _lastFailureUtc;
+    private string? _lastFailureDetail;
+    private int _failuresSinceLastDelivery;
+
+    /// <summary>[E5] Stato corrente del canale, per la UI: si legge senza inviare nulla.</summary>
+    public NotificationChannelStatus ChannelStatus
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return new NotificationChannelStatus(
+                    _lastDeliveredUtc, _lastFailureUtc, _lastFailureDetail, _failuresSinceLastDelivery);
+            }
+        }
+    }
+
+    private void RecordDelivered()
+    {
+        lock (_gate)
+        {
+            _lastDeliveredUtc = _time.GetUtcNow().UtcDateTime;
+            _failuresSinceLastDelivery = 0;
+        }
+    }
+
+    private void RecordFailure(string detail)
+    {
+        lock (_gate)
+        {
+            _lastFailureUtc = _time.GetUtcNow().UtcDateTime;
+            _lastFailureDetail = detail;
+            _failuresSinceLastDelivery++;
+        }
+    }
 
     /// <summary>
     /// Contratto invariato verso i producer: nessuna eccezione, nessun esito da controllare.
@@ -109,13 +165,15 @@ public sealed class NotificationDispatcher(
         {
             logger.LogError("Provider di notifica '{Provider}' sconosciuto: notifica [{Severity}] {Title} solo nel log. {Body}",
                 opt.Provider, severity, title, body);
-            return new NotificationResult(NotificationOutcome.UnknownProvider,
-                $"Provider '{opt.Provider}' sconosciuto. Disponibili: {string.Join(", ", providers.Select(p => p.Name))}.");
+            var detail = $"Provider '{opt.Provider}' sconosciuto. Disponibili: {string.Join(", ", providers.Select(p => p.Name))}.";
+            RecordFailure(detail);
+            return new NotificationResult(NotificationOutcome.UnknownProvider, detail);
         }
 
         try
         {
             await provider.SendAsync(severity, title, body, ct);
+            RecordDelivered();
             return new NotificationResult(NotificationOutcome.Delivered);
         }
         catch (Exception ex)
@@ -123,6 +181,7 @@ public sealed class NotificationDispatcher(
             // Mai propagare al producer: il canale di ritorno è "best effort ma rumoroso nel log".
             logger.LogError(ex, "Recapito notifica fallito su {Provider}: [{Severity}] {Title} — {Body}",
                 provider.Name, severity, title, body);
+            RecordFailure($"{provider.Name}: {ex.Message}");
             return new NotificationResult(NotificationOutcome.Failed, $"{provider.Name}: {ex.Message}");
         }
     }

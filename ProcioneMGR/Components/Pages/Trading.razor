@@ -27,7 +27,16 @@
         {
             <span class="badge bg-light text-dark border">SPOT</span>
         }
-        @if (Service.Status.IsRunning) { <span class="badge bg-success">RUNNING</span> }
+        @if (Service.Status.IsRunning)
+        {
+            <span class="badge bg-success">RUNNING</span>
+            @* [E6] Il battito accanto al flag: RUNNING dichiara l'intenzione, questo dice l'attività.
+               Stessa regola unica di SeriesFreshness — misurata contro adesso, non contro la serie. *@
+            @if (Heartbeat() is { } hb)
+            {
+                <span class="badge @hb.Css" title="Apertura dell'ultima candela valutata dal motore in questo avvio, giudicata contro adesso (tolleranza @ProcioneMGR.Services.Ingestion.SeriesFreshness.DefaultToleranceBars barre chiuse).">@hb.Text</span>
+            }
+        }
         else { <span class="badge bg-secondary">STOPPED</span> }
     }
 </h1>
@@ -403,9 +412,20 @@
         <div class="card mb-3 border-warning">
             <div class="card-header bg-warning-subtle d-flex justify-content-between align-items-center">
                 <span>⚙️ Configurazione di sicurezza <span class="badge bg-danger ms-1">solo Admin</span></span>
-                <small class="text-muted">salvata in appsettings.json · applicata a caldo</small>
+                <small class="text-muted">
+                    @(Service.SafetyIsRemote ? "letta e scritta sul MOTORE via gRPC" : "salvata in appsettings.json")
+                    @(Service.SafetySource is { Length: > 0 } src ? $" · sorgente: {src}" : "") · applicata a caldo
+                </small>
             </div>
             <div class="card-body">
+                @if (!Service.SafetyReachable)
+                {
+                    <div class="alert alert-warning py-2 small mb-3">
+                        ⚠️ <strong>Il motore non ha risposto</strong>: i valori qui sotto sono i default del codice,
+                        <u>non</u> le soglie che il motore sta applicando. @Service.SafetyError
+                        <button class="btn btn-sm btn-outline-secondary ms-2" @onclick="ReloadSafetyAsync">Riprova</button>
+                    </div>
+                }
                 @if (_running)
                 {
                     <div class="alert alert-info py-2 small mb-3">
@@ -523,7 +543,7 @@
                 </div>
                 <div class="mt-3">
                     <button class="btn btn-warning btn-sm" @onclick="SaveSafetyAsync">Salva configurazione</button>
-                    <button class="btn btn-outline-secondary btn-sm" @onclick="ReloadSafety">Annulla modifiche</button>
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="ReloadSafetyAsync">Annulla modifiche</button>
                 </div>
             </div>
         </div>
@@ -734,7 +754,7 @@
     {
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-        Service.ReloadSafety();
+        await Service.ReloadSafetyAsync();
         await RefreshAsync();
         AdoptLaneMode();
         await LoadExitDiagnosticsAsync();
@@ -936,10 +956,36 @@
         StateHasChanged();
     }
 
-    private void ReloadSafety()
+    private async Task ReloadSafetyAsync()
     {
-        Service.ReloadSafety();
+        await Service.ReloadSafetyAsync();
         StateHasChanged();
+    }
+
+    /// <summary>
+    /// [E6] Battito di valutazione della corsia visualizzata, già giudicato. Null se lo stato non
+    /// c'è. Tre esiti: mai valutato da questo avvio (giallo — dopo un riavvio è la verità, non un
+    /// guasto, ma non va spacciata per attività), stantio (rosso: se il numero non scende ai
+    /// refresh successivi, nessuno sta valutando stop e trailing), fresco (verde tenue).
+    /// </summary>
+    private (string Css, string Text)? Heartbeat()
+    {
+        if (Service.Status is not { IsRunning: true } s) return null;
+
+        if (s.LastProcessedCandleUtc is not DateTime last)
+        {
+            return ("bg-warning text-dark", "nessuna candela valutata da questo avvio");
+        }
+
+        var behind = ProcioneMGR.Services.Ingestion.SeriesFreshness.BarsBehind(s.Timeframe, last, DateTime.UtcNow);
+        if (behind is not int b)
+        {
+            return ("bg-warning text-dark", $"battito non giudicabile (timeframe \"{s.Timeframe}\")");
+        }
+
+        var stale = ProcioneMGR.Services.Ingestion.SeriesFreshness.IsStale(s.Timeframe, last, DateTime.UtcNow);
+        var text = $"ultima candela {last:dd/MM HH:mm} UTC · {b} barre indietro";
+        return stale ? ("bg-danger", text) : ("bg-success-subtle text-dark border", text);
     }
 
     private async Task SaveSafetyAsync()

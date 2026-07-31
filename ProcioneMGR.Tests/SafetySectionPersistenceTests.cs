@@ -9,20 +9,24 @@ using ProcioneMGR.Services.Trading;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// Regressione del bug adiacente a H1: <see cref="SafetyConfigWriter.SaveAsync"/> riscriveva
+/// Regressione del bug adiacente a H1: il vecchio SafetyConfigWriter riscriveva
 /// <c>Trading:Safety</c> con un elenco di 7 chiavi scritto a mano — ogni salvataggio dal pannello
 /// riportava SILENZIOSAMENTE ai default le proprietà dimenticate (MaxLeverageAllowed,
 /// MaintenanceMarginPercent, UseExchangeRestingStops). Il fix serializza l'INTERO oggetto:
-/// per costruzione una proprietà nuova non può più essere persa. Il test enumera le proprietà
-/// via reflection, così anche QUESTO test non va aggiornato a mano quando se ne aggiungono.
+/// per costruzione una proprietà nuova non può più essere persa.
+///
+/// [E1, 2026-07-31] SafetyConfigWriter non esiste più: il pannello passa da IEngineConfigStore,
+/// che scrive tramite <see cref="AppConfigWriter.SaveSectionAsync"/> — la stessa catena che questi
+/// test coprono, senza più l'adapter in mezzo. La proprietà difesa resta identica, e il test
+/// enumera le proprietà via reflection così non va aggiornato a mano quando se ne aggiungono.
 /// </summary>
-public sealed class SafetyConfigWriterTests : IDisposable
+public sealed class SafetySectionPersistenceTests : IDisposable
 {
     private readonly string _dir;
 
-    public SafetyConfigWriterTests()
+    public SafetySectionPersistenceTests()
     {
-        _dir = Path.Combine(Path.GetTempPath(), "procione-safetywriter-" + Guid.NewGuid().ToString("N"));
+        _dir = Path.Combine(Path.GetTempPath(), "procione-safetysection-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
     }
 
@@ -34,13 +38,12 @@ public sealed class SafetyConfigWriterTests : IDisposable
         public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 
-    // Dal refactor U2 il SafetyConfigWriter delega ad AppConfigWriter: il test copre la catena intera.
-    private SafetyConfigWriter Writer() => new(new AppConfigWriter(new FakeEnv(_dir), NullLogger<AppConfigWriter>.Instance));
+    private AppConfigWriter Writer() => new(new FakeEnv(_dir), NullLogger<AppConfigWriter>.Instance);
 
     private string SettingsPath => Path.Combine(_dir, "appsettings.json");
 
     [Fact]
-    public async Task SaveAsync_WritesEveryPublicProperty_AndPreservesSiblingSections()
+    public async Task SaveSection_WritesEveryPublicProperty_AndPreservesSiblingSections()
     {
         await File.WriteAllTextAsync(SettingsPath, """
             {
@@ -53,7 +56,7 @@ public sealed class SafetyConfigWriterTests : IDisposable
             }
             """);
 
-        await Writer().SaveAsync(new SafetyConfiguration { MaxLeverageAllowed = 10 });
+        await Writer().SaveSectionAsync("Trading:Safety", new SafetyConfiguration { MaxLeverageAllowed = 10 });
 
         var root = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!.AsObject();
         var safetyNode = root["Trading"]!["Safety"]!.AsObject();
@@ -62,7 +65,7 @@ public sealed class SafetyConfigWriterTests : IDisposable
         // la versione a elenco manuale ne perdeva 3 (il bug), e ne avrebbe perse di future.
         foreach (var prop in typeof(SafetyConfiguration).GetProperties())
         {
-            Assert.True(safetyNode.ContainsKey(prop.Name), $"proprietà '{prop.Name}' assente dopo SaveAsync");
+            Assert.True(safetyNode.ContainsKey(prop.Name), $"proprietà '{prop.Name}' assente dopo il salvataggio");
         }
 
         // Le sezioni sorelle e le altre radici NON vengono toccate.
@@ -72,11 +75,11 @@ public sealed class SafetyConfigWriterTests : IDisposable
     }
 
     [Fact]
-    public async Task SaveAsync_NonDefaultValues_SurviveTheRoundtrip()
+    public async Task SaveSection_NonDefaultValues_SurviveTheRoundtrip()
     {
         // Il sintomo del bug: MaxLeverageAllowed=10 salvato dal pannello, e al reload era di
         // nuovo 5 (default) perché la chiave non veniva mai scritta. Roundtrip completo:
-        // SaveAsync → file → ConfigurationBinder → oggetto.
+        // SaveSectionAsync → file → ConfigurationBinder → oggetto.
         await File.WriteAllTextAsync(SettingsPath, """{ "Trading": { "Safety": {} } }""");
 
         var saved = new SafetyConfiguration
@@ -87,7 +90,7 @@ public sealed class SafetyConfigWriterTests : IDisposable
             PositionSizePercent = 6.5m,
             MaxPositionSizePercent = 33m,
         };
-        await Writer().SaveAsync(saved);
+        await Writer().SaveSectionAsync("Trading:Safety", saved);
 
         var config = new ConfigurationBuilder().AddJsonFile(SettingsPath).Build();
         var reloaded = config.GetSection("Trading:Safety").Get<SafetyConfiguration>()!;
@@ -100,11 +103,11 @@ public sealed class SafetyConfigWriterTests : IDisposable
     }
 
     [Fact]
-    public async Task SaveAsync_MissingTradingSection_CreatesIt()
+    public async Task SaveSection_MissingTradingSection_CreatesIt()
     {
         await File.WriteAllTextAsync(SettingsPath, """{ "Logging": { "LogLevel": { "Default": "Information" } } }""");
 
-        await Writer().SaveAsync(new SafetyConfiguration());
+        await Writer().SaveSectionAsync("Trading:Safety", new SafetyConfiguration());
 
         var root = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!.AsObject();
         Assert.NotNull(root["Trading"]?["Safety"]?["MaxPositionSizePercent"]);

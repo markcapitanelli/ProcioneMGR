@@ -69,10 +69,36 @@ col motivo. La prima versione del pulsante mostrava un alert verde qualunque cos
 perché passava da `NotifyAsync`, che è `void` per progetto: una verifica che rassicura sempre è
 peggio di nessuna verifica.
 
+**[E5, 2026-07-31] La spia di guasto.** La prova è un gesto dell'operatore; fra una prova e l'altra
+un recapito fallito (token scaduto, rete) viveva solo nei log. Ora ogni canale mostra la sua
+**spia**: ultimo recapito riuscito, ultimo fallimento col motivo, e quanti fallimenti si sono
+accumulati dall'ultimo recapito (rossa quando > 0: il canale sta perdendo messaggi ADESSO). Per il
+guscio la legge `NotificationDispatcher.ChannelStatus`; per il motore l'rpc
+`GetNotificationChannelStatus`, che non invia nulla — e distingue «canale mai usato da questo
+avvio» (non un guasto) da «nessun canale composto nell'host» (un guasto grave, detto in rosso).
+
 Il **token** di ciascun canale non passa da questa pagina e non sta nelle sezioni di
 configurazione: per il guscio è `TELEGRAM_BOT_TOKEN` nell'ambiente del processo, per il motore la
 stessa variabile fornita dal Secret `trading-secrets` (vedi `scripts/k8s-trading-secret.ps1`). Se
 manca, la prova lo dice invece di tacere.
+
+### Le sezioni ospitate dal motore (E2/E3, 2026-07-31)
+
+Non solo Carry e Notifiche: anche **Esecuzione live** (`Trading:LiveExecution`, il worker che
+avanza le fette vive nell'host del motore) e **Dual-read ML** (`Ml`, il confronto lo fa
+`TradingEngine`) passano da `IEngineConfigStore`. Fino al 2026-07-31 quei due pannelli leggevano il
+monitor del guscio e salvavano col writer del guscio: col trading remoto la manopola non muoveva
+nulla — e per `Ml` era anche peggio, perché il Trading host non faceva nemmeno il binding della
+sezione (toggle non collegabile da nessuna strada). Il salvataggio condiviso è
+`SaveEngineSectionAsync`: validazione `AdminConfigRules`, scrittura sullo store, rilettura della
+fotografia.
+
+**[E4] Sync dati con ingestion remota.** Con `MarketData:UseRemoteIngestion=true` lo scheduling del
+sync vive nel servizio ingestion in-cluster, che legge la *propria* configurazione: i tre campi
+della card (interruttore, cadenza, backfill) non hanno alcun lettore nel guscio. Il pannello li
+**disabilita e lo dichiara** (la manopola vera è la ConfigMap del deployment ingestion), invece di
+mostrare un salvataggio verde che non muove nulla. Un canale di configurazione remota verso
+l'ingestion non è stato costruito, con motivo dichiarato nella ROADMAP (Filone E).
 
 ## Come funziona (flusso del codice)
 

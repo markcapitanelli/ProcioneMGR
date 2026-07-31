@@ -53,6 +53,11 @@ public static class EngineConfigSections
         // passa da questo canale. Qui viaggiano interruttore, provider, ChatId (non un segreto) e
         // rate-limit.
         "Notifications",
+        // [E3, 2026-07-31] Dual-read ML osservativo: il confronto lo fa TradingEngine, cioè il
+        // motore. Il pannello scriveva la sezione del guscio, che il motore remoto non legge — e il
+        // Trading host non faceva nemmeno il binding, quindi il toggle non era collegabile da
+        // nessuna strada. Niente segreti qui: toggle, URL del servizio ML in-cluster e timeout.
+        "Ml",
     ];
 
     /// <summary>

@@ -34,7 +34,25 @@ public interface IEngineConfigStore
     /// producer degli allarmi di quarantena, quindi il suo silenzio è il più costoso di tutti.
     /// </summary>
     Task<NotificationResult> SendTestNotificationAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// [E5] Spia di guasto del canale DEL MOTORE, letta senza inviare nulla: ultimo recapito,
+    /// ultimo fallimento col motivo, fallimenti accumulati. La prova qui sopra è un gesto; questa è
+    /// la memoria di ciò che è successo fra una prova e l'altra.
+    /// </summary>
+    Task<EngineNotificationChannelStatus> GetNotificationChannelStatusAsync(CancellationToken ct = default);
 }
+
+/// <summary>[E5] Spia del canale del motore come la vede il guscio.</summary>
+/// <param name="Reachable">Falso se il motore remoto non ha risposto: <paramref name="Status"/> non significa nulla.</param>
+/// <param name="ChannelComposed">Falso se l'host del motore non ha composto alcun canale di notifica.</param>
+/// <param name="Status">Lo stato del canale, quando raggiungibile e composto.</param>
+/// <param name="Error">Motivo dell'irraggiungibilità.</param>
+public sealed record EngineNotificationChannelStatus(
+    bool Reachable,
+    bool ChannelComposed,
+    NotificationChannelStatus? Status,
+    string? Error = null);
 
 /// <summary>Fotografia della configurazione del motore, con la diagnostica che la rende leggibile.</summary>
 /// <param name="Sections">Le sezioni lette.</param>
@@ -114,6 +132,12 @@ public sealed class LocalEngineConfigStore(
             "Se leggi questo messaggio, gli allarmi del MOTORE — quarantena corsie compresa — ti raggiungono.",
             ct);
     }
+
+    /// <summary>Motore in-process: la spia è quella del dispatcher di questo host.</summary>
+    public Task<EngineNotificationChannelStatus> GetNotificationChannelStatusAsync(CancellationToken ct = default)
+        => Task.FromResult(dispatcher is null
+            ? new EngineNotificationChannelStatus(Reachable: true, ChannelComposed: false, Status: null)
+            : new EngineNotificationChannelStatus(Reachable: true, ChannelComposed: true, dispatcher.ChannelStatus));
 }
 
 /// <summary>
@@ -191,6 +215,37 @@ public sealed class RemoteEngineConfigStore(
         catch (RpcException ex)
         {
             return new NotificationResult(NotificationOutcome.Failed, DescribeRpcFailure(ex));
+        }
+    }
+
+    public async Task<EngineNotificationChannelStatus> GetNotificationChannelStatusAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await client.GetNotificationChannelStatusAsync(
+                new Proto.GetNotificationChannelStatusRequest(), cancellationToken: ct);
+
+            if (!response.ChannelComposed)
+            {
+                return new EngineNotificationChannelStatus(Reachable: true, ChannelComposed: false, Status: null);
+            }
+
+            return new EngineNotificationChannelStatus(Reachable: true, ChannelComposed: true,
+                new NotificationChannelStatus(
+                    response.LastDeliveredUtc?.ToDateTime(),
+                    response.LastFailureUtc?.ToDateTime(),
+                    string.IsNullOrEmpty(response.LastFailureDetail) ? null : response.LastFailureDetail,
+                    response.FailuresSinceLastDelivery));
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.Unimplemented)
+        {
+            return new EngineNotificationChannelStatus(Reachable: false, ChannelComposed: false, Status: null,
+                "Il motore in esecuzione è una build precedente, che non espone ancora la spia del canale: va aggiornato.");
+        }
+        catch (RpcException ex)
+        {
+            return new EngineNotificationChannelStatus(Reachable: false, ChannelComposed: false, Status: null,
+                DescribeRpcFailure(ex));
         }
     }
 

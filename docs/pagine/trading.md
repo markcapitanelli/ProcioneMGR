@@ -38,7 +38,17 @@ salvata (badge FUTURES Nx / SPOT nell'header).
 | Posizioni aperte | 330–375 | Entry/current/qty/PnL; in Futures leva e **Liq. Price** colorato per vicinanza (<5% rosso, <15% giallo); editor SL/TP/Trailing per posizione con "Set SL/TP" e "Close" |
 | Equity curve | 377–383 | `OhlcvChart` solo indicatori |
 | Ordini recenti | 385–406 | Storico con stato (Filled/Rejected/Pending) e motivo d'errore |
-| Configurazione sicurezza | 408–481 | Solo Admin: soglie salvate in appsettings.json e applicate a caldo |
+| Configurazione sicurezza | 408–481 | Solo Admin: soglie lette e scritte **sul motore** via `IEngineConfigStore` (E1, 2026-07-31) — l'header dichiara dove vivono e la sorgente prevalente; se il motore non risponde, il pannello lo dice invece di spacciare i default per soglie applicate |
+
+### Il battito di valutazione (header, E6 2026-07-31)
+
+Accanto al badge RUNNING c'è il **battito**: l'apertura dell'ultima candela valutata dal motore in
+questo avvio, giudicata contro adesso con la regola unica di `SeriesFreshness`. RUNNING è un flag
+d'intento; il battito è la prova dell'attività — una corsia running con l'ultima candela di ieri ha
+stop e trailing che non valuta nessuno. Rosso = stantio (se il numero non scende ai refresh, è un
+digiuno, non la rincorsa del replay); giallo = nessuna candela ancora da questo avvio. Il
+`LaneInvariantWatchdog` fa lo stesso controllo lato motore e allerta (una volta per transizione,
+senza quarantena: la corsia non è corrotta, è a digiuno).
 
 ### Le soglie di sicurezza (righe 421–474)
 Max size per posizione, size per apertura (sui Futures il nozionale è size × leva), max
@@ -94,7 +104,7 @@ per costruzione.
 | `ITradingEngine` / `TradingEngine` | Il motore: posizioni, ordini, safety, corsie | [`Services/Trading/TradingEngine.cs`](../../ProcioneMGR/Services/Trading/TradingEngine.cs) |
 | Commands/Queries (Mediator) | StartLane, StopLane, EmergencyStop, ConfirmOrder, RejectOrder, SetStopLossTakeProfit, ClosePosition; GetLaneStatus, GetOpenPositions, GetOrderHistory, GetPendingOrders, GetPerformance | [`Services/Trading/Commands/`](../../ProcioneMGR/Services/Trading/Commands) · [`Queries/`](../../ProcioneMGR/Services/Trading/Queries) |
 | `SafetyChecker` + `SafetyConfiguration` | Le soglie applicate a ogni ordine (fail-safe anche con capitale ≤ 0) | [`Services/Trading/SafetyChecker.cs`](../../ProcioneMGR/Services/Trading/SafetyChecker.cs) |
-| `SafetyConfigWriter` | Persistenza a caldo delle soglie in appsettings.json | [`Services/Trading/SafetyConfigWriter.cs`](../../ProcioneMGR/Services/Trading/SafetyConfigWriter.cs) |
+| `IEngineConfigStore` | [E1] Lettura/scrittura delle soglie **sul processo che le applica** (in-process o gRPC), con rilettura dopo la scrittura e validazione `AdminConfigRules` lato server | [`Services/Trading/EngineConfigStore.cs`](../../ProcioneMGR/Services/Trading/EngineConfigStore.cs) |
 | `PromotionEvaluator` / `LanePromoter` / `PromotionWorker` | Valutazione e promozione corsie (mai auto-Live) | [`Services/Trading/PromotionEvaluator.cs`](../../ProcioneMGR/Services/Trading/PromotionEvaluator.cs) |
 | `LaneInvariantWatchdog` / `LaneQuarantineStore` | Invarianti contabili e quarantena | [`Services/Trading/LaneInvariantWatchdog.cs`](../../ProcioneMGR/Services/Trading/LaneInvariantWatchdog.cs) |
 | `IMasterKeyProbe` | Diagnosi credenziali non decifrabili (banner master key) | [`Services/Security/MasterKeyProbe.cs`](../../ProcioneMGR/Services/Security/MasterKeyProbe.cs) |
@@ -103,9 +113,11 @@ per costruzione.
 
 ## Dati letti / scritti
 
-- **Legge**: stato motore per corsia, posizioni, ordini, pending, equity, quarantena, safety config.
-- **Scrive**: comandi al motore (avvio/stop/emergenza/conferme/SL-TP/chiusure),
-  `appsettings.json` (safety, solo Admin), audit di conferma/rifiuto con utente.
+- **Legge**: stato motore per corsia (incluso il battito di valutazione), posizioni, ordini,
+  pending, equity, quarantena, safety config **dal motore**.
+- **Scrive**: comandi al motore (avvio/stop/emergenza/conferme/SL-TP/chiusure), soglie di
+  sicurezza **sul motore** via `IEngineConfigStore` (solo Admin, con rilettura), audit di
+  conferma/rifiuto con utente.
 
 ## [2026-07-25] Corsie configurabili e selettore a schede
 

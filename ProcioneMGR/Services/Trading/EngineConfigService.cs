@@ -67,6 +67,7 @@ public sealed class EngineConfigService(
         ["MarketData:Realtime"] = typeof(RealtimeFeedOptions),
         ["Carry"] = typeof(CarryOptions),
         ["Notifications"] = typeof(ProcioneMGR.Services.Notifications.NotificationOptions),
+        ["Ml"] = typeof(ProcioneMGR.Services.ML.MlComparisonOptions),
     };
 
     /// <summary>Dove il motore scrive: lo stesso file che <see cref="AppConfigWriter"/> tocca.</summary>

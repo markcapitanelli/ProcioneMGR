@@ -275,4 +275,38 @@ public sealed class TradingCommandServiceImpl(
             Provider = options.CurrentValue.Provider ?? string.Empty,
         };
     }
+
+    /// <summary>
+    /// [E5] Spia di guasto del canale di notifica DI QUESTO processo, senza inviare nulla. La prova
+    /// qui sopra è un gesto dell'operatore; fra una prova e l'altra un recapito fallito (token
+    /// scaduto, rete) viveva solo nei log del pod — la condizione esatta del «Telegram muto da due
+    /// giorni». Qui l'ultimo esito reale diventa leggibile da dove un operatore guarda.
+    /// </summary>
+    public override Task<GetNotificationChannelStatusResponse> GetNotificationChannelStatus(
+        GetNotificationChannelStatusRequest request, ServerCallContext context)
+    {
+        // GetService, non GetRequired: un host senza canale composto deve poterlo DIRE, non esplodere.
+        var dispatcher = serviceProvider.GetService<ProcioneMGR.Services.Notifications.NotificationDispatcher>();
+        if (dispatcher is null)
+        {
+            return Task.FromResult(new GetNotificationChannelStatusResponse { ChannelComposed = false });
+        }
+
+        var status = dispatcher.ChannelStatus;
+        var response = new GetNotificationChannelStatusResponse
+        {
+            ChannelComposed = true,
+            LastFailureDetail = status.LastFailureDetail ?? string.Empty,
+            FailuresSinceLastDelivery = status.FailuresSinceLastDelivery,
+        };
+        if (status.LastDeliveredUtc is DateTime delivered)
+        {
+            response.LastDeliveredUtc = TradingContractMapper.ToProtoNullable(delivered);
+        }
+        if (status.LastFailureUtc is DateTime failed)
+        {
+            response.LastFailureUtc = TradingContractMapper.ToProtoNullable(failed);
+        }
+        return Task.FromResult(response);
+    }
 }

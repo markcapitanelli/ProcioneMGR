@@ -64,6 +64,12 @@ service TradingCommandService {
 
   // Prova il canale di notifica DEL MOTORE (vedi SendTestNotificationRequest in fondo al file).
   rpc SendTestNotification(SendTestNotificationRequest) returns (SendTestNotificationResponse);
+
+  // [E5, 2026-07-31] Spia di guasto del canale di notifica DEL MOTORE, leggibile SENZA inviare
+  // nulla. Il pulsante di prova esiste e serve, ma e' un gesto: fra una prova e l'altra un recapito
+  // fallito (token scaduto, rete) vive solo nei log del pod — la condizione esatta che ha tenuto
+  // Telegram muto per due giorni. Questo rpc porta l'ultimo esito reale dove un operatore guarda.
+  rpc GetNotificationChannelStatus(GetNotificationChannelStatusRequest) returns (GetNotificationChannelStatusResponse);
 }
 
 // --- Enum di dominio -------------------------------------------------------------------------
@@ -133,6 +139,14 @@ message GetLaneStatusResponse {
   google.protobuf.Timestamp last_order_utc = 19;
   bool emergency_stopped = 20;
   string emergency_stop_reason = 21;
+  // [E6, 2026-07-31] Il battito dietro il flag: `running` dichiara l'intenzione, questo timestamp
+  // (apertura dell'ultima candela VALUTATA nell'avvio corrente del motore; assente = nessuna
+  // ancora) prova l'attivita'. Senza, una corsia affamata — DB muto, sync fermo — resta "running"
+  // e verde ovunque mentre stop e trailing non li valuta nessuno. Il timeframe viaggia accanto
+  // perche' il battito si giudica contro ADESSO con la regola unica di SeriesFreshness, e senza
+  // passo della barra il ritardo non e' interpretabile.
+  string timeframe = 22;
+  google.protobuf.Timestamp last_processed_candle_utc = 23;
 }
 
 // --- Posizioni -------------------------------------------------------------------------------
@@ -374,4 +388,20 @@ message SendTestNotificationResponse {
   string detail = 2;
   // Provider che ha tentato il recapito, come lo vede il MOTORE.
   string provider = 3;
+}
+
+// --- [E5] Spia del canale di notifica del motore ------------------------------------------------
+
+message GetNotificationChannelStatusRequest {}
+
+message GetNotificationChannelStatusResponse {
+  // false = nessun canale composto in questo host: gli altri campi non significano nulla.
+  bool channel_composed = 1;
+  // Ultimo recapito accettato dal provider (assente = mai dall'avvio del processo).
+  google.protobuf.Timestamp last_delivered_utc = 2;
+  // Ultimo fallimento di recapito (assente = mai dall'avvio del processo).
+  google.protobuf.Timestamp last_failure_utc = 3;
+  string last_failure_detail = 4;
+  // Fallimenti consecutivi dall'ultimo recapito riuscito: > 0 = il canale sta perdendo messaggi.
+  int32 failures_since_last_delivery = 5;
 }

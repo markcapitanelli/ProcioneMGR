@@ -93,23 +93,9 @@ public class TradingPageServiceTests
         }
     }
 
-    private sealed class RecordingSafetyWriter : ISafetyConfigWriter
-    {
-        public SafetyConfiguration? Saved { get; private set; }
-        public int Calls { get; private set; }
-        public Exception? ThrowOnSave { get; set; }
-        public Task SaveAsync(SafetyConfiguration cfg, CancellationToken ct = default)
-        {
-            if (ThrowOnSave is not null) return Task.FromException(ThrowOnSave);
-            Saved = cfg;
-            Calls++;
-            return Task.CompletedTask;
-        }
-    }
-
     private static (TradingPageService Service, FakeTradingEngine Engine0) Build(
         SafetyConfiguration? safety = null, IPromotionEvaluator? promotionEval = null,
-        ILanePromoter? promoter = null, ISafetyConfigWriter? safetyWriter = null,
+        ILanePromoter? promoter = null, FakeEngineConfigStore? engineConfig = null,
         ILaneQuarantineStore? quarantineStore = null)
     {
         var engine0 = new FakeTradingEngine(0);
@@ -119,12 +105,21 @@ public class TradingPageServiceTests
         services.AddMediator();
         var provider = services.BuildServiceProvider();
 
+        // [E1] Le soglie arrivano dallo store del MOTORE, non più da IOptionsMonitor del guscio:
+        // il fake le tiene in memoria come farebbe il motore col suo file. Se il test ha già
+        // seminato la sezione, quella vince.
+        var store = engineConfig ?? new FakeEngineConfigStore();
+        if (!store.Sections.ContainsKey("Trading:Safety"))
+        {
+            store.Seed("Trading:Safety",
+                safety ?? new SafetyConfiguration { MaxPositionSizePercent = 10m, MaxTotalExposurePercent = 50m, MaxOpenPositions = 5, MaxLeverageAllowed = 5 });
+        }
+
         var service = new TradingPageService(
             provider.GetRequiredService<IMediator>(),
             promotionEval ?? new FakePromotionEvaluator([]),
             promoter ?? new RecordingPromoter(),
-            (safety ?? new SafetyConfiguration { MaxPositionSizePercent = 10m, MaxTotalExposurePercent = 50m, MaxOpenPositions = 5, MaxLeverageAllowed = 5 }).AsMonitor(),
-            safetyWriter ?? new RecordingSafetyWriter(),
+            store,
             quarantineStore ?? new FakeLaneQuarantineStore());
         return (service, engine0);
     }
@@ -289,9 +284,9 @@ public class TradingPageServiceTests
     public async Task SaveSafetyAsync_InvalidValues_RejectsWithoutCallingWriter(
         decimal maxPos, decimal maxExposure, int maxOpen, int maxLeverage)
     {
-        var writer = new RecordingSafetyWriter();
-        var (service, _) = Build(safetyWriter: writer);
-        service.ReloadSafety();
+        var store = new FakeEngineConfigStore();
+        var (service, _) = Build(engineConfig: store);
+        await service.ReloadSafetyAsync();
         service.Safety.MaxPositionSizePercent = maxPos;
         service.Safety.MaxTotalExposurePercent = maxExposure;
         service.Safety.MaxOpenPositions = maxOpen;
@@ -299,7 +294,7 @@ public class TradingPageServiceTests
 
         await service.SaveSafetyAsync();
 
-        Assert.Equal(0, writer.Calls);
+        Assert.Empty(store.Saved);
         Assert.True(service.IsError);
         Assert.Contains("non validi", service.Message);
     }
@@ -309,28 +304,28 @@ public class TradingPageServiceTests
     {
         // P2-8: zero è un valore lecito (promozione a fee zero, test), negativo no — nessun exchange
         // paga per tradare in questo contesto, e un fee negativo alimenterebbe un PnL live gonfiato.
-        var writer = new RecordingSafetyWriter();
-        var (service, _) = Build(safetyWriter: writer);
-        service.ReloadSafety();
+        var store = new FakeEngineConfigStore();
+        var (service, _) = Build(engineConfig: store);
+        await service.ReloadSafetyAsync();
         service.Safety.FeePercent = -0.1m;
 
         await service.SaveSafetyAsync();
 
-        Assert.Equal(0, writer.Calls);
+        Assert.Empty(store.Saved);
         Assert.True(service.IsError);
     }
 
     [Fact]
     public async Task SaveSafetyAsync_ZeroFeePercent_IsAccepted()
     {
-        var writer = new RecordingSafetyWriter();
-        var (service, _) = Build(safetyWriter: writer);
-        service.ReloadSafety();
+        var store = new FakeEngineConfigStore();
+        var (service, _) = Build(engineConfig: store);
+        await service.ReloadSafetyAsync();
         service.Safety.FeePercent = 0m;
 
         await service.SaveSafetyAsync();
 
-        Assert.Equal(1, writer.Calls);
+        Assert.Single(store.Saved);
         Assert.False(service.IsError);
     }
 
@@ -391,29 +386,78 @@ public class TradingPageServiceTests
     [Fact]
     public async Task SaveSafetyAsync_ValidValues_PersistsAndReportsSuccess()
     {
-        var writer = new RecordingSafetyWriter();
-        var (service, _) = Build(safetyWriter: writer);
-        service.ReloadSafety();
+        var store = new FakeEngineConfigStore();
+        var (service, _) = Build(engineConfig: store);
+        await service.ReloadSafetyAsync();
         service.Safety.MaxDrawdownPercent = 12.5m;
 
         await service.SaveSafetyAsync();
 
-        Assert.Equal(1, writer.Calls);
-        Assert.Equal(12.5m, writer.Saved!.MaxDrawdownPercent);
+        var (section, options) = Assert.Single(store.Saved);
+        Assert.Equal("Trading:Safety", section);
+        Assert.Equal(12.5m, ((SafetyConfiguration)options).MaxDrawdownPercent);
         Assert.False(service.IsError);
+        // La conferma dichiara DOVE è stata scritta, non un generico "salvato".
+        Assert.Contains("salvate", service.Message);
     }
 
     [Fact]
     public async Task SaveSafetyAsync_WriterThrows_ReportsErrorMessage()
     {
-        var writer = new RecordingSafetyWriter { ThrowOnSave = new InvalidOperationException("disco pieno") };
-        var (service, _) = Build(safetyWriter: writer);
-        service.ReloadSafety();
+        var store = new FakeEngineConfigStore { ThrowOnWrite = new InvalidOperationException("disco pieno") };
+        var (service, _) = Build(engineConfig: store);
+        await service.ReloadSafetyAsync();
 
         await service.SaveSafetyAsync();
 
         Assert.True(service.IsError);
         Assert.Contains("disco pieno", service.Message);
+    }
+
+    [Fact]
+    public async Task SaveSafetyAsync_EngineWarning_IsSurfacedToTheOperator()
+    {
+        // In Kubernetes una env della ConfigMap vince sul file: il salvataggio riesce e non cambia
+        // nulla. Il motore lo dice nel risultato, e il pannello DEVE ripeterlo — tacere sarebbe
+        // esattamente la bugia che E1 corregge.
+        var store = new FakeEngineConfigStore { WarningToReturn = "MaxDrawdownPercent arriva da variabili d'ambiente" };
+        var (service, _) = Build(engineConfig: store);
+        await service.ReloadSafetyAsync();
+
+        await service.SaveSafetyAsync();
+
+        Assert.False(service.IsError);
+        Assert.Contains("variabili d'ambiente", service.Message);
+    }
+
+    [Fact]
+    public async Task ReloadSafetyAsync_EngineUnreachable_DeclaresDefaultsInsteadOfPassingThemOffAsReal()
+    {
+        // Il motore remoto non risponde: Bind restituisce i default. Il servizio NON deve
+        // spacciarli per le soglie applicate — SafetyReachable=false è ciò che il pannello mostra.
+        var store = new FakeEngineConfigStore(remote: true, reachable: false);
+        var (service, _) = Build(engineConfig: store);
+
+        await service.ReloadSafetyAsync();
+
+        Assert.False(service.SafetyReachable);
+        Assert.NotNull(service.SafetyError);
+        Assert.Equal(new SafetyConfiguration().MaxDrawdownPercent, service.Safety.MaxDrawdownPercent);
+    }
+
+    [Fact]
+    public async Task ReloadSafetyAsync_ReadsWhatTheEngineApplies_NotTheShellFile()
+    {
+        // Il cuore di E1: il valore mostrato è quello del MOTORE (via store), non quello del guscio.
+        var store = new FakeEngineConfigStore(remote: true);
+        store.Seed("Trading:Safety", new SafetyConfiguration { MaxDrawdownPercent = 33m });
+        var (service, _) = Build(engineConfig: store);
+
+        await service.ReloadSafetyAsync();
+
+        Assert.True(service.SafetyReachable);
+        Assert.True(service.SafetyIsRemote);
+        Assert.Equal(33m, service.Safety.MaxDrawdownPercent);
     }
 
     // --- Edit SL/TP/Trailing: fallback e parsing ----------------------------------------------

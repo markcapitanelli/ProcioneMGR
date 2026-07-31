@@ -1,6 +1,5 @@
 using Grpc.Core;
 using Mediator;
-using Microsoft.Extensions.Options;
 using ProcioneMGR.Services.Trading.Commands;
 using ProcioneMGR.Services.Trading.Queries;
 
@@ -9,7 +8,7 @@ namespace ProcioneMGR.Services.Trading;
 /// <summary>
 /// Orchestrazione di <c>Components/Pages/Trading.razor</c> (P1-5, audit consolidamento
 /// 2026-07-17): tutte le chiamate a <see cref="ITradingEngine"/>/<see cref="IPromotionEvaluator"/>/
-/// <see cref="ILanePromoter"/>/<see cref="ISafetyConfigWriter"/> e lo stato che ne deriva, così la
+/// <see cref="ILanePromoter"/>/<see cref="IEngineConfigStore"/> e lo stato che ne deriva, così la
 /// logica di orchestrazione ha test unitari indipendenti da Blazor (vedi
 /// <c>TradingPageServiceTests</c>). Il componente resta responsabile solo di ciò che è
 /// intrinsecamente Blazor: rendering, ciclo di vita (<c>OnInitializedAsync</c>/<c>Dispose</c>,
@@ -28,8 +27,7 @@ public sealed class TradingPageService(
     IMediator mediator,
     IPromotionEvaluator promotionEval,
     ILanePromoter promoter,
-    IOptionsMonitor<SafetyConfiguration> safetyMonitor,
-    ISafetyConfigWriter safetyWriter,
+    IEngineConfigStore engineConfig,
     ILaneQuarantineStore quarantineStore)
 {
     public TradingEngineStatus? Status { get; private set; }
@@ -54,8 +52,23 @@ public sealed class TradingPageService(
     public string? PromoMessage { get; private set; }
     public bool PromoIsError { get; private set; }
 
-    /// <summary>Copia di lavoro delle soglie di sicurezza (form Admin) — vedi <see cref="ReloadSafety"/>/<see cref="SaveSafetyAsync"/>.</summary>
+    /// <summary>Copia di lavoro delle soglie di sicurezza (form Admin) — vedi <see cref="ReloadSafetyAsync"/>/<see cref="SaveSafetyAsync"/>.</summary>
     public SafetyConfiguration Safety { get; private set; } = new();
+
+    /// <summary>
+    /// Falso quando il motore remoto non ha risposto all'ultima lettura: i valori nel form sono i
+    /// DEFAULT, non le soglie applicate — e il pannello lo deve dire invece di spacciarli per vere.
+    /// </summary>
+    public bool SafetyReachable { get; private set; } = true;
+
+    /// <summary>Motivo dell'irraggiungibilità quando <see cref="SafetyReachable"/> è falso.</summary>
+    public string? SafetyError { get; private set; }
+
+    /// <summary>Sorgente prevalente della sezione ("appsettings.json", "variabili d'ambiente"…), per spiegare perché salvare può non bastare.</summary>
+    public string? SafetySource { get; private set; }
+
+    /// <summary>Vero se le soglie vivono in un altro processo (cambia solo cosa dire all'operatore).</summary>
+    public bool SafetyIsRemote => engineConfig.IsRemote;
 
     // Valori SL/TP/Trailing in modifica: sopravvivono al refresh automatico finché non salvati.
     private readonly Dictionary<string, decimal?> _slEdits = new();
@@ -258,32 +271,23 @@ public sealed class TradingPageService(
     }
 
     // --- Configurazione di sicurezza (pannello Admin) ------------------------------------------
+    //
+    // [E1, 2026-07-31] Fino a oggi questo pannello leggeva IOptionsMonitor del GUSCIO e scriveva il
+    // file del GUSCIO («attiva entro pochi secondi») — ma la SafetyChecker che applica le soglie
+    // ordine per ordine vive nell'host del MOTORE, che col trading remoto è un altro processo: la
+    // manopola non muoveva nulla. Stessa forma del difetto n. 5 dell'audit backend↔frontend. Ora si
+    // passa da IEngineConfigStore: si legge da chi esegue, si scrive su chi esegue, e la risposta è
+    // la sezione RILETTA dal motore — non serve fidarsi.
 
-    public void ReloadSafety()
+    public async Task ReloadSafetyAsync(CancellationToken ct = default)
     {
-        var c = safetyMonitor.CurrentValue;
-        Safety = new SafetyConfiguration
-        {
-            MaxPositionSizePercent = c.MaxPositionSizePercent,
-            MaxTotalExposurePercent = c.MaxTotalExposurePercent,
-            MaxDailyLossPercent = c.MaxDailyLossPercent,
-            MaxDrawdownPercent = c.MaxDrawdownPercent,
-            MaxOpenPositions = c.MaxOpenPositions,
-            MinOrderIntervalSeconds = c.MinOrderIntervalSeconds,
-            RequireManualConfirmationForLive = c.RequireManualConfirmationForLive,
-            MaxLeverageAllowed = c.MaxLeverageAllowed,
-            MaintenanceMarginPercent = c.MaintenanceMarginPercent,
-            PositionSizePercent = c.PositionSizePercent,
-            UseExchangeRestingStops = c.UseExchangeRestingStops,
-            FeePercent = c.FeePercent,
-            // Dosaggio sulla volatilità: vanno copiati anche questi, altrimenti il pannello
-            // mostrerebbe i default e il salvataggio successivo cancellerebbe la configurazione vera.
-            VolatilityTargetingEnabled = c.VolatilityTargetingEnabled,
-            TargetAnnualVolatilityPercent = c.TargetAnnualVolatilityPercent,
-            VolatilityLookbackBars = c.VolatilityLookbackBars,
-            MinExposureMultiplier = c.MinExposureMultiplier,
-            MaxExposureMultiplier = c.MaxExposureMultiplier,
-        };
+        var snapshot = await engineConfig.ReadAsync(["Trading:Safety"], ct);
+        SafetyReachable = snapshot.Reachable;
+        SafetyError = snapshot.Error;
+        SafetySource = snapshot.SourceOf("Trading:Safety");
+        // Con motore irraggiungibile Bind restituisce i DEFAULT: il form resta usabile ma
+        // SafetyReachable=false dice al pannello di non spacciarli per le soglie applicate.
+        Safety = snapshot.Bind<SafetyConfiguration>("Trading:Safety");
     }
 
     public async Task SaveSafetyAsync()
@@ -296,8 +300,21 @@ public sealed class TradingPageService(
         }
         try
         {
-            await safetyWriter.SaveAsync(Safety);
-            SetMsg("Configurazione di sicurezza salvata (attiva entro pochi secondi).", false);
+            var result = await engineConfig.WriteAsync("Trading:Safety", Safety);
+
+            // La verità del motore, non l'eco del form: ciò che mostra il pannello da qui in poi
+            // è la sezione come il motore l'ha riletta dopo la scrittura.
+            try
+            {
+                Safety = System.Text.Json.JsonSerializer.Deserialize<SafetyConfiguration>(
+                    result.AppliedJson, EngineConfigSnapshot.JsonOptions) ?? Safety;
+            }
+            catch (System.Text.Json.JsonException) { /* si tiene la copia di lavoro */ }
+
+            var dove = engineConfig.IsRemote ? "sul MOTORE (riletta dal processo che la applica)" : "in appsettings.json";
+            SetMsg(result.Warning is { } warning
+                ? $"Soglie di sicurezza salvate {dove}, MA — {warning}"
+                : $"Soglie di sicurezza salvate {dove}: valgono dal prossimo ordine valutato.", false);
         }
         catch (Exception ex)
         {
