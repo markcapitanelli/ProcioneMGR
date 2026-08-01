@@ -451,7 +451,15 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Experiments.IExperimentTracke
 // Opzioni via Configure<T> (hot-reload da /admin/autonomy); worker anche singleton risolvibile
 // per il bottone "Esegui supervisione ora" (stessa istanza del hosted service).
 builder.Services.Configure<ProcioneMGR.Services.Llm.LlmOptions>(builder.Configuration.GetSection("Llm"));
-builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmClient, ProcioneMGR.Services.Llm.AnthropicLlmClient>();
+// Multi-provider (2026-08-01): le chiavi vivono cifrate a DB (AiCredentials, pannello
+// /admin/ai-supervisor) con fallback env; l'ILlmClient registrato è il delegante, che instrada
+// OGNI chiamata sul Provider corrente (hot-reload) — supervisore/guard/worker restano ignari.
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.IAiKeyStore, ProcioneMGR.Services.Llm.AiKeyStore>();
+builder.Services.AddHttpClient(ProcioneMGR.Services.Llm.NvidiaLlmClient.HttpClientName,
+    c => c.Timeout = TimeSpan.FromSeconds(120)); // i modelli con reasoning sono lenti; il taglio operativo resta al LlmCallGuard
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.AnthropicLlmClient>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.NvidiaLlmClient>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmClient, ProcioneMGR.Services.Llm.DelegatingLlmClient>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmCallGuard, ProcioneMGR.Services.Llm.LlmCallGuard>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.IPipelineSupervisor, ProcioneMGR.Services.Llm.PipelineSupervisor>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>();
