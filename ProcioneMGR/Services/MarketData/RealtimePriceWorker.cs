@@ -251,7 +251,10 @@ public sealed class RealtimePriceWorker(
 
             if (feed.UpdateSubscriptions(subs))
             {
-                logger.LogInformation("Feed {Exchange}: sottoscrizioni aggiornate a {N} serie.", feed.Exchange, subs.Count);
+                // Il riciclo lo fa il feed da sé (C1): qui si dice cosa sta succedendo davvero,
+                // non «aggiornate» — che rassicurava mentre la connessione restava sul set vecchio.
+                logger.LogInformation("Feed {Exchange}: sottoscrizioni cambiate ({N} serie), riciclo la connessione.",
+                    feed.Exchange, subs.Count);
             }
         }
     }

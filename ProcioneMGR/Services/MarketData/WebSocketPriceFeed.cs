@@ -21,8 +21,10 @@ public sealed record FeedHealth(
 /// Una connessione WebSocket verso un exchange, mantenuta viva a oltranza.
 ///
 /// Responsabilità: connettere, sottoscrivere, leggere, riconnettere con backoff esponenziale e
-/// jitter, e ripresentare le sottoscrizioni dopo ogni riconnessione. Il PARSING è del mapper, il
-/// ROUTING è del worker: qui si emettono solo eventi già tipizzati.
+/// jitter, ripresentare le sottoscrizioni dopo ogni riconnessione, e RICICLARE la connessione
+/// quando il set di sottoscrizioni cambia (gli exchange le negoziano solo al connect: senza
+/// riciclo un cambio resterebbe lettera morta). Il PARSING è del mapper, il ROUTING è del worker:
+/// qui si emettono solo eventi già tipizzati.
 ///
 /// Il jitter sul backoff non è ornamentale: senza, tre corsie che perdono la connessione insieme
 /// (tipico — la rete cade per tutte) ritenterebbero nello stesso istante a ogni giro, martellando
@@ -41,6 +43,14 @@ public sealed class WebSocketPriceFeed(
 
     private IReadOnlyList<StreamSubscription> _subscriptions = [];
     private Dictionary<string, StreamSubscription> _byExchangeSymbol = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// [C1] CTS della connessione IN CORSO, linked al token di <see cref="RunAsync"/>.
+    /// <see cref="UpdateSubscriptions"/> lo cancella quando il set cambia: è ciò che trasforma un
+    /// aggiornamento di sottoscrizioni in un riciclo immediato della connessione, invece di un
+    /// cambio di stato che nessuno applica finché il socket non cade da solo.
+    /// </summary>
+    private CancellationTokenSource? _connectionCts;
 
     private volatile bool _connected;
     private long _messages;
@@ -68,9 +78,12 @@ public sealed class WebSocketPriceFeed(
     }
 
     /// <summary>
-    /// Aggiorna l'insieme delle sottoscrizioni. Ritorna true se è CAMBIATO rispetto a quello attivo:
-    /// il chiamante usa l'esito per decidere se serve riciclare la connessione (Binance codifica le
-    /// sottoscrizioni nell'URL, quindi cambiarle richiede riconnettere).
+    /// Aggiorna l'insieme delle sottoscrizioni. Se è CAMBIATO rispetto a quello attivo, la
+    /// connessione corrente viene riciclata QUI, cancellandone il CTS: Binance codifica le
+    /// sottoscrizioni nell'URL e Bitget invia i frame solo al connect, quindi un cambio a
+    /// connessione viva non avrebbe altrimenti alcun effetto finché il socket non cade da solo
+    /// (Binance lo ricicla ogni 24 ore: possono volerci ORE). Ritorna true in quel caso — al
+    /// chiamante serve solo per loggare, non per agire.
     /// </summary>
     public bool UpdateSubscriptions(IReadOnlyList<StreamSubscription> subscriptions)
     {
@@ -82,6 +95,7 @@ public sealed class WebSocketPriceFeed(
             .ThenBy(s => s.Timeframe, StringComparer.Ordinal)
             .ToList();
 
+        CancellationTokenSource? active;
         lock (_sync)
         {
             if (ordered.SequenceEqual(_subscriptions))
@@ -90,8 +104,23 @@ public sealed class WebSocketPriceFeed(
             }
             _subscriptions = ordered;
             _byExchangeSymbol = ordered.ToDictionary(ExchangeSymbolOf, s => s, StringComparer.OrdinalIgnoreCase);
-            return true;
+            active = _connectionCts;
         }
+
+        // Il Cancel sta FUORI dal lock: cancellare esegue i callback registrati sul token, e
+        // farlo in sezione critica significherebbe correre codice arbitrario (le continuazioni
+        // del pump) tenendo il lock.
+        try
+        {
+            active?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // La connessione è appena finita da sola: non c'è più nulla da riciclare — RunAsync
+            // rilegge comunque il set aggiornato prima di riconnettersi.
+        }
+
+        return true;
     }
 
     private string ExchangeSymbolOf(StreamSubscription s) => mapper switch
@@ -113,38 +142,55 @@ public sealed class WebSocketPriceFeed(
         {
             IReadOnlyList<StreamSubscription> subs;
             Dictionary<string, StreamSubscription> index;
+
+            // [C1] Snapshot e registrazione del CTS nello STESSO lock: un UpdateSubscriptions
+            // arrivato un istante dopo trova già il CTS da cancellare — nessun cambio può cadere
+            // nella fessura fra la lettura del set e l'apertura della connessione.
+            using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             lock (_sync)
             {
                 subs = _subscriptions;
                 index = _byExchangeSymbol;
+                _connectionCts = connectionCts;
             }
 
-            if (subs.Count == 0)
-            {
-                // Nessuna corsia attiva: non si tiene aperta una connessione inutile.
-                await SafeDelayAsync(TimeSpan.FromSeconds(5), ct);
-                continue;
-            }
-
+            var recycle = false;
             try
             {
+                if (subs.Count == 0)
+                {
+                    // Nessuna corsia attiva: non si tiene aperta una connessione inutile. L'attesa
+                    // è sul token di connessione: la prima sottoscrizione che arriva la interrompe
+                    // e si connette subito, senza scontare il resto dei cinque secondi.
+                    await SafeDelayAsync(TimeSpan.FromSeconds(5), connectionCts.Token);
+                    continue;
+                }
+
                 await using var transport = transportFactory.Create();
-                await transport.ConnectAsync(mapper.BuildEndpoint(subs), ct);
+                await transport.ConnectAsync(mapper.BuildEndpoint(subs), connectionCts.Token);
 
                 foreach (var frame in mapper.BuildSubscribeFrames(subs))
                 {
-                    await transport.SendAsync(frame, ct);
+                    await transport.SendAsync(frame, connectionCts.Token);
                 }
 
                 MarkConnected();
                 attempt = 0; // la connessione ha retto: il backoff riparte da zero
                 logger.LogInformation("Feed {Exchange}: connesso, {N} sottoscrizioni.", mapper.Exchange, subs.Count);
 
-                await PumpAsync(transport, index, ct);
+                await PumpAsync(transport, index, connectionCts.Token);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 break;
+            }
+            catch (OperationCanceledException) when (connectionCts.IsCancellationRequested)
+            {
+                // Riciclo chiesto da UpdateSubscriptions: NON è un guasto. Si riconnette subito
+                // col set nuovo — niente backoff e niente conteggio fra le riconnessioni, che
+                // misurano la salute della rete, non i cambi di configurazione.
+                recycle = true;
+                logger.LogInformation("Feed {Exchange}: connessione riciclata per cambio sottoscrizioni.", mapper.Exchange);
             }
             catch (Exception ex)
             {
@@ -154,9 +200,20 @@ public sealed class WebSocketPriceFeed(
             finally
             {
                 MarkDisconnected();
+                lock (_sync)
+                {
+                    // Si toglie di mezzo PRIMA che l'using lo smaltisca: un Cancel su un CTS
+                    // pubblicato ma già smaltito è l'unica corsa possibile, e così resta stretta.
+                    if (ReferenceEquals(_connectionCts, connectionCts))
+                    {
+                        _connectionCts = null;
+                    }
+                }
             }
 
             if (ct.IsCancellationRequested) break;
+
+            if (recycle) continue;
 
             attempt++;
             Interlocked.Increment(ref _reconnects);
@@ -276,7 +333,7 @@ public sealed class WebSocketPriceFeed(
     private async Task SafeDelayAsync(TimeSpan delay, CancellationToken ct)
     {
         try { await Task.Delay(delay, _time, ct); }
-        catch (OperationCanceledException) { /* shutdown */ }
+        catch (OperationCanceledException) { /* shutdown o riciclo: decide il chiamante */ }
     }
 
     private void MarkConnected()
