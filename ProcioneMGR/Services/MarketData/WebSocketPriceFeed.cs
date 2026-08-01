@@ -18,6 +18,17 @@ public sealed record FeedHealth(
 }
 
 /// <summary>
+/// [G2] Salute di UNA serie sottoscritta: ultimo evento utile (tick/candela) e istante di
+/// sottoscrizione. Complementa <see cref="FeedHealth"/>: quello dice se il CANALE è vivo, questo
+/// se il SIMBOLO consegna — e basta un simbolo vivo a mascherare il silenzio degli altri.
+/// </summary>
+public sealed record SeriesHealth(
+    ExchangeName Exchange,
+    string Symbol,
+    DateTime? LastEventUtc,
+    DateTime SubscribedSinceUtc);
+
+/// <summary>
 /// Una connessione WebSocket verso un exchange, mantenuta viva a oltranza.
 ///
 /// Responsabilità: connettere, sottoscrivere, leggere, riconnettere con backoff esponenziale e
@@ -58,6 +69,17 @@ public sealed class WebSocketPriceFeed(
     private DateTime? _lastMessageUtc;
     private string? _lastError;
 
+    /// <summary>
+    /// [G2] Ultimo evento UTILE (tick o candela) per SIMBOLO sottoscritto, più l'istante in cui il
+    /// simbolo è entrato nel set. Il feed-level <see cref="Health"/> non basta alla watchdog: basta
+    /// UN simbolo vivo per coprire il silenzio di tutti gli altri — è il complice che ha reso
+    /// invisibile C1, e resta un buco anche col riciclo a posto (uno stream che l'exchange smette
+    /// di consegnare per blocco regionale tace mentre gli altri parlano). Chiavi = simbolo
+    /// canonico ("BTC/USDT"): è ciò che i mapper mettono negli eventi (sub.Symbol).
+    /// </summary>
+    private readonly Dictionary<string, DateTime> _lastBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime> _subscribedSinceBySymbol = new(StringComparer.OrdinalIgnoreCase);
+
     public ExchangeName Exchange => mapper.Exchange;
 
     /// <summary>Emesso per ogni tick valido. I gestori NON devono lanciare: un'eccezione qui è loggata e ignorata.</summary>
@@ -73,6 +95,28 @@ public sealed class WebSocketPriceFeed(
             lock (_sync)
             {
                 return new FeedHealth(mapper.Exchange, _connected, _lastMessageUtc, _reconnects, _messages, _lastError);
+            }
+        }
+    }
+
+    /// <summary>
+    /// [G2] Salute PER SERIE: per ogni simbolo sottoscritto, l'ultimo evento utile ricevuto (null =
+    /// mai, da quando è sottoscritto) e l'istante di sottoscrizione — il riferimento della grazia:
+    /// un simbolo appena aggiunto non ha ancora avuto il tempo di consegnare, e allertarlo subito
+    /// sarebbe il falso allarme a ogni avvio di corsia.
+    /// </summary>
+    public IReadOnlyList<SeriesHealth> SeriesHealthSnapshot
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _subscribedSinceBySymbol
+                    .Select(kv => new SeriesHealth(
+                        mapper.Exchange, kv.Key,
+                        _lastBySymbol.TryGetValue(kv.Key, out var last) ? last : null,
+                        kv.Value))
+                    .ToList();
             }
         }
     }
@@ -104,6 +148,22 @@ public sealed class WebSocketPriceFeed(
             }
             _subscriptions = ordered;
             _byExchangeSymbol = ordered.ToDictionary(ExchangeSymbolOf, s => s, StringComparer.OrdinalIgnoreCase);
+
+            // [G2] Contabilità per-serie allineata al set: i simboli nuovi partono ADESSO (è il
+            // riferimento della loro grazia), quelli usciti si dimenticano — lasciare voci orfane
+            // significherebbe una watchdog che sorveglia serie che nessuna corsia opera più.
+            var now = _time.GetUtcNow().UtcDateTime;
+            var current = ordered.Select(s => s.Symbol).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var symbol in current)
+            {
+                _subscribedSinceBySymbol.TryAdd(symbol, now);
+            }
+            foreach (var gone in _subscribedSinceBySymbol.Keys.Where(k => !current.Contains(k)).ToList())
+            {
+                _subscribedSinceBySymbol.Remove(gone);
+                _lastBySymbol.Remove(gone);
+            }
+
             active = _connectionCts;
         }
 
@@ -251,6 +311,17 @@ public sealed class WebSocketPriceFeed(
 
             var evt = mapper.Parse(raw, index);
             if (evt.IsEmpty) continue;
+
+            // [G2] Freschezza per-serie: conta l'evento UTILE (tick o candela), non il frame
+            // generico — un canale che consegna solo pong e conferme non tiene vivo nessun simbolo.
+            var eventSymbol = evt.Tick?.Symbol ?? evt.Bar?.Symbol;
+            if (eventSymbol is not null)
+            {
+                lock (_sync)
+                {
+                    _lastBySymbol[eventSymbol] = _time.GetUtcNow().UtcDateTime;
+                }
+            }
 
             if (evt.Tick is PriceTick tick)
             {

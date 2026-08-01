@@ -129,6 +129,48 @@ public class WebSocketPriceFeedTests
     }
 
     [Fact]
+    public async Task SeriesHealth_TracksPerSymbol_ASilentSymbolIsVisible()
+    {
+        // [G2] Il cuore del fix: BTC consegna, ETH tace. La salute del FEED è verde (un messaggio
+        // c'è), ma la watchdog deve poter vedere che ETH non ha MAI consegnato — è esattamente il
+        // silenzio che la versione per-feed mascherava.
+        var factory = new FakeTransportFactory(Script(BookTicker));
+        var feed = BuildFeed(new BinanceStreamMapper(), factory);
+        feed.UpdateSubscriptions([BtcSpot(), new StreamSubscription(ExchangeName.Binance, "ETH/USDT", "5m", MarketType.Spot)]);
+
+        var ticks = new ConcurrentBag<PriceTick>();
+        feed.TickReceived += ticks.Add;
+
+        using var cts = new CancellationTokenSource();
+        var run = feed.RunAsync(cts.Token);
+        await WaitForAsync(() => !ticks.IsEmpty, "il tick BTC");
+        await cts.CancelAsync();
+        await run;
+
+        var snapshot = feed.SeriesHealthSnapshot;
+        Assert.Equal(2, snapshot.Count);
+        var btc = Assert.Single(snapshot, s => s.Symbol == "BTC/USDT");
+        var eth = Assert.Single(snapshot, s => s.Symbol == "ETH/USDT");
+        Assert.NotNull(btc.LastEventUtc);       // ha consegnato
+        Assert.Null(eth.LastEventUtc);          // mai un evento: il suo silenzio è VISIBILE
+        Assert.True(eth.SubscribedSinceUtc <= DateTime.UtcNow, "la grazia della serie parte dalla sottoscrizione");
+    }
+
+    [Fact]
+    public void SeriesHealth_ForgetsUnsubscribedSymbols()
+    {
+        // [G2] Una serie tolta dal set non va sorvegliata: lasciarla nel tracciamento produrrebbe
+        // allarmi su simboli che nessuna corsia opera più.
+        var feed = BuildFeed(new BinanceStreamMapper(), new FakeTransportFactory(Script()));
+        feed.UpdateSubscriptions([BtcSpot(), new StreamSubscription(ExchangeName.Binance, "ETH/USDT", "5m", MarketType.Spot)]);
+        Assert.Equal(2, feed.SeriesHealthSnapshot.Count);
+
+        feed.UpdateSubscriptions([BtcSpot()]);
+        var remaining = Assert.Single(feed.SeriesHealthSnapshot);
+        Assert.Equal("BTC/USDT", remaining.Symbol);
+    }
+
+    [Fact]
     public async Task Feed_Reconnects_AfterChannelDrop()
     {
         // Primo canale: un tick, poi cade (null). Secondo canale: un altro tick.

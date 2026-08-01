@@ -160,6 +160,7 @@ public sealed class PipelineContext
 
     // ---- Stage outputs (all serializable) ----
     public DataIngestionOutput? DataStatus { get; set; }
+    public PowerCheckOutput? Power { get; set; }
     public AltDataOutput? AltData { get; set; }
     public FeatureSelectionOutput? Features { get; set; }
     public RegimeOutput? Regimes { get; set; }
@@ -202,6 +203,31 @@ public sealed class SeriesDataStatus
     public DateTime? LastUtc { get; set; }
     public bool CoversSelection { get; set; }
     public bool CoversHoldout { get; set; }
+}
+
+/// <summary>[F4] Potenza statistica del run, per serie: quale Sharpe può SUPERARE i gate qui.</summary>
+public sealed class PowerSeriesEntry
+{
+    public string Symbol { get; set; } = string.Empty;
+    public string Timeframe { get; set; } = string.Empty;
+    /// <summary>Osservazioni attese nell'holdout (le T su cui il DSR giudica).</summary>
+    public int HoldoutObservations { get; set; }
+    /// <summary>SR* per-periodo: fin dove arriva il puro caso con N tentativi (E[max] sotto il nullo).</summary>
+    public double NullBenchmarkSharpe { get; set; }
+    /// <summary>Sharpe ANNUALIZZATO minimo perché un candidato possa passare il gate su questa serie.</summary>
+    public double MinDetectableAnnualizedSharpe { get; set; }
+}
+
+/// <summary>[F4] Esito del power check MinTRL (Bailey-LdP): l'aritmetica del run, detta PRIMA dei backtest.</summary>
+public sealed class PowerCheckOutput
+{
+    public int TrialsAssumed { get; set; }
+    public double Confidence { get; set; }
+    public List<PowerSeriesEntry> Series { get; set; } = new();
+    /// <summary>Il caso peggiore fra le serie: il numero da guardare.</summary>
+    public double WorstMinDetectableAnnualizedSharpe { get; set; }
+    /// <summary>True se il check ritiene il run sotto potenza rispetto al tetto plausibile configurato.</summary>
+    public bool Underpowered { get; set; }
 }
 
 public sealed class DataIngestionOutput
