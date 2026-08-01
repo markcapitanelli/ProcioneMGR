@@ -1,35 +1,9 @@
 {
   "version": "0.0.1",
+  "_comment": "Pulizia 2026-08-01 (richiesta del proprietario): eliminati i profili 'procione' (nessuna env, superseded dalla config reale in appsettings.json), 'procione-pg' (la sua configurazione vive ora in appsettings.json; girava sulla 5256 con la master key placeholder, la stessa trappola dell'incidente del 2026-07-20) e 'procione-test' (nessun test lo usa: gli automatici girano su Testcontainers, la verifica browser dei worktree passa da procione-reale). La storia e le motivazioni di quei profili restano in git. Ne restano DUE, con scopi disgiunti: procione-main = l'app da tenere accesa (master, percorso assoluto); procione-reale = collaudo del codice di UN WORKTREE con login reale, da spegnere a collaudo finito.",
   "configurations": [
     {
-      "name": "procione",
-      "runtimeExecutable": "dotnet",
-      "runtimeArgs": ["run", "--project", "ProcioneMGR/ProcioneMGR.csproj", "--no-build"],
-      "port": 5256
-    },
-    {
-      "name": "procione-pg",
-      "runtimeExecutable": "powershell",
-      "runtimeArgs": [
-        "-NoProfile",
-        "-Command",
-        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ConnectionStrings__PostgresConnection='Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure'; $env:MarketData__DefaultBackfillDays='2200'; $env:ASPNETCORE_URLS='http://localhost:5256'; $env:PROCIONE_MGR_MASTER_KEY='__CHANGE_ME_BASE64_32_BYTES__'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-build --no-launch-profile"
-      ],
-      "port": 5256
-    },
-    {
-      "_comment": "Profilo per i test automatici, su porta 5257 e NON 5256. Il 2026-07-20 un'istanza di questo worktree occupava la 5256 e ha intercettato l'utente, che credeva di usare la propria app: le credenziali che ha salvato sono finite cifrate con la master key placeholder (pubblica nel template) e il login non funzionava per via della discriminante Data Protection. Porta separata = i due ambienti non si toccano piu'. La master key resta il placeholder: su questa istanza NON vanno inserite credenziali reali.",
-      "name": "procione-test",
-      "runtimeExecutable": "powershell",
-      "runtimeArgs": [
-        "-NoProfile",
-        "-Command",
-        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ConnectionStrings__PostgresConnection='Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure'; $env:ASPNETCORE_URLS='http://localhost:5257'; $env:PROCIONE_MGR_MASTER_KEY='__CHANGE_ME_BASE64_32_BYTES__'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-build --no-launch-profile"
-      ],
-      "port": 5257
-    },
-    {
-      "_comment": "Profilo per la verifica CON LOGIN REALE del worktree. A differenza di procione-test NON sovrascrive PROCIONE_MGR_MASTER_KEY: la chiave viene da ProcioneMGR/appsettings.json (non tracciato), che e' l'unico modo perche' le credenziali gia' cifrate si decifrino e il login dell'utente funzioni. Prerequisito: copiare appsettings.json dal repo principale dentro il worktree. Ambiente Development e NON Production come scripts/run-postgres.ps1: con `dotnet run` non pubblicato, in Production gli static web assets non vengono agganciati e la UI resta senza blazor.web.js ne' CSS (404). appsettings.Development.json contiene solo Logging, quindi chiave e connection string restano quelle vere.",
+      "_comment": "Collaudo CON LOGIN REALE del codice del worktree corrente (procione-main non puo' farlo: lancia sempre master via percorso assoluto). NON sovrascrive PROCIONE_MGR_MASTER_KEY: la chiave viene da ProcioneMGR/appsettings.json (non tracciato), l'unico modo perche' le credenziali gia' cifrate si decifrino e il login funzioni. Prerequisito: copiare appsettings.json dal repo principale dentro il worktree. Ambiente Development e NON Production: con `dotnet run` non pubblicato, in Production gli static web assets non vengono agganciati e la UI resta senza blazor.web.js ne' CSS (404). Prima di avviarlo FERMARE procione-main (stessa porta, di proposito: mai due guscii vivi insieme); a collaudo finito, tornare a procione-main.",
       "name": "procione-reale",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [
@@ -41,7 +15,7 @@
     },
     {
       "_comment_telegram": "CARICA IL TOKEN DEL BOT da ~/.procione/telegram.token, come faceva il profilo del worktree roadmap-autonomia-operativa dove Telegram fu verificato end-to-end il 2026-07-19. Il consolidamento del 27 luglio si e' portato dietro tutto TRANNE questa riga: dal 27 al 29 luglio ogni notifica dal guscio (quarantena corsie, esiti campagna, run falliti, promozioni, breaker AI) e' fallita in silenzio con 'env TELEGRAM_BOT_TOKEN assente', perche' il dispatcher per contratto non propaga mai l'errore al producer. Scoperto il 2026-07-29 premendo 'Invia notifica di prova' in /admin/autonomy -- cioe' dal primo pulsante che abbia mai chiesto al canale se funzionava.",
-      "_comment": "L'UNICA app da tenere accesa dal consolidamento del 2026-07-27: esegue il REPO PRINCIPALE sulla 5199 con percorso ASSOLUTO. Il percorso assoluto e' il punto: cosi' il profilo lancia sempre master anche se invocato dalla cartella di un worktree, che e' esattamente l'ambiguita' che quel giorno aveva prodotto due istanze diverse (worktree roadmap-b1-b2 sulla 5199 e worktree filone-D sulla 5210) e, prima ancora, l'incidente della 5256 descritto sopra. APRE ANCHE IL PORT-FORWARD 18092 verso il core di trading in-cluster, come fa scripts/run-postgres.ps1: senza, la pagina /trading mostra 'Unavailable' e 'DATI TRADING NON AGGIORNATI' perche' il guscio non raggiunge il motore (il quale continua a operare da solo -- e' il punto di B3). La prima versione di questo profilo lo ometteva, e dopo uno spegnimento improvviso del PC la pagina /trading e' rimasta in errore finche' non e' stato riaperto a mano. Preferire questo a procione-reale quando si lavora da un worktree.",
+      "_comment": "L'UNICA app da tenere accesa dal consolidamento del 2026-07-27: esegue il REPO PRINCIPALE sulla 5199 con percorso ASSOLUTO. Il percorso assoluto e' il punto: cosi' il profilo lancia sempre master anche se invocato dalla cartella di un worktree, che e' esattamente l'ambiguita' che quel giorno aveva prodotto due istanze diverse (worktree roadmap-b1-b2 sulla 5199 e worktree filone-D sulla 5210) e, prima ancora, l'incidente della 5256 del 2026-07-20 (istanza di un worktree con master key placeholder che ha intercettato l'utente: credenziali cifrate con la chiave sbagliata e login rotto). APRE ANCHE IL PORT-FORWARD 18092 verso il core di trading in-cluster, come fa scripts/run-postgres.ps1: senza, la pagina /trading mostra 'Unavailable' e 'DATI TRADING NON AGGIORNATI' perche' il guscio non raggiunge il motore (il quale continua a operare da solo -- e' il punto di B3). La prima versione di questo profilo lo ometteva, e dopo uno spegnimento improvviso del PC la pagina /trading e' rimasta in errore finche' non e' stato riaperto a mano. Preferire questo a procione-reale in ogni situazione che non sia il collaudo di un worktree.",
       "name": "procione-main",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [
