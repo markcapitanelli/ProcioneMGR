@@ -141,6 +141,121 @@ public class ExchangeRateLimitAndClockTests
         Assert.True(elapsed >= TimeSpan.FromMilliseconds(150), $"le richieste non sono state distanziate: {elapsed.TotalMilliseconds}ms");
     }
 
+    [Fact]
+    public async Task HungConnection_IsAbortedByPerAttemptTimeout_AsTaskCanceled()
+    {
+        // Una connessione che "muore" senza RST non deve tenere occupato il chiamante (e con lui
+        // il gate del TradingEngine) per i 100s del default di HttpClient: il timeout
+        // per-tentativo la abortisce, e come TaskCanceledException — il tipo che i client trattano
+        // già come "rete ⇒ stato incerto ⇒ riconciliazione".
+        var time = new TimerFakeTimeProvider();
+        var limiter = new ExchangeRateLimitHandler(
+            NullLogger<ExchangeRateLimitHandler>.Instance, requestsPerSecond: 1000,
+            timeProvider: time, attemptTimeout: TimeSpan.FromSeconds(15))
+        {
+            InnerHandler = new HangingHandler(),
+        };
+        using var client = new HttpClient(limiter) { BaseAddress = new Uri("https://example.test") };
+
+        var pending = client.GetAsync("/api/v3/order");
+        time.Advance(TimeSpan.FromSeconds(16));
+
+        await Assert.ThrowsAsync<TaskCanceledException>(() => pending);
+    }
+
+    [Fact]
+    public async Task CallerCancellation_IsNotDisguisedAsTimeout()
+    {
+        // Lo shutdown del chiamante deve restare riconoscibile come TALE (OperationCanceledException
+        // sul suo token), non diventare un finto timeout di rete.
+        var time = new TimerFakeTimeProvider();
+        var limiter = new ExchangeRateLimitHandler(
+            NullLogger<ExchangeRateLimitHandler>.Instance, requestsPerSecond: 1000, timeProvider: time)
+        {
+            InnerHandler = new HangingHandler(),
+        };
+        using var client = new HttpClient(limiter) { BaseAddress = new Uri("https://example.test") };
+        using var cts = new CancellationTokenSource();
+
+        var pending = client.GetAsync("/api/v3/order", cts.Token);
+        cts.Cancel();
+
+        // NB: niente uguaglianza sul token — HttpClient incapsula quello del chiamante in un
+        // linked token interno. Ciò che conta è che il filtro dell'handler NON scambi questa
+        // cancellazione per il proprio timeout (il tempo finto non è mai avanzato: l'unica
+        // sorgente di cancellazione è il chiamante).
+        var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.DoesNotContain("per-tentativo", ex.Message);
+    }
+
+    /// <summary>Simula la connessione appesa: non risponde mai, si sblocca solo alla cancellazione.</summary>
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new InvalidOperationException("irraggiungibile");
+        }
+    }
+
+    /// <summary>
+    /// A differenza dei FakeTimeProvider solo-orologio degli altri test, questo supporta i TIMER:
+    /// serve perché <c>new CancellationTokenSource(delay, timeProvider)</c> — il meccanismo del
+    /// timeout per-tentativo — si appoggia a <see cref="TimeProvider.CreateTimer"/>, e un fake che
+    /// non li fa scattare renderebbe il test un'attesa infinita.
+    /// </summary>
+    private sealed class TimerFakeTimeProvider : TimeProvider
+    {
+        private readonly object _sync = new();
+        private DateTimeOffset _now = DateTimeOffset.Parse("2026-07-31T12:00:00Z");
+        private readonly List<FakeTimer> _timers = [];
+
+        public override DateTimeOffset GetUtcNow() { lock (_sync) { return _now; } }
+
+        public void Advance(TimeSpan delta)
+        {
+            FakeTimer[] due;
+            lock (_sync)
+            {
+                _now += delta;
+                due = _timers.Where(t => t.DueAt is { } d && d <= _now).ToArray();
+                foreach (var t in due) t.DueAt = null; // one-shot: qui serve solo al CTS
+            }
+            foreach (var t in due) t.Fire();
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new FakeTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            lock (_sync) { _timers.Add(timer); }
+            return timer;
+        }
+
+        private sealed class FakeTimer(TimerFakeTimeProvider owner, TimerCallback callback, object? state) : ITimer
+        {
+            public DateTimeOffset? DueAt;
+
+            public void Fire() => callback(state);
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                lock (owner._sync)
+                {
+                    DueAt = dueTime == Timeout.InfiniteTimeSpan ? null : owner._now + dueTime;
+                }
+                return true;
+            }
+
+            public void Dispose()
+            {
+                lock (owner._sync) { DueAt = null; owner._timers.Remove(this); }
+            }
+
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+    }
+
     // ------------------------------------------------------------------ orologio
 
     [Fact]
