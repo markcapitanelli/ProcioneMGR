@@ -63,10 +63,21 @@ public sealed class SeriesFreshnessWatchWorker(
             .Where(s => s.Enabled)
             .ToListAsync(ct);
 
-        var lastBySeries = await db.OhlcvData
-            .GroupBy(c => new { c.Symbol, c.Timeframe })
-            .Select(g => new { g.Key.Symbol, g.Key.Timeframe, Last = (DateTime?)g.Max(c => c.TimestampUtc) })
-            .ToDictionaryAsync(x => (x.Symbol, x.Timeframe), x => x.Last, ct);
+        // [F1-F3 PRD Valore] MAX per-serie sull'indice (Symbol, Timeframe, TimestampUtc) invece del
+        // GROUP BY sull'INTERA tabella: quello era un seq scan da 15 secondi misurati (12,6M righe)
+        // ogni 15 minuti, per rileggere al 99% serie che non cambiano verdetto. Così il costo scala
+        // col numero di serie sorvegliate (~221 lookup da pochi ms), non con la storia accumulata.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var lastBySeries = new Dictionary<(string, string), DateTime?>(series.Count);
+        foreach (var s in series)
+        {
+            if (lastBySeries.ContainsKey((s.Symbol, s.Timeframe))) continue;
+            lastBySeries[(s.Symbol, s.Timeframe)] = await db.OhlcvData
+                .Where(c => c.Symbol == s.Symbol && c.Timeframe == s.Timeframe)
+                .MaxAsync(c => (DateTime?)c.TimestampUtc, ct);
+        }
+        logger.LogInformation("Freschezza: ultima candela letta per {Count} serie in {Ms}ms.",
+            lastBySeries.Count, sw.ElapsedMilliseconds);
 
         var newlyStale = new List<string>();
         foreach (var s in series)

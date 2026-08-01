@@ -30,7 +30,15 @@ public sealed class EnsembleManager(
     IRegimeDetector regimeDetector,
     IMarketFeatureExtractor featureExtractor,
     IStrategyDecayMonitor decayMonitor,
-    ILogger<EnsembleManager> logger) : IEnsembleManager
+    ILogger<EnsembleManager> logger,
+    // [G3, audit 2026-07-31] Fee per-lato usata nei backtest interni (pesi del ribilanciamento e
+    // simulazioni di stato): DEVE essere la stessa che il motore paga (SafetyConfiguration.FeePercent,
+    // hot-reload — P2-8), altrimenti i pesi si calcolano su costi diversi da quelli reali. È un
+    // Func e non IOptionsMonitor<SafetyConfiguration> per non introdurre la dipendenza
+    // Ensemble→Trading che questo file dichiara di voler evitare (vedi GetDecayReportsAsync): la
+    // composizione avviene nel composition root, che conosce entrambi. Null (vecchi harness di
+    // test) ⇒ 0,1%, il valore storico.
+    Func<decimal>? liveFeePercent = null) : IEnsembleManager
 {
     private const int DefaultWindowDays = 120;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -82,7 +90,60 @@ public sealed class EnsembleManager(
         var cfg = await GetConfigurationAsync(ct);
         var to = DateTime.UtcNow;
         var start = from ?? to.AddDays(-DefaultWindowDays);
-        return await SimulateAsync(cfg, start, to, ct);
+        var windowDays = Math.Max(1, (int)Math.Round((to - start).TotalDays));
+        return await GetOrSimulateAsync(cfg, windowDays, ct);
+    }
+
+    // ------------------------------------------------------------------ cache simulazione [F1]
+
+    /// <summary>
+    /// [F1 PRD Valore] Cache dell'ultima simulazione per finestra. Prima di questa cache, il poll
+    /// della pagina Ensemble (15s) rieseguiva DUE simulazioni complete — un backtest intero per
+    /// gamba su 120 e 90 giorni — a ogni giro, per ridisegnare numeri che cambiano solo quando
+    /// chiude una candela o cambia la configurazione. La chiave dice esattamente questo: ultima
+    /// candela della serie + configurazione serializzata + fee viva (G3: un cambio fee cambia i
+    /// risultati, quindi invalida). Il risultato in cache va trattato come IMMUTABILE dai
+    /// chiamanti — è lo stesso oggetto condiviso fra letture successive.
+    /// </summary>
+    private readonly Lock _simCacheSync = new();
+    private readonly Dictionary<int, (string Key, EnsemblePerformance Perf)> _simCache = new();
+
+    private async Task<EnsemblePerformance> GetOrSimulateAsync(EnsembleConfiguration cfg, int windowDays, CancellationToken ct)
+    {
+        var to = DateTime.UtcNow;
+        var from = to.AddDays(-windowDays);
+
+        // L'ultima candela della serie è ciò che decide se esiste qualcosa di nuovo da simulare:
+        // lookup sull'indice (Symbol, Timeframe, TimestampUtc), pochi ms. Che `from` scivoli in
+        // avanti fra due hit della cache è irrilevante per costruzione: il bordo sinistro perde al
+        // più una candela vecchia, ed è il bordo destro (la candela nuova) a cambiare i verdetti.
+        DateTime? lastCandle;
+        using (var scope = scopeFactory.CreateScope())
+        {
+            var dbf = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+            await using var db = await dbf.CreateDbContextAsync(ct);
+            lastCandle = await db.OhlcvData
+                .Where(c => c.Symbol == cfg.Symbol && c.Timeframe == cfg.Timeframe)
+                .MaxAsync(c => (DateTime?)c.TimestampUtc, ct);
+        }
+
+        var key = $"{lastCandle?.Ticks ?? 0}|{liveFeePercent?.Invoke() ?? 0.1m}|{JsonSerializer.Serialize(cfg, Json)}";
+        lock (_simCacheSync)
+        {
+            if (_simCache.TryGetValue(windowDays, out var hit) && hit.Key == key)
+            {
+                return hit.Perf;
+            }
+        }
+
+        // Fuori dal lock: una corsa doppia su miss concorrente produce lo stesso risultato due
+        // volte (deterministico) e l'ultima scrittura vince — accettabile, mai bloccante.
+        var perf = await SimulateAsync(cfg, from, to, ct);
+        lock (_simCacheSync)
+        {
+            _simCache[windowDays] = (key, perf);
+        }
+        return perf;
     }
 
     /// <summary>
@@ -131,8 +192,9 @@ public sealed class EnsembleManager(
     public async Task<EnsembleStatus> GetStatusAsync(CancellationToken ct = default)
     {
         var cfg = await GetConfigurationAsync(ct);
-        var to = DateTime.UtcNow;
-        var perf = await SimulateAsync(cfg, to.AddDays(-DefaultWindowDays), to, ct);
+        // [F1] Stessa corsa (e stessa cache) di GetPerformanceAsync sulla finestra di default: lo
+        // status è una proiezione della simulazione, non una seconda simulazione.
+        var perf = await GetOrSimulateAsync(cfg, DefaultWindowDays, ct);
 
         DateTime? last = perf.RebalanceHistory.Count > 0 ? perf.RebalanceHistory[^1].Timestamp : null;
         var status = new EnsembleStatus
@@ -490,14 +552,16 @@ public sealed class EnsembleManager(
         return res;
     }
 
-    private static BacktestConfiguration BuildBtConfig(EnsembleConfiguration cfg, EnsembleStrategy strat) => new()
+    private BacktestConfiguration BuildBtConfig(EnsembleConfiguration cfg, EnsembleStrategy strat) => new()
     {
         ExchangeName = cfg.ExchangeName,
         Symbol = cfg.Symbol,
         Timeframe = cfg.Timeframe,
+        // Capitale e size fissi: lo Sharpe che decide i pesi è invariante di scala, contano solo
+        // i ritorni relativi. La fee invece NO: è quella viva del motore (vedi liveFeePercent).
         InitialCapital = 10_000m,
         PositionSizePercent = 100m,
-        FeePercent = 0.1m,
+        FeePercent = liveFeePercent?.Invoke() ?? 0.1m,
         StrategyName = strat.StrategyName,
         StrategyParameters = new Dictionary<string, decimal>(strat.Parameters),
     };

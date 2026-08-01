@@ -634,7 +634,10 @@ else
         await LoadLaneAsync();
 
         // Auto-refresh status ogni 15s.
-        _refreshTimer = new PollingTimer(TimeSpan.FromSeconds(15), () => InvokeAsync(RefreshAsync), Logger);
+        // [F1 PRD Valore] 60s e non 15: il timeframe minimo delle corsie è 1h — a 15s si
+        // interrogava 240 volte per candela nuova, e ogni giro (prima della cache in
+        // EnsembleManager) costava due simulazioni complete.
+        _refreshTimer = new PollingTimer(TimeSpan.FromSeconds(60), () => InvokeAsync(RefreshAsync), Logger);
     }
 
     private IReadOnlyList<LaneSummary> _lanes = [];

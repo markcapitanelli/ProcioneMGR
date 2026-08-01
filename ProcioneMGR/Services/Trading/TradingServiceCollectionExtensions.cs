@@ -171,7 +171,12 @@ public static class TradingServiceCollectionExtensions
                 sp.GetRequiredService<IRegimeDetector>(),
                 sp.GetRequiredService<IMarketFeatureExtractor>(),
                 sp.GetRequiredService<Monitoring.IStrategyDecayMonitor>(),
-                sp.GetRequiredService<ILogger<EnsembleManager>>()));
+                sp.GetRequiredService<ILogger<EnsembleManager>>(),
+                // [G3, audit 2026-07-31] I backtest interni del ribilanciamento usano la fee VIVA
+                // del motore (hot-reload), non più 0,1% fisso: i pesi si calcolano sui costi che
+                // si pagano davvero. Composto qui perché Ensemble non importa Trading (vedi il
+                // commento sul parametro).
+                () => sp.GetRequiredService<IOptionsMonitor<SafetyConfiguration>>().CurrentValue.FeePercent));
 
             if (useRemote)
             {

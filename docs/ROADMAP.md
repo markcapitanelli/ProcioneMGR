@@ -520,3 +520,32 @@ delta-neutro (al riavvio del core ha riaperto BTC e BNB Paper a funding 8,9% ann
 configurazione remota dell'ingestion (E4, motivo nella riga); toccare i verdetti della RICERCA — i
 gate statistici hanno già i loro nulli per costruzione (livello 2 dello standard), e questo filone
 riguarda i controlli OPERATIVI, dove il «no» non è una soglia ma un guasto da vedere.
+
+---
+
+## Filone F — Valore: costo del calcolo, voce della validazione, igiene dei verdetti (2026-08-01)
+
+Nasce dall'**audit di valore 2026-08-01** ([AUDIT-VALORE.md](../AUDIT-VALORE.md): statica + test
+dal vivo sull'app reale) più un **benchmark esterno** (Bailey–López de Prado MinTRL/DSR,
+Harvey–Liu–Zhu t>3,0, evidenza 2025-26 su carry in compressione e market-neutral). Dettaglio,
+accettazione e verifica per fase nel [PRD-VALORE-2026-08](PRD-VALORE-2026-08.md). Tre verità
+dall'audit: la piattaforma è sana (zero errori runtime) ma spreca calcolo misurabile; alcune
+superfici sono sopravvissute ai propri verdetti; la validazione è corretta ma muta
+sull'aritmetica del campione — e il benchmark esterno CONFERMA le soglie, non le ammorbidisce.
+
+| # | Cosa | Stato | Gate / verifica |
+|---|---|---|---|
+| F1 | Cache simulazione ensemble + refresh a corsa unica + poll 60s (prima: ~2K backtest ogni 15s per pagina aperta) | **fatto (2026-08-01)**, verificato dal vivo: a cache calda il poll costa due `SELECT max()` da 1-11ms, zero ricaricamenti di candele, zero backtest; 3 test nuovi (parità ⇒ mai due volte; candela nuova/config cambiata ⇒ invalida; fee viva nell'hash) | ✅ refresh a cache calda senza `RunBacktestAsync` nei log |
+| F2 | Home: count 12,7M righe (4-7s misurati) → stima `pg_class.reltuples` | **fatto (2026-08-01)**, verificato dal vivo: 1-7ms, UI dichiara «≈» (scarto osservato ~3,7%, si riallinea con autovacuum); fallback al count esatto se reltuples=-1 | ✅ Home senza query >100ms sul count |
+| F3 | Freschezza serie: group-by full-table (15,2s misurati) → max per-serie su indice | **fatto (2026-08-01)**, verificato dal vivo: «221 serie in 274ms» nel log del worker (55× più veloce); stessa regola `SeriesFreshness`, cambia solo come si ottiene il max | ✅ <2s, stessi verdetti |
+| F4 | **Power check MinTRL**: lo Sharpe minimo che può passare il DSR dichiarato PRIMA dei backtest (formula Bailey-LdP; ancora interna: SR 1,0 ⇒ ~6,2 anni) | aperto | riga di potenza nel report del run; test contro la formula |
+| F5 | **Fascia grigia DSR [0,80–0,95) → proposta forward Paper** con click umano (mai automatico, mai oltre Paper): la flessibilità sta nell'instradare al giudice giusto, non nell'abbassare le soglie | aperto | verdetto a tre vie nel run; assegnazione via flussi corsia esistenti |
+| F6 | Gemello nullo SOLO sui sopravvissuti holdout: garantito da test d'ordine | aperto | candidati giudicati == sopravvissuti |
+| F7 | `/metrics` ricollegata al motore in-cluster (oggi: tutti zeri col motore altrove — dashboard che osserva il processo sbagliato) | aperto | numeri ≠ 0 coerenti con l'audit log, sull'app vera |
+| F8-F11 | Igiene: pulsante Live sempre-disabilitato → testo; KPI con ambito; alert deriva raggruppati; DTW nell'«archivio dei no» (verdetto D4) | aperto | L4 pagina per pagina |
+| F12 | **Capacità e universo del carry** (l'edge positivo, da dimensionare ORA: benchmark esterno = basis 25%→<5% in due anni): premio per simbolo/exchange, flip, curva capacità con √-impact | aperto | report con verdetto scritto anche se «la soglia attuale è già ottima» |
+| F13 | Market-neutral esteso sulle coppie (Kalman già validato → piccolo universo cross-sectional), Sharpe di letteratura (1,6-2,45) rimisurati coi costi PROPRI, via CPCV+gemello+F4 | aperto | sopravvissuti → F5/forward Paper; verdetto scritto comunque |
+
+**Ordine**: F1-F3 (una giornata, si ripagano per sempre) → F4-F5 → F7+F8-F11 → F6 → F12 → F13.
+**Non-obiettivi**: abbassare soglie di validazione; automatismi oltre Paper; implementare
+letteratura senza rimisura coi costi propri; fusioni di pagine (M6, opzionale fuori PRD).

@@ -28,17 +28,31 @@ public sealed class ExchangeRateLimitHandler(
     ILogger<ExchangeRateLimitHandler> logger,
     int requestsPerSecond = 10,
     int maxRetries = 3,
-    TimeProvider? timeProvider = null) : DelegatingHandler
+    TimeProvider? timeProvider = null,
+    TimeSpan? attemptTimeout = null) : DelegatingHandler
 {
     private const int MaxRetries = 3;
 
     /// <summary>Tetto di attesa per un singolo ritiro: oltre, tanto vale fallire e far decidere il chiamante.</summary>
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Tetto di attesa della risposta per un SINGOLO tentativo di rete. Il posto giusto è qui e non
+    /// <c>HttpClient.Timeout</c>: quello copre l'intera pipeline del SendAsync, quindi anche le
+    /// attese DELIBERATE di questo handler (Retry-After fino a 30s × ritentativi), e un valore
+    /// stretto lì abortirebbe proprio il rispetto del rate-limit che serve a evitare il ban.
+    /// Qui invece si limita solo il caso patologico: una connessione che "muore" senza RST e
+    /// terrebbe il gate del TradingEngine occupato per i 100s del default di HttpClient, con i
+    /// tick scartati e lo stato della corsia in coda per tutto quel tempo. recvWindow=5000 rende
+    /// comunque inutile attendere una firma oltre pochi secondi.
+    /// </summary>
+    private static readonly TimeSpan DefaultAttemptTimeout = TimeSpan.FromSeconds(15);
+
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly int _retries = Math.Clamp(maxRetries, 0, MaxRetries);
     private readonly TimeSpan _minInterval = TimeSpan.FromSeconds(1.0 / Math.Max(1, requestsPerSecond));
+    private readonly TimeSpan _attemptTimeout = attemptTimeout ?? DefaultAttemptTimeout;
 
     private DateTimeOffset _nextSlot = DateTimeOffset.MinValue;
 
@@ -48,7 +62,7 @@ public sealed class ExchangeRateLimitHandler(
         {
             await ThrottleAsync(ct);
 
-            var response = await base.SendAsync(request, ct);
+            var response = await SendOnceAsync(request, ct);
             if (!IsRateLimited(response.StatusCode) || attempt >= _retries)
             {
                 return response;
@@ -61,6 +75,28 @@ public sealed class ExchangeRateLimitHandler(
 
             response.Dispose();
             await Task.Delay(delay, _time, ct);
+        }
+    }
+
+    /// <summary>
+    /// Un tentativo di rete, limitato da <see cref="_attemptTimeout"/>. Il timeout scaduto viene
+    /// tradotto in <see cref="TaskCanceledException"/> — lo stesso tipo che HttpClient produce per
+    /// il proprio timeout — così la tassonomia dei chiamanti (rete ⇒ stato INCERTO ⇒
+    /// riconciliazione, vedi <c>BinanceClient.SignedAsync</c>) resta identica senza toccarli.
+    /// La cancellazione del CHIAMANTE invece ripropaga com'è: non è un timeout, è uno shutdown.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendOnceAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        using var timeout = new CancellationTokenSource(_attemptTimeout, _time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        try
+        {
+            return await base.SendAsync(request, linked.Token);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new TaskCanceledException(
+                $"Nessuna risposta da {request.RequestUri?.AbsolutePath} entro {_attemptTimeout.TotalSeconds:F0}s (timeout per-tentativo).");
         }
     }
 
