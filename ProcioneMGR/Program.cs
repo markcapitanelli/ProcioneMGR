@@ -614,6 +614,25 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 if (!EF.IsDesignTime)
 {
     await DbInitializer.InitializeAsync(app.Services);
+
+    // [Fase B] Warm-up della cache chiavi AI. `IsConfigured` è sincrono per contratto (mai I/O)
+    // e la cache si caricava solo aprendo /admin/ai-supervisor: dopo OGNI riavvio l'intero layer
+    // AI risultava «non configurato» — advisory in attesa e scorer LLM sul fallback — finché
+    // qualcuno non apriva il pannello. Trovato dal vivo al collaudo della Fase B (batch «non
+    // configurato» con la chiave NVIDIA regolarmente a database). Best-effort: un DB lento non
+    // deve bloccare l'avvio, e ReloadAsync dichiara già da solo le chiavi non decifrabili.
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            await app.Services.GetRequiredService<ProcioneMGR.Services.Llm.IAiKeyStore>().ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup")
+                .LogWarning(ex, "Warm-up della cache chiavi AI fallito: il layer si configurerà alla prima apertura del pannello.");
+        }
+    });
 }
 
 app.Run();
