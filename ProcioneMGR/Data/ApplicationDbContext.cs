@@ -29,6 +29,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// </summary>
     public DbSet<ExchangeCredentialCiphertext> ExchangeCredentialCiphertexts => Set<ExchangeCredentialCiphertext>();
 
+    /// <summary>Chiavi API dei provider AI (Anthropic, Nvidia, …), cifrate a riposo. Una riga per provider.</summary>
+    public DbSet<AiCredential> AiCredentials => Set<AiCredential>();
+
     /// <summary>Watchlist globale: serie mantenute aggiornate dal worker in background.</summary>
     public DbSet<TrackedSeries> TrackedSeries => Set<TrackedSeries>();
 
@@ -153,6 +156,16 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 
             // Le credenziali si interrogano sempre per utente.
             entity.HasIndex(e => e.UserId);
+        });
+
+        // Chiavi dei provider AI: stesso converter di cifratura, una riga per provider.
+        builder.Entity<AiCredential>(entity =>
+        {
+            entity.ToTable("AiCredentials");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).HasMaxLength(32).IsRequired();
+            entity.Property(e => e.ApiKey).HasConversion(encryptedConverter).IsRequired();
+            entity.HasIndex(e => e.Provider).IsUnique();
         });
 
         // Proiezione keyless sul ciphertext della STESSA tabella (vedi doc della classe): ToView

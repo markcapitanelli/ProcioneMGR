@@ -550,3 +550,14 @@ sull'aritmetica del campione — e il benchmark esterno CONFERMA le soglie, non 
 **Ordine**: F1-F3 (una giornata, si ripagano per sempre) → F4-F5 → F7+F8-F11 → F6 → F12 → F13.
 **Non-obiettivi**: abbassare soglie di validazione; automatismi oltre Paper; implementare
 letteratura senza rimisura coi costi propri; fusioni di pagine (M6, opzionale fuori PRD).
+
+---
+
+## Layer AI multi-provider (2026-08-01, richiesta del proprietario)
+
+Filone parallelo al F, con PRD proprio: [PRD-AI-MULTIPROVIDER-2026-08](PRD-AI-MULTIPROVIDER-2026-08.md).
+Fase A (fondazione) eseguita: chiavi cifrate a DB (`AiCredentials` + pannello in
+/admin/ai-supervisor), provider come dato hot-reload (`Llm:Provider`), client NVIDIA
+OpenAI-compatible con base URL parametrico, «Prova collegamento» che chiama davvero. Le fasi
+successive (gli USI delle AI) sono deliberatamente vuote: le descriverà il proprietario. Confine
+advisory non negoziabile in ogni fase.

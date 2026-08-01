@@ -8,11 +8,15 @@
 @using ProcioneMGR.Services.Pipeline
 @attribute [Authorize(Roles = $"{AppRoles.Admin},{AppRoles.Manager}")]
 
+@using Microsoft.Extensions.Options
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject ILlmClient LlmClient
 @inject ILlmCallGuard Guard
 @inject IPipelineSupervisor Supervisor
 @inject LlmSupervisorWorker LlmWorker
+@inject IAiKeyStore KeyStore
+@inject IOptionsMonitor<LlmOptions> LlmOptionsMonitor
+@inject ProcioneMGR.Services.Config.IAppConfigWriter ConfigWriter
 
 <PageTitle>Supervisione AI</PageTitle>
 
@@ -29,10 +33,97 @@
         <strong>Confine di sicurezza (non negoziabile):</strong> l'AI è <em>solo advisory</em>. Non può
         avviare il trading live, non può bypassare i controlli di sicurezza (<code>SafetyChecker</code>),
         non apre posizioni. I suoi suggerimenti sui parametri sono spunti da valutare, mai comandi
-        applicati in automatico. Il layer è attivo solo se <code>Llm:Enabled=true</code> e la variabile
-        d'ambiente <code>ANTHROPIC_API_KEY</code> è impostata.
+        applicati in automatico. Il layer è attivo solo se <code>Llm:Enabled=true</code> e il provider
+        attivo ha una chiave (inserita qui sotto, cifrata a riposo, o via variabile d'ambiente).
     </p>
 </GuidaPanel>
+
+@* ---- [Multi-provider 2026-08] Provider attivo, modelli e chiavi ---- *@
+<div class="card mb-3">
+    <div class="card-header"><i class="bi bi-key me-1"></i>Provider e chiavi</div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Il provider scelto qui serve OGNI chiamata del layer AI (hot-reload: effetto alla chiamata
+            successiva, senza riavvio). Le chiavi sono cifrate a riposo (AES-256-GCM, stessa cifratura
+            delle credenziali exchange); in assenza di chiave a database vale la variabile d'ambiente
+            del provider. La chiave non viene mai rimostrata: solo la sua fonte.
+        </p>
+        <div class="row g-3 align-items-end mb-3">
+            <div class="col-auto">
+                <label class="form-label mb-0">Provider attivo</label>
+                <select class="form-select" @bind="_provider">
+                    @foreach (var p in AiProviders.Known)
+                    {
+                        <option value="@p">@p</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Modello Anthropic</label>
+                <input class="form-control" @bind="_anthropicModel" style="min-width: 16rem" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Modello Nvidia</label>
+                <input class="form-control" @bind="_nvidiaModel" style="min-width: 20rem"
+                       placeholder="es. meta/llama-3.3-70b-instruct" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveProviderAsync" disabled="@_busy">Salva provider/modelli</button>
+            </div>
+        </div>
+
+        <table class="table table-sm align-middle mb-3" style="max-width: 60rem">
+            <thead class="table-light"><tr><th>Provider</th><th>Fonte chiave</th><th>Nuova chiave</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var p in AiProviders.Known)
+                {
+                    <tr>
+                        <td><strong>@p</strong></td>
+                        <td>
+                            @switch (KeyStore.GetCachedSource(p))
+                            {
+                                case AiKeySource.Database:
+                                    <span class="badge bg-success">a database (cifrata)</span>
+                                    break;
+                                case AiKeySource.Environment:
+                                    <span class="badge bg-info text-dark">variabile d'ambiente (@AiProviders.EnvVarFor(p))</span>
+                                    break;
+                                default:
+                                    <span class="badge bg-danger">assente</span>
+                                    break;
+                            }
+                        </td>
+                        <td style="min-width: 22rem">
+                            <input type="password" class="form-control form-control-sm" autocomplete="off"
+                                   placeholder="incolla qui la chiave e premi Salva"
+                                   @bind="_keyInputs[p]" />
+                        </td>
+                        <td class="text-nowrap">
+                            <button class="btn btn-sm btn-primary me-1" @onclick="() => SaveKeyAsync(p)"
+                                    disabled="@(_busy || string.IsNullOrWhiteSpace(_keyInputs[p]))">Salva</button>
+                            @if (KeyStore.GetCachedSource(p) == AiKeySource.Database)
+                            {
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveKeyAsync(p)" disabled="@_busy">Rimuovi</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-outline-primary" @onclick="TestNowAsync" disabled="@_busy">
+                @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Prova collegamento (@_provider · @(ActiveModel))
+            </button>
+            <span class="text-muted small">Una chiamata vera al provider attivo: la risposta (o l'errore, testuale) compare qui sotto.</span>
+        </div>
+        @if (_testResult is not null)
+        {
+            <div class="alert @(_testIsError ? "alert-danger" : "alert-success") py-2 mt-2 mb-0" style="white-space: pre-wrap;">@_testResult</div>
+        }
+    </div>
+</div>
 
 @* ---- Stato del layer (chiave, breaker, backlog) + azioni di recupero ---- *@
 <div class="card mb-3">
@@ -40,9 +131,9 @@
     <div class="card-body">
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
             @if (LlmClient.IsConfigured)
-            { <span class="badge bg-success">ANTHROPIC_API_KEY presente</span> }
+            { <span class="badge bg-success">@_provider: chiave presente · @ActiveModel</span> }
             else
-            { <span class="badge bg-danger">ANTHROPIC_API_KEY assente</span> }
+            { <span class="badge bg-danger">@_provider: chiave ASSENTE (pannello qui sopra)</span> }
 
             @if (_guard is { BreakerOpen: true })
             {
@@ -161,7 +252,106 @@ else
     private bool _actionIsError;
     private string? _actionStatus;
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    // ---- [Multi-provider] provider, modelli, chiavi, prova collegamento ----
+    private string _provider = AiProviders.Anthropic;
+    private string _anthropicModel = "";
+    private string _nvidiaModel = "";
+    private readonly Dictionary<string, string> _keyInputs =
+        AiProviders.Known.ToDictionary(p => p, _ => string.Empty);
+    private string? _testResult;
+    private bool _testIsError;
+
+    private string ActiveModel => _provider == AiProviders.Nvidia ? _nvidiaModel : _anthropicModel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var opt = LlmOptionsMonitor.CurrentValue;
+        _provider = opt.Provider;
+        _anthropicModel = opt.Model;
+        _nvidiaModel = opt.NvidiaModel;
+        await KeyStore.ReloadAsync();   // le fonti mostrate devono essere quelle VERE, non la cache di un processo vecchio
+        await LoadAsync();
+    }
+
+    private async Task SaveProviderAsync()
+    {
+        _busy = true; _actionIsError = false; _actionStatus = null;
+        try
+        {
+            // Clone VERO (roundtrip JSON) e non mutazione dell'istanza del monitor: SaveSectionAsync
+            // riscrive l'intera sezione Llm, e perdere Enabled/soglie del breaker per strada sarebbe
+            // il classico pannello che rompe ciò che non mostra; il roundtrip porta con sé anche i
+            // campi futuri senza doverli elencare qui.
+            var current = JsonSerializer.Deserialize<LlmOptions>(
+                JsonSerializer.Serialize(LlmOptionsMonitor.CurrentValue))!;
+            current.Provider = _provider;
+            current.Model = _anthropicModel;
+            current.NvidiaModel = _nvidiaModel;
+            await ConfigWriter.SaveSectionAsync("Llm", current);
+            _actionStatus = $"Provider attivo: {_provider}. Effetto alla prossima chiamata (hot-reload, ~1s).";
+        }
+        catch (Exception ex)
+        {
+            _actionIsError = true;
+            _actionStatus = $"Salvataggio fallito: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task SaveKeyAsync(string provider)
+    {
+        _busy = true; _actionIsError = false; _actionStatus = null;
+        try
+        {
+            await KeyStore.SetKeyAsync(provider, _keyInputs[provider].Trim());
+            _keyInputs[provider] = string.Empty;   // mai trattenere la chiave nel circuito più del necessario
+            _actionStatus = $"Chiave {provider} salvata (cifrata a riposo).";
+        }
+        catch (Exception ex)
+        {
+            _actionIsError = true;
+            _actionStatus = $"Salvataggio chiave fallito: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task RemoveKeyAsync(string provider)
+    {
+        _busy = true; _actionIsError = false; _actionStatus = null;
+        try
+        {
+            await KeyStore.RemoveKeyAsync(provider);
+            _actionStatus = $"Chiave {provider} rimossa dal database (vale l'eventuale variabile d'ambiente).";
+        }
+        catch (Exception ex)
+        {
+            _actionIsError = true;
+            _actionStatus = $"Rimozione fallita: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task TestNowAsync()
+    {
+        _busy = true; _testResult = null; _testIsError = false;
+        try
+        {
+            // Una chiamata VERA al provider attivo (via DelegatingLlmClient): è il pulsante che
+            // chiede al canale se funziona — la lezione del token Telegram (2026-07-29).
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            var reply = await LlmClient.CompleteAsync(
+                "Sei il test di collegamento di una piattaforma di trading. Rispondi in una sola riga.",
+                $"Conferma il collegamento indicando il tuo nome modello. Ora UTC: {DateTime.UtcNow:u}.",
+                cts.Token);
+            _testResult = $"✔ {LlmClient.Model} ha risposto:\n{reply.Trim()}";
+        }
+        catch (Exception ex)
+        {
+            _testIsError = true;
+            _testResult = $"✘ Collegamento fallito ({_provider} · {ActiveModel}):\n{ex.Message}";
+        }
+        finally { _busy = false; }
+    }
 
     private async Task LoadAsync()
     {

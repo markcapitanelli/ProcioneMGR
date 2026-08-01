@@ -3,11 +3,34 @@ using Anthropic.Models.Messages;
 
 namespace ProcioneMGR.Services.Llm;
 
-/// <summary>Opzioni del layer AI. La API key NON è qui: si legge da <c>ANTHROPIC_API_KEY</c>.</summary>
+/// <summary>
+/// Opzioni del layer AI. Le API key NON sono qui: vivono cifrate a database (AiCredentials,
+/// gestite da /admin/ai-supervisor) con fallback alle variabili d'ambiente
+/// (<c>ANTHROPIC_API_KEY</c>, <c>NVIDIA_API_KEY</c>) — vedi <see cref="IAiKeyStore"/>.
+/// </summary>
 public sealed class LlmOptions
 {
     public bool Enabled { get; set; }
+
+    /// <summary>
+    /// Provider attivo del layer AI: "Anthropic" (default, comportamento storico) o "Nvidia".
+    /// Hot-reload: l'instradamento avviene A OGNI chiamata (DelegatingLlmClient), cambiare
+    /// provider dal pannello non richiede riavvio.
+    /// </summary>
+    public string Provider { get; set; } = AiProviders.Anthropic;
+
     public string Model { get; set; } = "claude-opus-4-8";
+
+    /// <summary>Modello per il provider Nvidia (namespace/modello del catalogo build.nvidia.com).</summary>
+    public string NvidiaModel { get; set; } = "meta/llama-3.3-70b-instruct";
+
+    /// <summary>
+    /// Endpoint OpenAI-compatible del provider Nvidia. Parametrico DI PROPOSITO: qualunque
+    /// piattaforma esponga lo stesso contratto (OpenRouter, endpoint self-hosted, …) potrà
+    /// entrare cambiando URL e chiave, senza un client nuovo.
+    /// </summary>
+    public string NvidiaBaseUrl { get; set; } = "https://integrate.api.nvidia.com/v1";
+
     public int MaxTokens { get; set; } = 4096;
     public int PollIntervalMinutes { get; set; } = 5;
 
@@ -35,25 +58,35 @@ public sealed class AnthropicLlmClient : ILlmClient
     // IOptionsMonitor (non POCO): modello/token modificabili a caldo da /admin/autonomy.
     private readonly Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> _options;
     private readonly ILogger<AnthropicLlmClient> _logger;
+    private readonly IAiKeyStore? _keyStore;
 
-    public AnthropicLlmClient(Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> options, ILogger<AnthropicLlmClient> logger)
+    public AnthropicLlmClient(
+        Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> options,
+        ILogger<AnthropicLlmClient> logger,
+        IAiKeyStore? keyStore = null)   // opzionale: i vecchi harness di test costruiscono senza store
     {
         _options = options;
         _logger = logger;
+        _keyStore = keyStore;
     }
 
-    // Riletta a OGNI accesso, mai cachata nel ctor: così una chiave impostata nel processo a app
-    // viva prende effetto senza riavvio. (NB Windows consegna le variabili UTENTE nuove solo ai
-    // processi nuovi: l'hot-read serve al worker che non muore più e a chiavi settate in-process.)
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
+    // Riletta a OGNI accesso, mai cachata nel ctor: DB cifrato (pannello) prima, env poi — così
+    // una chiave inserita a processo vivo prende effetto senza riavvio. (NB Windows consegna le
+    // variabili UTENTE nuove solo ai processi nuovi: l'hot-read serve al worker che non muore più.)
+    public bool IsConfigured => _keyStore is not null
+        ? _keyStore.GetCachedKey(AiProviders.Anthropic) is not null
+        : !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
 
     public string Model => _options.CurrentValue.Model;
 
     public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct)
     {
-        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        var apiKey = _keyStore is not null
+            ? await _keyStore.GetKeyAsync(AiProviders.Anthropic, ct)
+            : Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
         if (string.IsNullOrWhiteSpace(apiKey))
-            throw new InvalidOperationException("ANTHROPIC_API_KEY non impostata: il client LLM non è configurato.");
+            throw new InvalidOperationException(
+                "Nessuna chiave Anthropic: inseriscila in /admin/ai-supervisor (o imposta ANTHROPIC_API_KEY).");
 
         var client = new AnthropicClient { ApiKey = apiKey };
 
