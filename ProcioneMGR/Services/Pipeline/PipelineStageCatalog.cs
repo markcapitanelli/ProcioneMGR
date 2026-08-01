@@ -16,6 +16,9 @@ public sealed class PipelineStageCatalog : IPipelineStageCatalog
     internal static readonly IReadOnlyList<Type> StageTypes =
     [
         typeof(DataIngestionStage),
+        // [F4] Subito dopo l'ingestione: dichiara l'aritmetica del run (Sharpe minimo che può
+        // passare i gate) PRIMA che qualunque stage spenda backtest. Additivo: default non blocca.
+        typeof(PowerCheckStage),
         typeof(AltDataSyncStage),
         typeof(FeatureEngineeringStage),
         typeof(RegimeAnalysisStage),
