@@ -34,7 +34,7 @@
         {
             <div class="row g-3 mb-4">
                 <div class="col-6 col-md-3">@StatCard("Serie tracciate", _stats.TrackedSeries.ToString(), "bi-eye-fill")</div>
-                <div class="col-6 col-md-3">@StatCard("Candele in archivio", _stats.TotalCandles.ToString("N0"), "bi-bar-chart-line-fill")</div>
+                <div class="col-6 col-md-3">@StatCard("Candele in archivio", "≈" + _stats.TotalCandles.ToString("N0"), "bi-bar-chart-line-fill")</div>
                 <div class="col-6 col-md-3">@StatCard("Le tue strategie salvate", _stats.MyStrategies.ToString(), "bi-collection-fill")</div>
                 <div class="col-6 col-md-3">@StatCard("Trading", _stats.TradingModeLabel, "bi-currency-exchange", _stats.TradingRunning)</div>
             </div>
@@ -186,7 +186,15 @@
 
         await using var db = await DbFactory.CreateDbContextAsync();
         var trackedSeries = await db.TrackedSeries.CountAsync(s => s.Enabled);
-        var totalCandles = await db.OhlcvData.LongCountAsync();
+        // [F2 PRD Valore] Stima da pg_class invece del COUNT(*) esatto: sul tavolo OHLCV (12,6M
+        // righe) il count pieno è un seq scan da 4-7 SECONDI misurati, pagato a ogni apertura
+        // della Home per una statistica di vetrina. reltuples lo tiene aggiornato autovacuum
+        // (errore <1% su una tabella append-only); -1 = tabella mai analizzata, e lì si ricade
+        // sul conteggio esatto. La UI dichiara la stima col «≈».
+        var estimate = (await db.Database
+            .SqlQuery<double>($"SELECT reltuples AS \"Value\" FROM pg_class WHERE relname = 'OhlcvData'")
+            .ToListAsync()).FirstOrDefault(defaultValue: -1d);
+        var totalCandles = estimate >= 0 ? (long)estimate : await db.OhlcvData.LongCountAsync();
         var myStrategies = userId is null ? 0 : await db.SavedStrategies.CountAsync(s => s.UserId == userId);
         var tradingState = await db.TradingEngineStates.FirstOrDefaultAsync();
 
