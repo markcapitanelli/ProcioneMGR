@@ -38,6 +38,9 @@ public class AltDataSyncServiceTests : IAsyncDisposable
     }
 
     private async Task<(IDbContextFactory<ApplicationDbContext> DbFactory, AltDataSyncService Service)> BuildAsync(params IAltDataSource[] sources)
+        => await BuildAsync(scorer: null, sources);
+
+    private async Task<(IDbContextFactory<ApplicationDbContext> DbFactory, AltDataSyncService Service)> BuildAsync(ISentimentScorer? scorer, params IAltDataSource[] sources)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
@@ -51,7 +54,7 @@ public class AltDataSyncServiceTests : IAsyncDisposable
             await db.Database.EnsureCreatedAsync();
         }
 
-        var syncService = new AltDataSyncService(sources, new KeywordSentimentScorer(), dbFactory, NullLogger<AltDataSyncService>.Instance);
+        var syncService = new AltDataSyncService(sources, scorer ?? new KeywordSentimentScorer(), dbFactory, NullLogger<AltDataSyncService>.Instance);
         return (dbFactory, syncService);
     }
 
@@ -102,6 +105,46 @@ public class AltDataSyncServiceTests : IAsyncDisposable
         Assert.Equal(1, inserted);
         await using var db = await dbFactory.CreateDbContextAsync();
         Assert.Equal("Working", (await db.AltDataPoints.SingleAsync()).Source);
+    }
+
+    private sealed class ThrowingScorer : ISentimentScorer
+    {
+        public Task<decimal> ScoreAsync(string title, string? summary, CancellationToken ct = default) =>
+            title.Contains("BOOM")
+                ? throw new InvalidOperationException("scorer rotto")
+                : Task.FromResult(0.5m);
+    }
+
+    [Fact]
+    public async Task SyncAllAsync_ScorerThrowsOnOneItem_ItemSkippedAndRetriedNextRun_OthersSaved()
+    {
+        // Gli scorer per contratto non lanciano; se uno lo facesse, l'elemento va SALTATO (non
+        // salvato con uno zero inventato: la dedupe non lo rivisiterebbe mai più) e la sync deve
+        // proseguire con gli altri. Al giro successivo l'elemento saltato viene ritentato.
+        var items = new List<RawNewsItem>
+        {
+            new(DateTime.UtcNow, "BOOM headline", null, "https://example.com/boom"),
+            new(DateTime.UtcNow, "Normal headline", null, "https://example.com/normal"),
+        };
+        var (dbFactory, service) = await BuildAsync(new ThrowingScorer(), new FakeAltDataSource("TestSource", items));
+
+        var inserted = await service.SyncAllAsync(CancellationToken.None);
+
+        Assert.Equal(1, inserted);
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            var saved = await db.AltDataPoints.SingleAsync();
+            Assert.Equal("Normal headline", saved.Title);
+            Assert.Equal(0.5m, saved.SentimentScore);
+        }
+
+        // Secondo giro: il BOOM viene ritentato (non è in DB), fallisce di nuovo, resta fuori.
+        var second = await service.SyncAllAsync(CancellationToken.None);
+        Assert.Equal(0, second);
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            Assert.Equal(1, await db.AltDataPoints.CountAsync());
+        }
     }
 
     [Fact]

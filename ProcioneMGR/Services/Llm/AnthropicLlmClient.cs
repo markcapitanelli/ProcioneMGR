@@ -45,6 +45,16 @@ public sealed class LlmOptions
 
     /// <summary>Notifica (Info) quando un'advisory riuscita contiene decisioni per l'utente. Default off.</summary>
     public bool NotifyDecisions { get; set; }
+
+    /// <summary>
+    /// [Fase C] Secondo parere: dopo ogni advisory riuscita, chiede la STESSA analisi anche al
+    /// provider di confronto e la salva accanto (artifact separato, mai al posto). Default off:
+    /// raddoppia il costo per run, e va scelto apposta.
+    /// </summary>
+    public bool ComparisonEnabled { get; set; }
+
+    /// <summary>Provider del secondo parere ("Anthropic" | "Nvidia"). Se coincide col provider attivo il confronto si salta da solo (due pareri identici non confrontano niente).</summary>
+    public string ComparisonProvider { get; set; } = AiProviders.Nvidia;
 }
 
 /// <summary>

@@ -27,6 +27,7 @@ prezzo** in passato.
 | Notizie ingerite | 191–258 | Ultime 200 con filtri categoria/fonte, badge colorati per categoria, punteggio, link |
 | Sentiment retail | 260–290 | Barre long/short per simbolo/fonte (gauge contrarian) |
 | 2. Valuta il fattore Sentiment | 292–423 | Il sentiment come **fattore alpha**: IC Spearman, Pearson, IR, consistenza, spread top-bottom, rendimenti per quantile, **decadimento dell'IC per orizzonte**; warning esplicito se < 30 osservazioni |
+| **3. Scorer del sentiment** | — | [Fase B + pilota ONNX, 2026-08-01] Scorer ATTIVO (Keyword/Llm/Onnx, hot-reload, default Keyword = zero costi), **addestramento del pilota ONNX** (distillazione del lessico con parità come gate di pubblicazione), **confronto A/B/C**: le notizie storiche rigiocate con ciascuno scorer e giudicate con lo stesso IC della sezione 2, più la lista dei disaccordi |
 | 4. Analisi di impatto storico | 425–542 | Movimento del prezzo a 1h/4h/24h dal timestamp di ogni notizia, aggregato per categoria e fonte; **confronto incrociato FXSSI vs MyFxBook** (concordi long / concordi short / in disaccordo) |
 
 ## Come funziona (flusso del codice)
@@ -43,8 +44,21 @@ giorni di storico pubblico ⇒ il worker è default ON per accumularlo).
 ### Sync notizie — `SyncAsync` (righe 660–683)
 `IAltDataSyncService.SyncAllAsync` interroga tutte le `IAltDataSource` registrate
 (RSS crypto, ForexFactory, retail sentiment), classifica (`NewsImpactClassifier`), assegna
-il punteggio (`KeywordSentimentScorer`) e deduplica. Il registro di salute si aggiorna a
-ogni sync.
+il punteggio con lo **scorer attivo** (`DelegatingSentimentScorer`: Keyword di default, Llm o
+Onnx a scelta — ogni scorer non-lessicale ripiega da solo sul lessico se il suo canale manca)
+e deduplica. Un elemento che non si riesce a scorare viene SALTATO e ritentato al giro dopo,
+mai salvato con uno zero inventato. Il registro di salute si aggiorna a ogni sync.
+
+### Scorer e confronto — sezione 3 (Fase B + pilota ONNX)
+Lo scorer attivo si sceglie e salva qui (`Sentiment:ScorerProvider`, hot-reload). «Addestra
+pilota ONNX» esegue `OnnxSentimentPilotService`: etichette deboli dal lessico → SDCA ML.NET →
+export ONNX potato al solo "Score" → **parità ML.NET↔ONNX Runtime come gate** (oltre 1e-3 il
+file si elimina). «Confronta gli scorer» rigioca le notizie storiche (tetto configurabile: il
+costo LLM è dichiarato prima, non scoperto dalla bolletta; batch da 20 titoli per chiamata)
+attraverso Keyword/Llm/Onnx e valuta OGNI scorer con lo **stesso** `FactorEvaluator` della
+sezione 2 — stesse notizie, stesse candele, stesso giudice. La tabella dei «disaccordi più
+grandi» mostra DOVE gli scorer leggono la stessa notizia in modo diverso. Il pannello
+confronta, non promuove: il gate per l'uso live resta l'IC OOS oltre i costi.
 
 ### Fattore sentiment — `EvaluateAsync` (righe 685–746)
 Costruisce un `SentimentAlphaFactor` dalle notizie punteggiate (filtrate per l'asset base
@@ -70,7 +84,12 @@ storico prezzi in piattaforma, non della coppia forex della notizia.
 | `SentimentSyncWorker` | Sync periodica di notizie + metriche (default ON) | [`Services/Sentiment/SentimentSyncWorker.cs`](../../ProcioneMGR/Services/Sentiment/SentimentSyncWorker.cs) |
 | `SentimentSourceHealthRegistry` | Salute per-fonte in-memory | [`Services/Sentiment/SentimentSourceHealthRegistry.cs`](../../ProcioneMGR/Services/Sentiment/SentimentSourceHealthRegistry.cs) |
 | `IAltDataSyncService` + `IAltDataSource` | Ingestione notizie multi-fonte | [`Services/AltData/AltDataSyncService.cs`](../../ProcioneMGR/Services/AltData/AltDataSyncService.cs) |
-| `KeywordSentimentScorer` | Punteggio [-1,+1] keyword-based | [`Services/Sentiment/KeywordSentimentScorer.cs`](../../ProcioneMGR/Services/Sentiment/KeywordSentimentScorer.cs) |
+| `KeywordSentimentScorer` | Punteggio [-1,+1] keyword-based (fallback universale) | [`Services/Sentiment/KeywordSentimentScorer.cs`](../../ProcioneMGR/Services/Sentiment/KeywordSentimentScorer.cs) |
+| `LlmSentimentScorer` | Punteggio via provider AI attivo (guard "sentiment", batch, fallback interno) | [`Services/Sentiment/LlmSentimentScorer.cs`](../../ProcioneMGR/Services/Sentiment/LlmSentimentScorer.cs) |
+| `OnnxSentimentScorer` + `HashingTextVectorizer` | Inferenza locale del pilota (CPU, in-process) | [`Services/Sentiment/OnnxSentimentScorer.cs`](../../ProcioneMGR/Services/Sentiment/OnnxSentimentScorer.cs) |
+| `DelegatingSentimentScorer` | Instradamento hot-reload sullo scorer attivo | [`Services/Sentiment/DelegatingSentimentScorer.cs`](../../ProcioneMGR/Services/Sentiment/DelegatingSentimentScorer.cs) |
+| `OnnxSentimentPilotService` | Addestra/esporta/verifica il pilota ONNX | [`Services/Sentiment/OnnxSentimentPilotService.cs`](../../ProcioneMGR/Services/Sentiment/OnnxSentimentPilotService.cs) |
+| `SentimentScorerComparisonService` | Confronto A/B/C sugli stessi IC | [`Services/Sentiment/SentimentScorerComparisonService.cs`](../../ProcioneMGR/Services/Sentiment/SentimentScorerComparisonService.cs) |
 | `SentimentAlphaFactor` | Le notizie come fattore alpha valutabile | [`Services/Sentiment/SentimentAlphaFactor.cs`](../../ProcioneMGR/Services/Sentiment/SentimentAlphaFactor.cs) |
 | `IFactorEvaluator` | Valutazione IC standard dei fattori | [`Services/Alpha/FactorEvaluator.cs`](../../ProcioneMGR/Services/Alpha/FactorEvaluator.cs) |
 | `INewsImpactAnalyzer` | Impatto storico per categoria/fonte + cross-source retail | [`Services/AltData/NewsImpactAnalyzer.cs`](../../ProcioneMGR/Services/AltData/NewsImpactAnalyzer.cs) |

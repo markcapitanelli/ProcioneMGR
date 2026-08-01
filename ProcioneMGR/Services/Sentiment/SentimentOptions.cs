@@ -50,4 +50,19 @@ public sealed class SentimentOptions
     /// Default OFF: il sentiment entra nei modelli solo per scelta esplicita dell'operatore.
     /// </summary>
     public bool EnableMlFeature { get; set; }
+
+    /// <summary>
+    /// Scorer delle notizie: "Keyword" (default, lessicale, zero costi), "Llm" (provider AI attivo
+    /// del layer multi-provider — sceglierlo è il consenso esplicito al costo per chiamata) o
+    /// "Onnx" (inferenza locale del pilota). Hot-reload via DelegatingSentimentScorer; ogni scorer
+    /// non-lessicale ripiega DA SOLO sul lessico quando il suo canale/modello manca.
+    /// </summary>
+    public string ScorerProvider { get; set; } = SentimentScorerProviders.Keyword;
+
+    /// <summary>
+    /// Percorso del modello ONNX del pilota sentiment (relativo al content root se non assoluto).
+    /// Il file NON sta nel repository (è un artefatto addestrato, cartella gitignored): si genera
+    /// dal pannello in /sentiment.
+    /// </summary>
+    public string OnnxModelPath { get; set; } = Path.Combine("models", "sentiment-pilot.onnx");
 }

@@ -54,3 +54,8 @@ ProcioneMGR.Trading/Properties/
 # resta nella storia git — la pulizia da 7,9 GB a 961 MB non l'ha potuta cancellare.
 docs/*.pdf
 *.pdf
+
+# Modelli ONNX addestrati (pilota sentiment): artefatti generati dal pannello /sentiment, non
+# sorgente. Il repo e' PUBBLICO e un binario addestrato sui propri dati non vi appartiene.
+models/
+*.onnx

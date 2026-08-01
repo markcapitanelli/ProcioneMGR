@@ -261,7 +261,15 @@ builder.Services.AddSingleton<IEnumerable<ProcioneMGR.Services.AltData.IAltDataS
     sources.Add(new ProcioneMGR.Services.AltData.RetailSentimentIngestor("MyFxBook", "myfxbook", httpClientFactory));
     return sources;
 });
-builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentScorer, ProcioneMGR.Services.Sentiment.KeywordSentimentScorer>();
+// [Fase B/pilota ONNX] Tre scorer concreti + delegante hot-reload (stesso pattern del layer LLM):
+// Keyword = default storico a costo zero; Llm = provider AI attivo (opt-in dal pannello);
+// Onnx = inferenza locale del pilota. Ognuno dei non-lessicali ripiega DA SOLO sul lessico.
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.KeywordSentimentScorer>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.LlmSentimentScorer>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.OnnxSentimentScorer>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentScorer, ProcioneMGR.Services.Sentiment.DelegatingSentimentScorer>();
+builder.Services.AddScoped<ProcioneMGR.Services.Sentiment.OnnxSentimentPilotService>();
+builder.Services.AddScoped<ProcioneMGR.Services.Sentiment.SentimentScorerComparisonService>();
 builder.Services.AddScoped<ProcioneMGR.Services.AltData.IAltDataSyncService, ProcioneMGR.Services.AltData.AltDataSyncService>();
 builder.Services.AddSingleton<ProcioneMGR.Services.AltData.INewsImpactAnalyzer, ProcioneMGR.Services.AltData.NewsImpactAnalyzer>();
 
@@ -460,6 +468,8 @@ builder.Services.AddHttpClient(ProcioneMGR.Services.Llm.NvidiaLlmClient.HttpClie
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.AnthropicLlmClient>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.NvidiaLlmClient>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmClient, ProcioneMGR.Services.Llm.DelegatingLlmClient>();
+// [Fase C] Il secondo parere parla con un provider SPECIFICO, non con quello attivo.
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmClientResolver, ProcioneMGR.Services.Llm.LlmClientResolver>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmCallGuard, ProcioneMGR.Services.Llm.LlmCallGuard>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.IPipelineSupervisor, ProcioneMGR.Services.Llm.PipelineSupervisor>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>();

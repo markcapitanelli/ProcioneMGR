@@ -558,6 +558,45 @@ letteratura senza rimisura coi costi propri; fusioni di pagine (M6, opzionale fu
 Filone parallelo al F, con PRD proprio: [PRD-AI-MULTIPROVIDER-2026-08](PRD-AI-MULTIPROVIDER-2026-08.md).
 Fase A (fondazione) eseguita: chiavi cifrate a DB (`AiCredentials` + pannello in
 /admin/ai-supervisor), provider come dato hot-reload (`Llm:Provider`), client NVIDIA
-OpenAI-compatible con base URL parametrico, «Prova collegamento» che chiama davvero. Le fasi
-successive (gli USI delle AI) sono deliberatamente vuote: le descriverà il proprietario. Confine
+OpenAI-compatible con base URL parametrico, «Prova collegamento» che chiama davvero. Confine
 advisory non negoziabile in ogni fase.
+
+### Il quinto PDF esterno e il confronto punto-per-punto (2026-08-01)
+
+Il proprietario ha portato "Architetture AI per Trading in C#" (deep research Qwen: ibridi
+LSTM+XGBoost, ONNX Runtime, RL per l'esecuzione, risk management AI) chiedendo parere, ricerca
+propria e roadmap. Come per i quattro PDF precedenti, la risposta è il confronto col già-misurato:
+
+| Proposta del PDF | Stato reale | Verdetto |
+|---|---|---|
+| Ibridi LSTM+XGBoost per predire prezzo/direzione | Stacking out-of-fold (`ReturnPredictorCatalog`: Linear/RF/**LightGBM**/MLP) + `AttentionReturnPredictor` C#-puro già esistenti; il bersaglio direzionale-tecnico ha **10 conferme negative** control-validate | già superato in generalità; un modello più sofisticato non risolve un problema di segnale |
+| LTR-Net / ibridi Transformer | nessun segnale ha margine che giustifichi la complessità | non fare |
+| ONNX Runtime come pilastro MLOps | il local-first qui è PIÙ forte (training E inferenza in C#, bivio QLIB-4 deciso contro TorchSharp) | non come default; adottato **stretto**: pilota sentiment (sezione sotto) |
+| RL per esecuzione ordini (PPO vs VWAP/TWAP) | **già respinto DUE volte** (QLIB-5: sim-to-real gap contro il proprio simulatore; audit tensortrade); sostituito da `AdaptiveExecutionAlgorithm` chiuso-forma + √-impact + fill queue-aware | resta respinto; la ricerca 2025-26 conferma il sim-to-real gap come problema aperto |
+| Risk: previsione volatilità | log-HAR batte GARCH/EWMA del −41% QLIKE (24 simboli), cablato | già fatto, già oltre |
+| Risk: regimi di mercato | K-means + router onestamente in osservazione; upgrade jump-model C1 ha fallito il gate | già fatto, limite misurato |
+| Risk: anomaly detection | `MarketEventDetector` (p 0,002 dal vivo) + `FillSanityCheck`; il resto richiede book (2027) | parziale, dipendenza dichiarata |
+| Latenza µs / GPU / FPGA / TensorRT | piattaforma intraday/swing su REST, non colocata (preferenza dichiarata) | non pertinente |
+
+Il genuinamente nuovo coincideva coi candidati che il §3 del PRD aspettava — ed è stato eseguito:
+
+| # | Cosa | Stato | Gate / verifica |
+|---|---|---|---|
+| Fase B | **Sentiment via LLM**: `ISentimentScorer` async, `LlmSentimentScorer` (provider attivo, path guard "sentiment", fallback interno al lessico, batch per il replay), `DelegatingSentimentScorer` hot-reload (default Keyword = zero costi), harness di confronto sul `FactorEvaluator` esistente + pannello «3. Scorer del sentiment» in /sentiment | **fatto (2026-08-01)** | ✅ test: parsing difensivo, fallback su ogni esito non-Ok, batch disallineato = fallback di batch, elemento non scorabile SALTATO e ritentato (mai uno zero inventato); confronto = stesse notizie, stesse candele, stesso giudice |
+| Fase C | **Secondo parere multi-provider**: dopo l'advisory primaria riuscita, stessa analisi al provider di confronto (`Llm:ComparisonEnabled` default off), artifact con Kind proprio `LlmAdvisoryCompare`, best-effort FUORI dal breaker condiviso, affiancato nella card del run | **fatto (2026-08-01)** | ✅ test: fallimento del confronto non tocca la primaria; provider coincidente/ignoto/senza chiave = skip a voce; l'anti-join del worker ignora i Kind di confronto |
+| — | Il gate per l'uso live del sentiment (qualunque scorer) resta l'IC OOS oltre i costi, misurato nel pannello: il pannello confronta, non promuove | — | — |
+
+## Pilota inferenza locale (ONNX Runtime) — 2026-08-01
+
+Sezione non-lettered come il layer AI (un pilota singolo non è un programma multi-item; si
+promuove a Filone solo se cresce). PRD proprio:
+[PRD-ONNX-SENTIMENT-PILOT-2026-08](PRD-ONNX-SENTIMENT-PILOT-2026-08.md) — separato dal
+multi-provider perché NON è un consumatore di `ILlmClient`.
+
+| # | Cosa | Stato | Gate / verifica |
+|---|---|---|---|
+| L1 | **Filiera 100% C#**: ML.NET (SDCA, iperparametri espliciti) → `ConvertToOnnx` (potato al solo "Score") → `Microsoft.ML.OnnxRuntime` CPU in-process; `HashingTextVectorizer` (FNV-1a, mai GetHashCode) condiviso train/inferenza; `OnnxSentimentScorer` con introspezione, `LastLoadError`, fallback al lessico; addestramento dal pannello /sentiment con **parità come gate di pubblicazione** (oltre 1e-3 il file si elimina) | **fatto (2026-08-01)** | ✅ parità ML.NET↔ORT ≤1e-3 su holdout; direzione conservata su frasi mai viste; corpus di test corretto quando il fit passava da scorciatoie degeneri (token unici per riga); modello gitignored (repo pubblico) |
+| L2 | Modello pre-addestrato esterno (FinBERT-class): tokenizer con parità verificata, licenza per-modello, download pin+checksum | gated, non impegnato | si apre SOLO se L1 mostra IC che giustifichi lo sforzo nel pannello di confronto |
+
+**Non-obiettivi** (dettaglio nel PRD): ONNX come pipeline di default; GPU/TensorRT; RL esecuzione
+e ibridi direzionali del PDF (già misurati e respinti).
