@@ -45,16 +45,26 @@ public class WebSocketPriceFeedTests
             return next; // null = canale chiuso
         }
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            owner.NoteDisposed();
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class FakeTransportFactory(params Queue<string?>[] scripts) : IWebSocketTransportFactory
     {
         private int _created;
+        private int _disposed;
 
         public ConcurrentBag<Uri> Connections { get; } = [];
         public ConcurrentBag<string> Sent { get; } = [];
         public int Created => _created;
+
+        /// <summary>Transport chiusi: è l'osservabile con cui i test di riciclo vedono la DISCONNESSIONE.</summary>
+        public int Disposed => _disposed;
+
+        internal void NoteDisposed() => Interlocked.Increment(ref _disposed);
 
         public IWebSocketTransport Create()
         {
@@ -209,6 +219,70 @@ public class WebSocketPriceFeedTests
 
         // Nessuna riconnessione: l'eccezione del gestore non ha rotto il canale.
         Assert.Equal(1, factory.Created);
+    }
+
+    [Fact]
+    public async Task Feed_RecyclesLiveConnection_WhenSubscriptionsChange_Binance()
+    {
+        // [C1] Binance codifica gli stream nell'URL: aggiungere una corsia a connessione viva DEVE
+        // riciclare il socket, altrimenti i tick del nuovo simbolo non arrivano mai — mentre il
+        // log rassicura e la watchdog resta verde sui messaggi del simbolo vecchio.
+        var factory = new FakeTransportFactory(Script(BookTicker), Script());
+        var feed = BuildFeed(new BinanceStreamMapper(), factory);
+        feed.UpdateSubscriptions([BtcSpot()]);
+
+        var ticks = new ConcurrentBag<PriceTick>();
+        feed.TickReceived += ticks.Add;
+
+        using var cts = new CancellationTokenSource();
+        var run = feed.RunAsync(cts.Token);
+
+        // Prima connessione VIVA: ha consegnato un tick e ora pende sulla ReceiveAsync.
+        await WaitForAsync(() => !ticks.IsEmpty, "un tick dalla prima connessione");
+        Assert.Single(factory.Connections);
+
+        feed.UpdateSubscriptions([BtcSpot(), new StreamSubscription(ExchangeName.Binance, "ETH/USDT", "5m", MarketType.Spot)]);
+
+        await WaitForAsync(() => factory.Connections.Count == 2, "la riconnessione col set aggiornato");
+        await cts.CancelAsync();
+        await run;
+
+        // Il vecchio transport è stato chiuso e il nuovo endpoint porta ANCHE il simbolo aggiunto.
+        Assert.True(factory.Disposed >= 1, "il transport della prima connessione deve risultare chiuso");
+        Assert.Contains(factory.Connections, u => u.AbsoluteUri.Contains("ethusdt", StringComparison.Ordinal));
+
+        // Il riciclo non è un guasto: non deve sporcare il contatore delle riconnessioni da errore.
+        Assert.Equal(0, feed.Health.Reconnects);
+    }
+
+    [Fact]
+    public async Task Feed_RecyclesLiveConnection_WhenSubscriptionsChange_Bitget()
+    {
+        // [C1] Bitget negozia le sottoscrizioni via frame, ma SOLO al connect: anche qui il cambio
+        // richiede il riciclo, e la nuova connessione deve presentare i frame col simbolo nuovo.
+        var factory = new FakeTransportFactory(Script(), Script());
+        var feed = BuildFeed(new BitgetStreamMapper(), factory);
+        feed.UpdateSubscriptions([BtcSpot(ExchangeName.Bitget)]);
+
+        using var cts = new CancellationTokenSource();
+        var run = feed.RunAsync(cts.Token);
+
+        await WaitForAsync(() => factory.Sent.Any(s => s.Contains("BTCUSDT", StringComparison.Ordinal)),
+            "il frame di sottoscrizione della prima connessione");
+
+        feed.UpdateSubscriptions([
+            BtcSpot(ExchangeName.Bitget),
+            new StreamSubscription(ExchangeName.Bitget, "ETH/USDT", "5m", MarketType.Spot),
+        ]);
+
+        await WaitForAsync(() => factory.Sent.Any(s => s.Contains("ETHUSDT", StringComparison.Ordinal)),
+            "il frame di sottoscrizione col simbolo nuovo dopo il riciclo");
+        await cts.CancelAsync();
+        await run;
+
+        Assert.True(factory.Created >= 2, "il cambio di sottoscrizioni deve aver riciclato il transport");
+        Assert.True(factory.Disposed >= 1, "il transport della prima connessione deve risultare chiuso");
+        Assert.Equal(0, feed.Health.Reconnects);
     }
 
     [Fact]
