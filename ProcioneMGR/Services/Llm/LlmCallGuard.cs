@@ -234,16 +234,52 @@ public sealed class LlmCallGuard(
         Anthropic4xxException => (false, "richiesta non valida"),
         Anthropic5xxException or AnthropicUnexpectedStatusCodeException => (true, "server"),
         AnthropicIOException or AnthropicSseException => (true, "rete"),
+        // [Multi-provider] Gli errori NVIDIA arrivano come InvalidOperationException col prefisso
+        // e il codice HTTP (vedi NvidiaLlmClient): la stessa tassonomia, letta dal codice.
+        InvalidOperationException nv when nv.Message.StartsWith("NVIDIA HTTP ", StringComparison.Ordinal) =>
+            ClassifyNvidia(nv.Message),
         HttpRequestException or IOException => (true, "rete"),
         _ => (false, "inatteso"),
     };
 
+    /// <summary>"NVIDIA HTTP 503: {json}" → il codice sta fra prefisso e due punti.</summary>
+    private static (bool Retryable, string Cause) ClassifyNvidia(string message)
+    {
+        var codePart = message.AsSpan("NVIDIA HTTP ".Length);
+        var end = codePart.IndexOf(':');
+        if (end > 0 && int.TryParse(codePart[..end], out var status))
+        {
+            return status switch
+            {
+                402 => (true, "credito API"),
+                429 => (true, "rate-limit"),
+                401 or 403 => (true, "credenziali"),
+                >= 500 => (true, "server"),   // incl. il 503 "request limit reached" del free tier
+                _ => (false, "richiesta non valida"),
+            };
+        }
+        return (false, "inatteso");
+    }
+
     /// <summary>Il billing arriva come 400 generico: si riconosce solo dal testo dell'errore.</summary>
     private static bool IsBilling(AnthropicBadRequestException ex)
     {
-        var haystack = $"{ex.Message} {ex.ResponseBody} {ex.InnerException?.Message}";
+        var haystack = $"{ex.Message} {ex.ResponseBody} {SafeInnerMessage(ex)}";
         return haystack.Contains("credit", StringComparison.OrdinalIgnoreCase)
                || haystack.Contains("billing", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// BUG dell'SDK Anthropic scoperto dal vivo (2026-08-01): il getter di
+    /// <c>AnthropicApiException.InnerException</c> LANCIA ArgumentNullException quando non c'è
+    /// inner — il <c>?.</c> non protegge, perché a lanciare è il getter stesso. Toccandolo nudo,
+    /// la classificazione del 402 faceva crollare l'INTERO tick del supervisore («Value cannot be
+    /// null» sul pannello) invece del singolo run.
+    /// </summary>
+    private static string SafeInnerMessage(Exception ex)
+    {
+        try { return ex.InnerException?.Message ?? string.Empty; }
+        catch (ArgumentNullException) { return string.Empty; }
     }
 
     private static string FirstLine(string message)

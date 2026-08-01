@@ -113,6 +113,24 @@ public class AiMultiProviderTests
         Assert.Contains("MaxTokens", ex.Message);
     }
 
+    // ------------------------------------------------------------------ classificazione NVIDIA nel guard
+
+    [Theory]
+    [InlineData("NVIDIA HTTP 503: {\"error\":\"limit reached\"}", true, "server")]
+    [InlineData("NVIDIA HTTP 429: {}", true, "rate-limit")]
+    [InlineData("NVIDIA HTTP 402: {}", true, "credito API")]
+    [InlineData("NVIDIA HTTP 401: {}", true, "credenziali")]
+    [InlineData("NVIDIA HTTP 400: {}", false, "richiesta non valida")]
+    public void Guard_ClassifiesNvidiaErrors_BySameTaxonomy(string message, bool retryable, string cause)
+    {
+        // Il 503 del free tier ("Worker local total request limit reached") è stato visto dal vivo
+        // il 2026-08-01: prima di questa classificazione cadeva in "inatteso" (non ritentabile) e
+        // il run finiva in errore invece di essere rinviato.
+        var (r, c) = LlmCallGuard.Classify(new InvalidOperationException(message));
+        Assert.Equal(retryable, r);
+        Assert.Equal(cause, c);
+    }
+
     // ------------------------------------------------------------------ DelegatingLlmClient
 
     [Fact]

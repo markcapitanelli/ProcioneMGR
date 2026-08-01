@@ -94,13 +94,17 @@
                             }
                         </td>
                         <td style="min-width: 22rem">
+                            @* oninput e non il default onchange: col default il valore si committa
+                               solo al blur, e il click su un Salva ancora disabilitato viene
+                               INGOIATO dal pulsante — l'utente incolla, preme, e non succede
+                               niente (successo davvero, 2026-08-01). *@
                             <input type="password" class="form-control form-control-sm" autocomplete="off"
                                    placeholder="incolla qui la chiave e premi Salva"
-                                   @bind="_keyInputs[p]" />
+                                   @bind="_keyInputs[p]" @bind:event="oninput" />
                         </td>
                         <td class="text-nowrap">
                             <button class="btn btn-sm btn-primary me-1" @onclick="() => SaveKeyAsync(p)"
-                                    disabled="@(_busy || string.IsNullOrWhiteSpace(_keyInputs[p]))">Salva</button>
+                                    disabled="@_busy">Salva</button>
                             @if (KeyStore.GetCachedSource(p) == AiKeySource.Database)
                             {
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveKeyAsync(p)" disabled="@_busy">Rimuovi</button>
@@ -130,10 +134,13 @@
     <div class="card-header"><i class="bi bi-heart-pulse me-1"></i>Stato del layer AI</div>
     <div class="card-body">
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+            @* Il badge riporta il provider SALVATO (quello che serve davvero le chiamate), non la
+               tendina locale: la differenza fra i due è esattamente ciò che ha confuso il primo
+               collaudo. *@
             @if (LlmClient.IsConfigured)
-            { <span class="badge bg-success">@_provider: chiave presente · @ActiveModel</span> }
+            { <span class="badge bg-success">@LlmOptionsMonitor.CurrentValue.Provider: chiave presente · @LlmClient.Model</span> }
             else
-            { <span class="badge bg-danger">@_provider: chiave ASSENTE (pannello qui sopra)</span> }
+            { <span class="badge bg-danger">@LlmOptionsMonitor.CurrentValue.Provider: chiave ASSENTE (pannello qui sopra)</span> }
 
             @if (_guard is { BreakerOpen: true })
             {
@@ -300,6 +307,12 @@ else
 
     private async Task SaveKeyAsync(string provider)
     {
+        if (string.IsNullOrWhiteSpace(_keyInputs[provider]))
+        {
+            _actionIsError = true;
+            _actionStatus = $"Nessuna chiave nel campo {provider}: incollala e premi di nuovo Salva.";
+            return;
+        }
         _busy = true; _actionIsError = false; _actionStatus = null;
         try
         {
@@ -336,6 +349,27 @@ else
         _busy = true; _testResult = null; _testIsError = false;
         try
         {
+            // PRIMA si allinea la configurazione salvata a ciò che il pannello MOSTRA: il primo
+            // collaudo dal vivo (2026-08-01) è partito con la tendina su Nvidia e la config ancora
+            // su Anthropic — il test diceva Nvidia e chiamava Anthropic. Ciò che vedi è ciò che
+            // viene provato, o il pulsante mente.
+            var saved = LlmOptionsMonitor.CurrentValue;
+            if (saved.Provider != _provider || saved.Model != _anthropicModel || saved.NvidiaModel != _nvidiaModel)
+            {
+                var toWrite = JsonSerializer.Deserialize<LlmOptions>(JsonSerializer.Serialize(saved))!;
+                toWrite.Provider = _provider;
+                toWrite.Model = _anthropicModel;
+                toWrite.NvidiaModel = _nvidiaModel;
+                await ConfigWriter.SaveSectionAsync("Llm", toWrite);
+
+                // reloadOnChange impiega ~1s: si attende che le opzioni vive combacino, con un
+                // tetto — se non arrivano si prosegue e l'esito lo dirà (mai un'attesa infinita).
+                for (var i = 0; i < 20 && LlmOptionsMonitor.CurrentValue.Provider != _provider; i++)
+                {
+                    await Task.Delay(200);
+                }
+            }
+
             // Una chiamata VERA al provider attivo (via DelegatingLlmClient): è il pulsante che
             // chiede al canale se funziona — la lezione del token Telegram (2026-07-29).
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
