@@ -75,6 +75,29 @@ public class RealtimeFeedSwitchTests
             Health(now.AddSeconds(-5)), TimeSpan.FromSeconds(60), now, start));
     }
 
+    [Fact]
+    public void SeriesAddedMidSession_GetsItsOwnGrace_ThenAlertsIfNeverDelivering()
+    {
+        // [G2] La grazia è PER SERIE: una serie sottoscritta a sessione viva non può essere
+        // giudicata sulla sveglia della sessione — non ha ancora avuto il tempo di consegnare.
+        // Ma scaduta la SUA grazia, il silenzio totale è l'allarme che C1 ha reso possibile vedere.
+        var sessionStart = DateTime.UtcNow;
+        var subscribedAt = sessionStart.AddMinutes(30);   // corsia avviata mezz'ora dopo
+        var threshold = TimeSpan.FromSeconds(60);
+
+        // Dentro la grazia della serie (anche se la sessione è vecchia): silenzio legittimo.
+        Assert.False(RealtimePriceWorker.ShouldAlertStale(
+            null, threshold, subscribedAt.AddSeconds(30), graceStartUtc: subscribedAt));
+
+        // Oltre la grazia della serie senza aver MAI consegnato: allarme.
+        Assert.True(RealtimePriceWorker.ShouldAlertStale(
+            null, threshold, subscribedAt.AddSeconds(61), graceStartUtc: subscribedAt));
+
+        // Ha consegnato e poi ha smesso: nessuna grazia, allarme oltre soglia.
+        Assert.True(RealtimePriceWorker.ShouldAlertStale(
+            subscribedAt.AddMinutes(1), threshold, subscribedAt.AddMinutes(3), graceStartUtc: subscribedAt));
+    }
+
     /// <summary>Monitor con valore MUTABILE: è il modo di simulare il salvataggio dal pannello.</summary>
     private sealed class MutableOptionsMonitor<T>(T value) : IOptionsMonitor<T>
     {

@@ -59,7 +59,9 @@ public sealed class RealtimePriceWorker(
     private sealed record LaneRoute(int LaneId, ExchangeName Exchange, string Symbol, string Timeframe, MarketType MarketType);
 
     private volatile IReadOnlyList<LaneRoute> _routes = [];
-    private readonly HashSet<ExchangeName> _staleAlerted = [];
+
+    /// <summary>[G2] Serie già segnalate come ferme (exchange + simbolo maiuscolo): allarme sulla transizione.</summary>
+    private readonly HashSet<(ExchangeName Exchange, string Symbol)> _staleAlerted = [];
 
     /// <summary>
     /// Inizio della sessione di feed corrente: serve a distinguere "non ha ancora cominciato" da
@@ -260,40 +262,75 @@ public sealed class RealtimePriceWorker(
     }
 
     /// <summary>
-    /// Allerta UNA SOLA VOLTA per transizione sano→stale (e informa al ritorno). Notificare a ogni
-    /// giro trasformerebbe l'allarme in rumore, che è il modo migliore per non farlo leggere.
+    /// [G2] Allerta PER SERIE, una sola volta per transizione sano→stale (e informa al ritorno).
+    /// La versione per-feed guardava <see cref="FeedHealth.LastMessageUtc"/> dell'intero canale:
+    /// bastava UN simbolo vivo a coprire il silenzio di tutti gli altri — è il complice che ha
+    /// reso invisibile C1, e resta un buco anche col riciclo a posto (uno stream che l'exchange
+    /// smette di consegnare per blocco regionale tace mentre i vicini parlano). La grazia è
+    /// per-serie: dal momento della SUA sottoscrizione, non dall'inizio della sessione.
+    /// Notifiche AGGREGATE per giro (pattern SeriesFreshnessWatchWorker): un guasto di rete che
+    /// ammutolisce venti serie insieme deve produrre un messaggio, non venti.
     /// </summary>
     private void CheckStaleness(IReadOnlyList<WebSocketPriceFeed> feeds)
     {
         var threshold = TimeSpan.FromSeconds(Math.Max(10, options.CurrentValue.StaleAfterSeconds));
         var now = DateTime.UtcNow;
 
+        var newlyStale = new List<string>();
+        var recovered = new List<string>();
+
         foreach (var feed in feeds)
         {
-            var health = feed.Health;
+            var routedSymbols = _routes
+                .Where(r => r.Exchange == feed.Exchange)
+                .Select(r => r.Symbol)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            // Un feed senza sottoscrizioni non è "fermo": non ha nulla da ricevere.
-            if (!_routes.Any(r => r.Exchange == feed.Exchange))
+            foreach (var series in feed.SeriesHealthSnapshot)
             {
-                _staleAlerted.Remove(feed.Exchange);
-                continue;
-            }
+                var key = (feed.Exchange, series.Symbol.ToUpperInvariant());
 
-            var stale = ShouldAlertStale(health, threshold, now, _sessionStartedUtc);
-            if (stale && _staleAlerted.Add(feed.Exchange))
-            {
-                logger.LogError("Feed {Exchange} STALE: nessun messaggio da oltre {Sec}s (ultimo: {Last}).",
-                    feed.Exchange, threshold.TotalSeconds, health.LastMessageUtc?.ToString("u") ?? "mai");
-                Notify(NotificationSeverity.Warning, $"Feed real-time {feed.Exchange} non risponde",
-                    $"Nessun messaggio da oltre {threshold.TotalSeconds:F0}s. Gli stop tornano a reagire solo alla chiusura " +
-                    "candela (percorso REST), quindi con un ritardo che può arrivare a diversi minuti.");
+                // Una serie non più instradata non è "ferma": nessuna corsia la opera. Il feed la
+                // toglie dal set al prossimo refresh; qui si riarma solo l'allarme.
+                if (!routedSymbols.Contains(series.Symbol))
+                {
+                    _staleAlerted.Remove(key);
+                    continue;
+                }
+
+                // La grazia parte dal momento più recente fra inizio sessione e sottoscrizione
+                // della serie: una serie aggiunta a sessione viva non ha ancora avuto modo di
+                // consegnare, e la sessione appena riaccesa azzera la storia di tutte.
+                var graceStart = series.SubscribedSinceUtc > _sessionStartedUtc ? series.SubscribedSinceUtc : _sessionStartedUtc;
+                var stale = ShouldAlertStale(series.LastEventUtc, threshold, now, graceStart);
+
+                if (stale && _staleAlerted.Add(key))
+                {
+                    logger.LogError("Serie {Exchange} {Symbol} STALE sul feed: nessun evento da oltre {Sec}s (ultimo: {Last}).",
+                        feed.Exchange, series.Symbol, threshold.TotalSeconds, series.LastEventUtc?.ToString("u") ?? "mai");
+                    newlyStale.Add($"{feed.Exchange} {series.Symbol} (ultimo: {series.LastEventUtc?.ToString("HH:mm:ss") ?? "mai"})");
+                }
+                else if (!stale && _staleAlerted.Remove(key))
+                {
+                    logger.LogInformation("Serie {Exchange} {Symbol}: tornata a ricevere sul feed.", feed.Exchange, series.Symbol);
+                    recovered.Add($"{feed.Exchange} {series.Symbol}");
+                }
             }
-            else if (!stale && _staleAlerted.Remove(feed.Exchange))
-            {
-                logger.LogInformation("Feed {Exchange}: tornato a ricevere.", feed.Exchange);
-                Notify(NotificationSeverity.Info, $"Feed real-time {feed.Exchange} ripristinato",
-                    "I tick sono tornati: le uscite protettive sono di nuovo reattive.");
-            }
+        }
+
+        if (newlyStale.Count > 0)
+        {
+            Notify(NotificationSeverity.Warning,
+                $"{newlyStale.Count} serie del feed real-time non rispondono",
+                $"Nessun tick/candela da oltre {threshold.TotalSeconds:F0}s su: {string.Join(", ", newlyStale)}. " +
+                "Per queste serie gli stop reagiscono solo alla chiusura candela (percorso REST), " +
+                "con un ritardo che può arrivare a diversi minuti.");
+        }
+        if (recovered.Count > 0)
+        {
+            Notify(NotificationSeverity.Info,
+                $"Feed real-time ripristinato per {recovered.Count} serie",
+                $"Tornati gli eventi su: {string.Join(", ", recovered)}.");
         }
     }
 
@@ -312,9 +349,17 @@ public sealed class RealtimePriceWorker(
     /// dopo la grazia invece che subito.</para>
     /// </summary>
     internal static bool ShouldAlertStale(FeedHealth health, TimeSpan threshold, DateTime nowUtc, DateTime sessionStartedUtc)
+        => ShouldAlertStale(health.LastMessageUtc, threshold, nowUtc, sessionStartedUtc);
+
+    /// <summary>
+    /// [G2] Il cuore della regola, riusato per-feed (overload sopra, coi suoi test) e per-serie:
+    /// silenzio da sempre dentro la grazia ⇒ non ancora un allarme; tutto il resto del silenzio
+    /// oltre soglia ⇒ allarme, incluso chi non ha MAI consegnato una volta scaduta la grazia.
+    /// </summary>
+    internal static bool ShouldAlertStale(DateTime? lastUtc, TimeSpan threshold, DateTime nowUtc, DateTime graceStartUtc)
     {
-        if (health.LastMessageUtc is null && nowUtc - sessionStartedUtc < threshold) return false;
-        return health.IsStale(threshold, nowUtc);
+        if (lastUtc is null && nowUtc - graceStartUtc < threshold) return false;
+        return lastUtc is not DateTime last || nowUtc - last > threshold;
     }
 
     private void Notify(NotificationSeverity severity, string title, string body)
