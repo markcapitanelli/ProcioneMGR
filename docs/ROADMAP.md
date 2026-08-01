@@ -535,9 +535,9 @@ sull'aritmetica del campione — e il benchmark esterno CONFERMA le soglie, non 
 
 | # | Cosa | Stato | Gate / verifica |
 |---|---|---|---|
-| F1 | Cache simulazione ensemble + refresh a corsa unica + poll 60s (oggi: ~2K backtest ogni 15s per pagina aperta) | aperto | refresh a cache calda senza `RunBacktestAsync` nei log |
-| F2 | Home: count 12,7M righe (4-7s misurati) → stima `pg_class.reltuples` | aperto | Home senza query >100ms sul count |
-| F3 | Freschezza serie: group-by full-table (15,2s misurati) → max per-serie su indice | aperto | <2s, stessi verdetti sulle 228 serie reali |
+| F1 | Cache simulazione ensemble + refresh a corsa unica + poll 60s (prima: ~2K backtest ogni 15s per pagina aperta) | **fatto (2026-08-01)**, verificato dal vivo: a cache calda il poll costa due `SELECT max()` da 1-11ms, zero ricaricamenti di candele, zero backtest; 3 test nuovi (parità ⇒ mai due volte; candela nuova/config cambiata ⇒ invalida; fee viva nell'hash) | ✅ refresh a cache calda senza `RunBacktestAsync` nei log |
+| F2 | Home: count 12,7M righe (4-7s misurati) → stima `pg_class.reltuples` | **fatto (2026-08-01)**, verificato dal vivo: 1-7ms, UI dichiara «≈» (scarto osservato ~3,7%, si riallinea con autovacuum); fallback al count esatto se reltuples=-1 | ✅ Home senza query >100ms sul count |
+| F3 | Freschezza serie: group-by full-table (15,2s misurati) → max per-serie su indice | **fatto (2026-08-01)**, verificato dal vivo: «221 serie in 274ms» nel log del worker (55× più veloce); stessa regola `SeriesFreshness`, cambia solo come si ottiene il max | ✅ <2s, stessi verdetti |
 | F4 | **Power check MinTRL**: lo Sharpe minimo che può passare il DSR dichiarato PRIMA dei backtest (formula Bailey-LdP; ancora interna: SR 1,0 ⇒ ~6,2 anni) | aperto | riga di potenza nel report del run; test contro la formula |
 | F5 | **Fascia grigia DSR [0,80–0,95) → proposta forward Paper** con click umano (mai automatico, mai oltre Paper): la flessibilità sta nell'instradare al giudice giusto, non nell'abbassare le soglie | aperto | verdetto a tre vie nel run; assegnazione via flussi corsia esistenti |
 | F6 | Gemello nullo SOLO sui sopravvissuti holdout: garantito da test d'ordine | aperto | candidati giudicati == sopravvissuti |
