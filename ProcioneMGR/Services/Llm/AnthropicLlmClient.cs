@@ -31,6 +31,24 @@ public sealed class LlmOptions
     /// </summary>
     public string NvidiaBaseUrl { get; set; } = "https://integrate.api.nvidia.com/v1";
 
+    // [Fase D 2026-08-02] Tre provider in un colpo, stessa forma di Nvidia: la prova del
+    // principio §1.2 del PRD. Ogni coppia Model/BaseUrl è hot-reload dal pannello.
+
+    /// <summary>Modello per Google Gemini (layer OpenAI-compatible di Generative Language API).</summary>
+    public string GeminiModel { get; set; } = "gemini-2.5-flash";
+
+    public string GeminiBaseUrl { get; set; } = "https://generativelanguage.googleapis.com/v1beta/openai";
+
+    /// <summary>Modello per Groq (inferenza a bassa latenza su modelli aperti).</summary>
+    public string GroqModel { get; set; } = "llama-3.3-70b-versatile";
+
+    public string GroqBaseUrl { get; set; } = "https://api.groq.com/openai/v1";
+
+    /// <summary>Modello per il router HuggingFace (org/nome del catalogo; il router sceglie il backend).</summary>
+    public string HuggingFaceModel { get; set; } = "meta-llama/Llama-3.3-70B-Instruct";
+
+    public string HuggingFaceBaseUrl { get; set; } = "https://router.huggingface.co/v1";
+
     public int MaxTokens { get; set; } = 4096;
     public int PollIntervalMinutes { get; set; } = 5;
 

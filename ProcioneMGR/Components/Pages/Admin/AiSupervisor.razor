@@ -58,15 +58,14 @@
                     }
                 </select>
             </div>
-            <div class="col-auto">
-                <label class="form-label mb-0">Modello Anthropic</label>
-                <input class="form-control" @bind="_anthropicModel" style="min-width: 16rem" />
-            </div>
-            <div class="col-auto">
-                <label class="form-label mb-0">Modello Nvidia</label>
-                <input class="form-control" @bind="_nvidiaModel" style="min-width: 20rem"
-                       placeholder="es. meta/llama-3.3-70b-instruct" />
-            </div>
+            @foreach (var p in AiProviders.Known)
+            {
+                <div class="col-auto">
+                    <label class="form-label mb-0">Modello @p</label>
+                    <input class="form-control" @bind="_models[p]" style="min-width: 15rem"
+                           placeholder="@ModelPlaceholder(p)" />
+                </div>
+            }
             <div class="col-auto">
                 <button class="btn btn-primary" @onclick="SaveProviderAsync" disabled="@_busy">Salva provider/modelli</button>
             </div>
@@ -326,8 +325,8 @@ else
 
     // ---- [Multi-provider] provider, modelli, chiavi, prova collegamento ----
     private string _provider = AiProviders.Anthropic;
-    private string _anthropicModel = "";
-    private string _nvidiaModel = "";
+    private readonly Dictionary<string, string> _models =
+        AiProviders.Known.ToDictionary(p => p, _ => string.Empty);
     private bool _comparisonEnabled;
     private string _comparisonProvider = AiProviders.Nvidia;
     private readonly Dictionary<string, string> _keyInputs =
@@ -335,14 +334,47 @@ else
     private string? _testResult;
     private bool _testIsError;
 
-    private string ActiveModel => _provider == AiProviders.Nvidia ? _nvidiaModel : _anthropicModel;
+    private string ActiveModel => _models.GetValueOrDefault(_provider, "");
+
+    /// <summary>Il modello del provider dentro LlmOptions (campi piatti, stile NvidiaModel).</summary>
+    private static string GetModelFor(LlmOptions o, string provider) => provider switch
+    {
+        AiProviders.Nvidia => o.NvidiaModel,
+        AiProviders.Gemini => o.GeminiModel,
+        AiProviders.Groq => o.GroqModel,
+        AiProviders.HuggingFace => o.HuggingFaceModel,
+        _ => o.Model,
+    };
+
+    private static void SetModelFor(LlmOptions o, string provider, string value)
+    {
+        switch (provider)
+        {
+            case AiProviders.Nvidia: o.NvidiaModel = value; break;
+            case AiProviders.Gemini: o.GeminiModel = value; break;
+            case AiProviders.Groq: o.GroqModel = value; break;
+            case AiProviders.HuggingFace: o.HuggingFaceModel = value; break;
+            default: o.Model = value; break;
+        }
+    }
+
+    private static string ModelPlaceholder(string provider) => provider switch
+    {
+        AiProviders.Nvidia => "es. meta/llama-3.3-70b-instruct",
+        AiProviders.Gemini => "es. gemini-2.5-flash",
+        AiProviders.Groq => "es. llama-3.3-70b-versatile",
+        AiProviders.HuggingFace => "es. meta-llama/Llama-3.3-70B-Instruct",
+        _ => "es. claude-opus-4-8",
+    };
 
     protected override async Task OnInitializedAsync()
     {
         var opt = LlmOptionsMonitor.CurrentValue;
         _provider = opt.Provider;
-        _anthropicModel = opt.Model;
-        _nvidiaModel = opt.NvidiaModel;
+        foreach (var p in AiProviders.Known)
+        {
+            _models[p] = GetModelFor(opt, p);
+        }
         _comparisonEnabled = opt.ComparisonEnabled;
         _comparisonProvider = opt.ComparisonProvider;
         await KeyStore.ReloadAsync();   // le fonti mostrate devono essere quelle VERE, non la cache di un processo vecchio
@@ -361,8 +393,10 @@ else
             var current = JsonSerializer.Deserialize<LlmOptions>(
                 JsonSerializer.Serialize(LlmOptionsMonitor.CurrentValue))!;
             current.Provider = _provider;
-            current.Model = _anthropicModel;
-            current.NvidiaModel = _nvidiaModel;
+            foreach (var p in AiProviders.Known)
+            {
+                SetModelFor(current, p, _models[p]);
+            }
             current.ComparisonEnabled = _comparisonEnabled;
             current.ComparisonProvider = _comparisonProvider;
             await ConfigWriter.SaveSectionAsync("Llm", current);
@@ -427,12 +461,14 @@ else
             // su Anthropic — il test diceva Nvidia e chiamava Anthropic. Ciò che vedi è ciò che
             // viene provato, o il pulsante mente.
             var saved = LlmOptionsMonitor.CurrentValue;
-            if (saved.Provider != _provider || saved.Model != _anthropicModel || saved.NvidiaModel != _nvidiaModel)
+            if (saved.Provider != _provider || AiProviders.Known.Any(p => GetModelFor(saved, p) != _models[p]))
             {
                 var toWrite = JsonSerializer.Deserialize<LlmOptions>(JsonSerializer.Serialize(saved))!;
                 toWrite.Provider = _provider;
-                toWrite.Model = _anthropicModel;
-                toWrite.NvidiaModel = _nvidiaModel;
+                foreach (var p in AiProviders.Known)
+                {
+                    SetModelFor(toWrite, p, _models[p]);
+                }
                 await ConfigWriter.SaveSectionAsync("Llm", toWrite);
 
                 // reloadOnChange impiega ~1s: si attende che le opzioni vive combacino, con un

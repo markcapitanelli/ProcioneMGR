@@ -25,7 +25,7 @@ env `ANTHROPIC_API_KEY`.
 | Blocco | Righe | Contenuto |
 |---|---|---|
 | GuidaPanel | 21–35 | Cosa fa l'agente e il confine advisory-only |
-| **Provider e chiavi** [multi-provider 2026-08] | — | Provider attivo (Anthropic/Nvidia, hot-reload), modelli per provider, chiavi cifrate a DB (mai rimostrate, solo la fonte: database/env/assente), «Prova collegamento» (chiamata VERA al provider attivo); **[Fase C] toggle «Secondo parere per ogni run» + provider di confronto** (default off: raddoppia il costo per run; best-effort dichiarato) |
+| **Provider e chiavi** [multi-provider 2026-08] | — | Provider attivo (**Anthropic/Nvidia/Gemini/Groq/HuggingFace** — Fase D 2026-08-02, hot-reload), un campo modello PER provider (ciclo su `AiProviders.Known`), chiavi cifrate a DB (mai rimostrate, solo la fonte: database/env/assente), «Prova collegamento» (chiamata VERA al provider attivo); **[Fase C] toggle «Secondo parere per ogni run» + provider di confronto** (default off: raddoppia il costo per run; best-effort dichiarato) |
 | **Stato del layer AI** | 38–87 | Badge: chiave presente/assente, **operativo / SOSPESO** (breaker con causa e orario del prossimo probe), conteggi advisory ok / in errore / run in attesa (7gg); azioni **Aggiorna**, **Riprova adesso**, **Rianalizza advisory in errore** |
 | Elenco advisory | 89–150 | Card per run: id run, badge confidenza (alta/media/bassa), badge errore, modello usato, riepilogo, tabella "Aggiustamenti proposti (da valutare, non applicati)", elenco "Decisioni che richiedono la tua conferma"; **[Fase C] riquadro «Secondo parere»** dentro la card quando esiste (stesso run, provider di confronto, affiancato — mai al posto) |
 

@@ -84,6 +84,25 @@ oltre i costi, come per ogni fattore.
 Se il provider di confronto coincide con l'attivo il confronto si salta da solo. Skip anche senza
 chiave o con provider ignoto — sempre a voce nel log, mai in silenzio.
 
+### Fase D — Tre provider in un colpo: Gemini, Groq, HuggingFace (ESEGUITA 2026-08-02)
+
+Il proprietario si è procurato le chiavi API di Google Gemini, Groq e HuggingFace. Tutti e tre
+parlano il dialetto OpenAI-compatible → il principio §1.2 passa dalla promessa alla prova:
+
+| Pezzo | Cosa | Dove |
+|---|---|---|
+| Base comune | `NvidiaLlmClient` elevato a `OpenAiCompatibleLlmClient` (astratta): l'intera logica HTTP/parse/errori è UNA; ogni provider è una sottoclasse da cinque righe (nome + coppia BaseUrl/Model dalle opzioni) | `Services/Llm/NvidiaLlmClient.cs` |
+| Provider | `GeminiLlmClient` (layer compat `generativelanguage.googleapis.com/v1beta/openai`, default `gemini-2.5-flash`), `GroqLlmClient` (`api.groq.com/openai/v1`, default `llama-3.3-70b-versatile`), `HuggingFaceLlmClient` (router `router.huggingface.co/v1`, default `meta-llama/Llama-3.3-70B-Instruct`) | idem |
+| Config | `Llm:{Gemini,Groq,HuggingFace}{Model,BaseUrl}` — campi piatti hot-reload, stesso stile di NvidiaModel | `LlmOptions` |
+| Chiavi | zero modifiche: `AiCredentials` è keyed per provider, il pannello mostra le righe nuove da solo; env fallback `GEMINI_API_KEY`/`GROQ_API_KEY`/`HUGGINGFACE_API_KEY` | — |
+| Errori | il classificatore del guard legge il contratto generico `<PROVIDER> HTTP <code>:` — la tassonomia è del codice HTTP, non del nome del provider | `LlmCallGuard` |
+| Routing | `LlmClientResolver` a 5; `DelegatingLlmClient` instrada via resolver (fallback storico a due senza) | `LlmClientResolver.cs` |
+| UI | il pannello genera un campo modello PER provider dal ciclo su `AiProviders.Known`; la tabella chiavi e il select del secondo parere erano già cicli | `/admin/ai-supervisor` |
+
+Con cinque provider il **secondo parere (Fase C) ha finalmente coppie utilizzabili** anche a
+credito Anthropic esaurito (es. attivo Nvidia + confronto Groq). Il confine advisory e il breaker
+unico del layer restano invariati.
+
 ### Candidato aperto (non impegnato)
 
 - **Spiegazioni leggibili dei run per il pannello** — nessuna nuova informazione lo giustifica

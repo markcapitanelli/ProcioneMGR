@@ -9,11 +9,14 @@ public static class AiProviders
 {
     public const string Anthropic = "Anthropic";
     public const string Nvidia = "Nvidia";
+    public const string Gemini = "Gemini";
+    public const string Groq = "Groq";
+    public const string HuggingFace = "HuggingFace";
 
     /// <summary>I provider noti alla UI di configurazione, nell'ordine di presentazione.</summary>
-    public static readonly IReadOnlyList<string> Known = [Anthropic, Nvidia];
+    public static readonly IReadOnlyList<string> Known = [Anthropic, Nvidia, Gemini, Groq, HuggingFace];
 
-    /// <summary>Variabile d'ambiente di fallback per il provider ("ANTHROPIC_API_KEY", "NVIDIA_API_KEY", …).</summary>
+    /// <summary>Variabile d'ambiente di fallback per il provider ("ANTHROPIC_API_KEY", "NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "HUGGINGFACE_API_KEY").</summary>
     public static string EnvVarFor(string provider) => provider.ToUpperInvariant() + "_API_KEY";
 }
 
