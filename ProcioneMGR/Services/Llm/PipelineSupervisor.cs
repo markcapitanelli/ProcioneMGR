@@ -13,6 +13,14 @@ namespace ProcioneMGR.Services.Llm;
 public static class LlmArtifactKinds
 {
     public const string Advisory = "LlmAdvisory";
+
+    /// <summary>
+    /// [Fase C] Il SECONDO parere (provider di confronto) di un run. Kind DISTINTO di proposito:
+    /// worker, pannello e test filtrano su <see cref="Advisory"/> per contare/riprendere i run —
+    /// un secondo artifact con lo stesso Kind li farebbe sbagliare tutti. Il provider che l'ha
+    /// scritto sta nello StageName ("LlmSupervisor:Comparison:{provider}").
+    /// </summary>
+    public const string AdvisoryComparison = "LlmAdvisoryCompare";
 }
 
 public interface IPipelineSupervisor
@@ -49,7 +57,8 @@ public sealed class PipelineSupervisor(
     ILogger<PipelineSupervisor> logger,
     ProcioneMetrics? metrics = null,
     INotifier? notifier = null,
-    ProcioneMGR.Services.Sentiment.SentimentSnapshotCache? sentimentCache = null) : IPipelineSupervisor
+    ProcioneMGR.Services.Sentiment.SentimentSnapshotCache? sentimentCache = null,
+    ILlmClientResolver? clientResolver = null) : IPipelineSupervisor
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
@@ -163,7 +172,84 @@ public sealed class PipelineSupervisor(
                 $"{advisory.DecisionsForUser.Count} decisioni da confermare in /admin/ai-supervisor.", ct);
         }
 
+        // [Fase C] Secondo parere DOPO (e mai al posto de) l'advisory primaria riuscita.
+        if (!advisory.IsError)
+        {
+            await TryWriteComparisonAdvisoryAsync(db, runId, userPrompt, ct);
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// [Fase C] Chiede la STESSA analisi al provider di confronto e la salva come artifact
+    /// separato. Best-effort DICHIARATO: la chiamata NON passa dal breaker condiviso (un guasto
+    /// del provider di confronto non deve sospendere advisory/veto — il breaker è del layer, e
+    /// questo percorso è fuori dal layer attivo per definizione) ma ha il suo timeout; un
+    /// fallimento si logga e il run resta con un parere solo, senza retry: riprovare per un
+    /// parere accessorio non vale il macchinario.
+    /// </summary>
+    private async Task TryWriteComparisonAdvisoryAsync(ApplicationDbContext db, Guid runId, string userPrompt, CancellationToken ct)
+    {
+        var opt = options.CurrentValue;
+        if (!opt.ComparisonEnabled || clientResolver is null)
+        {
+            return;
+        }
+
+        var provider = opt.ComparisonProvider;
+        if (string.Equals(provider, opt.Provider, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogDebug("Secondo parere saltato: il provider di confronto ({Provider}) coincide con quello attivo.", provider);
+            return;
+        }
+
+        var client = clientResolver.Resolve(provider);
+        if (client is null)
+        {
+            logger.LogWarning("Secondo parere saltato: provider di confronto '{Provider}' sconosciuto.", provider);
+            return;
+        }
+        if (!client.IsConfigured)
+        {
+            logger.LogDebug("Secondo parere saltato: il provider {Provider} non ha una chiave.", provider);
+            return;
+        }
+
+        if (await db.PipelineArtifacts.AnyAsync(a => a.RunId == runId && a.Kind == LlmArtifactKinds.AdvisoryComparison, ct))
+        {
+            return; // idempotente come l'advisory primaria
+        }
+
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(5, opt.RequestTimeoutSeconds)));
+
+            var raw = await client.CompleteAsync(SystemPrompt, userPrompt, timeoutCts.Token);
+            var advisory = ParseAdvisory(raw);
+            advisory.ModelUsed = client.Model;
+            advisory.CreatedAtUtc = DateTime.UtcNow;
+
+            db.PipelineArtifacts.Add(new PipelineArtifact
+            {
+                RunId = runId,
+                StageName = $"LlmSupervisor:Comparison:{provider}",
+                Kind = LlmArtifactKinds.AdvisoryComparison,
+                PayloadJson = JsonSerializer.Serialize(advisory),
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation("Secondo parere ({Provider} · {Model}) scritto per il run {RunId}.", provider, client.Model, runId);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Secondo parere ({Provider}) fallito per il run {RunId}: si prosegue col solo parere primario.", provider, runId);
+        }
     }
 
     public async Task<int> DeleteErrorAdvisoriesAsync(DateTime since, CancellationToken ct)

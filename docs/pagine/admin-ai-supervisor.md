@@ -25,8 +25,19 @@ env `ANTHROPIC_API_KEY`.
 | Blocco | Righe | Contenuto |
 |---|---|---|
 | GuidaPanel | 21–35 | Cosa fa l'agente e il confine advisory-only |
+| **Provider e chiavi** [multi-provider 2026-08] | — | Provider attivo (Anthropic/Nvidia, hot-reload), modelli per provider, chiavi cifrate a DB (mai rimostrate, solo la fonte: database/env/assente), «Prova collegamento» (chiamata VERA al provider attivo); **[Fase C] toggle «Secondo parere per ogni run» + provider di confronto** (default off: raddoppia il costo per run; best-effort dichiarato) |
 | **Stato del layer AI** | 38–87 | Badge: chiave presente/assente, **operativo / SOSPESO** (breaker con causa e orario del prossimo probe), conteggi advisory ok / in errore / run in attesa (7gg); azioni **Aggiorna**, **Riprova adesso**, **Rianalizza advisory in errore** |
-| Elenco advisory | 89–150 | Card per run: id run, badge confidenza (alta/media/bassa), badge errore, modello usato, riepilogo, tabella "Aggiustamenti proposti (da valutare, non applicati)", elenco "Decisioni che richiedono la tua conferma" |
+| Elenco advisory | 89–150 | Card per run: id run, badge confidenza (alta/media/bassa), badge errore, modello usato, riepilogo, tabella "Aggiustamenti proposti (da valutare, non applicati)", elenco "Decisioni che richiedono la tua conferma"; **[Fase C] riquadro «Secondo parere»** dentro la card quando esiste (stesso run, provider di confronto, affiancato — mai al posto) |
+
+### Secondo parere (Fase C, 2026-08-01)
+
+Con `Llm:ComparisonEnabled=true`, DOPO ogni advisory primaria riuscita il supervisore chiede la
+STESSA analisi al provider di confronto (`Llm:ComparisonProvider`) e la salva come artifact
+separato (Kind `LlmAdvisoryCompare`, provider nello StageName). La chiamata NON passa dal breaker
+condiviso — un guasto del provider di confronto non sospende advisory/veto — e un suo fallimento
+lascia il run con un parere solo, a voce nel log, senza retry. Provider coincidente con l'attivo,
+ignoto o senza chiave ⇒ skip dichiarato. Dettaglio nel
+[PRD-AI-MULTIPROVIDER-2026-08 §3](../PRD-AI-MULTIPROVIDER-2026-08.md).
 
 ## Come funziona (flusso del codice)
 

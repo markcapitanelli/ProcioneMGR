@@ -35,6 +35,12 @@
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.16.0" />
     <PackageReference Include="Microsoft.ML" Version="5.0.0" />
     <PackageReference Include="Microsoft.ML.LightGbm" Version="5.0.0" />
+    <!-- Pilota ONNX sentiment (PRD-ONNX-SENTIMENT-PILOT): filiera 100% C# — si addestra in
+         ML.NET, si esporta con OnnxConverter, si inferisce in-process con OnnxRuntime (CPU).
+         Prima dipendenza nativa di inferenza del repo: perimetro deliberatamente stretto
+         (solo lo scorer sentiment), NON la pipeline ML di default. -->
+    <PackageReference Include="Microsoft.ML.OnnxConverter" Version="0.23.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.10.1" />
     <PackageReference Include="OpenTelemetry.Instrumentation.GrpcNetClient" Version="1.10.0-beta.1" />

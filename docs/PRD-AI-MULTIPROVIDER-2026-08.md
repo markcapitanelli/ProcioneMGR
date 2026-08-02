@@ -43,14 +43,51 @@ anticipati a scatola chiusa.*
 OpenAI-compatible provato contro l'endpoint vero col «Prova collegamento»; integrazione = pannello
 sull'app reale con la chiave dell'operatore; browser = badge di stato e risposta del modello visibili.
 
-## §3 — Fasi successive (INTENZIONALMENTE VUOTE)
+## §3 — Fasi successive
 
-Il proprietario illustrerà gli usi che ha in mente («sfruttare le AI in diverse modalità e
-piattaforme»). Ogni idea entrerà qui come fase con: consumatore di `ILlmClient` (mai un canale
-parallelo), costo stimato per chiamata, e il suo posto rispetto al confine advisory. Candidati già
-emersi in passato e NON ancora decisi: supervisore su più provider in parallelo con confronto dei
-pareri; analisi del sentiment con LLM al posto dello scorer lessicale (`ISentimentScorer` è già
-sostituibile 1:1); spiegazioni leggibili dei run per il pannello. Nessuno di questi è impegnato.
+*Riempito il 2026-08-01, quando il proprietario ha portato il PDF di ricerca esterna "Architetture
+AI per Trading in C#" e chiesto la roadmap d'integrazione. Il confronto punto-per-punto col PDF sta
+in `docs/ROADMAP.md` (sezione «Layer AI multi-provider»); qui le fasi decise. Il terzo candidato
+storico ("spiegazioni leggibili dei run") resta aperto e non impegnato.*
+
+### Fase B — Sentiment via LLM (ESEGUITA 2026-08-01)
+
+Lo scorer lessicale a 25 parole era esplicitamente segnalato debole ("DEMOTE" nell'audit
+algoritmico di luglio); `ISentimentScorer` era già progettata per la sostituzione 1:1.
+
+| Pezzo | Cosa | Dove |
+|---|---|---|
+| Contratto | `ISentimentScorer.ScoreAsync(title, summary, ct)` — asincrono (un'implementazione può fare rete); chi implementa NON lascia mai propagare un fallimento del canale | `Services/Sentiment/ISentimentScorer.cs` |
+| Scorer LLM | `LlmSentimentScorer`: provider ATTIVO via `ILlmClient`+`LlmCallGuard` (path metrica **"sentiment"**, breaker del layer condiviso per scelta), parsing difensivo con clamp [-1,1], fallback interno al lessico su OGNI esito non-Ok; `ScoreBatchAsync` (20 titoli per chiamata) per il replay storico | `Services/Sentiment/LlmSentimentScorer.cs` |
+| Routing | `DelegatingSentimentScorer` su `Sentiment:ScorerProvider` hot-reload ("Keyword" default = comportamento storico; sceglierne un altro è il consenso esplicito al costo) | `Services/Sentiment/DelegatingSentimentScorer.cs` |
+| Call-site | UNICO in tutto il repo: `AltDataSyncService.SyncAllAsync` (~orario, ~decine di titoli). Fallimento di scoring = elemento SALTATO e ritentato al giro dopo, mai uno zero inventato (la dedupe non rivisita mai un elemento salvato) | `Services/AltData/AltDataSyncService.cs` |
+| Confronto | `SentimentScorerComparisonService`: rigioca le notizie storiche con ciascuno scorer e le giudica con lo STESSO `FactorEvaluator` (IC Spearman, t-stat Newey-West, IR, quantili) sulle stesse candele — nessun gate nuovo; pannello «3. Scorer del sentiment» in /sentiment con tetto costi e lista dei disaccordi | `Services/Sentiment/SentimentScorerComparisonService.cs` |
+
+**Costo dichiarato** (§1.4): percorso vivo = decine di piccole chiamate l'ora al massimo (solo
+notizie nuove); replay storico = N/20 chiamate col tetto scelto dal pannello. Il free tier NVIDIA
+(16 richieste concorrenti) non è mai un vincolo: le chiamate sono sequenziali.
+
+**Confine** (§1.5): consumatore puro di `ILlmClient`/`LlmCallGuard`; il punteggio influenza il
+fattore sentiment esattamente come il lessico di prima — il gate per l'uso live resta l'IC OOS
+oltre i costi, come per ogni fattore.
+
+### Fase C — Secondo parere multi-provider (ESEGUITA 2026-08-01)
+
+| Pezzo | Cosa | Dove |
+|---|---|---|
+| Config | `Llm:ComparisonEnabled` (default off — raddoppia il costo per run) + `Llm:ComparisonProvider` | `LlmOptions` |
+| Resolver | `ILlmClientResolver`: il secondo parere parla con un provider SPECIFICO, non con l'attivo del delegante | `Services/Llm/LlmClientResolver.cs` |
+| Flusso | DOPO l'advisory primaria riuscita (mai al posto; mai su advisory in errore), stessa `PipelineRecommendation`, stesso prompt. **Best-effort dichiarato**: NON passa dal breaker condiviso (un guasto del provider di confronto non deve sospendere advisory/veto), timeout proprio, fallimento = log + run con un parere solo, senza retry | `PipelineSupervisor.TryWriteComparisonAdvisoryAsync` |
+| Persistenza | artifact con **Kind distinto** `LlmAdvisoryCompare` (worker/pannello/test filtrano sul Kind primario e non devono vederlo), provider nello StageName; NESSUNA migrazione | — |
+| UI | toggle+provider nel pannello «Provider e chiavi»; il secondo parere compare DENTRO la card del run, affiancato | `/admin/ai-supervisor` |
+
+Se il provider di confronto coincide con l'attivo il confronto si salta da solo. Skip anche senza
+chiave o con provider ignoto — sempre a voce nel log, mai in silenzio.
+
+### Candidato aperto (non impegnato)
+
+- **Spiegazioni leggibili dei run per il pannello** — nessuna nuova informazione lo giustifica
+  rispetto a B/C; si riapre quando il proprietario lo chiede.
 
 ## §4 — Non-obiettivi
 
@@ -58,3 +95,7 @@ sostituibile 1:1); spiegazioni leggibili dei run per il pannello. Nessuno di que
 - Nessuna chiave in appsettings o nel repo; mai rimostrare una chiave salvata.
 - Nessun uso delle AI oltre il confine advisory, in nessuna fase futura.
 - Nessuna rimozione del percorso Anthropic: resta il default finché il proprietario non decide.
+- Il pilota di inferenza LOCALE (ONNX) NON sta in questo PRD: non è un consumatore di
+  `ILlmClient` (§1.5) — ha il suo documento, [PRD-ONNX-SENTIMENT-PILOT-2026-08](PRD-ONNX-SENTIMENT-PILOT-2026-08.md).
+- Retry del secondo parere (Fase C): un parere accessorio perso non vale il macchinario di
+  ripresa; il run resta con un parere solo, dichiarato nel log.

@@ -50,10 +50,28 @@ public sealed class AltDataSyncService(
                 }
 
                 // Le fonti strutturali (calendario economico, sentiment retail) forniscono i
-                // propri override: non sono testo libero da classificare/scorare col lessico.
+                // propri override: non sono testo libero da classificare/scorare.
                 var category = item.CategoryOverride ?? NewsImpactClassifier.Classify(item.Title, item.Summary);
                 var symbols = item.SymbolsOverride ?? NewsImpactClassifier.DetectSymbols(item.Title, item.Summary);
-                var sentiment = item.SentimentScoreOverride ?? scorer.Score(item.Title, item.Summary);
+                decimal sentiment;
+                try
+                {
+                    sentiment = item.SentimentScoreOverride ?? await scorer.ScoreAsync(item.Title, item.Summary, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // Gli scorer per contratto non lanciano (ripiegano da soli sul lessico), ma se
+                    // uno lo facesse il punteggio sbagliato resterebbe per sempre (la dedupe non
+                    // rivisita mai un elemento salvato): meglio SALTARE l'elemento — al prossimo
+                    // giro non sarà in DB e verrà ritentato — che salvarlo con uno zero inventato.
+                    logger.LogWarning(ex, "Scoring fallito per '{Title}' ({Source}): elemento saltato, ritenterà al prossimo sync.",
+                        item.Title, source.Name);
+                    continue;
+                }
 
                 db.AltDataPoints.Add(new AltDataPoint
                 {

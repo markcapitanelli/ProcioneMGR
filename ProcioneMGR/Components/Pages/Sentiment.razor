@@ -12,6 +12,7 @@
 @using ProcioneMGR.Services.Sentiment
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 
+@using Microsoft.Extensions.Options
 @inject AuthenticationStateProvider AuthProvider
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IAltDataSyncService SyncService
@@ -22,6 +23,11 @@
 @inject ISentimentSnapshotService MoodService
 @inject SentimentSourceHealthRegistry SourceHealth
 @inject SentimentSyncWorker SentimentWorker
+@inject SentimentScorerComparisonService ScorerComparison
+@inject OnnxSentimentPilotService OnnxPilot
+@inject OnnxSentimentScorer OnnxScorer
+@inject IOptionsMonitor<SentimentOptions> SentimentOptionsMonitor
+@inject ProcioneMGR.Services.Config.IAppConfigWriter AppConfigWriter
 
 <PageTitle>Sentiment</PageTitle>
 
@@ -57,6 +63,14 @@
             statisticamente se è davvero collegato ai movimenti di prezzo futuri (Information
             Coefficient) — stessa logica di un fattore alpha tradizionale, solo che i suoi dati di
             partenza sono testuali invece che tecnici.
+        </dd>
+        <dt class="col-sm-3">3. Scorer del sentiment</dt>
+        <dd class="col-sm-9">
+            Sceglie CHI assegna il punteggio alle notizie nuove — il lessico (default, zero costi),
+            il provider AI del layer multi-provider, o il pilota ONNX locale addestrato qui — e
+            confronta i tre scorer sulle stesse notizie storiche con lo stesso giudice della
+            sezione 2. Il confronto informa; la promozione di un fattore resta legata al gate IC
+            di sempre.
         </dd>
         <dt class="col-sm-3">4. Analisi di impatto storico</dt>
         <dd class="col-sm-9">
@@ -422,6 +436,150 @@
     </div>
 }
 
+@* ---- [Fase B + pilota ONNX] Scorer attivo, addestramento pilota, confronto IC ---- *@
+<div class="card mb-3">
+    <div class="card-header">3. Scorer del sentiment — attivo e confronto</div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            Le notizie <strong>nuove</strong> vengono scorate dallo scorer attivo (hot-reload, effetto dalla
+            prossima sync). <strong>Keyword</strong> = lessico 25 parole, zero costi. <strong>Llm</strong> = provider AI
+            attivo del layer multi-provider (vedi /admin/ai-supervisor) — sceglierlo è il consenso al costo per
+            notizia; se il canale manca ripiega da solo sul lessico. <strong>Onnx</strong> = inferenza locale del
+            pilota (distillazione del lessico, Livello 1): si addestra qui sotto, gira in-process senza chiavi né
+            rate limit. Il confronto rigioca le notizie storiche con ciascuno scorer e le giudica con lo
+            <em>stesso</em> IC del fattore (configurazione della sezione 2: simbolo, finestra, orizzonte).
+        </p>
+
+        <div class="row g-3 align-items-end mb-2">
+            <div class="col-auto">
+                <label class="form-label mb-0">Scorer attivo</label>
+                <select class="form-select" @bind="_scorerProvider" disabled="@_scorerBusy">
+                    @foreach (var p in SentimentScorerProviders.Known)
+                    { <option value="@p">@ScorerLabel(p)</option> }
+                </select>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveScorerAsync" disabled="@_scorerBusy">Salva scorer</button>
+            </div>
+            <div class="col-auto">
+                @if (OnnxScorer.IsAvailable)
+                { <span class="badge bg-success">pilota ONNX: modello caricato</span> }
+                else
+                { <span class="badge bg-secondary">pilota ONNX: non addestrato</span> }
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-outline-primary" @onclick="TrainOnnxAsync" disabled="@_onnxTraining">
+                    @if (_onnxTraining) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Addestra pilota ONNX
+                </button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_scorerStatus))
+        {
+            <div class="alert @(_scorerError ? "alert-danger" : "alert-success") py-2 mb-2">@_scorerStatus</div>
+        }
+        @if (_onnxResult is not null)
+        {
+            <div class="alert @(_onnxResult.Success ? "alert-success" : "alert-warning") py-2 mb-2" style="white-space: pre-wrap;">@_onnxResult.Message</div>
+        }
+
+        <hr />
+
+        <div class="row g-3 align-items-end mb-2">
+            <div class="col-auto form-check ms-2">
+                <input class="form-check-input" type="checkbox" id="cmpLlm" @bind="_cmpIncludeLlm" disabled="@_comparing" />
+                <label class="form-check-label" for="cmpLlm">Includi LLM <span class="text-muted small">(chiamate reali in batch, costo limitato dal tetto)</span></label>
+            </div>
+            <div class="col-auto form-check">
+                <input class="form-check-input" type="checkbox" id="cmpOnnx" @bind="_cmpIncludeOnnx" disabled="@_comparing" />
+                <label class="form-check-label" for="cmpOnnx">Includi ONNX locale</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Tetto notizie</label>
+                <input type="number" step="10" min="10" max="1000" class="form-control" style="width: 7rem;" @bind="_cmpMaxItems" disabled="@_comparing" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-success" @onclick="CompareScorersAsync" disabled="@(_comparing || !_hasData)">
+                    @if (_comparing) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Confronta gli scorer
+                </button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_cmpStatus))
+        {
+            <div class="alert @(_cmpError ? "alert-danger" : "alert-success") py-2 mb-2">@_cmpStatus</div>
+        }
+
+        @if (_cmp is not null && _cmp.Entries.Count > 0)
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-striped mb-2">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Scorer</th><th>Nota</th><th class="text-end">Oss.</th>
+                            <th class="text-end">IC (Spearman)</th><th class="text-end">t-NW</th>
+                            <th class="text-end">IR</th><th class="text-end">Consistenza</th>
+                            <th class="text-end">Spread top-bottom</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var e in _cmp.Entries)
+                        {
+                            <tr>
+                                <td><strong>@ScorerLabel(e.Scorer)</strong></td>
+                                <td class="small text-muted">@e.Note</td>
+                                @if (e.Available && e.Evaluation is not null)
+                                {
+                                    <td class="text-end">@e.Evaluation.Observations</td>
+                                    <td class="text-end @(e.Evaluation.InformationCoefficient > 0 ? "text-success" : "text-danger")">@e.Evaluation.InformationCoefficient.ToString("F4")</td>
+                                    <td class="text-end">@e.Evaluation.IcTStatistic.ToString("F2")</td>
+                                    <td class="text-end">@e.Evaluation.InformationRatio.ToString("F3")</td>
+                                    <td class="text-end">@e.Evaluation.IcConsistency.ToString("P0")</td>
+                                    <td class="text-end">@e.Evaluation.TopMinusBottomSpread.ToString("P3")</td>
+                                }
+                                else
+                                {
+                                    <td colspan="6" class="text-muted"><em>non disponibile</em></td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-muted small mb-2">
+                Stesse notizie (@_cmp.NewsScored testuali), stesse candele (@_cmp.CandleCount), stesso giudice
+                (IC con t-stat Newey-West): le righe sono confrontabili per costruzione. Un IC sotto
+                ~2/√N è rumore — il gate per l'uso live resta quello di ogni fattore (IC OOS oltre i costi),
+                mai questo pannello da solo.
+            </p>
+
+            @if (_cmp.TopDisagreements.Count > 0)
+            {
+                <h6>Disaccordi più grandi fra gli scorer</h6>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead class="table-light">
+                            <tr><th>Quando (UTC)</th><th>Titolo</th><th class="text-end">Keyword</th><th class="text-end">LLM</th><th class="text-end">ONNX</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var d in _cmp.TopDisagreements)
+                            {
+                                <tr>
+                                    <td class="text-nowrap">@d.WhenUtc.ToString("MM-dd HH:mm")</td>
+                                    <td>@(d.Title.Length > 90 ? d.Title[..90] + "…" : d.Title)</td>
+                                    <td class="text-end @SentimentClass(d.KeywordScore)">@d.KeywordScore.ToString("F2")</td>
+                                    <td class="text-end @SentimentClass(d.LlmScore)">@(d.LlmScore?.ToString("F2") ?? "—")</td>
+                                    <td class="text-end @SentimentClass(d.OnnxScore)">@(d.OnnxScore?.ToString("F2") ?? "—")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </div>
+</div>
+
 <div class="card mb-3">
     <div class="card-header">4. Analisi di impatto storico</div>
     <div class="card-body">
@@ -584,6 +742,21 @@
     private IReadOnlyList<SourceHealth> _health = [];
     private bool _moodBusy;
 
+    // [Fase B + pilota ONNX] Scorer attivo, addestramento pilota, confronto IC.
+    private string _scorerProvider = SentimentScorerProviders.Keyword;
+    private bool _scorerBusy;
+    private bool _scorerError;
+    private string? _scorerStatus;
+    private bool _onnxTraining;
+    private OnnxPilotTrainResult? _onnxResult;
+    private bool _cmpIncludeLlm;
+    private bool _cmpIncludeOnnx = true;
+    private int _cmpMaxItems = 150;
+    private bool _comparing;
+    private bool _cmpError;
+    private string? _cmpStatus;
+    private ScorerComparisonResult? _cmp;
+
     /// <summary>Memoria dell'ultima configurazione usata (modalità silenziosa: sezione valutazione IC).</summary>
     private sealed record PageConfig(
         string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
@@ -615,7 +788,112 @@
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
         _mood = MoodCache.Current;
         _health = SourceHealth.Snapshot();
+        _scorerProvider = SentimentOptionsMonitor.CurrentValue.ScorerProvider;
         await LoadNewsAsync();
+    }
+
+    private static string ScorerLabel(string provider) => provider switch
+    {
+        SentimentScorerProviders.Llm => "Llm (provider AI attivo)",
+        SentimentScorerProviders.Onnx => "Onnx (locale, pilota)",
+        _ => "Keyword (lessico)",
+    };
+
+    private async Task SaveScorerAsync()
+    {
+        if (!SentimentScorerProviders.Known.Contains(_scorerProvider, StringComparer.OrdinalIgnoreCase))
+        {
+            _scorerError = true;
+            _scorerStatus = $"Scorer '{_scorerProvider}' sconosciuto.";
+            return;
+        }
+
+        _scorerBusy = true; _scorerError = false; _scorerStatus = null;
+        try
+        {
+            // Clone roundtrip e non mutazione del monitor: SaveSectionAsync riscrive l'intera
+            // sezione Sentiment, e perdere pesi/retention per strada sarebbe il pannello che
+            // rompe ciò che non mostra (stessa disciplina di /admin/ai-supervisor).
+            var current = JsonSerializer.Deserialize<SentimentOptions>(
+                JsonSerializer.Serialize(SentimentOptionsMonitor.CurrentValue))!;
+            current.ScorerProvider = _scorerProvider;
+            await AppConfigWriter.SaveSectionAsync("Sentiment", current);
+            _scorerStatus = _scorerProvider switch
+            {
+                SentimentScorerProviders.Llm =>
+                    "Scorer attivo: Llm. Le notizie nuove passeranno dal provider AI attivo (costo per notizia; ripiega sul lessico se il canale manca). Effetto dalla prossima sync (~1s).",
+                SentimentScorerProviders.Onnx =>
+                    "Scorer attivo: Onnx (locale). Se il modello non è addestrato, ripiega sul lessico. Effetto dalla prossima sync (~1s).",
+                _ => "Scorer attivo: Keyword (lessico). Comportamento storico, zero costi.",
+            };
+        }
+        catch (Exception ex)
+        {
+            _scorerError = true;
+            _scorerStatus = $"Salvataggio fallito: {ex.Message}";
+        }
+        finally { _scorerBusy = false; }
+    }
+
+    private async Task TrainOnnxAsync()
+    {
+        _onnxTraining = true; _onnxResult = null;
+        try
+        {
+            _onnxResult = await OnnxPilot.TrainAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _onnxResult = new OnnxPilotTrainResult(false, $"Addestramento fallito: {ex.Message}", 0, 0, 0, 0, 0, "");
+        }
+        finally { _onnxTraining = false; }
+    }
+
+    private async Task CompareScorersAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_symbol) || _to <= _from)
+        {
+            _cmpError = true;
+            _cmpStatus = "Controlla symbol e intervallo date (sezione 2 sopra).";
+            return;
+        }
+
+        _comparing = true; _cmpError = false; _cmpStatus = null; _cmp = null;
+        try
+        {
+            var request = new ScorerComparisonRequest(
+                _symbol.Trim(), _timeframe,
+                DateTime.SpecifyKind(_from, DateTimeKind.Utc),
+                DateTime.SpecifyKind(_to.AddDays(1).AddSeconds(-1), DateTimeKind.Utc),
+                _lookbackHours, Math.Max(1, _forwardHorizon),
+                _cmpMaxItems, _cmpIncludeLlm, _cmpIncludeOnnx);
+
+            _cmp = await ScorerComparison.CompareAsync(request, CancellationToken.None);
+
+            if (_cmp.CandleCount < 30)
+            {
+                _cmpError = true;
+                _cmpStatus = "Dati insufficienti nel range selezionato (servono almeno 30 candele — sezione 2).";
+                _cmp = null;
+            }
+            else if (_cmp.NewsScored == 0)
+            {
+                _cmpError = true;
+                _cmpStatus = "Nessuna notizia testuale nella finestra: sincronizza prima (sezione 1) o allarga il range.";
+                _cmp = null;
+            }
+            else
+            {
+                _cmpStatus = $"Confronto su {_cmp.NewsScored} notizie e {_cmp.CandleCount} candele di {_symbol}." +
+                             (_cmpIncludeLlm ? $" Punteggi LLM reali: {_cmp.LlmScoredByLlm}/{_cmp.NewsScored}." : "");
+            }
+        }
+        catch (Exception ex)
+        {
+            _cmpError = true;
+            _cmpStatus = $"Errore nel confronto: {ex.Message}";
+        }
+        finally { _comparing = false; }
     }
 
     private async Task RecomputeMoodAsync()
