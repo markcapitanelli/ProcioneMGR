@@ -13,11 +13,42 @@ public sealed class LlmOptions
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// Provider attivo del layer AI: "Anthropic" (default, comportamento storico) o "Nvidia".
-    /// Hot-reload: l'instradamento avviene A OGNI chiamata (DelegatingLlmClient), cambiare
-    /// provider dal pannello non richiede riavvio.
+    /// Provider attivo del layer AI (una voce di <see cref="AiProviders.Known"/>). Default Nvidia
+    /// dal 2026-08-02 (Anthropic retrocessa: credito esaurito). Hot-reload: l'instradamento
+    /// avviene A OGNI chiamata (DelegatingLlmClient), cambiare provider dal pannello non
+    /// richiede riavvio.
     /// </summary>
-    public string Provider { get; set; } = AiProviders.Anthropic;
+    public string Provider { get; set; } = AiProviders.Nvidia;
+
+    /// <summary>
+    /// [Failover 2026-08-02] Se la chiamata al provider attivo fallisce (qualunque errore che non
+    /// sia una cancellazione), il DelegatingLlmClient prova DA SOLO i provider di questa lista,
+    /// nell'ordine, saltando quelli senza chiave e il provider già tentato. Default on: con più
+    /// AI configurate, un 503 del free tier non deve fermare advisory o sentiment.
+    /// </summary>
+    public bool FailoverEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Catena di failover, nell'ordine di tentativo; VUOTA = catena di default
+    /// (<see cref="DefaultFailoverChain"/>). Il default sta in una costante e NON qui: il binder
+    /// di configurazione APPENDE gli elementi dell'array alla lista già inizializzata invece di
+    /// sostituirla — con un default popolato la lista raddoppiava a ogni salvataggio dal pannello
+    /// (successo davvero, 2026-08-02). Anthropic esclusa dal default (credito esaurito) ma
+    /// aggiungibile a mano.
+    /// </summary>
+    public List<string> FailoverProviders { get; set; } = [];
+
+    /// <summary>La catena di default quando <see cref="FailoverProviders"/> è vuota.</summary>
+    public static readonly IReadOnlyList<string> DefaultFailoverChain =
+        [AiProviders.Nvidia, AiProviders.Groq, AiProviders.Gemini, AiProviders.HuggingFace];
+
+    /// <summary>La catena EFFETTIVA (configurata, o default se vuota), deduplicata preservando l'ordine.</summary>
+    public IReadOnlyList<string> EffectiveFailoverChain()
+    {
+        var source = FailoverProviders.Count > 0 ? (IReadOnlyList<string>)FailoverProviders : DefaultFailoverChain;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return source.Where(p => seen.Add(p)).ToList();
+    }
 
     public string Model { get; set; } = "claude-opus-4-8";
 
@@ -71,8 +102,8 @@ public sealed class LlmOptions
     /// </summary>
     public bool ComparisonEnabled { get; set; }
 
-    /// <summary>Provider del secondo parere ("Anthropic" | "Nvidia"). Se coincide col provider attivo il confronto si salta da solo (due pareri identici non confrontano niente).</summary>
-    public string ComparisonProvider { get; set; } = AiProviders.Nvidia;
+    /// <summary>Provider del secondo parere (una voce di <see cref="AiProviders.Known"/>). Default Groq (attivo default = Nvidia; due pareri dallo stesso provider non confrontano niente e si saltano da soli).</summary>
+    public string ComparisonProvider { get; set; } = AiProviders.Groq;
 }
 
 /// <summary>

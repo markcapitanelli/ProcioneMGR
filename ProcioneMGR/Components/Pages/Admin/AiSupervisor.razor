@@ -49,9 +49,10 @@
             delle credenziali exchange); in assenza di chiave a database vale la variabile d'ambiente
             del provider. La chiave non viene mai rimostrata: solo la sua fonte.
         </p>
-        <div class="row g-3 align-items-end mb-3">
+        @* ---- Riga principale: UNA AI, il SUO modello (auto), prova, salva. ---- *@
+        <div class="row g-3 align-items-end mb-1">
             <div class="col-auto">
-                <label class="form-label mb-0">Provider attivo</label>
+                <label class="form-label mb-0">AI attiva</label>
                 <select class="form-select" @bind="_provider">
                     @foreach (var p in AiProviders.Known)
                     {
@@ -59,43 +60,50 @@
                     }
                 </select>
             </div>
-            @foreach (var p in AiProviders.Known)
-            {
-                <div class="col-auto">
-                    <label class="form-label mb-0">
-                        Modello @p
-                        @if (_modelCatalog.TryGetValue(p, out var catalog) && catalog.Count > 0)
-                        {
-                            <span class="badge bg-light text-dark ms-1" title="modelli disponibili per la TUA chiave">@catalog.Count</span>
-                        }
-                    </label>
-                    <div class="input-group" style="min-width: 17rem">
-                        <input class="form-control" list="models-@p" @bind="_models[p]"
-                               placeholder="@ModelPlaceholder(p)" />
-                        <button class="btn btn-outline-secondary" title="Scarica dall'API l'elenco dei modelli disponibili per la chiave di @p"
-                                @onclick="() => FetchModelsAsync(p)" disabled="@(_fetchingModels == p)">
-                            @if (_fetchingModels == p)
-                            { <span class="spinner-border spinner-border-sm"></span> }
-                            else
-                            { <i class="bi bi-cloud-download"></i> }
-                        </button>
-                    </div>
-                    <datalist id="models-@p">
-                        @if (_modelCatalog.TryGetValue(p, out var list))
-                        {
-                            @foreach (var m in list)
-                            { <option value="@m"></option> }
-                        }
-                    </datalist>
-                </div>
-            }
             <div class="col-auto">
-                <button class="btn btn-primary" @onclick="SaveProviderAsync" disabled="@_busy">Salva provider/modelli</button>
+                <label class="form-label mb-0">
+                    Modello
+                    @if (_autoLoadingModels)
+                    { <span class="spinner-border spinner-border-sm ms-1" title="scarico gli elenchi modelli dalle API"></span> }
+                    else if (_modelCatalog.TryGetValue(_provider, out var activeCatalog) && activeCatalog.Count > 0)
+                    { <span class="badge bg-light text-dark ms-1" title="modelli disponibili per la TUA chiave (freccia giù nel campo per sfogliarli)">@activeCatalog.Count disponibili</span> }
+                </label>
+                <input class="form-control" style="min-width: 19rem" list="models-@_provider"
+                       @bind="_models[_provider]" placeholder="@ModelPlaceholder(_provider)" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-outline-primary" @onclick="TestNowAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Prova collegamento
+                </button>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveProviderAsync" disabled="@_busy">Salva</button>
             </div>
         </div>
+        <p class="text-muted small mb-2">
+            Gli elenchi modelli si scaricano DA SOLI all'apertura (per le AI con una chiave) e il
+            modello viene scelto in automatico se manca o non è più valido — puoi sempre cambiarlo
+            dal campo. In caso di errore su una chiamata, la piattaforma passa da sola alla
+            prossima AI: <strong>@FailoverChainText</strong>.
+        </p>
+        @foreach (var p in AiProviders.Known)
+        {
+            <datalist id="models-@p">
+                @if (_modelCatalog.TryGetValue(p, out var list))
+                {
+                    @foreach (var m in list)
+                    { <option value="@m"></option> }
+                }
+            </datalist>
+        }
         @if (!string.IsNullOrEmpty(_catalogStatus))
         {
-            <div class="alert @(_catalogIsError ? "alert-danger" : "alert-success") py-2 mb-2" style="white-space: pre-wrap;">@_catalogStatus</div>
+            <div class="alert @(_catalogIsError ? "alert-danger" : "alert-info") py-2 mb-2" style="white-space: pre-wrap;">@_catalogStatus</div>
+        }
+        @if (_testResult is not null)
+        {
+            <div class="alert @(_testIsError ? "alert-danger" : "alert-success") py-2 mb-2" style="white-space: pre-wrap;">@_testResult</div>
         }
 
         @* [Fase C] Secondo parere: stesso run, provider diverso, artifact separato. *@
@@ -164,17 +172,33 @@
             </tbody>
         </table>
 
-        <div class="d-flex align-items-center gap-2">
-            <button class="btn btn-outline-primary" @onclick="TestNowAsync" disabled="@_busy">
-                @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                Prova collegamento (@_provider · @(ActiveModel))
-            </button>
-            <span class="text-muted small">Una chiamata vera al provider attivo: la risposta (o l'errore, testuale) compare qui sotto.</span>
-        </div>
-        @if (_testResult is not null)
-        {
-            <div class="alert @(_testIsError ? "alert-danger" : "alert-success") py-2 mt-2 mb-0" style="white-space: pre-wrap;">@_testResult</div>
-        }
+        <details class="mt-2">
+            <summary class="text-muted">Modelli per AI (avanzate) — un campo per provider, con aggiornamento manuale dell'elenco</summary>
+            <div class="row g-3 align-items-end mt-1">
+                @foreach (var p in AiProviders.Known)
+                {
+                    <div class="col-auto">
+                        <label class="form-label mb-0">
+                            @p
+                            @if (_modelCatalog.TryGetValue(p, out var catalog) && catalog.Count > 0)
+                            { <span class="badge bg-light text-dark ms-1">@catalog.Count</span> }
+                        </label>
+                        <div class="input-group" style="min-width: 17rem">
+                            <input class="form-control form-control-sm" list="models-@p" @bind="_models[p]"
+                                   placeholder="@ModelPlaceholder(p)" />
+                            <button class="btn btn-sm btn-outline-secondary" title="Aggiorna l'elenco modelli per la chiave di @p"
+                                    @onclick="() => FetchModelsAsync(p)" disabled="@(_fetchingModels == p)">
+                                @if (_fetchingModels == p)
+                                { <span class="spinner-border spinner-border-sm"></span> }
+                                else
+                                { <i class="bi bi-arrow-clockwise"></i> }
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+            <p class="text-muted small mt-1 mb-0">Si salvano tutti insieme col pulsante «Salva» qui sopra.</p>
+        </details>
     </div>
 </div>
 
@@ -364,10 +388,89 @@ else
     // [Elenco modelli] catalogo per provider scaricato dall'API con la SUA chiave.
     private readonly Dictionary<string, IReadOnlyList<string>> _modelCatalog = new();
     private string? _fetchingModels;
+    private bool _autoLoadingModels;
     private bool _catalogIsError;
     private string? _catalogStatus;
 
     private string ActiveModel => _models.GetValueOrDefault(_provider, "");
+
+    /// <summary>La catena di failover come la vedrà l'utente: attiva → prossime con chiave.</summary>
+    private string FailoverChainText
+    {
+        get
+        {
+            var opt = LlmOptionsMonitor.CurrentValue;
+            if (!opt.FailoverEnabled) return $"{_provider} (failover spento)";
+            var chain = new List<string> { _provider };
+            chain.AddRange(opt.EffectiveFailoverChain()
+                .Where(p => !chain.Contains(p, StringComparer.OrdinalIgnoreCase))
+                .Where(p => KeyStore.GetCachedSource(p) != AiKeySource.None));
+            return string.Join(" → ", chain);
+        }
+    }
+
+    /// <summary>
+    /// [Auto-modelli] Al primo render scarica in background gli elenchi per OGNI provider con una
+    /// chiave e, dove il modello configurato manca o non è più nell'elenco, ne sceglie uno da
+    /// solo (ModelAutoSelector). Le scelte si confermano col «Salva» — e comunque a runtime il
+    /// failover copre anche un modello rotto non ancora salvato.
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _autoLoadingModels = true;
+        await InvokeAsync(StateHasChanged);
+        var autoPicked = new List<string>();
+        try
+        {
+            foreach (var p in AiProviders.Known)
+            {
+                if (KeyStore.GetCachedSource(p) == AiKeySource.None) continue;
+                if (ClientResolver.Resolve(p) is not IModelCatalogProvider catalogProvider) continue;
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    var models = await catalogProvider.ListModelsAsync(cts.Token);
+                    if (models.Count == 0) continue;
+                    _modelCatalog[p] = models;
+
+                    var current = _models.GetValueOrDefault(p, "");
+                    if (string.IsNullOrWhiteSpace(current) || !models.Contains(current, StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (ModelAutoSelector.Pick(p, models) is { } picked)
+                        {
+                            _models[p] = picked;
+                            autoPicked.Add(string.IsNullOrWhiteSpace(current)
+                                ? $"{p}: scelto {picked}"
+                                : $"{p}: «{current}» non è più nell'elenco → scelto {picked}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Un provider che non risponde non blocca gli altri: si dichiara e si prosegue.
+                    autoPicked.Add($"{p}: elenco non scaricabile ({FirstLine(ex.Message)})");
+                }
+            }
+            if (autoPicked.Count > 0)
+            {
+                _catalogIsError = false;
+                _catalogStatus = "Modelli aggiornati in automatico:\n" + string.Join("\n", autoPicked) +
+                                 "\nPremi «Salva» per confermare le scelte automatiche.";
+            }
+        }
+        finally
+        {
+            _autoLoadingModels = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static string FirstLine(string message)
+    {
+        var idx = message.IndexOfAny(['\r', '\n']);
+        return idx < 0 ? message : message[..idx];
+    }
 
     /// <summary>
     /// Scarica dall'API del provider l'elenco dei modelli disponibili per la SUA chiave e lo
@@ -547,14 +650,18 @@ else
                 }
             }
 
-            // Una chiamata VERA al provider attivo (via DelegatingLlmClient): è il pulsante che
-            // chiede al canale se funziona — la lezione del token Telegram (2026-07-29).
+            // Una chiamata VERA al provider SELEZIONATO, risolto direttamente (NON via
+            // DelegatingLlmClient): col failover attivo il delegante maschererebbe il guasto
+            // rispondendo con un'altra AI — e un test di collegamento che "passa" grazie a un
+            // altro canale è un controllo che rassicura, non un test.
+            var client = ClientResolver.Resolve(_provider)
+                ?? throw new InvalidOperationException($"Provider '{_provider}' sconosciuto.");
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-            var reply = await LlmClient.CompleteAsync(
+            var reply = await client.CompleteAsync(
                 "Sei il test di collegamento di una piattaforma di trading. Rispondi in una sola riga.",
                 $"Conferma il collegamento indicando il tuo nome modello. Ora UTC: {DateTime.UtcNow:u}.",
                 cts.Token);
-            _testResult = $"✔ {LlmClient.Model} ha risposto:\n{reply.Trim()}";
+            _testResult = $"✔ {client.Model} ha risposto:\n{reply.Trim()}";
         }
         catch (Exception ex)
         {

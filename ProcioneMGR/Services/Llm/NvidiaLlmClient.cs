@@ -190,21 +190,41 @@ public sealed class HuggingFaceLlmClient(
     protected override (string BaseUrl, string Model) Endpoint(LlmOptions options) => (options.HuggingFaceBaseUrl, options.HuggingFaceModel);
 }
 
+/// <summary>Espone quale modello ha DAVVERO servito l'ultima risposta (col failover può non essere quello attivo). Interfaccia separata: i fake dei test non devono implementarla.</summary>
+public interface ILlmCompletionInfo
+{
+    string? LastCompletionModel { get; }
+}
+
 /// <summary>
 /// L'<see cref="ILlmClient"/> registrato: instrada OGNI chiamata al provider scelto in
 /// <see cref="LlmOptions.Provider"/> (hot-reload: cambiare provider dal pannello ha effetto alla
 /// chiamata successiva, senza riavvio). Tutto ciò che consuma ILlmClient — supervisore, guard,
 /// worker, pannello — resta ignaro di quale provider stia parlando: è il punto dell'astrazione.
-/// Con l'<see cref="ILlmClientResolver"/> (opzionale per compatibilità coi vecchi harness) i
-/// provider instradabili sono TUTTI quelli noti; senza, il comportamento storico a due.
+///
+/// <para><b>[Failover 2026-08-02]</b> Se la chiamata al provider attivo fallisce (qualunque
+/// errore che non sia una cancellazione), prova DA SOLO i provider di
+/// <see cref="LlmOptions.FailoverProviders"/>, nell'ordine, saltando chi non ha chiave e chi è
+/// già stato tentato — con più AI configurate, un 503 del free tier non ferma advisory né
+/// sentiment. Ogni salto è dichiarato nel log; il modello che ha davvero risposto è in
+/// <see cref="LastCompletionModel"/>. Il breaker del guard, a valle, scatta solo se falliscono
+/// TUTTI: coerente col suo contratto — è il breaker del layer, e il layer ora è la federazione.
+/// Senza <see cref="ILlmClientResolver"/> (vecchi harness) la catena non è risolvibile e resta
+/// il comportamento storico a provider singolo.</para>
 /// </summary>
 public sealed class DelegatingLlmClient(
     AnthropicLlmClient anthropic,
     NvidiaLlmClient nvidia,
     IOptionsMonitor<LlmOptions> options,
-    ILlmClientResolver? resolver = null) : ILlmClient
+    ILlmClientResolver? resolver = null,
+    ILogger<DelegatingLlmClient>? logger = null) : ILlmClient, ILlmCompletionInfo
 {
-    private ILlmClient Active
+    private volatile string? _lastCompletionModel;
+
+    public string? LastCompletionModel => _lastCompletionModel;
+
+    /// <summary>Il client del provider ATTIVO (per Model/UI). Ignoto ⇒ Anthropic, il fallback storico.</summary>
+    private ILlmClient ActiveClient
     {
         get
         {
@@ -215,13 +235,70 @@ public sealed class DelegatingLlmClient(
             }
             return provider.Equals(AiProviders.Nvidia, StringComparison.OrdinalIgnoreCase)
                 ? nvidia
-                : anthropic; // default e fallback: il comportamento storico
+                : anthropic;
         }
     }
 
-    public bool IsConfigured => Active.IsConfigured;
-    public string Model => Active.Model;
+    /// <summary>La sequenza di tentativo: attivo per primo, poi la catena, senza duplicati né provider senza chiave.</summary>
+    private IEnumerable<(string Name, ILlmClient Client)> Sequence(LlmOptions opt)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { opt.Provider };
+        yield return (opt.Provider, ActiveClient);
 
-    public Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct) =>
-        Active.CompleteAsync(systemPrompt, userPrompt, ct);
+        if (!opt.FailoverEnabled || resolver is null)
+        {
+            yield break;
+        }
+        foreach (var name in opt.EffectiveFailoverChain())
+        {
+            if (!seen.Add(name)) continue;
+            if (resolver.Resolve(name) is { } client)
+            {
+                yield return (name, client);
+            }
+        }
+    }
+
+    public bool IsConfigured => Sequence(options.CurrentValue).Any(s => s.Client.IsConfigured);
+
+    public string Model => ActiveClient.Model;
+
+    public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct)
+    {
+        var opt = options.CurrentValue;
+        Exception? last = null;
+        string? failedBefore = null;
+
+        foreach (var (name, client) in Sequence(opt))
+        {
+            if (!client.IsConfigured)
+            {
+                continue; // senza chiave non è un fallimento: semplicemente non gioca
+            }
+            try
+            {
+                var text = await client.CompleteAsync(systemPrompt, userPrompt, ct);
+                _lastCompletionModel = client.Model;
+                if (failedBefore is not null)
+                {
+                    logger?.LogInformation("Failover AI riuscito: {Provider} ({Model}) ha servito la chiamata dopo il fallimento di {Failed}.",
+                        name, client.Model, failedBefore);
+                }
+                return text;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // shutdown/timeout del chiamante: non è un guasto del provider, niente failover
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                failedBefore = failedBefore is null ? name : $"{failedBefore}, {name}";
+                logger?.LogWarning(ex, "Provider AI {Provider} fallito; provo il prossimo della catena di failover.", name);
+            }
+        }
+
+        throw last ?? new InvalidOperationException(
+            "Nessun provider AI con una chiave configurata: inseriscine una in /admin/ai-supervisor.");
+    }
 }

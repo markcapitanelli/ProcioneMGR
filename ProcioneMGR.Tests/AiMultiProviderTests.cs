@@ -224,6 +224,189 @@ public class AiMultiProviderTests
         Assert.Equal("HUGGINGFACE_API_KEY", AiProviders.EnvVarFor(AiProviders.HuggingFace));
     }
 
+    // ------------------------------------------------------------------ [2026-08-02] failover automatico
+
+    /// <summary>Risponde per host: i provider si distinguono dall'endpoint, come nella realtà.</summary>
+    private sealed class HostRoutingHandler(Dictionary<string, (HttpStatusCode Status, string Body)> byHost) : HttpMessageHandler
+    {
+        public List<string> HostsCalled { get; } = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var host = request.RequestUri!.Host;
+            HostsCalled.Add(host);
+            var (status, body) = byHost.TryGetValue(host, out var r) ? r : (HttpStatusCode.InternalServerError, "{}");
+            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+        }
+    }
+
+    private static (DelegatingLlmClient Delegating, HostRoutingHandler Handler, LlmOptions Options) FailoverRig(
+        Dictionary<string, (HttpStatusCode, string)> byHost, LlmOptions? options = null, IAiKeyStore? keys = null)
+    {
+        var opt = options ?? new LlmOptions { Provider = AiProviders.Nvidia };
+        var handler = new HostRoutingHandler(byHost);
+        var factory = new SingleClientFactory(handler);
+        var monitor = opt.AsMonitor();
+        var store = keys ?? KeysForAll();
+
+        var anthropic = new AnthropicLlmClient(monitor, NullLogger<AnthropicLlmClient>.Instance, store);
+        var nvidia = new NvidiaLlmClient(factory, monitor, store, NullLogger<NvidiaLlmClient>.Instance);
+        var gemini = new GeminiLlmClient(factory, monitor, store, NullLogger<GeminiLlmClient>.Instance);
+        var groq = new GroqLlmClient(factory, monitor, store, NullLogger<GroqLlmClient>.Instance);
+        var hf = new HuggingFaceLlmClient(factory, monitor, store, NullLogger<HuggingFaceLlmClient>.Instance);
+        var resolver = new LlmClientResolver(anthropic, nvidia, gemini, groq, hf);
+        return (new DelegatingLlmClient(anthropic, nvidia, monitor, resolver), handler, opt);
+    }
+
+    private const string OkGroqBody = """{"choices":[{"message":{"role":"assistant","content":"ok-groq"},"finish_reason":"stop"}]}""";
+
+    [Fact]
+    public async Task Failover_ActiveFails_NextInChainServes_AndTruthIsTraceable()
+    {
+        // NVIDIA (attiva) giù col 503 del free tier; Groq (prima della catena) risponde.
+        var (delegating, handler, opt) = FailoverRig(new()
+        {
+            ["integrate.api.nvidia.com"] = (HttpStatusCode.ServiceUnavailable, """{"detail":"limit reached"}"""),
+            ["api.groq.com"] = (HttpStatusCode.OK, OkGroqBody),
+        });
+
+        var text = await delegating.CompleteAsync("s", "u", CancellationToken.None);
+
+        Assert.Equal("ok-groq", text);
+        Assert.Equal(["integrate.api.nvidia.com", "api.groq.com"], handler.HostsCalled);
+        // La tracciabilità dice chi ha DAVVERO risposto, non chi doveva.
+        Assert.Equal(opt.GroqModel, ((ILlmCompletionInfo)delegating).LastCompletionModel);
+        Assert.Equal(opt.NvidiaModel, delegating.Model); // il provider ATTIVO resta quello scelto
+    }
+
+    [Fact]
+    public async Task Failover_SkipsProvidersWithoutKey()
+    {
+        // Solo Nvidia e HuggingFace hanno la chiave: Groq e Gemini non giocano nemmeno.
+        var store = new FakeKeyStore();
+        store.Keys[AiProviders.HuggingFace] = "hf-test";
+        var (delegating, handler, _) = FailoverRig(new()
+        {
+            ["integrate.api.nvidia.com"] = (HttpStatusCode.ServiceUnavailable, "{}"),
+            ["router.huggingface.co"] = (HttpStatusCode.OK, """{"choices":[{"message":{"content":"ok-hf"},"finish_reason":"stop"}]}"""),
+        }, keys: store);
+
+        var text = await delegating.CompleteAsync("s", "u", CancellationToken.None);
+
+        Assert.Equal("ok-hf", text);
+        Assert.Equal(["integrate.api.nvidia.com", "router.huggingface.co"], handler.HostsCalled);
+    }
+
+    [Fact]
+    public async Task Failover_AllFail_ThrowsLastError_ClassifiableByGuard()
+    {
+        var (delegating, handler, _) = FailoverRig(new()); // ogni host → 500
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            delegating.CompleteAsync("s", "u", CancellationToken.None));
+
+        Assert.Equal(4, handler.HostsCalled.Count); // Nvidia + Groq + Gemini + HF (Anthropic fuori catena)
+        Assert.Contains(" HTTP 500:", ex.Message);
+        Assert.Equal((true, "server"), LlmCallGuard.Classify(ex)); // il breaker del layer scatta solo qui
+    }
+
+    [Fact]
+    public async Task Failover_Disabled_OnlyActiveIsTried()
+    {
+        var (delegating, handler, _) = FailoverRig(new(), new LlmOptions
+        {
+            Provider = AiProviders.Nvidia,
+            FailoverEnabled = false,
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            delegating.CompleteAsync("s", "u", CancellationToken.None));
+
+        Assert.Equal(["integrate.api.nvidia.com"], handler.HostsCalled);
+    }
+
+    [Fact]
+    public async Task Failover_CancellationIsNotAFailure_NoHopping()
+    {
+        using var cts = new CancellationTokenSource();
+        var factory = new SingleClientFactory(new CancelingHandler(cts));
+        var monitor = new LlmOptions { Provider = AiProviders.Nvidia }.AsMonitor();
+        var store = KeysForAll();
+        var nvidia = new NvidiaLlmClient(factory, monitor, store, NullLogger<NvidiaLlmClient>.Instance);
+        var anthropic = new AnthropicLlmClient(monitor, NullLogger<AnthropicLlmClient>.Instance, store);
+        var resolver = new LlmClientResolver(anthropic, nvidia,
+            new GeminiLlmClient(factory, monitor, store, NullLogger<GeminiLlmClient>.Instance),
+            new GroqLlmClient(factory, monitor, store, NullLogger<GroqLlmClient>.Instance),
+            new HuggingFaceLlmClient(factory, monitor, store, NullLogger<HuggingFaceLlmClient>.Instance));
+        var delegating = new DelegatingLlmClient(anthropic, nvidia, monitor, resolver);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            delegating.CompleteAsync("s", "u", cts.Token));
+    }
+
+    /// <summary>Cancella il token del CHIAMANTE a metà chiamata: lo shutdown non deve innescare failover.</summary>
+    private sealed class CancelingHandler(CancellationTokenSource cts) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            cts.Cancel();
+            return Task.FromCanceled<HttpResponseMessage>(new CancellationToken(canceled: true));
+        }
+    }
+
+    // ------------------------------------------------------------------ [2026-08-02] auto-scelta modello
+
+    [Fact]
+    public void AutoSelector_Gemini_PicksLatestNonPreviewFlash_FromTheRealCatalogShape()
+    {
+        // Forma reale del catalogo visto dal vivo (2026-08-02): pieno di tts/image/embedding/veo…
+        string[] catalog =
+        [
+            "models/gemini-2.0-flash", "models/gemini-2.5-flash", "models/gemini-2.5-flash-preview-tts",
+            "models/gemini-2.5-pro", "models/gemini-3-flash-preview", "models/gemini-3.1-flash-lite",
+            "models/gemini-3.5-flash", "models/gemini-3.6-flash", "models/gemini-embedding-2",
+            "models/gemini-flash-latest", "models/imagen-4.0-generate-001", "models/veo-3.1-generate-preview",
+            "models/gemini-2.5-flash-native-audio-latest", "models/deep-research-preview-04-2026",
+        ];
+
+        Assert.Equal("models/gemini-3.6-flash", ModelAutoSelector.Pick(AiProviders.Gemini, catalog));
+    }
+
+    [Fact]
+    public void AutoSelector_Groq_PrefersVersatileLlama()
+    {
+        string[] catalog = ["gemma2-9b-it", "llama-3.1-8b-instant", "llama-3.3-70b-versatile", "whisper-large-v3"];
+        Assert.Equal("llama-3.3-70b-versatile", ModelAutoSelector.Pick(AiProviders.Groq, catalog));
+    }
+
+    [Fact]
+    public void AutoSelector_EmptyOrAllNonChat_ReturnsNull()
+    {
+        Assert.Null(ModelAutoSelector.Pick(AiProviders.Gemini, []));
+        Assert.Null(ModelAutoSelector.Pick(AiProviders.Gemini, ["models/imagen-4.0", "models/gemini-embedding-2"]));
+    }
+
+    [Fact]
+    public void AutoSelector_UnknownProviderStillPicksSomethingChatLike()
+    {
+        Assert.Equal("qualcosa-instruct", ModelAutoSelector.Pick("Ignoto", ["modello-tts", "qualcosa-instruct"]));
+    }
+
+    [Fact]
+    public void FailoverChain_EmptyConfigUsesDefault_PollutedConfigIsDeduplicated()
+    {
+        // Il default vive in una costante e NON nell'inizializzatore della lista: il binder di
+        // configurazione APPENDE gli elementi dell'array al default già popolato, e la catena
+        // raddoppiava a ogni salvataggio dal pannello (successo davvero, 2026-08-02).
+        Assert.Equal(LlmOptions.DefaultFailoverChain, new LlmOptions().EffectiveFailoverChain());
+
+        var polluted = new LlmOptions
+        {
+            FailoverProviders = [AiProviders.Nvidia, AiProviders.Groq, AiProviders.Nvidia, AiProviders.Groq],
+        };
+        Assert.Equal([AiProviders.Nvidia, AiProviders.Groq], polluted.EffectiveFailoverChain());
+    }
+
     // ------------------------------------------------------------------ elenco modelli per chiave
 
     [Fact]

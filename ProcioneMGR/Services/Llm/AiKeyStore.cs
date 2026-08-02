@@ -13,8 +13,12 @@ public static class AiProviders
     public const string Groq = "Groq";
     public const string HuggingFace = "HuggingFace";
 
-    /// <summary>I provider noti alla UI di configurazione, nell'ordine di presentazione.</summary>
-    public static readonly IReadOnlyList<string> Known = [Anthropic, Nvidia, Gemini, Groq, HuggingFace];
+    /// <summary>
+    /// I provider noti alla UI di configurazione, nell'ordine di presentazione. Anthropic in coda
+    /// dal 2026-08-02 (scelta del proprietario: credito esaurito, si sfruttano le altre — resta
+    /// disponibile per quando/se il credito tornerà).
+    /// </summary>
+    public static readonly IReadOnlyList<string> Known = [Nvidia, Groq, Gemini, HuggingFace, Anthropic];
 
     /// <summary>Variabile d'ambiente di fallback per il provider ("ANTHROPIC_API_KEY", "NVIDIA_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "HUGGINGFACE_API_KEY").</summary>
     public static string EnvVarFor(string provider) => provider.ToUpperInvariant() + "_API_KEY";
