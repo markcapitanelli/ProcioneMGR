@@ -459,6 +459,14 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Experiments.IExperimentTracke
 // Opzioni via Configure<T> (hot-reload da /admin/autonomy); worker anche singleton risolvibile
 // per il bottone "Esegui supervisione ora" (stessa istanza del hosted service).
 builder.Services.Configure<ProcioneMGR.Services.Llm.LlmOptions>(builder.Configuration.GetSection("Llm"));
+// [AF1] Consumo e budget del layer AI. Il tracker è il sink dei client (ognuno dichiara il
+// consumo con sé stesso come provider: col failover conta chi ha SERVITO) e il tetto del guard
+// (budget esaurito = SkippedBudgetExhausted, nessuna chiamata, breaker fermo). Default off:
+// senza Llm:Budget:TrackingEnabled non si scrive una riga e non si applica alcun tetto.
+builder.Services.Configure<ProcioneMGR.Services.Llm.LlmBudgetOptions>(builder.Configuration.GetSection("Llm:Budget"));
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.LlmUsageTracker>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmUsageSink>(sp => sp.GetRequiredService<ProcioneMGR.Services.Llm.LlmUsageTracker>());
+builder.Services.AddHostedService<ProcioneMGR.Services.Llm.LlmUsageFlushWorker>();
 // Multi-provider (2026-08-01): le chiavi vivono cifrate a DB (AiCredentials, pannello
 // /admin/ai-supervisor) con fallback env; l'ILlmClient registrato è il delegante, che instrada
 // OGNI chiamata sul Provider corrente (hot-reload) — supervisore/guard/worker restano ignari.
@@ -500,6 +508,15 @@ builder.Services.Configure<ProcioneMGR.Services.Agents.SupervisorAgentOptions>(b
 builder.Services.AddSingleton<ProcioneMGR.Services.Agents.LoggingSupervisorAgent>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Agents.ClaudeSupervisorAgent>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Agents.IPipelineSupervisorAgent, ProcioneMGR.Services.Agents.DelegatingSupervisorAgent>();
+
+// --- [AF2] Orchestratore di flotta (Queen Bee): SOLO nel monolite, come planner e scheduler ---
+// Core deterministico puro + reader in sola lettura + worker con journal. Default OFF, e anche
+// acceso parte in DryRun: in AF2a non esiste il braccio esecutivo (arriva con AF2b). Non tocca
+// MAI l'impronta storica (corsie 0..2), le corsie Live/Testnet, le quarantene o le campagne.
+builder.Services.Configure<ProcioneMGR.Services.Fleet.FleetOptions>(builder.Configuration.GetSection("Fleet"));
+builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IFleetStateReader, ProcioneMGR.Services.Fleet.FleetStateReader>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.FleetOrchestratorWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Fleet.FleetOrchestratorWorker>());
 
 // --- Autonomia: auto-promozione Paper→Testnet (MAI a Live) ---
 // L'evaluator decide (logica pura, testabile), il promoter agisce (stop→restart della corsia),

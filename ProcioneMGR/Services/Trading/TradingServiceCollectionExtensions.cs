@@ -145,6 +145,14 @@ public static class TradingServiceCollectionExtensions
             // [2026-07-29] La configurazione ospitata dal motore si chiede AL MOTORE: il suo file
             // non è il nostro. Vedi IEngineConfigStore.
             services.TryAddSingleton<IEngineConfigStore, RemoteEngineConfigStore>();
+
+            // [AF0] Il numero di corsie è topologia DUPLICATA nei due host (questo file e la
+            // ConfigMap del motore), ognuno la congela alla prima lettura, e un disallineamento si
+            // manifestava solo al primo comando fallito su una corsia alta. La sonda lo dice
+            // all'avvio, a voce alta. Solo qui nel ramo remoto: in-process i due numeri escono
+            // dallo stesso file per costruzione.
+            services.TryAddSingleton<LaneCountCoherenceProbe>();
+            services.AddHostedService<LaneCountCoherenceProbeWorker>();
         }
         else
         {
@@ -315,6 +323,30 @@ public static class TradingServiceCollectionExtensions
             // Il binding di CarryOptions è più su, incondizionato (serve anche al solo pannello).
             services.AddSingleton<Carry.CarryWorker>();
             services.AddHostedService(sp => sp.GetRequiredService<Carry.CarryWorker>());
+        }
+
+        // [AF5.1] Heartbeat incrociato fra i due host. Ognuno scrive SOLO la propria riga (la
+        // regola "un scrittore, un host" vale a grana di riga) e sorveglia quella altrui: il
+        // motore sorveglia sempre il guscio; il guscio sorveglia il motore solo quando il motore
+        // È un altro processo. Default OFF nelle opzioni: a config vuota nessuno scrive né grida.
+        services.Configure<Health.HeartbeatOptions>(configuration.GetSection("Heartbeat"));
+        var ownRole = isTradingServiceHost ? Data.HostHeartbeat.EngineRole : Data.HostHeartbeat.ShellRole;
+        services.AddSingleton<IHostedService>(sp => new Health.HostHeartbeatWorker(
+            ownRole,
+            sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
+            sp.GetRequiredService<IOptionsMonitor<Health.HeartbeatOptions>>(),
+            sp.GetRequiredService<ILogger<Health.HostHeartbeatWorker>>()));
+        var monitoredRole = isTradingServiceHost
+            ? Data.HostHeartbeat.ShellRole
+            : (useRemote ? Data.HostHeartbeat.EngineRole : null);
+        if (monitoredRole is not null)
+        {
+            services.AddSingleton<IHostedService>(sp => new Health.HeartbeatMonitorWorker(
+                monitoredRole,
+                sp.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
+                sp.GetRequiredService<IOptionsMonitor<Health.HeartbeatOptions>>(),
+                sp.GetRequiredService<ILogger<Health.HeartbeatMonitorWorker>>(),
+                sp.GetService<Notifications.INotifier>()));
         }
 
         // Fallback non-keyed: risolve sempre la corsia 0. Serve ai consumer non ancora aggiornati con

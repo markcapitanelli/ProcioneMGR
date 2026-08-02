@@ -601,3 +601,31 @@ multi-provider perché NON è un consumatore di `ILlmClient`.
 
 **Non-obiettivi** (dettaglio nel PRD): ONNX come pipeline di default; GPU/TensorRT; RL esecuzione
 e ibridi direzionali del PDF (già misurati e respinti).
+
+---
+
+## Filone AF — Autonomia Finanziaria (2026-08-02, dodicesima roadmap)
+
+Nato dal sesto PDF esterno (framework multi-agente per l'autonomia) e dalla richiesta del
+proprietario: piattaforma quasi completamente autonoma, H24/7, su più corsie, fino alla promozione
+finale e dopo. PRD proprio con confronto punto-per-punto col già-costruito:
+[PRD-AUTONOMIA-FINANZIARIA-2026-08](PRD-AUTONOMIA-FINANZIARIA-2026-08.md). Le decisioni chiave del
+proprietario: gate Testnet→Live resta un click umano (i 5 failsafe intatti); la «Queen Bee» è
+codice deterministico col comitato LLM in consulenza; potere AI = scelta vincolata a menù;
+H24 sul PC attuale con watchdog. Del PDF si scarta Hurst-come-pilastro (10 no del
+direzionale-tecnico) e si tengono i due buchi veri: orchestratore di flotta e budget AI.
+
+| # | Cosa | Stato | Gate / verifica |
+|---|---|---|---|
+| AF0 | **Flotta da 3 a 8 corsie** (3..7 dormienti): `Trading:LaneCount=8` nei due host; `LaneCountCoherenceProbe` (monolite remoto, LogCritical+notifica sul disallineamento, MAI un allarme costruito sull'ignoranza); impronta auto-apply della pipeline FERMA a 3 (`AutoApplyLaneFootprint`: oltre schiera solo l'orchestratore) | **fatto (2026-08-02)** | ✅ L1: sonda (coerente/disallineata/ignoranza/valore illeggibile) + impronta applier (flotta 8→3, flotta 2→2); L3: `PromotionEvaluator` su 8 corsie di cui 5 mai avviate senza eccezioni né azioni; L2/L4 al deploy: zero scritture sulle dormienti in 24h, /trading e /ensemble a 8 corsie nel browser |
+| AF1 | **Tracking token/costi + budget**: `usage` dei provider → `ILlmUsageSink` (provider = chi ha SERVITO, non quello attivo; il `path` fluisce via AsyncLocal dal guard), `Llm:Budget` (TrackingEnabled=false default) con `SkippedBudgetExhausted` nel guard (breaker fermo, `forceProbe` non bypassa), righe aggregate `LlmUsageRecords` con ripresa dei totali al riavvio, pannello «Consumo e budget» in /admin/ai-supervisor | **fatto (2026-08-02)** | ✅ L1: parsing usage (anche col reasoning che svuota la risposta: i token si contano lo stesso), aritmetica su orologio finto, rollover mezzanotte/mese; L2: tracking spento ⇒ bit-identico; L3: Postgres — flush idempotente, riavvio che riprende il budget dal DB; L4 al deploy |
+| AF2 | **Queen Bee** `Services/Fleet/`: core puro `Decide` (fuzz 20k) + `FleetStateReader` sola-lettura (candidati SOLO con trade/mese derivato dall'holdout; la durata mediana NON è derivabile a run-level — trade list non persistita — la misura il forward test) + worker 15′ con isteresi ritiri e journal `OrchestratorDecisions`; opera SOLO oltre l'impronta auto-apply (corsie ≥3); fascia grigia = solo proposta (F5); carry sorvegliato, non gestito. **Incrementi 1-2 fatti (DryRun)**; esecuzione (AF2b: start/stop reali + `targetLanes` nell'applier) dopo ~1 settimana di journal osservato | **DryRun fatto (2026-08-02)**; esecuzione aperta | ✅ fuzz 20k (mai impronta/Live/Testnet/quarantena/campagne/emergency, mai doppia assegnazione, mai candidato sotto frequenza); 100 tick sani ⇒ zero azioni; pannello journal in /admin/autonomy |
+| AF3 | **Comitato a scelta vincolata**: voto parallelo multi-provider via resolver, contratto JSON severo (fuori menù = astensione), quorum 2, default deterministico, guard keyed `"committee"` con breaker proprio, innesto SOLO sui pareggi di `Decide` | aperto | proprietà L2: provider spazzatura al 100% ⇒ ≡ comitato spento; voti a journal; breaker advisory intatto con un provider giù |
+| AF4a | **Retrocessione Live→Testnet** (sola direzione di sicurezza): fuzz aggiornato PRIMA del codice (invariante 3′ flag-off bit-identico + inv. 4-5: da Live solo Testnet, mai col dry-run), opzioni default-off + `DemoteLiveDryRun=true` (annuncia senza agire, `WouldDemoteLive` nel verdetto), whitelist del worker irrigidita con la modalità di PARTENZA, notifica Warning; `LanePromoter` invariato; pannello in /admin/autonomy | **fatto (2026-08-02)** | ✅ fuzz 2×20k; caso nominale a mano (degradata/dry-run/giovane/sana); worker: Live→Paper diretto e "promozioni da Live" rifiutati a LogError; L4 = dry-run in produzione |
+| AF4b | **Guardie di flotta**: >`Fleet:MaxLanesWithoutExposureGuard` (3) corsie attive richiedono `CorrelatedExposureGuard` acceso — precondizione DENTRO `Decide`, blocco journalizzato col rimedio | **fatto (2026-08-02)** (vol targeting = attivazione via config al deploy) | ✅ test: guardia spenta + 3 attive ⇒ zero assegnazioni + blocco con "CorrelatedExposure" nel motivo |
+| AF4c | **Pesi ERC fra corsie, SOLO advisory** (riuso `Services/Portfolio`), `Fleet:CapitalWeights:Enabled=false` | aperto | L2: PnL bianco ⇒ ~equal-weight |
+| AF5 | **Continuità H24**: heartbeat incrociato a DB (`HostHeartbeats`, una riga per host, monitor una-notifica-per-transizione, assenza=ignoranza≠guasto; pannello con salvataggio doppio guscio+motore via gRPC, sezione nel contratto `EngineConfigSections`), `scripts/watchdog.ps1` (Task Scheduler 5′, Telegram diretto, auto-riparazione del port-forward prima di gridare, `-Register`), `scripts/bringup.ps1` idempotente (Docker→socat→nodo→pod→port-forward→guscio, `-Register` al logon). **Digest giornaliero: aperto** | **5.1-5.3 fatti (2026-08-02)**; digest aperto | ✅ L1: transizioni heartbeat (stantio alla prima osservazione ⇒ grida; Unknown per sempre ⇒ silenzio); L3: upsert senza duplicati su Postgres; script parse-verificati; L3/L4 veri (kill di un host, riavvio del PC) al deploy |
+
+**Non-obiettivi**: auto-Live in ogni forma; LLM che genera strategie/parametri; Hurst come
+pilastro; validazione più permissiva (F5 resta a click umano); terzo host. Ordine: AF0 → AF1 →
+AF5(1-3) → AF2(DryRun) → AF4a → AF2(esecuzione) → AF5(digest) → AF4b → AF3 → AF4c.

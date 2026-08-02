@@ -38,6 +38,10 @@
 @inject NotificationDispatcher Notifier
 @inject IOptionsMonitor<CampaignOptions> CampaignMonitor
 @inject IOptionsMonitor<RegimeTriggerOptions> RegimeTriggerMonitor
+@inject IOptionsMonitor<ProcioneMGR.Services.Fleet.FleetOptions> FleetMonitor
+@inject ProcioneMGR.Services.Fleet.FleetOrchestratorWorker FleetWorker
+@inject IPipelineApplier PipelineApplier
+@inject IOptionsMonitor<ProcioneMGR.Services.Health.HeartbeatOptions> HeartbeatMonitor
 @inject EnsembleComparatorOptions ComparatorOptions
 @inject ModelRegistryOptions RegistryOptions
 @* Carry, esecuzione live e dual-read ML vivono nell'host del MOTORE: la loro configurazione si
@@ -228,10 +232,144 @@
                 <label class="form-label">Intervallo (ore) @Restart()</label>
                 <input type="number" class="form-control" @bind="_promotion.EvaluationIntervalHours" min="1" style="width: 8rem;" />
             </div>
+        </div>
+        <hr />
+        @* [AF4a] La retrocessione di SICUREZZA Live→Testnet: unica estensione al perimetro Live,
+           sola direzione che riduce il rischio. Verso Live non esiste alcun automatismo, mai. *@
+        <p class="text-muted small mb-2">
+            <strong>Retrocessione di sicurezza Live→Testnet</strong> — se una corsia LIVE degrada
+            (Sharpe sotto soglia o drawdown oltre il limite, con storia sufficiente), il worker la
+            riporta a Testnet chiudendo prima le posizioni reali reduce-only. Mai Paper diretto,
+            mai il contrario. Col <em>dry-run</em> acceso (default) il verdetto si annuncia
+            soltanto, nel pannello promozioni di /trading e nei log.
+        </p>
+        <div class="row g-3">
+            <div class="col-auto form-check form-switch ms-2 align-self-end">
+                <input class="form-check-input" type="checkbox" id="pr_demlive" @bind="_promotion.AutoDemoteLiveToTestnet" />
+                <label class="form-check-label" for="pr_demlive">Retrocessione Live @Hot()</label>
+            </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="pr_demlive_dry" @bind="_promotion.DemoteLiveDryRun" />
+                <label class="form-check-label" for="pr_demlive_dry">Dry-run (solo annuncio) @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Sharpe sotto cui degrada @Hot()</label>
+                <input type="number" step="0.1" class="form-control" @bind="_promotion.DemoteLiveSharpeThreshold" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">DD oltre cui degrada % @Hot()</label>
+                <input type="number" step="0.5" class="form-control" @bind="_promotion.DemoteLiveMaxDrawdownPercent" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Settimane min @Hot()</label>
+                <input type="number" class="form-control" @bind="_promotion.DemoteLiveMinWeeks" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Trade min @Hot()</label>
+                <input type="number" class="form-control" @bind="_promotion.DemoteLiveMinTrades" min="1" style="width: 8rem;" />
+            </div>
             <div class="col-auto align-self-end">
                 <button class="btn btn-primary" @onclick='() => SaveAsync("PromotionEvaluator", _promotion, "Promozione corsie")' disabled="@_busy">Salva</button>
             </div>
         </div>
+    </div>
+</div>
+
+@* ============================ 3-bis. [AF2] Decisioni della flotta (Queen Bee) ============================ *@
+<div class="card mb-3" id="p-fleet">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-diagram-3 me-1"></i>Orchestratore di flotta (Queen Bee)</span>
+        <span>
+            @StateBadge(_fleet.Enabled)
+            @if (_fleet.Enabled && _fleet.DryRun)
+            {
+                <span class="badge bg-info ms-1">DRY-RUN</span>
+            }
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Gestisce le corsie di flotta (dalla @(_fleetFootprint) in su, mai l'impronta storica
+            dell'auto-apply né Live/Testnet/quarantene/campagne): assegna candidati validati alle
+            corsie Paper libere, ritira i forward test perdenti (con isteresi), propone la fascia
+            grigia al tuo click (F5). In DRY-RUN decide e journalizza senza eseguire — è
+            l'incremento corrente. Config in sezione <code>Fleet</code>; ogni decisione è una riga qui sotto.
+        </p>
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+            <span class="badge bg-light text-dark">ultimo tick: @(FleetWorker.LastTickUtc?.ToLocalTime().ToString("dd/MM HH:mm") ?? "mai")</span>
+            <span class="badge bg-light text-dark">azioni ultimo piano: @(FleetWorker.LastPlan?.Actions.Count ?? 0)</span>
+            <span class="badge bg-light text-dark">tick: @_fleet.TickMinutes min · ritiro: Sharpe &lt; @_fleet.RetireSharpeThreshold dopo @_fleet.RetireMinWeeks sett/@_fleet.RetireMinTrades trade ×@_fleet.RetireConfirmTicks conferme</span>
+        </div>
+        @if (_fleetJournal.Count == 0)
+        {
+            <p class="text-muted small mb-0"><em>Nessuna decisione a journal.</em></p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Quando</th><th>Tipo</th><th>Corsia</th><th>Run</th><th>Fonte</th><th>Esito</th><th>Motivo</th></tr></thead>
+                    <tbody>
+                        @foreach (var d in _fleetJournal)
+                        {
+                            <tr>
+                                <td class="text-nowrap">@d.AtUtc.ToLocalTime().ToString("dd/MM HH:mm")</td>
+                                <td><span class="badge @FleetKindBadge(d.Kind)">@d.Kind</span></td>
+                                <td>@(d.LaneId?.ToString() ?? "—")</td>
+                                <td>@(d.RunId?.ToString()[..8] ?? "—")</td>
+                                <td>@d.Source</td>
+                                <td>
+                                    @if (d.DryRun) { <span class="badge bg-info">dry-run</span> }
+                                    else if (d.Applied) { <span class="badge bg-success">eseguita</span> }
+                                    else if (d.Error is not null) { <span class="badge bg-danger" title="@d.Error">errore</span> }
+                                    else { <span class="badge bg-secondary">no</span> }
+                                </td>
+                                <td class="small">@d.Reason</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@* ============================ 3-ter. [AF5.1] Heartbeat incrociato ============================ *@
+<div class="card mb-3" id="p-heartbeat">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-activity me-1"></i>Heartbeat incrociato guscio ↔ motore</span>
+        <span>@StateBadge(_heartbeat.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Ogni host scrive il proprio battito a database (sezione <code>Heartbeat</code>) e
+            sorveglia quello dell'ALTRO: se il motore tace, il guscio manda un Warning; se tace il
+            guscio, lo manda il motore. Copre la morte di UN processo — per «muore tutto» ci sono
+            <code>scripts/watchdog.ps1</code> (Task Scheduler, Telegram diretto) e l'assenza del
+            digest giornaliero. Il salvataggio scrive ENTRAMBI gli host (guscio su file, motore via
+            gRPC): due processi, uno stato desiderato.
+        </p>
+        <div class="row g-3">
+            <div class="col-auto form-check form-switch ms-2 align-self-end">
+                <input class="form-check-input" type="checkbox" id="hb_en" @bind="_heartbeat.Enabled" />
+                <label class="form-check-label" for="hb_en">Attivo @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Battito ogni (s) @Hot()</label>
+                <input type="number" class="form-control" @bind="_heartbeat.WriteSeconds" min="10" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Muto dopo (min) @Hot()</label>
+                <input type="number" class="form-control" @bind="_heartbeat.StaleMinutes" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto align-self-end">
+                <button class="btn btn-primary" @onclick="SaveHeartbeatAsync" disabled="@_busy">Salva (guscio + motore)</button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_heartbeatStatus))
+        {
+            <div class="alert @(_heartbeatIsError ? "alert-danger" : "alert-success") py-2 mt-2 mb-0">@_heartbeatStatus</div>
+        }
     </div>
 </div>
 
@@ -1082,6 +1220,12 @@
     private LiveExecutionOptions _liveExec = new();
     private AutoReapplyOptions _autoReapply = new();
     private PromotionEvaluatorOptions _promotion = new();
+    private ProcioneMGR.Services.Fleet.FleetOptions _fleet = new();
+    private int _fleetFootprint = 3;
+    private List<OrchestratorDecision> _fleetJournal = [];
+    private ProcioneMGR.Services.Health.HeartbeatOptions _heartbeat = new();
+    private string? _heartbeatStatus;
+    private bool _heartbeatIsError;
     private LlmOptions _llm = new();
     private SupervisorAgentOptions _supervisorAgent = new();
     private ProcioneMGR.Services.Sentiment.SentimentOptions _sentiment = new();
@@ -1170,10 +1314,80 @@
         public string OtlpEndpoint { get; set; } = "http://localhost:4317";
     }
 
+    /// <summary>
+    /// [AF5.1] Un salvataggio, DUE host: il file del guscio (AppConfigWriter) e la sezione del
+    /// motore (IEngineConfigStore, che valida con AdminConfigRules e ricarica esplicitamente —
+    /// reloadOnChange non attraversa un mount PVC). Gli esiti si riportano separati: «salvato sul
+    /// guscio ma non sul motore» è un'informazione, non un dettaglio.
+    /// </summary>
+    private async Task SaveHeartbeatAsync()
+    {
+        var error = AdminConfigRules.Validate(_heartbeat);
+        if (error is not null)
+        {
+            _heartbeatStatus = error;
+            _heartbeatIsError = true;
+            return;
+        }
+
+        var outcomes = new List<string>();
+        var failed = false;
+        try
+        {
+            await ConfigWriter.SaveSectionAsync("Heartbeat", _heartbeat);
+            outcomes.Add("guscio: salvato");
+        }
+        catch (Exception ex)
+        {
+            outcomes.Add($"guscio: FALLITO ({ex.Message})");
+            failed = true;
+        }
+        try
+        {
+            await EngineConfig.WriteAsync("Heartbeat", _heartbeat);
+            outcomes.Add(EngineConfig.IsRemote ? "motore: salvato e ricaricato" : "motore in-process: stesso file del guscio");
+        }
+        catch (Exception ex)
+        {
+            outcomes.Add($"motore: FALLITO ({ex.Message})");
+            failed = true;
+        }
+
+        _heartbeatStatus = string.Join(" · ", outcomes);
+        _heartbeatIsError = failed;
+    }
+
+    private static string FleetKindBadge(string kind) => kind switch
+    {
+        "Assign" => "bg-success",
+        "Retire" => "bg-warning text-dark",
+        "ProposeGrey" => "text-bg-info",
+        "Blocked" => "bg-secondary",
+        _ => "bg-light text-dark",
+    };
+
     protected override async Task OnInitializedAsync()
     {
         _autoReapply = Clone(AutoReapplyMonitor.CurrentValue);
         _promotion = Clone(PromotionMonitor.CurrentValue);
+
+        _heartbeat = new ProcioneMGR.Services.Health.HeartbeatOptions
+        {
+            Enabled = HeartbeatMonitor.CurrentValue.Enabled,
+            WriteSeconds = HeartbeatMonitor.CurrentValue.WriteSeconds,
+            StaleMinutes = HeartbeatMonitor.CurrentValue.StaleMinutes,
+        };
+
+        // [AF2] Stato e journal della flotta (sola lettura: la config vive nella sezione Fleet).
+        _fleet = FleetMonitor.CurrentValue;
+        _fleetFootprint = PipelineApplier.LaneCount; // l'impronta storica dell'auto-apply: il confine della flotta
+        await using (var db = await DbFactory.CreateDbContextAsync())
+        {
+            _fleetJournal = await db.OrchestratorDecisions.AsNoTracking()
+                .OrderByDescending(d => d.AtUtc)
+                .Take(20)
+                .ToListAsync();
+        }
         _llm = Clone(LlmMonitor.CurrentValue);
         _supervisorAgent = Clone(SupervisorAgentMonitor.CurrentValue);
         _sentiment = Clone(SentimentMonitor.CurrentValue);

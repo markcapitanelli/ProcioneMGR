@@ -120,16 +120,20 @@ public sealed class AnthropicLlmClient : ILlmClient, IModelCatalogProvider
     private readonly IAiKeyStore? _keyStore;
     private readonly IHttpClientFactory? _httpClientFactory;
 
+    private readonly ILlmUsageSink? _usageSink;
+
     public AnthropicLlmClient(
         Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> options,
         ILogger<AnthropicLlmClient> logger,
         IAiKeyStore? keyStore = null,   // opzionale: i vecchi harness di test costruiscono senza store
-        IHttpClientFactory? httpClientFactory = null)   // opzionale: serve solo a ListModelsAsync
+        IHttpClientFactory? httpClientFactory = null,   // opzionale: serve solo a ListModelsAsync
+        ILlmUsageSink? usageSink = null)   // [AF1] opzionale: senza sink il consumo non si conta
     {
         _options = options;
         _logger = logger;
         _keyStore = keyStore;
         _httpClientFactory = httpClientFactory;
+        _usageSink = usageSink;
     }
 
     // Riletta a OGNI accesso, mai cachata nel ctor: DB cifrato (pannello) prima, env poi — così
@@ -161,6 +165,24 @@ public sealed class AnthropicLlmClient : ILlmClient, IModelCatalogProvider
             Thinking = new ThinkingConfigAdaptive(),
             Messages = [new() { Role = Role.User, Content = userPrompt }],
         }, cancellationToken: ct);
+
+        // [AF1] Il consumo si dichiara PRIMA del check sul rifiuto: anche una risposta rifiutata
+        // ha consumato token. Difensivo sul tipo dell'SDK: un contatore non rompe la chiamata.
+        if (_usageSink is not null)
+        {
+            try
+            {
+                _usageSink.Record(new LlmUsageEvent(
+                    AiProviders.Anthropic, options.Model, LlmCallContext.CurrentPath ?? "direct",
+                    (int)Math.Clamp(response.Usage?.InputTokens ?? 0, 0, int.MaxValue),
+                    (int)Math.Clamp(response.Usage?.OutputTokens ?? 0, 0, int.MaxValue),
+                    DateTime.UtcNow));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Lettura usage dalla risposta Anthropic fallita: consumo non contato.");
+            }
+        }
 
         if (response.StopReason == "refusal")
         {

@@ -16,7 +16,35 @@
     "RequestTimeoutSeconds": 60,
     "BreakerFailureThreshold": 3,
     "BreakerCooldownMinutes": 30,
-    "NotifyDecisions": false
+    "NotifyDecisions": false,
+    "_comment_Budget": "[AF1] Consumo e budget del layer AI (pannello in /admin/ai-supervisor). TrackingEnabled=false (default) = zero conteggi e zero tetti, comportamento identico a prima. Limiti a 0 = nessun tetto. A budget esaurito le chiamate si sospendono SENZA muovere il breaker e riprendono al reset (mezzanotte UTC).",
+    "Budget": {
+      "TrackingEnabled": false,
+      "DailyCallLimit": 0,
+      "DailyTokenLimit": 0,
+      "MonthlyTokenLimit": 0
+    }
+  },
+  "Fleet": {
+    "_comment": "[AF2] Orchestratore di flotta (Queen Bee): gestisce le corsie OLTRE l'impronta storica dell'auto-apply (mai le 0..2, mai Live/Testnet/quarantene/campagne). Enabled=false default; DryRun=true = decide e journalizza (pannello in /admin/autonomy) senza eseguire. Ritiro con isteresi: Sharpe < RetireSharpeThreshold dopo RetireMinWeeks settimane e RetireMinTrades trade, confermato per RetireConfirmTicks tick consecutivi.",
+    "Enabled": false,
+    "DryRun": true,
+    "TickMinutes": 15,
+    "RetireSharpeThreshold": 0.0,
+    "RetireMinWeeks": 3,
+    "RetireMinTrades": 20,
+    "RetireConfirmTicks": 2,
+    "MaxAssignmentsPerTick": 1,
+    "MinTradesPerMonth": 1.0,
+    "CandidateMaxAgeDays": 14,
+    "MaxLanesWithoutExposureGuard": 3,
+    "CarrySilenceAlertHours": 24
+  },
+  "Heartbeat": {
+    "_comment": "[AF5.1] Heartbeat incrociato guscio/motore (tabella HostHeartbeats): ogni host scrive il PROPRIO battito e sorveglia quello altrui; stantio oltre StaleMinutes => Telegram Warning una volta per transizione. Default OFF. Il pannello in /admin/autonomy salva su ENTRAMBI gli host.",
+    "Enabled": false,
+    "WriteSeconds": 60,
+    "StaleMinutes": 10
   },
   "EnsembleComparator": {
     "_comment": "Confronto oggettivo 'nuovo ensemble vs corrente' per la ri-applica automatica. MinSharpeImprovementPercent e' l'hysteresis: sotto questa soglia di miglioramento l'ensemble corrente resta (niente cambi per rumore).",
@@ -167,8 +195,8 @@
     "_comment_UseRemoteTrading": "Fase 2b microservizi. false (default): il motore di trading gira in-process nel monolite (TradingEngine + TradingWorker + ExecutionWorker per ogni corsia), esattamente come prima. true: il monolite diventa un client puro (RemoteTradingEngineClient via gRPC verso procionemgr-trading) e NON registra alcun motore/worker locale — le candele e gli ordini li elabora il servizio remoto. I due insiemi sono mutuamente esclusivi per costruzione (vedi TradingServiceCollectionExtensions): mai due esecuzioni sulla stessa corsia. RICHIEDE RIAVVIO (il canale gRPC si crea una volta sola). ATTENZIONE: se attivi questo, il Deployment procionemgr-trading DEVE essere vivo, e viceversa non deve MAI essere vivo con il toggle a false (sarebbe un secondo esecutore sullo stesso DB). NON esporre in /admin/autonomy.",
     "_comment_RemoteUrl": "Obbligatorio quando UseRemoteTrading=true (fail-fast a startup se vuoto: meglio non partire che avere un trading muto). Monolite sull'host + servizio in kind: port-forward (kubectl port-forward -n procionemgr-trading svc/procionemgr-trading 18092:8080) => http://localhost:18092. Il DNS cluster-interno (http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8080) vale solo quando ANCHE il monolite gira nel cluster. Ignorato dall'host ProcioneMGR.Trading stesso, che esegue sempre in locale.",
     "_comment_GrpcSharedSecret": "Obbligatorio quando UseRemoteTrading=true (fail-fast a startup se vuoto, stesso patto di RemoteUrl). Autorizzazione applicativa sul gRPC di trading (P1-6): il monolite lo manda come header su ogni chiamata, procionemgr-trading (SharedSecretAuthInterceptor) lo confronta col proprio e rifiuta Unauthenticated se assente/diverso — un secondo fattore oltre alla NetworkPolicy K8s, che da sola è bypassabile con kubectl port-forward. DEVE essere lo STESSO valore su entrambi i lati (K8s: stesso Secret trading-secrets su entrambi i pod tramite scripts/k8s-trading-secret.ps1 -GrpcSharedSecret, che lo scrive anche nel Secret ui-secrets via scripts/k8s-ui-secret.ps1). Genera con lo stesso comando della master key.",
-    "_comment_LaneCount": "Numero di corsie isolate (LaneId 0..LaneCount-1). Default 3, massimo 12. Ogni corsia avvia tre worker (il piu' frequente batte ogni 2 secondi con una lettura di stato), quindi il costo cresce linearmente: il tetto non e' una stima di capacita', e' protezione dal refuso. RICHIEDE RIAVVIO: il valore si congela alla prima lettura, perche' le corsie sono registrate keyed nel contenitore DI e cambiarlo a caldo lascerebbe motori senza corsia o corsie senza motore. Le corsie in piu' nascono vuote e ferme: si configurano da /ensemble come le altre.",
-    "LaneCount": 3,
+    "_comment_LaneCount": "Numero di corsie isolate (LaneId 0..LaneCount-1). Default 3, massimo 12; 8 dal 2026-08-02 (AF0): le corsie 3..7 nascono DORMIENTI — registrate ma mai avviate, zero ordini finche' non le si avvia da /trading. Ogni corsia avvia tre worker (il piu' frequente batte ogni 2 secondi con una lettura di stato), quindi il costo cresce linearmente: il tetto non e' una stima di capacita', e' protezione dal refuso. RICHIEDE RIAVVIO: il valore si congela alla prima lettura, perche' le corsie sono registrate keyed nel contenitore DI e cambiarlo a caldo lascerebbe motori senza corsia o corsie senza motore. DEVE combaciare con Trading__LaneCount della ConfigMap del motore (infra/k8s/trading/trading-config.env) quando UseRemoteTrading=true: il disallineamento lo dichiara all'avvio la LaneCountCoherenceProbe. L'auto-apply della pipeline resta sulle prime 3 corsie (impronta storica, vedi PipelineApplier): le corsie oltre le gestira' l'orchestratore di flotta.",
+    "LaneCount": 8,
     "UseRemoteTrading": false,
     "RemoteUrl": "",
     "GrpcSharedSecret": "",

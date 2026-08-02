@@ -25,6 +25,30 @@ public sealed class PromotionEvaluatorOptions
     public decimal DemoteSharpeThreshold { get; set; } = 0.5m;
     public int DemoteMinWeeks { get; set; } = 2;
 
+    // --- [AF4a] Retrocessione di SICUREZZA Live→Testnet: l'unica estensione mai concessa al
+    // perimetro Live, e solo nella direzione che riduce il rischio. Il flatten reduce-only prima
+    // del cambio modalità è quello storico di LanePromoter. Default: SPENTA, e anche da accesa
+    // parte in dry-run (annuncia senza agire) finché il dry-run non viene tolto apposta.
+    // Verso Live non esiste e non esisterà alcun percorso automatico. ---
+
+    /// <summary>Se true, una corsia LIVE degradata viene retrocessa a Testnet (mai a Paper diretto). Default false.</summary>
+    public bool AutoDemoteLiveToTestnet { get; set; }
+
+    /// <summary>Finché è true (default), la retrocessione Live si ANNUNCIA soltanto (WouldDemoteLive + reason DRY-RUN), senza agire.</summary>
+    public bool DemoteLiveDryRun { get; set; } = true;
+
+    /// <summary>Sharpe realizzato sotto cui la corsia Live è considerata degradata.</summary>
+    public decimal DemoteLiveSharpeThreshold { get; set; }
+
+    /// <summary>Drawdown oltre cui la corsia Live è considerata degradata, a prescindere dallo Sharpe.</summary>
+    public decimal DemoteLiveMaxDrawdownPercent { get; set; } = 15m;
+
+    /// <summary>Storia minima (settimane) prima che il degrado di una Live sia un giudizio e non rumore.</summary>
+    public int DemoteLiveMinWeeks { get; set; } = 1;
+
+    /// <summary>Trade minimi prima che il degrado di una Live sia un giudizio e non rumore.</summary>
+    public int DemoteLiveMinTrades { get; set; } = 10;
+
     /// <summary>Ogni quante ore il <c>PromotionWorker</c> rivaluta le corsie.</summary>
     public int EvaluationIntervalHours { get; set; } = 6;
 }
@@ -62,6 +86,9 @@ public sealed class PromotionDecision
 
     /// <summary>True se la corsia è pronta per Testnet ma l'auto-promozione è disattivata (mostra "pronto" in UI).</summary>
     public bool ReadyForTestnet { get; set; }
+
+    /// <summary>[AF4a] True se una corsia LIVE degradata VERREBBE retrocessa, ma il dry-run è acceso: solo visibilità, mai azione.</summary>
+    public bool WouldDemoteLive { get; set; }
 
     public string Reason { get; set; } = string.Empty;
     public LaneMetrics Metrics { get; set; } = new();
@@ -153,10 +180,43 @@ public sealed class PromotionEvaluator(
             Metrics = metrics,
         };
 
-        // Live: mai gestito automaticamente, in nessuna direzione.
+        // Live: VERSO Live non esiste alcun percorso automatico, mai. [AF4a] DA Live esiste una
+        // sola uscita automatica, opt-in e in sola direzione di sicurezza: la retrocessione a
+        // Testnet di una corsia degradata — mai Paper diretto, mai un avvio, e col dry-run
+        // (default) si annuncia soltanto. Il fuzz a 20k combinazioni difende tutti questi confini.
         if (currentMode == TradingMode.Live)
         {
-            decision.Reason = "Corsia in Live: nessuna gestione automatica (Testnet→Live e la gestione del Live restano manuali).";
+            if (!opt.AutoDemoteLiveToTestnet)
+            {
+                decision.Reason = "Corsia in Live: nessuna gestione automatica (Testnet→Live e la gestione del Live restano manuali).";
+                return decision;
+            }
+
+            var liveWeeks = TimeSpan.FromDays(7 * Math.Max(1, opt.DemoteLiveMinWeeks));
+            var enoughLiveHistory = metrics.TradeCount >= Math.Max(1, opt.DemoteLiveMinTrades)
+                                    && metrics.ObservationPeriod >= liveWeeks;
+            var degraded = metrics.RealizedSharpe < opt.DemoteLiveSharpeThreshold
+                           || metrics.MaxDrawdown > Math.Max(0m, opt.DemoteLiveMaxDrawdownPercent);
+
+            if (!enoughLiveHistory)
+            {
+                decision.Reason = $"Live: storia insufficiente per un giudizio ({metrics.TradeCount} trade, {metrics.ObservationPeriod.TotalDays:F0}gg): nessuna azione automatica.";
+            }
+            else if (!degraded)
+            {
+                decision.Reason = $"Live in linea: Sharpe {metrics.RealizedSharpe:F2}, DD {metrics.MaxDrawdown:F1}%. Testnet→Live resta manuale.";
+            }
+            else if (opt.DemoteLiveDryRun)
+            {
+                decision.WouldDemoteLive = true;
+                decision.Reason = $"DRY-RUN: retrocederei Live→Testnet (Sharpe {metrics.RealizedSharpe:F2} < {opt.DemoteLiveSharpeThreshold:F2} o DD {metrics.MaxDrawdown:F1}% > {opt.DemoteLiveMaxDrawdownPercent:F0}%). Nessuna azione: DemoteLiveDryRun=true.";
+            }
+            else
+            {
+                decision.ShouldDemote = true;
+                decision.SuggestedMode = TradingMode.Testnet;
+                decision.Reason = $"Retrocessione di SICUREZZA Live→Testnet: Sharpe {metrics.RealizedSharpe:F2} (soglia {opt.DemoteLiveSharpeThreshold:F2}), DD {metrics.MaxDrawdown:F1}% (limite {opt.DemoteLiveMaxDrawdownPercent:F0}%) su {metrics.TradeCount} trade in {metrics.ObservationPeriod.TotalDays:F0}gg. Le posizioni reali vengono chiuse reduce-only prima del cambio.";
+            }
             return decision;
         }
 

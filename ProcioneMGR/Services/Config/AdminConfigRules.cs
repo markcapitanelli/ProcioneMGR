@@ -75,6 +75,14 @@ public static class AdminConfigRules
             (o.WorkerTickSeconds >= 5, "Il tick del worker dev'essere almeno 5 secondi."),
             (o.AbandonGraceMinutes >= 0, "La grazia di abbandono non può essere negativa.")),
 
+        // [AF5.1] L'heartbeat incrociato: la soglia di stantiezza deve stare BEN sopra il periodo
+        // di scrittura, o il rumore di un tick perso diventa un falso allarme di host morto.
+        ProcioneMGR.Services.Health.HeartbeatOptions o => Check(
+            (o.WriteSeconds >= 10, "Il battito non può essere più fitto di 10 secondi."),
+            (o.StaleMinutes >= 1, "La soglia di stantiezza dev'essere almeno 1 minuto."),
+            (o.StaleMinutes * 60 >= o.WriteSeconds * 3,
+                "La soglia di stantiezza dev'essere almeno 3 volte il periodo di scrittura: sotto, un tick perso per rumore dichiara morto un host vivo.")),
+
         AutoReapplyOptions o => Check(
             (o.LookbackDays >= 1, "Il lookback dev'essere almeno 1 giorno."),
             (o.MaxPerTick >= 1, "Serve almeno un run per tick.")),

@@ -96,6 +96,15 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[B3] Confronti d'ombra fra il tick e la candela sulle uscite protettive.</summary>
     public DbSet<ProcioneMGR.Services.Trading.ProtectiveExitShadow> ProtectiveExitShadows => Set<ProcioneMGR.Services.Trading.ProtectiveExitShadow>();
 
+    /// <summary>[AF5.1] Battiti di vita degli host (una riga per processo: "shell" / "engine").</summary>
+    public DbSet<HostHeartbeat> HostHeartbeats => Set<HostHeartbeat>();
+
+    /// <summary>[AF1] Consumo LLM aggregato per giorno/provider/modello/percorso.</summary>
+    public DbSet<LlmUsageRecord> LlmUsageRecords => Set<LlmUsageRecord>();
+
+    /// <summary>[AF2] Journal delle decisioni dell'orchestratore di flotta.</summary>
+    public DbSet<OrchestratorDecision> OrchestratorDecisions => Set<OrchestratorDecision>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         // IMPORTANTISSIMO: lasciare che Identity configuri le sue tabelle
@@ -156,6 +165,40 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 
             // Le credenziali si interrogano sempre per utente.
             entity.HasIndex(e => e.UserId);
+        });
+
+        // [AF5.1] Battiti di vita: chiave naturale = ruolo dell'host. Due righe in tutto, mai
+        // cancellate: la stantiezza si legge da LastUtc, non dall'assenza.
+        builder.Entity<HostHeartbeat>(entity =>
+        {
+            entity.ToTable("HostHeartbeats");
+            entity.HasKey(e => e.Host);
+            entity.Property(e => e.Host).HasMaxLength(16);
+            entity.Property(e => e.Version).HasMaxLength(64);
+        });
+
+        // [AF2] Journal della flotta: append-only, letto per data discendente dal pannello e per
+        // (RunId, Kind) dal reader ("questo run è già stato gestito?").
+        builder.Entity<OrchestratorDecision>(entity =>
+        {
+            entity.ToTable("OrchestratorDecisions");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Kind).HasMaxLength(32).IsRequired();
+            entity.Property(e => e.Source).HasMaxLength(16).IsRequired();
+            entity.HasIndex(e => e.AtUtc);
+            entity.HasIndex(e => new { e.RunId, e.Kind });
+        });
+
+        // [AF1] Consumo LLM: una riga per combinazione al giorno, upsert dal flusher — l'indice
+        // univoco è il contratto dell'upsert, non un'ottimizzazione.
+        builder.Entity<LlmUsageRecord>(entity =>
+        {
+            entity.ToTable("LlmUsageRecords");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).HasMaxLength(32).IsRequired();
+            entity.Property(e => e.Model).HasMaxLength(128).IsRequired();
+            entity.Property(e => e.Path).HasMaxLength(32).IsRequired();
+            entity.HasIndex(e => new { e.DayUtc, e.Provider, e.Model, e.Path }).IsUnique();
         });
 
         // Chiavi dei provider AI: stesso converter di cifratura, una riga per provider.

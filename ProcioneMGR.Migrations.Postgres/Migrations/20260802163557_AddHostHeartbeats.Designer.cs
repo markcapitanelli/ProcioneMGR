@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProcioneMGR.Data;
@@ -11,9 +12,11 @@ using ProcioneMGR.Data;
 namespace ProcioneMGR.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260802163557_AddHostHeartbeats")]
+    partial class AddHostHeartbeats
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -492,49 +495,6 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.ToTable("HostHeartbeats", (string)null);
                 });
 
-            modelBuilder.Entity("ProcioneMGR.Data.LlmUsageRecord", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("Calls")
-                        .HasColumnType("integer");
-
-                    b.Property<long>("CompletionTokens")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTime>("DayUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<string>("Model")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("Path")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<long>("PromptTokens")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DayUtc", "Provider", "Model", "Path")
-                        .IsUnique();
-
-                    b.ToTable("LlmUsageRecords", (string)null);
-                });
-
             modelBuilder.Entity("ProcioneMGR.Data.OhlcvData", b =>
                 {
                     b.Property<long>("Id")
@@ -595,59 +555,6 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                         .HasDatabaseName("IX_OhlcvData_Symbol_Timeframe_TimestampUtc");
 
                     b.ToTable("OhlcvData", (string)null);
-                });
-
-            modelBuilder.Entity("ProcioneMGR.Data.OrchestratorDecision", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<bool>("Applied")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("AtUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<bool>("DryRun")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Error")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<int?>("LaneId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Reason")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("RunId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
-                    b.Property<string>("VotesJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AtUtc");
-
-                    b.HasIndex("RunId", "Kind");
-
-                    b.ToTable("OrchestratorDecisions", (string)null);
                 });
 
             modelBuilder.Entity("ProcioneMGR.Data.SavedFactor", b =>

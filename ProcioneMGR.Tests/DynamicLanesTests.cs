@@ -118,6 +118,39 @@ public sealed class TradingLanesCountTests : IDisposable
 }
 
 /// <summary>
+/// [AF0] La flotta può crescere (8 corsie), ma l'impronta dell'auto-apply della pipeline NON deve
+/// crescerle dietro: una ri-applica schedulata che di colpo distribuisce gambe sulle corsie
+/// dormienti è un cambio di comportamento che nessuno ha chiesto. Le corsie oltre l'impronta le
+/// schiera solo l'orchestratore di flotta, con corsie bersaglio esplicite (AF2).
+/// </summary>
+[Collection("TradingLanes")]
+public sealed class PipelineApplierFootprintTests : IDisposable
+{
+    public PipelineApplierFootprintTests() => TradingLanes.ResetForTests();
+
+    public void Dispose() => TradingLanes.ResetForTests();
+
+    private static Services.Pipeline.PipelineApplier Applier()
+        => new(null!, null!, null!); // solo la proprietà LaneCount: nessuna dipendenza toccata
+
+    [Fact]
+    public void FleetGrowth_DoesNotWidenTheAutoApplyFootprint()
+    {
+        TradingLanes.Configure(8);
+        Assert.Equal(3, Applier().LaneCount);
+    }
+
+    [Fact]
+    public void FleetSmallerThanTheFootprint_ShrinksIt()
+    {
+        // Il caso latente di prima: con 2 corsie fisiche, il vecchio "3" fisso avrebbe chiesto al
+        // contenitore una corsia keyed inesistente al primo ensemble con 3 gruppi-simbolo.
+        TradingLanes.Configure(2);
+        Assert.Equal(2, Applier().LaneCount);
+    }
+}
+
+/// <summary>
 /// L'elenco che alimenta il selettore di corsia. Non cambia il conteggio: si misura contro quello
 /// corrente, così può convivere con qualunque configurazione senza diventare capriccioso.
 /// </summary>
