@@ -83,6 +83,19 @@ public static class AdminConfigRules
             (o.StaleMinutes * 60 >= o.WriteSeconds * 3,
                 "La soglia di stantiezza dev'essere almeno 3 volte il periodo di scrittura: sotto, un tick perso per rumore dichiara morto un host vivo.")),
 
+        // [AF2] L'orchestratore di flotta: i minimi qui sotto sono ciò che separa "prudente per
+        // costruzione" da "impazzito per un refuso" (un tick a 0 o un ritiro senza storia).
+        ProcioneMGR.Services.Fleet.FleetOptions o => Check(
+            (o.TickMinutes >= 1, "Il tick dev'essere almeno 1 minuto."),
+            (o.RetireMinWeeks >= 1, "Il ritiro richiede almeno 1 settimana di osservazione."),
+            (o.RetireMinTrades >= 1, "Il ritiro richiede almeno 1 trade osservato."),
+            (o.RetireConfirmTicks >= 1, "Serve almeno 1 tick di conferma per un ritiro."),
+            (o.MaxAssignmentsPerTick >= 1, "Serve almeno 1 assegnazione possibile per tick."),
+            (o.MinTradesPerMonth >= 0m, "La frequenza minima non può essere negativa."),
+            (o.CandidateMaxAgeDays >= 1, "L'età massima dei candidati dev'essere almeno 1 giorno."),
+            (o.MaxLanesWithoutExposureGuard >= 1, "Il tetto senza guardia di esposizione dev'essere almeno 1."),
+            (o.CarrySilenceAlertHours >= 1, "La soglia di silenzio del carry dev'essere almeno 1 ora.")),
+
         AutoReapplyOptions o => Check(
             (o.LookbackDays >= 1, "Il lookback dev'essere almeno 1 giorno."),
             (o.MaxPerTick >= 1, "Serve almeno un run per tick.")),

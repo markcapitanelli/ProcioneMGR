@@ -298,7 +298,59 @@
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
             <span class="badge bg-light text-dark">ultimo tick: @(FleetWorker.LastTickUtc?.ToLocalTime().ToString("dd/MM HH:mm") ?? "mai")</span>
             <span class="badge bg-light text-dark">azioni ultimo piano: @(FleetWorker.LastPlan?.Actions.Count ?? 0)</span>
-            <span class="badge bg-light text-dark">tick: @_fleet.TickMinutes min · ritiro: Sharpe &lt; @_fleet.RetireSharpeThreshold dopo @_fleet.RetireMinWeeks sett/@_fleet.RetireMinTrades trade ×@_fleet.RetireConfirmTicks conferme</span>
+        </div>
+        <div class="row g-3 mb-3">
+            <div class="col-auto form-check form-switch ms-2 align-self-end">
+                <input class="form-check-input" type="checkbox" id="fl_en" @bind="_fleet.Enabled" />
+                <label class="form-check-label" for="fl_en">Attivo @Hot()</label>
+            </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="fl_dry" @bind="_fleet.DryRun" />
+                <label class="form-check-label" for="fl_dry" title="Finché è acceso: decide e journalizza, non esegue. L'esecuzione vera arriva con AF2b.">Dry-run @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Tick (min) @Hot()</label>
+                <input type="number" class="form-control" @bind="_fleet.TickMinutes" min="1" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Sharpe ritiro @Hot()</label>
+                <input type="number" step="0.1" class="form-control" @bind="_fleet.RetireSharpeThreshold" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Settimane min @Hot()</label>
+                <input type="number" class="form-control" @bind="_fleet.RetireMinWeeks" min="1" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Trade min @Hot()</label>
+                <input type="number" class="form-control" @bind="_fleet.RetireMinTrades" min="1" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Conferme (tick) @Hot()</label>
+                <input type="number" class="form-control" @bind="_fleet.RetireConfirmTicks" min="1" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Asseg./tick @Hot()</label>
+                <input type="number" class="form-control" @bind="_fleet.MaxAssignmentsPerTick" min="1" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Trade/mese min @Hot()</label>
+                <input type="number" step="0.5" class="form-control" @bind="_fleet.MinTradesPerMonth" min="0" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Età max cand. (gg) @Hot()</label>
+                <input type="number" class="form-control" @bind="_fleet.CandidateMaxAgeDays" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Oltre queste corsie attive serve CorrelatedExposure acceso (/admin/protections).">Corsie senza guardia @Hot()</label>
+                <input type="number" class="form-control" @bind="_fleet.MaxLanesWithoutExposureGuard" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Silenzio carry (h) @Hot()</label>
+                <input type="number" class="form-control" @bind="_fleet.CarrySilenceAlertHours" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto align-self-end">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("Fleet", _fleet, "Orchestratore di flotta")' disabled="@_busy">Salva</button>
+            </div>
         </div>
         @if (_fleetJournal.Count == 0)
         {
@@ -1378,8 +1430,8 @@
             StaleMinutes = HeartbeatMonitor.CurrentValue.StaleMinutes,
         };
 
-        // [AF2] Stato e journal della flotta (sola lettura: la config vive nella sezione Fleet).
-        _fleet = FleetMonitor.CurrentValue;
+        // [AF2] Config (editabile), stato e journal della flotta.
+        _fleet = Clone(FleetMonitor.CurrentValue);
         _fleetFootprint = PipelineApplier.LaneCount; // l'impronta storica dell'auto-apply: il confine della flotta
         await using (var db = await DbFactory.CreateDbContextAsync())
         {
