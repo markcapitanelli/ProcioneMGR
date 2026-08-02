@@ -40,16 +40,35 @@ $proxyPort = 16443
 $logFile = Join-Path $env:TEMP 'procionemgr-bringup.log'
 
 if ($Register) {
+    # Il trigger -AtLogOn richiede una shell ELEVATA: senza, Register-ScheduledTask fallisce con
+    # "Accesso negato" — e la prima versione di questo blocco stampava comunque "registrato"
+    # (l'errore è non terminante). Scoperto dal vivo il 2026-08-02. Ora: -ErrorAction Stop, e su
+    # fallimento si RIPIEGA da soli sulla cartella Esecuzione automatica, che non chiede privilegi
+    # e produce lo stesso effetto (partenza al logon dell'utente).
     $scriptPath = $MyInvocation.MyCommand.Path
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-        -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-    Register-ScheduledTask -TaskName 'ProcioneMGR BringUp' -Action $action -Trigger $trigger `
-        -Settings $settings -Description 'Bring-up ProcioneMGR al logon (AF5.3): Docker, proxy kind, port-forward, guscio.' -Force | Out-Null
-    Write-Host "BringUp  : task 'ProcioneMGR BringUp' registrato (al logon)." -ForegroundColor Green
-    exit 0
+    try {
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+        Register-ScheduledTask -TaskName 'ProcioneMGR BringUp' -Action $action -Trigger $trigger `
+            -Settings $settings -Description 'Bring-up ProcioneMGR al logon (AF5.3): Docker, proxy kind, port-forward, guscio.' `
+            -Force -ErrorAction Stop | Out-Null
+        Write-Host "BringUp  : task 'ProcioneMGR BringUp' registrato e VERIFICATO (al logon)." -ForegroundColor Green
+        exit 0
+    } catch {
+        Write-Host "BringUp  : Register-ScheduledTask fallito ($($_.Exception.Message.Trim())) - ripiego sulla cartella Esecuzione automatica." -ForegroundColor Yellow
+        $startup = [Environment]::GetFolderPath('Startup')
+        $cmd = Join-Path $startup 'ProcioneMGR-BringUp.cmd'
+        Set-Content -Path $cmd -Encoding ascii -Value "@echo off`r`nstart `"`" /min powershell -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+        if (Test-Path $cmd) {
+            Write-Host "BringUp  : collegamento creato e VERIFICATO in Esecuzione automatica ($cmd)." -ForegroundColor Green
+            exit 0
+        }
+        Write-Host "BringUp  : anche il ripiego e' fallito - registra a mano da una shell elevata." -ForegroundColor Red
+        exit 1
+    }
 }
 
 function Log([string]$msg, [string]$color = 'Gray') {

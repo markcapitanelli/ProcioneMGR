@@ -21,7 +21,8 @@ public sealed class FleetOrchestratorWorker(
     IOptionsMonitor<CarryOptions> carryOptions,
     IServiceProvider serviceProvider,
     ILogger<FleetOrchestratorWorker> logger,
-    INotifier? notifier = null) : BackgroundService
+    INotifier? notifier = null,
+    Llm.Committee.IAiCommittee? committee = null) : BackgroundService
 {
     /// <summary>Verdetti di ritiro CONSECUTIVI per corsia (isteresi: si agisce solo alla conferma).</summary>
     private readonly Dictionary<int, int> _retireStreak = new();
@@ -61,6 +62,55 @@ public sealed class FleetOrchestratorWorker(
         var opt = options.CurrentValue;
         var state = await reader.ReadAsync(ct);
         var plan = FleetOrchestrator.Decide(state, opt);
+
+        // [AF3] Sui PAREGGI (più candidati idonei della stessa assegnazione) il comitato può
+        // scegliere DENTRO il menù che il core ha già validato. Fonte a journal: "committee" se
+        // il quorum ha scelto, "default" se è stato consultato ed è ricaduto sulla regola,
+        // "rules" se non è mai stato interpellato.
+        var assignSource = "rules";
+        var votesJson = "[]";
+        if (opt.UseCommittee && committee is not null && plan.Menu is { } menu)
+        {
+            try
+            {
+                var question = new Llm.Committee.CommitteeQuestion(
+                    "fleet-assignment",
+                    $"Corsia Paper {menu.LaneId} libera; un solo slot per questo tick. Candidati (run della pipeline, tutti validati):\n"
+                    + string.Join("\n", menu.Eligible.Select(c =>
+                        $"- {c.RunId:N}: {c.Summary}; ~{c.TradesPerMonth:F1} trade/mese; {c.Timeframe}; completato {c.CompletedAtUtc:yyyy-MM-dd}")),
+                    menu.Eligible.Select(c => new Llm.Committee.CommitteeOption(c.RunId.ToString("N"),
+                        $"{c.Summary} (~{c.TradesPerMonth:F1} trade/mese, {c.Timeframe})")).ToList(),
+                    menu.DefaultRunId.ToString("N"));
+
+                var verdict = await committee.AskAsync(question, ct);
+                votesJson = System.Text.Json.JsonSerializer.Serialize(verdict.Votes);
+                assignSource = verdict.ByQuorum ? "committee" : "default";
+
+                if (verdict.ByQuorum && Guid.TryParseExact(verdict.ChosenOptionId, "N", out var chosen)
+                    && chosen != menu.DefaultRunId
+                    && menu.Eligible.FirstOrDefault(c => c.RunId == chosen) is { } elected)
+                {
+                    // Il verdetto è GIÀ garantito dentro il menù (doppia validazione nel comitato);
+                    // qui si sostituisce solo l'azione corrispondente, mai altro.
+                    plan = plan with
+                    {
+                        Actions = plan.Actions.Select(a => a is AssignCandidateToLane assign && assign.LaneId == menu.LaneId
+                            ? new AssignCandidateToLane(elected.RunId, menu.LaneId,
+                                $"Scelto dal comitato fra {menu.Eligible.Count} candidati: {elected.Summary} " +
+                                $"(~{elected.TradesPerMonth:F1} trade/mese, {elected.Timeframe}).")
+                            : a).ToList(),
+                    };
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                // Il comitato non deve MAI poter rompere il tick: fallito = si resta sulla regola.
+                logger.LogWarning(ex, "Comitato non consultabile: resta la scelta deterministica.");
+                assignSource = "default";
+            }
+        }
+
         LastPlan = plan;
         LastTickUtc = DateTime.UtcNow;
 
@@ -81,6 +131,7 @@ public sealed class FleetOrchestratorWorker(
                     await JournalAsync(new OrchestratorDecision
                     {
                         AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = assign.LaneId, RunId = assign.RunId,
+                        Source = assignSource, VotesJson = votesJson,
                         Reason = assign.Reason, DryRun = true, Applied = false,
                     }, ct);
                     logger.LogInformation("[DRY-RUN] Assegnerei il run {Run} alla corsia {Lane}: {Reason}",

@@ -58,6 +58,13 @@ public sealed class FleetOptions
 
     /// <summary>Notifica se il worker del carry è abilitato ma non decide da più di queste ore.</summary>
     public int CarrySilenceAlertHours { get; set; } = 24;
+
+    /// <summary>
+    /// [AF3] Consulta il comitato AI sui PAREGGI (più candidati idonei della stessa assegnazione).
+    /// Default false; richiede anche <c>Committee:Enabled</c>. Il comitato sceglie SOLO dentro il
+    /// menù che il core ha già validato: una risposta invalida ricade sul default deterministico.
+    /// </summary>
+    public bool UseCommittee { get; set; }
 }
 
 /// <summary>Fotografia di una corsia come la vede l'orchestratore (sola lettura).</summary>
@@ -126,8 +133,15 @@ public sealed record ProposeGreyCandidate(Guid RunId, string Reason) : FleetActi
 /// <summary>Nessuna azione, ma con un motivo che PORTA informazione (conflitto, guardia, coda bloccata).</summary>
 public sealed record FleetNoOp(string Reason) : FleetAction(Reason);
 
-/// <summary>Il piano di un tick.</summary>
-public sealed record FleetPlan(IReadOnlyList<FleetAction> Actions)
+/// <summary>
+/// [AF3] Il PAREGGIO che il comitato può arbitrare: più candidati idonei per la stessa corsia.
+/// <paramref name="DefaultRunId"/> è la scelta deterministica (il più vecchio) — quella che vale
+/// se il comitato non produce una maggioranza valida, ed è già dentro il piano.
+/// </summary>
+public sealed record FleetAssignmentMenu(int LaneId, IReadOnlyList<FleetCandidate> Eligible, Guid DefaultRunId);
+
+/// <summary>Il piano di un tick. <see cref="Menu"/> è presente solo quando esiste un pareggio arbitrabile.</summary>
+public sealed record FleetPlan(IReadOnlyList<FleetAction> Actions, FleetAssignmentMenu? Menu = null)
 {
     public static readonly FleetPlan Empty = new([]);
 }

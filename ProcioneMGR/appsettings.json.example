@@ -25,6 +25,13 @@
       "MonthlyTokenLimit": 0
     }
   },
+  "Committee": {
+    "_comment": "[AF3] Comitato AI a scelta vincolata: sui pareggi dell'orchestratore di flotta i provider votano in parallelo su un menu' chiuso preparato dal codice (scelta fuori menu' = astensione; quorum mancato = default deterministico). Serve anche Fleet:UseCommittee. Providers vuoto = nvidia,groq,gemini (il default sta nel codice: il binder APPENDE gli array, un default popolato qui raddoppierebbe a ogni salvataggio). Pannello in /admin/ai-supervisor.",
+    "Enabled": false,
+    "Providers": [],
+    "TimeoutSeconds": 30,
+    "MinValidVotes": 2
+  },
   "Fleet": {
     "_comment": "[AF2] Orchestratore di flotta (Queen Bee): gestisce le corsie OLTRE l'impronta storica dell'auto-apply (mai le 0..2, mai Live/Testnet/quarantene/campagne). Enabled=false default; DryRun=true = decide e journalizza (pannello in /admin/autonomy) senza eseguire. Ritiro con isteresi: Sharpe < RetireSharpeThreshold dopo RetireMinWeeks settimane e RetireMinTrades trade, confermato per RetireConfirmTicks tick consecutivi.",
     "Enabled": false,
@@ -38,7 +45,8 @@
     "MinTradesPerMonth": 1.0,
     "CandidateMaxAgeDays": 14,
     "MaxLanesWithoutExposureGuard": 3,
-    "CarrySilenceAlertHours": 24
+    "CarrySilenceAlertHours": 24,
+    "UseCommittee": false
   },
   "Heartbeat": {
     "_comment": "[AF5.1] Heartbeat incrociato guscio/motore (tabella HostHeartbeats): ogni host scrive il PROPRIO battito e sorveglia quello altrui; stantio oltre StaleMinutes => Telegram Warning una volta per transizione. Default OFF. Il pannello in /admin/autonomy salva su ENTRAMBI gli host.",
@@ -69,7 +77,13 @@
     "Enabled": false,
     "Provider": "Logging",
     "ChatId": "",
-    "MaxPerHour": 20
+    "MaxPerHour": 20,
+    "_comment_Digest": "[AF5.4] Riassunto quotidiano all'ora LOCALE indicata: corsie, decisioni della flotta (24h), consumo AI, carry, heartbeat. Default OFF. La sua ASSENZA all'ora attesa e' il dead-man's-switch percepibile da un umano: il messaggio stesso lo dichiara.",
+    "Digest": {
+      "Enabled": false,
+      "Hour": 7,
+      "Minute": 30
+    }
   },
   "Carry": {
     "_comment": "[E3] Forward test del carry delta-neutro (long spot + short perp): apre quando il funding annualizzato supera EnterAnnualFundingPercent, chiude sotto ExitAnnualFundingPercent. Default OFF. Mode: Paper (simulazione, nessun ordine) o Testnet; Live NON e' accettato (il carry non puo' operare con denaro reale). Testnet reale su Bitget demo = follow-up gated dal wallet demo Futures finanziato.",

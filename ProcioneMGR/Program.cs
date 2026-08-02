@@ -484,6 +484,12 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmClient, ProcioneMGR.S
 // delegante instrada su TUTTI i provider noti attraverso lo stesso resolver.
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmClientResolver, ProcioneMGR.Services.Llm.LlmClientResolver>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmCallGuard, ProcioneMGR.Services.Llm.LlmCallGuard>();
+// [AF3] Comitato a scelta vincolata: i provider votano in parallelo su menù chiusi preparati dal
+// codice; risposta invalida = astensione, quorum mancato = default deterministico. Nessun potere
+// fuori dal menù, nessun breaker condiviso (un'ecatombe del comitato non sospende advisory/veto).
+// Default OFF (Committee:Enabled + Fleet:UseCommittee, entrambi necessari).
+builder.Services.Configure<ProcioneMGR.Services.Llm.Committee.CommitteeOptions>(builder.Configuration.GetSection("Committee"));
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.Committee.IAiCommittee, ProcioneMGR.Services.Llm.Committee.AiCommittee>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.IPipelineSupervisor, ProcioneMGR.Services.Llm.PipelineSupervisor>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>());
@@ -508,6 +514,11 @@ builder.Services.Configure<ProcioneMGR.Services.Agents.SupervisorAgentOptions>(b
 builder.Services.AddSingleton<ProcioneMGR.Services.Agents.LoggingSupervisorAgent>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Agents.ClaudeSupervisorAgent>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Agents.IPipelineSupervisorAgent, ProcioneMGR.Services.Agents.DelegatingSupervisorAgent>();
+
+// --- [AF5.4] Digest giornaliero: SOLO nel monolite (è lui che vede corsie, journal e consumi).
+// Default OFF. La sua ASSENZA all'ora attesa è il dead-man's-switch percepibile dall'umano.
+builder.Services.Configure<ProcioneMGR.Services.Notifications.DigestOptions>(builder.Configuration.GetSection("Notifications:Digest"));
+builder.Services.AddHostedService<ProcioneMGR.Services.Notifications.DailyDigestWorker>();
 
 // --- [AF2] Orchestratore di flotta (Queen Bee): SOLO nel monolite, come planner e scheduler ---
 // Core deterministico puro + reader in sola lettura + worker con journal. Default OFF, e anche
