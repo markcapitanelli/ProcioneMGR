@@ -83,6 +83,18 @@ public static class AdminConfigRules
             (o.StaleMinutes * 60 >= o.WriteSeconds * 3,
                 "La soglia di stantiezza dev'essere almeno 3 volte il periodo di scrittura: sotto, un tick perso per rumore dichiara morto un host vivo.")),
 
+        // [AF3] Il comitato: un quorum a 0 renderebbe "maggioranza" un voto solo di rumore.
+        ProcioneMGR.Services.Llm.Committee.CommitteeOptions o => Check(
+            (o.MinValidVotes >= 1, "Il quorum dev'essere almeno 1 voto valido."),
+            (o.TimeoutSeconds >= 5, "Il timeout del voto dev'essere almeno 5 secondi."),
+            (o.Providers.All(p => ProcioneMGR.Services.Llm.AiProviders.Known.Contains(p, StringComparer.OrdinalIgnoreCase)),
+                $"Provider sconosciuto nella lista: i validi sono {string.Join(", ", ProcioneMGR.Services.Llm.AiProviders.Known)}.")),
+
+        // [AF5.4] Il digest giornaliero: un orario impossibile non è "mai", è un bug silenzioso.
+        ProcioneMGR.Services.Notifications.DigestOptions o => Check(
+            (o.Hour is >= 0 and <= 23, "L'ora del digest dev'essere fra 0 e 23."),
+            (o.Minute is >= 0 and <= 59, "I minuti del digest devono essere fra 0 e 59.")),
+
         // [AF2] L'orchestratore di flotta: i minimi qui sotto sono ciò che separa "prudente per
         // costruzione" da "impazzito per un refuso" (un tick a 0 o un ritiro senza storia).
         ProcioneMGR.Services.Fleet.FleetOptions o => Check(

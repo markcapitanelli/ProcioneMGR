@@ -207,6 +207,25 @@ public sealed class FleetOrchestratorTests
     }
 
     [Fact]
+    public void MultipleEligibleCandidates_ExposeTheMenu_WithTheRuleChoiceAsDefault()
+    {
+        // [AF3] Il pareggio arbitrabile: il core sceglie comunque da regola (il più vecchio) e
+        // ESPONE il menù; senza pareggio (un solo candidato) il menù non esiste.
+        var older = Pass(ageDays: 10);
+        var newer = Pass(ageDays: 1);
+        var tie = FleetOrchestrator.Decide(State([Lane(0, running: true), Lane(3), Lane(4)], [newer, older]),
+            new FleetOptions { MaxAssignmentsPerTick = 1 });
+
+        Assert.NotNull(tie.Menu);
+        Assert.Equal(older.RunId, tie.Menu.DefaultRunId);
+        Assert.Equal(2, tie.Menu.Eligible.Count);
+        Assert.Equal(older.RunId, Assert.Single(tie.Actions.OfType<AssignCandidateToLane>()).RunId);
+
+        var single = FleetOrchestrator.Decide(State([Lane(3)], [older]), new FleetOptions());
+        Assert.Null(single.Menu);
+    }
+
+    [Fact]
     public void HandledCandidates_AndLowFrequencyOnes_NeverEnterTheQueue()
     {
         var handled = Pass(handled: true);

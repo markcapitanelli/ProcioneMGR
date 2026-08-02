@@ -34,17 +34,31 @@ param(
 $ErrorActionPreference = 'Continue'
 
 if ($Register) {
-    $scriptPath = $MyInvocation.MyCommand.Path
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-        -RepetitionInterval (New-TimeSpan -Minutes 5)
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-        -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 4)
-    Register-ScheduledTask -TaskName 'ProcioneMGR Watchdog' -Action $action -Trigger $trigger `
-        -Settings $settings -Description 'Dead-man switch esterno ProcioneMGR (AF5.2): guscio, motore, Postgres ogni 5 minuti.' -Force | Out-Null
-    Write-Host "Watchdog : task 'ProcioneMGR Watchdog' registrato (ogni 5 minuti)." -ForegroundColor Green
-    exit 0
+    # -ErrorAction Stop + try/catch: senza, un "Accesso negato" (cmdlet non terminante) scivolava
+    # sotto il messaggio di successo — un controllo che rassicura, scoperto DAL VIVO il 2026-08-02
+    # registrando il task gemello del bring-up. Il verdetto ora è la VERIFICA (Get-ScheduledTask),
+    # non l'assenza di eccezioni.
+    try {
+        $scriptPath = $MyInvocation.MyCommand.Path
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+            -RepetitionInterval (New-TimeSpan -Minutes 5)
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 4)
+        Register-ScheduledTask -TaskName 'ProcioneMGR Watchdog' -Action $action -Trigger $trigger `
+            -Settings $settings -Description 'Dead-man switch esterno ProcioneMGR (AF5.2): guscio, motore, Postgres ogni 5 minuti.' `
+            -Force -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "Watchdog : registrazione FALLITA: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+    if (Get-ScheduledTask -TaskName 'ProcioneMGR Watchdog' -ErrorAction SilentlyContinue) {
+        Write-Host "Watchdog : task 'ProcioneMGR Watchdog' registrato e VERIFICATO (ogni 5 minuti)." -ForegroundColor Green
+        exit 0
+    }
+    Write-Host "Watchdog : Register-ScheduledTask non ha lanciato ma il task NON esiste - registrazione fallita." -ForegroundColor Red
+    exit 1
 }
 
 $stateFile = Join-Path $env:TEMP 'procionemgr-watchdog-state.json'

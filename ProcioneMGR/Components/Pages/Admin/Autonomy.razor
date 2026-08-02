@@ -42,6 +42,7 @@
 @inject ProcioneMGR.Services.Fleet.FleetOrchestratorWorker FleetWorker
 @inject IPipelineApplier PipelineApplier
 @inject IOptionsMonitor<ProcioneMGR.Services.Health.HeartbeatOptions> HeartbeatMonitor
+@inject IOptionsMonitor<DigestOptions> DigestMonitor
 @inject EnsembleComparatorOptions ComparatorOptions
 @inject ModelRegistryOptions RegistryOptions
 @* Carry, esecuzione live e dual-read ML vivono nell'host del MOTORE: la loro configurazione si
@@ -307,6 +308,10 @@
             <div class="col-auto form-check form-switch align-self-end">
                 <input class="form-check-input" type="checkbox" id="fl_dry" @bind="_fleet.DryRun" />
                 <label class="form-check-label" for="fl_dry" title="Finché è acceso: decide e journalizza, non esegue. L'esecuzione vera arriva con AF2b.">Dry-run @Hot()</label>
+            </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="fl_committee" @bind="_fleet.UseCommittee" />
+                <label class="form-check-label" for="fl_committee" title="[AF3] Sui pareggi (più candidati per lo stesso slot) chiede al comitato AI quale scegliere — solo dentro il menù pre-validato; serve anche Committee:Enabled in /admin/ai-supervisor.">Comitato AI @Hot()</label>
             </div>
             <div class="col-auto">
                 <label class="form-label">Tick (min) @Hot()</label>
@@ -1102,6 +1107,22 @@
                 <label class="form-label">Max messaggi/ora @Hot()</label>
                 <input type="number" class="form-control" @bind="_notifications.MaxPerHour" min="1" style="width: 8rem;" />
             </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                @* [AF5.4] Sezione PROPRIA Notifications:Digest (mai dentro il POCO Notifications:
+                   il writer preserva le sottosezioni-oggetto che il POCO non nomina). *@
+                <input class="form-check-input" type="checkbox" id="nt_digest" @bind="_digest.Enabled" />
+                <label class="form-check-label" for="nt_digest" title="Riassunto quotidiano: corsie, flotta, consumo AI, carry, heartbeat. La sua ASSENZA all'ora attesa è l'allarme.">Digest giornaliero @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Ora (locale) @Hot()</label>
+                <div class="d-flex gap-1">
+                    <input type="number" class="form-control" @bind="_digest.Hour" min="0" max="23" style="width: 5rem;" />
+                    <input type="number" class="form-control" @bind="_digest.Minute" min="0" max="59" style="width: 5rem;" />
+                </div>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-outline-primary" @onclick='() => SaveAsync("Notifications:Digest", _digest, "Digest giornaliero")' disabled="@_busy">Salva digest</button>
+            </div>
             <div class="col-auto">
                 <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Notifications", _notifications, "Notifiche del guscio")' disabled="@_busy">Salva</button>
                 <button class="btn btn-outline-secondary" @onclick="SendTestNotificationAsync" disabled="@_busy">
@@ -1278,6 +1299,7 @@
     private ProcioneMGR.Services.Health.HeartbeatOptions _heartbeat = new();
     private string? _heartbeatStatus;
     private bool _heartbeatIsError;
+    private DigestOptions _digest = new();
     private LlmOptions _llm = new();
     private SupervisorAgentOptions _supervisorAgent = new();
     private ProcioneMGR.Services.Sentiment.SentimentOptions _sentiment = new();
@@ -1423,6 +1445,7 @@
         _autoReapply = Clone(AutoReapplyMonitor.CurrentValue);
         _promotion = Clone(PromotionMonitor.CurrentValue);
 
+        _digest = Clone(DigestMonitor.CurrentValue);
         _heartbeat = new ProcioneMGR.Services.Health.HeartbeatOptions
         {
             Enabled = HeartbeatMonitor.CurrentValue.Enabled,

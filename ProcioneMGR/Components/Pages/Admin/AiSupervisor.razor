@@ -20,6 +20,7 @@
 @inject ProcioneMGR.Services.Config.IAppConfigWriter ConfigWriter
 @inject ILlmUsageSink UsageSink
 @inject IOptionsMonitor<LlmBudgetOptions> BudgetMonitor
+@inject IOptionsMonitor<ProcioneMGR.Services.Llm.Committee.CommitteeOptions> CommitteeMonitor
 
 <PageTitle>Supervisione AI</PageTitle>
 
@@ -333,6 +334,52 @@
     </div>
 </div>
 
+@* ---- [AF3] Comitato a scelta vincolata (sezione Committee) ---- *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-people me-1"></i>Comitato AI (scelta vincolata)</span>
+        <span>
+            @if (_committee.Enabled) { <span class="badge bg-success">ATTIVO</span> }
+            else { <span class="badge bg-secondary">SPENTO</span> }
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Sui <strong>pareggi</strong> dell'orchestratore di flotta (più candidati idonei per lo
+            stesso slot Paper) i provider elencati votano <strong>in parallelo</strong> su un menù
+            chiuso preparato dal codice: scelta fuori menù = astensione, quorum mancato = decide la
+            regola deterministica. I voti finiscono nel journal della flotta. Serve anche
+            l'interruttore «Comitato AI» nella card della flotta (/admin/autonomy). Il consumo
+            passa dal budget qui sopra (path <code>committee</code>).
+        </p>
+        <div class="row g-2 align-items-end">
+            <div class="col-auto form-check form-switch ms-2 mb-2">
+                <input type="checkbox" class="form-check-input" id="committee-enabled" @bind="_committee.Enabled" />
+                <label class="form-check-label" for="committee-enabled">Abilitato</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Provider votanti (csv; vuoto = @string.Join(",", ProcioneMGR.Services.Llm.Committee.CommitteeOptions.DefaultProviders))</label>
+                <input class="form-control form-control-sm" style="width:20rem" @bind="_committeeProvidersCsv" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Quorum (voti validi)</label>
+                <input type="number" class="form-control form-control-sm" style="width:6rem" min="1" @bind="_committee.MinValidVotes" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Timeout voto (s)</label>
+                <input type="number" class="form-control form-control-sm" style="width:6rem" min="5" @bind="_committee.TimeoutSeconds" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary" @onclick="SaveCommitteeAsync" disabled="@_busy">Salva comitato</button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_committeeStatus))
+        {
+            <div class="alert @(_committeeIsError ? "alert-danger" : "alert-success") py-2 mt-2 mb-0">@_committeeStatus</div>
+        }
+    </div>
+</div>
+
 @if (_items is null)
 {
     <p><em>Caricamento…</em></p>
@@ -470,6 +517,12 @@ else
     private int _budgetMonthlyTokens;
     private string? _budgetStatus;
     private bool _budgetIsError;
+
+    // ---- [AF3] Comitato ----
+    private ProcioneMGR.Services.Llm.Committee.CommitteeOptions _committee = new();
+    private string _committeeProvidersCsv = "";
+    private string? _committeeStatus;
+    private bool _committeeIsError;
 
     // [Elenco modelli] catalogo per provider scaricato dall'API con la SUA chiave.
     private readonly Dictionary<string, IReadOnlyList<string>> _modelCatalog = new();
@@ -785,6 +838,32 @@ else
         }
     }
 
+    /// <summary>[AF3] Salva la sezione Committee (validata dalle stesse regole del canale admin).</summary>
+    private async Task SaveCommitteeAsync()
+    {
+        try
+        {
+            _committee.Providers = _committeeProvidersCsv
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+            var error = ProcioneMGR.Services.Config.AdminConfigRules.Validate(_committee);
+            if (error is not null)
+            {
+                _committeeStatus = error;
+                _committeeIsError = true;
+                return;
+            }
+            await ConfigWriter.SaveSectionAsync("Committee", _committee);
+            _committeeStatus = "Comitato salvato: vale dal prossimo pareggio (hot-reload).";
+            _committeeIsError = false;
+        }
+        catch (Exception ex)
+        {
+            _committeeStatus = $"Salvataggio fallito: {ex.Message}";
+            _committeeIsError = true;
+        }
+    }
+
     private async Task LoadAsync()
     {
         _busy = true;
@@ -800,6 +879,17 @@ else
             _budgetDailyCalls = budget.DailyCallLimit;
             _budgetDailyTokens = budget.DailyTokenLimit;
             _budgetMonthlyTokens = budget.MonthlyTokenLimit;
+
+            // [AF3] Comitato: copia locale (mai riferire il CurrentValue vivo dentro un form).
+            var committee = CommitteeMonitor.CurrentValue;
+            _committee = new ProcioneMGR.Services.Llm.Committee.CommitteeOptions
+            {
+                Enabled = committee.Enabled,
+                Providers = [.. committee.Providers],
+                TimeoutSeconds = committee.TimeoutSeconds,
+                MinValidVotes = committee.MinValidVotes,
+            };
+            _committeeProvidersCsv = string.Join(",", committee.Providers);
 
             await using var db = await DbFactory.CreateDbContextAsync();
             var rows = await db.PipelineArtifacts

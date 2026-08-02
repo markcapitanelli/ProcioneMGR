@@ -23,6 +23,7 @@ public static class FleetOrchestrator
         ArgumentNullException.ThrowIfNull(opt);
 
         var actions = new List<FleetAction>();
+        FleetAssignmentMenu? menu = null;
 
         // Le corsie di flotta: oltre l'impronta, e mai intoccabili.
         var fleetLanes = state.Lanes
@@ -80,16 +81,28 @@ public static class FleetOrchestrator
             }
             else
             {
-                foreach (var (candidate, lane) in queue.Zip(freeLanes).Take(Math.Max(1, opt.MaxAssignmentsPerTick)))
+                var assignments = queue.Zip(freeLanes).Take(Math.Max(1, opt.MaxAssignmentsPerTick)).ToList();
+                foreach (var (candidate, lane) in assignments)
                 {
                     actions.Add(new AssignCandidateToLane(candidate.RunId, lane.LaneId,
                         $"Candidato validato del {candidate.CompletedAtUtc:yyyy-MM-dd} → corsia {lane.LaneId} in Paper: " +
                         $"{candidate.Summary} (~{candidate.TradesPerMonth:F1} trade/mese, {candidate.Timeframe})."));
                 }
+
+                // [AF3] Il PAREGGIO: più candidati idonei della prima assegnazione. Il core non
+                // sceglie "per il comitato": sceglie da regola (il più vecchio) e ESPONE il menù —
+                // il worker, se il comitato è attivo, può sostituire la scelta dentro il recinto.
+                if (assignments.Count == 1 && queue.Count > 1)
+                {
+                    menu = new FleetAssignmentMenu(
+                        assignments[0].Second.LaneId,
+                        queue.Take(5).ToList(),
+                        assignments[0].First.RunId);
+                }
             }
         }
 
-        return actions.Count == 0 ? FleetPlan.Empty : new FleetPlan(actions);
+        return actions.Count == 0 ? FleetPlan.Empty : new FleetPlan(actions, menu);
     }
 
     /// <summary>Live e Testnet non sono affare dell'orchestratore, nemmeno oltre l'impronta.</summary>

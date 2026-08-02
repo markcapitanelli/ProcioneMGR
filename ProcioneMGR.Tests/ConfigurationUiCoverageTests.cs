@@ -48,6 +48,10 @@ public sealed class ConfigurationUiCoverageTests
         ["Heartbeat"] = "Components/Pages/Admin/Autonomy.razor",
         // [AF1] Consumo e budget del layer AI.
         ["Llm:Budget"] = "Components/Pages/Admin/AiSupervisor.razor",
+        // [AF5.4] Digest giornaliero (dentro il pannello Notifiche).
+        ["Notifications:Digest"] = "Components/Pages/Admin/Autonomy.razor",
+        // [AF3] Comitato AI a scelta vincolata.
+        ["Committee"] = "Components/Pages/Admin/AiSupervisor.razor",
 
         // --- /admin/protections: ciò che filtra o ferma un'operazione ---
         ["MarketData:Realtime"] = "Components/Pages/Admin/Protections.razor",
