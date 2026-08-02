@@ -16,12 +16,18 @@ public interface ILlmClientResolver
 /// <inheritdoc cref="ILlmClientResolver"/>
 public sealed class LlmClientResolver(
     AnthropicLlmClient anthropic,
-    NvidiaLlmClient nvidia) : ILlmClientResolver
+    NvidiaLlmClient nvidia,
+    GeminiLlmClient gemini,
+    GroqLlmClient groq,
+    HuggingFaceLlmClient huggingFace) : ILlmClientResolver
 {
     public ILlmClient? Resolve(string provider) => provider switch
     {
         var p when string.Equals(p, AiProviders.Anthropic, StringComparison.OrdinalIgnoreCase) => anthropic,
         var p when string.Equals(p, AiProviders.Nvidia, StringComparison.OrdinalIgnoreCase) => nvidia,
+        var p when string.Equals(p, AiProviders.Gemini, StringComparison.OrdinalIgnoreCase) => gemini,
+        var p when string.Equals(p, AiProviders.Groq, StringComparison.OrdinalIgnoreCase) => groq,
+        var p when string.Equals(p, AiProviders.HuggingFace, StringComparison.OrdinalIgnoreCase) => huggingFace,
         _ => null,
     };
 }

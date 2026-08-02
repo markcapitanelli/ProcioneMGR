@@ -84,6 +84,60 @@ oltre i costi, come per ogni fattore.
 Se il provider di confronto coincide con l'attivo il confronto si salta da solo. Skip anche senza
 chiave o con provider ignoto — sempre a voce nel log, mai in silenzio.
 
+### Fase D — Tre provider in un colpo: Gemini, Groq, HuggingFace (ESEGUITA 2026-08-02)
+
+Il proprietario si è procurato le chiavi API di Google Gemini, Groq e HuggingFace. Tutti e tre
+parlano il dialetto OpenAI-compatible → il principio §1.2 passa dalla promessa alla prova:
+
+| Pezzo | Cosa | Dove |
+|---|---|---|
+| Base comune | `NvidiaLlmClient` elevato a `OpenAiCompatibleLlmClient` (astratta): l'intera logica HTTP/parse/errori è UNA; ogni provider è una sottoclasse da cinque righe (nome + coppia BaseUrl/Model dalle opzioni) | `Services/Llm/NvidiaLlmClient.cs` |
+| Provider | `GeminiLlmClient` (layer compat `generativelanguage.googleapis.com/v1beta/openai`, default `gemini-2.5-flash`), `GroqLlmClient` (`api.groq.com/openai/v1`, default `llama-3.3-70b-versatile`), `HuggingFaceLlmClient` (router `router.huggingface.co/v1`, default `meta-llama/Llama-3.3-70B-Instruct`) | idem |
+| Config | `Llm:{Gemini,Groq,HuggingFace}{Model,BaseUrl}` — campi piatti hot-reload, stesso stile di NvidiaModel | `LlmOptions` |
+| Chiavi | zero modifiche: `AiCredentials` è keyed per provider, il pannello mostra le righe nuove da solo; env fallback `GEMINI_API_KEY`/`GROQ_API_KEY`/`HUGGINGFACE_API_KEY` | — |
+| Errori | il classificatore del guard legge il contratto generico `<PROVIDER> HTTP <code>:` — la tassonomia è del codice HTTP, non del nome del provider | `LlmCallGuard` |
+| Routing | `LlmClientResolver` a 5; `DelegatingLlmClient` instrada via resolver (fallback storico a due senza) | `LlmClientResolver.cs` |
+| UI | il pannello genera un campo modello PER provider dal ciclo su `AiProviders.Known`; la tabella chiavi e il select del secondo parere erano già cicli | `/admin/ai-supervisor` |
+| **Elenco modelli per chiave** | `IModelCatalogProvider.ListModelsAsync` — `GET {base}/models` per i compat (stesso Bearer, stesso contratto d'errore), `GET /v1/models` col dialetto proprio (x-api-key) per Anthropic; nel pannello un pulsante per provider scarica l'elenco DELLA PROPRIA chiave e lo aggancia al campo come suggerimenti (datalist), con avviso se il modello attuale non è in elenco | idem |
+
+**Il caso che ha dettato la funzione** (2026-08-02, dal vivo): Google ha ritirato
+`gemini-2.5-flash` per le chiavi nuove e perfino l'alias `gemini-flash-latest` puntava al modello
+morto — errore parlante `GEMINI HTTP 404` col rimedio nel testo. L'elenco della chiave reale
+(59 modelli) ha dato l'id giusto: `models/gemini-3.6-flash` (prefisso `models/` incluso, com'è
+nell'elenco). **I nomi dei modelli invecchiano; l'elenco della propria chiave no.**
+
+**Collaudo dal vivo (2026-08-02)**: Gemini · `models/gemini-3.6-flash` ✔, Groq ·
+`llama-3.3-70b-versatile` ✔ (latenza da primato), HuggingFace · `meta-llama/Llama-3.3-70B-Instruct`
+✔ — tre «Prova collegamento» confermati sull'app reale con le chiavi del proprietario. Con cinque
+provider il **secondo parere (Fase C) ha finalmente coppie utilizzabili** anche a credito Anthropic
+esaurito (es. attivo Nvidia + confronto Groq). Il confine advisory e il breaker unico del layer
+restano invariati.
+
+### Fase D.1 — Failover automatico, Anthropic retrocessa, pannello lineare (2026-08-02)
+
+Tre richieste del proprietario a valle del collaudo:
+
+1. **Anthropic fuori dalle AI principali** (credito esaurito; «finché ho le altre sfrutterò
+   quelle»): default `Llm:Provider=Nvidia`, `ComparisonProvider=Groq`, Anthropic in coda a
+   `AiProviders.Known` e FUORI dalla catena di failover di default. Resta un provider completo:
+   se il credito torna, si riseleziona dal pannello.
+2. **Failover automatico** («se si verifica un errore di qualsiasi genere, la piattaforma testa
+   in automatico un'altra AI»): `DelegatingLlmClient` prova la catena
+   `Llm:FailoverProviders` (default Nvidia→Groq→Gemini→HuggingFace, `FailoverEnabled=true`),
+   saltando chi non ha chiave; le cancellazioni NON innescano failover (uno shutdown non è un
+   guasto del provider); ogni salto è nel log e `ILlmCompletionInfo.LastCompletionModel` dice chi
+   ha DAVVERO risposto (l'advisory registra la verità, non l'intenzione). Il breaker del guard
+   scatta solo se falliscono TUTTI — coerente: è il breaker del layer, e il layer ora è la
+   federazione. Il «Prova collegamento» risolve il provider DIRETTAMENTE (senza failover): un
+   test che "passa" grazie a un'altra AI sarebbe un controllo che rassicura.
+3. **Modelli automatici + pannello lineare**: all'apertura il pannello scarica DA SOLO gli
+   elenchi per ogni AI con chiave e, dove il modello configurato manca o non è più valido,
+   `ModelAutoSelector` (puro, testato) ne sceglie uno — filtro anti non-chat
+   (tts/image/embedding/…), preferenze per provider, a parità vince la versione più recente.
+   UI ridisegnata: UNA riga principale (AI attiva · modello con suggerimenti · Prova · Salva)
+   con la catena di failover dichiarata sotto; i campi per-provider stanno in una sezione
+   «avanzate» richiudibile.
+
 ### Candidato aperto (non impegnato)
 
 - **Spiegazioni leggibili dei run per il pannello** — nessuna nuova informazione lo giustifica

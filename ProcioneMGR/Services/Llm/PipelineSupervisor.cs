@@ -149,7 +149,9 @@ public sealed class PipelineSupervisor(
                 break;
         }
 
-        advisory.ModelUsed = llm.Model;
+        // Col failover il modello che ha DAVVERO risposto può non essere quello attivo: la
+        // tracciabilità dell'advisory deve dire la verità, non l'intenzione.
+        advisory.ModelUsed = llm is ILlmCompletionInfo { LastCompletionModel: { Length: > 0 } served } ? served : llm.Model;
         advisory.CreatedAtUtc = DateTime.UtcNow;
 
         db.PipelineArtifacts.Add(new PipelineArtifact

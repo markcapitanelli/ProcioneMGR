@@ -5,42 +5,60 @@ using Microsoft.Extensions.Options;
 namespace ProcioneMGR.Services.Llm;
 
 /// <summary>
-/// <see cref="ILlmClient"/> sull'API OpenAI-compatible della piattaforma NVIDIA
-/// (build.nvidia.com → <c>https://integrate.api.nvidia.com/v1/chat/completions</c>, Bearer
-/// <c>nvapi-…</c>). Nessun SDK: il contratto è tre campi JSON, e un HttpClient nudo è meno
-/// fragile di una dipendenza in più.
-///
-/// <para>Il base URL viene dalle opzioni: qualunque endpoint che parli lo stesso dialetto
-/// (OpenRouter, un vLLM self-hosted, …) può subentrare senza un client nuovo — è il mattone
-/// del multi-provider, non un adattatore una tantum.</para>
-///
-/// <para>La chiave viene da <see cref="IAiKeyStore"/> (DB cifrato → env <c>NVIDIA_API_KEY</c>).
-/// Timeout e retry NON vivono qui: la disciplina è del <see cref="LlmCallGuard"/>, identica per
-/// ogni provider — un breaker per il layer, non uno per client.</para>
+/// Chi sa elencare i modelli disponibili PER LA CHIAVE configurata. Interfaccia separata da
+/// <see cref="ILlmClient"/> di proposito: aggiungerlo lì costringerebbe ogni fake dei test a
+/// implementarlo, e non tutti i provider ce l'hanno. Il caso che l'ha resa necessaria (2026-08-02):
+/// Google ha ritirato gemini-2.5-flash per le chiavi nuove e perfino l'alias "-latest" puntava al
+/// modello morto — l'unico elenco affidabile è quello che l'API restituisce ALLA TUA chiave.
 /// </summary>
-public sealed class NvidiaLlmClient(
+public interface IModelCatalogProvider
+{
+    /// <summary>Gli id dei modelli disponibili per la chiave corrente, ordinati. Errori col contratto "&lt;PROVIDER&gt; HTTP &lt;code&gt;:".</summary>
+    Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct);
+}
+
+/// <summary>
+/// Base di OGNI provider che parla il dialetto OpenAI-compatible (<c>POST
+/// {base}/chat/completions</c>, Bearer, tre campi JSON). Nata come <c>NvidiaLlmClient</c> ed
+/// elevata a base quando il principio §1.2 del PRD («un provider nuovo = URL+chiave, zero client
+/// nuovi») è passato dalla promessa alla prova: NVIDIA, Google Gemini (layer compat), Groq e il
+/// router HuggingFace differiscono SOLO per nome, base URL e modello — una sottoclasse a testa,
+/// cinque righe l'una. Nessun SDK: un HttpClient nudo è meno fragile di quattro dipendenze.
+///
+/// <para>La chiave viene da <see cref="IAiKeyStore"/> (DB cifrato → env del provider). Timeout e
+/// retry NON vivono qui: la disciplina è del <see cref="LlmCallGuard"/>, identica per ogni
+/// provider — un breaker per il layer, non uno per client.</para>
+/// </summary>
+public abstract class OpenAiCompatibleLlmClient(
     IHttpClientFactory httpClientFactory,
     IOptionsMonitor<LlmOptions> options,
     IAiKeyStore keyStore,
-    ILogger<NvidiaLlmClient> logger) : ILlmClient
+    ILogger logger) : ILlmClient, IModelCatalogProvider
 {
-    /// <summary>Nome del client registrato in Program.cs (timeout largo: modelli con reasoning sono lenti).</summary>
-    public const string HttpClientName = "NvidiaLlm";
+    /// <summary>Nome del client HTTP registrato in Program.cs (timeout largo: i modelli con reasoning sono lenti). Condiviso da tutti i provider compat.</summary>
+    public const string HttpClientName = "OpenAiCompatLlm";
 
-    public bool IsConfigured => keyStore.GetCachedKey(AiProviders.Nvidia) is not null;
+    /// <summary>Nome canonico del provider (una voce di <see cref="AiProviders.Known"/>).</summary>
+    protected abstract string ProviderName { get; }
 
-    public string Model => options.CurrentValue.NvidiaModel;
+    /// <summary>Base URL e modello del provider, letti a OGNI chiamata (hot-reload).</summary>
+    protected abstract (string BaseUrl, string Model) Endpoint(LlmOptions options);
+
+    public bool IsConfigured => keyStore.GetCachedKey(ProviderName) is not null;
+
+    public string Model => Endpoint(options.CurrentValue).Model;
 
     public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct)
     {
-        var apiKey = await keyStore.GetKeyAsync(AiProviders.Nvidia, ct)
+        var apiKey = await keyStore.GetKeyAsync(ProviderName, ct)
             ?? throw new InvalidOperationException(
-                "Nessuna chiave NVIDIA: inseriscila in /admin/ai-supervisor (o imposta NVIDIA_API_KEY).");
+                $"Nessuna chiave {ProviderName}: inseriscila in /admin/ai-supervisor (o imposta {AiProviders.EnvVarFor(ProviderName)}).");
 
         var opt = options.CurrentValue;
+        var (baseUrl, model) = Endpoint(opt);
         var payload = JsonSerializer.Serialize(new
         {
-            model = opt.NvidiaModel,
+            model,
             max_tokens = opt.MaxTokens,
             temperature = 0.2,
             messages = new object[]
@@ -52,7 +70,7 @@ public sealed class NvidiaLlmClient(
 
         var http = httpClientFactory.CreateClient(HttpClientName);
         using var request = new HttpRequestMessage(HttpMethod.Post,
-            opt.NvidiaBaseUrl.TrimEnd('/') + "/chat/completions")
+            baseUrl.TrimEnd('/') + "/chat/completions")
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json"),
         };
@@ -62,10 +80,11 @@ public sealed class NvidiaLlmClient(
         var body = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
         {
-            // Il body va nell'errore (troncato): un 401/402/429 di NVIDIA spiega la causa nel
-            // JSON, e il breaker/pannello devono poterla mostrare — mai un "HTTP 4xx" muto.
+            // Il body va nell'errore (troncato): un 401/402/429 spiega la causa nel JSON, e il
+            // breaker/pannello devono poterla mostrare — mai un "HTTP 4xx" muto. Il prefisso
+            // "<PROVIDER> HTTP <code>:" è il contratto che LlmCallGuard.Classify sa leggere.
             throw new InvalidOperationException(
-                $"NVIDIA HTTP {(int)response.StatusCode}: {(body.Length > 400 ? body[..400] : body)}");
+                $"{ProviderName.ToUpperInvariant()} HTTP {(int)response.StatusCode}: {(body.Length > 400 ? body[..400] : body)}");
         }
 
         using var doc = JsonDocument.Parse(body);
@@ -80,14 +99,101 @@ public sealed class NvidiaLlmClient(
             // I modelli con reasoning possono esaurire i max_tokens PRIMA di scrivere la risposta
             // (il pensiero conta nel budget): un contenuto vuoto è un errore da spiegare, non da
             // restituire come advisory vuota.
-            logger.LogWarning("NVIDIA: risposta senza contenuto (finish_reason={Reason}).",
+            logger.LogWarning("{Provider}: risposta senza contenuto (finish_reason={Reason}).", ProviderName,
                 doc.RootElement.GetProperty("choices")[0].TryGetProperty("finish_reason", out var fr) ? fr.GetString() : "?");
             throw new InvalidOperationException(
-                "NVIDIA ha risposto senza testo (probabile budget token esaurito dal reasoning: alza Llm:MaxTokens o scegli un modello non-reasoning).");
+                $"{ProviderName} ha risposto senza testo (probabile budget token esaurito dal reasoning: alza Llm:MaxTokens o scegli un modello non-reasoning).");
         }
 
         return content;
     }
+
+    /// <summary>
+    /// <c>GET {base}/models</c> del dialetto OpenAI-compatible: gli id dei modelli disponibili
+    /// per la chiave corrente. Stessa autenticazione e stesso contratto d'errore delle chiamate
+    /// di completamento.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct)
+    {
+        var apiKey = await keyStore.GetKeyAsync(ProviderName, ct)
+            ?? throw new InvalidOperationException(
+                $"Nessuna chiave {ProviderName}: inseriscila in /admin/ai-supervisor (o imposta {AiProviders.EnvVarFor(ProviderName)}).");
+
+        var (baseUrl, _) = Endpoint(options.CurrentValue);
+        var http = httpClientFactory.CreateClient(HttpClientName);
+        using var request = new HttpRequestMessage(HttpMethod.Get, baseUrl.TrimEnd('/') + "/models");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+
+        using var response = await http.SendAsync(request, ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"{ProviderName.ToUpperInvariant()} HTTP {(int)response.StatusCode}: {(body.Length > 400 ? body[..400] : body)}");
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        var ids = new List<string>();
+        foreach (var el in doc.RootElement.GetProperty("data").EnumerateArray())
+        {
+            if (el.TryGetProperty("id", out var id) && id.GetString() is { Length: > 0 } value)
+            {
+                ids.Add(value);
+            }
+        }
+        ids.Sort(StringComparer.OrdinalIgnoreCase);
+        return ids;
+    }
+}
+
+/// <summary>NVIDIA build.nvidia.com (<c>integrate.api.nvidia.com/v1</c>, Bearer <c>nvapi-…</c>).</summary>
+public sealed class NvidiaLlmClient(
+    IHttpClientFactory httpClientFactory,
+    IOptionsMonitor<LlmOptions> options,
+    IAiKeyStore keyStore,
+    ILogger<NvidiaLlmClient> logger) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger)
+{
+    protected override string ProviderName => AiProviders.Nvidia;
+    protected override (string BaseUrl, string Model) Endpoint(LlmOptions options) => (options.NvidiaBaseUrl, options.NvidiaModel);
+}
+
+/// <summary>Google Gemini via layer OpenAI-compatible (<c>generativelanguage.googleapis.com/v1beta/openai</c>).</summary>
+public sealed class GeminiLlmClient(
+    IHttpClientFactory httpClientFactory,
+    IOptionsMonitor<LlmOptions> options,
+    IAiKeyStore keyStore,
+    ILogger<GeminiLlmClient> logger) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger)
+{
+    protected override string ProviderName => AiProviders.Gemini;
+    protected override (string BaseUrl, string Model) Endpoint(LlmOptions options) => (options.GeminiBaseUrl, options.GeminiModel);
+}
+
+/// <summary>Groq (<c>api.groq.com/openai/v1</c>): inferenza a bassissima latenza su modelli aperti.</summary>
+public sealed class GroqLlmClient(
+    IHttpClientFactory httpClientFactory,
+    IOptionsMonitor<LlmOptions> options,
+    IAiKeyStore keyStore,
+    ILogger<GroqLlmClient> logger) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger)
+{
+    protected override string ProviderName => AiProviders.Groq;
+    protected override (string BaseUrl, string Model) Endpoint(LlmOptions options) => (options.GroqBaseUrl, options.GroqModel);
+}
+
+/// <summary>Router di inferenza HuggingFace (<c>router.huggingface.co/v1</c>): molti modelli aperti dietro un endpoint solo.</summary>
+public sealed class HuggingFaceLlmClient(
+    IHttpClientFactory httpClientFactory,
+    IOptionsMonitor<LlmOptions> options,
+    IAiKeyStore keyStore,
+    ILogger<HuggingFaceLlmClient> logger) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger)
+{
+    protected override string ProviderName => AiProviders.HuggingFace;
+    protected override (string BaseUrl, string Model) Endpoint(LlmOptions options) => (options.HuggingFaceBaseUrl, options.HuggingFaceModel);
+}
+
+/// <summary>Espone quale modello ha DAVVERO servito l'ultima risposta (col failover può non essere quello attivo). Interfaccia separata: i fake dei test non devono implementarla.</summary>
+public interface ILlmCompletionInfo
+{
+    string? LastCompletionModel { get; }
 }
 
 /// <summary>
@@ -95,19 +201,104 @@ public sealed class NvidiaLlmClient(
 /// <see cref="LlmOptions.Provider"/> (hot-reload: cambiare provider dal pannello ha effetto alla
 /// chiamata successiva, senza riavvio). Tutto ciò che consuma ILlmClient — supervisore, guard,
 /// worker, pannello — resta ignaro di quale provider stia parlando: è il punto dell'astrazione.
+///
+/// <para><b>[Failover 2026-08-02]</b> Se la chiamata al provider attivo fallisce (qualunque
+/// errore che non sia una cancellazione), prova DA SOLO i provider di
+/// <see cref="LlmOptions.FailoverProviders"/>, nell'ordine, saltando chi non ha chiave e chi è
+/// già stato tentato — con più AI configurate, un 503 del free tier non ferma advisory né
+/// sentiment. Ogni salto è dichiarato nel log; il modello che ha davvero risposto è in
+/// <see cref="LastCompletionModel"/>. Il breaker del guard, a valle, scatta solo se falliscono
+/// TUTTI: coerente col suo contratto — è il breaker del layer, e il layer ora è la federazione.
+/// Senza <see cref="ILlmClientResolver"/> (vecchi harness) la catena non è risolvibile e resta
+/// il comportamento storico a provider singolo.</para>
 /// </summary>
 public sealed class DelegatingLlmClient(
     AnthropicLlmClient anthropic,
     NvidiaLlmClient nvidia,
-    IOptionsMonitor<LlmOptions> options) : ILlmClient
+    IOptionsMonitor<LlmOptions> options,
+    ILlmClientResolver? resolver = null,
+    ILogger<DelegatingLlmClient>? logger = null) : ILlmClient, ILlmCompletionInfo
 {
-    private ILlmClient Active => options.CurrentValue.Provider.Equals(AiProviders.Nvidia, StringComparison.OrdinalIgnoreCase)
-        ? nvidia
-        : anthropic; // default e fallback: il comportamento storico
+    private volatile string? _lastCompletionModel;
 
-    public bool IsConfigured => Active.IsConfigured;
-    public string Model => Active.Model;
+    public string? LastCompletionModel => _lastCompletionModel;
 
-    public Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct) =>
-        Active.CompleteAsync(systemPrompt, userPrompt, ct);
+    /// <summary>Il client del provider ATTIVO (per Model/UI). Ignoto ⇒ Anthropic, il fallback storico.</summary>
+    private ILlmClient ActiveClient
+    {
+        get
+        {
+            var provider = options.CurrentValue.Provider;
+            if (resolver?.Resolve(provider) is { } resolved)
+            {
+                return resolved;
+            }
+            return provider.Equals(AiProviders.Nvidia, StringComparison.OrdinalIgnoreCase)
+                ? nvidia
+                : anthropic;
+        }
+    }
+
+    /// <summary>La sequenza di tentativo: attivo per primo, poi la catena, senza duplicati né provider senza chiave.</summary>
+    private IEnumerable<(string Name, ILlmClient Client)> Sequence(LlmOptions opt)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { opt.Provider };
+        yield return (opt.Provider, ActiveClient);
+
+        if (!opt.FailoverEnabled || resolver is null)
+        {
+            yield break;
+        }
+        foreach (var name in opt.EffectiveFailoverChain())
+        {
+            if (!seen.Add(name)) continue;
+            if (resolver.Resolve(name) is { } client)
+            {
+                yield return (name, client);
+            }
+        }
+    }
+
+    public bool IsConfigured => Sequence(options.CurrentValue).Any(s => s.Client.IsConfigured);
+
+    public string Model => ActiveClient.Model;
+
+    public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken ct)
+    {
+        var opt = options.CurrentValue;
+        Exception? last = null;
+        string? failedBefore = null;
+
+        foreach (var (name, client) in Sequence(opt))
+        {
+            if (!client.IsConfigured)
+            {
+                continue; // senza chiave non è un fallimento: semplicemente non gioca
+            }
+            try
+            {
+                var text = await client.CompleteAsync(systemPrompt, userPrompt, ct);
+                _lastCompletionModel = client.Model;
+                if (failedBefore is not null)
+                {
+                    logger?.LogInformation("Failover AI riuscito: {Provider} ({Model}) ha servito la chiamata dopo il fallimento di {Failed}.",
+                        name, client.Model, failedBefore);
+                }
+                return text;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // shutdown/timeout del chiamante: non è un guasto del provider, niente failover
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                failedBefore = failedBefore is null ? name : $"{failedBefore}, {name}";
+                logger?.LogWarning(ex, "Provider AI {Provider} fallito; provo il prossimo della catena di failover.", name);
+            }
+        }
+
+        throw last ?? new InvalidOperationException(
+            "Nessun provider AI con una chiave configurata: inseriscine una in /admin/ai-supervisor.");
+    }
 }

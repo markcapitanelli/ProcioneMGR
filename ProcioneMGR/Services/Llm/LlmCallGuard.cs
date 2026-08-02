@@ -234,32 +234,36 @@ public sealed class LlmCallGuard(
         Anthropic4xxException => (false, "richiesta non valida"),
         Anthropic5xxException or AnthropicUnexpectedStatusCodeException => (true, "server"),
         AnthropicIOException or AnthropicSseException => (true, "rete"),
-        // [Multi-provider] Gli errori NVIDIA arrivano come InvalidOperationException col prefisso
-        // e il codice HTTP (vedi NvidiaLlmClient): la stessa tassonomia, letta dal codice.
-        InvalidOperationException nv when nv.Message.StartsWith("NVIDIA HTTP ", StringComparison.Ordinal) =>
-            ClassifyNvidia(nv.Message),
+        // [Multi-provider] Gli errori dei provider OpenAI-compatible (NVIDIA, GEMINI, GROQ,
+        // HUGGINGFACE, …) arrivano come InvalidOperationException col prefisso
+        // "<PROVIDER> HTTP <code>:" (contratto di OpenAiCompatibleLlmClient): stessa tassonomia,
+        // letta dal codice — non dal nome del provider.
+        InvalidOperationException compat when TryParseCompatHttpStatus(compat.Message, out var status) =>
+            ClassifyHttpStatus(status),
         HttpRequestException or IOException => (true, "rete"),
         _ => (false, "inatteso"),
     };
 
-    /// <summary>"NVIDIA HTTP 503: {json}" → il codice sta fra prefisso e due punti.</summary>
-    private static (bool Retryable, string Cause) ClassifyNvidia(string message)
+    /// <summary>"GROQ HTTP 429: {json}" → estrae il codice fra " HTTP " e i due punti, qualunque sia il provider.</summary>
+    internal static bool TryParseCompatHttpStatus(string message, out int status)
     {
-        var codePart = message.AsSpan("NVIDIA HTTP ".Length);
+        status = 0;
+        var marker = message.IndexOf(" HTTP ", StringComparison.Ordinal);
+        if (marker <= 0) return false;
+
+        var codePart = message.AsSpan(marker + " HTTP ".Length);
         var end = codePart.IndexOf(':');
-        if (end > 0 && int.TryParse(codePart[..end], out var status))
-        {
-            return status switch
-            {
-                402 => (true, "credito API"),
-                429 => (true, "rate-limit"),
-                401 or 403 => (true, "credenziali"),
-                >= 500 => (true, "server"),   // incl. il 503 "request limit reached" del free tier
-                _ => (false, "richiesta non valida"),
-            };
-        }
-        return (false, "inatteso");
+        return end > 0 && int.TryParse(codePart[..end], out status);
     }
+
+    private static (bool Retryable, string Cause) ClassifyHttpStatus(int status) => status switch
+    {
+        402 => (true, "credito API"),
+        429 => (true, "rate-limit"),
+        401 or 403 => (true, "credenziali"),
+        >= 500 => (true, "server"),   // incl. il 503 "request limit reached" del free tier NVIDIA
+        _ => (false, "richiesta non valida"),
+    };
 
     /// <summary>Il billing arriva come 400 generico: si riconosce solo dal testo dell'errore.</summary>
     private static bool IsBilling(AnthropicBadRequestException ex)

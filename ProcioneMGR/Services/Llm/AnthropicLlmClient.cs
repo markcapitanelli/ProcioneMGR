@@ -13,11 +13,42 @@ public sealed class LlmOptions
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// Provider attivo del layer AI: "Anthropic" (default, comportamento storico) o "Nvidia".
-    /// Hot-reload: l'instradamento avviene A OGNI chiamata (DelegatingLlmClient), cambiare
-    /// provider dal pannello non richiede riavvio.
+    /// Provider attivo del layer AI (una voce di <see cref="AiProviders.Known"/>). Default Nvidia
+    /// dal 2026-08-02 (Anthropic retrocessa: credito esaurito). Hot-reload: l'instradamento
+    /// avviene A OGNI chiamata (DelegatingLlmClient), cambiare provider dal pannello non
+    /// richiede riavvio.
     /// </summary>
-    public string Provider { get; set; } = AiProviders.Anthropic;
+    public string Provider { get; set; } = AiProviders.Nvidia;
+
+    /// <summary>
+    /// [Failover 2026-08-02] Se la chiamata al provider attivo fallisce (qualunque errore che non
+    /// sia una cancellazione), il DelegatingLlmClient prova DA SOLO i provider di questa lista,
+    /// nell'ordine, saltando quelli senza chiave e il provider già tentato. Default on: con più
+    /// AI configurate, un 503 del free tier non deve fermare advisory o sentiment.
+    /// </summary>
+    public bool FailoverEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Catena di failover, nell'ordine di tentativo; VUOTA = catena di default
+    /// (<see cref="DefaultFailoverChain"/>). Il default sta in una costante e NON qui: il binder
+    /// di configurazione APPENDE gli elementi dell'array alla lista già inizializzata invece di
+    /// sostituirla — con un default popolato la lista raddoppiava a ogni salvataggio dal pannello
+    /// (successo davvero, 2026-08-02). Anthropic esclusa dal default (credito esaurito) ma
+    /// aggiungibile a mano.
+    /// </summary>
+    public List<string> FailoverProviders { get; set; } = [];
+
+    /// <summary>La catena di default quando <see cref="FailoverProviders"/> è vuota.</summary>
+    public static readonly IReadOnlyList<string> DefaultFailoverChain =
+        [AiProviders.Nvidia, AiProviders.Groq, AiProviders.Gemini, AiProviders.HuggingFace];
+
+    /// <summary>La catena EFFETTIVA (configurata, o default se vuota), deduplicata preservando l'ordine.</summary>
+    public IReadOnlyList<string> EffectiveFailoverChain()
+    {
+        var source = FailoverProviders.Count > 0 ? (IReadOnlyList<string>)FailoverProviders : DefaultFailoverChain;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return source.Where(p => seen.Add(p)).ToList();
+    }
 
     public string Model { get; set; } = "claude-opus-4-8";
 
@@ -30,6 +61,24 @@ public sealed class LlmOptions
     /// entrare cambiando URL e chiave, senza un client nuovo.
     /// </summary>
     public string NvidiaBaseUrl { get; set; } = "https://integrate.api.nvidia.com/v1";
+
+    // [Fase D 2026-08-02] Tre provider in un colpo, stessa forma di Nvidia: la prova del
+    // principio §1.2 del PRD. Ogni coppia Model/BaseUrl è hot-reload dal pannello.
+
+    /// <summary>Modello per Google Gemini (layer OpenAI-compatible di Generative Language API). Id CANONICO col prefisso "models/" come lo restituisce l'elenco dell'API (verificato dal vivo 2026-08-02); il 2.5 è ritirato per le chiavi nuove — usare «Scarica modelli» nel pannello per l'elenco vero della PROPRIA chiave.</summary>
+    public string GeminiModel { get; set; } = "models/gemini-3.6-flash";
+
+    public string GeminiBaseUrl { get; set; } = "https://generativelanguage.googleapis.com/v1beta/openai";
+
+    /// <summary>Modello per Groq (inferenza a bassa latenza su modelli aperti).</summary>
+    public string GroqModel { get; set; } = "llama-3.3-70b-versatile";
+
+    public string GroqBaseUrl { get; set; } = "https://api.groq.com/openai/v1";
+
+    /// <summary>Modello per il router HuggingFace (org/nome del catalogo; il router sceglie il backend).</summary>
+    public string HuggingFaceModel { get; set; } = "meta-llama/Llama-3.3-70B-Instruct";
+
+    public string HuggingFaceBaseUrl { get; set; } = "https://router.huggingface.co/v1";
 
     public int MaxTokens { get; set; } = 4096;
     public int PollIntervalMinutes { get; set; } = 5;
@@ -53,8 +102,8 @@ public sealed class LlmOptions
     /// </summary>
     public bool ComparisonEnabled { get; set; }
 
-    /// <summary>Provider del secondo parere ("Anthropic" | "Nvidia"). Se coincide col provider attivo il confronto si salta da solo (due pareri identici non confrontano niente).</summary>
-    public string ComparisonProvider { get; set; } = AiProviders.Nvidia;
+    /// <summary>Provider del secondo parere (una voce di <see cref="AiProviders.Known"/>). Default Groq (attivo default = Nvidia; due pareri dallo stesso provider non confrontano niente e si saltano da soli).</summary>
+    public string ComparisonProvider { get; set; } = AiProviders.Groq;
 }
 
 /// <summary>
@@ -63,21 +112,24 @@ public sealed class LlmOptions
 /// letta esclusivamente dalla variabile d'ambiente <c>ANTHROPIC_API_KEY</c> — mai da appsettings —
 /// e se manca il client è semplicemente "non configurato" (l'app parte lo stesso).
 /// </summary>
-public sealed class AnthropicLlmClient : ILlmClient
+public sealed class AnthropicLlmClient : ILlmClient, IModelCatalogProvider
 {
     // IOptionsMonitor (non POCO): modello/token modificabili a caldo da /admin/autonomy.
     private readonly Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> _options;
     private readonly ILogger<AnthropicLlmClient> _logger;
     private readonly IAiKeyStore? _keyStore;
+    private readonly IHttpClientFactory? _httpClientFactory;
 
     public AnthropicLlmClient(
         Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> options,
         ILogger<AnthropicLlmClient> logger,
-        IAiKeyStore? keyStore = null)   // opzionale: i vecchi harness di test costruiscono senza store
+        IAiKeyStore? keyStore = null,   // opzionale: i vecchi harness di test costruiscono senza store
+        IHttpClientFactory? httpClientFactory = null)   // opzionale: serve solo a ListModelsAsync
     {
         _options = options;
         _logger = logger;
         _keyStore = keyStore;
+        _httpClientFactory = httpClientFactory;
     }
 
     // Riletta a OGNI accesso, mai cachata nel ctor: DB cifrato (pannello) prima, env poi — così
@@ -118,5 +170,48 @@ public sealed class AnthropicLlmClient : ILlmClient
 
         var text = string.Concat(response.Content.Select(b => b.Value).OfType<TextBlock>().Select(t => t.Text));
         return text;
+    }
+
+    /// <summary>
+    /// <c>GET api.anthropic.com/v1/models</c> (dialetto proprio: header <c>x-api-key</c> +
+    /// <c>anthropic-version</c>, non Bearer). HTTP nudo invece dell'SDK: è una GET con due header,
+    /// e il contratto d'errore resta quello leggibile dal pannello.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct)
+    {
+        if (_httpClientFactory is null)
+        {
+            throw new InvalidOperationException("Elenco modelli Anthropic non disponibile in questo assetto (nessun HttpClientFactory).");
+        }
+        var apiKey = (_keyStore is not null
+                ? await _keyStore.GetKeyAsync(AiProviders.Anthropic, ct)
+                : Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"))
+            ?? throw new InvalidOperationException(
+                "Nessuna chiave Anthropic: inseriscila in /admin/ai-supervisor (o imposta ANTHROPIC_API_KEY).");
+
+        var http = _httpClientFactory.CreateClient(OpenAiCompatibleLlmClient.HttpClientName);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/v1/models?limit=100");
+        request.Headers.Add("x-api-key", apiKey);
+        request.Headers.Add("anthropic-version", "2023-06-01");
+
+        using var response = await http.SendAsync(request, ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"ANTHROPIC HTTP {(int)response.StatusCode}: {(body.Length > 400 ? body[..400] : body)}");
+        }
+
+        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        var ids = new List<string>();
+        foreach (var el in doc.RootElement.GetProperty("data").EnumerateArray())
+        {
+            if (el.TryGetProperty("id", out var id) && id.GetString() is { Length: > 0 } value)
+            {
+                ids.Add(value);
+            }
+        }
+        ids.Sort(StringComparer.OrdinalIgnoreCase);
+        return ids;
     }
 }

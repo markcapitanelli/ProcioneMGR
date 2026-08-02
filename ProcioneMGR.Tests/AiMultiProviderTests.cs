@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -42,8 +43,14 @@ public class AiMultiProviderTests
 
     private sealed class FakeKeyStore(string? nvidiaKey = "nvapi-test") : IAiKeyStore
     {
+        /// <summary>Chiavi per-provider oltre a quella Nvidia storica (i test Fase D le riempiono).</summary>
+        public Dictionary<string, string?> Keys { get; } = new(StringComparer.OrdinalIgnoreCase)
+        {
+            [AiProviders.Nvidia] = nvidiaKey,
+        };
+
         public Task<string?> GetKeyAsync(string provider, CancellationToken ct = default) => Task.FromResult(GetCachedKey(provider));
-        public string? GetCachedKey(string provider) => provider == AiProviders.Nvidia ? nvidiaKey : null;
+        public string? GetCachedKey(string provider) => Keys.TryGetValue(provider, out var k) ? k : null;
         public AiKeySource GetCachedSource(string provider) => GetCachedKey(provider) is null ? AiKeySource.None : AiKeySource.Database;
         public Task SetKeyAsync(string provider, string apiKey, CancellationToken ct = default) => throw new NotImplementedException();
         public Task RemoveKeyAsync(string provider, CancellationToken ct = default) => throw new NotImplementedException();
@@ -129,6 +136,360 @@ public class AiMultiProviderTests
         var (r, c) = LlmCallGuard.Classify(new InvalidOperationException(message));
         Assert.Equal(retryable, r);
         Assert.Equal(cause, c);
+    }
+
+    // ------------------------------------------------------------------ [Fase D] i tre provider nuovi
+
+    private static IAiKeyStore KeysForAll()
+    {
+        var store = new FakeKeyStore();
+        store.Keys[AiProviders.Gemini] = "AIza-test";
+        store.Keys[AiProviders.Groq] = "gsk-test";
+        store.Keys[AiProviders.HuggingFace] = "hf-test";
+        return store;
+    }
+
+    public static TheoryData<string> CompatProviders() => new(AiProviders.Gemini, AiProviders.Groq, AiProviders.HuggingFace);
+
+    private static OpenAiCompatibleLlmClient CompatClient(string provider, ScriptedHandler handler, IAiKeyStore keys, LlmOptions options)
+    {
+        var factory = new SingleClientFactory(handler);
+        var monitor = options.AsMonitor();
+        return provider switch
+        {
+            AiProviders.Gemini => new GeminiLlmClient(factory, monitor, keys, NullLogger<GeminiLlmClient>.Instance),
+            AiProviders.Groq => new GroqLlmClient(factory, monitor, keys, NullLogger<GroqLlmClient>.Instance),
+            AiProviders.HuggingFace => new HuggingFaceLlmClient(factory, monitor, keys, NullLogger<HuggingFaceLlmClient>.Instance),
+            _ => throw new ArgumentOutOfRangeException(nameof(provider)),
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(CompatProviders))]
+    public async Task NewProviders_SendToTheirDefaultEndpoint_WithTheirModel(string provider)
+    {
+        var handler = new ScriptedHandler(HttpStatusCode.OK,
+            """{"choices":[{"message":{"role":"assistant","content":"ciao"},"finish_reason":"stop"}]}""");
+        var options = new LlmOptions();
+        var client = CompatClient(provider, handler, KeysForAll(), options);
+
+        var text = await client.CompleteAsync("sys", "user", CancellationToken.None);
+
+        Assert.Equal("ciao", text);
+        Assert.EndsWith("/chat/completions", handler.LastUri!.AbsolutePath);
+        var (expectedHost, expectedModel) = provider switch
+        {
+            AiProviders.Gemini => ("generativelanguage.googleapis.com", options.GeminiModel),
+            AiProviders.Groq => ("api.groq.com", options.GroqModel),
+            _ => ("router.huggingface.co", options.HuggingFaceModel),
+        };
+        Assert.Equal(expectedHost, handler.LastUri!.Host);
+        Assert.Contains($"\"model\":{JsonSerializer.Serialize(expectedModel)}", handler.LastRequestBody);
+        Assert.StartsWith("Bearer ", handler.LastAuthorization);
+    }
+
+    [Theory]
+    [MemberData(nameof(CompatProviders))]
+    public async Task NewProviders_MissingKey_FailsWithTheirEnvVarRemedy(string provider)
+    {
+        var handler = new ScriptedHandler(HttpStatusCode.OK, OkBody);
+        var client = CompatClient(provider, handler, new FakeKeyStore(nvidiaKey: null), new LlmOptions());
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.CompleteAsync("sys", "user", CancellationToken.None));
+
+        Assert.Contains("/admin/ai-supervisor", ex.Message);
+        Assert.Contains(AiProviders.EnvVarFor(provider), ex.Message);
+        Assert.False(client.IsConfigured);
+    }
+
+    [Theory]
+    [InlineData("GROQ HTTP 429: {\"error\":{\"message\":\"rate limit\"}}", true, "rate-limit")]
+    [InlineData("GEMINI HTTP 400: {}", false, "richiesta non valida")]
+    [InlineData("GEMINI HTTP 500: {}", true, "server")]
+    [InlineData("HUGGINGFACE HTTP 401: {}", true, "credenziali")]
+    [InlineData("HUGGINGFACE HTTP 402: {}", true, "credito API")]
+    public void Guard_ClassifiesAnyCompatProvider_BySameTaxonomy(string message, bool retryable, string cause)
+    {
+        var (r, c) = LlmCallGuard.Classify(new InvalidOperationException(message));
+        Assert.Equal(retryable, r);
+        Assert.Equal(cause, c);
+    }
+
+    [Fact]
+    public void EnvVarNames_AreTheDocumentedOnes()
+    {
+        Assert.Equal("GEMINI_API_KEY", AiProviders.EnvVarFor(AiProviders.Gemini));
+        Assert.Equal("GROQ_API_KEY", AiProviders.EnvVarFor(AiProviders.Groq));
+        Assert.Equal("HUGGINGFACE_API_KEY", AiProviders.EnvVarFor(AiProviders.HuggingFace));
+    }
+
+    // ------------------------------------------------------------------ [2026-08-02] failover automatico
+
+    /// <summary>Risponde per host: i provider si distinguono dall'endpoint, come nella realtà.</summary>
+    private sealed class HostRoutingHandler(Dictionary<string, (HttpStatusCode Status, string Body)> byHost) : HttpMessageHandler
+    {
+        public List<string> HostsCalled { get; } = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var host = request.RequestUri!.Host;
+            HostsCalled.Add(host);
+            var (status, body) = byHost.TryGetValue(host, out var r) ? r : (HttpStatusCode.InternalServerError, "{}");
+            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+        }
+    }
+
+    private static (DelegatingLlmClient Delegating, HostRoutingHandler Handler, LlmOptions Options) FailoverRig(
+        Dictionary<string, (HttpStatusCode, string)> byHost, LlmOptions? options = null, IAiKeyStore? keys = null)
+    {
+        var opt = options ?? new LlmOptions { Provider = AiProviders.Nvidia };
+        var handler = new HostRoutingHandler(byHost);
+        var factory = new SingleClientFactory(handler);
+        var monitor = opt.AsMonitor();
+        var store = keys ?? KeysForAll();
+
+        var anthropic = new AnthropicLlmClient(monitor, NullLogger<AnthropicLlmClient>.Instance, store);
+        var nvidia = new NvidiaLlmClient(factory, monitor, store, NullLogger<NvidiaLlmClient>.Instance);
+        var gemini = new GeminiLlmClient(factory, monitor, store, NullLogger<GeminiLlmClient>.Instance);
+        var groq = new GroqLlmClient(factory, monitor, store, NullLogger<GroqLlmClient>.Instance);
+        var hf = new HuggingFaceLlmClient(factory, monitor, store, NullLogger<HuggingFaceLlmClient>.Instance);
+        var resolver = new LlmClientResolver(anthropic, nvidia, gemini, groq, hf);
+        return (new DelegatingLlmClient(anthropic, nvidia, monitor, resolver), handler, opt);
+    }
+
+    private const string OkGroqBody = """{"choices":[{"message":{"role":"assistant","content":"ok-groq"},"finish_reason":"stop"}]}""";
+
+    [Fact]
+    public async Task Failover_ActiveFails_NextInChainServes_AndTruthIsTraceable()
+    {
+        // NVIDIA (attiva) giù col 503 del free tier; Groq (prima della catena) risponde.
+        var (delegating, handler, opt) = FailoverRig(new()
+        {
+            ["integrate.api.nvidia.com"] = (HttpStatusCode.ServiceUnavailable, """{"detail":"limit reached"}"""),
+            ["api.groq.com"] = (HttpStatusCode.OK, OkGroqBody),
+        });
+
+        var text = await delegating.CompleteAsync("s", "u", CancellationToken.None);
+
+        Assert.Equal("ok-groq", text);
+        Assert.Equal(["integrate.api.nvidia.com", "api.groq.com"], handler.HostsCalled);
+        // La tracciabilità dice chi ha DAVVERO risposto, non chi doveva.
+        Assert.Equal(opt.GroqModel, ((ILlmCompletionInfo)delegating).LastCompletionModel);
+        Assert.Equal(opt.NvidiaModel, delegating.Model); // il provider ATTIVO resta quello scelto
+    }
+
+    [Fact]
+    public async Task Failover_SkipsProvidersWithoutKey()
+    {
+        // Solo Nvidia e HuggingFace hanno la chiave: Groq e Gemini non giocano nemmeno.
+        var store = new FakeKeyStore();
+        store.Keys[AiProviders.HuggingFace] = "hf-test";
+        var (delegating, handler, _) = FailoverRig(new()
+        {
+            ["integrate.api.nvidia.com"] = (HttpStatusCode.ServiceUnavailable, "{}"),
+            ["router.huggingface.co"] = (HttpStatusCode.OK, """{"choices":[{"message":{"content":"ok-hf"},"finish_reason":"stop"}]}"""),
+        }, keys: store);
+
+        var text = await delegating.CompleteAsync("s", "u", CancellationToken.None);
+
+        Assert.Equal("ok-hf", text);
+        Assert.Equal(["integrate.api.nvidia.com", "router.huggingface.co"], handler.HostsCalled);
+    }
+
+    [Fact]
+    public async Task Failover_AllFail_ThrowsLastError_ClassifiableByGuard()
+    {
+        var (delegating, handler, _) = FailoverRig(new()); // ogni host → 500
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            delegating.CompleteAsync("s", "u", CancellationToken.None));
+
+        Assert.Equal(4, handler.HostsCalled.Count); // Nvidia + Groq + Gemini + HF (Anthropic fuori catena)
+        Assert.Contains(" HTTP 500:", ex.Message);
+        Assert.Equal((true, "server"), LlmCallGuard.Classify(ex)); // il breaker del layer scatta solo qui
+    }
+
+    [Fact]
+    public async Task Failover_Disabled_OnlyActiveIsTried()
+    {
+        var (delegating, handler, _) = FailoverRig(new(), new LlmOptions
+        {
+            Provider = AiProviders.Nvidia,
+            FailoverEnabled = false,
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            delegating.CompleteAsync("s", "u", CancellationToken.None));
+
+        Assert.Equal(["integrate.api.nvidia.com"], handler.HostsCalled);
+    }
+
+    [Fact]
+    public async Task Failover_CancellationIsNotAFailure_NoHopping()
+    {
+        using var cts = new CancellationTokenSource();
+        var factory = new SingleClientFactory(new CancelingHandler(cts));
+        var monitor = new LlmOptions { Provider = AiProviders.Nvidia }.AsMonitor();
+        var store = KeysForAll();
+        var nvidia = new NvidiaLlmClient(factory, monitor, store, NullLogger<NvidiaLlmClient>.Instance);
+        var anthropic = new AnthropicLlmClient(monitor, NullLogger<AnthropicLlmClient>.Instance, store);
+        var resolver = new LlmClientResolver(anthropic, nvidia,
+            new GeminiLlmClient(factory, monitor, store, NullLogger<GeminiLlmClient>.Instance),
+            new GroqLlmClient(factory, monitor, store, NullLogger<GroqLlmClient>.Instance),
+            new HuggingFaceLlmClient(factory, monitor, store, NullLogger<HuggingFaceLlmClient>.Instance));
+        var delegating = new DelegatingLlmClient(anthropic, nvidia, monitor, resolver);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            delegating.CompleteAsync("s", "u", cts.Token));
+    }
+
+    /// <summary>Cancella il token del CHIAMANTE a metà chiamata: lo shutdown non deve innescare failover.</summary>
+    private sealed class CancelingHandler(CancellationTokenSource cts) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            cts.Cancel();
+            return Task.FromCanceled<HttpResponseMessage>(new CancellationToken(canceled: true));
+        }
+    }
+
+    // ------------------------------------------------------------------ [2026-08-02] auto-scelta modello
+
+    [Fact]
+    public void AutoSelector_Gemini_PicksLatestNonPreviewFlash_FromTheRealCatalogShape()
+    {
+        // Forma reale del catalogo visto dal vivo (2026-08-02): pieno di tts/image/embedding/veo…
+        string[] catalog =
+        [
+            "models/gemini-2.0-flash", "models/gemini-2.5-flash", "models/gemini-2.5-flash-preview-tts",
+            "models/gemini-2.5-pro", "models/gemini-3-flash-preview", "models/gemini-3.1-flash-lite",
+            "models/gemini-3.5-flash", "models/gemini-3.6-flash", "models/gemini-embedding-2",
+            "models/gemini-flash-latest", "models/imagen-4.0-generate-001", "models/veo-3.1-generate-preview",
+            "models/gemini-2.5-flash-native-audio-latest", "models/deep-research-preview-04-2026",
+        ];
+
+        Assert.Equal("models/gemini-3.6-flash", ModelAutoSelector.Pick(AiProviders.Gemini, catalog));
+    }
+
+    [Fact]
+    public void AutoSelector_Groq_PrefersVersatileLlama()
+    {
+        string[] catalog = ["gemma2-9b-it", "llama-3.1-8b-instant", "llama-3.3-70b-versatile", "whisper-large-v3"];
+        Assert.Equal("llama-3.3-70b-versatile", ModelAutoSelector.Pick(AiProviders.Groq, catalog));
+    }
+
+    [Fact]
+    public void AutoSelector_EmptyOrAllNonChat_ReturnsNull()
+    {
+        Assert.Null(ModelAutoSelector.Pick(AiProviders.Gemini, []));
+        Assert.Null(ModelAutoSelector.Pick(AiProviders.Gemini, ["models/imagen-4.0", "models/gemini-embedding-2"]));
+    }
+
+    [Fact]
+    public void AutoSelector_UnknownProviderStillPicksSomethingChatLike()
+    {
+        Assert.Equal("qualcosa-instruct", ModelAutoSelector.Pick("Ignoto", ["modello-tts", "qualcosa-instruct"]));
+    }
+
+    [Fact]
+    public void FailoverChain_EmptyConfigUsesDefault_PollutedConfigIsDeduplicated()
+    {
+        // Il default vive in una costante e NON nell'inizializzatore della lista: il binder di
+        // configurazione APPENDE gli elementi dell'array al default già popolato, e la catena
+        // raddoppiava a ogni salvataggio dal pannello (successo davvero, 2026-08-02).
+        Assert.Equal(LlmOptions.DefaultFailoverChain, new LlmOptions().EffectiveFailoverChain());
+
+        var polluted = new LlmOptions
+        {
+            FailoverProviders = [AiProviders.Nvidia, AiProviders.Groq, AiProviders.Nvidia, AiProviders.Groq],
+        };
+        Assert.Equal([AiProviders.Nvidia, AiProviders.Groq], polluted.EffectiveFailoverChain());
+    }
+
+    // ------------------------------------------------------------------ elenco modelli per chiave
+
+    [Fact]
+    public async Task ListModels_SendsGetToModelsEndpoint_AndParsesSortedIds()
+    {
+        var handler = new ScriptedHandler(HttpStatusCode.OK,
+            """{"object":"list","data":[{"id":"zeta-9b"},{"id":"alpha-70b"},{"id":"med-8b"}]}""");
+        var client = CompatClient(AiProviders.Groq, handler, KeysForAll(), new LlmOptions());
+
+        var models = await client.ListModelsAsync(CancellationToken.None);
+
+        Assert.Equal(["alpha-70b", "med-8b", "zeta-9b"], models);
+        Assert.Equal("api.groq.com", handler.LastUri!.Host);
+        Assert.EndsWith("/models", handler.LastUri!.AbsolutePath);
+        Assert.StartsWith("Bearer ", handler.LastAuthorization);
+    }
+
+    [Fact]
+    public async Task ListModels_HttpError_KeepsTheSpeakingContract()
+    {
+        var handler = new ScriptedHandler(HttpStatusCode.Unauthorized, """{"error":"invalid key"}""");
+        var client = CompatClient(AiProviders.Gemini, handler, KeysForAll(), new LlmOptions());
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ListModelsAsync(CancellationToken.None));
+
+        Assert.StartsWith("GEMINI HTTP 401:", ex.Message);
+        // Il contratto d'errore resta classificabile dal guard con la stessa tassonomia.
+        Assert.Equal((true, "credenziali"), LlmCallGuard.Classify(ex));
+    }
+
+    [Fact]
+    public async Task ListModels_Anthropic_UsesItsOwnDialect()
+    {
+        var handler = new ScriptedHandler(HttpStatusCode.OK,
+            """{"data":[{"id":"claude-b","display_name":"B"},{"id":"claude-a","display_name":"A"}],"has_more":false}""");
+        var keys = KeysForAll();
+        ((FakeKeyStore)keys).Keys[AiProviders.Anthropic] = "sk-ant-test";
+        var client = new AnthropicLlmClient(new LlmOptions().AsMonitor(),
+            NullLogger<AnthropicLlmClient>.Instance, keys, new SingleClientFactory(handler));
+
+        var models = await client.ListModelsAsync(CancellationToken.None);
+
+        Assert.Equal(["claude-a", "claude-b"], models);
+        Assert.Equal("api.anthropic.com", handler.LastUri!.Host);
+        Assert.Null(handler.LastAuthorization); // x-api-key, non Bearer: il dialetto è il suo
+    }
+
+    [Fact]
+    public async Task Delegating_WithResolver_RoutesToEveryKnownProvider()
+    {
+        // Ogni provider risponde col proprio host: si prova che il delegante+resolver instrada
+        // davvero su TUTTI i provider noti, non solo sui due storici.
+        var handler = new ScriptedHandler(HttpStatusCode.OK,
+            """{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}""");
+        var options = new LlmOptions { Provider = AiProviders.Groq };
+        var keys = KeysForAll();
+        var factory = new SingleClientFactory(handler);
+        var monitor = options.AsMonitor();
+
+        var anthropic = new AnthropicLlmClient(monitor, NullLogger<AnthropicLlmClient>.Instance, (FakeKeyStore)keys);
+        var nvidia = new NvidiaLlmClient(factory, monitor, keys, NullLogger<NvidiaLlmClient>.Instance);
+        var gemini = new GeminiLlmClient(factory, monitor, keys, NullLogger<GeminiLlmClient>.Instance);
+        var groq = new GroqLlmClient(factory, monitor, keys, NullLogger<GroqLlmClient>.Instance);
+        var hf = new HuggingFaceLlmClient(factory, monitor, keys, NullLogger<HuggingFaceLlmClient>.Instance);
+        var resolver = new LlmClientResolver(anthropic, nvidia, gemini, groq, hf);
+        var delegating = new DelegatingLlmClient(anthropic, nvidia, monitor, resolver);
+
+        Assert.Equal(options.GroqModel, delegating.Model);
+        await delegating.CompleteAsync("s", "u", CancellationToken.None);
+        Assert.Equal("api.groq.com", handler.LastUri!.Host);
+
+        options.Provider = AiProviders.HuggingFace;
+        Assert.Equal(options.HuggingFaceModel, delegating.Model);
+        await delegating.CompleteAsync("s", "u", CancellationToken.None);
+        Assert.Equal("router.huggingface.co", handler.LastUri!.Host);
+
+        options.Provider = AiProviders.Gemini;
+        await delegating.CompleteAsync("s", "u", CancellationToken.None);
+        Assert.Equal("generativelanguage.googleapis.com", handler.LastUri!.Host);
+
+        // Provider ignoto → fallback storico (Anthropic), mai un'eccezione di instradamento.
+        options.Provider = "Inventato";
+        Assert.Equal(options.Model, delegating.Model);
     }
 
     // ------------------------------------------------------------------ DelegatingLlmClient
