@@ -52,13 +52,22 @@ public sealed class PromotionWorker(
             // Solo corsie attive: non promuoviamo una corsia ferma (nessuna sessione da valutare/spostare).
             if (!d.IsRunning) continue;
 
-            if (d.ShouldPromote && d.SuggestedMode == TradingMode.Testnet)
+            // Whitelist ESPLICITA delle transizioni lecite, con la modalità di partenza compresa
+            // ([AF4a]: prima bastava la coppia flag+SuggestedMode; con la retrocessione da Live la
+            // partenza è diventata parte del contratto — Live→Paper diretto non esiste).
+            if (d.ShouldPromote && d.CurrentMode == TradingMode.Paper && d.SuggestedMode == TradingMode.Testnet)
             {
-                await ActAsync(d.LaneId, TradingMode.Testnet, d.Reason, ct);
+                await ActAsync(d.LaneId, TradingMode.Testnet, d.Reason, Notifications.NotificationSeverity.Info, ct);
             }
-            else if (d.ShouldDemote && d.SuggestedMode == TradingMode.Paper)
+            else if (d.ShouldDemote && d.CurrentMode == TradingMode.Testnet && d.SuggestedMode == TradingMode.Paper)
             {
-                await ActAsync(d.LaneId, TradingMode.Paper, d.Reason, ct);
+                await ActAsync(d.LaneId, TradingMode.Paper, d.Reason, Notifications.NotificationSeverity.Info, ct);
+            }
+            else if (d.ShouldDemote && d.CurrentMode == TradingMode.Live && d.SuggestedMode == TradingMode.Testnet)
+            {
+                // [AF4a] La retrocessione di sicurezza: soldi veri appena messi fuori pericolo —
+                // Warning, non Info: l'operatore deve alzare gli occhi.
+                await ActAsync(d.LaneId, TradingMode.Testnet, d.Reason, Notifications.NotificationSeverity.Warning, ct);
             }
             else if (d.ShouldPromote || d.ShouldDemote)
             {
@@ -74,7 +83,8 @@ public sealed class PromotionWorker(
         }
     }
 
-    private async Task ActAsync(int laneId, TradingMode newMode, string reason, CancellationToken ct)
+    private async Task ActAsync(int laneId, TradingMode newMode, string reason,
+        Notifications.NotificationSeverity severity, CancellationToken ct)
     {
         try
         {
@@ -83,8 +93,7 @@ public sealed class PromotionWorker(
             // Fase 4 (PRD Autonomia §7): la promozione automatica è una delle azioni da riferire.
             if (notifier is not null)
             {
-                await notifier.NotifyAsync(Notifications.NotificationSeverity.Info,
-                    $"Corsia {laneId} → {newMode}", reason, ct);
+                await notifier.NotifyAsync(severity, $"Corsia {laneId} → {newMode}", reason, ct);
             }
         }
         catch (Exception ex)

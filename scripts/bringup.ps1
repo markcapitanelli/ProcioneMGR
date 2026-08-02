@@ -1,0 +1,157 @@
+# =============================================================================================
+#  [AF5.3] Bring-up IDEMPOTENTE della piattaforma dopo un riavvio del PC (roadmap Autonomia
+#  Finanziaria). Ordina in un solo posto cio' che prima era sparso fra memoria, docs e mani:
+#
+#    1. attesa di Docker Desktop (al boot impiega minuti; senza, tutto il resto e' inutile)
+#    2. proxy kind-apiproxy: Windows RISERVA la porta dell'API server dopo un riavvio e Docker
+#       non ripristina il binding (docker restart NON basta — visto il 2026-07-27, due volte).
+#       Rimedio permanente: container socat con --restart unless-stopped che ripubblica 6443 del
+#       nodo su 127.0.0.1:16443 + kubectl config set-cluster. Qui si verifica e, se manca, si
+#       ricrea.
+#    3. attesa del nodo kind Ready e del pod di trading Running (il core caldo riparte da solo:
+#       qui si aspetta, non si comanda)
+#    4. port-forward: motore 18092 (ensure-trading-portforward.ps1, con il controllo del pod
+#       stantio) e ingestion 18080 (best-effort)
+#    5. guscio: se la 5199 non risponde, lancia scripts\run-postgres.ps1 in una shell separata
+#
+#  PREREQUISITI UNA-TANTUM (mai fatti da questo script, vedi infra/k8s/README.md):
+#    - cluster kind creato (scripts\k8s-bootstrap.ps1) e Secret popolati con gli script dedicati
+#      k8s-postgres-secret.ps1 / k8s-trading-secret.ps1 / k8s-ui-secret.ps1 (i NOMI delle chiavi
+#      vivono la' dentro: non inventarli)
+#    - Docker Desktop impostato per partire al logon
+#    - PostgreSQL locale come servizio Windows (parte da solo)
+#
+#  REGISTRAZIONE (una volta, da shell elevata):
+#    .\scripts\bringup.ps1 -Register
+#  crea il task "ProcioneMGR BringUp" che esegue questo script al LOGON dell'utente.
+#
+#  Non fallisce mai in modo bloccante: ogni passo dice cosa manca e si prosegue col possibile —
+#  il watchdog (watchdog.ps1, ogni 5') segnala su Telegram cio' che resta giu'.
+# =============================================================================================
+param(
+    [switch]$Register
+)
+
+$ErrorActionPreference = 'Continue'
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$context = 'kind-procionemgr-dev'
+$proxyName = 'kind-apiproxy'
+$proxyPort = 16443
+$logFile = Join-Path $env:TEMP 'procionemgr-bringup.log'
+
+if ($Register) {
+    $scriptPath = $MyInvocation.MyCommand.Path
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    Register-ScheduledTask -TaskName 'ProcioneMGR BringUp' -Action $action -Trigger $trigger `
+        -Settings $settings -Description 'Bring-up ProcioneMGR al logon (AF5.3): Docker, proxy kind, port-forward, guscio.' -Force | Out-Null
+    Write-Host "BringUp  : task 'ProcioneMGR BringUp' registrato (al logon)." -ForegroundColor Green
+    exit 0
+}
+
+function Log([string]$msg, [string]$color = 'Gray') {
+    $line = "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg
+    Write-Host $line -ForegroundColor $color
+    try { Add-Content -Path $logFile -Value $line -Encoding utf8 } catch { }
+}
+
+Log "=== BringUp avviato ===" 'Cyan'
+
+# --- 1. Docker -------------------------------------------------------------------------------
+$dockerUp = $false
+for ($i = 0; $i -lt 60; $i++) {
+    docker info *> $null
+    if ($LASTEXITCODE -eq 0) { $dockerUp = $true; break }
+    if ($i -eq 0) { Log "Docker   : non ancora pronto, attendo (fino a 10 minuti)..." 'Yellow' }
+    Start-Sleep -Seconds 10
+}
+if (-not $dockerUp) {
+    Log "Docker   : NON disponibile dopo 10 minuti - mi fermo qui (il watchdog avvisera')." 'Red'
+    exit 0
+}
+Log "Docker   : pronto." 'Green'
+
+# --- 2. Proxy kind-apiproxy (la porta riservata di Windows) ----------------------------------
+$proxyRunning = docker ps --filter "name=$proxyName" --filter 'status=running' --format '{{.Names}}' 2>$null
+if (-not $proxyRunning) {
+    # Il container e' --restart unless-stopped, quindi di norma riparte con Docker. Se manca del
+    # tutto (cluster ricreato, container rimosso), lo si ricrea puntando all'IP corrente del nodo.
+    $nodeIp = docker inspect procionemgr-dev-control-plane --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>$null
+    if ([string]::IsNullOrWhiteSpace($nodeIp)) {
+        Log "Proxy    : nodo kind non trovato - cluster assente? (k8s-bootstrap.ps1 e' il prerequisito)." 'Red'
+    } else {
+        docker rm -f $proxyName *> $null
+        docker run -d --name $proxyName --network kind --restart unless-stopped `
+            -p "127.0.0.1:${proxyPort}:6443" alpine/socat `
+            'tcp-listen:6443,fork,reuseaddr' "tcp-connect:${nodeIp}:6443" *> $null
+        Log "Proxy    : kind-apiproxy ricreato verso $nodeIp (porta $proxyPort)." 'Green'
+    }
+} else {
+    Log "Proxy    : kind-apiproxy gia' attivo." 'Green'
+}
+
+# kubectl deve puntare al proxy: set-cluster e' idempotente e sopravvive ai riavvii, ma se il
+# kubeconfig e' stato rigenerato (kind ricreato) il server torna alla porta riservata morta.
+kubectl config set-cluster $context --server="https://127.0.0.1:$proxyPort" *> $null
+
+# --- 3. Cluster e pod di trading -------------------------------------------------------------
+$nodeReady = $false
+for ($i = 0; $i -lt 30; $i++) {
+    $status = kubectl get nodes --context $context -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>$null
+    if ("$status" -eq 'True') { $nodeReady = $true; break }
+    if ($i -eq 0) { Log "Cluster  : attendo il nodo Ready (fino a 5 minuti)..." 'Yellow' }
+    Start-Sleep -Seconds 10
+}
+if ($nodeReady) {
+    Log "Cluster  : nodo Ready." 'Green'
+    $podReady = $false
+    for ($i = 0; $i -lt 30; $i++) {
+        $phase = kubectl get pods -n procionemgr-trading --context $context `
+            -l app.kubernetes.io/component=trading `
+            --field-selector status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>$null
+        if (-not [string]::IsNullOrWhiteSpace("$phase")) { $podReady = $true; break }
+        if ($i -eq 0) { Log "Motore   : attendo il pod di trading Running (fino a 5 minuti)..." 'Yellow' }
+        Start-Sleep -Seconds 10
+    }
+    if ($podReady) { Log "Motore   : pod di trading Running." 'Green' }
+    else { Log "Motore   : pod di trading NON Running dopo 5 minuti - proseguo, il watchdog avvisera'." 'Red' }
+} else {
+    Log "Cluster  : nodo NON Ready dopo 5 minuti - proseguo col possibile." 'Red'
+}
+
+# --- 4. Port-forward -------------------------------------------------------------------------
+& (Join-Path $repoRoot 'scripts\ensure-trading-portforward.ps1')
+
+$ingListening = Get-NetTCPConnection -State Listen -LocalPort 18080 -ErrorAction SilentlyContinue
+if (-not $ingListening) {
+    $svc = kubectl get svc procionemgr-ingestion -n procionemgr-ingestion --context $context 2>$null
+    if ($svc) {
+        Start-Process -WindowStyle Hidden kubectl -ArgumentList 'port-forward', '-n', 'procionemgr-ingestion', 'svc/procionemgr-ingestion', '18080:8080', '--context', $context
+        Log "Ingestion: port-forward 18080 avviato." 'Green'
+    } else {
+        Log "Ingestion: servizio non trovato - sync manuale UI indisponibile." 'Yellow'
+    }
+} else {
+    Log "Ingestion: port-forward 18080 gia' attivo." 'Green'
+}
+
+# --- 5. Guscio -------------------------------------------------------------------------------
+$shellOk = $false
+try {
+    $resp = Invoke-WebRequest -Uri 'http://localhost:5199/health' -UseBasicParsing -TimeoutSec 5
+    $shellOk = ($resp.StatusCode -eq 200)
+} catch { }
+
+if ($shellOk) {
+    Log "Guscio   : gia' in ascolto su 5199." 'Green'
+} else {
+    $runScript = Join-Path $repoRoot 'scripts\run-postgres.ps1'
+    Start-Process -WindowStyle Minimized powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$runScript`""
+    Log "Guscio   : avviato con run-postgres.ps1 (finestra minimizzata; la 5199 arriva fra qualche istante)." 'Green'
+}
+
+Log "=== BringUp completato ===" 'Cyan'
+exit 0

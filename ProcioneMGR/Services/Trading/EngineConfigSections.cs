@@ -58,6 +58,10 @@ public static class EngineConfigSections
         // Trading host non faceva nemmeno il binding, quindi il toggle non era collegabile da
         // nessuna strada. Niente segreti qui: toggle, URL del servizio ML in-cluster e timeout.
         "Ml",
+        // [AF5.1] Heartbeat incrociato: il worker del MOTORE (che scrive il proprio battito e
+        // sorveglia quello del guscio) legge la sezione del proprio processo — accenderla dal
+        // browser deve raggiungere anche lui, e reloadOnChange non attraversa un mount PVC.
+        "Heartbeat",
     ];
 
     /// <summary>

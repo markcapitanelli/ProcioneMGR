@@ -33,7 +33,8 @@ public abstract class OpenAiCompatibleLlmClient(
     IHttpClientFactory httpClientFactory,
     IOptionsMonitor<LlmOptions> options,
     IAiKeyStore keyStore,
-    ILogger logger) : ILlmClient, IModelCatalogProvider
+    ILogger logger,
+    ILlmUsageSink? usageSink = null) : ILlmClient, IModelCatalogProvider
 {
     /// <summary>Nome del client HTTP registrato in Program.cs (timeout largo: i modelli con reasoning sono lenti). Condiviso da tutti i provider compat.</summary>
     public const string HttpClientName = "OpenAiCompatLlm";
@@ -88,6 +89,19 @@ public abstract class OpenAiCompatibleLlmClient(
         }
 
         using var doc = JsonDocument.Parse(body);
+
+        // [AF1] Il campo `usage` che finora veniva scartato: si dichiara al sink PRIMA del check
+        // sul contenuto — i token del reasoning che svuota la risposta sono stati consumati lo
+        // stesso, e un contatore che li ignora è un contatore che rassicura.
+        if (usageSink is not null && doc.RootElement.TryGetProperty("usage", out var usage))
+        {
+            static int Tokens(JsonElement u, string name)
+                => u.TryGetProperty(name, out var v) && v.TryGetInt32(out var n) ? n : 0;
+            usageSink.Record(new LlmUsageEvent(
+                ProviderName, model, LlmCallContext.CurrentPath ?? "direct",
+                Tokens(usage, "prompt_tokens"), Tokens(usage, "completion_tokens"), DateTime.UtcNow));
+        }
+
         var content = doc.RootElement
             .GetProperty("choices")[0]
             .GetProperty("message")
@@ -151,7 +165,8 @@ public sealed class NvidiaLlmClient(
     IHttpClientFactory httpClientFactory,
     IOptionsMonitor<LlmOptions> options,
     IAiKeyStore keyStore,
-    ILogger<NvidiaLlmClient> logger) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger)
+    ILogger<NvidiaLlmClient> logger,
+    ILlmUsageSink? usageSink = null) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger, usageSink)
 {
     protected override string ProviderName => AiProviders.Nvidia;
     protected override (string BaseUrl, string Model) Endpoint(LlmOptions options) => (options.NvidiaBaseUrl, options.NvidiaModel);
@@ -162,7 +177,8 @@ public sealed class GeminiLlmClient(
     IHttpClientFactory httpClientFactory,
     IOptionsMonitor<LlmOptions> options,
     IAiKeyStore keyStore,
-    ILogger<GeminiLlmClient> logger) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger)
+    ILogger<GeminiLlmClient> logger,
+    ILlmUsageSink? usageSink = null) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger, usageSink)
 {
     protected override string ProviderName => AiProviders.Gemini;
     protected override (string BaseUrl, string Model) Endpoint(LlmOptions options) => (options.GeminiBaseUrl, options.GeminiModel);
@@ -173,7 +189,8 @@ public sealed class GroqLlmClient(
     IHttpClientFactory httpClientFactory,
     IOptionsMonitor<LlmOptions> options,
     IAiKeyStore keyStore,
-    ILogger<GroqLlmClient> logger) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger)
+    ILogger<GroqLlmClient> logger,
+    ILlmUsageSink? usageSink = null) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger, usageSink)
 {
     protected override string ProviderName => AiProviders.Groq;
     protected override (string BaseUrl, string Model) Endpoint(LlmOptions options) => (options.GroqBaseUrl, options.GroqModel);
@@ -184,7 +201,8 @@ public sealed class HuggingFaceLlmClient(
     IHttpClientFactory httpClientFactory,
     IOptionsMonitor<LlmOptions> options,
     IAiKeyStore keyStore,
-    ILogger<HuggingFaceLlmClient> logger) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger)
+    ILogger<HuggingFaceLlmClient> logger,
+    ILlmUsageSink? usageSink = null) : OpenAiCompatibleLlmClient(httpClientFactory, options, keyStore, logger, usageSink)
 {
     protected override string ProviderName => AiProviders.HuggingFace;
     protected override (string BaseUrl, string Model) Endpoint(LlmOptions options) => (options.HuggingFaceBaseUrl, options.HuggingFaceModel);

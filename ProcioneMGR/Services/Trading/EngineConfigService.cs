@@ -68,6 +68,9 @@ public sealed class EngineConfigService(
         ["Carry"] = typeof(CarryOptions),
         ["Notifications"] = typeof(ProcioneMGR.Services.Notifications.NotificationOptions),
         ["Ml"] = typeof(ProcioneMGR.Services.ML.MlComparisonOptions),
+        // [AF5.1] L'heartbeat vive in ENTRAMBI gli host: il pannello scrive il file del guscio e,
+        // tramite questo canale, quello del motore — due processi, uno stato desiderato.
+        ["Heartbeat"] = typeof(ProcioneMGR.Services.Health.HeartbeatOptions),
     };
 
     /// <summary>Dove il motore scrive: lo stesso file che <see cref="AppConfigWriter"/> tocca.</summary>

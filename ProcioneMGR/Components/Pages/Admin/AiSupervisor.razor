@@ -18,6 +18,8 @@
 @inject IOptionsMonitor<LlmOptions> LlmOptionsMonitor
 @inject ILlmClientResolver ClientResolver
 @inject ProcioneMGR.Services.Config.IAppConfigWriter ConfigWriter
+@inject ILlmUsageSink UsageSink
+@inject IOptionsMonitor<LlmBudgetOptions> BudgetMonitor
 
 <PageTitle>Supervisione AI</PageTitle>
 
@@ -257,6 +259,80 @@
     </div>
 </div>
 
+@* ---- [AF1] Consumo e budget: quanto si è speso, e il freno al cost runaway ---- *@
+<div class="card mb-3">
+    <div class="card-header"><i class="bi bi-cash-coin me-1"></i>Consumo e budget</div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Ogni chiamata AI dichiara i token consumati, attribuiti al provider che l'ha
+            <strong>davvero servita</strong> (col failover può non essere quello attivo). A budget
+            esaurito le chiamate si sospendono <em>senza</em> toccare il breaker dei guasti e
+            riprendono da sole al reset (mezzanotte UTC per i tetti giornalieri). 0 = nessun tetto.
+        </p>
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+            @if (_usage is { TrackingEnabled: true })
+            {
+                <span class="badge bg-success">tracking attivo</span>
+                <span class="badge bg-light text-dark">oggi: @_usage.TodayCalls chiamate · @_usage.TodayTokens token</span>
+                <span class="badge bg-light text-dark">mese: @_usage.MonthTokens token</span>
+                @if (_budgetVerdict is { Exhausted: true })
+                {
+                    <span class="badge bg-warning text-dark">BUDGET ESAURITO — @_budgetVerdict.Reason</span>
+                }
+            }
+            else
+            {
+                <span class="badge bg-secondary">tracking spento — nessun conteggio, nessun tetto</span>
+            }
+        </div>
+        @if (_usage is { TrackingEnabled: true, Today.Count: > 0 })
+        {
+            <div class="table-responsive mb-2">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Provider</th><th>Modello</th><th>Percorso</th><th class="text-end">Chiamate</th><th class="text-end">Token in</th><th class="text-end">Token out</th></tr></thead>
+                    <tbody>
+                        @foreach (var row in _usage.Today)
+                        {
+                            <tr>
+                                <td>@row.Provider</td><td><code>@row.Model</code></td><td>@row.Path</td>
+                                <td class="text-end">@row.Calls</td>
+                                <td class="text-end">@row.PromptTokens</td>
+                                <td class="text-end">@row.CompletionTokens</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-muted small mb-2">Solo i delta di oggi non ancora scritti a database; i totali nei badge comprendono anche il persistito.</p>
+        }
+        <div class="row g-2 align-items-end">
+            <div class="col-auto form-check ms-2 mb-2">
+                <input type="checkbox" class="form-check-input" id="budget-tracking" @bind="_budgetTracking" />
+                <label class="form-check-label" for="budget-tracking">Conteggio attivo</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Chiamate/giorno</label>
+                <input type="number" class="form-control form-control-sm" style="width:8rem" min="0" @bind="_budgetDailyCalls" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Token/giorno</label>
+                <input type="number" class="form-control form-control-sm" style="width:8rem" min="0" @bind="_budgetDailyTokens" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Token/mese</label>
+                <input type="number" class="form-control form-control-sm" style="width:8rem" min="0" @bind="_budgetMonthlyTokens" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary" @onclick="SaveBudgetAsync" disabled="@_busy">Salva budget</button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_budgetStatus))
+        {
+            <div class="alert @(_budgetIsError ? "alert-danger" : "alert-success") py-2 mt-2 mb-0">@_budgetStatus</div>
+        }
+    </div>
+</div>
+
 @if (_items is null)
 {
     <p><em>Caricamento…</em></p>
@@ -384,6 +460,16 @@ else
         AiProviders.Known.ToDictionary(p => p, _ => string.Empty);
     private string? _testResult;
     private bool _testIsError;
+
+    // ---- [AF1] Consumo e budget ----
+    private LlmUsageSnapshot? _usage;
+    private LlmBudgetVerdict? _budgetVerdict;
+    private bool _budgetTracking;
+    private int _budgetDailyCalls;
+    private int _budgetDailyTokens;
+    private int _budgetMonthlyTokens;
+    private string? _budgetStatus;
+    private bool _budgetIsError;
 
     // [Elenco modelli] catalogo per provider scaricato dall'API con la SUA chiave.
     private readonly Dictionary<string, IReadOnlyList<string>> _modelCatalog = new();
@@ -671,12 +757,49 @@ else
         finally { _busy = false; }
     }
 
+    /// <summary>
+    /// [AF1] Salva la sezione Llm:Budget come sezione PROPRIA (mai riscrivendo l'intera "Llm" da
+    /// un POCO che non modella Budget: è la classe di bug della perdita di MarketData:Realtime).
+    /// Hot-reload: il tracker e il guard leggono le opzioni a ogni chiamata.
+    /// </summary>
+    private async Task SaveBudgetAsync()
+    {
+        try
+        {
+            await ConfigWriter.SaveSectionAsync("Llm:Budget", new LlmBudgetOptions
+            {
+                TrackingEnabled = _budgetTracking,
+                DailyCallLimit = Math.Max(0, _budgetDailyCalls),
+                DailyTokenLimit = Math.Max(0, _budgetDailyTokens),
+                MonthlyTokenLimit = Math.Max(0, _budgetMonthlyTokens),
+            });
+            _budgetStatus = "Budget salvato: vale dalla prossima chiamata (hot-reload).";
+            _budgetIsError = false;
+            _usage = UsageSink.GetSnapshot();
+            _budgetVerdict = UsageSink.CheckBudget();
+        }
+        catch (Exception ex)
+        {
+            _budgetStatus = $"Salvataggio fallito: {ex.Message}";
+            _budgetIsError = true;
+        }
+    }
+
     private async Task LoadAsync()
     {
         _busy = true;
         try
         {
             _guard = Guard.GetStatus();
+
+            // [AF1] Snapshot consumo + verdetto budget + valori correnti del form.
+            _usage = UsageSink.GetSnapshot();
+            _budgetVerdict = UsageSink.CheckBudget();
+            var budget = BudgetMonitor.CurrentValue;
+            _budgetTracking = budget.TrackingEnabled;
+            _budgetDailyCalls = budget.DailyCallLimit;
+            _budgetDailyTokens = budget.DailyTokenLimit;
+            _budgetMonthlyTokens = budget.MonthlyTokenLimit;
 
             await using var db = await DbFactory.CreateDbContextAsync();
             var rows = await db.PipelineArtifacts

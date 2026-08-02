@@ -13,6 +13,9 @@ public enum LlmCallOutcome
     SkippedNotConfigured,
     /// <summary>Breaker aperto e cooldown non scaduto: nessuna chiamata.</summary>
     SkippedBreakerOpen,
+    /// <summary>[AF1] Budget del layer AI esaurito: nessuna chiamata, il breaker NON si muove
+    /// (un tetto raggiunto non è un guasto). Riprende da solo al reset del budget.</summary>
+    SkippedBudgetExhausted,
     /// <summary>Errore transitorio (credito, credenziali, rate-limit, server, rete, timeout): ritentabile.</summary>
     FailedRetryable,
     /// <summary>Errore permanente (richiesta non valida, refusal, parse): ritentarlo non serve.</summary>
@@ -74,7 +77,8 @@ public sealed class LlmCallGuard(
     ILogger<LlmCallGuard> logger,
     ProcioneMetrics? metrics = null,
     INotifier? notifier = null,
-    TimeProvider? timeProvider = null) : ILlmCallGuard
+    TimeProvider? timeProvider = null,
+    ILlmUsageSink? usageSink = null) : ILlmCallGuard
 {
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly object _gate = new();
@@ -101,6 +105,27 @@ public sealed class LlmCallGuard(
             return new LlmCallResult { Outcome = LlmCallOutcome.SkippedNotConfigured, Cause = "non configurato" };
         }
 
+        // [AF1] Budget PRIMA di tutto il resto, forceProbe compreso: il probe forza il COOLDOWN di
+        // un guasto, non un tetto di spesa — un budget bypassabile col bottone non è un budget.
+        // Il breaker non si muove (nessuna chiamata è partita) e l'operatore è avvisato UNA volta
+        // per transizione, con la ripresa automatica dichiarata nel messaggio.
+        if (usageSink?.CheckBudget() is { Exhausted: true } budget)
+        {
+            metrics?.RecordLlmCall(path, "skipped_budget");
+            if (usageSink.TryMarkExhaustionNotified())
+            {
+                logger.LogWarning("Chiamate AI SOSPESE per budget esaurito ({Reason}).", budget.Reason);
+                if (notifier is not null)
+                {
+                    await notifier.NotifyAsync(NotificationSeverity.Warning, "Budget AI esaurito",
+                        $"Le chiamate AI sono sospese ({budget.Reason}). Riprendono da sole al reset del " +
+                        "budget (mezzanotte UTC per i tetti giornalieri); i tetti si regolano da /admin/ai-supervisor.",
+                        CancellationToken.None);
+                }
+            }
+            return new LlmCallResult { Outcome = LlmCallOutcome.SkippedBudgetExhausted, Cause = budget.Reason };
+        }
+
         lock (_gate)
         {
             if (_breakerOpen)
@@ -119,6 +144,10 @@ public sealed class LlmCallGuard(
         var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(Math.Max(5, opt.RequestTimeoutSeconds));
         using var timeoutCts = new CancellationTokenSource(effectiveTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        // [AF1] Il path fluisce per contesto asincrono fino al client che serve la risposta
+        // (attraverso il failover): è lui a dichiarare il consumo, con SÉ STESSO come provider.
+        using var pathScope = LlmCallContext.Enter(path);
 
         try
         {

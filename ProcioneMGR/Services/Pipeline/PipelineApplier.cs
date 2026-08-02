@@ -23,7 +23,12 @@ namespace ProcioneMGR.Services.Pipeline;
 /// </summary>
 public interface IPipelineApplier
 {
-    /// <summary>Number of isolated trading lanes (must match Program.cs LaneCount).</summary>
+    /// <summary>
+    /// Number of lanes the automatic distribution spreads legs across. Deliberately the HISTORICAL
+    /// footprint (3), NOT the physical fleet size (<see cref="TradingLanes.Count"/>): growing the
+    /// fleet (AF0) must not silently widen what a scheduled re-apply overwrites. Deploying beyond
+    /// this footprint is the fleet orchestrator's job, with explicit target lanes (AF2).
+    /// </summary>
     int LaneCount { get; }
 
     /// <summary>Distributes the recommendation's legs across the lanes. Returns a report (lanes used, overflow, message).</summary>
@@ -54,7 +59,18 @@ public sealed class PipelineApplier(
     ExcursionAnalyzer excursion,
     IServiceProvider serviceProvider) : IPipelineApplier
 {
-    public int LaneCount => 3;
+    /// <summary>
+    /// [AF0] The literal 3 predates <see cref="TradingLanes"/> and is KEPT as the auto-apply
+    /// footprint now that the fleet can be larger: an 8-lane fleet with this at
+    /// <c>TradingLanes.Count</c> would spread a scheduled re-apply onto the dormant lanes, changing
+    /// behaviour nobody asked to change. Min() also covers the latent case of a fleet SMALLER than
+    /// the footprint, where lanes 1-2 would not exist as keyed services.
+    /// <see cref="GetCurrentEnsembleSummaryAsync"/> reads the same footprint — the comparison in
+    /// RunApplyEvaluator must look at exactly the lanes the re-apply would rewrite.
+    /// </summary>
+    private const int AutoApplyLaneFootprint = 3;
+
+    public int LaneCount => Math.Min(TradingLanes.Count, AutoApplyLaneFootprint);
 
     public async Task<ApplyResult> ApplyRunAsync(Guid runId, CancellationToken ct = default)
     {

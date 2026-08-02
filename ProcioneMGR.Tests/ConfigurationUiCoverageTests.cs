@@ -42,6 +42,12 @@ public sealed class ConfigurationUiCoverageTests
         ["Ml"] = "Components/Pages/Admin/Autonomy.razor",
         ["Observability:Enabled"] = "Components/Pages/Admin/Autonomy.razor",
         ["Observability:OtlpEndpoint"] = "Components/Pages/Admin/Autonomy.razor",
+        // [AF2] L'orchestratore di flotta: pannello + journal.
+        ["Fleet"] = "Components/Pages/Admin/Autonomy.razor",
+        // [AF5.1] Heartbeat incrociato: salvataggio doppio guscio+motore.
+        ["Heartbeat"] = "Components/Pages/Admin/Autonomy.razor",
+        // [AF1] Consumo e budget del layer AI.
+        ["Llm:Budget"] = "Components/Pages/Admin/AiSupervisor.razor",
 
         // --- /admin/protections: ciò che filtra o ferma un'operazione ---
         ["MarketData:Realtime"] = "Components/Pages/Admin/Protections.razor",
