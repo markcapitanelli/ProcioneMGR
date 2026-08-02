@@ -5,6 +5,19 @@ using Microsoft.Extensions.Options;
 namespace ProcioneMGR.Services.Llm;
 
 /// <summary>
+/// Chi sa elencare i modelli disponibili PER LA CHIAVE configurata. Interfaccia separata da
+/// <see cref="ILlmClient"/> di proposito: aggiungerlo lì costringerebbe ogni fake dei test a
+/// implementarlo, e non tutti i provider ce l'hanno. Il caso che l'ha resa necessaria (2026-08-02):
+/// Google ha ritirato gemini-2.5-flash per le chiavi nuove e perfino l'alias "-latest" puntava al
+/// modello morto — l'unico elenco affidabile è quello che l'API restituisce ALLA TUA chiave.
+/// </summary>
+public interface IModelCatalogProvider
+{
+    /// <summary>Gli id dei modelli disponibili per la chiave corrente, ordinati. Errori col contratto "&lt;PROVIDER&gt; HTTP &lt;code&gt;:".</summary>
+    Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct);
+}
+
+/// <summary>
 /// Base di OGNI provider che parla il dialetto OpenAI-compatible (<c>POST
 /// {base}/chat/completions</c>, Bearer, tre campi JSON). Nata come <c>NvidiaLlmClient</c> ed
 /// elevata a base quando il principio §1.2 del PRD («un provider nuovo = URL+chiave, zero client
@@ -20,7 +33,7 @@ public abstract class OpenAiCompatibleLlmClient(
     IHttpClientFactory httpClientFactory,
     IOptionsMonitor<LlmOptions> options,
     IAiKeyStore keyStore,
-    ILogger logger) : ILlmClient
+    ILogger logger) : ILlmClient, IModelCatalogProvider
 {
     /// <summary>Nome del client HTTP registrato in Program.cs (timeout largo: i modelli con reasoning sono lenti). Condiviso da tutti i provider compat.</summary>
     public const string HttpClientName = "OpenAiCompatLlm";
@@ -93,6 +106,43 @@ public abstract class OpenAiCompatibleLlmClient(
         }
 
         return content;
+    }
+
+    /// <summary>
+    /// <c>GET {base}/models</c> del dialetto OpenAI-compatible: gli id dei modelli disponibili
+    /// per la chiave corrente. Stessa autenticazione e stesso contratto d'errore delle chiamate
+    /// di completamento.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct)
+    {
+        var apiKey = await keyStore.GetKeyAsync(ProviderName, ct)
+            ?? throw new InvalidOperationException(
+                $"Nessuna chiave {ProviderName}: inseriscila in /admin/ai-supervisor (o imposta {AiProviders.EnvVarFor(ProviderName)}).");
+
+        var (baseUrl, _) = Endpoint(options.CurrentValue);
+        var http = httpClientFactory.CreateClient(HttpClientName);
+        using var request = new HttpRequestMessage(HttpMethod.Get, baseUrl.TrimEnd('/') + "/models");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+
+        using var response = await http.SendAsync(request, ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"{ProviderName.ToUpperInvariant()} HTTP {(int)response.StatusCode}: {(body.Length > 400 ? body[..400] : body)}");
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        var ids = new List<string>();
+        foreach (var el in doc.RootElement.GetProperty("data").EnumerateArray())
+        {
+            if (el.TryGetProperty("id", out var id) && id.GetString() is { Length: > 0 } value)
+            {
+                ids.Add(value);
+            }
+        }
+        ids.Sort(StringComparer.OrdinalIgnoreCase);
+        return ids;
     }
 }
 

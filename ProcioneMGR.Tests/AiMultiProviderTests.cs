@@ -224,6 +224,53 @@ public class AiMultiProviderTests
         Assert.Equal("HUGGINGFACE_API_KEY", AiProviders.EnvVarFor(AiProviders.HuggingFace));
     }
 
+    // ------------------------------------------------------------------ elenco modelli per chiave
+
+    [Fact]
+    public async Task ListModels_SendsGetToModelsEndpoint_AndParsesSortedIds()
+    {
+        var handler = new ScriptedHandler(HttpStatusCode.OK,
+            """{"object":"list","data":[{"id":"zeta-9b"},{"id":"alpha-70b"},{"id":"med-8b"}]}""");
+        var client = CompatClient(AiProviders.Groq, handler, KeysForAll(), new LlmOptions());
+
+        var models = await client.ListModelsAsync(CancellationToken.None);
+
+        Assert.Equal(["alpha-70b", "med-8b", "zeta-9b"], models);
+        Assert.Equal("api.groq.com", handler.LastUri!.Host);
+        Assert.EndsWith("/models", handler.LastUri!.AbsolutePath);
+        Assert.StartsWith("Bearer ", handler.LastAuthorization);
+    }
+
+    [Fact]
+    public async Task ListModels_HttpError_KeepsTheSpeakingContract()
+    {
+        var handler = new ScriptedHandler(HttpStatusCode.Unauthorized, """{"error":"invalid key"}""");
+        var client = CompatClient(AiProviders.Gemini, handler, KeysForAll(), new LlmOptions());
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ListModelsAsync(CancellationToken.None));
+
+        Assert.StartsWith("GEMINI HTTP 401:", ex.Message);
+        // Il contratto d'errore resta classificabile dal guard con la stessa tassonomia.
+        Assert.Equal((true, "credenziali"), LlmCallGuard.Classify(ex));
+    }
+
+    [Fact]
+    public async Task ListModels_Anthropic_UsesItsOwnDialect()
+    {
+        var handler = new ScriptedHandler(HttpStatusCode.OK,
+            """{"data":[{"id":"claude-b","display_name":"B"},{"id":"claude-a","display_name":"A"}],"has_more":false}""");
+        var keys = KeysForAll();
+        ((FakeKeyStore)keys).Keys[AiProviders.Anthropic] = "sk-ant-test";
+        var client = new AnthropicLlmClient(new LlmOptions().AsMonitor(),
+            NullLogger<AnthropicLlmClient>.Instance, keys, new SingleClientFactory(handler));
+
+        var models = await client.ListModelsAsync(CancellationToken.None);
+
+        Assert.Equal(["claude-a", "claude-b"], models);
+        Assert.Equal("api.anthropic.com", handler.LastUri!.Host);
+        Assert.Null(handler.LastAuthorization); // x-api-key, non Bearer: il dialetto è il suo
+    }
+
     [Fact]
     public async Task Delegating_WithResolver_RoutesToEveryKnownProvider()
     {

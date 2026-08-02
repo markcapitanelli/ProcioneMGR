@@ -16,6 +16,7 @@
 @inject LlmSupervisorWorker LlmWorker
 @inject IAiKeyStore KeyStore
 @inject IOptionsMonitor<LlmOptions> LlmOptionsMonitor
+@inject ILlmClientResolver ClientResolver
 @inject ProcioneMGR.Services.Config.IAppConfigWriter ConfigWriter
 
 <PageTitle>Supervisione AI</PageTitle>
@@ -61,15 +62,41 @@
             @foreach (var p in AiProviders.Known)
             {
                 <div class="col-auto">
-                    <label class="form-label mb-0">Modello @p</label>
-                    <input class="form-control" @bind="_models[p]" style="min-width: 15rem"
-                           placeholder="@ModelPlaceholder(p)" />
+                    <label class="form-label mb-0">
+                        Modello @p
+                        @if (_modelCatalog.TryGetValue(p, out var catalog) && catalog.Count > 0)
+                        {
+                            <span class="badge bg-light text-dark ms-1" title="modelli disponibili per la TUA chiave">@catalog.Count</span>
+                        }
+                    </label>
+                    <div class="input-group" style="min-width: 17rem">
+                        <input class="form-control" list="models-@p" @bind="_models[p]"
+                               placeholder="@ModelPlaceholder(p)" />
+                        <button class="btn btn-outline-secondary" title="Scarica dall'API l'elenco dei modelli disponibili per la chiave di @p"
+                                @onclick="() => FetchModelsAsync(p)" disabled="@(_fetchingModels == p)">
+                            @if (_fetchingModels == p)
+                            { <span class="spinner-border spinner-border-sm"></span> }
+                            else
+                            { <i class="bi bi-cloud-download"></i> }
+                        </button>
+                    </div>
+                    <datalist id="models-@p">
+                        @if (_modelCatalog.TryGetValue(p, out var list))
+                        {
+                            @foreach (var m in list)
+                            { <option value="@m"></option> }
+                        }
+                    </datalist>
                 </div>
             }
             <div class="col-auto">
                 <button class="btn btn-primary" @onclick="SaveProviderAsync" disabled="@_busy">Salva provider/modelli</button>
             </div>
         </div>
+        @if (!string.IsNullOrEmpty(_catalogStatus))
+        {
+            <div class="alert @(_catalogIsError ? "alert-danger" : "alert-success") py-2 mb-2" style="white-space: pre-wrap;">@_catalogStatus</div>
+        }
 
         @* [Fase C] Secondo parere: stesso run, provider diverso, artifact separato. *@
         <div class="row g-3 align-items-end mb-3">
@@ -334,7 +361,48 @@ else
     private string? _testResult;
     private bool _testIsError;
 
+    // [Elenco modelli] catalogo per provider scaricato dall'API con la SUA chiave.
+    private readonly Dictionary<string, IReadOnlyList<string>> _modelCatalog = new();
+    private string? _fetchingModels;
+    private bool _catalogIsError;
+    private string? _catalogStatus;
+
     private string ActiveModel => _models.GetValueOrDefault(_provider, "");
+
+    /// <summary>
+    /// Scarica dall'API del provider l'elenco dei modelli disponibili per la SUA chiave e lo
+    /// aggancia al campo modello (datalist). È il rimedio strutturale al caso Gemini del
+    /// 2026-08-02: i nomi dei modelli invecchiano, l'elenco della propria chiave no.
+    /// </summary>
+    private async Task FetchModelsAsync(string provider)
+    {
+        _fetchingModels = provider; _catalogIsError = false; _catalogStatus = null;
+        try
+        {
+            if (ClientResolver.Resolve(provider) is not IModelCatalogProvider catalogProvider)
+            {
+                _catalogIsError = true;
+                _catalogStatus = $"Il provider {provider} non espone un elenco modelli.";
+                return;
+            }
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var models = await catalogProvider.ListModelsAsync(cts.Token);
+            _modelCatalog[provider] = models;
+            _catalogStatus = models.Count == 0
+                ? $"{provider}: l'API ha risposto con un elenco vuoto."
+                : $"{provider}: {models.Count} modelli disponibili per la tua chiave — il campo ora li suggerisce mentre scrivi (freccia giù per sfogliarli).";
+            if (models.Count > 0 && !models.Contains(_models[provider], StringComparer.OrdinalIgnoreCase))
+            {
+                _catalogStatus += $"\nATTENZIONE: il modello attuale «{_models[provider]}» NON è nell'elenco: sceglierne uno valido prima di salvare.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _catalogIsError = true;
+            _catalogStatus = $"Elenco modelli {provider} non scaricabile: {ex.Message}";
+        }
+        finally { _fetchingModels = null; }
+    }
 
     /// <summary>Il modello del provider dentro LlmOptions (campi piatti, stile NvidiaModel).</summary>
     private static string GetModelFor(LlmOptions o, string provider) => provider switch
@@ -361,7 +429,7 @@ else
     private static string ModelPlaceholder(string provider) => provider switch
     {
         AiProviders.Nvidia => "es. meta/llama-3.3-70b-instruct",
-        AiProviders.Gemini => "es. gemini-2.5-flash",
+        AiProviders.Gemini => "es. models/gemini-3.6-flash",
         AiProviders.Groq => "es. llama-3.3-70b-versatile",
         AiProviders.HuggingFace => "es. meta-llama/Llama-3.3-70B-Instruct",
         _ => "es. claude-opus-4-8",

@@ -98,10 +98,20 @@ parlano il dialetto OpenAI-compatible → il principio §1.2 passa dalla promess
 | Errori | il classificatore del guard legge il contratto generico `<PROVIDER> HTTP <code>:` — la tassonomia è del codice HTTP, non del nome del provider | `LlmCallGuard` |
 | Routing | `LlmClientResolver` a 5; `DelegatingLlmClient` instrada via resolver (fallback storico a due senza) | `LlmClientResolver.cs` |
 | UI | il pannello genera un campo modello PER provider dal ciclo su `AiProviders.Known`; la tabella chiavi e il select del secondo parere erano già cicli | `/admin/ai-supervisor` |
+| **Elenco modelli per chiave** | `IModelCatalogProvider.ListModelsAsync` — `GET {base}/models` per i compat (stesso Bearer, stesso contratto d'errore), `GET /v1/models` col dialetto proprio (x-api-key) per Anthropic; nel pannello un pulsante per provider scarica l'elenco DELLA PROPRIA chiave e lo aggancia al campo come suggerimenti (datalist), con avviso se il modello attuale non è in elenco | idem |
 
-Con cinque provider il **secondo parere (Fase C) ha finalmente coppie utilizzabili** anche a
-credito Anthropic esaurito (es. attivo Nvidia + confronto Groq). Il confine advisory e il breaker
-unico del layer restano invariati.
+**Il caso che ha dettato la funzione** (2026-08-02, dal vivo): Google ha ritirato
+`gemini-2.5-flash` per le chiavi nuove e perfino l'alias `gemini-flash-latest` puntava al modello
+morto — errore parlante `GEMINI HTTP 404` col rimedio nel testo. L'elenco della chiave reale
+(59 modelli) ha dato l'id giusto: `models/gemini-3.6-flash` (prefisso `models/` incluso, com'è
+nell'elenco). **I nomi dei modelli invecchiano; l'elenco della propria chiave no.**
+
+**Collaudo dal vivo (2026-08-02)**: Gemini · `models/gemini-3.6-flash` ✔, Groq ·
+`llama-3.3-70b-versatile` ✔ (latenza da primato), HuggingFace · `meta-llama/Llama-3.3-70B-Instruct`
+✔ — tre «Prova collegamento» confermati sull'app reale con le chiavi del proprietario. Con cinque
+provider il **secondo parere (Fase C) ha finalmente coppie utilizzabili** anche a credito Anthropic
+esaurito (es. attivo Nvidia + confronto Groq). Il confine advisory e il breaker unico del layer
+restano invariati.
 
 ### Candidato aperto (non impegnato)
 
