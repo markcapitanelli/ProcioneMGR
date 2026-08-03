@@ -107,7 +107,6 @@ public static class DailyDigestComposer
 /// </summary>
 public sealed class DailyDigestWorker(
     IOptionsMonitor<DigestOptions> options,
-    ILaneDirectory laneDirectory,
     IPromotionEvaluator promotionEvaluator,
     IDbContextFactory<ApplicationDbContext> dbFactory,
     ILlmUsageSink usageSink,

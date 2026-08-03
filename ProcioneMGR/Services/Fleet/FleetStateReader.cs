@@ -214,9 +214,7 @@ public sealed class FleetStateReader(
         }
 
         var grey = validated
-            .Where(candidate => !candidate.Survived && candidate.HoldoutSharpe > 0m && candidate.HoldoutTrades > 0)
-            .Where(candidate => (candidate.RejectReason?.StartsWith("Solo ", StringComparison.Ordinal) ?? false)
-                                || candidate.DeflatedSharpe is >= GreyDsrFloor and < 0.95)
+            .Where(IsGrey)
             .OrderByDescending(candidate => candidate.HoldoutSharpe)
             .ToList();
         if (grey.Count == 0) return null;
@@ -228,6 +226,19 @@ public sealed class FleetStateReader(
             $"{best.StrategyName} {best.Symbol} {best.Timeframe}: Sharpe holdout {best.HoldoutSharpe:F2} su {best.HoldoutTrades} trade"
             + (grey.Count > 1 ? $" (+{grey.Count - 1} altri in fascia grigia)" : ""));
     }
+
+    /// <summary>
+    /// IL filtro della fascia grigia — l'unica definizione, condivisa fra il lettore (le proposte)
+    /// e il GreyDeployer (il click umano): bocciato per SOLA finestra corta (ContoTrade "Solo N
+    /// trade…" o DSR in [0.80, 0.95)) CON Sharpe holdout positivo e almeno un trade. Un grigio che
+    /// perde non è grigio: è bocciato nel merito.
+    /// </summary>
+    internal static bool IsGrey(ValidatedCandidate candidate) =>
+        !candidate.Survived
+        && candidate.HoldoutSharpe > 0m
+        && candidate.HoldoutTrades > 0
+        && ((candidate.RejectReason?.StartsWith("Solo ", StringComparison.Ordinal) ?? false)
+            || candidate.DeflatedSharpe is >= GreyDsrFloor and < 0.95);
 
     /// <summary>
     /// Mesi della finestra holdout della config. Null se non derivabile (e allora il run non è un
