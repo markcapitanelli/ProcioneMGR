@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Mediator;
+using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Services.Trading.Commands;
 using ProcioneMGR.Services.Trading.Queries;
 
@@ -29,7 +30,8 @@ public sealed class TradingPageService(
     ILanePromoter promoter,
     IEngineConfigStore engineConfig,
     ILaneQuarantineStore quarantineStore,
-    IServiceProvider? serviceProvider = null)   // opzionale: serve solo a ClearLaneAsync (manager keyed); i test storici non cambiano
+    IServiceProvider? serviceProvider = null,   // opzionale: ClearLaneAsync + LaneStory (manager keyed); i test storici non cambiano
+    Microsoft.EntityFrameworkCore.IDbContextFactory<Data.ApplicationDbContext>? dbFactory = null)   // opzionale: candele del grafico + provenienza dal journal
 {
     public TradingEngineStatus? Status { get; private set; }
 
@@ -70,6 +72,95 @@ public sealed class TradingPageService(
 
     /// <summary>Vero se le soglie vivono in un altro processo (cambia solo cosa dire all'operatore).</summary>
     public bool SafetyIsRemote => engineConfig.IsRemote;
+
+    /// <summary>La "carta d'identità" della corsia: cosa gira, con che aspettative, da dove viene.</summary>
+    public sealed record LaneStoryStrategy(
+        string DisplayName, decimal? ExpectedSharpe, decimal? ExpectedProfitFactor, decimal? ExpectedMaxDrawdown,
+        decimal? StopLossPercent, decimal? TakeProfitPercent, decimal? TrailingStopPercent);
+
+    public sealed record LaneStoryInfo(
+        string Symbol, string Timeframe,
+        IReadOnlyList<LaneStoryStrategy> Strategies,
+        string? Provenance, string? ProvenanceSource, DateTime? ProvenanceAtUtc);
+
+    public LaneStoryInfo? Story { get; private set; }
+
+    /// <summary>Candele per il grafico prezzi+operazioni (ultime ~300 del simbolo/timeframe della corsia).</summary>
+    public List<Data.OhlcvData> ChartCandles { get; private set; } = [];
+
+    /// <summary>
+    /// [2026-08-03, richiesta proprietario] Carica la storia della corsia (configurazione con le
+    /// aspettative + provenienza dal journal della flotta — lo stesso testo delle proposte
+    /// Telegram) e le candele per il grafico delle operazioni. Chiamata al cambio corsia e al
+    /// refresh lento (~30s), NON a ogni battito da 2s: due query in più al battito sarebbero
+    /// rumore per un dato che cambia di rado.
+    /// </summary>
+    public async Task LoadLaneStoryAsync(int laneId, CancellationToken ct = default)
+    {
+        try
+        {
+            // La configurazione con le aspettative (ExpectedSharpe/PF/DD arrivano dall'holdout
+            // del candidato: sono la "promessa" contro cui il forward test misura la realtà).
+            if (serviceProvider is not null)
+            {
+                var manager = Microsoft.Extensions.DependencyInjection.ServiceProviderKeyedServiceExtensions
+                    .GetRequiredKeyedService<Ensemble.IEnsembleManager>(serviceProvider, laneId);
+                var cfg = await manager.GetConfigurationAsync(ct);
+                var strategies = cfg.Strategies
+                    .Where(s => s.IsActive)
+                    .Select(s => new LaneStoryStrategy(
+                        string.IsNullOrWhiteSpace(s.DisplayName) ? s.StrategyName : s.DisplayName,
+                        s.ExpectedSharpe, s.ExpectedProfitFactor, s.ExpectedMaxDrawdown,
+                        s.StopLossPercent, s.TakeProfitPercent, s.TrailingStopPercent))
+                    .ToList();
+
+                string? provenance = null;
+                string? provenanceSource = null;
+                DateTime? provenanceAt = null;
+                if (dbFactory is not null)
+                {
+                    // La provenienza: l'ultima assegnazione della flotta per questa corsia — lo
+                    // STESSO testo della proposta/schieramento arrivato su Telegram.
+                    await using var db = await dbFactory.CreateDbContextAsync(ct);
+                    var assign = await db.OrchestratorDecisions.AsNoTracking()
+                        .Where(d => d.LaneId == laneId && d.Kind == "Assign")
+                        .OrderByDescending(d => d.AtUtc)
+                        .FirstOrDefaultAsync(ct);
+                    provenance = assign?.Reason;
+                    provenanceSource = assign?.Source;
+                    provenanceAt = assign?.AtUtc;
+                }
+
+                Story = string.IsNullOrEmpty(cfg.Symbol)
+                    ? null
+                    : new LaneStoryInfo(cfg.Symbol, cfg.Timeframe, strategies, provenance, provenanceSource, provenanceAt);
+            }
+
+            // Le candele del grafico: ultime ~300 del simbolo/timeframe correnti.
+            if (dbFactory is not null && Story is not null)
+            {
+                await using var db = await dbFactory.CreateDbContextAsync(ct);
+                var recent = await db.OhlcvData.AsNoTracking()
+                    .Where(c => c.Symbol == Story.Symbol && c.Timeframe == Story.Timeframe)
+                    .OrderByDescending(c => c.TimestampUtc)
+                    .Take(300)
+                    .ToListAsync(ct);
+                recent.Reverse();
+                ChartCandles = recent;
+            }
+            else
+            {
+                ChartCandles = [];
+            }
+        }
+        catch (Exception ex)
+        {
+            // La carta d'identità è contesto, non controllo: un guasto qui non deve rompere la pagina.
+            Story = null;
+            ChartCandles = [];
+            System.Diagnostics.Debug.WriteLine($"LoadLaneStory fallito: {ex.Message}");
+        }
+    }
 
     /// <summary>
     /// [2026-08-03] Svuota la configurazione di una corsia FERMA (mai la rimuove: l'id è identità —
@@ -117,31 +208,38 @@ public sealed class TradingPageService(
     private readonly Dictionary<string, decimal?> _tpEdits = new();
     private readonly Dictionary<string, decimal?> _tslEdits = new();
 
+    /// <summary>
+    /// [2026-08-03] Perf del TEST CORRENTE (da StartedAtUtc): la stessa base della decisione di
+    /// promozione. I KPI della pagina la usano al posto dei totali di Status, che sommano tutte le
+    /// vite precedenti della corsia (corsia 0 mostrava «159 trade» dei run di luglio accanto a
+    /// un'equity vuota: tre finestre diverse nella stessa pagina, trovate dal proprietario).
+    /// </summary>
+    public TradingPerformance? Perf { get; private set; }
+
     public async Task RefreshAsync(int laneId)
     {
         try
         {
-            // Le cinque letture sono indipendenti: in parallelo, non in fila. In modalità remota
-            // (Trading:UseRemoteTrading) tre di queste sono round-trip gRPC — sommarne le latenze
-            // ogni 2 secondi era solo attesa gratuita. Il motore regge già le chiamate concorrenti
-            // per costruzione: il TradingWorker gli parla in parallelo alla UI da sempre.
-            // Tutte le letture e i comandi di questa classe passano ora da IMediator (Fase 1) —
-            // nessuna risoluzione diretta di ITradingEngine resta in questo file.
-            var statusTask = mediator.Send(new GetLaneStatusQuery(laneId)).AsTask();
+            // Lo STATUS per primo (serve StartedAtUtc per la finestra di perf); le altre quattro
+            // letture in parallelo — in modalità remota sono round-trip gRPC, e sommarne le
+            // latenze ogni 2 secondi era solo attesa gratuita. Il motore regge le chiamate
+            // concorrenti per costruzione (il TradingWorker gli parla in parallelo da sempre).
+            // Tutte le letture e i comandi passano da IMediator (Fase 1).
+            Status = await mediator.Send(new GetLaneStatusQuery(laneId));
+
             var positionsTask = mediator.Send(new GetOpenPositionsQuery(laneId)).AsTask();
             var ordersTask = mediator.Send(new GetOrderHistoryQuery(laneId)).AsTask();
             var pendingTask = mediator.Send(new GetPendingOrdersQuery(laneId)).AsTask();
-            // Finestra di 90 giorni (stesso taglio di Ensemble.razor), NON tutto lo storico: questa
-            // pagina di perf usa solo l'equity curve (già bounded a 10k punti dal motore) — i
-            // TradeRecord non li legge nessuno qui (vedi anche P3-12: il motore stesso li tronca ora).
-            var perfTask = mediator.Send(new GetPerformanceQuery(laneId, DateTime.UtcNow.AddDays(-90))).AsTask();
-            await Task.WhenAll(statusTask, positionsTask, ordersTask, pendingTask, perfTask);
-
-            Status = statusTask.Result;
+            // [2026-08-03] UNA finestra per tutta la pagina: dal TEST CORRENTE (StartedAtUtc),
+            // stessa base della tabella promozioni. Fallback 90gg per una corsia mai avviata.
+            var perfFrom = Status?.StartedAtUtc ?? DateTime.UtcNow.AddDays(-90);
+            var perfTask = mediator.Send(new GetPerformanceQuery(laneId, perfFrom)).AsTask();
+            await Task.WhenAll(positionsTask, ordersTask, pendingTask, perfTask);
             Positions = positionsTask.Result;
             Orders = ordersTask.Result;
             Pending = pendingTask.Result;
             var perf = perfTask.Result;
+            Perf = perf;
             Equity = perf.EquityCurve.Count > 0
                 ?
                 [

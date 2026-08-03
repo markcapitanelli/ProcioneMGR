@@ -232,6 +232,45 @@
 
 @if (Service.Status is not null)
 {
+    @* [2026-08-03] La "carta d'identità" della corsia: cosa gira, con che aspettative, da dove
+       viene — lo stesso racconto delle proposte Telegram, qui accanto ai numeri che lo misurano. *@
+    @if (Service.Story is { } story)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Cosa sta facendo questa corsia — @story.Symbol @story.Timeframe</div>
+            <div class="card-body py-2">
+                @foreach (var s in story.Strategies)
+                {
+                    <div class="mb-1">
+                        <strong>@s.DisplayName</strong>
+                        <span class="text-muted small ms-2">
+                            attese (holdout): Sharpe @(s.ExpectedSharpe?.ToString("F2") ?? "—") · PF @(s.ExpectedProfitFactor?.ToString("F2") ?? "—") · DD @(s.ExpectedMaxDrawdown?.ToString("F1") ?? "—")%
+                            &nbsp;·&nbsp; protezioni: SL @(s.StopLossPercent?.ToString("F2") ?? "—")% / TP @(s.TakeProfitPercent?.ToString("F2") ?? "—")%@(s.TrailingStopPercent is not null ? $" / TSL {s.TrailingStopPercent:F2}%" : "")
+                        </span>
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(story.Provenance))
+                {
+                    <div class="text-muted small mt-2 border-top pt-2">
+                        <span class="badge @(story.ProvenanceSource == "human" ? "bg-info text-dark" : "bg-secondary") me-1">@(story.ProvenanceSource == "human" ? "tuo click" : story.ProvenanceSource)</span>
+                        @story.Provenance
+                        @if (story.ProvenanceAtUtc is DateTime at)
+                        {
+                            <span class="ms-1">(@at.ToLocalTime().ToString("dd/MM HH:mm"))</span>
+                        }
+                    </div>
+                }
+                <div class="text-muted small mt-1">
+                    In test dal @(Service.Status.StartedAtUtc?.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ?? "—"): il forward test misura la promessa dell'holdout contro il mercato vero. I numeri qui sotto partono da lì.
+                </div>
+            </div>
+        </div>
+    }
+
+    @* [2026-08-03] KPI del TEST CORRENTE (da StartedAtUtc, stessa base della tabella promozioni):
+       prima Total PnL/Trades/Win venivano dai totali del motore, che sommano tutte le vite
+       precedenti della corsia — 159 trade di luglio accanto a un'equity vuota. Capitale e
+       margini restano dallo Status: sono lo stato presente, non una finestra. *@
     <div class="row g-2 mb-3">
         <div class="col-auto">@Metric("Total Capital", Service.Status.TotalCapital.ToString("N2"))</div>
         <div class="col-auto">@Metric("Available", Service.Status.AvailableCapital.ToString("N2"))</div>
@@ -240,11 +279,13 @@
         {
             <div class="col-auto">@Metric("Leva", Service.Status.Leverage + "x")</div>
         }
-        <div class="col-auto">@Metric("Total PnL", Service.Status.TotalPnl.ToString("N2"), Service.Status.TotalPnl >= 0)</div>
-        <div class="col-auto">@Metric("PnL %", Service.Status.TotalPnlPercent.ToString("F2") + "%", Service.Status.TotalPnlPercent >= 0)</div>
-        <div class="col-auto">@Metric("Max DD %", Service.Status.MaxDrawdown.ToString("F2"), false)</div>
-        <div class="col-auto">@Metric("Trades", Service.Status.TotalTrades.ToString())</div>
-        <div class="col-auto">@Metric("Win Rate", Service.Status.WinRate.ToString("F0") + "%")</div>
+        @if (Service.Perf is { } perf)
+        {
+            <div class="col-auto">@Metric("PnL (test)", perf.TotalReturn.ToString("N2"), perf.TotalReturn >= 0)</div>
+            <div class="col-auto">@Metric("Max DD % (test)", perf.MaxDrawdown.ToString("F2"), false)</div>
+            <div class="col-auto">@Metric("Trades (test)", perf.TotalTrades.ToString())</div>
+            <div class="col-auto">@Metric("Win (test)", perf.TotalTrades > 0 ? perf.WinRate.ToString("F0") + "%" : "—")</div>
+        }
     </div>
 
     <div class="card mb-3">
@@ -441,10 +482,21 @@
         }
     </div>
 
+    @* [2026-08-03, richiesta proprietario] Il grafico delle OPERAZIONI: prezzi del simbolo con i
+       marker di ogni entrata/uscita del test corrente e le linee entry/SL/TP delle posizioni
+       aperte — dove sta il prezzo rispetto a dove la strategia si aspetta di uscire. *@
+    @if (Service.ChartCandles.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Prezzo e operazioni — @Service.Story?.Symbol @Service.Story?.Timeframe (▲▼ entrate · ● uscite col PnL · linee: entry/SL/TP delle posizioni aperte)</div>
+            <div class="card-body"><OhlcvChart Candles="Service.ChartCandles" Indicators="@(Array.Empty<ProcioneMGR.Services.Indicators.IndicatorSeries>())" Markers="TradeMarkers()" PriceLines="PositionLines()" Height="360" /></div>
+        </div>
+    }
+
     @if (Service.Equity.Count > 0)
     {
         <div class="card mb-3">
-            <div class="card-header">Equity curve</div>
+            <div class="card-header">Equity curve (dal test corrente)</div>
             <div class="card-body"><OhlcvChart ShowCandles="false" Indicators="Service.Equity" Height="280" /></div>
         </div>
     }
@@ -825,6 +877,7 @@
         AdoptLaneMode();
         await LoadExitDiagnosticsAsync();
         await Service.RefreshPromotionsAsync();
+        await Service.LoadLaneStoryAsync(_laneId);
         _timer = new PollingTimer(TimeSpan.FromSeconds(2), () => InvokeAsync(RefreshAsync), Logger);
     }
 
@@ -850,8 +903,66 @@
     {
         _confirmClear = false;
         await Service.ClearLaneAsync(_laneId);
+        await Service.LoadLaneStoryAsync(_laneId); // la carta d'identità deve sparire subito
         await RefreshAsync();
     }
+
+    /// <summary>
+    /// I marker delle operazioni del TEST CORRENTE: ▲/▼ all'entrata (long/short), ● all'uscita
+    /// col PnL. I tempi si arrotondano all'apertura della candela del timeframe corrente, o il
+    /// marker non si aggancia alla barra giusta.
+    /// </summary>
+    private IReadOnlyList<OhlcvChart.ChartMarker> TradeMarkers()
+    {
+        if (Service.Perf is not { } perf || Service.ChartCandles.Count == 0) return [];
+        var barSeconds = Service.ChartCandles.Count >= 2
+            ? (long)(Service.ChartCandles[1].TimestampUtc - Service.ChartCandles[0].TimestampUtc).TotalSeconds
+            : 60;
+        var firstBar = ToUnix(Service.ChartCandles[0].TimestampUtc);
+
+        long Snap(DateTime utc)
+        {
+            var t = ToUnix(utc);
+            return barSeconds > 0 ? t - ((t - firstBar) % barSeconds + barSeconds) % barSeconds : t;
+        }
+
+        var markers = new List<OhlcvChart.ChartMarker>();
+        foreach (var t in perf.Trades)
+        {
+            var isLong = t.Side == OrderSide.Buy;
+            markers.Add(new OhlcvChart.ChartMarker(Snap(t.OpenedAtUtc),
+                isLong ? "belowBar" : "aboveBar", isLong ? "#26a69a" : "#ef5350",
+                isLong ? "arrowUp" : "arrowDown", $"{(isLong ? "Long" : "Short")} @{t.EntryPrice:0.####}"));
+            markers.Add(new OhlcvChart.ChartMarker(Snap(t.ClosedAtUtc),
+                "aboveBar", t.Pnl >= 0 ? "#26a69a" : "#ef5350",
+                "circle", $"{(t.Pnl >= 0 ? "+" : "")}{t.Pnl:0.##}"));
+        }
+        // Le posizioni ancora aperte: l'entrata c'è, l'uscita non ancora.
+        foreach (var p in Service.Positions)
+        {
+            var isLong = p.Side == OrderSide.Buy;
+            markers.Add(new OhlcvChart.ChartMarker(Snap(p.OpenedAtUtc),
+                isLong ? "belowBar" : "aboveBar", "#2962FF",
+                isLong ? "arrowUp" : "arrowDown", $"APERTA {(isLong ? "Long" : "Short")} @{p.EntryPrice:0.####}"));
+        }
+        return markers;
+    }
+
+    /// <summary>Le linee di prezzo delle posizioni APERTE: entry (piena) + SL/TP (tratteggiate) — dove la strategia si aspetta di uscire.</summary>
+    private IReadOnlyList<OhlcvChart.ChartPriceLine> PositionLines()
+    {
+        var lines = new List<OhlcvChart.ChartPriceLine>();
+        foreach (var p in Service.Positions)
+        {
+            lines.Add(new OhlcvChart.ChartPriceLine((double)p.EntryPrice, "#2962FF", "entry", Dashed: false));
+            if (p.StopLoss is decimal sl) lines.Add(new OhlcvChart.ChartPriceLine((double)sl, "#ef5350", "SL"));
+            if (p.TakeProfit is decimal tp) lines.Add(new OhlcvChart.ChartPriceLine((double)tp, "#26a69a", "TP"));
+        }
+        return lines;
+    }
+
+    private static long ToUnix(DateTime utc) =>
+        new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc)).ToUnixTimeSeconds();
 
     private IReadOnlyList<LaneSummary> _lanes = [];
 
@@ -863,6 +974,8 @@
         await RefreshAsync();
         AdoptLaneMode();
         await LoadExitDiagnosticsAsync();
+        await Service.LoadLaneStoryAsync(_laneId);
+        StateHasChanged();
     }
 
     /// <summary>
@@ -899,6 +1012,7 @@
         if (++_refreshTick % 15 == 0)
         {
             await Service.RefreshPromotionsAsync();
+            await Service.LoadLaneStoryAsync(_laneId); // candele nuove e provenienza al passo lento
         }
         StateHasChanged();
     }
