@@ -256,44 +256,9 @@ public sealed class PipelineApplier(
     }
 
     /// <summary>
-    /// Protective SL+TP bracket (% from entry) from the pair/timeframe's recent candles via
-    /// <see cref="ExcursionAnalyzer"/>. Primary (R1.5): MAE/MFE over a holding horizon, conditioned on
-    /// the CURRENT volatility regime (<see cref="ExcursionAnalyzer.SuggestAdaptiveBracket"/>); mean of
-    /// the long/short brackets for a symmetric level. Falls back to the single-bar 95th-percentile
-    /// excursions when the horizon sampling is too sparse. (0,0) if data is insufficient.
+    /// [AF] Extracted verbatim to <see cref="AutoBracket"/> (shared with the grey-candidate deploy
+    /// path — one implementation, no drift). Kept as a thin instance wrapper for the call sites.
     /// </summary>
-    private async Task<(decimal sl, decimal tp)> ComputeAutoBracketAsync(string symbol, string timeframe, CancellationToken ct)
-    {
-        try
-        {
-            await using var db = await dbFactory.CreateDbContextAsync(ct);
-            var candles = await db.OhlcvData
-                .Where(c => c.Symbol == symbol && c.Timeframe == timeframe)
-                .OrderByDescending(c => c.TimestampUtc)
-                .Take(5000)
-                .ToListAsync(ct);
-            if (candles.Count < 100) return (0m, 0m);
-            candles.Reverse(); // chronological for the analysis
-
-            static decimal Avg(decimal a, decimal b)
-            {
-                var v = new[] { a, b }.Where(x => x > 0m).ToList();
-                return v.Count > 0 ? Math.Round(v.Average(), 2) : 0m;
-            }
-
-            // R1.5: MAE/MFE sull'orizzonte di detenzione, consapevole del regime di volatilità corrente.
-            var longB = excursion.SuggestAdaptiveBracket(candles, OrderSide.Buy);
-            var shortB = excursion.SuggestAdaptiveBracket(candles, OrderSide.Sell);
-            var sl = Avg(longB.StopLossPercent, shortB.StopLossPercent);
-            var tp = Avg(longB.TakeProfitPercent, shortB.TakeProfitPercent);
-            if (sl > 0m || tp > 0m) return (sl, tp);
-
-            // Fallback: escursioni a barra singola (campioni orizzonte insufficienti).
-            var slBar = excursion.SuggestStopLoss(candles);
-            var tpBar = excursion.SuggestTakeProfit(candles);
-            return (Avg(slBar.LongStopPercentile95, slBar.ShortStopPercentile95),
-                    Avg(tpBar.LongTakeProfitPercentile95, tpBar.ShortTakeProfitPercentile95));
-        }
-        catch { return (0m, 0m); }
-    }
+    private Task<(decimal sl, decimal tp)> ComputeAutoBracketAsync(string symbol, string timeframe, CancellationToken ct)
+        => AutoBracket.ComputeAsync(dbFactory, excursion, symbol, timeframe, ct);
 }

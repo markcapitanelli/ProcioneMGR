@@ -526,6 +526,9 @@ builder.Services.AddHostedService<ProcioneMGR.Services.Notifications.DailyDigest
 // MAI l'impronta storica (corsie 0..2), le corsie Live/Testnet, le quarantene o le campagne.
 builder.Services.Configure<ProcioneMGR.Services.Fleet.FleetOptions>(builder.Configuration.GetSection("Fleet"));
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IFleetStateReader, ProcioneMGR.Services.Fleet.FleetStateReader>();
+// [F5] Il click umano sui candidati grigi: scrive la config su una corsia di flotta libera e
+// (se richiesto) la avvia in Paper. Solo grigi, solo flotta, solo Paper: non è una porta di servizio.
+builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IGreyDeployer, ProcioneMGR.Services.Fleet.GreyDeployer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.FleetOrchestratorWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Fleet.FleetOrchestratorWorker>());
 

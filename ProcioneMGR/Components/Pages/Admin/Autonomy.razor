@@ -40,6 +40,8 @@
 @inject IOptionsMonitor<RegimeTriggerOptions> RegimeTriggerMonitor
 @inject IOptionsMonitor<ProcioneMGR.Services.Fleet.FleetOptions> FleetMonitor
 @inject ProcioneMGR.Services.Fleet.FleetOrchestratorWorker FleetWorker
+@inject ProcioneMGR.Services.Fleet.IGreyDeployer GreyDeployer
+@inject ILaneDirectory LaneDirectory
 @inject IPipelineApplier PipelineApplier
 @inject IOptionsMonitor<ProcioneMGR.Services.Health.HeartbeatOptions> HeartbeatMonitor
 @inject IOptionsMonitor<DigestOptions> DigestMonitor
@@ -357,6 +359,63 @@
                 <button class="btn btn-primary" @onclick='() => SaveAsync("Fleet", _fleet, "Orchestratore di flotta")' disabled="@_busy">Salva</button>
             </div>
         </div>
+        @* [F5] IL CLICK UMANO: schiera un candidato grigio proposto su una corsia di flotta libera. *@
+        @if (_greyRuns.Count > 0)
+        {
+            <div class="border rounded p-2 mb-3">
+                <strong class="small">Schiera un candidato grigio (forward test Paper)</strong>
+                <div class="row g-2 align-items-end mt-1">
+                    <div class="col-auto">
+                        <label class="form-label mb-0 small">Run proposto</label>
+                        <select class="form-select form-select-sm" style="width: 11rem" value="@_greyRunId" @onchange="OnGreyRunChangedAsync">
+                            <option value="">— scegli —</option>
+                            @foreach (var runId in _greyRuns)
+                            {
+                                <option value="@runId">@runId.ToString()[..8]</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label mb-0 small">Candidato (grigi del run)</label>
+                        <select class="form-select form-select-sm" style="width: 26rem" @bind="_greyChoiceKey">
+                            @foreach (var c in _greyChoices)
+                            {
+                                <option value="@($"{c.StrategyName}|{c.Symbol}|{c.Timeframe}")">
+                                    @c.StrategyName @c.Symbol @c.Timeframe — Sharpe @c.HoldoutSharpe.ToString("F2") su @c.HoldoutTrades trade
+                                </option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label mb-0 small">Corsia libera</label>
+                        <select class="form-select form-select-sm" style="width: 7rem" @bind="_greyLaneId">
+                            @foreach (var lane in _freeFleetLanes)
+                            {
+                                <option value="@lane">@lane</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto form-check ms-2 mb-1">
+                        <input type="checkbox" class="form-check-input" id="grey-start" @bind="_greyStartPaper" />
+                        <label class="form-check-label small" for="grey-start">Avvia subito in Paper</label>
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-success" @onclick="DeployGreyAsync"
+                                disabled="@(_busy || _greyRunId is null || _greyChoices.Count == 0 || _freeFleetLanes.Count == 0)">
+                            Schiera
+                        </button>
+                    </div>
+                </div>
+                @if (_freeFleetLanes.Count == 0)
+                {
+                    <p class="text-muted small mt-1 mb-0">Nessuna corsia di flotta libera: ritira un forward test o attendi.</p>
+                }
+                @if (!string.IsNullOrEmpty(_greyStatus))
+                {
+                    <div class="alert @(_greyIsError ? "alert-danger" : "alert-success") py-2 mt-2 mb-0">@_greyStatus</div>
+                }
+            </div>
+        }
         @if (_fleetJournal.Count == 0)
         {
             <p class="text-muted small mb-0"><em>Nessuna decisione a journal.</em></p>
@@ -1296,6 +1355,17 @@
     private ProcioneMGR.Services.Fleet.FleetOptions _fleet = new();
     private int _fleetFootprint = 3;
     private List<OrchestratorDecision> _fleetJournal = [];
+
+    // ---- [F5] Il click umano sui candidati grigi ----
+    private List<Guid> _greyRuns = [];
+    private Guid? _greyRunId;
+    private List<ProcioneMGR.Services.Fleet.GreyChoice> _greyChoices = [];
+    private string _greyChoiceKey = "";
+    private List<int> _freeFleetLanes = [];
+    private int _greyLaneId;
+    private bool _greyStartPaper = true;
+    private string? _greyStatus;
+    private bool _greyIsError;
     private ProcioneMGR.Services.Health.HeartbeatOptions _heartbeat = new();
     private string? _heartbeatStatus;
     private bool _heartbeatIsError;
@@ -1431,6 +1501,54 @@
         _heartbeatIsError = failed;
     }
 
+    /// <summary>[F5] Cambio run nel form: ricarica i grigi di QUEL run (dal suo artifact).</summary>
+    private async Task OnGreyRunChangedAsync(ChangeEventArgs e)
+    {
+        _greyStatus = null;
+        _greyChoices = [];
+        _greyChoiceKey = "";
+        _greyRunId = Guid.TryParse(e.Value?.ToString(), out var id) ? id : null;
+        if (_greyRunId is Guid runId)
+        {
+            _greyChoices = (await GreyDeployer.ListGreyAsync(runId)).ToList();
+            if (_greyChoices.Count > 0)
+            {
+                var first = _greyChoices[0];
+                _greyChoiceKey = $"{first.StrategyName}|{first.Symbol}|{first.Timeframe}";
+            }
+            else
+            {
+                _greyStatus = "Nessun candidato grigio leggibile in quel run.";
+                _greyIsError = true;
+            }
+        }
+    }
+
+    private async Task DeployGreyAsync()
+    {
+        if (_greyRunId is not Guid runId || string.IsNullOrEmpty(_greyChoiceKey)) return;
+        var parts = _greyChoiceKey.Split('|');
+        if (parts.Length != 3) return;
+        _busy = true;
+        try
+        {
+            var result = await GreyDeployer.DeployAsync(runId, parts[0], parts[1], parts[2], _greyLaneId, _greyStartPaper);
+            _greyStatus = result.Message;
+            _greyIsError = !result.Success;
+            if (result.Success)
+            {
+                // Journal e corsie libere sono cambiati: si rilegge lo stato vero, non lo si finge.
+                await OnInitializedAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _greyStatus = $"Schieramento fallito: {ex.Message}";
+            _greyIsError = true;
+        }
+        finally { _busy = false; }
+    }
+
     private static string FleetKindBadge(string kind) => kind switch
     {
         "Assign" => "bg-success",
@@ -1462,7 +1580,21 @@
                 .OrderByDescending(d => d.AtUtc)
                 .Take(20)
                 .ToListAsync();
+
+            // [F5] I run proposti in fascia grigia, per il form del click umano (i più recenti,
+            // deduplicati: run diversi possono proporre lo stesso candidato sottostante).
+            _greyRuns = await db.OrchestratorDecisions.AsNoTracking()
+                .Where(d => d.Kind == "ProposeGrey" && d.RunId != null)
+                .OrderByDescending(d => d.AtUtc)
+                .Select(d => d.RunId!.Value)
+                .Take(30)
+                .ToListAsync();
+            _greyRuns = _greyRuns.Distinct().Take(10).ToList();
         }
+
+        var lanes = await LaneDirectory.ListAsync();
+        _freeFleetLanes = lanes.Where(l => l.Id >= PipelineApplier.LaneCount && !l.IsRunning).Select(l => l.Id).ToList();
+        if (_freeFleetLanes.Count > 0 && !_freeFleetLanes.Contains(_greyLaneId)) _greyLaneId = _freeFleetLanes[0];
         _llm = Clone(LlmMonitor.CurrentValue);
         _supervisorAgent = Clone(SupervisorAgentMonitor.CurrentValue);
         _sentiment = Clone(SentimentMonitor.CurrentValue);
