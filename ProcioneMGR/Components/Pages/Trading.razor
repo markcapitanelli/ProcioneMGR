@@ -41,93 +41,13 @@
     }
 </h1>
 
-<LaneSelector Lanes="_lanes" Selected="_laneId" SelectedChanged="OnLaneSelectedAsync"
-              Hint="Motore di trading indipendente per corsia — stessa isolazione della configurazione in Ensemble." />
-
-<div class="card mb-3">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <span>Promozioni — da Paper a Testnet (mai a Live in automatico)</span>
-        <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshPromotionsAsync" disabled="@Service.PromoBusy">Rivaluta ora</button>
-    </div>
-    <div class="card-body">
-        <GuidaPanel Title="Come funziona la promozione automatica">
-            <p class="mb-1">
-                Una corsia in <strong>Paper</strong> che performa bene abbastanza a lungo (Sharpe, numero di
-                trade, drawdown, win rate e settimane di osservazione tutti sopra soglia) può passare
-                automaticamente a <strong>Testnet</strong> — stesso protocollo del Live ma senza soldi veri.
-                La promozione è <strong>reversibile</strong>: se in Testnet l'edge svanisce, la corsia torna a Paper.
-            </p>
-            <p class="mb-0">
-                <strong>Confine non negoziabile:</strong> il passaggio a <strong>Live</strong> non è mai
-                automatico — richiede sempre la conferma manuale qui sotto, dietro i controlli di sicurezza.
-            </p>
-        </GuidaPanel>
-        @if (Service.Promotions.Count == 0)
-        {
-            <p class="text-muted mb-0">Nessuna valutazione disponibile (avvia una corsia in Paper per iniziare a raccogliere metriche).</p>
-        }
-        else
-        {
-            <table class="table table-sm align-middle mb-0">
-                <thead>
-                    <tr>
-                        @{ const string sinceStartHint = "Metriche misurate DALL'AVVIO della corsia (stessa base della decisione di promozione): possono differire dai KPI del pannello di controllo qui sotto, che usano una finestra di 90 giorni."; }
-                        <th>Corsia</th><th>Simbolo</th><th>Modalità</th>
-                        <th class="text-end" title="@sinceStartHint">Sharpe</th>
-                        <th class="text-end" title="@sinceStartHint">Trade</th>
-                        <th class="text-end">Max DD</th><th class="text-end">Win</th>
-                        <th class="text-end" title="@sinceStartHint">Osserv.</th><th>Stato</th><th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var p in Service.Promotions)
-                    {
-                        <tr>
-                            <td>@p.LaneId</td>
-                            <td>@(string.IsNullOrEmpty(p.Symbol) ? "—" : p.Symbol)</td>
-                            <td><span class="badge @ModeBadge(p.CurrentMode)">@p.CurrentMode</span></td>
-                            <td class="text-end">@p.Metrics.RealizedSharpe.ToString("F2")</td>
-                            <td class="text-end">@p.Metrics.TradeCount</td>
-                            <td class="text-end">@p.Metrics.MaxDrawdown.ToString("F1")%</td>
-                            <td class="text-end">@p.Metrics.WinRate.ToString("P0")</td>
-                            <td class="text-end">@p.Metrics.ObservationPeriod.TotalDays.ToString("F0")gg</td>
-                            <td>
-                                @if (p.CurrentMode == TradingMode.Testnet)
-                                {
-                                    <span class="badge bg-success">Testnet</span>
-                                    @if (p.ShouldDemote) { <span class="badge bg-warning text-dark ms-1">retrocessione consigliata</span> }
-                                }
-                                else if (p.CurrentMode == TradingMode.Live)
-                                {
-                                    <span class="badge bg-danger">Live (manuale)</span>
-                                }
-                                else if (p.ReadyForTestnet)
-                                {
-                                    <span class="badge bg-warning text-dark" title="@p.Reason">Pronta per Testnet</span>
-                                }
-                                else
-                                {
-                                    <span class="badge bg-secondary" title="@p.Reason">Paper</span>
-                                }
-                            </td>
-                            <td class="text-end">
-                                @if (p.CurrentMode == TradingMode.Paper && p.ReadyForTestnet)
-                                {
-                                    <button class="btn btn-sm btn-success" @onclick="() => PromoteAsync(p.LaneId, TradingMode.Testnet)" disabled="@Service.PromoBusy">▲ Promuovi a Testnet</button>
-                                }
-                                <button class="btn btn-sm btn-outline-danger" disabled title="Live richiede conferma manuale dai controlli di modalità qui sotto.">▲ Promuovi a Live</button>
-                            </td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        }
-        @if (!string.IsNullOrEmpty(Service.PromoMessage))
-        {
-            <div class="alert @(Service.PromoIsError ? "alert-danger" : "alert-success") mt-2 mb-0 py-2">@Service.PromoMessage</div>
-        }
-    </div>
-</div>
+@* MaxVisible=12: TUTTE le corsie sempre visibili, in ordine di id. Il collasso "+N" (pensato per
+   i portatili) nascondeva le corsie ferme e faceva sembrare RIMOSSA una corsia che era solo
+   dietro il menu — domanda vera del proprietario del 2026-08-03 sulla corsia 3. Le corsie non si
+   rimuovono MAI (l'id è identità: posizioni e storico vi sono agganciati — lezione delle
+   posizioni orfane di luglio); si SVUOTANO, col pulsante nel pannello Controllo. *@
+<LaneSelector Lanes="_lanes" Selected="_laneId" SelectedChanged="OnLaneSelectedAsync" MaxVisible="12"
+              Hint="Motore di trading indipendente per corsia — stessa isolazione della configurazione in Ensemble. Le corsie non si rimuovono (l'id è identità): si svuotano dal pannello Controllo." />
 
 <GuidaPanel Title="Trading — dal simulato ai soldi veri, con freni di sicurezza">
     <p>
@@ -254,7 +174,10 @@
                 }
                 @if (!_confirmEmergency)
                 {
-                    <button class="btn btn-danger" style="animation: pulse 1.2s infinite" @onclick="() => _confirmEmergency = true">🛑 EMERGENCY STOP</button>
+                    @* Niente animazione: un pulsante d'emergenza dev'essere trovabile, non ansiogeno.
+                       Il lampeggio perenne (rimosso 2026-08-03 su richiesta del proprietario) diceva
+                       "emergenza" quando non ce n'era nessuna. *@
+                    <button class="btn btn-danger" @onclick="() => _confirmEmergency = true">🛑 EMERGENCY STOP</button>
                 }
                 else
                 {
@@ -283,6 +206,27 @@
         {
             <div class="text-muted small mt-2">ℹ️ In Live ogni apertura richiede <strong>conferma manuale</strong> (safety): gli ordini del worker restano in coda nella sezione "⏳ Conferme in attesa (Live)" qui sotto finché non li approvi o rifiuti uno per uno. Disattivabile solo da RequireManualConfirmationForLive nel pannello sicurezza.</div>
         }
+
+        @* [2026-08-03] Le corsie non si RIMUOVONO (l'id è identità: posizioni e storico vi sono
+           agganciati — le posizioni orfane di luglio nacquero proprio da un id sparito). Si
+           SVUOTANO: la configurazione si azzera, la corsia torna "non configurata" e libera per
+           la flotta; lo storico resta a database. Solo da ferma, con conferma. *@
+        @if (!_running && _lanes.FirstOrDefault(l => l.Id == _laneId)?.IsConfigured == true)
+        {
+            <div class="mt-3 pt-2 border-top">
+                @if (!_confirmClear)
+                {
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmClear = true">🧹 Svuota corsia @_laneId</button>
+                    <span class="text-muted small ms-2">azzera la configurazione (lo storico resta): la corsia torna libera per la flotta.</span>
+                }
+                else
+                {
+                    <span class="fw-bold me-2">Svuotare la configurazione della corsia @_laneId?</span>
+                    <button class="btn btn-sm btn-secondary" @onclick="ClearLaneAsync">Sì, svuota</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmClear = false">Annulla</button>
+                }
+            </div>
+        }
     </div>
 </div>
 
@@ -301,6 +245,126 @@
         <div class="col-auto">@Metric("Max DD %", Service.Status.MaxDrawdown.ToString("F2"), false)</div>
         <div class="col-auto">@Metric("Trades", Service.Status.TotalTrades.ToString())</div>
         <div class="col-auto">@Metric("Win Rate", Service.Status.WinRate.ToString("F0") + "%")</div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Promozioni — da Paper a Testnet (mai a Live in automatico)</span>
+            <span class="small text-muted">si aggiorna da sola ogni ~30s · <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshPromotionsAsync" disabled="@Service.PromoBusy">Rivaluta ora</button></span>
+        </div>
+        <div class="card-body">
+            <GuidaPanel Title="Come funziona la promozione automatica">
+                <p class="mb-1">
+                    Una corsia in <strong>Paper</strong> che performa bene abbastanza a lungo (Sharpe, numero di
+                    trade, drawdown, win rate e settimane di osservazione tutti sopra soglia) può passare
+                    automaticamente a <strong>Testnet</strong> — stesso protocollo del Live ma senza soldi veri.
+                    La promozione è <strong>reversibile</strong>: se in Testnet l'edge svanisce, la corsia torna a Paper.
+                    I pulsanti «→ Testnet» / «→ Paper» fanno lo stesso passaggio a mano, quando vuoi anticipare tu.
+                </p>
+                <p class="mb-0">
+                    <strong>Confine non negoziabile:</strong> il passaggio a <strong>Live</strong> non è mai
+                    automatico e non ha un pulsante qui: si fa dai controlli di modalità, con conferma esplicita.
+                </p>
+            </GuidaPanel>
+            @if (Service.Promotions.Count == 0)
+            {
+                <p class="text-muted mb-0">Nessuna valutazione disponibile (avvia una corsia in Paper per iniziare a raccogliere metriche).</p>
+            }
+            else
+            {
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            @{
+                                const string sinceStartHint = "Metriche misurate DALL'AVVIO della corsia (stessa base della decisione di promozione): possono differire dai KPI del pannello di controllo qui sopra, che usano una finestra di 90 giorni.";
+                                const string noTradesHint = "Nessun trade CHIUSO dall'avvio: le metriche non sono ancora significative (lo Sharpe si calcola sull'equity e su poche ore è solo rumore).";
+                            }
+                            <th>Corsia</th><th>Simbolo</th><th>Modalità</th>
+                            <th class="text-end" title="@sinceStartHint">Sharpe</th>
+                            <th class="text-end" title="@sinceStartHint">Trade</th>
+                            <th class="text-end">Max DD</th><th class="text-end">Win</th>
+                            <th class="text-end" title="@sinceStartHint">Osserv.</th><th>Stato</th><th class="text-end">Azioni</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var p in Service.Promotions)
+                        {
+                            <tr>
+                                <td>@p.LaneId</td>
+                                <td>@(string.IsNullOrEmpty(p.Symbol) ? "—" : p.Symbol)</td>
+                                <td><span class="badge @ModeBadge(p.CurrentMode)">@p.CurrentMode</span></td>
+                                @* Con ZERO trade chiusi lo Sharpe (calcolato sull'equity) e il win rate sono
+                                   rumore travestito da giudizio: si mostra "—", non un numero. *@
+                                @if (p.Metrics.TradeCount == 0)
+                                {
+                                    <td class="text-end text-muted" title="@noTradesHint">—</td>
+                                    <td class="text-end">0</td>
+                                    <td class="text-end">@p.Metrics.MaxDrawdown.ToString("F1")%</td>
+                                    <td class="text-end text-muted" title="@noTradesHint">—</td>
+                                }
+                                else
+                                {
+                                    <td class="text-end">@p.Metrics.RealizedSharpe.ToString("F2")</td>
+                                    <td class="text-end">@p.Metrics.TradeCount</td>
+                                    <td class="text-end">@p.Metrics.MaxDrawdown.ToString("F1")%</td>
+                                    <td class="text-end">@p.Metrics.WinRate.ToString("P0")</td>
+                                }
+                                <td class="text-end">@p.Metrics.ObservationPeriod.TotalDays.ToString("F0")gg</td>
+                                <td>
+                                    @if (p.CurrentMode == TradingMode.Testnet)
+                                    {
+                                        <span class="badge bg-success">Testnet</span>
+                                        @if (p.ShouldDemote) { <span class="badge bg-warning text-dark ms-1">retrocessione consigliata</span> }
+                                    }
+                                    else if (p.CurrentMode == TradingMode.Live)
+                                    {
+                                        <span class="badge bg-danger">Live (manuale)</span>
+                                    }
+                                    else if (p.ReadyForTestnet)
+                                    {
+                                        <span class="badge bg-warning text-dark" title="@p.Reason">Pronta per Testnet</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary" title="@p.Reason">Paper</span>
+                                    }
+                                </td>
+                                <td class="text-end">
+                                    @if (p.CurrentMode == TradingMode.Paper && p.IsRunning)
+                                    {
+                                        <button class="btn btn-sm @(p.ReadyForTestnet ? "btn-success" : "btn-outline-secondary")"
+                                                @onclick="() => PromoteAsync(p.LaneId, TradingMode.Testnet)" disabled="@Service.PromoBusy"
+                                                title="@(p.ReadyForTestnet ? "Tutti i criteri soddisfatti: promozione a Testnet." : "Promozione MANUALE (criteri non ancora tutti soddisfatti): flatten + riavvio in Testnet. Servono credenziali testnet in /settings/exchanges.")">
+                                            → Testnet
+                                        </button>
+                                    }
+                                    else if (p.CurrentMode == TradingMode.Testnet && p.IsRunning)
+                                    {
+                                        <button class="btn btn-sm btn-outline-secondary"
+                                                @onclick="() => PromoteAsync(p.LaneId, TradingMode.Paper)" disabled="@Service.PromoBusy"
+                                                title="Retrocessione manuale a Paper: flatten + riavvio.">
+                                            → Paper
+                                        </button>
+                                    }
+                                    else if (p.CurrentMode == TradingMode.Live)
+                                    {
+                                        <span class="text-muted small">solo manuale (Controllo)</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted small" title="Corsia ferma: le transizioni valgono per corsie in esecuzione.">ferma</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            @if (!string.IsNullOrEmpty(Service.PromoMessage))
+            {
+                <div class="alert @(Service.PromoIsError ? "alert-danger" : "alert-success") mt-2 mb-0 py-2">@Service.PromoMessage</div>
+            }
+        </div>
     </div>
 
     @if (Service.Pending.Count > 0)
@@ -742,6 +806,8 @@
     private string _mode = "Paper";
     private bool _liveConfirmed;
     private bool _confirmEmergency;
+    private bool _confirmClear;
+    private int _refreshTick;
 
     private PollingTimer? _timer;
     private bool _running => Service.Status?.IsRunning == true;
@@ -778,6 +844,13 @@
     {
         await Service.PromoteAsync(laneId, newMode, _laneId);
         StateHasChanged();
+    }
+
+    private async Task ClearLaneAsync()
+    {
+        _confirmClear = false;
+        await Service.ClearLaneAsync(_laneId);
+        await RefreshAsync();
     }
 
     private IReadOnlyList<LaneSummary> _lanes = [];
@@ -818,6 +891,15 @@
         // L'elenco corsie segue lo stesso polling dello stato: i puntini "in esecuzione" devono
         // dire come stanno le cose adesso, non com'erano al primo caricamento della pagina.
         _lanes = await LaneDirectory.ListAsync();
+
+        // [2026-08-03] Anche le PROMOZIONI si aggiornano da sole, ma a passo loro: la valutazione
+        // interroga tutte le corsie, quindi ogni ~30s (15 tick da 2s) e non a ogni battito. Prima
+        // la tabella restava all'istantanea del primo caricamento, e uno Sharpe di ore prima
+        // sembrava lo stato attuale — "non aggiornata in tempo reale" detto dal proprietario.
+        if (++_refreshTick % 15 == 0)
+        {
+            await Service.RefreshPromotionsAsync();
+        }
         StateHasChanged();
     }
 
