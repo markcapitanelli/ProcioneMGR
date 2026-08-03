@@ -240,8 +240,13 @@ public class AuditBlazorUiTests : BunitContext
     }
 
     [Fact]
-    public void Trading_PromuoviALiveButton_IsAlwaysDisabled()
+    public void Trading_PromotionsTable_HasNoLiveButtonAtAll_ButOffersTestnet()
     {
+        // [F8, 2026-08-03] Il contratto è cambiato: il pulsante "Promuovi a Live" perennemente
+        // disabilitato NON esiste più (un bottone morto è rumore che rassicura). La trappola di
+        // sicurezza resta, più forte: dalla tabella promozioni non deve esistere ALCUN pulsante
+        // verso Live — cliccabile o meno. L'unico percorso Live è il controllo di modalità con
+        // conferma esplicita (test dedicato qui sotto).
         var auth = AddAuthorization();
         auth.SetAuthorized("auditor");
         auth.SetRoles(AppRoles.Admin);
@@ -249,13 +254,10 @@ public class AuditBlazorUiTests : BunitContext
 
         var cut = Render<ProcioneMGR.Components.Pages.Trading>();
 
-        var liveButtons = cut.FindAll("button").Where(b => b.TextContent.Contains("Promuovi a Live")).ToList();
-        Assert.NotEmpty(liveButtons); // il pannello promozioni è renderizzato (fake con 3 corsie)
-        Assert.All(liveButtons, b => Assert.True(b.HasAttribute("disabled"),
-            "TRAPPOLA DI SICUREZZA VIOLATA: trovato un pulsante 'Promuovi a Live' cliccabile"));
+        Assert.DoesNotContain(cut.FindAll("button"), b => b.TextContent.Contains("Live"));
 
-        // Il pulsante 'Promuovi a Testnet' invece esiste ed è abilitato (il percorso lecito).
-        var testnetButtons = cut.FindAll("button").Where(b => b.TextContent.Contains("Promuovi a Testnet")).ToList();
+        // Il percorso lecito invece c'è ed è abilitato: "→ Testnet" per la corsia Paper attiva.
+        var testnetButtons = cut.FindAll("button").Where(b => b.TextContent.Contains("Testnet")).ToList();
         Assert.NotEmpty(testnetButtons);
         Assert.Contains(testnetButtons, b => !b.HasAttribute("disabled"));
     }

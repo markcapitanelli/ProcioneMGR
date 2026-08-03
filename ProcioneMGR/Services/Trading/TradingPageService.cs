@@ -28,7 +28,8 @@ public sealed class TradingPageService(
     IPromotionEvaluator promotionEval,
     ILanePromoter promoter,
     IEngineConfigStore engineConfig,
-    ILaneQuarantineStore quarantineStore)
+    ILaneQuarantineStore quarantineStore,
+    IServiceProvider? serviceProvider = null)   // opzionale: serve solo a ClearLaneAsync (manager keyed); i test storici non cambiano
 {
     public TradingEngineStatus? Status { get; private set; }
 
@@ -69,6 +70,47 @@ public sealed class TradingPageService(
 
     /// <summary>Vero se le soglie vivono in un altro processo (cambia solo cosa dire all'operatore).</summary>
     public bool SafetyIsRemote => engineConfig.IsRemote;
+
+    /// <summary>
+    /// [2026-08-03] Svuota la configurazione di una corsia FERMA (mai la rimuove: l'id è identità —
+    /// posizioni e storico vi restano agganciati, ed è la lezione delle posizioni orfane di luglio).
+    /// La corsia torna "non configurata", quindi libera per la flotta; lo storico resta a database.
+    /// </summary>
+    public async Task ClearLaneAsync(int laneId, CancellationToken ct = default)
+    {
+        try
+        {
+            var status = await mediator.Send(new GetLaneStatusQuery(laneId), ct);
+            if (status.IsRunning)
+            {
+                Message = $"La corsia {laneId} sta girando: fermala prima di svuotarla.";
+                IsError = true;
+                return;
+            }
+            if (serviceProvider is null)
+            {
+                Message = "Svuotamento non disponibile in questo assetto (nessun contenitore corsie).";
+                IsError = true;
+                return;
+            }
+
+            var manager = Microsoft.Extensions.DependencyInjection.ServiceProviderKeyedServiceExtensions
+                .GetRequiredKeyedService<Ensemble.IEnsembleManager>(serviceProvider, laneId);
+            var cfg = await manager.GetConfigurationAsync(ct);
+            cfg.Symbol = string.Empty;
+            cfg.Timeframe = string.Empty;
+            cfg.Strategies = [];
+            await manager.UpdateConfigurationAsync(cfg, ct);
+
+            Message = $"Corsia {laneId} svuotata: configurazione azzerata, storico conservato — libera per la flotta.";
+            IsError = false;
+        }
+        catch (Exception ex)
+        {
+            Message = $"Svuotamento corsia {laneId} fallito: {ex.Message}";
+            IsError = true;
+        }
+    }
 
     // Valori SL/TP/Trailing in modifica: sopravvivono al refresh automatico finché non salvati.
     private readonly Dictionary<string, decimal?> _slEdits = new();
