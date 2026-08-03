@@ -169,25 +169,11 @@ public sealed class FleetStateReader(
                     catch (JsonException) { /* verdetti illeggibili: si classifica con quello che c'è */ }
                 }
 
-                var survivors = validated.Count(v => v.Survived);
-                var band = Classify(recommendation, validated, survivors);
-                if (band is null) continue;
-
-                var tradesPerMonth = DeriveTradesPerMonth(recommendation, rangesByConfig.GetValueOrDefault(run.ConfigurationId));
-                if (tradesPerMonth is not decimal tpm)
-                {
-                    // Preferenza vincolante del proprietario: un candidato che non sa dichiarare
-                    // la propria frequenza non entra in coda.
-                    continue;
-                }
-
-                var timeframe = recommendation.EnsembleLegs.FirstOrDefault()?.Timeframe ?? "?";
-                var summary = band == "pass"
-                    ? $"{recommendation.BestCandidate} ({survivors} sopravvissuti su {recommendation.CandidatesEvaluated})"
-                    : $"{recommendation.BestCandidate} (0 sopravvissuti: finestra corta, non mancanza di edge)";
+                var verdict = Evaluate(recommendation, validated, rangesByConfig.GetValueOrDefault(run.ConfigurationId));
+                if (verdict is not { } v) continue;
 
                 list.Add(new FleetCandidate(
-                    run.Id, run.CompletedAt ?? now, band, tpm, timeframe, summary,
+                    run.Id, run.CompletedAt ?? now, v.Band, v.TradesPerMonth, v.Timeframe, v.Summary,
                     AlreadyHandled: handledByReapply.Contains(run.Id) || handledByFleet.Contains(run.Id)));
             }
             catch (Exception ex)
@@ -198,40 +184,65 @@ public sealed class FleetStateReader(
         return list;
     }
 
-    /// <summary>
-    /// "pass" = almeno un sopravvissuto alla validazione piena E gambe schierabili.
-    /// "grey" (F5) = zero sopravvissuti ma bocciature per SOLA finestra corta: classe ContoTrade
-    /// (guadagna ma i trade in holdout sono pochi per la sua frequenza) o DSR in [0.80, soglia).
-    /// null = non candidato (bocciato nel merito, o niente da schierare).
-    /// </summary>
-    private static string? Classify(PipelineRecommendation recommendation, List<ValidatedCandidate> validated, int survivors)
-    {
-        if (survivors > 0 && recommendation.EnsembleLegs.Count > 0) return "pass";
-        if (validated.Count == 0) return null;
+    internal readonly record struct CandidateVerdict(string Band, decimal TradesPerMonth, string Timeframe, string Summary);
 
-        var contoTrade = PipelineEngine.ClassifyRejections(validated).Any(c => c.Classe == "ContoTrade" && c.Quanti > 0);
-        var greyDsr = validated.Any(v => !v.Survived && v.DeflatedSharpe is double dsr and >= GreyDsrFloor and < 0.95);
-        return contoTrade || greyDsr ? "grey" : null;
+    /// <summary>
+    /// Il verdetto di un run come candidato di flotta.
+    /// "pass" = almeno un sopravvissuto E gambe schierabili: frequenza dalla gamba più RADA (min).
+    /// "grey" (F5) = zero sopravvissuti ma bocciature per SOLA finestra corta — classe ContoTrade
+    /// ("Solo N trade in holdout") o DSR in [0.80, 0.95) — CON Sharpe holdout positivo: un grigio
+    /// che perde non è grigio, è bocciato nel merito. La frequenza del grigio viene dal SUO
+    /// HoldoutTrades, non dalle gambe della raccomandazione: con zero sopravvissuti le gambe non
+    /// esistono, ed è proprio il caso per cui la fascia grigia esiste (primo journal vuoto del
+    /// 2026-08-03: i grigi non entravano MAI in coda — il lettore chiedeva la frequenza a una
+    /// lista vuota).
+    /// null = non candidato (bocciato nel merito, o finestra/frequenza non derivabili).
+    /// </summary>
+    internal static CandidateVerdict? Evaluate(
+        PipelineRecommendation recommendation, List<ValidatedCandidate> validated, string? dateRangesJson)
+    {
+        if (HoldoutMonths(dateRangesJson) is not decimal months) return null;
+
+        var survivors = validated.Count(v => v.Survived);
+        if (survivors > 0 && recommendation.EnsembleLegs.Count > 0)
+        {
+            var minTrades = recommendation.EnsembleLegs.Min(l => l.HoldoutTrades);
+            return new CandidateVerdict("pass",
+                Math.Round(minTrades / months, 2),
+                recommendation.EnsembleLegs[0].Timeframe,
+                $"{recommendation.BestCandidate} ({survivors} sopravvissuti su {recommendation.CandidatesEvaluated})");
+        }
+
+        var grey = validated
+            .Where(candidate => !candidate.Survived && candidate.HoldoutSharpe > 0m && candidate.HoldoutTrades > 0)
+            .Where(candidate => (candidate.RejectReason?.StartsWith("Solo ", StringComparison.Ordinal) ?? false)
+                                || candidate.DeflatedSharpe is >= GreyDsrFloor and < 0.95)
+            .OrderByDescending(candidate => candidate.HoldoutSharpe)
+            .ToList();
+        if (grey.Count == 0) return null;
+
+        var best = grey[0];
+        return new CandidateVerdict("grey",
+            Math.Round(best.HoldoutTrades / months, 2),
+            best.Timeframe,
+            $"{best.StrategyName} {best.Symbol} {best.Timeframe}: Sharpe holdout {best.HoldoutSharpe:F2} su {best.HoldoutTrades} trade"
+            + (grey.Count > 1 ? $" (+{grey.Count - 1} altri in fascia grigia)" : ""));
     }
 
     /// <summary>
-    /// Trade/mese derivati: gamba più RADA (min) su finestra holdout della config. Null se la
-    /// finestra non è derivabile — la durata mediana delle posizioni invece NON esiste a livello
-    /// di run (trade list non persistita): la misura il forward test stesso.
+    /// Mesi della finestra holdout della config. Null se non derivabile (e allora il run non è un
+    /// candidato: senza finestra la frequenza è un'illusione). La durata mediana delle posizioni
+    /// invece NON esiste a livello di run (trade list non persistita): la misura il forward test.
     /// </summary>
-    private static decimal? DeriveTradesPerMonth(PipelineRecommendation recommendation, string? dateRangesJson)
+    private static decimal? HoldoutMonths(string? dateRangesJson)
     {
-        if (recommendation.EnsembleLegs.Count == 0 || string.IsNullOrWhiteSpace(dateRangesJson)) return null;
+        if (string.IsNullOrWhiteSpace(dateRangesJson)) return null;
         try
         {
             var ranges = JsonSerializer.Deserialize<PipelineDateRanges>(dateRangesJson);
             if (ranges is null) return null;
             var days = (ranges.HoldoutTo - ranges.HoldoutFrom).TotalDays;
-            if (days < 7) return null; // sotto una settimana la frequenza è un'illusione
-
-            var months = (decimal)(days / 30.44);
-            var minTrades = recommendation.EnsembleLegs.Min(l => l.HoldoutTrades);
-            return Math.Round(minTrades / months, 2);
+            return days < 7 ? null : (decimal)(days / 30.44);
         }
         catch (JsonException)
         {
