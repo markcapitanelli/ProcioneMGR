@@ -18,6 +18,17 @@
 
     [Parameter] public int Height { get; set; } = 480;
 
+    /// <summary>[2026-08-03] Marker delle operazioni (entrate/uscite) sul grafico candele. Ignorati se ShowCandles è false.</summary>
+    [Parameter] public IReadOnlyList<ChartMarker> Markers { get; set; } = Array.Empty<ChartMarker>();
+
+    /// <summary>Linee orizzontali di prezzo (entry/SL/TP delle posizioni aperte). Ignorate se ShowCandles è false.</summary>
+    [Parameter] public IReadOnlyList<ChartPriceLine> PriceLines { get; set; } = Array.Empty<ChartPriceLine>();
+
+    /// <summary>Un marker: position "aboveBar"|"belowBar"|"inBar"; shape "arrowUp"|"arrowDown"|"circle"|"square".</summary>
+    public sealed record ChartMarker(long Time, string Position, string Color, string Shape, string Text);
+
+    public sealed record ChartPriceLine(double Price, string Color, string Title, bool Dashed = true);
+
     private ElementReference _container;
     private IJSObjectReference? _module;
     private readonly string _chartId = "chart_" + Guid.NewGuid().ToString("N");
@@ -58,6 +69,14 @@
                 volume = (double)c.Volume,
             }).ToArray();
             await _module.InvokeVoidAsync("setData", _chartId, candlePayload);
+
+            await _module.InvokeVoidAsync("setMarkers", _chartId, Markers
+                .OrderBy(m => m.Time) // lightweight-charts esige i marker in ordine di tempo
+                .Select(m => new { time = m.Time, position = m.Position, color = m.Color, shape = m.Shape, text = m.Text })
+                .ToArray());
+            await _module.InvokeVoidAsync("setPriceLines", _chartId, PriceLines
+                .Select(l => new { price = l.Price, color = l.Color, title = l.Title, dashed = l.Dashed })
+                .ToArray());
         }
 
         var indicatorPayload = Indicators.Select(s => new

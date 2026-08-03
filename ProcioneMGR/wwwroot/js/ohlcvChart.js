@@ -88,6 +88,46 @@ export function setIndicators(id, series) {
     entry.chart.timeScale().fitContent();
 }
 
+// [2026-08-03] Marker delle operazioni sul grafico prezzi (v5: createSeriesMarkers, non più
+// series.setMarkers). markers: [{ time, position, color, shape, text }]
+export function setMarkers(id, markers) {
+    const entry = charts.get(id);
+    if (!entry || !entry.candleSeries) return;
+    const LWC = window.LightweightCharts;
+
+    const data = (markers || []).map(m => ({
+        time: m.time, position: m.position, color: m.color, shape: m.shape, text: m.text,
+    }));
+    if (!entry.markersApi) {
+        entry.markersApi = LWC.createSeriesMarkers(entry.candleSeries, data);
+    } else {
+        entry.markersApi.setMarkers(data);
+    }
+}
+
+// Linee orizzontali di prezzo (entry/SL/TP delle posizioni aperte).
+// lines: [{ price, color, title, dashed }]
+export function setPriceLines(id, lines) {
+    const entry = charts.get(id);
+    if (!entry || !entry.candleSeries) return;
+    const LWC = window.LightweightCharts;
+
+    for (const pl of (entry.priceLines || [])) {
+        entry.candleSeries.removePriceLine(pl);
+    }
+    entry.priceLines = [];
+    for (const l of (lines || [])) {
+        entry.priceLines.push(entry.candleSeries.createPriceLine({
+            price: l.price,
+            color: l.color,
+            lineWidth: 1,
+            lineStyle: l.dashed ? LWC.LineStyle.Dashed : LWC.LineStyle.Solid,
+            axisLabelVisible: true,
+            title: l.title,
+        }));
+    }
+}
+
 export function dispose(id) {
     const entry = charts.get(id);
     if (entry) {
