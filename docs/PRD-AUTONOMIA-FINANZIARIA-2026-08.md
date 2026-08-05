@@ -146,8 +146,13 @@ provider che rispondono spazzatura al 100% ⇒ comportamento ≡ comitato spento
 ## 4. Non-obiettivi
 
 1. **Auto-Live, in nessuna forma** — il throw di `LanePromoter` e il fuzz lo dimostrano a ogni build.
-2. **LLM che genera strategie/codice/parametri** — il testo libero delle AI finisce solo in
-   journal e notifiche, mai in un parametro operativo.
+2. **LLM che scrive codice libero o tocca un parametro operativo senza gate** — resta vietato.
+   **Reconsiderato in parte il 2026-08-04** (vedi [PRD-BENCHMARK-BITGET-AI-2026-08](PRD-BENCHMARK-BITGET-AI-2026-08.md)
+   §2bis, item G3): l'AI può PROPORRE candidati strutturati (whitelist di componenti esistenti, mai
+   codice libero) che entrano nell'imbuto di discovery esistente e sono giudicati dagli STESSI gate
+   (DSR/PBO/CPCV/NullTwin/forward Paper) di ogni altro candidato — zero scorciatoie, zero soglie
+   diverse, zero corsia riservata. Il testo libero (spiegazioni, veto, post-mortem) resta comunque
+   confinato a journal/notifiche, mai un parametro diretto.
 3. **Hurst come pilastro** — al più item di misura opzionale, con aspettativa dichiarata di esito
    negativo dopo 10 no del direzionale-tecnico.
 4. **Il PDF a scatola chiusa** — RL-esecuzione e ibridi LSTM restano respinti; Kafka/GKE non
