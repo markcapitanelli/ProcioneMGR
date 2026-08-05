@@ -39,6 +39,16 @@ public sealed class TradingPageService(
     public LaneQuarantine? Quarantine { get; private set; }
     public List<OpenPosition> Positions { get; private set; } = [];
     public List<Order> Orders { get; private set; } = [];
+
+    /// <summary>
+    /// [2026-08-05] Falso (default): la tabella ordini mostra solo il TEST CORRENTE, come i KPI.
+    /// Vero: tutta la vita della corsia, comprese le configurazioni precedenti su altri simboli —
+    /// utile per un'indagine, fuorviante come vista di partenza.
+    /// </summary>
+    public bool ShowAllOrders { get; private set; }
+
+    /// <summary>Alterna fra la finestra del test corrente e lo storico completo. Il chiamante ricarica.</summary>
+    public void ToggleOrderHistory() => ShowAllOrders = !ShowAllOrders;
     public List<Order> Pending { get; private set; } = [];
     public List<Indicators.IndicatorSeries> Equity { get; private set; } = [];
     public string? Message { get; private set; }
@@ -228,11 +238,19 @@ public sealed class TradingPageService(
             Status = await mediator.Send(new GetLaneStatusQuery(laneId));
 
             var positionsTask = mediator.Send(new GetOpenPositionsQuery(laneId)).AsTask();
-            var ordersTask = mediator.Send(new GetOrderHistoryQuery(laneId)).AsTask();
-            var pendingTask = mediator.Send(new GetPendingOrdersQuery(laneId)).AsTask();
             // [2026-08-03] UNA finestra per tutta la pagina: dal TEST CORRENTE (StartedAtUtc),
             // stessa base della tabella promozioni. Fallback 90gg per una corsia mai avviata.
             var perfFrom = Status?.StartedAtUtc ?? DateTime.UtcNow.AddDays(-90);
+
+            // [2026-08-05] Gli ordini seguono la STESSA finestra dei KPI. Prima la query partiva
+            // senza `from` — pur essendo il parametro già previsto — e la tabella mostrava tutta
+            // la vita della corsia: ordini di mesi prima, su SIMBOLI DIVERSI, indistinguibili dai
+            // presenti perché la colonna del simbolo non c'era. Segnalato dal proprietario:
+            // «a quali operazioni si riferiscono?». Domanda a cui la tabella non sapeva rispondere.
+            // Con ShowAllOrders si torna allo storico intero, ma è una scelta esplicita.
+            var ordersFrom = ShowAllOrders ? (DateTime?)null : perfFrom;
+            var ordersTask = mediator.Send(new GetOrderHistoryQuery(laneId, ordersFrom)).AsTask();
+            var pendingTask = mediator.Send(new GetPendingOrdersQuery(laneId)).AsTask();
             var perfTask = mediator.Send(new GetPerformanceQuery(laneId, perfFrom)).AsTask();
             await Task.WhenAll(positionsTask, ordersTask, pendingTask, perfTask);
             Positions = positionsTask.Result;
