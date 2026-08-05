@@ -288,14 +288,15 @@ che questo progetto ha già incontrato e corretto in passato.
 
 ## 🔴 Alta priorità
 
-**1. Segreti reali su repository pubblico.** Il file
-`ProcioneMGR/appsettings.json.pre-audit-test-20260729-141448` è tracciato in git, non ignorato, e
-presente su `origin/master` del repository **pubblico** `markcapitanelli/ProcioneMGR` dal commit
-`7f9b56c` del 2026-07-29. Contiene la **master key AES-256** (quella che decifra le credenziali
-degli exchange), la password PostgreSQL, il segreto condiviso gRPC e il ChatId Telegram.
-Vanno **ruotati tutti**: ciò che è stato pubblico va considerato compromesso.
-Non è teorico: nel database ci sono **tre credenziali exchange reali** (Binance Main, Bitget Main,
-Bitget Test) cifrate proprio con quella chiave.
+**1. Segreti committati per errore, rotazione obbligatoria.** Un file di configurazione con segreti
+reali è finito tracciato in git ed è arrivato su un ramo pubblicato: il `.gitignore` intercettava il
+nome esatto ma non le sue varianti con suffisso. Fra i segreti coinvolti c'è la **chiave di
+cifratura a riposo**, quella che protegge le credenziali API degli exchange sul database.
+Vanno **ruotati tutti**: ciò che è stato pubblico va considerato compromesso. Non è teorico — nel
+database ci sono **tre credenziali exchange reali** cifrate proprio con quella chiave.
+
+> 🔒 Percorso del file, commit di origine ed elenco puntuale delle chiavi sono **fuori dal
+> repository pubblico** finché la rotazione non è completata. Il proprietario ha il dettaglio.
 
 **1-bis. La quantità dell'ordine può partire non arrotondata verso l'exchange.** Difetto con
 evidenza di produzione: nello storico ordini ci sono ordini rifiutati da Binance con

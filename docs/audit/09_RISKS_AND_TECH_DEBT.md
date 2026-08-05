@@ -6,63 +6,43 @@ Ordinati per priorità. Ogni voce ha: cosa, dove si verifica, perché conta, cos
 
 ## 🔴 Priorità ALTA
 
-### R1 — Segreti reali committati su un repository pubblico {#r1}
+### R1 — Segreti committati per errore, rotazione obbligatoria {#r1}
 
 **Il problema più grave trovato in questo audit.**
 
-Il file
+> 🔒 **Il dettaglio operativo di questo rilievo è deliberatamente fuori dal repository.**
+> Percorso del file, commit di origine ed elenco puntuale delle chiavi coinvolte vivono nel notebook
+> NotebookLM privato del progetto (documento `09` completo). Questo repository è **pubblico**: finché
+> la rotazione non è completata, scrivere qui dove guardare aumenterebbe il danno invece di ridurlo.
+> Il proprietario ha già le informazioni complete.
 
-```
-ProcioneMGR/appsettings.json.pre-audit-test-20260729-141448
-```
+**In sintesi, senza indicare dove.** Durante l'audit del 2026-08-04 è emerso che un file di
+configurazione contenente segreti reali è finito **tracciato da git** — non coperto dal
+`.gitignore`, che intercettava il nome esatto ma non le sue varianti con suffisso — ed è arrivato
+su un ramo pubblicato. Fra i segreti coinvolti c'è la **chiave di cifratura a riposo**, quella che
+protegge le credenziali API degli exchange salvate sul database.
 
-è **tracciato da git**, **non coperto da `.gitignore`** e presente su **`origin/master`** del
-repository **`markcapitanelli/ProcioneMGR`**, la cui visibilità è confermata **`PUBLIC`**.
+**Perché conta, e non è teorico.** Il giro dell'interfaccia ha confermato che nel database ci sono
+**tre credenziali exchange reali** ([12](12_UI_WALKTHROUGH.md)) cifrate proprio con quella chiave.
+Esiste quindi materiale concreto che quella chiave decifra. Il file conteneva anche un commento che
+diceva testualmente di non committare quel segreto: il promemoria c'era, la disciplina è saltata.
 
-Verifiche eseguite:
+**Cosa farci** — in quest'ordine. Le prime tre valgono *a prescindere* dalla rimozione dal
+repository, perché **ciò che è stato pubblico va considerato compromesso**:
 
-```
-git ls-files ProcioneMGR/appsettings*        → il file compare
-git check-ignore -v <file>                   → NOT IGNORED
-git ls-tree -r origin/master --name-only     → il file compare
-gh repo view … --json visibility             → {"visibility":"PUBLIC"}
-git log --diff-filter=A -- <file>            → 7f9b56c, 2026-07-29 15:24:29 +0200
-```
-
-Contiene, in chiaro:
-
-| Chiave | Cosa protegge |
-|---|---|
-| `Security:MasterKey` | **la chiave AES-256 che decifra le credenziali API degli exchange salvate sul DB** |
-| `ConnectionStrings:PostgresConnection` | password dell'utente PostgreSQL |
-| `Trading:GrpcSharedSecret` | l'unica autenticazione fra guscio e core di trading |
-| `Notifications:ChatId` | destinatario Telegram |
-
-*(I valori non sono riportati qui né altrove in `docs/audit/`: ovunque compaiono come `[REDACTED]`.)*
-
-**Perché conta.** La master key è la chiave di volta del modello di sicurezza a riposo: con quella,
-chiunque abbia una copia del database può decifrare le chiavi API degli exchange. Il file ha una
-sezione `_comment_MasterKey` che dice testualmente di non committare quel segreto — il commento c'è,
-la disciplina è saltata. È esposto da **6 giorni** al momento dell'audit.
-
-**E non è un rischio teorico.** Il giro dell'interfaccia ha confermato che nel database ci sono
-**tre credenziali exchange reali** — `Binance Main`, `Bitget Main`, `Bitget Test`
-([12](12_UI_WALKTHROUGH.md)) — cifrate proprio con quella chiave. Esiste quindi materiale concreto
-che quella master key decifra.
-
-**Cosa farci** — in quest'ordine, e le prime tre valgono *a prescindere* dalla rimozione dal repo,
-perché ciò che è stato pubblico va considerato compromesso:
-
-1. **Ruotare la master key** e ri-cifrare le credenziali exchange esistenti.
+1. **Ruotare la chiave di cifratura** e ri-cifrare le credenziali exchange esistenti.
 2. **Revocare e rigenerare le chiavi API** su Binance e Bitget.
-3. **Cambiare la password PostgreSQL** e rigenerare `Trading:GrpcSharedSecret`.
-4. Rimuovere il file dal tracking e aggiungere a `.gitignore` un pattern che copra le varianti:
-   `ProcioneMGR/appsettings.json*` con eccezione esplicita per `.example`.
-5. Riscrivere la storia (`git filter-repo`) *oppure* accettare che resti nella storia — come già
-   accaduto per il PDF di Jansen. La rotazione dei segreti resta comunque obbligatoria.
+3. **Cambiare la password del database** e rigenerare il segreto condiviso fra i servizi.
+4. Rimuovere il file dal tracking e correggere il `.gitignore` con un **pattern che copra le
+   varianti** del nome, non solo il nome esatto, con eccezione esplicita per il template `.example`.
+5. Decidere se riscrivere la storia (`git filter-repo`) o accettare che il file vi resti — come già
+   accaduto per altro materiale. La rotazione resta comunque obbligatoria.
 
 > Non ho eseguito nessuna di queste azioni: l'audit è read-only e la rotazione di segreti in
 > produzione è una decisione del proprietario.
+
+**Lezione trasversale, questa sì da tenere in repo:** un `.gitignore` che elenca nomi esatti non
+protegge dai file di backup con timestamp. Il pattern va scritto sulla famiglia, non sull'istanza.
 
 ### R2 — `run-postgres.ps1` muore se il cluster kind è giù {#r2}
 
