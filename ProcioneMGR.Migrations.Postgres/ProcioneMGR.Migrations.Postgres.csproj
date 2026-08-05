@@ -22,4 +22,27 @@
     </PackageReference>
   </ItemGroup>
 
+  <!-- [2026-08-05] Porta la DLL delle migrazioni ACCANTO all'eseguibile dell'app, così il
+       migrate-on-startup (DatabaseMigrator) la trova: EF risolve l'assembly delle migrazioni per
+       NOME, e il caricamento riesce se il file è nella cartella di probing.
+
+       Perché una copia e non un ProjectReference: questo progetto referenzia ProcioneMGR (i file
+       .Designer puntano ad ApplicationDbContext), quindi il riferimento inverso sarebbe un ciclo.
+       La copia va nella direzione giusta — da qui verso l'app — e avviene dopo la build di questo
+       progetto, che per via del ProjectReference avviene sempre DOPO quella dell'app.
+
+       Nota onesta sui limiti: un `dotnet run` mirato al solo progetto dell'app NON costruisce
+       questo, e quindi non aggiorna la copia. Chi aggiunge una migrazione deve costruire la
+       SOLUZIONE (o questo progetto) perché l'app la veda. Se la DLL manca o è vecchia,
+       DatabaseMigrator lo dichiara a log invece di fingere che lo schema sia allineato. -->
+  <Target Name="CopyMigrationsToApp" AfterTargets="Build" Condition="'$(OutputPath)' != ''">
+    <ItemGroup>
+      <MigrationsOutput Include="$(TargetDir)$(TargetName).dll;$(TargetDir)$(TargetName).pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(MigrationsOutput)"
+          DestinationFolder="$(MSBuildThisFileDirectory)..\ProcioneMGR\bin\$(Configuration)\$(TargetFramework)\"
+          SkipUnchangedFiles="true"
+          ContinueOnError="true" />
+  </Target>
+
 </Project>

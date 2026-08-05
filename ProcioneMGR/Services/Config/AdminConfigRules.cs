@@ -130,7 +130,22 @@ public static class AdminConfigRules
             (o.PollIntervalMinutes >= 1, "Il poll dev'essere almeno 1 minuto."),
             (o.RequestTimeoutSeconds >= 5, "Il timeout di chiamata dev'essere almeno 5 secondi."),
             (o.BreakerFailureThreshold >= 1, "Serve almeno 1 errore per aprire il breaker."),
-            (o.BreakerCooldownMinutes >= 1, "Il cooldown del breaker dev'essere almeno 1 minuto.")),
+            (o.BreakerCooldownMinutes >= 1, "Il cooldown del breaker dev'essere almeno 1 minuto."),
+            // [G6] A 0 la spiegazione chiederebbe all'AI di commentare una lista vuota: una chiamata
+            // pagata per forza. Il tetto alto tiene il prompt (e il costo) entro una misura sensata.
+            (o.ExplainRejectionsTopN is >= 1 and <= 20,
+                "I candidati bocciati da riportare per esteso stanno fra 1 e 20."),
+            // Il budget per-provider: 0 = spento (comportamento storico), sopra il tetto sarebbe
+            // solo un modo confuso di scriverlo — il budget complessivo scade comunque prima.
+            (o.PerProviderTimeoutSeconds is >= 0 and <= 600,
+                "Il budget per provider sta fra 0 (spento) e 600 secondi.")),
+
+        // [G4] Post-mortem: una soglia a 0 analizzerebbe ogni operazione chiusa in pari, e un
+        // tetto a 0 per giro renderebbe l'interruttore acceso indistinguibile da spento.
+        ProcioneMGR.Services.Llm.Narration.PostMortemOptions o => Check(
+            (o.LossThresholdPercent > 0m, "La soglia di perdita dev'essere > 0 (è un valore positivo: 1,0 = perdite oltre l'1%)."),
+            (o.MaxPerRun is >= 1 and <= 50, "Le analisi per giro stanno fra 1 e 50."),
+            (o.CommitteeContextCount is >= 0 and <= 50, "I post-mortem passati al comitato stanno fra 0 (nessuno) e 50.")),
 
         SupervisorAgentOptions o => Check(
             (o.Provider is "Logging" or "Claude", "Provider ammessi: Logging oppure Claude."),

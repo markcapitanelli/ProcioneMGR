@@ -20,7 +20,8 @@ public sealed class LlmSupervisorWorker(
     ILlmClient llm,
     Microsoft.Extensions.Options.IOptionsMonitor<LlmOptions> options,
     IPipelineSupervisor supervisor,
-    ILogger<LlmSupervisorWorker> logger) : BackgroundService
+    ILogger<LlmSupervisorWorker> logger,
+    ProcioneMGR.Services.Llm.Narration.IRejectionExplainService? explainer = null) : BackgroundService
 {
     private bool _warnedUnconfigured;
 
@@ -93,6 +94,23 @@ public sealed class LlmSupervisorWorker(
             ct.ThrowIfCancellationRequested();
             await supervisor.SuperviseRunAsync(runId, ct, forceProbe);
             forceProbe = false; // il bypass del cooldown vale per UN probe, non per tutto il batch
+
+            // [G6] La spiegazione delle bocciature, se accesa. DOPO l'advisory e indipendente da
+            // come è andata: un run senza advisory ha comunque candidati bocciati da spiegare.
+            // Best-effort dichiarato — un fallimento qui non deve far saltare il resto del batch,
+            // e il riassunto deterministico resta leggibile in pagina in ogni caso.
+            if (options.CurrentValue.ExplainRejections && explainer is not null)
+            {
+                try
+                {
+                    await explainer.ExplainRunAsync(runId, force: false, ct);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Spiegazione delle bocciature fallita per il run {Run}; il riassunto deterministico resta.", runId);
+                }
+            }
         }
     }
 

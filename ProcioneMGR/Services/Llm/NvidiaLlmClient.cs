@@ -293,9 +293,21 @@ public sealed class DelegatingLlmClient(
             {
                 continue; // senza chiave non è un fallimento: semplicemente non gioca
             }
+            // [2026-08-05] Budget di tempo PER PROVIDER. Senza, un provider che si appende
+            // consumava da solo l'intero budget della chiamata e la catena non veniva mai
+            // percorsa: il token che arriva qui è già quello linked col timeout complessivo, e
+            // una cancellazione da timeout è indistinguibile da uno shutdown. Con un token
+            // proprio la distinzione diventa possibile — ed è tutta nel `when` qui sotto.
+            var perProvider = opt.PerProviderTimeoutSeconds;
+            using var attemptCts = perProvider > 0
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            attemptCts?.CancelAfter(TimeSpan.FromSeconds(perProvider));
+            var attemptToken = attemptCts?.Token ?? ct;
+
             try
             {
-                var text = await client.CompleteAsync(systemPrompt, userPrompt, ct);
+                var text = await client.CompleteAsync(systemPrompt, userPrompt, attemptToken);
                 _lastCompletionModel = client.Model;
                 if (failedBefore is not null)
                 {
@@ -304,9 +316,22 @@ public sealed class DelegatingLlmClient(
                 }
                 return text;
             }
+            // Il token ESTERNO è cancellato: shutdown vero, o budget complessivo della chiamata
+            // esaurito. In nessuno dei due casi ha senso interpellare un altro provider — non
+            // resta tempo, e non è colpa sua. Comportamento storico, invariato.
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                throw; // shutdown/timeout del chiamante: non è un guasto del provider, niente failover
+                throw;
+            }
+            // Il token esterno NON è cancellato ma questo tentativo sì: è scaduto il budget del
+            // singolo provider. QUESTO è il caso che prima si perdeva.
+            catch (OperationCanceledException ex) when (attemptCts?.IsCancellationRequested == true)
+            {
+                last = new TimeoutException(
+                    $"Il provider {name} non ha risposto entro {perProvider}s (budget per provider).", ex);
+                failedBefore = failedBefore is null ? name : $"{failedBefore}, {name}";
+                logger?.LogWarning("Provider AI {Provider} non ha risposto entro {Seconds}s; provo il prossimo della catena.",
+                    name, perProvider);
             }
             catch (Exception ex)
             {

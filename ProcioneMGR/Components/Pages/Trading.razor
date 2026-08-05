@@ -241,11 +241,33 @@
             <div class="card-body py-2">
                 @foreach (var s in story.Strategies)
                 {
+                    @* [2026-08-05] Tre correzioni sulle attese, tutte dello stesso tipo — un numero
+                       che non significa quello che sembra:
+                       · PF 999 è il SENTINELLA di «nessuna operazione perdente in holdout», non un
+                         profit factor di 999: si scrive a parole;
+                       · TP/TSL a 0,00% NON sono una protezione allo 0%: sono protezioni ASSENTI;
+                       · le attese tutte a «—» sulle corsie schierate prima della flotta non sono
+                         un guasto: quelle corsie furono configurate a mano e non hanno un holdout
+                         registrato. Dirlo è meglio che tre trattini muti. *@
                     <div class="mb-1">
                         <strong>@s.DisplayName</strong>
+                        @if (s.ExpectedSharpe is null && s.ExpectedProfitFactor is null && s.ExpectedMaxDrawdown is null)
+                        {
+                            <span class="text-muted small ms-2"
+                                  title="Questa corsia è stata configurata a mano, prima dell'orchestratore di flotta: non ha un holdout registrato con cui confrontare il forward test. I numeri qui sotto restano validi, manca solo il termine di paragone.">
+                                attese (holdout): non registrate (corsia configurata a mano)
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="text-muted small ms-2">
+                                attese (holdout): Sharpe @(s.ExpectedSharpe?.ToString("F2") ?? "—")
+                                · PF @(FormatProfitFactor(s.ExpectedProfitFactor))
+                                · DD @(s.ExpectedMaxDrawdown?.ToString("F1") ?? "—")%
+                            </span>
+                        }
                         <span class="text-muted small ms-2">
-                            attese (holdout): Sharpe @(s.ExpectedSharpe?.ToString("F2") ?? "—") · PF @(s.ExpectedProfitFactor?.ToString("F2") ?? "—") · DD @(s.ExpectedMaxDrawdown?.ToString("F1") ?? "—")%
-                            &nbsp;·&nbsp; protezioni: SL @(s.StopLossPercent?.ToString("F2") ?? "—")% / TP @(s.TakeProfitPercent?.ToString("F2") ?? "—")%@(s.TrailingStopPercent is not null ? $" / TSL {s.TrailingStopPercent:F2}%" : "")
+                            &nbsp;·&nbsp; protezioni: SL @FormatProtection(s.StopLossPercent) / TP @FormatProtection(s.TakeProfitPercent)@(s.TrailingStopPercent is > 0m ? $" / TSL {s.TrailingStopPercent:F2}%" : "")
                         </span>
                     </div>
                 }
@@ -271,20 +293,53 @@
        prima Total PnL/Trades/Win venivano dai totali del motore, che sommano tutte le vite
        precedenti della corsia — 159 trade di luglio accanto a un'equity vuota. Capitale e
        margini restano dallo Status: sono lo stato presente, non una finestra. *@
+    @* [2026-08-05] Le tre voci di capitale dicevano cose diverse con nomi che sembravano la stessa
+       cosa: «Total Capital» è il capitale INIZIALE (non cambia mai), «Available» è la CASSA — che
+       su una posizione SHORT include il ricavato della vendita e può quindi SUPERARE il capitale
+       iniziale. Il proprietario ha visto Available 10.799,20 su Total 10.000,00 e ha giustamente
+       pensato a un errore: era aritmetica corretta con etichette che non la spiegavano. E mancava
+       proprio il numero che conta, l'EQUITY (iniziale + PnL, posizioni aperte comprese). *@
     <div class="row g-2 mb-3">
-        <div class="col-auto">@Metric("Total Capital", Service.Status.TotalCapital.ToString("N2"))</div>
-        <div class="col-auto">@Metric("Available", Service.Status.AvailableCapital.ToString("N2"))</div>
-        <div class="col-auto">@Metric(Service.Status.MarketType == MarketType.Futures ? "Margine usato" : "Used", Service.Status.UsedCapital.ToString("N2"))</div>
+        @{
+            var equity = Service.Status.TotalCapital + Service.Status.TotalPnl;
+            var cassaOltreCapitale = Service.Status.AvailableCapital > Service.Status.TotalCapital;
+        }
+        <div class="col-auto">@Metric("Equity ora", equity.ToString("N2"), Service.Status.TotalPnl >= 0,
+            "Quanto vale la corsia adesso: capitale iniziale più il risultato, posizioni aperte comprese (valorizzate al prezzo corrente).")</div>
+        <div class="col-auto">@Metric("Capitale iniziale", Service.Status.TotalCapital.ToString("N2"), null,
+            "Il capitale con cui la corsia è partita. Non cambia mai: è il riferimento del PnL.")</div>
+        <div class="col-auto">@Metric("Cassa", Service.Status.AvailableCapital.ToString("N2"), null,
+            cassaOltreCapitale
+                ? "Liquidità disponibile. È SUPERIORE al capitale iniziale perché una vendita allo scoperto accredita subito il ricavato: non è un guadagno, la posizione aperta lo compensa in negativo. Guarda l'equity."
+                : "Liquidità disponibile per aprire nuove posizioni.")</div>
+        <div class="col-auto">@Metric(Service.Status.MarketType == MarketType.Futures ? "Margine usato" : "Impegnato",
+            Service.Status.UsedCapital.ToString("N2"), null,
+            Service.Status.MarketType == MarketType.Futures
+                ? "Margine isolato bloccato dalle posizioni aperte."
+                : "Valore nozionale delle posizioni aperte, al prezzo di ingresso.")</div>
         @if (Service.Status.MarketType == MarketType.Futures)
         {
             <div class="col-auto">@Metric("Leva", Service.Status.Leverage + "x")</div>
         }
         @if (Service.Perf is { } perf)
         {
-            <div class="col-auto">@Metric("PnL (test)", perf.TotalReturn.ToString("N2"), perf.TotalReturn >= 0)</div>
-            <div class="col-auto">@Metric("Max DD % (test)", perf.MaxDrawdown.ToString("F2"), false)</div>
-            <div class="col-auto">@Metric("Trades (test)", perf.TotalTrades.ToString())</div>
-            <div class="col-auto">@Metric("Win (test)", perf.TotalTrades > 0 ? perf.WinRate.ToString("F0") + "%" : "—")</div>
+            @* [2026-08-05] «PnL (test) 0,00» accanto a «Max DD 0,74%» con ZERO trade sembrava una
+               contraddizione: il PnL del test conta solo le operazioni CHIUSE, il drawdown segue
+               anche l'equity delle posizioni APERTE. Adesso ognuno dice di cosa parla, e col
+               drawdown che viene da una posizione ancora aperta lo si dichiara. *@
+            var soloAperte = perf.TotalTrades == 0 && perf.MaxDrawdown > 0m;
+            <div class="col-auto">@Metric("PnL realizzato (test)", perf.TotalReturn.ToString("N2"), perf.TotalReturn >= 0,
+                "Somma delle operazioni CHIUSE dall'avvio di questo test. Le posizioni ancora aperte non entrano qui: le vedi nell'equity.")</div>
+            <div class="col-auto">@Metric("Max DD % (test)", perf.MaxDrawdown.ToString("F2"), false,
+                soloAperte
+                    ? "Viene da una posizione ANCORA APERTA: nessuna operazione è stata chiusa, quindi non c'è nulla di realizzato da perdere — ancora."
+                    : "Massima discesa dell'equity dall'avvio, posizioni aperte comprese.")</div>
+            <div class="col-auto">@Metric("Operazioni chiuse (test)", perf.TotalTrades.ToString(), null,
+                Service.Status.OpenPositionCount > 0
+                    ? $"{Service.Status.OpenPositionCount} ancora aperta/e, non conteggiata/e qui."
+                    : null)</div>
+            <div class="col-auto">@Metric("Win (test)", perf.TotalTrades > 0 ? perf.WinRate.ToString("F0") + "%" : "—", null,
+                perf.TotalTrades == 0 ? "Serve almeno un'operazione chiusa." : null)</div>
         }
     </div>
 
@@ -330,13 +385,39 @@
                     <tbody>
                         @foreach (var p in Service.Promotions)
                         {
+                            @* [2026-08-05] Il simbolo si legge dalla CONFIGURAZIONE, la stessa fonte
+                               delle schede corsia qui sopra — non dallo stato del motore, che
+                               conserva l'ultimo simbolo girato anche dopo lo svuotamento. Prima
+                               della correzione la stessa schermata si contraddiceva: la scheda
+                               diceva «2 non configurata» e questa riga «2 XLM/USDT · 9gg».
+                               Trovato dal proprietario. *@
+                            var configured = _lanes.FirstOrDefault(l => l.Id == p.LaneId)?.IsConfigured ?? true;
                             <tr>
                                 <td>@p.LaneId</td>
-                                <td>@(string.IsNullOrEmpty(p.Symbol) ? "—" : p.Symbol)</td>
+                                <td>
+                                    @if (!configured)
+                                    {
+                                        <span class="text-muted" title="Corsia svuotata: la configurazione è azzerata e la corsia è libera. Lo storico resta a database.">non configurata</span>
+                                    }
+                                    else
+                                    {
+                                        @(string.IsNullOrEmpty(p.Symbol) ? "—" : p.Symbol)
+                                    }
+                                </td>
                                 <td><span class="badge @ModeBadge(p.CurrentMode)">@p.CurrentMode</span></td>
                                 @* Con ZERO trade chiusi lo Sharpe (calcolato sull'equity) e il win rate sono
-                                   rumore travestito da giudizio: si mostra "—", non un numero. *@
-                                @if (p.Metrics.TradeCount == 0)
+                                   rumore travestito da giudizio: si mostra "—", non un numero. E su una
+                                   corsia svuotata non si mostra NIENTE: quei numeri appartengono a un test
+                                   che non esiste più, e affiancarli a «non configurata» è la stessa
+                                   contraddizione di prima con un'altra faccia. *@
+                                @if (!configured)
+                                {
+                                    <td class="text-end text-muted">—</td>
+                                    <td class="text-end text-muted">—</td>
+                                    <td class="text-end text-muted">—</td>
+                                    <td class="text-end text-muted">—</td>
+                                }
+                                else if (p.Metrics.TradeCount == 0)
                                 {
                                     <td class="text-end text-muted" title="@noTradesHint">—</td>
                                     <td class="text-end">0</td>
@@ -350,7 +431,13 @@
                                     <td class="text-end">@p.Metrics.MaxDrawdown.ToString("F1")%</td>
                                     <td class="text-end">@p.Metrics.WinRate.ToString("P0")</td>
                                 }
-                                <td class="text-end">@p.Metrics.ObservationPeriod.TotalDays.ToString("F0")gg</td>
+                                @* Su una corsia svuotata l'osservazione non misura più niente: i
+                                   giorni sono quelli del test precedente, e mostrarli accanto a
+                                   «non configurata» rimette in scena la contraddizione appena tolta. *@
+                                <td class="text-end">
+                                    @if (configured) { @($"{p.Metrics.ObservationPeriod.TotalDays:F0}gg") }
+                                    else { <span class="text-muted">—</span> }
+                                </td>
                                 <td>
                                     @if (p.CurrentMode == TradingMode.Testnet)
                                     {
@@ -1220,12 +1307,35 @@
     };
 
     // Delega al componente condiviso <Stat> (stile unico in app.css), come le altre pagine.
-    private RenderFragment Metric(string label, string value, bool? positive = null) => builder =>
+    /// <summary>
+    /// [2026-08-05] Il profit factor «999» è il SENTINELLA che il motore scrive quando in holdout
+    /// non c'è stata nemmeno un'operazione perdente (il rapporto sarebbe infinito). Mostrarlo come
+    /// numero fa credere a un rapporto 999:1 — e su poche operazioni è invece il segnale che il
+    /// campione è troppo piccolo perché quel rapporto significhi qualcosa.
+    /// </summary>
+    private static string FormatProfitFactor(decimal? pf) => pf switch
+    {
+        null => "—",
+        >= 999m => "nessuna perdita in holdout",
+        _ => pf.Value.ToString("F2"),
+    };
+
+    /// <summary>
+    /// [2026-08-05] Una protezione a 0,00% non è una protezione «a zero»: è una protezione
+    /// ASSENTE. «TP 0,00%» si legge come «prendi profitto a zero», che è tutt'altra cosa.
+    /// </summary>
+    private static string FormatProtection(decimal? percent) =>
+        percent is > 0m ? $"{percent.Value:F2}%" : "non impostato";
+
+    /// <summary><paramref name="hint"/> [2026-08-05]: la riga sotto il valore. Serve quando il numero
+    /// da solo si presta a essere letto male — «Cassa» maggiore del capitale iniziale su uno short.</summary>
+    private RenderFragment Metric(string label, string value, bool? positive = null, string? hint = null) => builder =>
     {
         builder.OpenComponent<Stat>(0);
         builder.AddComponentParameter(1, nameof(Stat.Label), label);
         builder.AddComponentParameter(2, nameof(Stat.Value), value);
         builder.AddComponentParameter(3, nameof(Stat.Positive), positive);
+        builder.AddComponentParameter(4, nameof(Stat.Hint), hint);
         builder.CloseComponent();
     };
 

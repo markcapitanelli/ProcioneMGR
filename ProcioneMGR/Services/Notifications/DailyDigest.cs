@@ -19,6 +19,17 @@ public sealed class DigestOptions
     public int Hour { get; set; } = 7;
 
     public int Minute { get; set; } = 30;
+
+    /// <summary>
+    /// [G9] Un paragrafo di sintesi in italiano, scritto dal provider AI attivo, SOPRA i dati
+    /// strutturati. Default off.
+    ///
+    /// <para>Additivo per costruzione: se l'AI è spenta, senza chiave, in breaker o fuori budget,
+    /// il digest esce identico a come uscirebbe senza questa opzione — e la sua assenza NON viene
+    /// segnalata, perché non è un guasto. Il dead-man's-switch (se il digest non arriva, la
+    /// piattaforma è muta) non deve dipendere da un provider esterno.</para>
+    /// </summary>
+    public bool NarrativeEnabled { get; set; }
 }
 
 /// <summary>
@@ -51,9 +62,20 @@ public sealed record DigestData(
 /// </summary>
 public static class DailyDigestComposer
 {
-    public static string Compose(DigestData data, DateTime nowLocal)
+    /// <summary>
+    /// <paramref name="narrative"/> [G9]: paragrafo di sintesi opzionale, inserito SOPRA i dati e
+    /// mai al loro posto — il lettore ha sempre la fonte accanto alla sintesi. <c>null</c> o vuoto
+    /// ⇒ messaggio identico a prima, carattere per carattere.
+    /// </summary>
+    public static string Compose(DigestData data, DateTime nowLocal, string? narrative = null)
     {
         var lines = new List<string> { $"ProcioneMGR — digest del {nowLocal:dd/MM/yyyy HH:mm}", "" };
+
+        if (!string.IsNullOrWhiteSpace(narrative))
+        {
+            lines.Add(narrative.Trim());
+            lines.Add("");
+        }
 
         lines.Add("CORSIE");
         if (data.Lanes.Count == 0) lines.Add("  (nessuna corsia leggibile)");
@@ -112,7 +134,8 @@ public sealed class DailyDigestWorker(
     ILlmUsageSink usageSink,
     IServiceProvider serviceProvider,
     ILogger<DailyDigestWorker> logger,
-    INotifier? notifier = null) : BackgroundService
+    INotifier? notifier = null,
+    Llm.Narration.IDigestNarrator? narrator = null) : BackgroundService
 {
     private DateOnly? _lastSentDate;
 
@@ -126,7 +149,19 @@ public sealed class DailyDigestWorker(
             {
                 try
                 {
-                    var body = DailyDigestComposer.Compose(await GatherAsync(stoppingToken), DateTime.Now);
+                    var data = await GatherAsync(stoppingToken);
+
+                    // [G9] La narrativa è un extra: un suo fallimento non deve MAI impedire il
+                    // digest, che è il dead-man's-switch. Try/catch proprio, come ogni sezione.
+                    string? narrative = null;
+                    if (opt.NarrativeEnabled && narrator is not null)
+                    {
+                        try { narrative = await narrator.NarrateAsync(data, stoppingToken); }
+                        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+                        catch (Exception ex) { logger.LogWarning(ex, "Digest: narrativa non prodotta; il digest esce senza."); }
+                    }
+
+                    var body = DailyDigestComposer.Compose(data, DateTime.Now, narrative);
                     await notifier.NotifyAsync(NotificationSeverity.Info, "Digest giornaliero", body, stoppingToken);
                     _lastSentDate = DateOnly.FromDateTime(DateTime.Now.Date);
                     logger.LogInformation("Digest giornaliero inviato.");

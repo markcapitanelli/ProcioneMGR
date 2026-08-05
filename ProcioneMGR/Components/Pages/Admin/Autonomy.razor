@@ -1179,6 +1179,12 @@
                     <input type="number" class="form-control" @bind="_digest.Minute" min="0" max="59" style="width: 5rem;" />
                 </div>
             </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                @* [G9] Paragrafo di sintesi scritto dall'AI SOPRA i dati. Additivo: se l'AI non
+                   risponde il digest esce identico, e l'assenza NON è un guasto da segnalare. *@
+                <input class="form-check-input" type="checkbox" id="nt_digest_narrative" @bind="_digest.NarrativeEnabled" />
+                <label class="form-check-label" for="nt_digest_narrative" title="Un paragrafo in italiano scritto dal provider AI attivo, sopra i dati strutturati (che restano invariati). Se l'AI non risponde, il digest esce senza — non è un guasto.">Sintesi AI in cima @Hot()</label>
+            </div>
             <div class="col-auto">
                 <button class="btn btn-outline-primary" @onclick='() => SaveAsync("Notifications:Digest", _digest, "Digest giornaliero")' disabled="@_busy">Salva digest</button>
             </div>

@@ -21,6 +21,14 @@ public static class LlmArtifactKinds
     /// scritto sta nello StageName ("LlmSupervisor:Comparison:{provider}").
     /// </summary>
     public const string AdvisoryComparison = "LlmAdvisoryCompare";
+
+    /// <summary>
+    /// [G6] La spiegazione in prosa dei candidati BOCCIATI di un run
+    /// (<see cref="Narration.RejectionNarration"/>). Kind proprio per la stessa ragione del
+    /// secondo parere: l'anti-join del worker e i conteggi del pannello guardano
+    /// <see cref="Advisory"/>, e un artifact in più con quel Kind li farebbe sbagliare tutti.
+    /// </summary>
+    public const string RejectionExplanation = "LlmRejectionExplain";
 }
 
 public interface IPipelineSupervisor

@@ -47,13 +47,27 @@ function Test-PortListening([int]$p) {
 
 # Il selettore e' quello del SERVICE (app.kubernetes.io/component=trading), non un "app=..."
 # inventato: cosi' il pod che si misura e' esattamente quello a cui il port-forward instrada.
-function Get-CurrentPodName {
-    $name = kubectl get pods -n $namespace --context $context `
+#
+# --- IL NOME DEL POD NON BASTA (2026-08-05) ---------------------------------------------------
+# Il confronto sul solo NOME copriva il caso "pod sostituito" ma era cieco a quello piu' frequente:
+# il RESTART DEL CONTAINER dentro lo stesso pod (OOM-kill, crash, liveness fallita). Il pod
+# mantiene nome e identita', il tunnel di kubectl muore lo stesso, e questo script rispondeva
+# "gia' attivo". Successo davvero: pod procionemgr-trading-9b875dd78-n6v4c con RESTARTS 2, tunnel
+# morto da 8 ore, /trading mostrava ZERO corsie mentre il motore in cluster stava operando -- e la
+# porta locale risultava regolarmente in ascolto. Ora l'identita' del tunnel e' la coppia
+# NOME + CONTEGGIO RESTART: se il container e' ripartito, il tunnel si rifa'.
+function Get-CurrentPodIdentity {
+    $out = kubectl get pods -n $namespace --context $context `
         -l app.kubernetes.io/component=trading `
         --field-selector status.phase=Running `
-        -o jsonpath='{.items[0].metadata.name}' 2>$null
-    if ([string]::IsNullOrWhiteSpace($name)) { return $null }
-    return "$name".Trim()
+        -o jsonpath='{.items[0].metadata.name}|{.items[0].status.containerStatuses[0].restartCount}' 2>$null
+    if ([string]::IsNullOrWhiteSpace($out)) { return $null }
+    $parts = "$out".Trim().Split('|')
+    if ($parts.Count -lt 1 -or [string]::IsNullOrWhiteSpace($parts[0])) { return $null }
+    # Il conteggio puo' mancare (container non ancora avviato): si tratta come 0 invece che come
+    # ignoto -- al giro dopo, quando esiste, un valore diverso fara' semplicemente rifare il tunnel.
+    $restarts = if ($parts.Count -ge 2 -and $parts[1]) { $parts[1] } else { '0' }
+    return "$($parts[0])#$restarts"
 }
 
 function Stop-StalePortForward([int]$p) {
@@ -80,17 +94,18 @@ if (-not $svc) {
     exit 0
 }
 
-$currentPod = Get-CurrentPodName
+$currentPod = Get-CurrentPodIdentity
 
 if (Test-PortListening $port) {
     $servedPod = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { '' }
 
     if ($currentPod -and $servedPod -eq $currentPod) {
-        Write-Host "Trading  : port-forward $port gia' attivo verso $currentPod." -ForegroundColor Green
+        Write-Host "Trading  : port-forward $port gia' attivo verso $($currentPod.Split('#')[0]) (restart $($currentPod.Split('#')[1]))." -ForegroundColor Green
         exit 0
     }
 
-    # Il caso che prima passava inosservato.
+    # Il caso che prima passava inosservato -- ora comprende anche il solo restart del container,
+    # che lascia il nome del pod invariato ma uccide il tunnel.
     $detail = if ($servedPod) { "serviva $servedPod, ora c'e' $currentPod" } else { "pod servito sconosciuto" }
     Write-Host "Trading  : port-forward $port STANTIO ($detail) - lo ricreo." -ForegroundColor Yellow
     Stop-StalePortForward $port

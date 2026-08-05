@@ -491,6 +491,20 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Llm.ILlmCallGuard, ProcioneMG
 builder.Services.Configure<ProcioneMGR.Services.Llm.Committee.CommitteeOptions>(builder.Configuration.GetSection("Committee"));
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.Committee.IAiCommittee, ProcioneMGR.Services.Llm.Committee.AiCommittee>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Llm.IPipelineSupervisor, ProcioneMGR.Services.Llm.PipelineSupervisor>();
+// [G6] Spiegazione dei candidati bocciati. Il RIASSUNTO è deterministico e vive senza AI (il
+// servizio si registra comunque: la pagina lo usa per il digest anche a Llm:ExplainRejections=false);
+// il narratore aggiunge solo la prosa, ed è quello che l'interruttore accende.
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.Narration.IRejectionNarrator, ProcioneMGR.Services.Llm.Narration.RejectionNarrator>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.Narration.IRejectionExplainService, ProcioneMGR.Services.Llm.Narration.RejectionExplainService>();
+// [G9] Narrativa di sintesi in cima al digest giornaliero. Additiva: col narratore assente o muto
+// il digest esce identico a prima (Notifications:Digest:NarrativeEnabled, default off).
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.Narration.IDigestNarrator, ProcioneMGR.Services.Llm.Narration.DigestNarrator>();
+// [G4] Post-mortem delle operazioni in perdita: fatti dal codice, causa dal menù chiuso, prosa
+// dall'AI solo se serve. Sezione PostMortem, default SPENTO; il contesto che ne deriva raggiunge
+// il comitato AF3 come informazione in più, mai come scorciatoia fuori dal menù.
+builder.Services.Configure<ProcioneMGR.Services.Llm.Narration.PostMortemOptions>(builder.Configuration.GetSection("PostMortem"));
+builder.Services.AddSingleton<ProcioneMGR.Services.Llm.Narration.IPostMortemService, ProcioneMGR.Services.Llm.Narration.PostMortemService>();
+builder.Services.AddHostedService<ProcioneMGR.Services.Llm.Narration.PostMortemWorker>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Pipeline.LlmSupervisorWorker>());
 
@@ -649,6 +663,24 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 // generano migrazioni (es. verso un PostgreSQL non ancora creato).
 if (!EF.IsDesignTime)
 {
+    // [2026-08-05] Migrate-on-startup, prima dei ruoli (che scrivono su tabelle che devono esistere).
+    // Non fallisce mai l'avvio da solo: se le migrazioni non sono applicabili da questo host, o il
+    // lock è occupato, lo dice a log e prosegue — il comportamento storico (migrate-on-deploy) resta
+    // valido e possibile. Vedi DatabaseMigrator per il perché del lock e del caricamento per nome.
+    var migrationOptions = app.Configuration.GetSection("Database").Get<DatabaseMigrationOptions>()
+                           ?? new DatabaseMigrationOptions();
+    var migrationLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseMigrator");
+    try
+    {
+        await DatabaseMigrator.MigrateAsync(app.Services, migrationOptions, migrationLogger);
+    }
+    catch (Exception ex)
+    {
+        // Uno schema non allineato è un guasto grave, ma va DETTO, non nascosto dietro un crash
+        // opaco: il passo successivo (i ruoli) fallirà con un messaggio chiaro se la causa è quella.
+        migrationLogger.LogCritical(ex, "Migrazione automatica fallita. Applica lo schema a mano: dotnet ef database update.");
+    }
+
     await DbInitializer.InitializeAsync(app.Services);
 
     // [Fase B] Warm-up della cache chiavi AI. `IsConfigured` è sincrono per contratto (mai I/O)

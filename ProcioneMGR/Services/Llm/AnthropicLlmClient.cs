@@ -83,8 +83,24 @@ public sealed class LlmOptions
     public int MaxTokens { get; set; } = 4096;
     public int PollIntervalMinutes { get; set; } = 5;
 
-    /// <summary>Timeout della singola chiamata Claude (il SDK da solo aspetterebbe fino a 10 minuti).</summary>
+    /// <summary>Timeout COMPLESSIVO della chiamata, tutti i tentativi di failover compresi (il SDK da solo aspetterebbe fino a 10 minuti).</summary>
     public int RequestTimeoutSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// [2026-08-05] Budget di tempo del SINGOLO provider dentro la catena di failover. Scaduto
+    /// questo, il provider è considerato appeso e si passa al prossimo anello.
+    ///
+    /// <para><b>Perché esiste</b>: senza, un provider che <i>si appende</i> — il modo più comune in
+    /// cui un provider gratuito smette di funzionare — consumava da solo tutto
+    /// <see cref="RequestTimeoutSeconds"/> e la catena non veniva mai percorsa. Il delegante vedeva
+    /// il token già cancellato dal timeout complessivo e non poteva distinguerlo da uno shutdown,
+    /// quindi rilanciava senza provare nessun altro (osservato dal vivo: Nvidia appesa, e Groq,
+    /// Gemini e HuggingFace — vivi e con chiave — mai interpellati).</para>
+    ///
+    /// <para>Va tenuto MINORE di <see cref="RequestTimeoutSeconds"/>, altrimenti scade prima il
+    /// budget complessivo e non cambia nulla. <b>0 = spento</b>, comportamento storico.</para>
+    /// </summary>
+    public int PerProviderTimeoutSeconds { get; set; } = 25;
 
     /// <summary>Errori transitori consecutivi dopo i quali il breaker sospende le chiamate.</summary>
     public int BreakerFailureThreshold { get; set; } = 3;
@@ -104,6 +120,19 @@ public sealed class LlmOptions
 
     /// <summary>Provider del secondo parere (una voce di <see cref="AiProviders.Known"/>). Default Groq (attivo default = Nvidia; due pareri dallo stesso provider non confrontano niente e si saltano da soli).</summary>
     public string ComparisonProvider { get; set; } = AiProviders.Groq;
+
+    /// <summary>
+    /// [G6] Spiegazione in prosa dei candidati BOCCIATI, prodotta dal worker dopo l'advisory.
+    /// Default off: è una chiamata in più per run, e va scelta apposta.
+    ///
+    /// <para>Spento NON significa niente spiegazione: il riassunto DETERMINISTICO delle bocciature
+    /// (quanti candidati per quale giudice, i migliori scartati coi loro numeri) è calcolato in C#
+    /// e resta visibile comunque. Questo interruttore riguarda solo le parole attorno ai numeri.</para>
+    /// </summary>
+    public bool ExplainRejections { get; set; }
+
+    /// <summary>[G6] Quanti candidati bocciati riportare per esteso (i conteggi per causa coprono sempre tutti).</summary>
+    public int ExplainRejectionsTopN { get; set; } = Narration.RejectionDigestBuilder.DefaultTopN;
 }
 
 /// <summary>

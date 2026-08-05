@@ -626,6 +626,210 @@ direzionale-tecnico) e si tengono i due buchi veri: orchestratore di flotta e bu
 | AF4c | **Pesi ERC fra corsie, SOLO advisory** (riuso `Services/Portfolio`), `Fleet:CapitalWeights:Enabled=false` | aperto | L2: PnL bianco ⇒ ~equal-weight |
 | AF5 | **Continuità H24**: heartbeat incrociato a DB (`HostHeartbeats`, una riga per host, monitor una-notifica-per-transizione, assenza=ignoranza≠guasto; pannello con salvataggio doppio guscio+motore via gRPC, sezione nel contratto `EngineConfigSections`), `scripts/watchdog.ps1` (Task Scheduler 5′, Telegram diretto, auto-riparazione del port-forward prima di gridare, `-Register`), `scripts/bringup.ps1` idempotente (Docker→socat→nodo→pod→port-forward→guscio, `-Register` al logon con ripiego automatico sulla cartella Esecuzione automatica). **Digest giornaliero fatto**: `DailyDigestWorker` (ora LOCALE, `Notifications:Digest` default OFF, pannello dentro Notifiche), sezioni raccolte ognuna in proprio try/catch, chiusura che dichiara l'assenza-come-allarme; anti-doppione in memoria (un doppione raro batte una tabella in più) | **fatto (2026-08-02)** — deploy 5.1-5.3 eseguito la sera stessa | ✅ L1: transizioni heartbeat + scheduling digest (prima/dopo l'ora, già-inviato, avvio tardivo); L3: upsert senza duplicati su Postgres; L4 deploy: watchdog registrato e VERIFICATO, bring-up al logon, il rimedio socat del bringup è servito DAL VIVO al primo deploy (IP del nodo kind cambiato). Fix post-deploy: i `-Register` ora verificano l'esito invece di rassicurare (bug trovato sul campo: Register-ScheduledTask non terminante + messaggio di successo) |
 
-**Non-obiettivi**: auto-Live in ogni forma; LLM che genera strategie/parametri; Hurst come
-pilastro; validazione più permissiva (F5 resta a click umano); terzo host. Ordine: AF0 → AF1 →
-AF5(1-3) → AF2(DryRun) → AF4a → AF2(esecuzione) → AF5(digest) → AF4b → AF3 → AF4c.
+**Non-obiettivi**: auto-Live in ogni forma; LLM che scrive codice libero o tocca un parametro
+senza gate (**reconsiderato in parte 2026-08-04** per la sola generazione di candidati dentro
+l'imbuto esistente — vedi Filone G, item G3); Hurst come pilastro; validazione più permissiva (F5
+resta a click umano); terzo host. Ordine: AF0 → AF1 → AF5(1-3) → AF2(DryRun) → AF4a →
+AF2(esecuzione) → AF5(digest) → AF4b → AF3 → AF4c.
+
+---
+
+## Filone G — Benchmark Bitget/AI: confronto col settimo PDF esterno (2026-08-04, tredicesima roadmap)
+
+Nato dal settimo PDF esterno («Architettura di un Bot di Trading AI per Altcoin: Guida allo
+Sviluppo in C# su Bitget e all'Integrazione con Groq, Gemini e NVIDIA») e dalla richiesta del
+proprietario di aggiornare/potenziare ProcioneMGR tenendo il documento come riferimento. Confronto
+punto-per-punto completo nel [PRD-BENCHMARK-BITGET-AI-2026-08](PRD-BENCHMARK-BITGET-AI-2026-08.md).
+
+Il documento è una **guida introduttiva generalista** (setup ambiente → Bitget → backtesting →
+AI → produzione, come se si partisse dal foglio bianco): quasi tutto il suo piano a 5 fasi
+corrisponde a lavoro chiuso da tempo e ampiamente superato. Nessuna riga di codice nuova nasce
+dal confronto stesso — solo verdetti, in gran parte "già fatto" o "già respinto con un motivo".
+
+| # | Cosa | Stato | Gate / verifica |
+|---|---|---|---|
+| G1 | **RAG-lite documentale per l'advisory** (BM25/TF-IDF C# puro, nessun embedding esterno nuovo; il testo recuperato è CONTESTO, mai istruzione, stessa doppia validazione anti-injection del comitato AF3) — utile perché il proprietario porta spesso PDF esterni che oggi solo Claude confronta manualmente | aperto, priorità bassa/opzionale, **non urgente** | L1 ranking su corpus noto; L2 iniezione malevola non altera la scelta vincolata; L3 Postgres reale; L4 citazione visibile nell'advisory dal vivo |
+| G2 | Ottimizzazione multi-obiettivo (fronte di Pareto Sharpe/MaxDD, tipo NSGA-II) | **backlog, nessuna fase assegnata** — il gate DSR/PBO + risk parity ERC/Ledoit-Wolf ottengono già un effetto simile per altra via; nessun caso misurato in cui divergono | — |
+| G3 | **AI come generatore di candidati aggiuntivo** (2026-08-04, regola reconsiderata su richiesta del proprietario): un provider AI propone candidati STRUTTURATI (JSON vincolato: solo componenti dal catalogo esistente — indicatori, filtri di regime, range di parametri già in `Discovery` — mai codice libero), rivalidati contro la whitelist (stesso principio anti-injection del comitato AF3). Il candidato entra nell'imbuto ESISTENTE di `CreativeDiscoveryStage`/`GeneticAlphaMiner`: selezione → holdout → DSR/PBO/CPCV → gemello sintetico → forward Paper, **zero scorciatoie, zero soglie diverse, zero corsia riservata** | aperto, priorità bassa — **aspettativa onesta dichiarata**: dato lo storico di 10 esiti negativi consecutivi control-validati sulla classe direzionale-tecnica dopo 445mila combinazioni sistematiche, la probabilità che l'AI trovi ciò che la ricerca sistematica non ha trovato è bassa; il valore vero atteso è restringere lo spazio (quale classe/regime esplorare), non inventare segnali | L1 nessun componente fuori whitelist supera il parsing; L2 AI spenta ⇒ pipeline bit-identica a oggi; L3 un candidato AI riceve DSR/PBO reali in un run; L4 verdetto scritto anche se negativo |
+| G4 | **Post-mortem AI su operazioni fallite/negative** (2026-08-04, nuova regola; **estesa lo stesso giorno** su richiesta del proprietario): dopo un trade chiuso in perdita oltre soglia o il ritiro di una corsia, un provider AI scrive un'analisi testuale da dati oggettivi + una **classificazione a menù chiuso** (`RegimeAvverso`/`StopStretto`/`SegnaleDegradato`/`CostiDominanti`/`RumoreNormale`/`Inconcludente`, con `Inconcludente` come default deterministico su ogni fallimento, e le cause CALCOLABILI derivate dal codice senza interpellare l'AI). **In più**: la classificazione alimenta il `Context` della domanda al comitato AF3 quando quello decide su quella corsia/candidato — contesto in più DENTRO il menù esistente, mai un canale che lo bypassa, mai una scorciatoia che tocca un parametro da sola | **fatto (2026-08-05)**: `TradePostMortem` + migrazione `AddTradePostMortems` (additiva: una CREATE TABLE e due indici, zero ALTER), `PostMortemAnalyzer` puro per fatti e cause calcolabili, `PostMortemService` col menù chiuso, worker 30′, pannello «Perché le operazioni sono andate male» in /admin/ai-supervisor, contesto innestato sul `Context` della domanda al comitato | ✅ L1 22 test: causa aritmetica senza AI, menù che non offre all'AI ciò che il codice calcola, verdetto fuori menù ⇒ Inconcludente (anche una voce vera ma non offribile), riassunto deterministico a parità; ✅ L2 AI spenta ⇒ contesto vuoto e comitato identico a prima; ✅ L3 migrazione provata su Postgres 18 VERGINE prima del database vero, poi applicata (212 trade e 12,7M candele invariati); ✅ **L4 sull'app reale**: acceso senza AI, «Analizza adesso» → 5 operazioni vere analizzate, tutte `Inconcludente/default` — che è la risposta ONESTA senza AI e senza causa aritmetica, non un'invenzione. **Nota di design registrata**: con soglia 1% e fee 0,1% la causa «costi che hanno mangiato il lordo» resta dormiente (serve una perdita più piccola del round-turn) |
+| G5 | **Bozza automatica del confronto col PDF esterno**: quando il proprietario porta un documento (sette finora), un provider AI produce la PRIMA STESURA della tabella «proposta del PDF → stato reale → verdetto» pescando dal corpus di G1; la stesura è una BOZZA da rivedere insieme, mai un verdetto pubblicato da sola | aperto, dipende da G1 | L1 la bozza cita solo documenti realmente nel corpus (nessuna fonte inventata); L2 AI spenta ⇒ nessuna bozza, il confronto resta manuale come oggi; L4 bozza generata su un PDF vero e confrontata con quella scritta a mano |
+| G6 | **Spiegazione dei candidati bocciati dai gate**. Costruito in DUE strati, ed è il punto: (a) `RejectionDigestBuilder` **deterministico e senza AI** — classifica ogni bocciatura leggendo il `RejectReason` del motore, conta per causa, riporta i migliori scartati coi numeri veri e la fascia grigia (filtro condiviso `FleetStateReader.IsGrey`, non uno nuovo); (b) `RejectionNarrator` che aggiunge SOLO la prosa (path guard `explain`, budget AF1, artifact Kind proprio `LlmRejectionExplain`). La prosa è mostrata ACCANTO ai numeri veri, mai al loro posto: un numero sbagliato si vede a occhio. Note legate ai candidati per CHIAVE, chiavi inventate scartate e **contate in pagina**. Pannello in /admin/ai-supervisor con interruttore, tetto 1-20 e pulsante «Spiega con l'AI» per singolo run | **fatto (2026-08-05)** | ✅ L1 44 test: classificatore sui messaggi VERI del motore (fallisce se il motore li cambia — meglio che contarli sotto l'etichetta sbagliata), raggruppamento, topN che limita il dettaglio ma non i conteggi, ordine deterministico; ✅ L2 «un modello che inventa TUTTO non produce nemmeno una nota», e ogni esito non-Ok del guard ⇒ nessuna prosa, zero eccezioni, digest intatto; ✅ L3 11 test su Postgres vero: digest senza mai sfiorare l'AI, idempotenza, force che sostituisce, artifact corrotto ⇒ vuoto dichiarato, Kind nuovo che non disturba advisory e verdetti; ✅ **L4 sull'app reale**: pannello vivo sui run del 05/08 (144 candidati classificati «119 Sharpe sotto soglia / 21 pochi trade / 4 DSR», 21 in fascia grigia, i numeri veri accanto a ogni riga) **col layer AI che NON ha risposto** — cioè la prova sul campo che il riassunto vive senza AI; salvataggio verificato (tetto 5→6→5, hot-reload senza riavvio, e le altre 23 chiavi della sezione `Llm` intatte, sottosezione `Budget` compresa). ⚠️ Il ramo di SUCCESSO della prosa non è dimostrato dal vivo: Nvidia è andata in timeout due volte (vedi il difetto del failover qui sotto); coperto da test unità+integrazione |
+| G9 | **Narrativa di sintesi nel digest giornaliero**: un paragrafo in italiano SOPRA i dati strutturati che il `DailyDigestWorker` già invia (`DigestNarrator`, path guard `digest`, tetto 600 caratteri col taglio dichiarato). Interruttore in /admin/autonomy accanto all'ora del digest | **fatto (2026-08-05)** | ✅ L1/L2 17 test, fra cui la **proprietà regina**: senza narrativa il messaggio è IDENTICO carattere per carattere a quello di prima della funzione (non «equivalente»: identico), la chiusura col dead-man's-switch resta l'ultima riga, e ogni fallimento dell'AI ⇒ digest invariato senza segnalare nulla (l'assenza della sintesi non è un guasto); ✅ L4 interruttore «Sintesi AI in cima» visibile e spento in /admin/autonomy accanto all'ora del digest |
+| G7 | **Parere del comitato accanto al click Live**: al momento della promozione Testnet→Live (che **resta il click umano intoccabile**), il comitato AF3 mostra lì un parere dentro menù vincolato (promuovere ora / aspettare / non promuovere + motivazione). **Mai bloccante, mai automatico, non sposta il gate di un millimetro**: è informazione in più accanto al pulsante | aperto, priorità bassa — **il punto più delicato del sistema**, da trattare con lo standard più severo | L1 il parere non può in nessun caso abilitare/disabilitare il pulsante (test che lo dimostra sullo stato del DOM); L2 comitato spento/spazzatura ⇒ pulsante e flusso identici a oggi; L3 fuzz sulla macchina a stati promozioni invariata; L4 il click Live resta umano e funzionante col parere presente e col parere assente |
+| G8 | **Domande e risposte sui documenti propri**: estensione naturale di G1 una volta costruito — chiedere «cosa abbiamo scoperto sul pairs trading a 1d?» e ottenere una risposta ANCORATA ai report veri, con citazione del documento, invece di scavare a mano | aperto, dipende da G1 | L1 ogni risposta cita il documento da cui viene (risposta senza fonte = rifiutata); L2 domanda su cosa non è nel corpus ⇒ «non lo so», mai un'invenzione; L4 tre domande vere di cui una fuori corpus |
+
+---
+
+## Filone H — Prestazioni e risorse (2026-08-05, quattordicesima roadmap)
+
+Dalla richiesta del proprietario di ottimizzare processi e uso di risorse «senza peggiorare, senza
+causare danni». Misure e dettaglio in [PRD-PRESTAZIONI-2026-08](PRD-PRESTAZIONI-2026-08.md).
+
+**La scoperta che cambia la diagnosi**: il guscio consuma **111 MB e l'1,2% di un core** — è già
+magro. La macchina soffoca (317 MB liberi su 7.835) per **il cluster**: il nodo kind sta a 2,35 GiB
+con `kube-scheduler` a **418 riavvii** e `kube-controller-manager` a **413**, perché non
+raggiungono l'API server entro il timeout del lease e escono. Non è un guasto: è fame di risorse
+che si auto-alimenta. Sopra ci girano 7 pod ArgoCD per un cluster locale mono-nodo.
+
+| # | Cosa | Stato | Numeri |
+|---|---|---|---|
+| H1 | `random_page_cost` 4 → 1,1 sul database (il `4` è il valore da disco a piatti; qui c'è un **NVMe**) | **fatto** | stessa query, connessione nuova: **Bitmap Heap Scan 92,3 ms → Index Scan 25,4 ms**; su un'altra serie il piano diventa *Index Only Scan*. Il guadagno durevole è il PIANO, non il millisecondo |
+| H6 | Log SQL e HTTP da `Information` a `Warning` | **fatto** | prima 37 righe/s di SQL a riposo e 4 righe per richiesta HTTP: una lettura dei log rendeva 147.000 caratteri. **Onestà**: il guadagno di CPU è piccolo (l'app era all'1,2%), il valore è l'osservabilità |
+| H2 | ArgoCD scalato a 0 quando non si deploya + pod morto da 7 giorni | **bloccato dal classifier**, serve via libera | è il maggior rilascio di RAM ancora sul tavolo, e probabilmente ferma il crash-loop del control plane |
+| H3 | Tetto alla VM WSL2 (`.wslconfig` assente) | aperto | richiede `wsl --shutdown`, che ferma il motore: da fare in un momento scelto |
+| H4 | Memoria di Postgres (`shared_buffers` 128 MB per una tabella da 2,6 GB, cache hit **70%**) | **gated su H2/H3** | alzarla ora, col 4% di RAM libera, sarebbe il danno da evitare |
+
+**Errore mio da ricordare**: un commento messo dentro `Logging:LogLevel` impedisce l'avvio — lì
+ogni chiave dev'essere un livello valido. Va accanto a `LogLevel`, dentro `Logging`, che è dove lo
+tiene già `appsettings.Development.json`.
+
+---
+
+### Migrate-on-startup (2026-08-05) — `MigrateAsync` esiste finalmente
+
+Fino a quel giorno lo schema si applicava SOLO a mano (`dotnet ef database update`): il commento in
+`DbInitializer` lo dichiarava come scelta («l'app non referenzia l'assembly delle migrazioni, quindi
+niente migrate-on-startup»). Funziona finché qualcuno si ricorda — e la sera prima non se n'era
+ricordato nessuno, con la tabella nuova assente e l'errore che sarebbe uscito a metà giornata.
+
+`DatabaseMigrator` (`Database:AutoMigrate`, default **true**; `LockTimeoutSeconds` 120) applica le
+migrazioni pendenti prima dei ruoli. Tre cose non ovvie, tutte scoperte facendolo:
+
+1. **Il ciclo di progetti non era il vero ostacolo.** EF risolve l'assembly delle migrazioni per
+   NOME: basta che la DLL sia accanto all'eseguibile. Un target `CopyMigrationsToApp` nel progetto
+   delle migrazioni ce la porta, nella direzione che NON crea il ciclo.
+2. **Copiare la DLL non basta.** Un'app framework-dependent risolve gli assembly dal proprio
+   `deps.json`, non dai file presenti nella cartella: la DLL c'era, mezzo mega, e `Assembly.Load`
+   continuava a dire «file non trovato». Serve un resolver esplicito su
+   `AssemblyLoadContext.Default.Resolving`, ristretto a QUEL nome.
+3. **Il lock serve davvero.** Monolite e servizi in cluster condividono il database e possono
+   partire insieme: un advisory lock di PostgreSQL li serializza, e chi arriva secondo rilegge
+   dentro il lock e non trova nulla da fare.
+
+Non fallisce mai l'avvio: assembly assente (gli host satelliti non lo ricevono), lock occupato o
+interruttore spento producono una riga di log e la prosecuzione. Il migrate-on-deploy resta
+possibile con `Database:AutoMigrate=false`. 4 test; L4: «Schema del database già allineato:
+nessuna migrazione pendente» all'avvio dell'app vera.
+
+### Incongruenze della pagina /trading trovate col proprietario (2026-08-05)
+
+Segnalate da lui («continuo a riscontrare qualche incongruenza»), verificate sui dati veri del
+database, non a occhio. **La causa principale non era nella pagina**:
+
+1. **🔴 Port-forward STANTIO — la causa vera.** Il container del pod di trading era ripartito 8 ore
+   prima (`RESTARTS 2`). `kubectl port-forward` restava in ascolto sulla 18092, ma il tunnel era
+   morto: l'handshake HTTP/2 falliva e il guscio riceveva `Unavailable` a ogni chiamata. La pagina
+   mostrava **zero corsie e «Avvia trading»** mentre il motore in cluster stava operando.
+   **`ensure-trading-portforward.ps1` diceva «già attivo»**: confrontava il NOME del pod, che un
+   restart del container non cambia — il controllo era cieco proprio al caso più frequente.
+   **Corretto**: l'identità del tunnel è ora la coppia NOME + CONTEGGIO RESTART. Provato sul
+   cluster vero forzando il marcatore: «STANTIO (serviva …#99, ora c'è …#2) — lo ricreo». Corretto
+   anche il profilo `procione-reale` di launch.json, che a differenza di `procione-main` non
+   apriva il tunnel e quindi partiva ogni volta con /trading cieca.
+   *Osservazione operativa*: il container del motore esce con **codice 0 «Completed»** e viene
+   riavviato da Docker (3 restart in 2 giorni) — non è un crash dell'applicazione, ma è il motivo
+   per cui questo caso si presenta spesso.
+2. **Corsia svuotata descritta in due modi nella STESSA schermata**: la scheda diceva «2 non
+   configurata», la tabella promozioni sotto «2 XLM/USDT · 9gg». `ClearLaneAsync` azzera la
+   configurazione ma non lo stato del motore, che conserva l'ultimo simbolo girato. **Corretto**:
+   la tabella legge ora la configurazione (stessa fonte delle schede) e mostra «non configurata»
+   con le metriche a «—», perché quei numeri appartengono a un test che non esiste più.
+3. **`AVAILABLE` maggiore di `TOTAL CAPITAL`** sulla corsia 4 (10.799,20 contro 10.000,00): non era
+   un dato corrotto ma una posizione SHORT che accredita a cassa il ricavato — aritmetica giusta
+   con etichette che non la spiegavano, e per giunta mancava il numero che conta. **Corretto**: le
+   carte ora sono «Equity ora» (per prima), «Capitale iniziale», «Cassa» (che dichiara il perché
+   quando supera il capitale) e «Impegnato».
+4. **`PNL (TEST) 0,00` con `MAX DD 0,74%` e zero trade**: il PnL del test conta solo le operazioni
+   CHIUSE, il drawdown segue anche l'equity delle posizioni APERTE. **Corretto**: «PnL realizzato
+   (test)», «Operazioni chiuse (test)» con quante ne restano aperte, e il drawdown che dichiara
+   quando viene da una posizione ancora aperta.
+5. **`PF 999,00`** nelle attese di holdout: è il sentinella «nessuna operazione perdente», non un
+   rapporto 999:1. **Corretto**: si scrive a parole. Stessa cura per `TP 0,00% / TSL 0,00%`, che
+   non sono protezioni «a zero» ma protezioni ASSENTI → «non impostato».
+6. **Attese di holdout vuote** sulle corsie pre-flotta 0-2. **Corretto**: «non registrate (corsia
+   configurata a mano)» invece di tre trattini muti — quelle corsie non hanno un holdout con cui
+   confrontare il forward test, e dirlo è il punto.
+7. **`/metrics` tutta a zeri** (item F7): la pagina legge i contatori del processo in cui gira, e
+   il motore vive altrove. **Corretto il fraintendimento**, non ancora il collegamento: un banner
+   dichiara che quei contatori resteranno a zero per costruzione finché il motore è remoto, e
+   rimanda a /trading. Il collegamento vero resta F7.
+
+### Difetto pre-esistente trovato dal vivo col collaudo di G6 (2026-08-05) — CORRETTO
+
+**Il rimedio è stato applicato** su decisione del proprietario: `Llm:PerProviderTimeoutSeconds`
+(default 25s, 0 = spento) dà a ogni anello della catena il proprio budget di tempo. Scaduto quello,
+il provider è considerato appeso e si passa al successivo; se invece è il token ESTERNO a essere
+cancellato (shutdown vero, o budget complessivo esaurito) non si prova nessun altro — comportamento
+storico invariato. 13 test scritti PRIMA del codice, compresi «cancellazione esterna ⇒ niente
+failover» e «budget a 0 ⇒ comportamento storico». Il testo qui sotto resta come racconto del
+difetto e di come si è manifestato.
+
+### Come si era manifestato
+
+Provando il pulsante «Spiega con l'AI» sull'app reale, la chiamata a
+`integrate.api.nvidia.com/v1/chat/completions` è andata in **timeout** due volte di fila (60s), e
+**il failover non è mai partito** — pur avendo Groq, Gemini, HuggingFace e Anthropic con chiave
+valida e raggiungibili (i cinque `GET /models` avevano risposto 200 pochi secondi prima).
+
+**Il meccanismo, nei dettagli.** `LlmCallGuard` crea un token *linked* (token del chiamante +
+timeout) e passa QUELLO al client; il guard poi distingue correttamente le due cause
+(`ct.IsCancellationRequested` = shutdown vero ⇒ non tocca il breaker;
+`timeoutCts.IsCancellationRequested` ⇒ «timeout», ritentabile). Ma un livello più sotto,
+`DelegatingLlmClient.CompleteAsync` vede **solo il token linked**, che risulta cancellato in
+ENTRAMBI i casi; il suo filtro `catch (OperationCanceledException) when (ct.IsCancellationRequested)`
+scatta anche sul timeout e **rilancia senza provare il provider successivo**.
+
+**Perché conta**: un provider che *si appende* è il modo più comune in cui un provider gratuito
+smette di funzionare — ed è esattamente il caso per cui la catena di failover esiste. Oggi quel
+caso la scavalca. Riguarda TUTTI i percorsi AI (advisory, sentiment, comitato, e le funzioni
+nuove), non solo G6.
+
+**Nota operativa di quella notte**: il breaker del layer era rimasto a **2 errori consecutivi su 3**
+— la soglia non fu raggiunta di proposito (al terzo si sarebbe aperto per 30 minuti anche per
+l'advisory della piattaforma). Si richiude da solo al primo successo.
+
+### La regola sull'AI riconsiderata (2026-08-04)
+
+Il proprietario ha chiesto di riconsiderare tre regole prese in precedenza. Risposta data PRIMA
+del codice, con opinione esplicita, poi consenso registrato:
+
+1. **AI che genera strategie** → **accettato in forma scoped** (G3 sopra): solo come fonte di
+   candidati che passa dagli stessi gate di tutto il resto, mai un canale privilegiato.
+2. **AI che entra nel meccanismo e nel percorso d'esecuzione** → **RIFIUTATO, linea rossa
+   confermata**. È il principio su cui è costruita la Queen Bee (deterministica, fuzzata 20k
+   volte) e il comitato (scelta vincolata a menù, fallback deterministico su ogni fallimento,
+   proprietà "provider spazzatura al 100% ⇒ comitato spento"). L'AI ha già causato incidenti
+   operativi restando solo advisory (credito Anthropic esaurito in silenzio per settimane, bug SDK
+   che abbatteva un intero tick): nel percorso reale d'ordine lo stesso guasto diventerebbe un
+   ordine sbagliato o uno stop-loss mancato. Resta anche il motivo epistemico: non si può fuzzare
+   lo spazio di risposta di un LLM come si fa col codice deterministico, e tutta la piattaforma
+   vale per essere dimostrabile su ogni stato raggiungibile. **Via sanzionata per dare più peso
+   all'AI**: ampliare i tipi di decisione arbitrabili dal comitato (sempre a menù vincolato,
+   sempre fallback deterministico, mai su Live, mai nel loop caldo di piazzamento ordini) — nessun
+   item concreto richiesto oggi, resta un principio disponibile per fasi future.
+3. **AI che studia le operazioni fallite o negative** → **accettato** (G4 sopra); **esteso lo
+   stesso giorno** su richiesta del proprietario: oltre a journal/digest, l'esito strutturato
+   alimenta anche il comitato a scelta vincolata (AF3) come contesto — mai una scorciatoia che
+   tocca un parametro operativo DA SOLA, sempre dentro il menù esistente.
+
+**Non-obiettivi** (motivati uno per uno nel PRD): `JK.Bitget.Net`/ExchangeSharp; arbitraggio
+cross-exchange (manca un secondo venue con leva, MiCA Bitget-only); market making immediato
+(dipende da D2 + server, già rimandato); LLM che scrive codice libero o parametri fuori gate
+(G3 è l'unica eccezione, scoped); **LLM nel percorso di esecuzione — linea rossa confermata
+2026-08-04** (violerebbe "l'AI non entra mai nel meccanismo"); NVIDIA NIM self-hosted (manca GPU
+dedicata); multi-agente generativo stile "trading firm" (la Queen Bee deterministica + comitato a
+menù è già la versione più prudente della stessa idea); validazione più permissiva.
+
+**Priorità reale**: nessun item di questo filone è bloccante per Filone F (F5→F13) e Filone AF
+(AF2 esecuzione, AF4c), che restano il lavoro di sostanza. Ordine interno ai G, per rischio
+crescente e costo crescente:
+
+**G6** (rischio nullo, self-contained, valore immediato) → **G4** (post-mortem + contesto al
+comitato, riusa advisory+comitato) → **G9** (polish sul digest, piccolo) → **G1** (RAG-lite, è la
+fondazione di G5 e G8) → **G5**+**G8** (entrambi consumatori di G1) → **G3** (bassa aspettativa
+dichiarata, meglio dopo G1) → **G7** (il più delicato: si tocca solo quando tutto il resto è
+stabile) → **G2** backlog senza scadenza.
+
+**Invariante comune a tutti i G**: ognuno è default-off, ognuno ha la sua configurazione nella UI
+(mai un flag che vive solo in appsettings), e ognuno spento deve lasciare il comportamento
+bit-identico a prima — verificato al livello 2, non promesso.

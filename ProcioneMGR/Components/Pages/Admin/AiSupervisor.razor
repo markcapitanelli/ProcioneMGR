@@ -21,6 +21,9 @@
 @inject ILlmUsageSink UsageSink
 @inject IOptionsMonitor<LlmBudgetOptions> BudgetMonitor
 @inject IOptionsMonitor<ProcioneMGR.Services.Llm.Committee.CommitteeOptions> CommitteeMonitor
+@inject ProcioneMGR.Services.Llm.Narration.IRejectionExplainService RejectionExplain
+@inject ProcioneMGR.Services.Llm.Narration.IPostMortemService PostMortems
+@inject IOptionsMonitor<ProcioneMGR.Services.Llm.Narration.PostMortemOptions> PostMortemMonitor
 
 <PageTitle>Supervisione AI</PageTitle>
 
@@ -380,6 +383,253 @@
     </div>
 </div>
 
+@* ---- [G4] Post-mortem delle operazioni in perdita ---- *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-clipboard-pulse me-1"></i>Perché le operazioni sono andate male</span>
+        <span>
+            @if (_postMortem.Enabled && _postMortem.UseAi) { <span class="badge bg-success">ATTIVO CON AI</span> }
+            else if (_postMortem.Enabled) { <span class="badge bg-info text-dark">SOLO CAUSE CALCOLABILI</span> }
+            else { <span class="badge bg-secondary">SPENTO</span> }
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Dopo ogni operazione chiusa in perdita oltre la soglia, la piattaforma registra i
+            <strong>fatti</strong> (ingresso, uscita, durata, motivo, costi) e una
+            <strong>causa scelta da un elenco chiuso</strong>. Dove la causa è aritmetica la
+            calcola il codice e <strong>l'AI non viene nemmeno interpellata</strong>: è il caso di
+            «costi che hanno mangiato il lordo» e della liquidazione forzata. Solo quando resta un
+            dubbio si chiede all'AI, che può rispondere <em>soltanto</em> con una voce dell'elenco —
+            qualunque altra cosa vale come nessuna risposta e la causa resta «inconcludente».
+        </p>
+        <p class="text-muted small mb-3">
+            Il conteggio delle cause recenti di una corsia raggiunge il <strong>comitato</strong>
+            quando deve scegliere su quella corsia: è contesto in più dentro il menù che già
+            esiste, <strong>mai una scorciatoia che tocca un parametro da sola</strong>. Se questo
+            pannello è spento, il comitato decide esattamente come prima.
+        </p>
+
+        <div class="row g-2 align-items-end mb-2">
+            <div class="col-auto form-check form-switch ms-2 mb-2">
+                <input type="checkbox" class="form-check-input" id="pm-enabled" @bind="_postMortem.Enabled" />
+                <label class="form-check-label" for="pm-enabled">Registra i post-mortem</label>
+            </div>
+            <div class="col-auto form-check form-switch ms-2 mb-2">
+                <input type="checkbox" class="form-check-input" id="pm-ai" @bind="_postMortem.UseAi" />
+                <label class="form-check-label" for="pm-ai">Chiedi anche all'AI (costa)</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Perdita oltre (%)</label>
+                <input type="number" step="0.1" class="form-control form-control-sm" style="width:7rem" @bind="_postMortem.LossThresholdPercent" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Max per giro</label>
+                <input type="number" class="form-control form-control-sm" style="width:6rem" min="1" max="50" @bind="_postMortem.MaxPerRun" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Al comitato</label>
+                <input type="number" class="form-control form-control-sm" style="width:6rem" min="0" max="50" @bind="_postMortem.CommitteeContextCount" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary" @onclick="SavePostMortemAsync" disabled="@_busy">Salva</button>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="RunPostMortemAsync" disabled="@_busy">
+                    <i class="bi bi-play me-1"></i>Analizza adesso
+                </button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_postMortemStatus))
+        {
+            <div class="alert @(_postMortemIsError ? "alert-danger" : "alert-success") py-2 mb-3">@_postMortemStatus</div>
+        }
+
+        @if (_postMortems is { Count: > 0 })
+        {
+            <table class="table table-sm table-striped mb-0">
+                <thead class="table-light">
+                    <tr><th>Quando</th><th>Corsia</th><th>Simbolo</th><th class="text-end">Perdita</th><th>Causa</th><th>Chi l'ha detto</th><th>Analisi</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var pm in _postMortems)
+                    {
+                        <tr>
+                            <td class="small">@pm.CreatedAtUtc.ToLocalTime().ToString("dd/MM HH:mm")</td>
+                            <td>@pm.LaneId</td>
+                            <td><code>@pm.Symbol</code></td>
+                            <td class="text-end text-danger">@pm.PnlPercent.ToString("F2")%</td>
+                            <td>@ProcioneMGR.Services.Llm.Narration.PostMortemCauses.Label(pm.Cause)</td>
+                            <td>
+                                @switch (pm.Source)
+                                {
+                                    case "rules": <span class="badge bg-secondary" title="Causa aritmetica: nessuna AI interpellata.">codice</span> break;
+                                    case "ai": <span class="badge bg-info text-dark" title="@pm.ModelUsed">AI</span> break;
+                                    default: <span class="badge bg-light text-dark border" title="L'AI non ha risposto o è uscita dal menù: default deterministico.">default</span> break;
+                                }
+                            </td>
+                            <td class="small fst-italic">@(string.IsNullOrWhiteSpace(pm.Narrative) ? "—" : pm.Narrative)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        else if (_postMortems is not null)
+        {
+            <p class="text-muted mb-0"><em>Nessun post-mortem registrato. Compaiono qui dopo la prima operazione chiusa in perdita oltre la soglia, col pannello acceso.</em></p>
+        }
+    </div>
+</div>
+
+@* ---- [G6] Perché i candidati sono stati scartati ---- *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-funnel me-1"></i>Perché i candidati sono stati scartati</span>
+        <span>
+            @if (_explainEnabled) { <span class="badge bg-success">PROSA AUTOMATICA</span> }
+            else { <span class="badge bg-secondary">SOLO NUMERI</span> }
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Il <strong>riassunto per causa e i numeri</strong> qui sotto sono calcolati dal codice
+            dai verdetti dei gate: <strong>non dipendono dall'AI</strong>, non costano nulla e si
+            vedono anche col layer AI spento. L'interruttore riguarda solo le <em>parole</em>
+            attorno a quei numeri: con la prosa automatica accesa, dopo ogni run il provider attivo
+            scrive una spiegazione in italiano (path <code>explain</code>, passa dal budget qui
+            sopra). Puoi comunque chiederla a mano run per run col pulsante «Spiega con l'AI».
+        </p>
+        <p class="text-muted small mb-3">
+            I candidati di cui si parla sono <strong>già stati respinti e non sono mai stati
+            schierati</strong>: non esiste un percorso per cui questo testo torni a toccare una
+            decisione — ed è lì che sta la sicurezza, non nel fidarsi di ciò che l'AI scrive. Le
+            note sono legate ai candidati per chiave e quelle riferite a candidati inesistenti
+            vengono scartate: se succede, il conteggio è dichiarato accanto alla spiegazione.
+        </p>
+
+        <div class="row g-2 align-items-end mb-2">
+            <div class="col-auto form-check form-switch ms-2 mb-2">
+                <input type="checkbox" class="form-check-input" id="explain-enabled" @bind="_explainEnabled" />
+                <label class="form-check-label" for="explain-enabled">Prosa automatica dopo ogni run</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0 small">Bocciati riportati per esteso (1-20)</label>
+                <input type="number" class="form-control form-control-sm" style="width:7rem" min="1" max="20" @bind="_explainTopN" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary" @onclick="SaveExplainAsync" disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_explainStatus))
+        {
+            <div class="alert @(_explainIsError ? "alert-danger" : "alert-success") py-2 mb-3">@_explainStatus</div>
+        }
+
+        @if (_rejections is null)
+        {
+            <p class="mb-0"><em>Caricamento dei verdetti…</em></p>
+        }
+        else if (_rejections.Count == 0)
+        {
+            <p class="text-muted mb-0">
+                <em>Nessun run recente con candidati scartati. Compaiono qui appena un run del
+                pipeline produce verdetti di validazione.</em>
+            </p>
+        }
+        else
+        {
+            @foreach (var run in _rejections)
+            {
+                <div class="border rounded p-3 mb-3">
+                    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
+                        <div>
+                            <strong>@run.ConfigurationName</strong>
+                            <code class="ms-1">@run.RunId.ToString()[..8]</code>
+                            <span class="text-muted ms-2 small">@run.CompletedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                        </div>
+                        <div>
+                            <span class="badge bg-light text-dark border">@run.Digest.Evaluated valutati</span>
+                            <span class="badge @(run.Digest.Survived > 0 ? "bg-success" : "bg-secondary")">@run.Digest.Survived sopravvissuti</span>
+                            <span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle">@run.Digest.Rejected scartati</span>
+                            @if (run.Digest.GreyCount > 0)
+                            {
+                                <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">
+                                    @run.Digest.GreyCount in fascia grigia
+                                </span>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="mb-2">
+                        @foreach (var g in run.Digest.Groups)
+                        {
+                            <span class="badge bg-light text-dark border me-1 mb-1">@g.Count × @g.Label</span>
+                        }
+                    </div>
+
+                    <table class="table table-sm table-striped mb-2">
+                        <thead class="table-light">
+                            <tr>
+                                <th>I migliori fra gli scartati</th>
+                                <th class="text-end">Sharpe holdout</th>
+                                <th class="text-end">Trade</th>
+                                <th class="text-end">DSR</th>
+                                <th class="text-end">Gemello</th>
+                                <th>Verdetto del motore</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var c in run.Digest.TopRejected)
+                            {
+                                <tr>
+                                    <td>
+                                        @c.StrategyName <code>@c.Symbol</code> @c.Timeframe
+                                        @if (c.IsGrey) { <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1">grigio</span> }
+                                    </td>
+                                    <td class="text-end">@c.HoldoutSharpe.ToString("F2")</td>
+                                    <td class="text-end">@c.HoldoutTrades</td>
+                                    <td class="text-end">@(c.DeflatedSharpe?.ToString("F3") ?? "—")</td>
+                                    <td class="text-end">@(c.NullTwinPercentile is { } p ? $"{p:F0}°" : "—")</td>
+                                    <td class="small">@c.RejectReason</td>
+                                </tr>
+                                @if (run.Narration?.Notes.FirstOrDefault(n => n.Key == c.Key) is { } note)
+                                {
+                                    <tr class="table-light">
+                                        <td colspan="6" class="small fst-italic">
+                                            <i class="bi bi-chat-left-text me-1"></i>@note.Text
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+
+                    @if (run.Narration is { } n2)
+                    {
+                        <div class="border-start border-3 ps-3 py-1 mb-2">
+                            <p class="mb-1" style="white-space: pre-wrap;">@n2.Summary</p>
+                            <small class="text-muted">
+                                @n2.ModelUsed · @n2.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                                @if (n2.DiscardedNotes > 0)
+                                {
+                                    <span class="text-warning-emphasis ms-1">
+                                        · @n2.DiscardedNotes note scartate (riferite a candidati inesistenti)
+                                    </span>
+                                }
+                            </small>
+                        </div>
+                    }
+
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@_busy"
+                            @onclick="() => ExplainRunAsync(run.RunId, run.Narration is not null)">
+                        <i class="bi bi-stars me-1"></i>@(run.Narration is null ? "Spiega con l'AI" : "Rigenera la spiegazione")
+                    </button>
+                </div>
+            }
+        }
+    </div>
+</div>
+
 @if (_items is null)
 {
     <p><em>Caricamento…</em></p>
@@ -523,6 +773,19 @@ else
     private string _committeeProvidersCsv = "";
     private string? _committeeStatus;
     private bool _committeeIsError;
+
+    // ---- [G4] Post-mortem delle operazioni in perdita ----
+    private ProcioneMGR.Services.Llm.Narration.PostMortemOptions _postMortem = new();
+    private IReadOnlyList<ProcioneMGR.Data.TradePostMortem>? _postMortems;
+    private string? _postMortemStatus;
+    private bool _postMortemIsError;
+
+    // ---- [G6] Perché i candidati sono stati scartati ----
+    private IReadOnlyList<ProcioneMGR.Services.Llm.Narration.RunRejectionSummary>? _rejections;
+    private bool _explainEnabled;
+    private int _explainTopN = ProcioneMGR.Services.Llm.Narration.RejectionDigestBuilder.DefaultTopN;
+    private string? _explainStatus;
+    private bool _explainIsError;
 
     // [Elenco modelli] catalogo per provider scaricato dall'API con la SUA chiave.
     private readonly Dictionary<string, IReadOnlyList<string>> _modelCatalog = new();
@@ -864,6 +1127,132 @@ else
         }
     }
 
+    /// <summary>[G4] Salva la sezione PostMortem (sezione propria: nessun campo altrui da preservare).</summary>
+    private async Task SavePostMortemAsync()
+    {
+        _busy = true;
+        try
+        {
+            var error = ProcioneMGR.Services.Config.AdminConfigRules.Validate(_postMortem);
+            if (error is not null)
+            {
+                _postMortemStatus = error;
+                _postMortemIsError = true;
+                return;
+            }
+            await ConfigWriter.SaveSectionAsync("PostMortem", _postMortem);
+            _postMortemStatus = _postMortem.Enabled
+                ? $"Salvato: analizzo le perdite oltre {_postMortem.LossThresholdPercent:F1}%" +
+                  (_postMortem.UseAi ? " chiedendo anche all'AI." : " con le sole cause calcolabili dal codice.")
+                : "Salvato: post-mortem spento. Il comitato decide senza questo contesto, come prima.";
+            _postMortemIsError = false;
+        }
+        catch (Exception ex)
+        {
+            _postMortemStatus = $"Salvataggio fallito: {ex.Message}";
+            _postMortemIsError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    /// <summary>[G4] Un giro di analisi su richiesta, senza aspettare il worker.</summary>
+    private async Task RunPostMortemAsync()
+    {
+        _busy = true; _postMortemStatus = null; _postMortemIsError = false;
+        try
+        {
+            if (!PostMortemMonitor.CurrentValue.Enabled)
+            {
+                _postMortemIsError = true;
+                _postMortemStatus = "I post-mortem sono spenti: accendi l'interruttore e salva, poi riprova.";
+                return;
+            }
+            var written = await PostMortems.AnalyzeRecentAsync();
+            _postMortemStatus = written == 0
+                ? "Nessuna operazione in perdita da analizzare (o sono già tutte analizzate)."
+                : $"Analizzate {written} operazioni.";
+            _postMortems = await PostMortems.GetRecentAsync(20);
+        }
+        catch (Exception ex)
+        {
+            _postMortemIsError = true;
+            _postMortemStatus = $"Analisi fallita: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    /// <summary>
+    /// [G6] Salva i due campi della spiegazione. Stesso clone-roundtrip di
+    /// <see cref="SaveProviderAsync"/>: <c>SaveSectionAsync</c> riscrive TUTTA la sezione Llm, e
+    /// scrivere qui un oggetto nuovo perderebbe provider, chiavi di failover e soglie del breaker.
+    /// </summary>
+    private async Task SaveExplainAsync()
+    {
+        _busy = true;
+        try
+        {
+            var current = JsonSerializer.Deserialize<LlmOptions>(
+                JsonSerializer.Serialize(LlmOptionsMonitor.CurrentValue))!;
+            current.ExplainRejections = _explainEnabled;
+            current.ExplainRejectionsTopN = _explainTopN;
+
+            var error = ProcioneMGR.Services.Config.AdminConfigRules.Validate(current);
+            if (error is not null)
+            {
+                _explainStatus = error;
+                _explainIsError = true;
+                return;
+            }
+
+            await ConfigWriter.SaveSectionAsync("Llm", current);
+            _explainStatus = _explainEnabled
+                ? $"Salvato: dopo ogni run il provider attivo spiegherà i primi {_explainTopN} scartati (hot-reload)."
+                : "Salvato: prosa automatica spenta. I numeri e il riassunto per causa restano visibili qui sotto.";
+            _explainIsError = false;
+        }
+        catch (Exception ex)
+        {
+            _explainStatus = $"Salvataggio fallito: {ex.Message}";
+            _explainIsError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    /// <summary>
+    /// [G6] Spiegazione su richiesta di UN run. <paramref name="force"/> rigenera al posto di
+    /// restituire quella già scritta. Un fallimento si dice: senza messaggio, un pulsante che non
+    /// fa nulla è indistinguibile da un pulsante rotto.
+    /// </summary>
+    private async Task ExplainRunAsync(Guid runId, bool force)
+    {
+        _busy = true; _explainStatus = null; _explainIsError = false;
+        try
+        {
+            var narration = await RejectionExplain.ExplainRunAsync(runId, force);
+            if (narration is null)
+            {
+                _explainIsError = true;
+                _explainStatus = "Nessuna spiegazione prodotta: il layer AI non ha risposto " +
+                                 "(spento, senza chiave, breaker aperto o budget esaurito — lo stato è nelle card qui sopra). " +
+                                 "I numeri del run restano quelli che vedi.";
+            }
+            else
+            {
+                _explainStatus = $"Spiegazione scritta da {narration.ModelUsed}" +
+                                 (narration.DiscardedNotes > 0
+                                     ? $" · {narration.DiscardedNotes} note scartate perché riferite a candidati inesistenti."
+                                     : ".");
+            }
+            _rejections = await RejectionExplain.GetRecentAsync(5);
+        }
+        catch (Exception ex)
+        {
+            _explainIsError = true;
+            _explainStatus = $"Spiegazione fallita: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
     private async Task LoadAsync()
     {
         _busy = true;
@@ -890,6 +1279,18 @@ else
                 MinValidVotes = committee.MinValidVotes,
             };
             _committeeProvidersCsv = string.Join(",", committee.Providers);
+
+            // [G6] Interruttore della prosa + i verdetti recenti. Il digest è deterministico:
+            // questa lista si popola anche col layer AI spento, ed è il punto della funzione.
+            var llmOpt = LlmOptionsMonitor.CurrentValue;
+            _explainEnabled = llmOpt.ExplainRejections;
+            _explainTopN = llmOpt.ExplainRejectionsTopN;
+            _rejections = await RejectionExplain.GetRecentAsync(5);
+
+            // [G4] Copia locale delle opzioni (mai il CurrentValue vivo dentro un form) + le righe.
+            _postMortem = JsonSerializer.Deserialize<ProcioneMGR.Services.Llm.Narration.PostMortemOptions>(
+                JsonSerializer.Serialize(PostMortemMonitor.CurrentValue))!;
+            _postMortems = await PostMortems.GetRecentAsync(20);
 
             await using var db = await DbFactory.CreateDbContextAsync();
             var rows = await db.PipelineArtifacts
