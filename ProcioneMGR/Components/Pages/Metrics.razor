@@ -10,10 +10,33 @@
 @inject MetricsCollector Collector
 @inject IJSRuntime JS
 @inject ILogger<Metrics> Logger
+@inject IConfiguration Configuration
 
 <PageTitle>Metriche</PageTitle>
 
 <h1>Osservabilità <span class="badge bg-secondary">metriche runtime</span></h1>
+
+@* [2026-08-05, item F7] Questa pagina legge i contatori del processo in cui gira, cioè il GUSCIO.
+   Con Trading:UseRemoteTrading=true il motore che apre e chiude posizioni vive in un ALTRO
+   processo (il servizio in cluster) e i suoi contatori restano lì: qui si vedono zeri, per sempre.
+   Uno zero indistinguibile da «non è successo niente» su una dashboard è esattamente il controllo
+   che rassicura a torto — finché il collegamento non c'è, la pagina lo deve dire. *@
+@if (RemoteTrading)
+{
+    <div class="alert alert-warning d-flex align-items-start gap-2">
+        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+        <div>
+            <strong>I contatori del trading NON sono su questa pagina.</strong>
+            Il motore che apre e chiude le posizioni gira in un <strong>altro processo</strong>
+            (<code>Trading:UseRemoteTrading</code> è attivo, host <code>@RemoteHost</code>): i suoi
+            contatori vivono lì. Qui vedi quelli del guscio, e per trade, job di esecuzione e
+            promozioni di corsia resteranno <strong>a zero comunque</strong> — non perché non stia
+            succedendo nulla, ma perché sta succedendo altrove. Per lo stato vero del motore usa
+            <a href="/trading">Trading</a>. Il collegamento di questa pagina al motore remoto è
+            l'item F7 della roadmap.
+        </div>
+    </div>
+}
 
 <GuidaPanel Title="Metriche — cosa sta facendo la piattaforma, in numeri">
     <p>
@@ -190,6 +213,17 @@
 </div>
 
 @code {
+    /// <summary>
+    /// [F7] Vero quando il motore di trading vive in un ALTRO processo: allora i contatori di
+    /// trade/job/promozioni di questa pagina restano a zero per costruzione, e la pagina lo
+    /// dichiara invece di lasciar credere che non stia succedendo nulla.
+    /// </summary>
+    private bool RemoteTrading => Configuration.GetValue("Trading:UseRemoteTrading", false);
+
+    private string RemoteHost => Configuration["Trading:RemoteUrl"] is { Length: > 0 } url
+        ? url
+        : "non dichiarato";
+
     private MetricsSnapshot _s = default!;
     private DateTime _lastRefresh = DateTime.UtcNow;
     private PollingTimer? _timer;

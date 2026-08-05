@@ -3,13 +3,14 @@
   "_comment": "Pulizia 2026-08-01 (richiesta del proprietario): eliminati i profili 'procione' (nessuna env, superseded dalla config reale in appsettings.json), 'procione-pg' (la sua configurazione vive ora in appsettings.json; girava sulla 5256 con la master key placeholder, la stessa trappola dell'incidente del 2026-07-20) e 'procione-test' (nessun test lo usa: gli automatici girano su Testcontainers, la verifica browser dei worktree passa da procione-reale). La storia e le motivazioni di quei profili restano in git. Ne restano DUE, con scopi disgiunti: procione-main = l'app da tenere accesa (master, percorso assoluto); procione-reale = collaudo del codice di UN WORKTREE con login reale, da spegnere a collaudo finito.",
   "configurations": [
     {
+      "_comment_portforward": "APRE ANCHE IL PORT-FORWARD 18092, come procione-main. Mancava, e il collaudo di un worktree partiva con /trading cieca: zero corsie e il pulsante 'Avvia trading' mentre il motore in cluster stava regolarmente operando. Successo due volte il 2026-08-05, durante i riavvii del collaudo. Lo script e' idempotente e non blocca mai l'avvio se il cluster non c'e'.",
       "_comment": "Collaudo CON LOGIN REALE del codice del worktree corrente (procione-main non puo' farlo: lancia sempre master via percorso assoluto). NON sovrascrive PROCIONE_MGR_MASTER_KEY: la chiave viene da ProcioneMGR/appsettings.json (non tracciato), l'unico modo perche' le credenziali gia' cifrate si decifrino e il login funzioni. Prerequisito: copiare appsettings.json dal repo principale dentro il worktree. Ambiente Development e NON Production: con `dotnet run` non pubblicato, in Production gli static web assets non vengono agganciati e la UI resta senza blazor.web.js ne' CSS (404). Prima di avviarlo FERMARE procione-main (stessa porta, di proposito: mai due guscii vivi insieme); a collaudo finito, tornare a procione-main.",
       "name": "procione-reale",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [
         "-NoProfile",
         "-Command",
-        "$env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-launch-profile -c Release"
+        "& 'C:/Users/proci/Desktop/ProgettoP/scripts/ensure-trading-portforward.ps1'; $env:ASPNETCORE_ENVIRONMENT='Development'; $env:ASPNETCORE_URLS='http://localhost:5199'; dotnet run --project ProcioneMGR/ProcioneMGR.csproj --no-launch-profile -c Release"
       ],
       "port": 5199
     },
