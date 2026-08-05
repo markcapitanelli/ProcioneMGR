@@ -22,7 +22,8 @@ public sealed class FleetOrchestratorWorker(
     IServiceProvider serviceProvider,
     ILogger<FleetOrchestratorWorker> logger,
     INotifier? notifier = null,
-    Llm.Committee.IAiCommittee? committee = null) : BackgroundService
+    Llm.Committee.IAiCommittee? committee = null,
+    Llm.Narration.IPostMortemService? postMortems = null) : BackgroundService
 {
     /// <summary>Verdetti di ritiro CONSECUTIVI per corsia (isteresi: si agisce solo alla conferma).</summary>
     private readonly Dictionary<int, int> _retireStreak = new();
@@ -73,11 +74,24 @@ public sealed class FleetOrchestratorWorker(
         {
             try
             {
+                // [G4] Contesto in più: come sono andate le ultime operazioni in perdita DI QUESTA
+                // corsia, riassunte per causa. È informazione, non potere: il menù, il quorum e il
+                // default deterministico restano quelli di AF3, e un post-mortem assente o un
+                // servizio muto lasciano la domanda esattamente com'era prima.
+                var postMortem = string.Empty;
+                if (postMortems is not null)
+                {
+                    try { postMortem = await postMortems.BuildCommitteeContextAsync(menu.LaneId, ct); }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (Exception ex) { logger.LogDebug(ex, "Contesto post-mortem non disponibile: il comitato decide senza."); }
+                }
+
                 var question = new Llm.Committee.CommitteeQuestion(
                     "fleet-assignment",
                     $"Corsia Paper {menu.LaneId} libera; un solo slot per questo tick. Candidati (run della pipeline, tutti validati):\n"
                     + string.Join("\n", menu.Eligible.Select(c =>
-                        $"- {c.RunId:N}: {c.Summary}; ~{c.TradesPerMonth:F1} trade/mese; {c.Timeframe}; completato {c.CompletedAtUtc:yyyy-MM-dd}")),
+                        $"- {c.RunId:N}: {c.Summary}; ~{c.TradesPerMonth:F1} trade/mese; {c.Timeframe}; completato {c.CompletedAtUtc:yyyy-MM-dd}"))
+                    + (string.IsNullOrEmpty(postMortem) ? "" : $"\n\n{postMortem}"),
                     menu.Eligible.Select(c => new Llm.Committee.CommitteeOption(c.RunId.ToString("N"),
                         $"{c.Summary} (~{c.TradesPerMonth:F1} trade/mese, {c.Timeframe})")).ToList(),
                     menu.DefaultRunId.ToString("N"));
