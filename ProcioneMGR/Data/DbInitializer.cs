@@ -14,10 +14,14 @@ public static class DbInitializer
         using var scope = services.CreateScope();
         var sp = scope.ServiceProvider;
 
-        // Lo schema PostgreSQL si applica come passo separato (`dotnet ef database update`, vedi
-        // docs/POSTGRES_MIGRATION.md): l'app NON referenzia l'assembly ProcioneMGR.Migrations.Postgres
-        // (per evitare un ciclo di progetti), quindi niente migrate-on-startup — pattern
-        // migrate-on-deploy del tutto ordinario in produzione. Qui garantiamo solo i ruoli applicativi.
+        // [2026-08-05] Lo schema lo applica ORA <see cref="DatabaseMigrator"/>, chiamato in
+        // Program.cs subito prima di qui. Fino a quel giorno si applicava solo a mano
+        // (`dotnet ef database update`): l'app non referenzia l'assembly delle migrazioni per non
+        // creare un ciclo di progetti, e da lì la conclusione — sbagliata — che non si potesse
+        // migrare all'avvio. Si può: EF risolve quell'assembly per NOME, basta che la DLL sia
+        // accanto all'eseguibile (ci pensa un target di copia nel progetto delle migrazioni).
+        // Il migrate-on-deploy resta possibile e supportato: Database:AutoMigrate=false.
+        // Qui restano solo i ruoli applicativi.
         var roleManager = sp.GetRequiredService<RoleManager<IdentityRole>>();
         foreach (var role in AppRoles.All)
         {

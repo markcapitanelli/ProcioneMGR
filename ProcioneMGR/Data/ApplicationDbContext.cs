@@ -105,6 +105,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[AF2] Journal delle decisioni dell'orchestratore di flotta.</summary>
     public DbSet<OrchestratorDecision> OrchestratorDecisions => Set<OrchestratorDecision>();
 
+    /// <summary>[G4] Post-mortem delle operazioni chiuse in perdita: testo e classificazione, mai un parametro.</summary>
+    public DbSet<TradePostMortem> TradePostMortems => Set<TradePostMortem>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         // IMPORTANTISSIMO: lasciare che Identity configuri le sue tabelle
@@ -187,6 +190,23 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(e => e.Source).HasMaxLength(16).IsRequired();
             entity.HasIndex(e => e.AtUtc);
             entity.HasIndex(e => new { e.RunId, e.Kind });
+        });
+
+        // [G4] Post-mortem delle operazioni in perdita: UNA riga per trade — l'indice univoco su
+        // TradeRecordId è il contratto dell'idempotenza (l'anti-join del servizio ci si appoggia),
+        // non un'ottimizzazione. La causa è una voce del menù chiuso PostMortemCauses.
+        builder.Entity<TradePostMortem>(entity =>
+        {
+            entity.ToTable("TradePostMortems");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(e => e.StrategyId).HasMaxLength(64).IsRequired();
+            entity.Property(e => e.Cause).HasMaxLength(32).IsRequired();
+            entity.Property(e => e.Source).HasMaxLength(16).IsRequired();
+            entity.Property(e => e.ModelUsed).HasMaxLength(128);
+            entity.Property(e => e.PnlPercent).HasPrecision(18, 8);
+            entity.HasIndex(e => e.TradeRecordId).IsUnique();
+            entity.HasIndex(e => new { e.LaneId, e.CreatedAtUtc });
         });
 
         // [AF1] Consumo LLM: una riga per combinazione al giorno, upsert dal flusher — l'indice
