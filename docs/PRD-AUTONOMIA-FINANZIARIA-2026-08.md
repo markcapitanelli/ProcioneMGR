@@ -95,6 +95,75 @@ fonte rules/committee/default, voti, esito) + sezione in /admin/autonomy.
 Incrementi: (1) entità+reader+core+fuzz 20k; (2) DryRun dal vivo ~1 settimana; (3) esecuzione;
 (4) `targetLanes` in PR separata.
 
+#### AF2c — Criteri emersi dalla prima revisione manuale delle corsie (2026-08-05)
+
+*Nati facendo a mano ciò che l'orchestratore dovrà fare da solo. Ognuno è una regola che oggi
+manca, e il primo è un buco che rende la regola di ritiro inefficace proprio sul caso più comune.*
+
+**1. 🔴 La corsia che non opera non viene MAI ritirata.** La regola scritta sopra è «ritiro a
+`RealizedSharpe<0` dopo 3 settimane **e ≥20 trade**». Una corsia che produce **zero** trade non
+raggiunge mai i 20, quindi non è mai candidata al ritiro: resta occupata per sempre senza produrre
+informazione. Successo davvero — la corsia 0 (AAVE 1d) è rimasta 9,3 giorni con **zero trade sul
+proprio simbolo**, e nessuna regola l'avrebbe mai toccata. È la stessa famiglia dei «controlli che
+rassicurano» del Filone E: la regola sembra completa e non può scattare sul guasto più frequente.
+**Serve un secondo criterio, per inedia**: se dopo N settimane i trade sono *sotto una frazione*
+di quelli attesi dall'holdout, la corsia va proposta per il ritiro — con la stessa isteresi.
+
+**2. Il conteggio va fatto sul SIMBOLO ATTUALE, non sulla corsia.** Le corsie hanno vite
+precedenti su altri simboli: la corsia 0 mostrava 159 trade storici, tutti su NEAR/ATOM/BTC, e
+zero su AAVE. Un criterio che guarda `TradeRecords` per `LaneId` legge la storia di qualcun altro.
+La domanda giusta è: *questa corsia ha mai operato sul simbolo che ha ORA?*
+
+**3. Il timeframe 1d non può produrre un verdetto in tempo utile, e va detto prima di schierarlo.**
+A ~2 trade/mese servono **dieci mesi** per arrivare ai 20 trade minimi. Sommato all'aritmetica del
+MinTRL (F4: Sharpe 1,0 ⇒ 6,2 anni), una corsia 1d è epistemicamente ferma: occupa uno slot che un
+4h userebbe per accumulare evidenza. **Non è un divieto** — un test lungo può avere senso — ma
+l'orizzonte va dichiarato al momento dello schieramento, non scoperto dopo nove giorni.
+
+**4. Diversificare i simboli fra le corsie.** Al momento della revisione tre corsie su sei erano su
+DOT/USDT. Con `CorrelatedExposureGuard` acceso al 30% è un rischio governato, ma resta evidenza
+ridondante: sei test sullo stesso sottostante misurano più o meno la stessa cosa. A parità
+ragionevole di Sharpe holdout, preferire un simbolo non ancora schierato — è il criterio con cui
+oggi ho scelto ETC e STX scartando XRP e DOT, che pure avevano Sharpe più alto.
+
+**5. I grigi riproposti all'infinito sono rumore.** Il journal mostra lo stesso candidato
+(GridMeanReversion XRP/USDT 4h) proposto **sette volte in due giorni**, mentre era già schierato
+sulla corsia 4. Serve il dedup per `PipelineCandidateKey` già annotato come task #12: la
+ricorrenza di un candidato è un SEGNALE (lo trova run dopo run), ma va contata, non ripetuta come
+notifica.
+
+**6. Il pannello dei grigi offre solo i run che la flotta ha proposto.** Il candidato migliore
+misurato quel giorno — Supertrend ADA/USDT 4h, **Sharpe 3,19 su 17 trade**, dalla configurazione
+coi gate più severi — **non era schierabile**, perché il suo run non compariva nell'elenco. Il
+filtro è coerente col disegno (si schiera ciò che la flotta ha valutato), ma taglia fuori i
+candidati migliori di run non proposti: da rivedere, o almeno da rendere visibile il perché.
+
+**7. Le corsie 0-2 non sono assegnabili ai grigi, ed è giusto così.** Appartengono all'impronta
+dell'auto-apply (`AutoApplyLaneFootprint=3`): ciò che una ri-applica schedulata sovrascriverebbe
+non si assegna a mano. Va ricordato quando si libera una di quelle corsie — si libera *per la
+pipeline*, non per la flotta.
+
+#### Cosa è stato deciso il 2026-08-05, e perché
+
+Registro delle azioni, così fra un mese si sa cosa è stato cambiato e su quale base.
+
+| Corsia | Prima | Azione | Motivo |
+|---|---|---|---|
+| 0 | AAVE/USDT 1d, 9,3 giorni | **svuotata** | zero trade su AAVE *mai* (né nei 9 giorni né nei 30 di replay: ~39 barre giornaliere senza un segnale) e orizzonte 1d che non produce verdetto in tempo utile. Torna alla pipeline (impronta auto-apply) |
+| 2 | XLM/USDT 1h | **svuotata** (il giorno prima) | ~936 barre orarie fra replay e vivo, zero segnali |
+| 3 | vuota (orfana di luglio) | **RsiOversold ETC/USDT 4h** | Sharpe holdout 1,66 su 13 trade; simbolo nuovo. SL 3,70% / TP 9,78% |
+| 7 | mai configurata | **BollingerMeanReversion STX/USDT 4h** | Sharpe holdout 1,44 su **18 trade** — il più vicino alla soglia dei 20, quindi il meno rumoroso; simbolo nuovo. SL 4,84% / TP 14,45% |
+| 1, 4, 5, 6 | — | **lasciate** | 1 e 5 hanno operato; 4 ha una posizione aperta; 6 ha solo 2,2 giorni |
+
+**Scartati e perché**: `GridMeanReversion XRP/USDT 4h` (Sharpe 2,10, il più alto disponibile) era
+già schierato sulla corsia 4; `GridMeanReversion DOT/USDT 4h` (1,60) avrebbe portato DOT a quattro
+corsie. In entrambi i casi ha vinto la diversificazione sul numero — che è il criterio 4 di sopra,
+applicato per la prima volta.
+
+**Da guardare al prossimo giro**: `Supertrend ADA/USDT 4h`, Sharpe **3,19 su 17 trade**, dalla
+configurazione «Caccia onesta majors» (embargo + gate severi) — il migliore misurato, e non
+schierabile dal pannello per il criterio 6.
+
 ### AF3 — Comitato AI a scelta vincolata — M
 
 `Services/Llm/Committee/`: `IAiCommittee.AskAsync(CommitteeQuestion) → CommitteeVerdict`. I
