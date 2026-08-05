@@ -122,16 +122,70 @@ ripartita** (`Configuration value '…' is not supported`). Trovato in un minuto
 falliva subito; il commento va accanto a `LogLevel`, dentro `Logging` — che è esattamente dove lo
 tiene `appsettings.Development.json`, e adesso so perché.
 
-### H2, H3, H4, H5 · **NON eseguiti**
+### H2 + H3 · **FATTI** (su via libera del proprietario) — il guadagno vero
 
-- **H2** (ArgoCD a 0, pod morto): il comando è stato **bloccato dal classifier** come operazione
-  infrastrutturale distruttiva. Non è stato forzato: serve un via libera esplicito del
-  proprietario. È l'intervento col guadagno maggiore ancora sul tavolo.
-- **H3** (`.wslconfig`): richiede `wsl --shutdown`, che ferma il motore di trading. Va fatto in un
-  momento scelto, non di sorpresa.
-- **H4** (memoria di Postgres): resta gated su H2/H3 per costruzione — alzarla ora, col 4% di RAM
-  libera, sarebbe il danno che questa roadmap vuole evitare.
-- **H5**: la pulizia del pod morto è dentro il blocco di H2.
+Eseguiti insieme perché il secondo completa il primo, come si è visto misurando.
+
+**H2**: i 7 deployment ArgoCD scalati a 0 (`kubectl scale --replicas=0`, si torna indietro con
+`--replicas=1`) e rimosso il pod `e2e-smoke-probe-3823` fermo in `Error` da 7 giorni. I tre
+servizi della piattaforma — ingestion, ml, trading — verificati vivi subito dopo.
+
+**Misura intermedia, e la lezione che contiene**: il nodo kind è sceso da 2,306 a 2,087 GiB e la
+CPU dal 57% al 45%, ma **la RAM libera dell'host è PEGGIORATA** (435 → 291 MB). La memoria era
+stata liberata *dentro* la VM e lì era rimasta: WSL2 senza configurazione non la restituisce mai a
+Windows. Da solo, H2 non bastava.
+
+**H3**: `.wslconfig` scritto (`memory=3GB`, `processors=2`, `swap=2GB`, `pageReporting=true`) con
+la voce che risolve esattamente quanto sopra: **`autoMemoryReclaim=gradual`**. Applicato con
+`wsl --shutdown`; Docker ha ricreato la VM, il nodo kind è tornato da solo, il proxy
+`kind-apiproxy` era caduto col riavvio (caso già noto) e si riavvia con `docker start`.
+
+**Esito combinato:**
+
+| | Prima | Dopo H2+H3 |
+|---|---|---|
+| Nodo kind | 2,306 GiB / 3,65 GiB | **1,66 GiB / 2,841 GiB** (−28%) |
+| CPU del nodo a vuoto | 57% | **26%** |
+| RAM libera host | 435 MB | 472 MB |
+| Riavvii control plane | +1 ogni pochi minuti | fermi (418 / 422) |
+
+Il numero che conta è la **CPU dimezzata**: è il crash-loop del control plane che si è calmato,
+cioè la causa che si auto-alimentava.
+
+### H4 · **FATTO A METÀ, e la metà mancante è una scelta motivata**
+
+Applicati con `ALTER DATABASE` (nessun riavvio, nessun superuser): `effective_cache_size`
+4 GB → **1536 MB** (il default dichiarava una cache che su questa macchina non è mai esistita) e
+`work_mem` 4 → **16 MB**.
+
+**`shared_buffers` NON toccato**, ed è la parte interessante. La roadmap lo elencava sulla base del
+cache hit al **70,08%**. Ma quel numero è il **cumulato da sempre**, dominato dai backfill storici.
+Misurato sul carico VIVO, su una finestra di 75 secondi: 15 blocchi da disco contro 32.215 da
+cache, cioè **99,95%**. Il working set sta già in cache: alzare `shared_buffers` avrebbe richiesto
+elevazione e il riavvio del servizio Postgres per un guadagno misurato **pari a zero**.
+
+È il motivo per cui questa roadmap comincia col misurare: senza la misura fine avrei riavviato un
+database in produzione per niente.
+
+**Verifica finale del blocco**: parametri effettivi su connessione nuova
+(`random_page_cost` 1.1, `effective_io_concurrency` 200, `effective_cache_size` 1536 MB,
+`work_mem` 16 MB), piano ancora **Index Scan**, tempo a cache calda **3,9-6,7 ms** contro i 92,3 ms
+di partenza.
+
+### H5 · **fatto** — il pod morto è stato rimosso dentro H2.
+
+### Come tornare indietro
+
+| Intervento | Comando |
+|---|---|
+| H1 / H4a | `ALTER DATABASE procionemgr RESET random_page_cost;` (idem per gli altri) |
+| H2 | `kubectl -n argocd scale deployment --all --replicas=1` + `scale statefulset argocd-application-controller --replicas=1` |
+| H3 | cancellare `%USERPROFILE%\.wslconfig` e `wsl --shutdown` |
+| H6 | rimettere `Information` ai due logger in `appsettings.json` |
+
+**Nota su ArgoCD**: da spento non c'è sync GitOps. Il deploy del trading era comunque a sync
+MANUALE (`kubectl apply -k infra/k8s/trading`), quindi il flusso quotidiano non cambia; prima di
+un deploy che passa da ArgoCD va riacceso col comando qui sopra.
 
 ## 3. Criterio di accettazione comune
 

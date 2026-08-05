@@ -675,9 +675,8 @@ che si auto-alimenta. Sopra ci girano 7 pod ArgoCD per un cluster locale mono-no
 |---|---|---|---|
 | H1 | `random_page_cost` 4 → 1,1 sul database (il `4` è il valore da disco a piatti; qui c'è un **NVMe**) | **fatto** | stessa query, connessione nuova: **Bitmap Heap Scan 92,3 ms → Index Scan 25,4 ms**; su un'altra serie il piano diventa *Index Only Scan*. Il guadagno durevole è il PIANO, non il millisecondo |
 | H6 | Log SQL e HTTP da `Information` a `Warning` | **fatto** | prima 37 righe/s di SQL a riposo e 4 righe per richiesta HTTP: una lettura dei log rendeva 147.000 caratteri. **Onestà**: il guadagno di CPU è piccolo (l'app era all'1,2%), il valore è l'osservabilità |
-| H2 | ArgoCD scalato a 0 quando non si deploya + pod morto da 7 giorni | **bloccato dal classifier**, serve via libera | è il maggior rilascio di RAM ancora sul tavolo, e probabilmente ferma il crash-loop del control plane |
-| H3 | Tetto alla VM WSL2 (`.wslconfig` assente) | aperto | richiede `wsl --shutdown`, che ferma il motore: da fare in un momento scelto |
-| H4 | Memoria di Postgres (`shared_buffers` 128 MB per una tabella da 2,6 GB, cache hit **70%**) | **gated su H2/H3** | alzarla ora, col 4% di RAM libera, sarebbe il danno da evitare |
+| H2+H3 | ArgoCD a 0 (7 pod) + pod morto rimosso, poi `.wslconfig` con **`autoMemoryReclaim=gradual`** | **fatti** | nodo kind **2,306 → 1,66 GiB (−28%)**, **CPU a vuoto 57% → 26%**, riavvii del control plane FERMI. **La lezione sta nell'ordine**: dopo il solo H2 la RAM libera dell'host era PEGGIORATA (435→291 MB) — la memoria era stata liberata dentro la VM e lì era rimasta. Senza H3, H2 non bastava |
+| H4 | Memoria di Postgres | **fatto a metà, di proposito** | `effective_cache_size` 4 GB → 1536 MB e `work_mem` 4 → 16 MB via `ALTER DATABASE`. **`shared_buffers` NON toccato**: il cache hit al 70% era il CUMULATO storico; sul carico vivo è **99,95%** (15 blocchi da disco contro 32.215 da cache in 75s). Alzarlo avrebbe richiesto elevazione e riavvio del servizio per un guadagno misurato pari a zero |
 
 **Errore mio da ricordare**: un commento messo dentro `Logging:LogLevel` impedisce l'avvio — lì
 ogni chiave dev'essere un livello valido. Va accanto a `LogLevel`, dentro `Logging`, che è dove lo
