@@ -623,6 +623,7 @@ direzionale-tecnico) e si tengono i due buchi veri: orchestratore di flotta e bu
 | AF3 | **Comitato a scelta vincolata** (`Services/Llm/Committee/`): voto parallelo multi-provider via resolver (semantica opposta al failover), contratto JSON severo (fuori menù/JSON rotto/timeout = ASTENSIONE, mai errore), quorum `MinValidVotes=2`, parità ⇒ default deterministico, doppia validazione del verdetto contro il menù (anti prompt-injection dai dati di mercato), budget AF1 controllato PRIMA di ogni giro. Innesto SOLO sui pareggi di `Decide` (`FleetAssignmentMenu`): il worker può sostituire la scelta dentro il recinto, `Source`+`VotesJson` a journal. Scostamento dal PRD: NIENTE guard keyed dedicato — l'isolamento (nessun breaker condiviso) si ottiene senza breaker del comitato: un giro fallito = verdetto di default, e basta. Pannelli: /admin/ai-supervisor (sezione Committee) + interruttore `Fleet:UseCommittee` nella card flotta | **fatto (2026-08-02)** | ✅ proprietà L2 verificata: spazzatura al 100% ⇒ ≡ comitato spento (default, zero eccezioni); parse su fences markdown/scelte inventate/JSON rotto; parità⇒default; sotto-quorum⇒default; spento/budget esaurito⇒zero chiamate; menù senza default⇒ArgumentException |
 | AF4a | **Retrocessione Live→Testnet** (sola direzione di sicurezza): fuzz aggiornato PRIMA del codice (invariante 3′ flag-off bit-identico + inv. 4-5: da Live solo Testnet, mai col dry-run), opzioni default-off + `DemoteLiveDryRun=true` (annuncia senza agire, `WouldDemoteLive` nel verdetto), whitelist del worker irrigidita con la modalità di PARTENZA, notifica Warning; `LanePromoter` invariato; pannello in /admin/autonomy | **fatto (2026-08-02)** | ✅ fuzz 2×20k; caso nominale a mano (degradata/dry-run/giovane/sana); worker: Live→Paper diretto e "promozioni da Live" rifiutati a LogError; L4 = dry-run in produzione |
 | AF4b | **Guardie di flotta**: >`Fleet:MaxLanesWithoutExposureGuard` (3) corsie attive richiedono `CorrelatedExposureGuard` acceso — precondizione DENTRO `Decide`, blocco journalizzato col rimedio | **fatto (2026-08-02)** (vol targeting = attivazione via config al deploy) | ✅ test: guardia spenta + 3 attive ⇒ zero assegnazioni + blocco con "CorrelatedExposure" nel motivo |
+| AF2c | **Criteri emersi dalla prima revisione MANUALE delle corsie** (2026-08-05, dettaglio nel PRD): (1) 🔴 **la regola di ritiro non può scattare su una corsia che non opera** — chiede `Sharpe<0` dopo 3 settimane **E ≥20 trade**, e chi produce zero trade non arriva mai a 20: la corsia 0 è rimasta 9,3 giorni a zero senza che nulla la toccasse. Serve un secondo criterio **per inedia**, sui trade attesi dall'holdout; (2) il conteggio va fatto sul **simbolo attuale**, non sulla corsia (le corsie hanno vite precedenti: la 0 aveva 159 trade storici, tutti su altri simboli); (3) **il timeframe 1d non produce un verdetto in tempo utile** (~2 trade/mese ⇒ 10 mesi per 20 trade) — non è un divieto, ma va dichiarato allo schieramento; (4) **diversificare i simboli** (3 corsie su 6 erano su DOT); (5) **dedup dei grigi riproposti** (lo stesso candidato proposto 7 volte in 2 giorni mentre era già schierato — task #12); (6) il pannello dei grigi **offre solo i run che la flotta ha proposto**, e il candidato migliore misurato (Supertrend ADA/USDT 4h, Sharpe 3,19 su 17 trade) non era schierabile; (7) le corsie 0-2 restano dell'impronta auto-apply, non assegnabili a mano | aperto — da incorporare in AF2b | ognuno con la sua prova sul campo del 2026-08-05 |
 | AF4c | **Pesi ERC fra corsie, SOLO advisory** (riuso `Services/Portfolio`), `Fleet:CapitalWeights:Enabled=false` | aperto | L2: PnL bianco ⇒ ~equal-weight |
 | AF5 | **Continuità H24**: heartbeat incrociato a DB (`HostHeartbeats`, una riga per host, monitor una-notifica-per-transizione, assenza=ignoranza≠guasto; pannello con salvataggio doppio guscio+motore via gRPC, sezione nel contratto `EngineConfigSections`), `scripts/watchdog.ps1` (Task Scheduler 5′, Telegram diretto, auto-riparazione del port-forward prima di gridare, `-Register`), `scripts/bringup.ps1` idempotente (Docker→socat→nodo→pod→port-forward→guscio, `-Register` al logon con ripiego automatico sulla cartella Esecuzione automatica). **Digest giornaliero fatto**: `DailyDigestWorker` (ora LOCALE, `Notifications:Digest` default OFF, pannello dentro Notifiche), sezioni raccolte ognuna in proprio try/catch, chiusura che dichiara l'assenza-come-allarme; anti-doppione in memoria (un doppione raro batte una tabella in più) | **fatto (2026-08-02)** — deploy 5.1-5.3 eseguito la sera stessa | ✅ L1: transizioni heartbeat + scheduling digest (prima/dopo l'ora, già-inviato, avvio tardivo); L3: upsert senza duplicati su Postgres; L4 deploy: watchdog registrato e VERIFICATO, bring-up al logon, il rimedio socat del bringup è servito DAL VIVO al primo deploy (IP del nodo kind cambiato). Fix post-deploy: i `-Register` ora verificano l'esito invece di rassicurare (bug trovato sul campo: Register-ScheduledTask non terminante + messaggio di successo) |
 
@@ -675,9 +676,8 @@ che si auto-alimenta. Sopra ci girano 7 pod ArgoCD per un cluster locale mono-no
 |---|---|---|---|
 | H1 | `random_page_cost` 4 → 1,1 sul database (il `4` è il valore da disco a piatti; qui c'è un **NVMe**) | **fatto** | stessa query, connessione nuova: **Bitmap Heap Scan 92,3 ms → Index Scan 25,4 ms**; su un'altra serie il piano diventa *Index Only Scan*. Il guadagno durevole è il PIANO, non il millisecondo |
 | H6 | Log SQL e HTTP da `Information` a `Warning` | **fatto** | prima 37 righe/s di SQL a riposo e 4 righe per richiesta HTTP: una lettura dei log rendeva 147.000 caratteri. **Onestà**: il guadagno di CPU è piccolo (l'app era all'1,2%), il valore è l'osservabilità |
-| H2 | ArgoCD scalato a 0 quando non si deploya + pod morto da 7 giorni | **bloccato dal classifier**, serve via libera | è il maggior rilascio di RAM ancora sul tavolo, e probabilmente ferma il crash-loop del control plane |
-| H3 | Tetto alla VM WSL2 (`.wslconfig` assente) | aperto | richiede `wsl --shutdown`, che ferma il motore: da fare in un momento scelto |
-| H4 | Memoria di Postgres (`shared_buffers` 128 MB per una tabella da 2,6 GB, cache hit **70%**) | **gated su H2/H3** | alzarla ora, col 4% di RAM libera, sarebbe il danno da evitare |
+| H2+H3 | ArgoCD a 0 (7 pod) + pod morto rimosso, poi `.wslconfig` con **`autoMemoryReclaim=gradual`** | **fatti** | nodo kind **2,306 → 1,66 GiB (−28%)**, **CPU a vuoto 57% → 26%**, riavvii del control plane FERMI. **La lezione sta nell'ordine**: dopo il solo H2 la RAM libera dell'host era PEGGIORATA (435→291 MB) — la memoria era stata liberata dentro la VM e lì era rimasta. Senza H3, H2 non bastava |
+| H4 | Memoria di Postgres | **fatto a metà, di proposito** | `effective_cache_size` 4 GB → 1536 MB e `work_mem` 4 → 16 MB via `ALTER DATABASE`. **`shared_buffers` NON toccato**: il cache hit al 70% era il CUMULATO storico; sul carico vivo è **99,95%** (15 blocchi da disco contro 32.215 da cache in 75s). Alzarlo avrebbe richiesto elevazione e riavvio del servizio per un guadagno misurato pari a zero |
 
 **Errore mio da ricordare**: un commento messo dentro `Logging:LogLevel` impedisce l'avvio — lì
 ogni chiave dev'essere un livello valido. Va accanto a `LogLevel`, dentro `Logging`, che è dove lo
@@ -833,3 +833,54 @@ stabile) → **G2** backlog senza scadenza.
 **Invariante comune a tutti i G**: ognuno è default-off, ognuno ha la sua configurazione nella UI
 (mai un flag che vive solo in appsettings), e ognuno spento deve lasciare il comportamento
 bit-identico a prima — verificato al livello 2, non promesso.
+
+---
+
+## Filone R — Archivio della ricerca: leggere i 6.554 candidati che già abbiamo (2026-08-06)
+
+Nasce da una domanda del proprietario: *«penso abbia senso salvare anche le varie campagne con i
+vari candidati e le varie proposte, per fare una ricerca più approfondita»*. **La premessa è
+sbagliata in modo utile: è già tutto salvato.** Misurato sul database vero:
+
+| Cosa | Quanto | Da quando |
+|---|---|---|
+| `ValidatedCandidates` (candidato per candidato, **24 metriche** + parametri + motivo di scarto) | 84 run, 5,8 MB, **6.554 candidati** | 2026-07-02 |
+| `FactorIc`, `RegimeProfile`, `PairScreen`, `FeatureImportance` | 86 run ciascuno, ~9,4 MB | 2026-07-02 |
+| `EnsembleProposal` (le proposte) | **9, l'ultima il 2026-07-09** | — |
+| `LlmAdvisory` | 77 su 75 run | 2026-07-08 |
+| Campagne (`VettingCampaigns`) con rotazione, esito e run collegati | 1 attiva, `WaitingForTrigger` | — |
+
+Le 9 sole proposte **non sono un guasto**: sono la realtà. Da metà luglio nessun run produce un
+ensemble perché nessun candidato passa.
+
+**Il buco vero non è la scrittura: è la lettura.** Ogni run è un blob JSON separato, quindi non
+esiste nessuna domanda che attraversi i run — ed è esattamente la domanda che serve per
+«analizzare le strategie, confrontare i candidati, migliorare la ricerca». Tre query scritte a
+mano il 2026-08-06 (secondi di esecuzione, nessuna riga di codice nuova) tirano fuori questo:
+
+**Il fatto più duro**: dal 13 luglio, **66 run e 5.131 candidati, ZERO sopravvissuti**. È
+l'undicesimo «no» del direzionale-tecnico, ma stavolta con la scala visibile in una riga.
+
+**Il fatto più utile**: fra i bocciati, **702 hanno Sharpe fuori campione MEDIO POSITIVO** —
+532 fermati da «troppi pochi trade» (Sharpe medio **+1,10**) e 170 dal DSR (**+1,07**). Non sono
+stati bocciati perché perdono: sono stati bocciati perché la finestra è corta per la loro
+frequenza, o perché i tentativi erano troppi rispetto ai dati. Contro i 5.814 che perdono davvero,
+con Sharpe medio −1,86. È la stessa diagnosi del power check MinTRL (Filone F), ma qui è
+**quantificata**: 702 candidati.
+
+**Il fatto per la Queen Bee**: il tasso di passaggio per famiglia è misurabile e disomogeneo —
+`Composite` 12 su 2.212 (0,5%), `PriceSmaCross` 7 su 46 (**15%**), `Supertrend` 6 su 406,
+`EventTrigger` 0 su 1.415, `RegimeConditional` 0 su 1.096, `Ml` 0 su 19 con Sharpe medio **−9,66**.
+Oggi la caccia spende lo stesso sforzo su famiglie con rese di due ordini di grandezza diverse.
+
+| # | Cosa | Perché | Costo |
+|---|---|---|---|
+| R1 | Vista di lettura trasversale sui candidati archiviati (motivi di scarto aggregati, tasso di passaggio per famiglia/simbolo/timeframe, andamento nel tempo) — pagina `/research` | Rende interrogabile ciò che già c'è. Le query esistono, provate a mano | piccolo, rischio nullo (sola lettura) |
+| R2 | Indicizzare i candidati in righe invece che in blob JSON (tabella derivata, ricostruibile dagli artefatti — nessun dato nuovo da raccogliere) | Oggi ogni domanda costa una scansione con `jsonb_array_elements` su 5,8 MB; con l'archivio che cresce non regge | medio |
+| R3 | Portare il tasso di passaggio per famiglia dentro la scelta della prossima caccia (`CampaignPlanner`) | La rotazione oggi è cieca alla resa storica delle famiglie che ruota | medio, dietro gate |
+| R4 | Riesaminare i 702 «bocciati per potenza statistica» con la finestra giusta, come esperimento dichiarato | Sono l'unico bacino di candidati con Sharpe medio positivo mai prodotto dalla piattaforma | medio, è ricerca |
+
+**Onestà su R4**: non è una scorciatoia al profitto. Ripescare candidati già bocciati è
+esattamente il gesto che fabbrica falsa significatività se fatto male (lezione del 2026-07-20,
+445k combinazioni → 0). Va fatto come esperimento con la sua ipotesi scritta prima, e col controllo
+sul rumore del [Standard di verifica](STANDARD-VERIFICA.md) — altrimenti non si fa.

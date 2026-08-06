@@ -39,6 +39,94 @@ public sealed class TradingPageService(
     public LaneQuarantine? Quarantine { get; private set; }
     public List<OpenPosition> Positions { get; private set; } = [];
     public List<Order> Orders { get; private set; } = [];
+
+    /// <summary>
+    /// [2026-08-05] Falso (default): la tabella ordini mostra solo il TEST CORRENTE, come i KPI.
+    /// Vero: tutta la vita della corsia, comprese le configurazioni precedenti su altri simboli —
+    /// utile per un'indagine, fuorviante come vista di partenza.
+    /// </summary>
+    public bool ShowAllOrders { get; private set; }
+
+    /// <summary>Alterna fra la finestra del test corrente e lo storico completo. Il chiamante ricarica.</summary>
+    public void ToggleOrderHistory() => ShowAllOrders = !ShowAllOrders;
+
+    /// <summary>
+    /// [2026-08-06] Gli episodi della corsia: un tratto di vita per ogni avvio del motore, dal più
+    /// recente. Popolato solo in modalità storico completo — sul test corrente c'è un episodio solo
+    /// e raggrupparlo sarebbe cerimonia inutile.
+    /// </summary>
+    public IReadOnlyList<LaneEpisode> Episodes { get; private set; } = [];
+
+    /// <summary>Gli ordini di un episodio, per la tabella raggruppata.</summary>
+    public IReadOnlyList<Order> OrdersOf(LaneEpisode ep) =>
+        [.. Orders.Where(o => o.CreatedAtUtc >= ep.StartedAtUtc
+                              && (ep.EndedAtUtc is null || o.CreatedAtUtc < ep.EndedAtUtc))];
+
+    /// <summary>
+    /// [2026-08-06] Protezioni risultate toccate da barre CHIUSE con la posizione ancora aperta.
+    /// Vuoto è il caso normale. Vedi <see cref="ProtectiveExitAudit"/> per il perché esiste.
+    /// </summary>
+    public IReadOnlyList<ProtectiveExitAnomaly> ExitAnomalies { get; private set; } = [];
+
+    /// <summary>
+    /// Confronta le posizioni aperte con le barre già chiuse del loro simbolo.
+    ///
+    /// <para>Il filtro sulle barre chiuse non è prudenza: passare qui la candela in formazione
+    /// rimetterebbe nel controllo lo stesso difetto che il controllo deve scoprire — e per un
+    /// attimo direbbe «target toccato» su un massimo parziale che poi rientra.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<ProtectiveExitAnomaly>> LoadExitAnomaliesAsync()
+    {
+        if (dbFactory is null || Positions.Count == 0) return [];
+        try
+        {
+            var simboli = Positions.Select(p => p.Symbol).Distinct().ToList();
+            var timeframe = Status?.Timeframe;
+            if (string.IsNullOrWhiteSpace(timeframe)) return [];
+
+            var ultimaChiusa = Ingestion.SeriesFreshness.LastClosedBarOpenUtc(timeframe, DateTime.UtcNow);
+            if (ultimaChiusa is not DateTime chiusaFinoA) return [];
+
+            var daQuando = Positions.Min(p => p.OpenedAtUtc);
+
+            await using var db = await dbFactory.CreateDbContextAsync();
+            var barre = await db.OhlcvData.AsNoTracking()
+                .Where(c => simboli.Contains(c.Symbol) && c.Timeframe == timeframe
+                            && c.TimestampUtc >= daQuando && c.TimestampUtc <= chiusaFinoA)
+                .ToListAsync();
+
+            return ProtectiveExitAudit.Find(Positions, barre);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Controllo uscite protettive fallito: {ex.Message}");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// I confini degli episodi vengono dagli avvii del motore già registrati in
+    /// <c>TradingAuditLogs</c>. Come la carta d'identità della corsia: se questa lettura fallisce
+    /// la pagina resta funzionante e la tabella torna piatta, perché è contesto e non controllo.
+    /// </summary>
+    private async Task<IReadOnlyList<LaneEpisode>> LoadEpisodesAsync(int laneId)
+    {
+        if (dbFactory is null) return [];
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync();
+            var avvii = await db.TradingAuditLogs.AsNoTracking()
+                .Where(a => a.LaneId == laneId && a.Action == "StartEngine")
+                .OrderBy(a => a.TimestampUtc)
+                .ToListAsync();
+            return LaneEpisodeBuilder.Build(avvii, Orders);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"LoadEpisodes corsia {laneId} fallito: {ex.Message}");
+            return [];
+        }
+    }
     public List<Order> Pending { get; private set; } = [];
     public List<Indicators.IndicatorSeries> Equity { get; private set; } = [];
     public string? Message { get; private set; }
@@ -228,16 +316,33 @@ public sealed class TradingPageService(
             Status = await mediator.Send(new GetLaneStatusQuery(laneId));
 
             var positionsTask = mediator.Send(new GetOpenPositionsQuery(laneId)).AsTask();
-            var ordersTask = mediator.Send(new GetOrderHistoryQuery(laneId)).AsTask();
-            var pendingTask = mediator.Send(new GetPendingOrdersQuery(laneId)).AsTask();
             // [2026-08-03] UNA finestra per tutta la pagina: dal TEST CORRENTE (StartedAtUtc),
             // stessa base della tabella promozioni. Fallback 90gg per una corsia mai avviata.
             var perfFrom = Status?.StartedAtUtc ?? DateTime.UtcNow.AddDays(-90);
+
+            // [2026-08-05] Gli ordini seguono la STESSA finestra dei KPI. Prima la query partiva
+            // senza `from` — pur essendo il parametro già previsto — e la tabella mostrava tutta
+            // la vita della corsia: ordini di mesi prima, su SIMBOLI DIVERSI, indistinguibili dai
+            // presenti perché la colonna del simbolo non c'era. Segnalato dal proprietario:
+            // «a quali operazioni si riferiscono?». Domanda a cui la tabella non sapeva rispondere.
+            // Con ShowAllOrders si torna allo storico intero, ma è una scelta esplicita.
+            var ordersFrom = ShowAllOrders ? (DateTime?)null : perfFrom;
+            var ordersTask = mediator.Send(new GetOrderHistoryQuery(laneId, ordersFrom)).AsTask();
+            var pendingTask = mediator.Send(new GetPendingOrdersQuery(laneId)).AsTask();
             var perfTask = mediator.Send(new GetPerformanceQuery(laneId, perfFrom)).AsTask();
             await Task.WhenAll(positionsTask, ordersTask, pendingTask, perfTask);
             Positions = positionsTask.Result;
             Orders = ordersTask.Result;
             Pending = pendingTask.Result;
+
+            // [2026-08-06] Gli episodi: solo quando si guarda tutta la storia, che è il caso in cui
+            // servono. I confini vengono dagli avvii del motore già nel registro di audit — nessuna
+            // tabella nuova, nessuna migrazione: l'informazione c'era, mancava chi la leggesse.
+            Episodes = ShowAllOrders ? await LoadEpisodesAsync(laneId) : [];
+
+            // [2026-08-06] Protezioni toccate ma non eseguite. Va calcolato a OGNI refresh, non
+            // dietro un pulsante: è il controllo che il proprietario ha dovuto fare a occhio.
+            ExitAnomalies = await LoadExitAnomaliesAsync();
             var perf = perfTask.Result;
             Perf = perf;
             Equity = perf.EquityCurve.Count > 0

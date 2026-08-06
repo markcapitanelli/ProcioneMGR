@@ -522,6 +522,35 @@
         </div>
     }
 
+    @* [2026-08-06] Protezioni toccate ma non eseguite. Nasce da uno short ETC/USDT sulla corsia 3
+       che aveva raggiunto il take profit senza chiudersi: il minimo vero della barra 4h delle 08:00
+       era 6,31 contro un target di 6,3786, scritto a database da ore, e NESSUN pannello lo diceva —
+       il battito era verde e il PnL non realizzato positivo. La causa è corretta, ma una causa
+       corretta non è un controllo: il prossimo motivo per cui un'uscita non scatta sarà un altro. *@
+    @if (Service.ExitAnomalies.Count > 0)
+    {
+        <div class="alert alert-danger mb-3">
+            <strong>⚠️ Protezione raggiunta ma posizione ancora aperta.</strong>
+            <div class="small mt-1">
+                Non è una previsione: è il confronto fra il livello impostato e i prezzi delle barre
+                <strong>già chiuse</strong>. Se compare, l'uscita protettiva non è scattata quando doveva.
+            </div>
+            <ul class="mb-0 mt-2 small">
+                @foreach (var a in Service.ExitAnomalies)
+                {
+                    <li>
+                        <code>@a.Symbol</code> — il <strong>@a.Kind</strong> a
+                        <strong>@a.Level.ToString("N6").TrimEnd('0').TrimEnd(',')</strong>
+                        risulta superato da @a.BarsTouched @(a.BarsTouched == 1 ? "barra chiusa" : "barre chiuse")
+                        (fin dove il prezzo è arrivato: <strong>@a.ReachedPrice.ToString("N6").TrimEnd('0').TrimEnd(',')</strong>),
+                        la prima il @a.FirstTouchUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm").
+                        Posizione <code>…@a.PositionId[^Math.Min(6, a.PositionId.Length)..]</code> ancora aperta.
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+
     <div class="card mb-3">
         <div class="card-header">Posizioni aperte (@Service.Positions.Count)</div>
         @if (Service.Positions.Count == 0)
@@ -588,22 +617,160 @@
         </div>
     }
 
+    @* [2026-08-05] Questa tabella confondeva, e il proprietario ha chiesto perché: mostrava TUTTA
+       la vita della corsia — ordini di mesi prima, su SIMBOLI DIVERSI — senza una colonna che
+       dicesse su cosa fossero, e col prezzo di RIFERIMENTO al posto di quello davvero eseguito.
+       Quattro correzioni: la stessa finestra dei KPI (con lo storico intero a un click), il
+       simbolo, il prezzo pagato per gli ordini eseguiti, e un riferimento all'operazione che lega
+       fra loro apertura e chiusura. *@
     <div class="card mb-3">
-        <div class="card-header">Ordini recenti (@Service.Orders.Count)</div>
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>
+                Ordini @(Service.ShowAllOrders ? "— tutta la storia della corsia" : "di questo test") (@Service.Orders.Count)
+            </span>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleOrdersAsync">
+                @(Service.ShowAllOrders ? "Mostra solo questo test" : "Mostra tutto lo storico")
+            </button>
+        </div>
+        @if (Service.ShowAllOrders)
+        {
+            <div class="alert alert-warning py-2 mb-0 rounded-0 small">
+                Stai vedendo anche le <strong>vite precedenti</strong> di questa corsia.
+                @if (Service.Episodes.Count > 0)
+                {
+                    <text>
+                        Gli ordini sono raggruppati per <strong>episodio</strong>: un episodio è un
+                        tratto di vita fra due avvii del motore, con il suo simbolo e la sua strategia.
+                    </text>
+                }
+                else
+                {
+                    <text>
+                        Possono esserci ordini su simboli diversi da quello attuale, e con
+                        configurazioni che non esistono più: guarda la colonna «Simbolo».
+                    </text>
+                }
+            </div>
+        }
         <div class="table-responsive" style="max-height: 320px; overflow:auto;">
             <table class="table table-sm table-striped mb-0">
-                <thead class="table-light" style="position:sticky;top:0;"><tr><th>Timestamp</th><th>Side</th><th>Type</th><th>Qty</th><th>Price</th><th>Status</th><th>Error</th></tr></thead>
+                <thead class="table-light" style="position:sticky;top:0;">
+                    <tr>
+                        <th>Quando</th><th>Simbolo</th><th>Operazione</th><th>Lato</th><th>Tipo</th>
+                        <th class="text-end">Quantità</th>
+                        <th class="text-end" title="Per gli ordini eseguiti è il prezzo DAVVERO pagato; per gli altri il prezzo di riferimento stimato al momento della decisione.">Prezzo</th>
+                        <th>Stato</th><th>Errore</th>
+                    </tr>
+                </thead>
                 <tbody>
-                    @foreach (var o in Service.Orders)
+                    @* [2026-08-06] Raggruppamento per EPISODIO. La domanda del proprietario — «a
+                       quali operazioni si riferiscono?» — non si risolve con una colonna in più:
+                       un elenco piatto di 610 ordini di 7 strategie su 3 simboli non ha una
+                       risposta, perché l'unità mancante era il tratto di vita. Solo nello storico
+                       completo: sul test corrente l'episodio è uno solo e raggrupparlo è cerimonia. *@
+                    @if (Service.ShowAllOrders && Service.Episodes.Count > 0)
                     {
+                        @foreach (var ep in Service.Episodes)
+                        {
+                            <tr class="table-light">
+                                <td colspan="9" class="py-2">
+                                    <strong>Episodio @ep.Index — @ep.Title</strong>
+                                    <span class="text-muted small ms-2">
+                                        dal @ep.StartedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
+                                        @(ep.EndedAtUtc is { } fine ? $"al {fine.ToLocalTime():dd/MM/yyyy HH:mm}" : "a oggi")
+                                        · @ep.Mode · @ep.OrderCount @(ep.OrderCount == 1 ? "ordine" : "ordini")
+                                    </span>
+                                    @if (ep.IsCurrent)
+                                    {
+                                        <span class="badge bg-primary ms-1">in corso</span>
+                                    }
+                                    @if (ep.Source == LaneEpisodeSource.Declared)
+                                    {
+                                        @foreach (var id in ep.SavedStrategyIds)
+                                        {
+                                            <a class="badge bg-info text-dark ms-1" href="strategies">strategia #@id</a>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        @* Ciò che è dedotto non viene mai spacciato per dichiarato. *@
+                                        <span class="badge bg-secondary ms-1"
+                                              title="Questo episodio è precedente al 2026-08-06: l'avvio del motore non registrava simbolo e strategie. Il simbolo qui sopra è DEDOTTO dagli ordini; la strategia di allora non è recuperabile.">
+                                            ricostruito
+                                        </span>
+                                    }
+                                </td>
+                            </tr>
+                            @foreach (var o in Service.OrdersOf(ep))
+                            {
+                                @RigaOrdine(o)
+                            }
+                        }
+                        var orfani = LaneEpisodeBuilder.OrphanOrders(Service.Episodes, Service.Orders);
+                        @* Gli orfani sono ordini più vecchi del più antico `StartEngine` in
+                           registro: sulla corsia 0 sono 474, di giugno, quando l'avvio non veniva
+                           ancora annotato. Un unico blocco da 474 righe sarebbe lo stesso mucchio
+                           di prima; il simbolo è l'unica cosa che si sa di loro, e basta a
+                           separarli in gruppi che vogliono dire qualcosa. *@
+                        @if (orfani.Count > 0)
+                        {
+                            <tr class="table-light">
+                                <td colspan="9" class="py-2">
+                                    <strong>Prima del primo avvio registrato</strong>
+                                    <span class="text-muted small ms-2">
+                                        @orfani.Count @(orfani.Count == 1 ? "ordine" : "ordini") anteriori
+                                        al più vecchio avvio annotato (@Service.Episodes[^1].StartedAtUtc.ToLocalTime().ToString("dd/MM/yyyy")):
+                                        di quale episodio facessero parte non resta traccia, si sa solo su cosa operavano.
+                                    </span>
+                                </td>
+                            </tr>
+                            @foreach (var gruppo in orfani.GroupBy(o => o.Symbol)
+                                                          .OrderByDescending(g => g.Max(o => o.CreatedAtUtc)))
+                            {
+                                <tr class="table-secondary">
+                                    <td colspan="9" class="py-1 small">
+                                        <code>@(string.IsNullOrEmpty(gruppo.Key) ? "simbolo assente" : gruppo.Key)</code>
+                                        <span class="text-muted ms-2">
+                                            @gruppo.Count() @(gruppo.Count() == 1 ? "ordine" : "ordini")
+                                            dal @gruppo.Min(o => o.CreatedAtUtc).ToLocalTime().ToString("dd/MM/yyyy")
+                                            al @gruppo.Max(o => o.CreatedAtUtc).ToLocalTime().ToString("dd/MM/yyyy")
+                                        </span>
+                                    </td>
+                                </tr>
+                                @foreach (var o in gruppo.OrderByDescending(o => o.CreatedAtUtc))
+                                {
+                                    @RigaOrdine(o)
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        @foreach (var o in Service.Orders)
+                        {
+                            @RigaOrdine(o)
+                        }
+                    }
+                    @if (Service.Orders.Count == 0)
+                    {
+                        @* Il messaggio del vuoto deve dire di QUALE vuoto si tratta: «nessun ordine
+                           in questo test» e «nessun ordine mai» sono due fatti diversi, e leggerli
+                           come lo stesso è il tipo di confusione che questa correzione toglie. *@
                         <tr>
-                            <td class="small">@o.CreatedAtUtc.ToString("MM-dd HH:mm")</td>
-                            <td>@o.Side</td>
-                            <td>@o.Type</td>
-                            <td>@o.Quantity.ToString("N5")</td>
-                            <td>@(o.Price?.ToString("N2") ?? "—")</td>
-                            <td><span class="badge @StatusBadge(o.Status)">@o.Status</span></td>
-                            <td class="small text-danger">@o.ErrorMessage</td>
+                            <td colspan="9" class="text-muted small">
+                                @if (Service.ShowAllOrders)
+                                {
+                                    <text>Questa corsia non ha <strong>mai</strong> piazzato un ordine, in nessuna configurazione.</text>
+                                }
+                                else
+                                {
+                                    <text>
+                                        Nessun ordine da quando è iniziato questo test
+                                        (@(Service.Status?.StartedAtUtc is DateTime avvio ? avvio.ToLocalTime().ToString("dd/MM/yyyy HH:mm") : "—")).
+                                        Se la corsia ha operato in precedenza, lo vedi con «Mostra tutto lo storico».
+                                    </text>
+                                }
+                            </td>
                         </tr>
                     }
                 </tbody>
@@ -986,6 +1153,55 @@
         StateHasChanged();
     }
 
+    /// <summary>
+    /// [2026-08-06] La riga di un ordine, una sola volta: la tabella la usa sia piatta sia
+    /// raggruppata per episodio, e due copie divergono al primo ritocco.
+    /// </summary>
+    private RenderFragment<Order> RigaOrdine => o =>
+    @<tr>
+        <td class="small">@o.CreatedAtUtc.ToLocalTime().ToString("dd/MM HH:mm")</td>
+        <td class="small">
+            <code>@(string.IsNullOrEmpty(o.Symbol) ? "—" : o.Symbol)</code>
+            @if (!string.IsNullOrEmpty(Service.Status?.Symbol) && !string.IsNullOrEmpty(o.Symbol)
+                 && o.Symbol != Service.Status.Symbol)
+            {
+                <span class="badge bg-secondary ms-1" title="Ordine di una configurazione PRECEDENTE di questa corsia: il simbolo non è quello attuale.">vita precedente</span>
+            }
+        </td>
+        @* Le ultime 6 cifre bastano a legare fra loro apertura e chiusura della stessa posizione,
+           che è la domanda vera («a quale operazione si riferisce?»); l'id intero è un GUID e
+           riempirebbe la riga. *@
+        <td class="small text-muted" title="@o.PositionId">
+            @(string.IsNullOrEmpty(o.PositionId) ? "—" : "…" + o.PositionId[^Math.Min(6, o.PositionId.Length)..])
+        </td>
+        <td>@o.Side</td>
+        <td>@o.Type</td>
+        <td class="text-end">@o.Quantity.ToString("N5")</td>
+        <td class="text-end">
+            @if (o.FilledPrice is { } filled)
+            {
+                @filled.ToString("N4")
+            }
+            else if (o.Price is { } stimato)
+            {
+                <span class="text-muted" title="Prezzo di riferimento stimato: l'ordine non è stato eseguito, quindi nessun prezzo è stato pagato.">@stimato.ToString("N4")</span>
+            }
+            else
+            {
+                <span class="text-muted">—</span>
+            }
+        </td>
+        <td><span class="badge @StatusBadge(o.Status)">@o.Status</span></td>
+        <td class="small text-danger">@o.ErrorMessage</td>
+    </tr>;
+
+    /// <summary>[2026-08-05] Alterna finestra del test / storico intero e ricarica subito.</summary>
+    private async Task ToggleOrdersAsync()
+    {
+        Service.ToggleOrderHistory();
+        await Service.RefreshAsync(_laneId);
+    }
+
     private async Task ClearLaneAsync()
     {
         _confirmClear = false;
@@ -1267,8 +1483,23 @@
         }
 
         var stale = ProcioneMGR.Services.Ingestion.SeriesFreshness.IsStale(s.Timeframe, last, DateTime.UtcNow);
+
+        // [2026-08-06] Dire se la candela valutata è CHIUSA. Prima il battito mostrava «ultima
+        // candela 16:00 · 0 barre indietro» in verde mentre quella barra 4h chiudeva alle 20:00: il
+        // motore stava valutando stop e target su un High/Low ancora parziale, e l'indicatore che
+        // avrebbe dovuto accorgersene rassicurava. Il conteggio delle barre non poteva vederlo —
+        // misura contro l'ultima chiusa e la barra aperta gli risulta "0" esattamente come la
+        // chiusa. Serviva questa parola in più, non un numero diverso.
+        var ultimaChiusa = ProcioneMGR.Services.Ingestion.SeriesFreshness.LastClosedBarOpenUtc(s.Timeframe, DateTime.UtcNow);
+        var inFormazione = ultimaChiusa is DateTime chiusa && last > chiusa;
+
         var text = $"ultima candela {last:dd/MM HH:mm} UTC · {b} barre indietro";
-        return stale ? ("bg-danger", text) : ("bg-success-subtle text-dark border", text);
+        if (inFormazione)
+        {
+            return ("bg-warning text-dark",
+                $"{text} · ⚠️ ANCORA APERTA: stop e target valutati su prezzi parziali");
+        }
+        return stale ? ("bg-danger", text) : ("bg-success-subtle text-dark border", $"{text} · barra chiusa");
     }
 
     private async Task SaveSafetyAsync()

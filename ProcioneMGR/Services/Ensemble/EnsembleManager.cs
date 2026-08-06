@@ -573,6 +573,20 @@ public sealed class EnsembleManager(
         await using var db = await dbf.CreateDbContextAsync(ct);
         var fromUtc = DateTime.SpecifyKind(from, DateTimeKind.Utc);
         var toUtc = DateTime.SpecifyKind(to, DateTimeKind.Utc);
+
+        // [2026-08-06] Mai la barra in FORMAZIONE. I chiamanti passano `to = DateTime.UtcNow`, e la
+        // riga della candela corrente è già a database (l'ingestione REST scrive anche l'ultima
+        // kline incompleta): finiva in coda alla finestra come se fosse un rendimento compiuto,
+        // mentre è un pezzo di barra che cambia a ogni sync. È la stessa classe di difetto che sul
+        // motore di trading impediva alle uscite protettive di scattare (vedi
+        // TradingWorker.LastClosedBarOpenUtc): qui non è pericolosa, è solo un dato sporco — e
+        // lasciarla sarebbe tenere due regole diverse sulla stessa domanda.
+        if (Ingestion.SeriesFreshness.LastClosedBarOpenUtc(cfg.Timeframe, DateTime.UtcNow) is DateTime ultimaChiusa
+            && toUtc > ultimaChiusa)
+        {
+            toUtc = ultimaChiusa;
+        }
+
         var candles = await db.OhlcvData
             .Where(c => c.Symbol == cfg.Symbol && c.Timeframe == cfg.Timeframe && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
             .OrderBy(c => c.TimestampUtc)

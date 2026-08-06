@@ -52,6 +52,11 @@ public sealed class ConfigurationUiCoverageTests
         ["Notifications:Digest"] = "Components/Pages/Admin/Autonomy.razor",
         // [AF3] Comitato AI a scelta vincolata.
         ["Committee"] = "Components/Pages/Admin/AiSupervisor.razor",
+        // [G4] Post-mortem delle operazioni perse: interruttori, soglia di perdita, tetto per giro
+        // e quante cause recenti raggiungono il comitato. Il pannello c'era dal 2026-08-05 ma la
+        // sezione non era stata registrata qui, quindi la CI è rimasta rossa per un giorno pur
+        // essendo la UI già a posto: l'inventario va aggiornato INSIEME al pannello, non dopo.
+        ["PostMortem"] = "Components/Pages/Admin/AiSupervisor.razor",
 
         // --- /admin/protections: ciò che filtra o ferma un'operazione ---
         ["MarketData:Realtime"] = "Components/Pages/Admin/Protections.razor",
@@ -89,6 +94,13 @@ public sealed class ConfigurationUiCoverageTests
         ["FactorCache"] =
             "Solo memoria e prestazioni: la cache è un memoizzatore con invariante 'cache == ricalcolo', " +
             "quindi nessun valore prodotto dalla piattaforma cambia al variare di questa sezione.",
+        ["Database"] =
+            "Migrazioni all'avvio (AutoMigrate, LockTimeoutSeconds): lette UNA volta da " +
+            "DatabaseMigrator prima che l'host parta, quindi un interruttore in pagina non potrebbe " +
+            "avere effetto fino al riavvio successivo. Sarebbe un comando che sembra fare qualcosa e " +
+            "non fa nulla — la classe di difetto che questa piattaforma combatte, non un rimedio. " +
+            "L'ESITO invece si vede: la riga di log all'avvio dice se lo schema era allineato o " +
+            "quante migrazioni sono state applicate, ed è un fatto, non una manopola.",
         ["Trading:Bitget:SpotMarketBuyVerified"] =
             "Attestazione di una verifica fatta a mano contro l'exchange reale (semantica del campo " +
             "quantity sugli ordini market spot): è un fatto sul mondo, non una preferenza da cambiare.",

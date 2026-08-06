@@ -31,6 +31,36 @@ public static class SeriesFreshness
     public const int DefaultToleranceBars = 3;
 
     /// <summary>
+    /// [2026-08-06] L'istante di APERTURA dell'ultima barra che ha già CHIUSO. <c>null</c> se il
+    /// timeframe non è riconosciuto.
+    ///
+    /// <para>Sta qui, accanto a <see cref="BarsBehind"/>, perché è la stessa nozione vista dall'altro
+    /// lato: là serve a misurare il ritardo, qui a decidere cosa si può consumare. Due definizioni
+    /// separate di «ultima barra chiusa» darebbero due verdetti sulla stessa serie, che è
+    /// esattamente il difetto corretto in D2 e nel Filone E.</para>
+    ///
+    /// <para><b>Il guasto che ha reso necessaria la versione pubblica</b>, trovato dal proprietario
+    /// il 2026-08-06: la barra in formazione È a database — l'ingestione REST scrive anche l'ultima
+    /// kline incompleta — e chi legge «fino ad adesso» se la prende. Sul motore di trading questo
+    /// significava valutare stop e target su un High/Low parziale: uno short ETC/USDT con target a
+    /// 6,3786 non si è chiuso benché il minimo VERO della barra 4h delle 08:00 fosse 6,31, perché
+    /// quella barra era stata valutata poco dopo le 08:00 e la versione definitiva veniva poi
+    /// scartata come «già vista».</para>
+    /// </summary>
+    public static DateTime? LastClosedBarOpenUtc(string timeframe, DateTime nowUtc)
+    {
+        if (string.IsNullOrWhiteSpace(timeframe)
+            || !Timeframes.Supported.TryGetValue(timeframe, out var step)
+            || step <= TimeSpan.Zero)
+        {
+            return null;
+        }
+
+        var currentOpen = new DateTime(nowUtc.Ticks - (nowUtc.Ticks % step.Ticks), DateTimeKind.Utc);
+        return currentOpen - step;
+    }
+
+    /// <summary>
     /// Quante barre CHIUSE mancano all'appello. <c>null</c> se il timeframe non è riconosciuto o la
     /// serie è vuota: due casi che NON sono "aggiornata" e non devono poter essere scambiati per
     /// tale da un confronto numerico.
@@ -47,8 +77,7 @@ public static class SeriesFreshness
         if (lastCandleUtc is not DateTime last) return null;
         if (!Timeframes.Supported.TryGetValue(timeframe, out var step) || step <= TimeSpan.Zero) return null;
 
-        var currentOpen = new DateTime(nowUtc.Ticks - (nowUtc.Ticks % step.Ticks), DateTimeKind.Utc);
-        var lastClosedOpen = currentOpen - step;
+        var lastClosedOpen = LastClosedBarOpenUtc(timeframe, nowUtc)!.Value;
 
         var behind = (lastClosedOpen - DateTime.SpecifyKind(last, DateTimeKind.Utc)).Ticks / step.Ticks;
         return behind <= 0 ? 0 : (int)behind;

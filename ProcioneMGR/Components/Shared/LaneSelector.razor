@@ -91,10 +91,27 @@
     /// </summary>
     private bool _expanded;
 
-    /// <summary>Le schede mostrate, riportate in ordine di id: la priorità decide CHI, non DOVE.</summary>
+    /// <summary>
+    /// [2026-08-05, richiesta del proprietario] Le corsie CONFIGURATE per prime, poi le vuote —
+    /// così la fila non ha buchi e le corsie libere stanno tutte in coda, pronte da assegnare.
+    ///
+    /// <para><b>Perché si raggruppa su «configurata» e non su «sta girando»</b>: l'ordine deve
+    /// stare fermo. Configurare o svuotare una corsia è un atto deliberato e raro; avviarla o
+    /// fermarla succede di continuo, anche da sola. Ordinare sull'esecuzione farebbe saltare le
+    /// schede sotto il cursore a ogni cambio di stato — e chi stava per cliccare la corsia 4 si
+    /// ritroverebbe a cliccare un'altra cosa.</para>
+    ///
+    /// <para>Dentro ciascun gruppo resta l'id crescente, e l'id resta scritto su ogni scheda:
+    /// le corsie non si rinumerano MAI (l'id è identità — posizioni e storico vi sono agganciati,
+    /// e le posizioni orfane di luglio nacquero proprio da un id sparito). Qui cambia solo l'ordine
+    /// di visualizzazione.</para>
+    /// </summary>
     private List<LaneSummary> Visible =>
-        _expanded ? [.. Lanes.OrderBy(l => l.Id)]
-                  : [.. Ranked.Take(Math.Max(1, MaxVisible)).OrderBy(l => l.Id)];
+        _expanded ? [.. Ordered(Lanes)]
+                  : [.. Ordered(Ranked.Take(Math.Max(1, MaxVisible)))];
+
+    private static IEnumerable<LaneSummary> Ordered(IEnumerable<LaneSummary> lanes) =>
+        lanes.OrderByDescending(l => l.IsConfigured).ThenBy(l => l.Id);
 
     /// <summary>Quante corsie resterebbero fuori senza espansione.</summary>
     private int Overflow => Math.Max(0, Lanes.Count - Math.Max(1, MaxVisible));

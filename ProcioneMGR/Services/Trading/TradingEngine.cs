@@ -351,7 +351,31 @@ public sealed class TradingEngine(
             _executionJobs.Clear();
 
             await SaveStateAsync(ct);
-            await AuditAsync("StartEngine", new { mode = mode.ToString(), capital, strategies = _active.Count }, DateTime.UtcNow, ct);
+            // [2026-08-06] La voce di StartEngine porta ora anche COSA gira: simbolo, timeframe e
+            // nomi delle strategie. Prima registrava solo modalità, capitale e un CONTEGGIO, e
+            // quella lacuna rendeva lo storico di una corsia illeggibile: gli avvii marcavano già
+            // i confini fra un esperimento e l'altro (la corsia 0 ne aveva 11), ma senza sapere
+            // cosa girasse in ciascuno restavano 610 ordini di 7 strategie diverse su 3 simboli in
+            // un mucchio unico. Con questi tre campi ogni avvio apre un EPISODIO identificabile
+            // (vedi LaneEpisodeBuilder) e la domanda «a quale strategia si riferisce?» ha risposta.
+            await AuditAsync("StartEngine", new
+            {
+                mode = mode.ToString(),
+                capital,
+                strategies = _active.Count,
+                symbol = _state.Symbol,
+                timeframe = _state.Timeframe,
+                strategyNames = _active
+                    .Select(s => string.IsNullOrWhiteSpace(s.DisplayName) ? s.StrategyName : s.DisplayName)
+                    .ToArray(),
+                // Il PONTE verso la strategia salvata, che è la cosa che davvero mancava: con
+                // questo un episodio non dice solo «girava un Composite», dice QUALE — e la si
+                // può riaprire in /strategies. `Order.StrategyId` non serviva a niente per questo:
+                // è un GUID di sessione che non corrisponde ad alcuna riga di SavedStrategies
+                // (verificato sul database vero: zero riscontri).
+                savedStrategyIds = _active.Where(s => s.SavedStrategyId is not null)
+                                          .Select(s => s.SavedStrategyId!.Value).ToArray(),
+            }, DateTime.UtcNow, ct);
             logger.LogInformation("Trading engine avviato in modalità {Mode} con {N} strategie, capitale {Cap}.", mode, _active.Count, capital);
         }
         finally { _gate.Release(); }
