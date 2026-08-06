@@ -884,3 +884,31 @@ Oggi la caccia spende lo stesso sforzo su famiglie con rese di due ordini di gra
 esattamente il gesto che fabbrica falsa significatività se fatto male (lezione del 2026-07-20,
 445k combinazioni → 0). Va fatto come esperimento con la sua ipotesi scritta prima, e col controllo
 sul rumore del [Standard di verifica](STANDARD-VERIFICA.md) — altrimenti non si fa.
+
+---
+
+## Filone S — Distribuzione sul server: immagini private e build in casa (2026-08-06)
+
+Nasce da un fatto e da una decisione del proprietario. Il fatto: rendendo **privata** la repo il
+2026-08-06, il cluster ha smesso di poter scaricare immagini nuove — nessun workload ha mai avuto
+un `imagePullSecrets`, perché finché le immagini erano pubbliche non serviva. Il proprietario ha
+rimesso pubbliche le immagini per sbloccare, dichiarando che **è un ripiego che non gli piace** e
+che il progetto sarà presto trasferito su un server dove dovrà girare per intero.
+
+**Stato attuale, misurato**: cinque namespace tirano da `ghcr.io/markcapitanelli` — `trading`,
+`ui`, `ml`, `ingestion`, più i Job di `pipeline` e `supervisor`. Il pacchetto GHCR è pubblico
+anche ora che la repo è privata: la visibilità dei pacchetti è indipendente da quella del
+repository, quindi chiunque scarica ancora i binari della piattaforma.
+
+**La domanda che decide la forma**: il server deve funzionare *senza* GitHub, o gli basta
+raggiungerlo al momento del deploy? Finché non c'è risposta, S2 resta indecidibile.
+
+| # | Cosa | Perché | Note |
+|---|---|---|---|
+| S1 | `imagePullSecrets` da PAT fine-grained con **solo** `read:packages`, attaccato al ServiceAccount `default` di ogni namespace | Copre Deployment, Job e CronJob **senza toccare un manifest**. È il pezzo che manca per poter chiudere i pacchetti | piccolo; script nuovo accanto ai `k8s-*-secret.ps1` esistenti, stessa convenzione di nomi |
+| S2 | Chiudere i pacchetti GHCR | Oggi i binari sono scaricabili da chiunque | **dopo S1, mai prima**: invertire l'ordine ferma gli aggiornamenti del cluster |
+| S3 | Runner **self-hosted** sul server | Con la repo privata i minuti Actions si pagano e il workflow costruisce **6 immagini a ogni push**. Toglie il costo, accorcia build→deploy, e rende il deploy indipendente dai runner di GitHub — che il 2026-08-06 sono stati giù un'intera serata bloccando questo stesso lavoro | medio. **Cautela**: girerebbe sulla macchina del motore di trading, quindi limiti di risorse obbligatori e mai codice di PR non fidate (con repo privata a un autore la condizione è già soddisfatta) |
+| S4 | Registro locale sul server | Solo se l'autonomia **offline** è un requisito vero | Il pin sul digest continua a valere, ma si perde il legame diretto immagine↔commit su GitHub, che è la garanzia a cui `infra/k8s/trading/kustomization.yaml` tiene di più. Non farlo per abitudine |
+
+**Raccomandazione**: S1 + S2 subito (chiudono il buco vero), S3 quando si passa al server. S4 solo
+se la risposta alla domanda qui sopra è «senza GitHub».
