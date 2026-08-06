@@ -833,3 +833,54 @@ stabile) → **G2** backlog senza scadenza.
 **Invariante comune a tutti i G**: ognuno è default-off, ognuno ha la sua configurazione nella UI
 (mai un flag che vive solo in appsettings), e ognuno spento deve lasciare il comportamento
 bit-identico a prima — verificato al livello 2, non promesso.
+
+---
+
+## Filone R — Archivio della ricerca: leggere i 6.554 candidati che già abbiamo (2026-08-06)
+
+Nasce da una domanda del proprietario: *«penso abbia senso salvare anche le varie campagne con i
+vari candidati e le varie proposte, per fare una ricerca più approfondita»*. **La premessa è
+sbagliata in modo utile: è già tutto salvato.** Misurato sul database vero:
+
+| Cosa | Quanto | Da quando |
+|---|---|---|
+| `ValidatedCandidates` (candidato per candidato, **24 metriche** + parametri + motivo di scarto) | 84 run, 5,8 MB, **6.554 candidati** | 2026-07-02 |
+| `FactorIc`, `RegimeProfile`, `PairScreen`, `FeatureImportance` | 86 run ciascuno, ~9,4 MB | 2026-07-02 |
+| `EnsembleProposal` (le proposte) | **9, l'ultima il 2026-07-09** | — |
+| `LlmAdvisory` | 77 su 75 run | 2026-07-08 |
+| Campagne (`VettingCampaigns`) con rotazione, esito e run collegati | 1 attiva, `WaitingForTrigger` | — |
+
+Le 9 sole proposte **non sono un guasto**: sono la realtà. Da metà luglio nessun run produce un
+ensemble perché nessun candidato passa.
+
+**Il buco vero non è la scrittura: è la lettura.** Ogni run è un blob JSON separato, quindi non
+esiste nessuna domanda che attraversi i run — ed è esattamente la domanda che serve per
+«analizzare le strategie, confrontare i candidati, migliorare la ricerca». Tre query scritte a
+mano il 2026-08-06 (secondi di esecuzione, nessuna riga di codice nuova) tirano fuori questo:
+
+**Il fatto più duro**: dal 13 luglio, **66 run e 5.131 candidati, ZERO sopravvissuti**. È
+l'undicesimo «no» del direzionale-tecnico, ma stavolta con la scala visibile in una riga.
+
+**Il fatto più utile**: fra i bocciati, **702 hanno Sharpe fuori campione MEDIO POSITIVO** —
+532 fermati da «troppi pochi trade» (Sharpe medio **+1,10**) e 170 dal DSR (**+1,07**). Non sono
+stati bocciati perché perdono: sono stati bocciati perché la finestra è corta per la loro
+frequenza, o perché i tentativi erano troppi rispetto ai dati. Contro i 5.814 che perdono davvero,
+con Sharpe medio −1,86. È la stessa diagnosi del power check MinTRL (Filone F), ma qui è
+**quantificata**: 702 candidati.
+
+**Il fatto per la Queen Bee**: il tasso di passaggio per famiglia è misurabile e disomogeneo —
+`Composite` 12 su 2.212 (0,5%), `PriceSmaCross` 7 su 46 (**15%**), `Supertrend` 6 su 406,
+`EventTrigger` 0 su 1.415, `RegimeConditional` 0 su 1.096, `Ml` 0 su 19 con Sharpe medio **−9,66**.
+Oggi la caccia spende lo stesso sforzo su famiglie con rese di due ordini di grandezza diverse.
+
+| # | Cosa | Perché | Costo |
+|---|---|---|---|
+| R1 | Vista di lettura trasversale sui candidati archiviati (motivi di scarto aggregati, tasso di passaggio per famiglia/simbolo/timeframe, andamento nel tempo) — pagina `/research` | Rende interrogabile ciò che già c'è. Le query esistono, provate a mano | piccolo, rischio nullo (sola lettura) |
+| R2 | Indicizzare i candidati in righe invece che in blob JSON (tabella derivata, ricostruibile dagli artefatti — nessun dato nuovo da raccogliere) | Oggi ogni domanda costa una scansione con `jsonb_array_elements` su 5,8 MB; con l'archivio che cresce non regge | medio |
+| R3 | Portare il tasso di passaggio per famiglia dentro la scelta della prossima caccia (`CampaignPlanner`) | La rotazione oggi è cieca alla resa storica delle famiglie che ruota | medio, dietro gate |
+| R4 | Riesaminare i 702 «bocciati per potenza statistica» con la finestra giusta, come esperimento dichiarato | Sono l'unico bacino di candidati con Sharpe medio positivo mai prodotto dalla piattaforma | medio, è ricerca |
+
+**Onestà su R4**: non è una scorciatoia al profitto. Ripescare candidati già bocciati è
+esattamente il gesto che fabbrica falsa significatività se fatto male (lezione del 2026-07-20,
+445k combinazioni → 0). Va fatto come esperimento con la sua ipotesi scritta prima, e col controllo
+sul rumore del [Standard di verifica](STANDARD-VERIFICA.md) — altrimenti non si fa.
