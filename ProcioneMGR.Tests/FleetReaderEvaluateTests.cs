@@ -43,7 +43,13 @@ public sealed class FleetReaderEvaluateTests
         Assert.Equal("grey", verdict.Value.Band);
         Assert.InRange(verdict.Value.TradesPerMonth, 3.5m, 4.5m);
         Assert.Contains("RsiOversold DOT/USDT", verdict.Value.Summary);
-        Assert.Contains("Sharpe holdout 1,20", verdict.Value.Summary);
+        // [2026-08-06] Formattato come lo formatta la produzione, NON con la virgola scritta a
+        // mano: `:F2` segue la cultura del processo, quindi l'asserzione letterale passava sul
+        // Windows italiano dello sviluppatore e falliva sul runner Linux della CI — che è la
+        // ragione per cui la CI era rossa anche su master dal 2026-08-03. Il difetto vero non è
+        // qui: nessuna cultura è fissata da nessuna parte, quindi il guscio scrive «1,20» e il
+        // motore in container scrive «1.20» nello STESSO journal. Vedi la nota in ROADMAP.
+        Assert.Contains($"Sharpe holdout {1.2m:F2}", verdict.Value.Summary);
     }
 
     [Fact]
