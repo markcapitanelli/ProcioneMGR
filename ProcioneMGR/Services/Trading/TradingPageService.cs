@@ -49,6 +49,42 @@ public sealed class TradingPageService(
 
     /// <summary>Alterna fra la finestra del test corrente e lo storico completo. Il chiamante ricarica.</summary>
     public void ToggleOrderHistory() => ShowAllOrders = !ShowAllOrders;
+
+    /// <summary>
+    /// [2026-08-06] Gli episodi della corsia: un tratto di vita per ogni avvio del motore, dal più
+    /// recente. Popolato solo in modalità storico completo — sul test corrente c'è un episodio solo
+    /// e raggrupparlo sarebbe cerimonia inutile.
+    /// </summary>
+    public IReadOnlyList<LaneEpisode> Episodes { get; private set; } = [];
+
+    /// <summary>Gli ordini di un episodio, per la tabella raggruppata.</summary>
+    public IReadOnlyList<Order> OrdersOf(LaneEpisode ep) =>
+        [.. Orders.Where(o => o.CreatedAtUtc >= ep.StartedAtUtc
+                              && (ep.EndedAtUtc is null || o.CreatedAtUtc < ep.EndedAtUtc))];
+
+    /// <summary>
+    /// I confini degli episodi vengono dagli avvii del motore già registrati in
+    /// <c>TradingAuditLogs</c>. Come la carta d'identità della corsia: se questa lettura fallisce
+    /// la pagina resta funzionante e la tabella torna piatta, perché è contesto e non controllo.
+    /// </summary>
+    private async Task<IReadOnlyList<LaneEpisode>> LoadEpisodesAsync(int laneId)
+    {
+        if (dbFactory is null) return [];
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync();
+            var avvii = await db.TradingAuditLogs.AsNoTracking()
+                .Where(a => a.LaneId == laneId && a.Action == "StartEngine")
+                .OrderBy(a => a.TimestampUtc)
+                .ToListAsync();
+            return LaneEpisodeBuilder.Build(avvii, Orders);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"LoadEpisodes corsia {laneId} fallito: {ex.Message}");
+            return [];
+        }
+    }
     public List<Order> Pending { get; private set; } = [];
     public List<Indicators.IndicatorSeries> Equity { get; private set; } = [];
     public string? Message { get; private set; }
@@ -256,6 +292,11 @@ public sealed class TradingPageService(
             Positions = positionsTask.Result;
             Orders = ordersTask.Result;
             Pending = pendingTask.Result;
+
+            // [2026-08-06] Gli episodi: solo quando si guarda tutta la storia, che è il caso in cui
+            // servono. I confini vengono dagli avvii del motore già nel registro di audit — nessuna
+            // tabella nuova, nessuna migrazione: l'informazione c'era, mancava chi la leggesse.
+            Episodes = ShowAllOrders ? await LoadEpisodesAsync(laneId) : [];
             var perf = perfTask.Result;
             Perf = perf;
             Equity = perf.EquityCurve.Count > 0

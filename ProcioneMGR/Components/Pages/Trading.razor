@@ -606,9 +606,21 @@
         @if (Service.ShowAllOrders)
         {
             <div class="alert alert-warning py-2 mb-0 rounded-0 small">
-                Stai vedendo anche le <strong>vite precedenti</strong> di questa corsia: possono esserci
-                ordini su simboli diversi da quello attuale, e con configurazioni che non esistono più.
-                Guarda la colonna «Simbolo» prima di trarre conclusioni.
+                Stai vedendo anche le <strong>vite precedenti</strong> di questa corsia.
+                @if (Service.Episodes.Count > 0)
+                {
+                    <text>
+                        Gli ordini sono raggruppati per <strong>episodio</strong>: un episodio è un
+                        tratto di vita fra due avvii del motore, con il suo simbolo e la sua strategia.
+                    </text>
+                }
+                else
+                {
+                    <text>
+                        Possono esserci ordini su simboli diversi da quello attuale, e con
+                        configurazioni che non esistono più: guarda la colonna «Simbolo».
+                    </text>
+                }
             </div>
         }
         <div class="table-responsive" style="max-height: 320px; overflow:auto;">
@@ -622,46 +634,93 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var o in Service.Orders)
+                    @* [2026-08-06] Raggruppamento per EPISODIO. La domanda del proprietario — «a
+                       quali operazioni si riferiscono?» — non si risolve con una colonna in più:
+                       un elenco piatto di 610 ordini di 7 strategie su 3 simboli non ha una
+                       risposta, perché l'unità mancante era il tratto di vita. Solo nello storico
+                       completo: sul test corrente l'episodio è uno solo e raggrupparlo è cerimonia. *@
+                    @if (Service.ShowAllOrders && Service.Episodes.Count > 0)
                     {
-                        var fuoriSimbolo = !string.IsNullOrEmpty(Service.Status?.Symbol)
-                                           && !string.IsNullOrEmpty(o.Symbol)
-                                           && o.Symbol != Service.Status.Symbol;
-                        <tr>
-                            <td class="small">@o.CreatedAtUtc.ToString("dd/MM HH:mm")</td>
-                            <td class="small">
-                                <code>@(string.IsNullOrEmpty(o.Symbol) ? "—" : o.Symbol)</code>
-                                @if (fuoriSimbolo)
+                        @foreach (var ep in Service.Episodes)
+                        {
+                            <tr class="table-light">
+                                <td colspan="9" class="py-2">
+                                    <strong>Episodio @ep.Index — @ep.Title</strong>
+                                    <span class="text-muted small ms-2">
+                                        dal @ep.StartedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
+                                        @(ep.EndedAtUtc is { } fine ? $"al {fine.ToLocalTime():dd/MM/yyyy HH:mm}" : "a oggi")
+                                        · @ep.Mode · @ep.OrderCount @(ep.OrderCount == 1 ? "ordine" : "ordini")
+                                    </span>
+                                    @if (ep.IsCurrent)
+                                    {
+                                        <span class="badge bg-primary ms-1">in corso</span>
+                                    }
+                                    @if (ep.Source == LaneEpisodeSource.Declared)
+                                    {
+                                        @foreach (var id in ep.SavedStrategyIds)
+                                        {
+                                            <a class="badge bg-info text-dark ms-1" href="strategies">strategia #@id</a>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        @* Ciò che è dedotto non viene mai spacciato per dichiarato. *@
+                                        <span class="badge bg-secondary ms-1"
+                                              title="Questo episodio è precedente al 2026-08-06: l'avvio del motore non registrava simbolo e strategie. Il simbolo qui sopra è DEDOTTO dagli ordini; la strategia di allora non è recuperabile.">
+                                            ricostruito
+                                        </span>
+                                    }
+                                </td>
+                            </tr>
+                            @foreach (var o in Service.OrdersOf(ep))
+                            {
+                                @RigaOrdine(o)
+                            }
+                        }
+                        var orfani = LaneEpisodeBuilder.OrphanOrders(Service.Episodes, Service.Orders);
+                        @* Gli orfani sono ordini più vecchi del più antico `StartEngine` in
+                           registro: sulla corsia 0 sono 474, di giugno, quando l'avvio non veniva
+                           ancora annotato. Un unico blocco da 474 righe sarebbe lo stesso mucchio
+                           di prima; il simbolo è l'unica cosa che si sa di loro, e basta a
+                           separarli in gruppi che vogliono dire qualcosa. *@
+                        @if (orfani.Count > 0)
+                        {
+                            <tr class="table-light">
+                                <td colspan="9" class="py-2">
+                                    <strong>Prima del primo avvio registrato</strong>
+                                    <span class="text-muted small ms-2">
+                                        @orfani.Count @(orfani.Count == 1 ? "ordine" : "ordini") anteriori
+                                        al più vecchio avvio annotato (@Service.Episodes[^1].StartedAtUtc.ToLocalTime().ToString("dd/MM/yyyy")):
+                                        di quale episodio facessero parte non resta traccia, si sa solo su cosa operavano.
+                                    </span>
+                                </td>
+                            </tr>
+                            @foreach (var gruppo in orfani.GroupBy(o => o.Symbol)
+                                                          .OrderByDescending(g => g.Max(o => o.CreatedAtUtc)))
+                            {
+                                <tr class="table-secondary">
+                                    <td colspan="9" class="py-1 small">
+                                        <code>@(string.IsNullOrEmpty(gruppo.Key) ? "simbolo assente" : gruppo.Key)</code>
+                                        <span class="text-muted ms-2">
+                                            @gruppo.Count() @(gruppo.Count() == 1 ? "ordine" : "ordini")
+                                            dal @gruppo.Min(o => o.CreatedAtUtc).ToLocalTime().ToString("dd/MM/yyyy")
+                                            al @gruppo.Max(o => o.CreatedAtUtc).ToLocalTime().ToString("dd/MM/yyyy")
+                                        </span>
+                                    </td>
+                                </tr>
+                                @foreach (var o in gruppo.OrderByDescending(o => o.CreatedAtUtc))
                                 {
-                                    <span class="badge bg-secondary ms-1" title="Ordine di una configurazione PRECEDENTE di questa corsia: il simbolo non è quello attuale.">vita precedente</span>
+                                    @RigaOrdine(o)
                                 }
-                            </td>
-                            @* Le ultime 6 cifre bastano a legare fra loro apertura e chiusura della
-                               stessa posizione, che è la domanda vera («a quale operazione si
-                               riferisce?»); l'id intero è un GUID e riempirebbe la riga. *@
-                            <td class="small text-muted" title="@o.PositionId">
-                                @(string.IsNullOrEmpty(o.PositionId) ? "—" : "…" + o.PositionId[^Math.Min(6, o.PositionId.Length)..])
-                            </td>
-                            <td>@o.Side</td>
-                            <td>@o.Type</td>
-                            <td class="text-end">@o.Quantity.ToString("N5")</td>
-                            <td class="text-end">
-                                @if (o.FilledPrice is { } filled)
-                                {
-                                    @filled.ToString("N4")
-                                }
-                                else if (o.Price is { } stimato)
-                                {
-                                    <span class="text-muted" title="Prezzo di riferimento stimato: l'ordine non è stato eseguito, quindi nessun prezzo è stato pagato.">@stimato.ToString("N4")</span>
-                                }
-                                else
-                                {
-                                    <span class="text-muted">—</span>
-                                }
-                            </td>
-                            <td><span class="badge @StatusBadge(o.Status)">@o.Status</span></td>
-                            <td class="small text-danger">@o.ErrorMessage</td>
-                        </tr>
+                            }
+                        }
+                    }
+                    else
+                    {
+                        @foreach (var o in Service.Orders)
+                        {
+                            @RigaOrdine(o)
+                        }
                     }
                     @if (Service.Orders.Count == 0)
                     {
@@ -1064,6 +1123,48 @@
         await Service.PromoteAsync(laneId, newMode, _laneId);
         StateHasChanged();
     }
+
+    /// <summary>
+    /// [2026-08-06] La riga di un ordine, una sola volta: la tabella la usa sia piatta sia
+    /// raggruppata per episodio, e due copie divergono al primo ritocco.
+    /// </summary>
+    private RenderFragment<Order> RigaOrdine => o =>
+    @<tr>
+        <td class="small">@o.CreatedAtUtc.ToLocalTime().ToString("dd/MM HH:mm")</td>
+        <td class="small">
+            <code>@(string.IsNullOrEmpty(o.Symbol) ? "—" : o.Symbol)</code>
+            @if (!string.IsNullOrEmpty(Service.Status?.Symbol) && !string.IsNullOrEmpty(o.Symbol)
+                 && o.Symbol != Service.Status.Symbol)
+            {
+                <span class="badge bg-secondary ms-1" title="Ordine di una configurazione PRECEDENTE di questa corsia: il simbolo non è quello attuale.">vita precedente</span>
+            }
+        </td>
+        @* Le ultime 6 cifre bastano a legare fra loro apertura e chiusura della stessa posizione,
+           che è la domanda vera («a quale operazione si riferisce?»); l'id intero è un GUID e
+           riempirebbe la riga. *@
+        <td class="small text-muted" title="@o.PositionId">
+            @(string.IsNullOrEmpty(o.PositionId) ? "—" : "…" + o.PositionId[^Math.Min(6, o.PositionId.Length)..])
+        </td>
+        <td>@o.Side</td>
+        <td>@o.Type</td>
+        <td class="text-end">@o.Quantity.ToString("N5")</td>
+        <td class="text-end">
+            @if (o.FilledPrice is { } filled)
+            {
+                @filled.ToString("N4")
+            }
+            else if (o.Price is { } stimato)
+            {
+                <span class="text-muted" title="Prezzo di riferimento stimato: l'ordine non è stato eseguito, quindi nessun prezzo è stato pagato.">@stimato.ToString("N4")</span>
+            }
+            else
+            {
+                <span class="text-muted">—</span>
+            }
+        </td>
+        <td><span class="badge @StatusBadge(o.Status)">@o.Status</span></td>
+        <td class="small text-danger">@o.ErrorMessage</td>
+    </tr>;
 
     /// <summary>[2026-08-05] Alterna finestra del test / storico intero e ricarica subito.</summary>
     private async Task ToggleOrdersAsync()
