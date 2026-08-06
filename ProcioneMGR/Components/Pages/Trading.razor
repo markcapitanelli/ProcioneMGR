@@ -1051,6 +1051,46 @@
                     </div>
                 </div>
             </div>
+            @* [2026-08-06] Separato per TIPO di uscita, su obiezione del proprietario. Il verdetto
+               di B3 somma stop e target in un numero solo, ma il meccanismo che lo spiega — il
+               prezzo che buca il livello e rientra — ha segno OPPOSTO sui due lati: rientrare da
+               sotto lo stop fa uscire meglio chi aspetta, rientrare da sopra il target fa uscire
+               peggio. Una media fra due segni opposti non dice nulla su nessuno dei due. *@
+            @if (_lag.ByKind.Count > 0)
+            {
+                <table class="table table-sm mb-2" style="max-width:44rem">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Tipo di uscita</th>
+                            <th class="text-end">Casi</th>
+                            <th class="text-end">Costo mediano</th>
+                            <th>Cosa conviene</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var k in _lag.ByKind)
+                        {
+                            <tr>
+                                <td>@(k.Kind switch { "TakeProfit" => "take profit", "StopLoss" => "stop loss", "Liquidation" => "liquidazione", var x => x })</td>
+                                <td class="text-end">@k.Count.ToString("N0")</td>
+                                <td class="text-end @(k.MedianDelayCostBps > 0 ? "text-danger" : "text-success")">
+                                    @k.MedianDelayCostBps.ToString("0.#") bps
+                                </td>
+                                <td class="small">
+                                    @(k.MedianDelayCostBps > 0
+                                        ? "uscire al TOCCO: aspettare la barra costa"
+                                        : "aspettare la barra chiusa")
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <div class="small text-muted mb-2">
+                    Solo le uscite in cui i due percorsi escono per la <strong>stessa</strong> ragione:
+                    @_lag.ReasonDisagreements discordi sono escluse, perché lì la differenza di prezzo
+                    misurerebbe due eventi diversi e non il ritardo.
+                </div>
+            }
             <div class="small text-muted">
                 Surrogato dei tick: @_lag.FineTimeframe su barre @_lag.LaneTimeframe ·
                 bracket reali SL @_lag.StopLossPercent.ToString("0.##")%
