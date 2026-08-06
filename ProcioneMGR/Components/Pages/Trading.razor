@@ -30,16 +30,28 @@
         @if (Service.Status.IsRunning)
         {
             <span class="badge bg-success">RUNNING</span>
-            @* [E6] Il battito accanto al flag: RUNNING dichiara l'intenzione, questo dice l'attività.
-               Stessa regola unica di SeriesFreshness — misurata contro adesso, non contro la serie. *@
-            @if (Heartbeat() is { } hb)
-            {
-                <span class="badge @hb.Css" title="Apertura dell'ultima candela valutata dal motore in questo avvio, giudicata contro adesso (tolleranza @ProcioneMGR.Services.Ingestion.SeriesFreshness.DefaultToleranceBars barre chiuse).">@hb.Text</span>
-            }
         }
         else { <span class="badge bg-secondary">STOPPED</span> }
     }
 </h1>
+
+@* [E6] Il battito: RUNNING dichiara l'intenzione, questo dice l'attività. Stessa regola unica di
+   SeriesFreshness — misurata contro adesso, non contro la serie.
+
+   [2026-08-06] Sta su una riga PROPRIA, non più dentro l'<h1>. Là dentro ereditava il corpo del
+   titolo, e allungandone il testo di quattro parole il badge è arrivato a 1029px occupando l'intera
+   riga e mandando a capo l'intestazione — segnalato dal proprietario. Fuori dal titolo il testo può
+   crescere senza deformare nulla, che è la proprietà che serve a un indicatore il cui contenuto
+   cambia. *@
+@if (Service.Status is { IsRunning: true } && Heartbeat() is { } hb)
+{
+    <div class="mb-2">
+        @* text-wrap: un badge non va a capo per impostazione predefinita, e su schermo stretto
+           questo testo sborda dal contenitore. text-start perché, andando a capo, il centrato
+           di default spezzerebbe la riga in modo illeggibile. *@
+        <span class="badge text-wrap text-start @hb.Css" title="Apertura dell'ultima candela valutata dal motore in questo avvio, giudicata contro adesso (tolleranza @ProcioneMGR.Services.Ingestion.SeriesFreshness.DefaultToleranceBars barre chiuse).">@hb.Text</span>
+    </div>
+}
 
 @* MaxVisible=12: TUTTE le corsie sempre visibili, in ordine di id. Il collasso "+N" (pensato per
    i portatili) nascondeva le corsie ferme e faceva sembrare RIMOSSA una corsia che era solo
@@ -48,6 +60,18 @@
    posizioni orfane di luglio); si SVUOTANO, col pulsante nel pannello Controllo. *@
 <LaneSelector Lanes="_lanes" Selected="_laneId" SelectedChanged="OnLaneSelectedAsync" MaxVisible="12"
               Hint="Motore di trading indipendente per corsia — stessa isolazione della configurazione in Ensemble. Le corsie non si rimuovono (l'id è identità): si svuotano dal pannello Controllo." />
+
+@* [2026-08-06] La spiegazione del battito quando la candela valutata non ha ancora chiuso. Sta
+   QUI e non nel badge dentro l'<h1>: là ereditava il corpo del titolo e una frase intera occupava
+   l'intera riga, mandando a capo l'intestazione. *@
+@if (IsCandleForming())
+{
+    <div class="alert alert-warning py-2 small mb-3">
+        ⚠️ Il motore ha valutato una candela <strong>non ancora chiusa</strong>: stop e target stanno
+        decidendo su massimi e minimi <strong>parziali</strong>, che cambieranno prima della chiusura.
+        Se questo avviso resta acceso, il motore in esecuzione non ha ancora la correzione del 6 agosto.
+    </div>
+}
 
 <GuidaPanel Title="Trading — dal simulato ai soldi veri, con freni di sicurezza">
     <p>
@@ -1530,16 +1554,32 @@
         // avrebbe dovuto accorgersene rassicurava. Il conteggio delle barre non poteva vederlo —
         // misura contro l'ultima chiusa e la barra aperta gli risulta "0" esattamente come la
         // chiusa. Serviva questa parola in più, non un numero diverso.
-        var ultimaChiusa = ProcioneMGR.Services.Ingestion.SeriesFreshness.LastClosedBarOpenUtc(s.Timeframe, DateTime.UtcNow);
-        var inFormazione = ultimaChiusa is DateTime chiusa && last > chiusa;
-
+        //
+        // Il testo resta CORTO: questo badge vive dentro l'<h1> e ne eredita il corpo, quindi una
+        // frase intera qui dentro occupa l'intera riga e manda a capo l'intestazione. Successo il
+        // 2026-08-06, segnalato dal proprietario. La spiegazione sta sotto il selettore corsie
+        // (vedi IsCandleForming), dove ha lo spazio per essere letta.
         var text = $"ultima candela {last:dd/MM HH:mm} UTC · {b} barre indietro";
-        if (inFormazione)
+        if (IsCandleForming())
         {
-            return ("bg-warning text-dark",
-                $"{text} · ⚠️ ANCORA APERTA: stop e target valutati su prezzi parziali");
+            return ("bg-warning text-dark", $"{text} · NON chiusa");
         }
-        return stale ? ("bg-danger", text) : ("bg-success-subtle text-dark border", $"{text} · barra chiusa");
+        return stale ? ("bg-danger", text) : ("bg-success-subtle text-dark border", text);
+    }
+
+    /// <summary>
+    /// Vero quando il motore ha valutato una candela che <b>non ha ancora chiuso</b>: stop e target
+    /// stanno decidendo su un High/Low parziale. Separato da <see cref="Heartbeat"/> perché il
+    /// badge deve restare corto e questa condizione merita una frase intera.
+    /// </summary>
+    private bool IsCandleForming()
+    {
+        if (Service.Status is not { IsRunning: true } s || s.LastProcessedCandleUtc is not DateTime last)
+        {
+            return false;
+        }
+        return ProcioneMGR.Services.Ingestion.SeriesFreshness.LastClosedBarOpenUtc(s.Timeframe, DateTime.UtcNow)
+            is DateTime chiusa && last > chiusa;
     }
 
     private async Task SaveSafetyAsync()
