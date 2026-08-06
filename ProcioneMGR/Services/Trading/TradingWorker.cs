@@ -125,11 +125,26 @@ public sealed class TradingWorker(
         }
 
         var cfg = await ensemble.GetConfigurationAsync(ct);
+
+        // [2026-08-06] SOLO BARRE CHIUSE. Vedi <see cref="LastClosedBarOpenUtc"/>: la riga della
+        // candela in formazione è già a database, e consumarla qui valuta stop e target su un
+        // High/Low parziale — poi la versione definitiva viene RIFIUTATA da ProcessCandleAsync
+        // perché quel timestamp è già nel buffer.
+        var lastClosed = LastClosedBarOpenUtc(cfg.Timeframe, DateTime.UtcNow);
+        if (lastClosed is not DateTime chiusaFinoA)
+        {
+            // Timeframe sconosciuto: meglio non alimentare che alimentare barre non chiuse.
+            logger.LogWarning("Corsia {LaneId}: timeframe \"{Timeframe}\" non riconosciuto, nessuna candela alimentata.",
+                engine.LaneId, cfg.Timeframe);
+            return;
+        }
+
         List<OhlcvData> batch;
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
             batch = await db.OhlcvData
-                .Where(c => c.Symbol == cfg.Symbol && c.Timeframe == cfg.Timeframe && c.TimestampUtc > _cursor)
+                .Where(c => c.Symbol == cfg.Symbol && c.Timeframe == cfg.Timeframe
+                            && c.TimestampUtc > _cursor && c.TimestampUtc <= chiusaFinoA)
                 .OrderBy(c => c.TimestampUtc)
                 .Take(BatchPerTick)
                 .ToListAsync(ct);
@@ -141,6 +156,34 @@ public sealed class TradingWorker(
             _cursor = c.TimestampUtc;
         }
     }
+
+    /// <summary>
+    /// [2026-08-06] L'istante di APERTURA dell'ultima barra che ha già chiuso. Null se il
+    /// timeframe non è riconosciuto.
+    ///
+    /// <para><b>Il guasto che questa funzione chiude</b>, trovato dal proprietario il 2026-08-06 sulla
+    /// corsia 3: uno short ETC/USDT con take profit a 6,3786 non si è chiuso benché il minimo della
+    /// barra 4h delle 08:00 fosse 6,31. Il motore aveva valutato quella barra pochi secondi dopo le
+    /// 08:00 — quando il minimo era ancora sopra il target — perché l'ingestione REST scrive anche
+    /// l'ultima kline INCOMPLETA (Binance la restituisce, e il filtro sull'intervallo la lascia
+    /// passare). Il cursore era così avanzato oltre le 08:00, e quando la barra ha chiuso davvero
+    /// col minimo vero, <c>ProcessCandleAsync</c> l'ha scartata: <c>candle.TimestampUtc &lt;=
+    /// _buffer[^1].TimestampUtc</c> è la guardia anti-replay, e non distingue «già vista» da
+    /// «già vista ma incompleta».</para>
+    ///
+    /// <para>Il risultato non era un errore visibile ma il contrario: il battito diceva «ultima
+    /// candela 16:00 · 0 barre indietro» in verde, mentre quella barra chiudeva alle 20:00. Su 4h il
+    /// punto cieco arriva a quattro ore di prezzi.</para>
+    ///
+    /// <para>Il feed real-time non copriva il buco: instrada solo barre CHIUSE, che arrivavano dopo
+    /// e venivano rifiutate dalla stessa guardia.</para>
+    ///
+    /// <para>La regola vive in <see cref="Ingestion.SeriesFreshness.LastClosedBarOpenUtc"/>, accanto
+    /// a quella che misura il ritardo: sono la stessa nozione, e separarle rimetterebbe in piedi il
+    /// difetto delle «due regole, due verdetti».</para>
+    /// </summary>
+    internal static DateTime? LastClosedBarOpenUtc(string timeframe, DateTime nowUtc)
+        => Ingestion.SeriesFreshness.LastClosedBarOpenUtc(timeframe, nowUtc);
 
     private static async Task<bool> SafeWaitAsync(PeriodicTimer timer, CancellationToken ct)
     {

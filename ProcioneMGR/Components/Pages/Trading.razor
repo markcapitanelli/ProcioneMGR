@@ -522,6 +522,35 @@
         </div>
     }
 
+    @* [2026-08-06] Protezioni toccate ma non eseguite. Nasce da uno short ETC/USDT sulla corsia 3
+       che aveva raggiunto il take profit senza chiudersi: il minimo vero della barra 4h delle 08:00
+       era 6,31 contro un target di 6,3786, scritto a database da ore, e NESSUN pannello lo diceva —
+       il battito era verde e il PnL non realizzato positivo. La causa è corretta, ma una causa
+       corretta non è un controllo: il prossimo motivo per cui un'uscita non scatta sarà un altro. *@
+    @if (Service.ExitAnomalies.Count > 0)
+    {
+        <div class="alert alert-danger mb-3">
+            <strong>⚠️ Protezione raggiunta ma posizione ancora aperta.</strong>
+            <div class="small mt-1">
+                Non è una previsione: è il confronto fra il livello impostato e i prezzi delle barre
+                <strong>già chiuse</strong>. Se compare, l'uscita protettiva non è scattata quando doveva.
+            </div>
+            <ul class="mb-0 mt-2 small">
+                @foreach (var a in Service.ExitAnomalies)
+                {
+                    <li>
+                        <code>@a.Symbol</code> — il <strong>@a.Kind</strong> a
+                        <strong>@a.Level.ToString("N6").TrimEnd('0').TrimEnd(',')</strong>
+                        risulta superato da @a.BarsTouched @(a.BarsTouched == 1 ? "barra chiusa" : "barre chiuse")
+                        (fin dove il prezzo è arrivato: <strong>@a.ReachedPrice.ToString("N6").TrimEnd('0').TrimEnd(',')</strong>),
+                        la prima il @a.FirstTouchUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm").
+                        Posizione <code>…@a.PositionId[^Math.Min(6, a.PositionId.Length)..]</code> ancora aperta.
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+
     <div class="card mb-3">
         <div class="card-header">Posizioni aperte (@Service.Positions.Count)</div>
         @if (Service.Positions.Count == 0)
@@ -1454,8 +1483,23 @@
         }
 
         var stale = ProcioneMGR.Services.Ingestion.SeriesFreshness.IsStale(s.Timeframe, last, DateTime.UtcNow);
+
+        // [2026-08-06] Dire se la candela valutata è CHIUSA. Prima il battito mostrava «ultima
+        // candela 16:00 · 0 barre indietro» in verde mentre quella barra 4h chiudeva alle 20:00: il
+        // motore stava valutando stop e target su un High/Low ancora parziale, e l'indicatore che
+        // avrebbe dovuto accorgersene rassicurava. Il conteggio delle barre non poteva vederlo —
+        // misura contro l'ultima chiusa e la barra aperta gli risulta "0" esattamente come la
+        // chiusa. Serviva questa parola in più, non un numero diverso.
+        var ultimaChiusa = ProcioneMGR.Services.Ingestion.SeriesFreshness.LastClosedBarOpenUtc(s.Timeframe, DateTime.UtcNow);
+        var inFormazione = ultimaChiusa is DateTime chiusa && last > chiusa;
+
         var text = $"ultima candela {last:dd/MM HH:mm} UTC · {b} barre indietro";
-        return stale ? ("bg-danger", text) : ("bg-success-subtle text-dark border", text);
+        if (inFormazione)
+        {
+            return ("bg-warning text-dark",
+                $"{text} · ⚠️ ANCORA APERTA: stop e target valutati su prezzi parziali");
+        }
+        return stale ? ("bg-danger", text) : ("bg-success-subtle text-dark border", $"{text} · barra chiusa");
     }
 
     private async Task SaveSafetyAsync()

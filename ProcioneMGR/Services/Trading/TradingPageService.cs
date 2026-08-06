@@ -63,6 +63,48 @@ public sealed class TradingPageService(
                               && (ep.EndedAtUtc is null || o.CreatedAtUtc < ep.EndedAtUtc))];
 
     /// <summary>
+    /// [2026-08-06] Protezioni risultate toccate da barre CHIUSE con la posizione ancora aperta.
+    /// Vuoto è il caso normale. Vedi <see cref="ProtectiveExitAudit"/> per il perché esiste.
+    /// </summary>
+    public IReadOnlyList<ProtectiveExitAnomaly> ExitAnomalies { get; private set; } = [];
+
+    /// <summary>
+    /// Confronta le posizioni aperte con le barre già chiuse del loro simbolo.
+    ///
+    /// <para>Il filtro sulle barre chiuse non è prudenza: passare qui la candela in formazione
+    /// rimetterebbe nel controllo lo stesso difetto che il controllo deve scoprire — e per un
+    /// attimo direbbe «target toccato» su un massimo parziale che poi rientra.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<ProtectiveExitAnomaly>> LoadExitAnomaliesAsync()
+    {
+        if (dbFactory is null || Positions.Count == 0) return [];
+        try
+        {
+            var simboli = Positions.Select(p => p.Symbol).Distinct().ToList();
+            var timeframe = Status?.Timeframe;
+            if (string.IsNullOrWhiteSpace(timeframe)) return [];
+
+            var ultimaChiusa = Ingestion.SeriesFreshness.LastClosedBarOpenUtc(timeframe, DateTime.UtcNow);
+            if (ultimaChiusa is not DateTime chiusaFinoA) return [];
+
+            var daQuando = Positions.Min(p => p.OpenedAtUtc);
+
+            await using var db = await dbFactory.CreateDbContextAsync();
+            var barre = await db.OhlcvData.AsNoTracking()
+                .Where(c => simboli.Contains(c.Symbol) && c.Timeframe == timeframe
+                            && c.TimestampUtc >= daQuando && c.TimestampUtc <= chiusaFinoA)
+                .ToListAsync();
+
+            return ProtectiveExitAudit.Find(Positions, barre);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Controllo uscite protettive fallito: {ex.Message}");
+            return [];
+        }
+    }
+
+    /// <summary>
     /// I confini degli episodi vengono dagli avvii del motore già registrati in
     /// <c>TradingAuditLogs</c>. Come la carta d'identità della corsia: se questa lettura fallisce
     /// la pagina resta funzionante e la tabella torna piatta, perché è contesto e non controllo.
@@ -297,6 +339,10 @@ public sealed class TradingPageService(
             // servono. I confini vengono dagli avvii del motore già nel registro di audit — nessuna
             // tabella nuova, nessuna migrazione: l'informazione c'era, mancava chi la leggesse.
             Episodes = ShowAllOrders ? await LoadEpisodesAsync(laneId) : [];
+
+            // [2026-08-06] Protezioni toccate ma non eseguite. Va calcolato a OGNI refresh, non
+            // dietro un pulsante: è il controllo che il proprietario ha dovuto fare a occhio.
+            ExitAnomalies = await LoadExitAnomaliesAsync();
             var perf = perfTask.Result;
             Perf = perf;
             Equity = perf.EquityCurve.Count > 0
