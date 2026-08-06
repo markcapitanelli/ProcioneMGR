@@ -24,8 +24,38 @@ configMapGenerator:
       - trading-config.env
 
 images:
+  # ┌─────────────────────────────────────────────────────────────────────────────────────────┐
+  # │ [2026-08-06] PONTE TEMPORANEO — build LOCALE, non di master. Da disfare.                │
+  # └─────────────────────────────────────────────────────────────────────────────────────────┘
+  #
+  # Il motore girava con le uscite protettive CIECHE: consumava la candela ancora in FORMAZIONE
+  # (l'ingestione REST scrive anche l'ultima kline incompleta) e valutava stop e target su
+  # High/Low parziali; la barra definitiva veniva poi scartata dalla guardia anti-replay. Le
+  # protezioni scattavano solo ai riavvii, che rifanno il replay sulle barre ormai chiuse — e i
+  # riavvii arrivavano da una sonda che uccideva il motore perche lento (corretta qui accanto).
+  # Correzione in TradingWorker.LastClosedBarOpenUtc, PR #70.
+  #
+  # Perche un build locale e non di master, contro la regola scritta sotto: GitHub Actions era in
+  # GUASTO MAGGIORE (incidente qcvjkzcs7j74, 2026-08-06), quindi nessuna immagine poteva essere
+  # costruita ne pubblicata. Il proprietario ha chiesto di aggiornare comunque il motore.
+  #
+  # DA FARE quando Actions torna: mergiare il PR #70, lasciare che master produca l'immagine, e
+  # ri-pinnare sul digest ufficiale rimuovendo newName/newTag qui sotto. Questo blocco e un ponte,
+  # non un assetto.
+  #
+  # Provenienza del ponte: commit c026a67 del branch claude/procione-mgr-roadmap-ai-829af2,
+  # costruito con `docker build --target procionemgr-trading` e caricato con `kind load`, DOPO la
+  # stessa guardia della CI che rifiuta immagini contenenti un appsettings.json reale.
   - name: ghcr.io/markcapitanelli/procionemgr-trading
-    # [E5/E6, 2026-07-31 — Filone E] Il motore impara a dire di no: battito di valutazione
+    newName: procionemgr-trading
+    newTag: local-c026a67
+    #
+    # ── Il digest ufficiale PRECEDENTE, conservato per il ritorno ──────────────────────────────
+    # Per disfare il ponte: cancellare le due righe newName/newTag qui sopra e rimettere
+    #     digest: sha256:df9899c302e14b4625ad68a13256a5e2cdf57c723a630c412c22400779c8b747
+    # oppure — preferibile — il digest del nuovo build di master col PR #70 dentro.
+    #
+    # Quel digest era: [E5/E6, 2026-07-31 — Filone E] Il motore impara a dire di no: battito di valutazione
     # (LastProcessedCandleUtc + Timeframe nello status, campi proto 22/23), allarme di INEDIA nel
     # LaneInvariantWatchdog (running senza candele = stop e trailing che nessuno valuta; una
     # notifica per transizione, col discriminatore stantio-E-fermo che non scambia il replay di
@@ -46,4 +76,3 @@ images:
     # 562b359 (sentinella d'ombra, tick osservati). INVARIATO l'assetto operativo: uscite guidate
     # dalle candele (DriveProtectiveExits=false per MISURA, docs/REPORT-B3-EXITLAG-2026-07-28.md),
     # feed R1 in osservazione, carry Paper.
-    digest: sha256:df9899c302e14b4625ad68a13256a5e2cdf57c723a630c412c22400779c8b747
