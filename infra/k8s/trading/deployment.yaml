@@ -96,18 +96,37 @@ spec:
               # ripuntare altrove senza refactor. Il file condiviso è il meccanismo.
               mountPath: /app/appsettings.json
               subPath: appsettings.json
+          # [2026-08-06] timeoutSeconds ESPLICITO. Senza, Kubernetes usa 1 SECONDO, e con
+          # failureThreshold 3 significa: se /health impiega più di un secondo per tre volte, il
+          # motore di trading viene ucciso con SIGKILL a metà lavoro.
+          #
+          # Non è teoria: il container era a 8 riavvii, tre solo il 6 agosto, tutti con
+          # `exitCode=137` e l'evento `Liveness probe failed: context deadline exceeded`. Il nodo
+          # NON era sotto pressione di memoria — era semplicemente lento oltre il secondo, cosa
+          # banale con Postgres sull'host e otto corsie che rifanno il replay all'avvio.
+          #
+          # La parte peggiore l'ha scoperta l'indagine sulle uscite protettive: quei riavvii erano
+          # l'UNICA ragione per cui stop e target scattavano, perché il replay ripassa le barre
+          # ormai chiuse coi loro veri massimi e minimi. Le protezioni cavalcavano i crash. Con la
+          # correzione della candela in formazione non serve più, e la sonda deve smettere di
+          # uccidere un motore soltanto lento.
+          #
+          # 5s è largo per un endpoint di salute e resta ben sotto il tempo in cui un processo
+          # davvero bloccato va sostituito (5s × 3 tentativi × 30s di periodo).
           readinessProbe:
             httpGet:
               path: /health
               port: health   # 8081, HTTP/1.1: le probe non parlano HTTP/2
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health
               port: health
             initialDelaySeconds: 15
             periodSeconds: 30
+            timeoutSeconds: 5
           resources:
             requests:
               cpu: "100m"

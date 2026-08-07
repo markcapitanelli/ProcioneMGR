@@ -24,6 +24,29 @@ configMapGenerator:
       - trading-config.env
 
 images:
+  # ┌─────────────────────────────────────────────────────────────────────────────────────────┐
+  # │ [2026-08-07] ATTENZIONE — il cluster NON sta girando questo digest. Vedi sotto.          │
+  # └─────────────────────────────────────────────────────────────────────────────────────────┘
+  #
+  # Il motore girava con le uscite protettive CIECHE: consumava la candela ancora in FORMAZIONE
+  # (l'ingestione REST scrive anche l'ultima kline incompleta) e valutava stop e target su
+  # High/Low parziali; la barra definitiva veniva poi scartata dalla guardia anti-replay. Le
+  # protezioni scattavano solo ai riavvii, che rifanno il replay sulle barre ormai chiuse — e i
+  # riavvii arrivavano dalla sonda a un secondo, corretta in deployment.yaml.
+  # Correzione: TradingWorker.LastClosedBarOpenUtc, PR #70.
+  #
+  # Il 2026-08-06 GitHub Actions era in guasto maggiore (incidente qcvjkzcs7j74) e nessuna
+  # immagine poteva essere costruita. Su richiesta del proprietario il motore e stato aggiornato
+  # con un build LOCALE del commit c026a67 (`procionemgr-trading:local-c026a67`), caricato in
+  # containerd e applicato al cluster in modo IMPERATIVO.
+  #
+  # Quel ponte vive SOLO nel cluster, di proposito: qui resta il digest ufficiale, perche un pin
+  # a un'immagine che esiste su una sola macchina non deve entrare in master.
+  #
+  # >>> CONSEGUENZA DA NON DIMENTICARE: finche il digest qui sotto non viene aggiornato, un
+  # >>> `kubectl apply -k` RIPORTA IL MOTORE ALLA VERSIONE COL DIFETTO. Prima di riapplicare,
+  # >>> sostituire il digest con quello del build di master che contiene il PR #70.
+  #
   - name: ghcr.io/markcapitanelli/procionemgr-trading
     # [E5/E6, 2026-07-31 — Filone E] Il motore impara a dire di no: battito di valutazione
     # (LastProcessedCandleUtc + Timeframe nello status, campi proto 22/23), allarme di INEDIA nel
