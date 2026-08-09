@@ -159,7 +159,9 @@
             <div class="row g-3 align-items-end">
                 <div class="col-auto">
                     <label class="form-label">Fee %</label>
-                    <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
+                    @* min="0": il motore clampa comunque (una fee negativa non è un rebate), ma
+                       il form non deve nemmeno suggerire che un valore negativo abbia senso. *@
+                    <input type="number" step="any" min="0" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
                 </div>
                 <div class="col-auto">
                     <label class="form-label">Stop loss % (0=off)</label>
