@@ -44,6 +44,8 @@
         <dd class="col-sm-9">Vincoli per-asset (es. max 40%: nessun asset oltre il 40% del capitale). Il minimo forza una presenza; lasciare 0 per permettere l'esclusione di un asset.</dd>
         <dt class="col-sm-3">Fattori di rischio (PCA)</dt>
         <dd class="col-sm-9">Quanta parte del movimento comune del paniere è spiegata da pochi "fattori" statistici: se la prima componente spiega l'80%, il paniere si muove di fatto come UN solo asset — la diversificazione apparente è illusoria.</dd>
+        <dt class="col-sm-3">Applicare un'allocazione</dt>
+        <dd class="col-sm-9">Questa pagina <strong>confronta</strong>; l'allocazione operativa la decide la pipeline. Dal 2026-08-09 l'optimizer dei pesi dell'ensemble è <strong>selezionabile</strong> (HRP · MeanVariance · RiskParity) dal parametro <code>portfolioOptimizer</code> dello stage «Assemblaggio ensemble» in <a href="pipeline">/pipeline</a> — la scelta resta dentro i gate anti-overfitting, mai un percorso diretto verso l'esecuzione.</dd>
     </dl>
 </GuidaPanel>
 

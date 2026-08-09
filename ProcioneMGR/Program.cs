@@ -338,6 +338,13 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Servic
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.MeanVarianceOptimizer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.RiskParityOptimizer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.HierarchicalRiskParityOptimizer>();
+// [2.8 PRD-RISANAMENTO, chiude C-05] Le stesse TRE istanze anche come IPortfolioOptimizer:
+// l'EnsembleAssemblyStage risolve per nome (parametro di stage 'portfolioOptimizer', default
+// HRP = pesi identici allo storico). Prima l'allocatore era un tipo concreto cablato nello
+// stage e /portfolio confrontava allocazioni che nessuno poteva applicare.
+builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.IPortfolioOptimizer>(sp => sp.GetRequiredService<ProcioneMGR.Services.Portfolio.HierarchicalRiskParityOptimizer>());
+builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.IPortfolioOptimizer>(sp => sp.GetRequiredService<ProcioneMGR.Services.Portfolio.MeanVarianceOptimizer>());
+builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.IPortfolioOptimizer>(sp => sp.GetRequiredService<ProcioneMGR.Services.Portfolio.RiskParityOptimizer>());
 
 // --- Analisi statistica delle serie (gap/lap, escursioni, ciclicita' - Trombetta cap. 4-5) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Analysis.GapLapAnalyzer>();

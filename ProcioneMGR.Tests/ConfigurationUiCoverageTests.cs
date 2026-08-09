@@ -77,6 +77,13 @@ public sealed class ConfigurationUiCoverageTests
     /// </summary>
     private static readonly Dictionary<string, string> DeliberatelyNotExposed = new()
     {
+        ["MarketRegime:Model"] =
+            "[2.7 PRD-RISANAMENTO] Contratto C1 del JumpModel: il default resta KMeans finché la " +
+            "MISURA non decide (confronto transizioni nei log di ogni training). Una manopola in UI " +
+            "inviterebbe a cambiare algoritmo di regime a sensazione, prima del ciclo di misura — " +
+            "l'eventuale esposizione arriva con la Fase 3, DOPO che il confronto ha parlato. " +
+            "Il run di pipeline può già forzarlo per-esperimento col parametro di stage 'model'. " +
+            "(La λ del jump, MarketRegime:JumpLambda, segue lo stesso destino: si tara con la misura.)",
         ["MarketData:UseRemoteIngestion"] =
             "Topologia: decide se la sync gira in-process o nel servizio Ingestion. Cambiarlo dalla UI " +
             "senza il deploy corrispondente lascerebbe la watchlist senza aggiornamenti, o con due " +

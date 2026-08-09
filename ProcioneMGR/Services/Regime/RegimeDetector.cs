@@ -109,13 +109,42 @@ public sealed class RegimeDetector(
             (centroids, silhouette) = FitKMeans(_ml, matrix, chosenK, config.MaxIterations);
         }
 
+        // [2.7 PRD-RISANAMENTO] Jump model dietro flag (contratto C1: default K-means finché la
+        // misura non decide). Il K resta quello scelto sopra (fisso o auto-K su silhouette: la
+        // selezione di K è un problema ortogonale alla persistenza); i centroidi vengono ristimati
+        // CON la penalità di salto, e il percorso di stato OFFLINE del fit fa da etichette di
+        // training — è il punto del modello: la persistenza entra nella stima, non a valle.
+        // Il formato persistito non cambia (centroidi float[][]): l'inference nearest-centroid +
+        // SmoothRolling resta identica, e fa da surrogato dichiarato della penalità al tempo di
+        // inferenza. MISURA IN PARALLELO gratuita: il K-means è già stato addestrato qui sopra,
+        // quindi si logga il confronto delle transizioni prima di sostituire i centroidi.
+        int[]? jumpStates = null;
+        if (RegimeModelKinds.Normalize(config.Model) == RegimeModelKinds.Jump)
+        {
+            var xd = matrix.Select(r => Array.ConvertAll(r, v => (double)v)).ToArray();
+            var fit = JumpModel.Fit(xd, chosenK, config.JumpLambda, seed: 1);
+
+            var kmeansTransitions = JumpModel.RunLengths(RegimeAssignment.AssignRaw(matrix, centroids)).Count - 1;
+            var jumpTransitions = JumpModel.RunLengths(fit.States).Count - 1;
+            logger.LogInformation(
+                "Jump model per {Symbol} {Tf}: K={K}, λ={Lambda}, transizioni {Jump} contro {KMeans} del K-means " +
+                "(objective {Obj:F2}, convergenza={Conv}). Confronto registrato per la decisione C1.",
+                config.Symbol, config.Timeframe, chosenK, config.JumpLambda,
+                jumpTransitions, kmeansTransitions, fit.Objective, fit.Converged);
+
+            centroids = fit.Centroids.Select(c => Array.ConvertAll(c, v => (float)v)).ToArray();
+            jumpStates = fit.States;
+            silhouette = RegimeAssignment.Silhouette(matrix, fit.States, chosenK);
+        }
+
         if (silhouette < 0.3)
         {
             logger.LogWarning("Silhouette Score basso ({Score:F3}): clustering di qualità modesta.", silhouette);
         }
 
-        // Assegnazione (nearest-centroid, coerente con l'inference) + smoothing.
-        var rawLabels = RegimeAssignment.AssignRaw(matrix, centroids);
+        // Assegnazione + smoothing. Per il K-means le etichette sono nearest-centroid (coerente
+        // con l'inference); per il jump sono il percorso OFFLINE del fit, che porta la penalità.
+        var rawLabels = jumpStates ?? RegimeAssignment.AssignRaw(matrix, centroids);
         var smoothed = RegimeAssignment.SmoothRolling(rawLabels, SmoothWindow(config.Timeframe), confirmFrames: 3, chosenK);
 
         // Profili (mean feature per regime, su assegnazione smoothed).
