@@ -557,7 +557,11 @@ public sealed class BacktestEngine(
     private sealed class Portfolio(
         decimal initialCapital, decimal feePercent, decimal sizePercent, decimal leverage, decimal slippagePercent = 0m)
     {
-        private readonly decimal _feeFrac = feePercent / 100m;
+        // Clampata a >= 0 come leva e slippage: una fee negativa (bug d'uso dalla pagina,
+        // Fee % = -1) diventerebbe un rebate pagato a ogni fill, gonfiando i rendimenti in
+        // silenzio — misurato: una strategia da -4% "migliorava" a -0,08% (PR #34, riportata
+        // il 2026-08-09). Presidiato da BacktestFeeTests.
+        private readonly decimal _feeFrac = Math.Max(0m, feePercent) / 100m;
         private readonly decimal _marginFrac = sizePercent / 100m;
         private readonly decimal _leverage = Math.Max(1m, leverage);
 
