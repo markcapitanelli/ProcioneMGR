@@ -118,6 +118,7 @@
         </div>
 
         <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          ShowSentimentCoverage="true"
                           OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
                           OnHasDataChanged="@(has => _hasData = has)" />
 

@@ -441,6 +441,10 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         var result = OverfittingGate.Apply(ctx.Validated, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrelationThreshold,
             log: m => ctx.LogLine($"[{Name}] {m}"),
             trialsExplored: ctx.TrialsExplored); // [D-01] l'N vero della ricerca, non il Top-N
+        // [Fase 3] I numeri del gate restano nel contesto: il riepilogo di stage (e quindi
+        // /pipeline) li mostra, invece di lasciarli sepolti in una riga di log.
+        ctx.DsrNominalTrials = result.NominalTrials;
+        ctx.DsrEffectiveTrials = result.EffectiveTrials;
         ctx.LogLine($"[{Name}] Gate DSR/PBO: {result.Survivors}/{ctx.Validated.Count} sopravvissuti"
                   + (result.PanelPbo is double pp ? $"; PBO pannello {pp:P0}" : "; PBO n/d")
                   + $" (soglie DSR>{minDeflatedSharpe:F2}, PBO<{maxPbo:P0}).");
@@ -485,16 +489,34 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     {
         var survivors = ctx.Validated.Count(v => v.Survived);
         var best = ctx.Validated.Where(v => v.Survived).OrderByDescending(v => v.HoldoutSharpe).FirstOrDefault();
+
+        // [Fase 3, D-01 lato UI] Il gate deve dire contro quale N ha deflazionato. Se le
+        // combinazioni provate dal run superano i candidati osservati, la divergenza si dichiara:
+        // è la differenza fra «15 candidati» e «3.000 prove», cioè il bug D-01 reso visibile.
+        var trialsNote = "";
+        if (ctx.DsrEffectiveTrials > 0)
+        {
+            trialsNote = $" Gate DSR su N={ctx.DsrEffectiveTrials} tentativi effettivi";
+            if (ctx.TrialsExplored > ctx.Validated.Count)
+            {
+                trialsNote += $" ({ctx.TrialsExplored} combinazioni provate dal run, {ctx.Validated.Count} candidati osservati: il gate usa le prove, non i soli sopravvissuti)";
+            }
+            trialsNote += ".";
+        }
+
         return new StageSummary
         {
             StageName = Name,
             DisplayName = DisplayName,
             Text = $"{ctx.Validated.Count} candidati validati, {survivors} sopravvissuti all'holdout"
-                 + (best is null ? "." : $"; migliore: {best.Key} (Sharpe holdout {best.HoldoutSharpe:F2}, PF {best.HoldoutProfitFactor:F2})."),
+                 + (best is null ? "." : $"; migliore: {best.Key} (Sharpe holdout {best.HoldoutSharpe:F2}, PF {best.HoldoutProfitFactor:F2}).")
+                 + trialsNote,
             Metrics = new()
             {
                 ["Validati"] = ctx.Validated.Count,
                 ["Sopravvissuti"] = survivors,
+                ["CombinazioniProvate"] = ctx.TrialsExplored,
+                ["TentativiDsr"] = ctx.DsrEffectiveTrials,
             },
         };
     }
@@ -690,7 +712,13 @@ public sealed class RobustnessProbeStage(
 /// </summary>
 public static class OverfittingGate
 {
-    public readonly record struct Result(int Survivors, double? PanelPbo);
+    /// <summary>
+    /// [Fase 3, D-01 lato UI] Oltre all'esito, il gate DICHIARA i suoi numeri: quante combinazioni
+    /// nominali ha considerato e quanti tentativi effettivi ha usato dopo il collasso dei
+    /// correlati. Prima vivevano solo in una riga di log: per giudicare un DSR serve sapere contro
+    /// quale N è stato deflazionato.
+    /// </summary>
+    public readonly record struct Result(int Survivors, double? PanelPbo, int NominalTrials, int EffectiveTrials);
 
     /// <param name="validated">Candidati validati (con SelectionSharpe/Survived già impostati).</param>
     /// <param name="holdoutReturns">Rendimenti periodici holdout, allineati per indice a <paramref name="validated"/>.</param>
@@ -807,6 +835,6 @@ public static class OverfittingGate
             log?.Invoke($"PBO di pannello {pbo:P0} ≥ soglia {maxPbo:P0}: ENSEMBLE BLOCCATO (nessun sopravvissuto).");
         }
 
-        return new Result(validated.Count(v => v.Survived), panelPbo);
+        return new Result(validated.Count(v => v.Survived), panelPbo, nominalTrials, trials);
     }
 }

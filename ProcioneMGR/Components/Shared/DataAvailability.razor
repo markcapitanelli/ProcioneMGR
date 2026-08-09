@@ -38,6 +38,39 @@
                 <span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Il periodo selezionato è fuori dal range disponibile.</span>
             }
         </div>
+        @* [C-06, Fase 3] La copertura del sentiment dichiarata dove il fattore Sentiment è
+           selezionabile: le notizie scorate partono da quando il worker ha iniziato a raccoglierle,
+           NON dall'inizio delle candele. Senza questa riga, un training sul 2024 col fattore
+           Sentiment produce serie vuote per la maggior parte del range — in silenzio. *@
+        @if (ShowSentimentCoverage)
+        {
+            <div class="form-text mt-1 mb-0">
+                @if (_sentimentRange is { } s)
+                {
+                    <span>
+                        <i class="bi bi-chat-left-text me-1"></i>
+                        Sentiment (notizie scorate): <strong>@s.From.ToString("yyyy-MM-dd")</strong> →
+                        <strong>@s.To.ToString("yyyy-MM-dd")</strong> (@s.Count.ToString("N0") notizie)
+                    </span>
+                    @if (From != default && From.Date < s.From.Date)
+                    {
+                        <span class="text-warning ms-2">
+                            <i class="bi bi-exclamation-triangle me-1"></i>
+                            Il periodo parte prima della copertura sentiment: su quel tratto il
+                            fattore Sentiment non ha dati (serie vuota, non zero).
+                        </span>
+                    }
+                }
+                else
+                {
+                    <span class="text-body-secondary">
+                        <i class="bi bi-chat-left-text me-1"></i>
+                        Sentiment: <strong>nessuna notizia scorata a database</strong> — il fattore
+                        Sentiment produrrebbe una serie vuota su qualunque periodo.
+                    </span>
+                }
+            </div>
+        }
     }
 }
 
@@ -60,6 +93,12 @@
     /// <summary>false per nascondere la scorciatoia (pagine senza campi data).</summary>
     [Parameter] public bool ShowUseFullRange { get; set; } = true;
 
+    /// <summary>
+    /// [C-06] true nelle pagine dove il fattore Sentiment è selezionabile (feature selection, ML):
+    /// mostra la copertura temporale delle notizie scorate, che è molto più corta delle candele.
+    /// </summary>
+    [Parameter] public bool ShowSentimentCoverage { get; set; }
+
     /// <summary>Notifica al parent il nuovo periodo quando l'utente clicca "Usa tutto il range" o scatta l'auto-aggancio.</summary>
     [Parameter] public EventCallback<(DateTime From, DateTime To)> OnApplyRange { get; set; }
 
@@ -67,6 +106,7 @@
     [Parameter] public EventCallback<bool> OnHasDataChanged { get; set; }
 
     private (DateTime From, DateTime To, int Count)? _range;
+    private (DateTime From, DateTime To, int Count)? _sentimentRange;
     private bool _checked;
     private string? _loadedKey;
 
@@ -100,6 +140,18 @@
                 .Select(g => new { Min = g.Min(c => c.TimestampUtc), Max = g.Max(c => c.TimestampUtc), Count = g.Count() })
                 .FirstOrDefaultAsync();
             _range = agg is null ? null : (agg.Min, agg.Max, agg.Count);
+
+            // [C-06] La copertura del sentiment è GLOBALE (le notizie sono di mercato, il filtro
+            // per ticker avviene al calcolo): un aggregato basta, e si legge solo dove richiesto.
+            if (ShowSentimentCoverage)
+            {
+                var news = await db.AltDataPoints
+                    .Where(a => a.SentimentScore != null)
+                    .GroupBy(_ => 1)
+                    .Select(g => new { Min = g.Min(a => a.TimestampUtc), Max = g.Max(a => a.TimestampUtc), Count = g.Count() })
+                    .FirstOrDefaultAsync();
+                _sentimentRange = news is null ? null : (news.Min, news.Max, news.Count);
+            }
         }
         _checked = true;
 

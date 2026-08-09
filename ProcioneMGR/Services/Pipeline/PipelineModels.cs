@@ -195,6 +195,15 @@ public sealed class PipelineContext
     /// combinazioni: la soglia SR* applicata era la metà di quella dovuta.
     /// </summary>
     public int TrialsExplored { get; set; }
+
+    /// <summary>
+    /// [Fase 3, D-01 lato UI] I numeri con cui il gate DSR ha davvero deflazionato: N nominale
+    /// (max fra candidati e combinazioni provate) e N effettivo dopo il collasso dei correlati.
+    /// Scritti da HoldoutValidationStage, mostrati dal suo riepilogo — un DSR senza il suo N non
+    /// è giudicabile.
+    /// </summary>
+    public int DsrNominalTrials { get; set; }
+    public int DsrEffectiveTrials { get; set; }
     public EnsembleProposal? Ensemble { get; set; }
     public RiskAssessment? Risk { get; set; }
     public NewsImpactOutput? NewsImpact { get; set; }
