@@ -117,7 +117,10 @@ public sealed class AuditPipelineExperimentLoggingTests : IAsyncDisposable
             CreatedBy = "auditor",
             ExecutionMode = "Paper",
             UniverseJson = """[{"Symbol":"BTC/USDT","Timeframe":"1h"}]""",
-            DateRangesJson = "{}",
+            // [D-03] Range VALIDI: da quando l'invariante selezione/holdout sta sul percorso
+            // obbligato (PipelineEngine.BuildContext), il vecchio "{}" (date MinValue)
+            // viene giustamente respinto prima di arrivare agli stage.
+            DateRangesJson = "{\"SelectionFrom\":\"2026-01-01\",\"SelectionTo\":\"2026-04-30\",\"HoldoutFrom\":\"2026-05-01\",\"HoldoutTo\":\"2026-06-30\"}",
             StagesJson = """[{"Type":"STAGE","Order":1,"Enabled":true,"Parameters":{}}]""".Replace("STAGE", stageType),
         };
         db.PipelineConfigurations.Add(cfg);
