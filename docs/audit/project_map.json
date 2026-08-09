@@ -1,0 +1,6552 @@
+{
+  "meta": {
+    "project": "ProcioneMGR",
+    "audit_date": "2026-08-08",
+    "branch": "claude/procionemgr-architecture-analysis-32b584",
+    "method": "static source analysis; no source modified, no external service contacted",
+    "totals": {
+      "production_cs_files": 439,
+      "production_cs_loc": 72824,
+      "razor_files": 89,
+      "razor_loc": 22607,
+      "test_files": 262,
+      "test_loc": 53700,
+      "migration_files": 42,
+      "db_entities": 34,
+      "hosted_services": 22,
+      "routed_pages": 32, "page_directives_total": 34
+    },
+    "docs": [
+      "00_MASTER_INDEX.md",
+      "01_PROJECT_MAP.md",
+      "02_ARCHITECTURE_AS_IS.md",
+      "03_DOMAIN_QUANT_MACHINE.md",
+      "04_ALGORITHMS_AND_MODELS.md",
+      "05_UI_BACKEND_BINDING.md",
+      "06_INTEGRATION_GAPS.md",
+      "07_RECONSTRUCTION_BLUEPRINT.md",
+      "08_TRACEABILITY_MATRIX.md",
+      "09_OPEN_QUESTIONS.md",
+      "10_FILE_INVENTORY.md"
+    ]
+  },
+  "projects": [
+    {
+      "name": "ProcioneMGR",
+      "role": "monolite Blazor Server + logica quant + guscio worker",
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR.Contracts",
+      "role": "contratti gRPC condivisi",
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR.Trading",
+      "role": "motore di trading standalone (gRPC)",
+      "status": "Implemented",
+      "enabled_by": "Trading:UseRemoteTrading",
+      "default": false
+    },
+    {
+      "name": "ProcioneMGR.Ml",
+      "role": "inferenza ML remota (dual-read osservativo)",
+      "status": "Deliberately-Off",
+      "enabled_by": "Ml:RemoteUrl",
+      "default": false
+    },
+    {
+      "name": "ProcioneMGR.Ingestion",
+      "role": "ingestione OHLCV remota",
+      "status": "Deliberately-Off",
+      "enabled_by": "MarketData:UseRemoteIngestion",
+      "default": false
+    },
+    {
+      "name": "ProcioneMGR.Migrations.Postgres",
+      "role": "migrazioni EF Core (caricate per nome, nessun riferimento dall'app)",
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR.Tests",
+      "role": "262 file di test",
+      "status": "Implemented"
+    },
+    {
+      "name": "tools/*",
+      "role": "5 CLI di ricerca e utility",
+      "status": "Implemented"
+    }
+  ],
+  "modules": [
+    {
+      "name": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "files": 62,
+      "loc": 9465,
+      "status": "Implemented"
+    },
+    {
+      "name": "tools",
+      "layer": "Scripts",
+      "files": 5,
+      "loc": 6632,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "files": 28,
+      "loc": 6340,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "files": 37,
+      "loc": 5234,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "files": 24,
+      "loc": 3674,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "files": 19,
+      "loc": 3623,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "files": 14,
+      "loc": 2831,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "files": 9,
+      "loc": 2604,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "files": 12,
+      "loc": 2260,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "files": 9,
+      "loc": 2230,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "files": 21,
+      "loc": 2093,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "files": 12,
+      "loc": 2088,
+      "status": "Dead"
+    },
+    {
+      "name": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "files": 9,
+      "loc": 1921,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Data",
+      "layer": "Data",
+      "files": 23,
+      "loc": 1731,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Ensemble",
+      "layer": "Domain",
+      "files": 7,
+      "loc": 1596,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Risk",
+      "layer": "Risk",
+      "files": 8,
+      "loc": 1514,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Discovery",
+      "layer": "Domain",
+      "files": 6,
+      "loc": 1347,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Microstructure",
+      "layer": "Domain",
+      "files": 6,
+      "loc": 1166,
+      "status": "Disconnected"
+    },
+    {
+      "name": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "files": 10,
+      "loc": 1154,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Fleet",
+      "layer": "App",
+      "files": 5,
+      "loc": 978,
+      "status": "Deliberately-Off"
+    },
+    {
+      "name": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "files": 10,
+      "loc": 902,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "files": 10,
+      "loc": 891,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/AlphaMining",
+      "layer": "ML",
+      "files": 4,
+      "loc": 842,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/AltData",
+      "layer": "Data",
+      "files": 7,
+      "loc": 800,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/PairsTrading",
+      "layer": "Domain",
+      "files": 7,
+      "loc": 721,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/TimeSeries",
+      "layer": "Domain",
+      "files": 8,
+      "loc": 718,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR",
+      "layer": "App",
+      "files": 1,
+      "loc": 706,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Indicators",
+      "layer": "Domain",
+      "files": 3,
+      "loc": 640,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Components",
+      "layer": "UI",
+      "files": 8,
+      "loc": 593,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Notifications",
+      "layer": "Infra",
+      "files": 6,
+      "loc": 593,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Carry",
+      "layer": "Exec",
+      "files": 5,
+      "loc": 573,
+      "status": "Deliberately-Off"
+    },
+    {
+      "name": "ProcioneMGR/Services/Portfolio",
+      "layer": "Risk",
+      "files": 6,
+      "loc": 559,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR.Trading",
+      "layer": "App",
+      "files": 3,
+      "loc": 514,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Security",
+      "layer": "Infra",
+      "files": 6,
+      "loc": 501,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Execution",
+      "layer": "Exec",
+      "files": 5,
+      "loc": 470,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Observability",
+      "layer": "Infra",
+      "files": 3,
+      "loc": 431,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Config",
+      "layer": "Config",
+      "files": 2,
+      "loc": 372,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Agents",
+      "layer": "App",
+      "files": 4,
+      "loc": 303,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Experiments",
+      "layer": "App",
+      "files": 4,
+      "loc": 269,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Admin",
+      "layer": "Infra",
+      "files": 2,
+      "loc": 223,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Health",
+      "layer": "Infra",
+      "files": 1,
+      "loc": 194,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR.Ml",
+      "layer": "App",
+      "files": 3,
+      "loc": 166,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Registry",
+      "layer": "ML",
+      "files": 1,
+      "loc": 161,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR.Ingestion",
+      "layer": "App",
+      "files": 2,
+      "loc": 81,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR/Services/Preferences",
+      "layer": "App",
+      "files": 1,
+      "loc": 78,
+      "status": "Implemented"
+    },
+    {
+      "name": "ProcioneMGR.Contracts",
+      "layer": "Infra",
+      "files": 1,
+      "loc": 42,
+      "status": "Implemented"
+    }
+  ],
+  "files": [
+    {
+      "path": "ProcioneMGR.Contracts/Grpc/SharedSecretClientInterceptor.cs",
+      "loc": 42,
+      "module": "ProcioneMGR.Contracts",
+      "layer": "Infra",
+      "types": [
+        "SharedSecretClientInterceptor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR.Ingestion/NoOpEncryptionService.cs",
+      "loc": 27,
+      "module": "ProcioneMGR.Ingestion",
+      "layer": "App",
+      "types": [
+        "NoOpEncryptionService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR.Ingestion/Program.cs",
+      "loc": 54,
+      "module": "ProcioneMGR.Ingestion",
+      "layer": "App",
+      "types": [
+        "Program"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR.Ml/InferenceServiceImpl.cs",
+      "loc": 82,
+      "module": "ProcioneMGR.Ml",
+      "layer": "App",
+      "types": [
+        "InferenceServiceImpl"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR.Ml/NoOpEncryptionService.cs",
+      "loc": 27,
+      "module": "ProcioneMGR.Ml",
+      "layer": "App",
+      "types": [
+        "NoOpEncryptionService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR.Ml/Program.cs",
+      "loc": 57,
+      "module": "ProcioneMGR.Ml",
+      "layer": "App",
+      "types": [
+        "Program"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR.Trading/Program.cs",
+      "loc": 147,
+      "module": "ProcioneMGR.Trading",
+      "layer": "App",
+      "types": [
+        "Program"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR.Trading/SharedSecretAuthInterceptor.cs",
+      "loc": 55,
+      "module": "ProcioneMGR.Trading",
+      "layer": "App",
+      "types": [
+        "SharedSecretAuthInterceptor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR.Trading/TradingCommandServiceImpl.cs",
+      "loc": 312,
+      "module": "ProcioneMGR.Trading",
+      "layer": "App",
+      "types": [
+        "TradingCommandServiceImpl"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Components/Account/IdentityComponentsEndpointRouteBuilderExtensions.cs",
+      "loc": 152,
+      "module": "ProcioneMGR/Components",
+      "layer": "UI",
+      "types": [
+        "IdentityComponentsEndpointRouteBuilderExtensions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Components/Account/IdentityNoOpEmailSender.cs",
+      "loc": 20,
+      "module": "ProcioneMGR/Components",
+      "layer": "UI",
+      "types": [
+        "IdentityNoOpEmailSender"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Components/Account/IdentityRedirectManager.cs",
+      "loc": 54,
+      "module": "ProcioneMGR/Components",
+      "layer": "UI",
+      "types": [
+        "IdentityRedirectManager"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Components/Account/IdentityRevalidatingAuthenticationStateProvider.cs",
+      "loc": 47,
+      "module": "ProcioneMGR/Components",
+      "layer": "UI",
+      "types": [
+        "IdentityRevalidatingAuthenticationStateProvider"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Components/Account/PasskeyInputModel.cs",
+      "loc": 7,
+      "module": "ProcioneMGR/Components",
+      "layer": "UI",
+      "types": [
+        "PasskeyInputModel"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Components/Account/PasskeyOperation.cs",
+      "loc": 7,
+      "module": "ProcioneMGR/Components",
+      "layer": "UI",
+      "types": [
+        "PasskeyOperation"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Components/Layout/NavModel.cs",
+      "loc": 229,
+      "module": "ProcioneMGR/Components",
+      "layer": "UI",
+      "types": [
+        "NavItem",
+        "NavSection",
+        "NavModel"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Components/Shared/PollingTimer.cs",
+      "loc": 77,
+      "module": "ProcioneMGR/Components",
+      "layer": "UI",
+      "types": [
+        "PollingTimer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/AiCredential.cs",
+      "loc": 21,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "AiCredential"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/AltDataPoint.cs",
+      "loc": 44,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "AltDataPoint"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/AppRoles.cs",
+      "loc": 15,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "AppRoles"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/ApplicationDbContext.cs",
+      "loc": 604,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "ApplicationDbContext"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/ApplicationUser.cs",
+      "loc": 13,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "ApplicationUser"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/DatabaseMigrator.cs",
+      "loc": 219,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "DatabaseMigrationOptions",
+        "MigrationOutcome",
+        "DatabaseMigrator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/DatabaseServiceCollectionExtensions.cs",
+      "loc": 31,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "DatabaseServiceCollectionExtensions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/DbInitializer.cs",
+      "loc": 34,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "DbInitializer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/EnsembleState.cs",
+      "loc": 37,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "EnsembleState",
+        "EnsembleRebalanceHistory"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/ExchangeCredential.cs",
+      "loc": 80,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "ExchangeName",
+        "ExchangeCredential"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/ExchangeCredentialCiphertext.cs",
+      "loc": 38,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "ExchangeCredentialCiphertext"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/HostHeartbeat.cs",
+      "loc": 27,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "HostHeartbeat"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/LlmUsageRecord.cs",
+      "loc": 29,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "LlmUsageRecord"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/ModelStage.cs",
+      "loc": 22,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "ModelStage"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/OhlcvData.cs",
+      "loc": 63,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "OhlcvData"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/OrchestratorDecision.cs",
+      "loc": 37,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "OrchestratorDecision"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/SavedFactor.cs",
+      "loc": 53,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "SavedFactor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/SavedMlModel.cs",
+      "loc": 107,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "SavedMlModel"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/SavedStrategy.cs",
+      "loc": 42,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "SavedStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/SentimentMetricPoint.cs",
+      "loc": 92,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "SentimentMetricPoint",
+        "SentimentMetricSources",
+        "SentimentMetrics"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/TrackedSeries.cs",
+      "loc": 37,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "TrackedSeries"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/TradePostMortem.cs",
+      "loc": 52,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "TradePostMortem"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Data/UserPageConfig.cs",
+      "loc": 34,
+      "module": "ProcioneMGR/Data",
+      "layer": "Data",
+      "types": [
+        "UserPageConfig"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Program.cs",
+      "loc": 706,
+      "module": "ProcioneMGR",
+      "layer": "App",
+      "types": [],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Admin/DatabaseBackupHelper.cs",
+      "loc": 171,
+      "module": "ProcioneMGR/Services/Admin",
+      "layer": "Infra",
+      "types": [
+        "PgConnectionInfo",
+        "IntegrityResult",
+        "BackupResult",
+        "BackupInfo",
+        "DatabaseBackupHelper"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Admin/DatabaseBackupService.cs",
+      "loc": 52,
+      "module": "ProcioneMGR/Services/Admin",
+      "layer": "Infra",
+      "types": [
+        "DatabaseBackupService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Agents/ClaudeSupervisorAgent.cs",
+      "loc": 174,
+      "module": "ProcioneMGR/Services/Agents",
+      "layer": "App",
+      "types": [
+        "ClaudeSupervisorAgent"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Agents/DelegatingSupervisorAgent.cs",
+      "loc": 30,
+      "module": "ProcioneMGR/Services/Agents",
+      "layer": "App",
+      "types": [
+        "DelegatingSupervisorAgent"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Agents/IPipelineSupervisorAgent.cs",
+      "loc": 64,
+      "module": "ProcioneMGR/Services/Agents",
+      "layer": "App",
+      "types": [
+        "IPipelineSupervisorAgent",
+        "SupervisorJudgment",
+        "SupervisorAgentOptions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Agents/LoggingSupervisorAgent.cs",
+      "loc": 35,
+      "module": "ProcioneMGR/Services/Agents",
+      "layer": "App",
+      "types": [
+        "LoggingSupervisorAgent"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/Alpha158/Alpha158Catalog.cs",
+      "loc": 172,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "OpDescriptor",
+        "Alpha158Factor",
+        "Alpha158Catalog"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/Alpha158/RollingOps.cs",
+      "loc": 518,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "Bars",
+        "RollingOps"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/AlphaFactorFactory.cs",
+      "loc": 94,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "IAlphaFactorFactory",
+        "AlphaFactorFactory"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/AlphaModels.cs",
+      "loc": 207,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "FactorEvaluationConfig",
+        "QuantileReturn",
+        "IcByHorizon",
+        "FactorEvaluationResult",
+        "Correlation"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/FactorCache.cs",
+      "loc": 114,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "FactorCacheOptions",
+        "IFactorCache",
+        "FactorCache"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/FactorDriftAnalyzer.cs",
+      "loc": 281,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "FactorIcPoint",
+        "FactorDriftStatus",
+        "FactorDriftReport",
+        "FactorDriftConfig",
+        "IFactorDriftAnalyzer",
+        "FactorDriftAnalyzer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/FactorDriftMonitor.cs",
+      "loc": 335,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "FactorDriftSeriesSnapshot",
+        "FactorDriftSnapshot",
+        "FactorDriftWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/FactorEvaluator.cs",
+      "loc": 192,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "FactorEvaluator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/FactorIcHistory.cs",
+      "loc": 298,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "FactorIcWindow",
+        "IFactorIcHistoryStore",
+        "FactorIcHistoryStore"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/FactorMath.cs",
+      "loc": 106,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "FactorMath"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/Factors.cs",
+      "loc": 308,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "MomentumFactor",
+        "MeanReversionFactor",
+        "RealizedVolatilityFactor",
+        "ParkinsonVolatilityFactor",
+        "RelativeVolumeFactor",
+        "RsiFactor",
+        "MacdFactor",
+        "DistanceFromMaFactor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/IAlphaFactor.cs",
+      "loc": 65,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "FactorParameterDefinition",
+        "FactorCategory",
+        "IAlphaFactor",
+        "FactorParametersExtensions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/IFactorEvaluator.cs",
+      "loc": 26,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "IFactorEvaluator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Alpha/OrderFlowFactors.cs",
+      "loc": 115,
+      "module": "ProcioneMGR/Services/Alpha",
+      "layer": "ML",
+      "types": [
+        "TakerImbalanceFactor",
+        "AvgTradeSizeFactor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AlphaMining/AlphaExpressionFactor.cs",
+      "loc": 47,
+      "module": "ProcioneMGR/Services/AlphaMining",
+      "layer": "ML",
+      "types": [
+        "AlphaExpressionFactor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AlphaMining/AlphaExpressionParser.cs",
+      "loc": 91,
+      "module": "ProcioneMGR/Services/AlphaMining",
+      "layer": "ML",
+      "types": [
+        "AlphaExpressionParser"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AlphaMining/AlphaNode.cs",
+      "loc": 267,
+      "module": "ProcioneMGR/Services/AlphaMining",
+      "layer": "ML",
+      "types": [
+        "AlphaOp",
+        "AlphaNode"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AlphaMining/GeneticAlphaMiner.cs",
+      "loc": 437,
+      "module": "ProcioneMGR/Services/AlphaMining",
+      "layer": "ML",
+      "types": [
+        "MiningConfig",
+        "MinedFactor",
+        "GeneticAlphaMiner"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AltData/AltDataSyncService.cs",
+      "loc": 124,
+      "module": "ProcioneMGR/Services/AltData",
+      "layer": "Data",
+      "types": [
+        "IAltDataSyncService",
+        "AltDataSyncService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AltData/ForexFactoryIngestor.cs",
+      "loc": 119,
+      "module": "ProcioneMGR/Services/AltData",
+      "layer": "Data",
+      "types": [
+        "ForexFactoryIngestor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AltData/IAltDataSource.cs",
+      "loc": 34,
+      "module": "ProcioneMGR/Services/AltData",
+      "layer": "Data",
+      "types": [
+        "RawNewsItem",
+        "IAltDataSource"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AltData/NewsImpactAnalyzer.cs",
+      "loc": 214,
+      "module": "ProcioneMGR/Services/AltData",
+      "layer": "Data",
+      "types": [
+        "ImpactStats",
+        "CategoryImpact",
+        "SourceImpact",
+        "RetailSentimentAgreement",
+        "NewsImpactReport",
+        "INewsImpactAnalyzer",
+        "NewsImpactAnalyzer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AltData/NewsImpactClassifier.cs",
+      "loc": 134,
+      "module": "ProcioneMGR/Services/AltData",
+      "layer": "Data",
+      "types": [
+        "NewsCategory",
+        "NewsImpactClassifier"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AltData/RetailSentimentIngestor.cs",
+      "loc": 101,
+      "module": "ProcioneMGR/Services/AltData",
+      "layer": "Data",
+      "types": [
+        "RetailSentimentIngestor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/AltData/RssNewsSource.cs",
+      "loc": 74,
+      "module": "ProcioneMGR/Services/AltData",
+      "layer": "Data",
+      "types": [
+        "NewsFeeds",
+        "RssNewsSource"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Analysis/CandlestickPatternDetector.cs",
+      "loc": 313,
+      "module": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "types": [
+        "CandlePatternType",
+        "CandlePattern",
+        "CandlestickPatternDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Analysis/ChartPatternDetector.cs",
+      "loc": 165,
+      "module": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "types": [
+        "ChartPatternType",
+        "ChartPatternMatch",
+        "ChartPatternDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Analysis/CyclicalAnalyzer.cs",
+      "loc": 310,
+      "module": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "types": [
+        "CyclicalAnalyzer",
+        "HourlyActivity",
+        "HourlyBias",
+        "HourlyComboStat",
+        "DayOfWeekBias",
+        "SeasonalityPoint",
+        "SeasonalYearOutcome",
+        "SeasonalWindowResult"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Analysis/EventStudy.cs",
+      "loc": 187,
+      "module": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "types": [
+        "EventStudyConfig",
+        "EventStudyResult",
+        "EventStudy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Analysis/ExcursionAnalyzer.cs",
+      "loc": 411,
+      "module": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "types": [
+        "ExcursionAnalyzer",
+        "StopLossSuggestion",
+        "TakeProfitSuggestion",
+        "RiskBracket",
+        "VolatilityRegime",
+        "HorizonExcursion",
+        "RegimeConditionedBracket",
+        "LagCorrelation",
+        "ContinuationStats"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Analysis/GapLapAnalyzer.cs",
+      "loc": 325,
+      "module": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "types": [
+        "GapLapAnalyzer",
+        "GapType",
+        "GapEvent",
+        "GapLapReport",
+        "GapLapCategoryStats"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Analysis/MarketEventDetector.cs",
+      "loc": 153,
+      "module": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "types": [
+        "MarketEventKind",
+        "MarketEvent",
+        "MarketEventDetectorConfig",
+        "MarketEventDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Analysis/SupportResistanceAnalyzer.cs",
+      "loc": 299,
+      "module": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "types": [
+        "SupportResistanceAnalyzer",
+        "SwingPoint",
+        "PriceLevel",
+        "BreakoutEvent",
+        "SwingTrend",
+        "RetracementInfo",
+        "SupportResistanceReport"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Analysis/VolumeAnalyzer.cs",
+      "loc": 67,
+      "module": "ProcioneMGR/Services/Analysis",
+      "layer": "Domain",
+      "types": [
+        "VolumeAnalyzer",
+        "VolumeConfirmation"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/BacktestEngine.cs",
+      "loc": 692,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "BacktestEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/BacktestModels.cs",
+      "loc": 267,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "Signal",
+        "BacktestConfiguration",
+        "VolatilityTargetingOptions",
+        "EntryExecutionStyle",
+        "BacktestResult",
+        "BacktestTrade",
+        "EquityPoint"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/BacktestPageService.cs",
+      "loc": 484,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "BacktestConfigSnapshot",
+        "BacktestActionResult",
+        "BracketSuggestion",
+        "BacktestHandoffQuery",
+        "LoadedSavedStrategy",
+        "BacktestPageService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/BollingerMeanReversionStrategy.cs",
+      "loc": 81,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "BollingerMeanReversionStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/CompositeSignalStrategy.cs",
+      "loc": 165,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "CompositeSignalStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/DonchianBreakoutStrategy.cs",
+      "loc": 111,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "DonchianBreakoutStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/EmaCrossStrategy.cs",
+      "loc": 70,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "EmaCrossStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/EventTriggerStrategy.cs",
+      "loc": 158,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "EventTriggerStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/FundingHistoryProvider.cs",
+      "loc": 46,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "IFundingHistoryProvider",
+        "FundingHistoryProvider"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/FundingRateLookup.cs",
+      "loc": 46,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "FundingRatePoint",
+        "FundingRateLookup"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/GridMeanReversionStrategy.cs",
+      "loc": 112,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "GridMeanReversionStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/IBacktestEngine.cs",
+      "loc": 23,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "IBacktestEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/IStrategy.cs",
+      "loc": 49,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "StrategyParameterDefinition",
+        "IStrategy",
+        "StrategyParametersExtensions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/MacdTrendStrategy.cs",
+      "loc": 69,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "MacdTrendStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/MlStrategy.cs",
+      "loc": 193,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "MlStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/MomentumStrategy.cs",
+      "loc": 73,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "MomentumStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/PriceSmaCrossStrategy.cs",
+      "loc": 70,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "PriceSmaCrossStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/RegimeConditionalStrategy.cs",
+      "loc": 131,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "RegimeConditionalStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/RsiOversoldStrategy.cs",
+      "loc": 63,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "RsiOversoldStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/SignalCatalog.cs",
+      "loc": 394,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "SignalCatalog"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/StochasticStrategy.cs",
+      "loc": 101,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "StochasticStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/StrategyFactory.cs",
+      "loc": 54,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "IStrategyFactory",
+        "StrategyFactory"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/SupertrendStrategy.cs",
+      "loc": 116,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "SupertrendStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Backtesting/VwapReversionStrategy.cs",
+      "loc": 106,
+      "module": "ProcioneMGR/Services/Backtesting",
+      "layer": "Domain",
+      "types": [
+        "VwapReversionStrategy"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Carry/CarryBacktestEngine.cs",
+      "loc": 135,
+      "module": "ProcioneMGR/Services/Carry",
+      "layer": "Exec",
+      "types": [
+        "CarryBacktestEngine"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Carry/CarryDecider.cs",
+      "loc": 49,
+      "module": "ProcioneMGR/Services/Carry",
+      "layer": "Exec",
+      "types": [
+        "CarryAction",
+        "CarryDecider"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Carry/CarryEngine.cs",
+      "loc": 144,
+      "module": "ProcioneMGR/Services/Carry",
+      "layer": "Exec",
+      "types": [
+        "CarryMode",
+        "CarryLegOrder",
+        "CarryExecutionResult",
+        "ICarryExecutor",
+        "CarrySymbolState",
+        "CarryEngine",
+        "PaperCarryExecutor"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Carry/CarryModels.cs",
+      "loc": 64,
+      "module": "ProcioneMGR/Services/Carry",
+      "layer": "Exec",
+      "types": [
+        "CarryConfiguration",
+        "CarryEpisode",
+        "CarryBacktestResult"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Carry/CarryWorker.cs",
+      "loc": 181,
+      "module": "ProcioneMGR/Services/Carry",
+      "layer": "Exec",
+      "types": [
+        "CarryOptions",
+        "CarryWorker"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Config/AdminConfigRules.cs",
+      "loc": 271,
+      "module": "ProcioneMGR/Services/Config",
+      "layer": "Config",
+      "types": [
+        "AdminConfigRules"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Config/AppConfigWriter.cs",
+      "loc": 101,
+      "module": "ProcioneMGR/Services/Config",
+      "layer": "Config",
+      "types": [
+        "IAppConfigWriter",
+        "AppConfigWriter"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Discovery/Dtw/DtwMatcher.cs",
+      "loc": 244,
+      "module": "ProcioneMGR/Services/Discovery",
+      "layer": "Domain",
+      "types": [
+        "DtwMatch",
+        "DtwConfig",
+        "IDtwMatcher",
+        "DtwMatcher"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Discovery/Dtw/DtwPatternAnalysisService.cs",
+      "loc": 255,
+      "module": "ProcioneMGR/Services/Discovery",
+      "layer": "Domain",
+      "types": [
+        "DtwPatternAnalysis",
+        "ShapeMatchedNull",
+        "IDtwPatternAnalysisService",
+        "DtwPatternAnalysisService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Discovery/IStrategyDiscovery.cs",
+      "loc": 9,
+      "module": "ProcioneMGR/Services/Discovery",
+      "layer": "Domain",
+      "types": [
+        "IStrategyDiscovery"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Discovery/StrategyComposer.cs",
+      "loc": 556,
+      "module": "ProcioneMGR/Services/Discovery",
+      "layer": "Domain",
+      "types": [
+        "ComposedCandidate",
+        "ComposerConfiguration",
+        "ComposerScreeningConfiguration",
+        "ICompositeSignalGenerator",
+        "IEventTriggerGenerator",
+        "IRegimeMapGenerator",
+        "IStrategyComposer",
+        "CompositeSignalGenerator",
+        "EventTriggerGenerator",
+        "RegimeMapGenerator",
+        "StrategyComposer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Discovery/StrategyDiscoveryEngine.cs",
+      "loc": 211,
+      "module": "ProcioneMGR/Services/Discovery",
+      "layer": "Domain",
+      "types": [
+        "StrategyDiscoveryEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Discovery/StrategyDiscoveryModels.cs",
+      "loc": 72,
+      "module": "ProcioneMGR/Services/Discovery",
+      "layer": "Domain",
+      "types": [
+        "StrategyDiscoveryConfiguration",
+        "DiscoveryCandidate",
+        "StrategyDiscoveryResult",
+        "DiscoveryProgress"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ensemble/EnsembleAllocator.cs",
+      "loc": 152,
+      "module": "ProcioneMGR/Services/Ensemble",
+      "layer": "Domain",
+      "types": [
+        "EnsembleAllocator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ensemble/EnsembleComparator.cs",
+      "loc": 241,
+      "module": "ProcioneMGR/Services/Ensemble",
+      "layer": "Domain",
+      "types": [
+        "IEnsembleComparator",
+        "EnsembleComparatorOptions",
+        "EnsembleSummary",
+        "LegSummary",
+        "EnsembleComparison",
+        "EnsembleComparator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ensemble/EnsembleManager.cs",
+      "loc": 642,
+      "module": "ProcioneMGR/Services/Ensemble",
+      "layer": "Domain",
+      "types": [
+        "EnsembleManager"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ensemble/EnsembleModels.cs",
+      "loc": 189,
+      "module": "ProcioneMGR/Services/Ensemble",
+      "layer": "Domain",
+      "types": [
+        "EnsembleConfiguration",
+        "EnsembleStrategy",
+        "EnsembleStatus",
+        "StrategyStatus",
+        "EnsemblePerformance",
+        "StrategyEquityCurve",
+        "RebalanceEvent",
+        "RebalanceAllocation"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ensemble/EnsemblePageService.cs",
+      "loc": 290,
+      "module": "ProcioneMGR/Services/Ensemble",
+      "layer": "Domain",
+      "types": [
+        "DriftEvaluationResult",
+        "EnsemblePageService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ensemble/EnsembleRebalanceWorker.cs",
+      "loc": 56,
+      "module": "ProcioneMGR/Services/Ensemble",
+      "layer": "Domain",
+      "types": [
+        "EnsembleRebalanceWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ensemble/IEnsembleManager.cs",
+      "loc": 26,
+      "module": "ProcioneMGR/Services/Ensemble",
+      "layer": "Domain",
+      "types": [
+        "IEnsembleManager"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/BinanceClient.cs",
+      "loc": 688,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "BinanceClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/BitgetClient.cs",
+      "loc": 806,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "BitgetClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/ExchangeClientException.cs",
+      "loc": 20,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "ExchangeClientException"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/ExchangeClientFactory.cs",
+      "loc": 42,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "ExchangeClientFactory"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/ExchangeClock.cs",
+      "loc": 167,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "IExchangeClock",
+        "ExchangeClock",
+        "ExchangeClockSyncWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/ExchangeRateLimitHandler.cs",
+      "loc": 156,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "ExchangeRateLimitHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/ExchangeTrading.cs",
+      "loc": 139,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "struct",
+        "PlaceOrderRequest",
+        "PlaceOrderResult",
+        "CancelOrderResult",
+        "OrderStatusResult",
+        "OpenOrder",
+        "AccountBalance",
+        "SymbolFilters",
+        "ExchangeSigning"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/FuturesTrading.cs",
+      "loc": 110,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "SetLeverageResult",
+        "FuturesPosition",
+        "FuturesBalance",
+        "IFuturesExchangeClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/IExchangeClient.cs",
+      "loc": 59,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "IExchangeClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/IExchangeClientFactory.cs",
+      "loc": 17,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "IExchangeClientFactory"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/Ohlcv.cs",
+      "loc": 24,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "struct"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Exchanges/Timeframes.cs",
+      "loc": 32,
+      "module": "ProcioneMGR/Services/Exchanges",
+      "layer": "Infra",
+      "types": [
+        "Timeframes"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Execution/ExecutionAlgorithmFactory.cs",
+      "loc": 35,
+      "module": "ProcioneMGR/Services/Execution",
+      "layer": "Exec",
+      "types": [
+        "IExecutionAlgorithmFactory",
+        "ExecutionAlgorithmFactory"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Execution/ExecutionAlgorithms.cs",
+      "loc": 214,
+      "module": "ProcioneMGR/Services/Execution",
+      "layer": "Exec",
+      "types": [
+        "ExecutionPlanning",
+        "ImmediateExecutionAlgorithm",
+        "TwapExecutionAlgorithm",
+        "VwapExecutionAlgorithm",
+        "IcebergExecutionAlgorithm",
+        "AdaptiveExecutionAlgorithm"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Execution/ExecutionModels.cs",
+      "loc": 106,
+      "module": "ProcioneMGR/Services/Execution",
+      "layer": "Exec",
+      "types": [
+        "ExecutionSide",
+        "ExecutionIntent",
+        "ExecutionSlice",
+        "MarketImpactModel",
+        "ExecutionPlan",
+        "ExecutionParameters",
+        "ExecutionFill",
+        "ExecutionResult"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Execution/ExecutionSimulator.cs",
+      "loc": 89,
+      "module": "ProcioneMGR/Services/Execution",
+      "layer": "Exec",
+      "types": [
+        "IExecutionSimulator",
+        "ExecutionSimulator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Execution/IExecutionAlgorithm.cs",
+      "loc": 26,
+      "module": "ProcioneMGR/Services/Execution",
+      "layer": "Exec",
+      "types": [
+        "IExecutionAlgorithm"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Experiments/ExperimentEntities.cs",
+      "loc": 70,
+      "module": "ProcioneMGR/Services/Experiments",
+      "layer": "App",
+      "types": [
+        "ExperimentRun",
+        "ExperimentArtifact"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Experiments/ExperimentTracker.cs",
+      "loc": 109,
+      "module": "ProcioneMGR/Services/Experiments",
+      "layer": "App",
+      "types": [
+        "ExperimentTracker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Experiments/ExperimentTrackerExtensions.cs",
+      "loc": 53,
+      "module": "ProcioneMGR/Services/Experiments",
+      "layer": "App",
+      "types": [
+        "ExperimentTrackerExtensions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Experiments/IExperimentTracker.cs",
+      "loc": 37,
+      "module": "ProcioneMGR/Services/Experiments",
+      "layer": "App",
+      "types": [
+        "IExperimentTracker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Fleet/FleetModels.cs",
+      "loc": 147,
+      "module": "ProcioneMGR/Services/Fleet",
+      "layer": "App",
+      "types": [
+        "FleetOptions",
+        "FleetLaneState",
+        "FleetCandidate",
+        "FleetState",
+        "FleetAction",
+        "AssignCandidateToLane",
+        "StopAndFreeLane",
+        "ProposeGreyCandidate",
+        "FleetNoOp",
+        "FleetAssignmentMenu",
+        "FleetPlan"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Fleet/FleetOrchestrator.cs",
+      "loc": 115,
+      "module": "ProcioneMGR/Services/Fleet",
+      "layer": "App",
+      "types": [
+        "FleetOrchestrator"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Fleet/FleetOrchestratorWorker.cs",
+      "loc": 273,
+      "module": "ProcioneMGR/Services/Fleet",
+      "layer": "App",
+      "types": [
+        "FleetOrchestratorWorker"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Fleet/FleetStateReader.cs",
+      "loc": 263,
+      "module": "ProcioneMGR/Services/Fleet",
+      "layer": "App",
+      "types": [
+        "IFleetStateReader",
+        "FleetStateReader",
+        "struct"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Fleet/GreyDeployer.cs",
+      "loc": 180,
+      "module": "ProcioneMGR/Services/Fleet",
+      "layer": "App",
+      "types": [
+        "GreyChoice",
+        "GreyDeployResult",
+        "IGreyDeployer",
+        "GreyDeployer"
+      ],
+      "status": "Deliberately-Off"
+    },
+    {
+      "path": "ProcioneMGR/Services/Health/HostHeartbeats.cs",
+      "loc": 194,
+      "module": "ProcioneMGR/Services/Health",
+      "layer": "Infra",
+      "types": [
+        "HeartbeatOptions",
+        "HeartbeatHealth",
+        "HeartbeatMonitorLogic",
+        "HeartbeatNotice",
+        "HeartbeatTransitionTracker",
+        "HostHeartbeatWorker",
+        "HeartbeatMonitorWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Indicators/ITechnicalIndicatorsService.cs",
+      "loc": 69,
+      "module": "ProcioneMGR/Services/Indicators",
+      "layer": "Domain",
+      "types": [
+        "ITechnicalIndicatorsService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Indicators/IndicatorSeries.cs",
+      "loc": 40,
+      "module": "ProcioneMGR/Services/Indicators",
+      "layer": "Domain",
+      "types": [
+        "IndicatorSeriesType",
+        "struct",
+        "IndicatorSeries"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Indicators/TechnicalIndicatorsService.cs",
+      "loc": 531,
+      "module": "ProcioneMGR/Services/Indicators",
+      "layer": "Domain",
+      "types": [
+        "TechnicalIndicatorsService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/BarBuilder.cs",
+      "loc": 128,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "AggregatedBar",
+        "BarBuilder"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/IMarketDataSyncService.cs",
+      "loc": 15,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "IMarketDataSyncService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/IOhlcvIngestionService.cs",
+      "loc": 26,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "struct",
+        "struct",
+        "IOhlcvIngestionService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/IngestionServiceCollectionExtensions.cs",
+      "loc": 65,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "IngestionServiceCollectionExtensions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/MarketDataSyncService.cs",
+      "loc": 132,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "MarketDataSyncService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/MarketDataSyncWorker.cs",
+      "loc": 78,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "MarketDataSyncWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/OhlcvIngestionService.cs",
+      "loc": 176,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "OhlcvIngestionService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/RemoteMarketDataSyncService.cs",
+      "loc": 37,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "RemoteMarketDataSyncService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/SeriesFreshness.cs",
+      "loc": 114,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "SeriesFreshness"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Ingestion/SeriesFreshnessWatchWorker.cs",
+      "loc": 131,
+      "module": "ProcioneMGR/Services/Ingestion",
+      "layer": "Data",
+      "types": [
+        "SeriesFreshnessWatchWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/AiKeyStore.cs",
+      "loc": 168,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "AiProviders",
+        "AiKeySource",
+        "IAiKeyStore",
+        "AiKeyStore"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/AnthropicLlmClient.cs",
+      "loc": 268,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "LlmOptions",
+        "AnthropicLlmClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/Committee/AiCommittee.cs",
+      "loc": 213,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "CommitteeOptions",
+        "CommitteeOption",
+        "CommitteeQuestion",
+        "CommitteeVote",
+        "CommitteeVerdict",
+        "IAiCommittee",
+        "AiCommittee"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/ILlmClient.cs",
+      "loc": 18,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "ILlmClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/LlmCallGuard.cs",
+      "loc": 323,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "LlmCallOutcome",
+        "LlmCallResult",
+        "LlmGuardStatus",
+        "ILlmCallGuard",
+        "LlmCallGuard"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/LlmClientResolver.cs",
+      "loc": 33,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "ILlmClientResolver",
+        "LlmClientResolver"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/LlmSupervisorWorker.cs",
+      "loc": 122,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "LlmSupervisorWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/LlmUsage.cs",
+      "loc": 385,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "LlmCallContext",
+        "struct",
+        "LlmBudgetVerdict",
+        "LlmUsageSnapshot",
+        "LlmUsageRow",
+        "LlmBudgetOptions",
+        "ILlmUsageSink",
+        "LlmUsageTracker",
+        "LlmUsageFlushWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/ModelAutoSelector.cs",
+      "loc": 87,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "ModelAutoSelector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/Narration/DigestNarrator.cs",
+      "loc": 123,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "IDigestNarrator",
+        "DigestNarrator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/Narration/PostMortemAnalyzer.cs",
+      "loc": 125,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "PostMortemCauses",
+        "TradeFacts",
+        "PostMortemAnalyzer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/Narration/PostMortemService.cs",
+      "loc": 275,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "PostMortemOptions",
+        "IPostMortemService",
+        "PostMortemService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/Narration/PostMortemWorker.cs",
+      "loc": 49,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "PostMortemWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/Narration/RejectionDigest.cs",
+      "loc": 190,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "RejectionCauses",
+        "RejectionGroup",
+        "RejectedCandidateFacts",
+        "RunRejectionDigest",
+        "RejectionDigestBuilder"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/Narration/RejectionExplainService.cs",
+      "loc": 189,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "IRejectionExplainService",
+        "RunRejectionSummary",
+        "RejectionExplainService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/Narration/RejectionNarrator.cs",
+      "loc": 224,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "RejectionNote",
+        "RejectionNarration",
+        "IRejectionNarrator",
+        "RejectionNarrator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/NvidiaLlmClient.cs",
+      "loc": 347,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "IModelCatalogProvider",
+        "OpenAiCompatibleLlmClient",
+        "NvidiaLlmClient",
+        "GeminiLlmClient",
+        "GroqLlmClient",
+        "HuggingFaceLlmClient",
+        "ILlmCompletionInfo",
+        "DelegatingLlmClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/PipelineSupervisor.cs",
+      "loc": 445,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "LlmArtifactKinds",
+        "IPipelineSupervisor",
+        "PipelineSupervisor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Llm/SupervisorAdvisory.cs",
+      "loc": 39,
+      "module": "ProcioneMGR/Services/Llm",
+      "layer": "App",
+      "types": [
+        "SupervisorAdvisory",
+        "ParameterSuggestion"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/AttentionReturnPredictor.cs",
+      "loc": 559,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "AttentionReturnPredictor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/DatasetBuilder.cs",
+      "loc": 74,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "DatasetBuilder"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/GradientBoostingReturnPredictor.cs",
+      "loc": 36,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "GradientBoostingReturnPredictor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/HierarchicalClustering.cs",
+      "loc": 105,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "HierarchicalClustering"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/IDatasetBuilder.cs",
+      "loc": 29,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "IDatasetBuilder"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/IHierarchicalClustering.cs",
+      "loc": 75,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "LinkageMethod",
+        "ClusterNode",
+        "IHierarchicalClustering",
+        "CorrelationDistance"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/IPurgedTimeSeriesCv.cs",
+      "loc": 22,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "IPurgedTimeSeriesCv"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/IReturnPredictor.cs",
+      "loc": 38,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "IReturnPredictor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/IRiskFactorPca.cs",
+      "loc": 17,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "IRiskFactorPca"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/ISequencePredictor.cs",
+      "loc": 18,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "ISequencePredictor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/IcFeatureSelector.cs",
+      "loc": 93,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "IcFeatureSelectionConfig",
+        "ScoredFactor",
+        "IIcFeatureSelector",
+        "IcFeatureSelector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/Labeling/MetaLabeler.cs",
+      "loc": 229,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "PrimarySignal",
+        "MetaLabelSample",
+        "MetaLabelingReport",
+        "IMetaLabeler",
+        "MetaLabeler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/Labeling/MetaLabelingAnalysisService.cs",
+      "loc": 207,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "MetaLabelingAnalysis",
+        "IMetaLabelingAnalysisService",
+        "MetaLabelingAnalysisService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/Labeling/MetaModelTrainer.cs",
+      "loc": 178,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "MetaRow",
+        "MetaPrediction",
+        "MetaModelConfig",
+        "MetaModelResult",
+        "IMetaModelTrainer",
+        "MetaModelTrainer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/Labeling/TripleBarrierLabeler.cs",
+      "loc": 222,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "TripleBarrierOutcome",
+        "TripleBarrierLabel",
+        "TripleBarrierConfig",
+        "ITripleBarrierLabeler",
+        "TripleBarrierLabeler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/LinearReturnPredictor.cs",
+      "loc": 20,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "LinearReturnPredictor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/MlComparisonClient.cs",
+      "loc": 70,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "IMlComparisonClient",
+        "MlComparisonClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/MlComparisonOptions.cs",
+      "loc": 20,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "MlComparisonOptions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/MlLabService.cs",
+      "loc": 808,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "MlConfigSnapshot",
+        "MlActionResult",
+        "MlLoadResult",
+        "MlLabService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/MlModelLoader.cs",
+      "loc": 85,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "MlModelLoader"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/MlModels.cs",
+      "loc": 71,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "FactorSpec",
+        "FeatureRow",
+        "MlDataset",
+        "MlDatasetView",
+        "CvSplit",
+        "FeatureImportance",
+        "SavedFactorSpecDto"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/MlStageMapper.cs",
+      "loc": 33,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "MlStageMapper"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/MlTargetKind.cs",
+      "loc": 82,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "MlTargetKind",
+        "ForwardTargets"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/MlpReturnPredictor.cs",
+      "loc": 298,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "MlpReturnPredictor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/PurgedTimeSeriesCv.cs",
+      "loc": 41,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "PurgedTimeSeriesCv"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/RandomForestReturnPredictor.cs",
+      "loc": 32,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "RandomForestReturnPredictor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/RegressionPredictorBase.cs",
+      "loc": 180,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "PredictedReturn",
+        "IShapExplainable",
+        "RegressionPredictorBase"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/ReturnPredictorCatalog.cs",
+      "loc": 23,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "ReturnPredictorCatalog"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/RiskFactorPca.cs",
+      "loc": 103,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "RiskFactorPca"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/RiskFactorPcaModels.cs",
+      "loc": 26,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "PrincipalComponent",
+        "RiskFactorPcaResult"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/SequenceWindowing.cs",
+      "loc": 83,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "SequenceWindowing"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/Shap/MlNetTreeExtractor.cs",
+      "loc": 197,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "MlNetTreeExtractor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/Shap/ShapAnalysis.cs",
+      "loc": 177,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "ShapContextCell",
+        "ShapContextLens",
+        "ShapAnalysisResult",
+        "ShapAnalyzer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/Shap/ShapTree.cs",
+      "loc": 140,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "ShapTree",
+        "ShapTreeEnsemble"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/Shap/TreeShapExplainer.cs",
+      "loc": 280,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "ShapContribution",
+        "ShapExplanation",
+        "ShapSummaryRow",
+        "TreeShapExplainer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/StackedReturnPredictor.cs",
+      "loc": 428,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "StackingMode",
+        "StackedReturnPredictor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/ML/VolForecastEvaluator.cs",
+      "loc": 135,
+      "module": "ProcioneMGR/Services/ML",
+      "layer": "ML",
+      "types": [
+        "VolForecastEvaluation",
+        "VolForecastEvaluator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/MarketData/BinanceStreamMapper.cs",
+      "loc": 197,
+      "module": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "types": [
+        "BinanceStreamMapper"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/MarketData/BitgetStreamMapper.cs",
+      "loc": 129,
+      "module": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "types": [
+        "BitgetStreamMapper"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/MarketData/IExchangeStreamMapper.cs",
+      "loc": 43,
+      "module": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "types": [
+        "IExchangeStreamMapper"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/MarketData/IWebSocketTransport.cs",
+      "loc": 111,
+      "module": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "types": [
+        "IWebSocketTransport",
+        "IWebSocketTransportFactory",
+        "ClientWebSocketTransport",
+        "ClientWebSocketTransportFactory"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/MarketData/LiquidationAccumulation.cs",
+      "loc": 127,
+      "module": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "types": [
+        "LiquidationEvent",
+        "BinanceLiquidationMapper",
+        "LiquidationBucket",
+        "LiquidationAggregator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/MarketData/LiquidationSyncWorker.cs",
+      "loc": 270,
+      "module": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "types": [
+        "LiquidationsOptions",
+        "LiquidationSyncWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/MarketData/RealtimeMarketDataModels.cs",
+      "loc": 137,
+      "module": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "types": [
+        "struct",
+        "struct",
+        "struct",
+        "struct",
+        "RealtimeFeedOptions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/MarketData/RealtimePriceWorker.cs",
+      "loc": 478,
+      "module": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "types": [
+        "RealtimePriceWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/MarketData/WebSocketPriceFeed.cs",
+      "loc": 429,
+      "module": "ProcioneMGR/Services/MarketData",
+      "layer": "Data",
+      "types": [
+        "FeedHealth",
+        "SeriesHealth",
+        "WebSocketPriceFeed"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Microstructure/BinanceDumpDownloader.cs",
+      "loc": 177,
+      "module": "ProcioneMGR/Services/Microstructure",
+      "layer": "Domain",
+      "types": [
+        "DumpMarket",
+        "BinanceDumpDownloader"
+      ],
+      "status": "Disconnected"
+    },
+    {
+      "path": "ProcioneMGR/Services/Microstructure/BinanceDumpParser.cs",
+      "loc": 201,
+      "module": "ProcioneMGR/Services/Microstructure",
+      "layer": "Domain",
+      "types": [
+        "BinanceDumpParser"
+      ],
+      "status": "Disconnected"
+    },
+    {
+      "path": "ProcioneMGR/Services/Microstructure/IncrementalIcGate.cs",
+      "loc": 467,
+      "module": "ProcioneMGR/Services/Microstructure",
+      "layer": "Domain",
+      "types": [
+        "IcCandidate",
+        "IncrementalIcConfig",
+        "IncrementalIcOutcome",
+        "IncrementalIcReport",
+        "IncrementalIcGate"
+      ],
+      "status": "Disconnected"
+    },
+    {
+      "path": "ProcioneMGR/Services/Microstructure/MicrostructureModels.cs",
+      "loc": 111,
+      "module": "ProcioneMGR/Services/Microstructure",
+      "layer": "Domain",
+      "types": [
+        "AggTrade",
+        "TapeBar",
+        "BestQuote",
+        "BookDepthSnapshot"
+      ],
+      "status": "Disconnected"
+    },
+    {
+      "path": "ProcioneMGR/Services/Microstructure/OrderFlowImbalance.cs",
+      "loc": 100,
+      "module": "ProcioneMGR/Services/Microstructure",
+      "layer": "Domain",
+      "types": [
+        "OrderFlowImbalance"
+      ],
+      "status": "Disconnected"
+    },
+    {
+      "path": "ProcioneMGR/Services/Microstructure/TapeAggregator.cs",
+      "loc": 110,
+      "module": "ProcioneMGR/Services/Microstructure",
+      "layer": "Domain",
+      "types": [
+        "TapeAggregator"
+      ],
+      "status": "Disconnected"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/Drift/DriftMath.cs",
+      "loc": 56,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "DriftMath"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/Drift/DriftModels.cs",
+      "loc": 108,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "DriftSeverity",
+        "DriftResult",
+        "DriftThresholds",
+        "FactorDriftReport",
+        "DriftCheckResult"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/Drift/FeatureDriftMonitor.cs",
+      "loc": 95,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "FeatureDriftMonitor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/Drift/FeatureDriftWorker.cs",
+      "loc": 188,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "DriftMonitorOptions",
+        "FeatureDriftWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/Drift/IFeatureDriftDetector.cs",
+      "loc": 23,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "IFeatureDriftDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/Drift/IFeatureDriftMonitor.cs",
+      "loc": 18,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "IFeatureDriftMonitor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/Drift/KsDriftDetector.cs",
+      "loc": 49,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "KsDriftDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/Drift/PageHinkleyDetector.cs",
+      "loc": 45,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "PageHinkleyDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/Drift/PsiDriftDetector.cs",
+      "loc": 63,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "PsiDriftDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Monitoring/StrategyDecayMonitor.cs",
+      "loc": 246,
+      "module": "ProcioneMGR/Services/Monitoring",
+      "layer": "App",
+      "types": [
+        "IStrategyDecayMonitor",
+        "DecayMonitorOptions",
+        "DecayReport",
+        "StrategyDecayMonitor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Notifications/DailyDigest.cs",
+      "loc": 250,
+      "module": "ProcioneMGR/Services/Notifications",
+      "layer": "Infra",
+      "types": [
+        "DigestOptions",
+        "DigestSchedule",
+        "DigestData",
+        "DailyDigestComposer",
+        "DailyDigestWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Notifications/INotifier.cs",
+      "loc": 47,
+      "module": "ProcioneMGR/Services/Notifications",
+      "layer": "Infra",
+      "types": [
+        "NotificationSeverity",
+        "INotifier",
+        "INotificationProvider",
+        "NotificationOptions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Notifications/LoggingNotifier.cs",
+      "loc": 22,
+      "module": "ProcioneMGR/Services/Notifications",
+      "layer": "Infra",
+      "types": [
+        "LoggingNotifier"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Notifications/NotificationDispatcher.cs",
+      "loc": 188,
+      "module": "ProcioneMGR/Services/Notifications",
+      "layer": "Infra",
+      "types": [
+        "NotificationOutcome",
+        "NotificationResult",
+        "NotificationChannelStatus",
+        "NotificationDispatcher"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Notifications/NotificationServiceCollectionExtensions.cs",
+      "loc": 31,
+      "module": "ProcioneMGR/Services/Notifications",
+      "layer": "Infra",
+      "types": [
+        "NotificationServiceCollectionExtensions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Notifications/TelegramNotifier.cs",
+      "loc": 55,
+      "module": "ProcioneMGR/Services/Notifications",
+      "layer": "Infra",
+      "types": [
+        "TelegramNotifier"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Observability/MetricsCollector.cs",
+      "loc": 228,
+      "module": "ProcioneMGR/Services/Observability",
+      "layer": "Infra",
+      "types": [
+        "MetricsCollector",
+        "HistogramSummary",
+        "MetricsSnapshot"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Observability/ObservabilityExtensions.cs",
+      "loc": 52,
+      "module": "ProcioneMGR/Services/Observability",
+      "layer": "Infra",
+      "types": [
+        "ObservabilityExtensions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Observability/ProcioneMetrics.cs",
+      "loc": 151,
+      "module": "ProcioneMGR/Services/Observability",
+      "layer": "Infra",
+      "types": [
+        "ProcioneMetrics"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Optimization/Bayesian/BayesianOptimizationEngine.cs",
+      "loc": 205,
+      "module": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "types": [
+        "BayesianOptions",
+        "IHyperparameterOptimizer",
+        "BayesianOptimizationEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Optimization/Bayesian/BayesianSearch.cs",
+      "loc": 49,
+      "module": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "types": [
+        "BayesianSearchResult",
+        "BayesianSearch"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Optimization/Bayesian/ParameterSpace.cs",
+      "loc": 53,
+      "module": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "types": [
+        "ParameterDimension",
+        "EvaluatedPoint",
+        "ParameterSpace"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Optimization/IOptimizationEngine.cs",
+      "loc": 20,
+      "module": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "types": [
+        "IOptimizationEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Optimization/OptimizationEngine.cs",
+      "loc": 755,
+      "module": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "types": [
+        "OptimizationEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Optimization/OptimizationModels.cs",
+      "loc": 228,
+      "module": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "types": [
+        "OptimizationSelectionMetric",
+        "SearchStrategy",
+        "OptimizationConfiguration",
+        "ParameterRange",
+        "WalkForwardConfiguration",
+        "OptimizationValidationMethod",
+        "CpcvConfiguration",
+        "CpcvPathResult",
+        "CpcvResult",
+        "OptimizationResult",
+        "ParameterSet",
+        "WalkForwardResult",
+        "WalkForwardWindow",
+        "OptimizationProgress"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Optimization/OptimizationPageService.cs",
+      "loc": 538,
+      "module": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "types": [
+        "OptRange",
+        "OptimizationConfigSnapshot",
+        "OptActionResult",
+        "OptimizationHandoffQuery",
+        "HeatmapMatrix",
+        "OptimizationPageService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Optimization/Statistics.cs",
+      "loc": 406,
+      "module": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "types": [
+        "Statistics",
+        "TearsheetMetrics"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Optimization/TradeStatistics.cs",
+      "loc": 350,
+      "module": "ProcioneMGR/Services/Optimization",
+      "layer": "Domain",
+      "types": [
+        "TradeStatistics",
+        "MonthlyProfitCell",
+        "TradeReport"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/PairsTrading/IPairsBacktestEngine.cs",
+      "loc": 19,
+      "module": "ProcioneMGR/Services/PairsTrading",
+      "layer": "Domain",
+      "types": [
+        "IPairsBacktestEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/PairsTrading/KalmanPairsSpreadAnalyzer.cs",
+      "loc": 118,
+      "module": "ProcioneMGR/Services/PairsTrading",
+      "layer": "Domain",
+      "types": [
+        "KalmanPairsSpreadAnalyzer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/PairsTrading/PairsBacktestEngine.cs",
+      "loc": 284,
+      "module": "ProcioneMGR/Services/PairsTrading",
+      "layer": "Domain",
+      "types": [
+        "PairsBacktestEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/PairsTrading/PairsBacktestModels.cs",
+      "loc": 119,
+      "module": "ProcioneMGR/Services/PairsTrading",
+      "layer": "Domain",
+      "types": [
+        "PairsBacktestConfiguration",
+        "PairsHedgeRatioEstimator",
+        "PairsPositionSide",
+        "PairsTrade",
+        "PairsBacktestResult"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/PairsTrading/PairsCandleAligner.cs",
+      "loc": 50,
+      "module": "ProcioneMGR/Services/PairsTrading",
+      "layer": "Domain",
+      "types": [
+        "PairsCandleAligner"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/PairsTrading/PairsSpreadSeries.cs",
+      "loc": 31,
+      "module": "ProcioneMGR/Services/PairsTrading",
+      "layer": "Domain",
+      "types": [
+        "PairsSpreadSeries"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/PairsTrading/RollingPairsSpreadAnalyzer.cs",
+      "loc": 100,
+      "module": "ProcioneMGR/Services/PairsTrading",
+      "layer": "Domain",
+      "types": [
+        "RollingPairsAnalysis",
+        "RollingPairsSpreadAnalyzer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/AutoBracket.cs",
+      "loc": 59,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "AutoBracket"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/CampaignEntities.cs",
+      "loc": 89,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "VettingCampaign",
+        "CampaignStatus",
+        "CampaignConfigState"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/CampaignOptions.cs",
+      "loc": 16,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "CampaignOptions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/CampaignPageService.cs",
+      "loc": 120,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "CampaignPageService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/CampaignPlanner.cs",
+      "loc": 404,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "ICampaignPlanner",
+        "CampaignPlanner"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/CampaignPlannerWorker.cs",
+      "loc": 42,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "CampaignPlannerWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/IPipelineEngine.cs",
+      "loc": 56,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "IPipelineEngine",
+        "IPipelineStageCatalog"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/IPipelineStage.cs",
+      "loc": 51,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "IPipelineStage"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelineApplier.cs",
+      "loc": 264,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "IPipelineApplier",
+        "ApplyResult",
+        "PipelineApplier"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelineCandleCache.cs",
+      "loc": 35,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "PipelineCandleCache"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelineDagValidator.cs",
+      "loc": 51,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "PipelineDagValidator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelineEngine.cs",
+      "loc": 572,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "PipelineEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelineEntities.cs",
+      "loc": 107,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "PipelineConfiguration",
+        "PipelineRun",
+        "PipelineArtifact"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelineModels.cs",
+      "loc": 639,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "SeriesSpec",
+        "PipelineDateRanges",
+        "StageConfig",
+        "StageConfigExtensions",
+        "StageParameterDefinition",
+        "struct",
+        "StageDependency",
+        "IPipelineCandleCache",
+        "PipelineContext",
+        "SeriesDataStatus",
+        "PowerSeriesEntry",
+        "PowerCheckOutput",
+        "DataIngestionOutput",
+        "AltDataOutput",
+        "FactorIcSummary",
+        "FeatureSelectionOutput",
+        "RegimeOutput",
+        "VolatilityOutput",
+        "PairScreenResult",
+        "PairsOutput",
+        "MlTrainingOutput",
+        "FeatureImportanceDto",
+        "ValidatedCandidate",
+        "PipelineCandidateKey",
+        "ProposedLeg",
+        "EnsembleProposal",
+        "RiskAssessment",
+        "CategoryImpactDto",
+        "NewsImpactOutput",
+        "RecommendationRiskLimits",
+        "PipelineRecommendation",
+        "PlannedAction",
+        "ExecutionPlan",
+        "StageStatus",
+        "StageSummary",
+        "PipelineLiveStatus"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelinePageService.cs",
+      "loc": 385,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "PipelineActionResult",
+        "PipelineConfigDraft",
+        "PipelineSaveResult",
+        "PipelinePageService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelineRules.cs",
+      "loc": 90,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "PipelineRuleSet",
+        "IPipelineRulesProvider",
+        "PipelineRulesProvider"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelineSchedulerWorker.cs",
+      "loc": 392,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "AutoReapplyOptions",
+        "AutoReapplyArtifactKinds",
+        "AutoResumeArtifactKinds",
+        "PipelineSchedulerWorker",
+        "AutoReapplyDecisionArtifact"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/PipelineStageCatalog.cs",
+      "loc": 79,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "PipelineStageCatalog"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/RegimeChangeDetector.cs",
+      "loc": 188,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "RegimeTriggerOptions",
+        "RegimeTriggerCheck",
+        "IRegimeChangeDetector",
+        "RegimeChangeDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/RegimeChangeTriggerWorker.cs",
+      "loc": 83,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "RegimeChangeTriggerWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/RunApplyEvaluator.cs",
+      "loc": 171,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "IRunApplyEvaluator",
+        "RunApplyOutcome",
+        "RunApplyEvaluator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/Stages/AnalysisStages.cs",
+      "loc": 475,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "FeatureEngineeringStage",
+        "RegimeAnalysisStage",
+        "VolatilityRegimeStage",
+        "PairsScreeningStage"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/Stages/CreativeDiscoveryStage.cs",
+      "loc": 141,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "CreativeDiscoveryStage"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/Stages/DataStages.cs",
+      "loc": 199,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "DataIngestionStage",
+        "AltDataSyncStage"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/Stages/DecisionStages.cs",
+      "loc": 579,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "EnsembleAssemblyStage",
+        "RiskSizingStage",
+        "NewsImpactCheckStage",
+        "RecommendationStage",
+        "ExecutionPlanStage"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/Stages/ModelStages.cs",
+      "loc": 788,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "MlModelTrainingStage",
+        "StrategyDiscoveryStage",
+        "HoldoutValidationStage",
+        "RobustnessProbeStage",
+        "OverfittingGate",
+        "struct"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/Stages/NullTwinValidationStage.cs",
+      "loc": 139,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "NullTwinValidationStage"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Pipeline/Stages/PowerCheckStage.cs",
+      "loc": 126,
+      "module": "ProcioneMGR/Services/Pipeline",
+      "layer": "App",
+      "types": [
+        "PowerCheckStage"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Portfolio/HierarchicalRiskParityOptimizer.cs",
+      "loc": 82,
+      "module": "ProcioneMGR/Services/Portfolio",
+      "layer": "Risk",
+      "types": [
+        "HierarchicalRiskParityOptimizer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Portfolio/IPortfolioOptimizer.cs",
+      "loc": 75,
+      "module": "ProcioneMGR/Services/Portfolio",
+      "layer": "Risk",
+      "types": [
+        "MeanVarianceObjective",
+        "CovarianceEstimator",
+        "RiskParityMethod",
+        "PortfolioOptimizationConfig",
+        "PortfolioAllocation",
+        "IPortfolioOptimizer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Portfolio/MeanVarianceOptimizer.cs",
+      "loc": 53,
+      "module": "ProcioneMGR/Services/Portfolio",
+      "layer": "Risk",
+      "types": [
+        "MeanVarianceOptimizer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Portfolio/PortfolioMath.cs",
+      "loc": 218,
+      "module": "ProcioneMGR/Services/Portfolio",
+      "layer": "Risk",
+      "types": [
+        "PortfolioMath"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Portfolio/ReturnMatrixBuilder.cs",
+      "loc": 94,
+      "module": "ProcioneMGR/Services/Portfolio",
+      "layer": "Risk",
+      "types": [
+        "AlignedReturnMatrix",
+        "ReturnMatrixBuilder"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Portfolio/RiskParityOptimizer.cs",
+      "loc": 37,
+      "module": "ProcioneMGR/Services/Portfolio",
+      "layer": "Risk",
+      "types": [
+        "RiskParityOptimizer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Preferences/PageConfigStore.cs",
+      "loc": 78,
+      "module": "ProcioneMGR/Services/Preferences",
+      "layer": "App",
+      "types": [
+        "IPageConfigStore",
+        "PageConfigStore"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/IMarketFeatureExtractor.cs",
+      "loc": 28,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "IMarketFeatureExtractor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/IRegimeDetector.cs",
+      "loc": 38,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "IRegimeDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/JumpModel.cs",
+      "loc": 288,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "JumpModelFit",
+        "JumpModel"
+      ],
+      "status": "Dead"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/LaneRegimeRouter.cs",
+      "loc": 265,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "RegimeRoutingRule",
+        "RegimeRoutingOptions",
+        "RegimeRoutingDecision",
+        "ILaneRegimeRouter",
+        "LaneRegimeRouter"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/MarketBreadthCalculator.cs",
+      "loc": 76,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "IMarketBreadthCalculator",
+        "MarketBreadthCalculator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/MarketFeatureExtractor.cs",
+      "loc": 215,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "MarketFeatureExtractor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/MarketFeatures.cs",
+      "loc": 171,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "MarketFeatures",
+        "FeatureScaling",
+        "FeatureNormalizer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/RegimeAssignment.cs",
+      "loc": 192,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "RegimeAssignment"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/RegimeAugmentation.cs",
+      "loc": 76,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "RegimeAugmentation"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/RegimeDetector.cs",
+      "loc": 548,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "RegimeDetector"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/RegimeModels.cs",
+      "loc": 93,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "TrainingConfiguration",
+        "RegimeModel",
+        "RegimeProfile",
+        "StrategyPerformanceInRegime"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Regime/RegimeRetrainingWorker.cs",
+      "loc": 98,
+      "module": "ProcioneMGR/Services/Regime",
+      "layer": "Domain",
+      "types": [
+        "RegimeRetrainingWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Registry/ModelRegistry.cs",
+      "loc": 161,
+      "module": "ProcioneMGR/Services/Registry",
+      "layer": "ML",
+      "types": [
+        "ModelRegistryOptions",
+        "PromotionOutcome",
+        "IModelRegistry",
+        "ModelRegistry"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Risk/BotPageService.cs",
+      "loc": 247,
+      "module": "ProcioneMGR/Services/Risk",
+      "layer": "Risk",
+      "types": [
+        "BotPageService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Risk/CorrelatedExposureGuard.cs",
+      "loc": 244,
+      "module": "ProcioneMGR/Services/Risk",
+      "layer": "Risk",
+      "types": [
+        "CorrelatedExposureAssessment",
+        "CorrelatedExposureContribution",
+        "CorrelatedExposureOptions",
+        "ICorrelatedExposureGuard",
+        "CorrelatedExposureGuard"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Risk/KellyCalculator.cs",
+      "loc": 228,
+      "module": "ProcioneMGR/Services/Risk",
+      "layer": "Risk",
+      "types": [
+        "KellyCalculator",
+        "KellySuggestion"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Risk/LeverageAdvisor.cs",
+      "loc": 140,
+      "module": "ProcioneMGR/Services/Risk",
+      "layer": "Risk",
+      "types": [
+        "LeverageAdvisor",
+        "LeverageScenario",
+        "LeverageAdvice"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Risk/MarginMath.cs",
+      "loc": 45,
+      "module": "ProcioneMGR/Services/Risk",
+      "layer": "Risk",
+      "types": [
+        "MarginMath"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Risk/MonteCarloAnalyzer.cs",
+      "loc": 210,
+      "module": "ProcioneMGR/Services/Risk",
+      "layer": "Risk",
+      "types": [
+        "MonteCarloAnalyzer",
+        "MonteCarloSamplingMode",
+        "MonteCarloConfig",
+        "MonteCarloResult"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Risk/PerformanceControlService.cs",
+      "loc": 212,
+      "module": "ProcioneMGR/Services/Risk",
+      "layer": "Risk",
+      "types": [
+        "PerformanceControlService",
+        "EquityControlResult"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Risk/RiskProfile.cs",
+      "loc": 188,
+      "module": "ProcioneMGR/Services/Risk",
+      "layer": "Risk",
+      "types": [
+        "RiskProfile",
+        "RiskProfiles"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Security/AesGcmEncryptionService.cs",
+      "loc": 153,
+      "module": "ProcioneMGR/Services/Security",
+      "layer": "Infra",
+      "types": [
+        "AesGcmEncryptionService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Security/DataProtectionSetup.cs",
+      "loc": 52,
+      "module": "ProcioneMGR/Services/Security",
+      "layer": "Infra",
+      "types": [
+        "DataProtectionSetup"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Security/EncryptedStringConverter.cs",
+      "loc": 18,
+      "module": "ProcioneMGR/Services/Security",
+      "layer": "Infra",
+      "types": [
+        "EncryptedStringConverter"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Security/ExchangeCredentialReader.cs",
+      "loc": 129,
+      "module": "ProcioneMGR/Services/Security",
+      "layer": "Infra",
+      "types": [
+        "DecryptedExchangeCredential",
+        "IExchangeCredentialReader",
+        "ExchangeCredentialReader"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Security/IEncryptionService.cs",
+      "loc": 26,
+      "module": "ProcioneMGR/Services/Security",
+      "layer": "Infra",
+      "types": [
+        "IEncryptionService",
+        "IMasterKeyStatus"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Security/MasterKeyProbe.cs",
+      "loc": 123,
+      "module": "ProcioneMGR/Services/Security",
+      "layer": "Infra",
+      "types": [
+        "MasterKeyProbeResult",
+        "IMasterKeyProbe",
+        "MasterKeyProbe",
+        "MasterKeyProbeWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/DelegatingSentimentScorer.cs",
+      "loc": 39,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "SentimentScorerProviders",
+        "DelegatingSentimentScorer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/HashingTextVectorizer.cs",
+      "loc": 88,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "HashingTextVectorizer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/ISentimentScorer.cs",
+      "loc": 20,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "ISentimentScorer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/KeywordSentimentScorer.cs",
+      "loc": 48,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "KeywordSentimentScorer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/LlmSentimentScorer.cs",
+      "loc": 189,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "LlmSentimentScorer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/Metrics/BinanceFuturesSentimentClient.cs",
+      "loc": 151,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "BinanceFuturesSentimentClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/Metrics/FearGreedClient.cs",
+      "loc": 66,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "FearGreedClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/Metrics/ISentimentMetricSource.cs",
+      "loc": 31,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "SentimentMetricSample",
+        "ISentimentMetricSource",
+        "IBackfillableMetricSource"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/Metrics/SentimentMetricSyncService.cs",
+      "loc": 121,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "ISentimentMetricSyncService",
+        "SentimentMetricSyncService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/OnnxSentimentPilotService.cs",
+      "loc": 180,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "OnnxPilotTrainResult",
+        "OnnxSentimentPilotService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/OnnxSentimentScorer.cs",
+      "loc": 196,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "OnnxSentimentScorer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentAlphaFactor.cs",
+      "loc": 70,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "ScoredNewsItem",
+        "SentimentAlphaFactor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentCompositeCalculator.cs",
+      "loc": 195,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "SentimentCompositeCalculator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentFeatureFactor.cs",
+      "loc": 40,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "SentimentFeatureFactor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentNewsProvider.cs",
+      "loc": 62,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "ISentimentNewsProvider",
+        "SentimentNewsProvider"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentOptions.cs",
+      "loc": 68,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "SentimentOptions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentScorerComparisonService.cs",
+      "loc": 220,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "ScorerComparisonRequest",
+        "ScorerComparisonEntry",
+        "ScorerDisagreement",
+        "ScorerComparisonResult",
+        "SentimentScorerComparisonService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentSnapshot.cs",
+      "loc": 56,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "SentimentSnapshot",
+        "SymbolSentiment"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentSnapshotService.cs",
+      "loc": 90,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "SentimentSnapshotCache",
+        "ISentimentSnapshotService",
+        "SentimentSnapshotService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentSourceHealthRegistry.cs",
+      "loc": 36,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "SourceHealth",
+        "SentimentSourceHealthRegistry"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Sentiment/SentimentSyncWorker.cs",
+      "loc": 127,
+      "module": "ProcioneMGR/Services/Sentiment",
+      "layer": "Data",
+      "types": [
+        "SentimentSyncWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/TimeSeries/EngleGrangerCointegrationTest.cs",
+      "loc": 196,
+      "module": "ProcioneMGR/Services/TimeSeries",
+      "layer": "Domain",
+      "types": [
+        "EngleGrangerCointegrationTest"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/TimeSeries/GarchFit.cs",
+      "loc": 67,
+      "module": "ProcioneMGR/Services/TimeSeries",
+      "layer": "Domain",
+      "types": [
+        "GarchFit"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/TimeSeries/GarchModel.cs",
+      "loc": 119,
+      "module": "ProcioneMGR/Services/TimeSeries",
+      "layer": "Domain",
+      "types": [
+        "GarchModel"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/TimeSeries/HarRvForecaster.cs",
+      "loc": 159,
+      "module": "ProcioneMGR/Services/TimeSeries",
+      "layer": "Domain",
+      "types": [
+        "HarRvForecaster",
+        "RealizedVariance"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/TimeSeries/ICointegrationTest.cs",
+      "loc": 63,
+      "module": "ProcioneMGR/Services/TimeSeries",
+      "layer": "Domain",
+      "types": [
+        "CointegrationResult",
+        "ICointegrationTest"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/TimeSeries/IGarchModel.cs",
+      "loc": 35,
+      "module": "ProcioneMGR/Services/TimeSeries",
+      "layer": "Domain",
+      "types": [
+        "GarchInnovation",
+        "IGarchModel"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/TimeSeries/OlsRegression.cs",
+      "loc": 38,
+      "module": "ProcioneMGR/Services/TimeSeries",
+      "layer": "Domain",
+      "types": [
+        "OlsResult",
+        "OlsRegression"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/TimeSeries/PairsSpreadAnalyzer.cs",
+      "loc": 41,
+      "module": "ProcioneMGR/Services/TimeSeries",
+      "layer": "Domain",
+      "types": [
+        "PairsSpreadAnalyzer"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Behaviors/LoggingBehavior.cs",
+      "loc": 30,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "LoggingBehavior<TMessage"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Commands/ClosePositionCommand.cs",
+      "loc": 15,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ClosePositionCommand",
+        "ClosePositionCommandHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Commands/ConfirmOrderCommand.cs",
+      "loc": 15,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ConfirmOrderCommand",
+        "ConfirmOrderCommandHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Commands/EmergencyStopCommand.cs",
+      "loc": 15,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "EmergencyStopCommand",
+        "EmergencyStopCommandHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Commands/RejectOrderCommand.cs",
+      "loc": 15,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "RejectOrderCommand",
+        "RejectOrderCommandHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Commands/SetStopLossTakeProfitCommand.cs",
+      "loc": 21,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "SetStopLossTakeProfitCommand",
+        "SetStopLossTakeProfitCommandHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Commands/StartLaneCommand.cs",
+      "loc": 15,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "StartLaneCommand",
+        "StartLaneCommandHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Commands/StopLaneCommand.cs",
+      "loc": 15,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "StopLaneCommand",
+        "StopLaneCommandHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/DecimalValueMapper.cs",
+      "loc": 77,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "DecimalValueMapper"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/EngineConfigSections.cs",
+      "loc": 122,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "EngineConfigSections"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/EngineConfigService.cs",
+      "loc": 284,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "EngineConfigSectionView",
+        "EngineConfigWriteResult",
+        "EngineConfigService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/EngineConfigStore.cs",
+      "loc": 268,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "IEngineConfigStore",
+        "EngineNotificationChannelStatus",
+        "EngineConfigSnapshot",
+        "LocalEngineConfigStore",
+        "RemoteEngineConfigStore"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/ExecutionJobModels.cs",
+      "loc": 99,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ExecutionJob",
+        "ExecutionJobSlice",
+        "ExecutionJobSlices"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/ExecutionWorker.cs",
+      "loc": 49,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ExecutionWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/ITradingEngine.cs",
+      "loc": 69,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ITradingEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/AutoStopApplier.cs",
+      "loc": 38,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "AutoStopApplier"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/BracketOrderManager.cs",
+      "loc": 87,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "BracketOrderManager"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/ExecutionQuality.cs",
+      "loc": 61,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ExecutionQuality"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/ExecutionSlicePlanner.cs",
+      "loc": 124,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ExecutionSlicePlanner"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/FillSanityCheck.cs",
+      "loc": 57,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "FillSanityCheck"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/FuturesPositionReconciler.cs",
+      "loc": 80,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "FuturesPositionReconciler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/OrderReconciler.cs",
+      "loc": 85,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ReconcileStatus",
+        "ReconcileOutcome",
+        "OrderReconciler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/PositionCloser.cs",
+      "loc": 367,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "PositionCloser"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/PositionOpener.cs",
+      "loc": 413,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "PositionOpener"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/ProtectiveExitEvaluator.cs",
+      "loc": 134,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ProtectiveExitKind",
+        "struct",
+        "ProtectiveExitEvaluator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/SignalOrderBuilder.cs",
+      "loc": 116,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "SignalOrderBuilder"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/TradingPersistence.cs",
+      "loc": 130,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingPersistence"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Internal/VolatilityScaler.cs",
+      "loc": 105,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "VolatilityScaler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LaneCountCoherenceProbe.cs",
+      "loc": 179,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "LaneCountCoherenceResult",
+        "LaneCountCoherenceProbe",
+        "LaneCountCoherenceProbeWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LaneDirectory.cs",
+      "loc": 83,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "LaneSummary",
+        "ILaneDirectory",
+        "LaneDirectory"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LaneEpisodes.cs",
+      "loc": 205,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "LaneEpisodeSource",
+        "LaneEpisode",
+        "LaneEpisodeBuilder"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LaneExecutionLease.cs",
+      "loc": 109,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ILaneLease",
+        "ILaneLeaseFactory",
+        "NpgsqlLaneLeaseFactory"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LaneInvariantChecker.cs",
+      "loc": 64,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "LaneInvariantChecker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LaneInvariantOptions.cs",
+      "loc": 26,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "LaneInvariantOptions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LaneInvariantWatchdog.cs",
+      "loc": 265,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "LaneInvariantWatchdog"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LanePromoter.cs",
+      "loc": 72,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ILanePromoter",
+        "LanePromoter"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LaneQuarantineStore.cs",
+      "loc": 103,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ILaneQuarantineStore",
+        "LaneQuarantineStore"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LaneSafetyMonitor.cs",
+      "loc": 70,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ILaneRiskProfileSink",
+        "LaneSafetyMonitor"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/LiveExecutionOptions.cs",
+      "loc": 22,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "LiveExecutionOptions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/PromotionEvaluator.cs",
+      "loc": 273,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "PromotionEvaluatorOptions",
+        "LaneMetrics",
+        "PromotionDecision",
+        "IPromotionEvaluator",
+        "PromotionEvaluator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/PromotionWorker.cs",
+      "loc": 111,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "PromotionWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/ProtectiveExitAudit.cs",
+      "loc": 104,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ProtectiveExitAnomaly",
+        "ProtectiveExitAudit"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/ProtectiveExitDiagnosticsService.cs",
+      "loc": 248,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ProtectiveExitDiagnosticsService"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/ProtectiveExitLagAnalyzer.cs",
+      "loc": 410,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ProtectiveExitLagAnalyzer",
+        "ProtectiveExitLagRequest",
+        "ProtectiveExitLagObservation",
+        "ProtectiveExitLagReport"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/ProtectiveExitShadow.cs",
+      "loc": 143,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "ProtectiveExitShadow",
+        "IProtectiveExitShadowRecorder",
+        "ProtectiveExitShadowOptions",
+        "ProtectiveExitShadowRecorder"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Queries/GetLaneStatusQuery.cs",
+      "loc": 12,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "GetLaneStatusQuery",
+        "GetLaneStatusQueryHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Queries/GetOpenPositionsQuery.cs",
+      "loc": 12,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "GetOpenPositionsQuery",
+        "GetOpenPositionsQueryHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Queries/GetOrderHistoryQuery.cs",
+      "loc": 12,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "GetOrderHistoryQuery",
+        "GetOrderHistoryQueryHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Queries/GetPendingOrdersQuery.cs",
+      "loc": 12,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "GetPendingOrdersQuery",
+        "GetPendingOrdersQueryHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/Queries/GetPerformanceQuery.cs",
+      "loc": 12,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "GetPerformanceQuery",
+        "GetPerformanceQueryHandler"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/RemoteTradingEngineClient.cs",
+      "loc": 180,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "RemoteTradingEngineClient"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/SafetyChecker.cs",
+      "loc": 122,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "SafetyCheckResult",
+        "SafetyChecker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/SafetyConfiguration.cs",
+      "loc": 130,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "SafetyConfiguration"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/TradingContractMapper.cs",
+      "loc": 286,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingContractMapper"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/TradingEngine.cs",
+      "loc": 1668,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingEngine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/TradingEntities.cs",
+      "loc": 95,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingEngineState",
+        "TradingAuditLog",
+        "LaneQuarantine"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/TradingLanes.cs",
+      "loc": 87,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingLanes"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/TradingModels.cs",
+      "loc": 280,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingMode",
+        "MarketType",
+        "OrderSide",
+        "OrderType",
+        "OrderStatus",
+        "TradingEngineStatus",
+        "OpenPosition",
+        "Order",
+        "TradingPerformance",
+        "TradeRecord"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/TradingOrderQueries.cs",
+      "loc": 40,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingOrderQueries"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/TradingPageService.cs",
+      "loc": 571,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingPageService",
+        "LaneStoryStrategy",
+        "LaneStoryInfo"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/TradingServiceCollectionExtensions.cs",
+      "loc": 360,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingServiceCollectionExtensions"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Trading/TradingWorker.cs",
+      "loc": 193,
+      "module": "ProcioneMGR/Services/Trading",
+      "layer": "Exec",
+      "types": [
+        "TradingWorker"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/BacktestOverfitting.cs",
+      "loc": 103,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "PboResult",
+        "BacktestOverfitting"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/CombinatorialPurgedCv.cs",
+      "loc": 106,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "CpcvSplit",
+        "ICombinatorialPurgedCv",
+        "CombinatorialPurgedCv"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/DeflatedSharpeRatio.cs",
+      "loc": 160,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "ReturnMoments",
+        "DeflatedSharpeRatio"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/EffectiveTrials.cs",
+      "loc": 100,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "EffectiveTrials"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/GatePowerAnalyzer.cs",
+      "loc": 192,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "GatePowerAnalyzer",
+        "struct"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/MinTrackRecord.cs",
+      "loc": 96,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "MinTrackRecord"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/NullTwinGenerator.cs",
+      "loc": 111,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "NullTwinGenerator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/NullTwinJudge.cs",
+      "loc": 144,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "NullTwinVerdict",
+        "INullTwinJudge",
+        "NullTwinJudge"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/PermutationTest.cs",
+      "loc": 68,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "PermutationTest",
+        "struct"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "ProcioneMGR/Services/Validation/SelectionValidator.cs",
+      "loc": 74,
+      "module": "ProcioneMGR/Services/Validation",
+      "layer": "Domain",
+      "types": [
+        "SelectionValidation",
+        "SelectionValidator"
+      ],
+      "status": "Implemented"
+    },
+    {
+      "path": "tools/DbBackup/Program.cs",
+      "loc": 98,
+      "module": "tools",
+      "layer": "Scripts",
+      "types": [],
+      "status": "Implemented"
+    },
+    {
+      "path": "tools/FuturesVerify/Program.cs",
+      "loc": 113,
+      "module": "tools",
+      "layer": "Scripts",
+      "types": [],
+      "status": "Implemented"
+    },
+    {
+      "path": "tools/PlatformExpand/Program.cs",
+      "loc": 5848,
+      "module": "tools",
+      "layer": "Scripts",
+      "types": [],
+      "status": "Implemented"
+    },
+    {
+      "path": "tools/SpotVerify/Program.cs",
+      "loc": 164,
+      "module": "tools",
+      "layer": "Scripts",
+      "types": [],
+      "status": "Implemented"
+    },
+    {
+      "path": "tools/StrategyHunter/Program.cs",
+      "loc": 409,
+      "module": "tools",
+      "layer": "Scripts",
+      "types": [],
+      "status": "Implemented"
+    }
+  ],
+  "ui_components": [
+    {
+      "path": "ProcioneMGR/Components/Pages/AdminUsers.razor",
+      "route": "/admin/users",
+      "loc": 141,
+      "injected_services": [
+        "UserManager<ApplicationUser>"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/AlphaMining.razor",
+      "route": "/alpha-mining",
+      "loc": 375,
+      "injected_services": [
+        "GeneticAlphaMiner",
+        "IExperimentTracker",
+        "AuthenticationStateProvider",
+        "IDbContextFactory<ApplicationDbContext>"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Backtest.razor",
+      "route": "/backtest",
+      "loc": 833,
+      "injected_services": [
+        "IStrategyFactory",
+        "AuthenticationStateProvider",
+        "BacktestPageService"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Bot.razor",
+      "route": "/bot",
+      "loc": 298,
+      "injected_services": [
+        "BotPageService",
+        "ILogger<Bot>"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Campaign.razor",
+      "route": "/campaign",
+      "loc": 237,
+      "injected_services": [
+        "CampaignPageService",
+        "AuthenticationStateProvider"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Dashboard.razor",
+      "route": "/dashboard",
+      "loc": 386,
+      "injected_services": [
+        "IOhlcvIngestionService",
+        "IExchangeClientFactory",
+        "IDbContextFactory<ApplicationDbContext>",
+        "ITechnicalIndicatorsService",
+        "IPromotionEvaluator"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Discovery.razor",
+      "route": "/discovery",
+      "loc": 420,
+      "injected_services": [
+        "IStrategyDiscovery",
+        "IStrategyComposer",
+        "IStrategyFactory",
+        "ProcioneMGR.Services.Experiments.IExperimentTracker",
+        "IDbContextFactory<ApplicationDbContext>",
+        "AuthenticationStateProvider"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Ensemble.razor",
+      "route": "/ensemble",
+      "loc": 762,
+      "injected_services": [
+        "IStrategyFactory",
+        "ILogger<Ensemble>",
+        "EnsemblePageService",
+        "ILaneDirectory"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Error.razor",
+      "route": "/Error",
+      "loc": 37,
+      "injected_services": [],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/ExchangeSettings.razor",
+      "route": "/settings/exchanges",
+      "loc": 392,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "IExchangeClientFactory",
+        "IExchangeCredentialReader",
+        "IMasterKeyProbe",
+        "AuthenticationStateProvider"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/ExecutionLab.razor",
+      "route": "/execution",
+      "loc": 316,
+      "injected_services": [
+        "IExecutionAlgorithmFactory",
+        "IExecutionSimulator",
+        "IOptionsMonitor<ExecutionParameters>",
+        "IAppConfigWriter",
+        "IExperimentTracker",
+        "IDbContextFactory<ApplicationDbContext>",
+        "AuthenticationStateProvider"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Experiments.razor",
+      "route": "/experiments",
+      "loc": 334,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/FeatureSelection.razor",
+      "route": "/feature-selection",
+      "loc": 762,
+      "injected_services": [
+        "IIcFeatureSelector",
+        "IFactorDriftAnalyzer",
+        "IFactorIcHistoryStore",
+        "IConfiguration",
+        "IAlphaFactorFactory",
+        "IDbContextFactory<ApplicationDbContext>",
+        "IJSRuntime",
+        "AuthenticationStateProvider"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Home.razor",
+      "route": "/",
+      "loc": 289,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "AuthenticationStateProvider",
+        "IEnsembleManager",
+        "FactorDriftSnapshot"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/InformationBars.razor",
+      "route": "/market/bars",
+      "loc": 323,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "IJSRuntime"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/MarketAnalysis.razor",
+      "route": "/market-analysis",
+      "loc": 746,
+      "injected_services": [
+        "AuthenticationStateProvider",
+        "IDbContextFactory<ApplicationDbContext>",
+        "GapLapAnalyzer",
+        "ExcursionAnalyzer",
+        "CyclicalAnalyzer",
+        "CandlestickPatternDetector",
+        "SupportResistanceAnalyzer",
+        "ChartPatternDetector",
+        "VolumeAnalyzer",
+        "IDtwPatternAnalysisService"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Metrics.razor",
+      "route": "/metrics",
+      "loc": 359,
+      "injected_services": [
+        "MetricsCollector",
+        "IJSRuntime",
+        "ILogger<Metrics>",
+        "IConfiguration"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/MlLab.razor",
+      "route": "/ml",
+      "loc": 1022,
+      "injected_services": [
+        "IAlphaFactorFactory",
+        "AuthenticationStateProvider",
+        "MlLabService"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/NotFound.razor",
+      "route": "/not-found",
+      "loc": 5,
+      "injected_services": [],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/OhlcvChart.razor",
+      "route": null,
+      "loc": 111,
+      "injected_services": [
+        "IJSRuntime"
+      ],
+      "kind": "component"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Optimization.razor",
+      "route": "/optimization",
+      "loc": 737,
+      "injected_services": [
+        "IStrategyFactory",
+        "AuthenticationStateProvider",
+        "IJSRuntime",
+        "OptimizationPageService"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/PairsTrading.razor",
+      "route": "/pairs-trading",
+      "loc": 487,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "IPairsBacktestEngine",
+        "AuthenticationStateProvider"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Pipeline.razor",
+      "route": "/pipeline",
+      "loc": 706,
+      "injected_services": [
+        "IPipelineStageCatalog",
+        "IPipelineRulesProvider",
+        "AuthenticationStateProvider",
+        "ILogger<Pipeline>",
+        "PipelinePageService"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/PortfolioOptimization.razor",
+      "route": "/portfolio",
+      "loc": 433,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "MeanVarianceOptimizer",
+        "RiskParityOptimizer",
+        "HierarchicalRiskParityOptimizer",
+        "IRiskFactorPca",
+        "IJSRuntime"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Regimes.razor",
+      "route": "/regimes",
+      "loc": 417,
+      "injected_services": [
+        "IRegimeDetector",
+        "IMarketFeatureExtractor",
+        "IEnsembleManager",
+        "IStrategyFactory",
+        "IDbContextFactory<ApplicationDbContext>",
+        "AuthenticationStateProvider"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Registry.razor",
+      "route": "/registry",
+      "loc": 164,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "IModelRegistry"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Sentiment.razor",
+      "route": "/sentiment",
+      "loc": 1138,
+      "injected_services": [
+        "AuthenticationStateProvider",
+        "IDbContextFactory<ApplicationDbContext>",
+        "IAltDataSyncService",
+        "IFactorEvaluator",
+        "INewsImpactAnalyzer",
+        "IEnumerable<IAltDataSource>",
+        "SentimentSnapshotCache",
+        "ISentimentSnapshotService",
+        "SentimentSourceHealthRegistry",
+        "SentimentSyncWorker",
+        "SentimentScorerComparisonService",
+        "OnnxSentimentPilotService",
+        "OnnxSentimentScorer",
+        "IOptionsMonitor<SentimentOptions>",
+        "ProcioneMGR.Services.Config.IAppConfigWriter"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Strategies.razor",
+      "route": "/strategies",
+      "loc": 138,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "AuthenticationStateProvider",
+        "NavigationManager"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Trading.razor",
+      "route": "/trading",
+      "loc": 1575,
+      "injected_services": [
+        "TradingPageService",
+        "ProcioneMGR.Services.Security.IMasterKeyProbe",
+        "AuthenticationStateProvider",
+        "ILogger<Trading>",
+        "ILaneDirectory",
+        "ProtectiveExitDiagnosticsService"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Volatility.razor",
+      "route": "/volatility",
+      "loc": 289,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "IGarchModel",
+        "AuthenticationStateProvider"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Watchlist.razor",
+      "route": "/market/watchlist",
+      "loc": 308,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "IMarketDataSyncService"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Admin/AiSupervisor.razor",
+      "route": "/admin/ai-supervisor",
+      "loc": 1390,
+      "injected_services": [
+        "IDbContextFactory<ApplicationDbContext>",
+        "ILlmClient",
+        "ILlmCallGuard",
+        "IPipelineSupervisor",
+        "LlmSupervisorWorker",
+        "IAiKeyStore",
+        "IOptionsMonitor<LlmOptions>",
+        "ILlmClientResolver",
+        "ProcioneMGR.Services.Config.IAppConfigWriter",
+        "ILlmUsageSink",
+        "IOptionsMonitor<LlmBudgetOptions>",
+        "IOptionsMonitor<ProcioneMGR.Services.Llm.Committee.CommitteeOptions>",
+        "ProcioneMGR.Services.Llm.Narration.IRejectionExplainService",
+        "ProcioneMGR.Services.Llm.Narration.IPostMortemService",
+        "IOptionsMonitor<ProcioneMGR.Services.Llm.Narration.PostMortemOptions>"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Admin/Autonomy.razor",
+      "route": "/admin/autonomy",
+      "loc": 1975,
+      "injected_services": [
+        "IAppConfigWriter",
+        "IConfiguration",
+        "IDbContextFactory<ApplicationDbContext>",
+        "IOptionsMonitor<AutoReapplyOptions>",
+        "IOptionsMonitor<PromotionEvaluatorOptions>",
+        "IOptionsMonitor<LlmOptions>",
+        "IOptionsMonitor<SupervisorAgentOptions>",
+        "IOptionsMonitor<DriftMonitorOptions>",
+        "ILlmClient",
+        "LlmSupervisorWorker",
+        "FeatureDriftWorker",
+        "IOptionsMonitor<ProcioneMGR.Services.Sentiment.SentimentOptions>",
+        "ProcioneMGR.Services.Sentiment.SentimentSyncWorker",
+        "IOptionsMonitor<NotificationOptions>",
+        "NotificationDispatcher",
+        "IOptionsMonitor<CampaignOptions>",
+        "IOptionsMonitor<RegimeTriggerOptions>",
+        "IOptionsMonitor<ProcioneMGR.Services.Fleet.FleetOptions>",
+        "ProcioneMGR.Services.Fleet.FleetOrchestratorWorker",
+        "ProcioneMGR.Services.Fleet.IGreyDeployer",
+        "ILaneDirectory",
+        "IPipelineApplier",
+        "IOptionsMonitor<ProcioneMGR.Services.Health.HeartbeatOptions>",
+        "IOptionsMonitor<DigestOptions>",
+        "EnsembleComparatorOptions",
+        "ModelRegistryOptions",
+        "IEngineConfigStore",
+        "IOptionsMonitor<LiquidationsOptions>",
+        "IServiceProvider"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Admin/Backup.razor",
+      "route": "/admin/backup",
+      "loc": 200,
+      "injected_services": [
+        "DatabaseBackupService"
+      ],
+      "kind": "page"
+    },
+    {
+      "path": "ProcioneMGR/Components/Pages/Admin/Protections.razor",
+      "route": "/admin/protections",
+      "loc": 534,
+      "injected_services": [
+        "IEngineConfigStore",
+        "IStrategyFactory"
+      ],
+      "kind": "page"
+    }
+  ],
+  "algorithms": [
+    {
+      "id": "A1",
+      "name": "Alpha158 catalog",
+      "file": "ProcioneMGR/Services/Alpha/Alpha158/Alpha158Catalog.cs",
+      "category": "feature",
+      "status": "IMPL",
+      "integrated_via": "AlphaFactorFactory.cs:60",
+      "risks": [
+        "prove multiple: richiede EffectiveTrials nel DSR",
+        "deriva non sorvegliata (G-04)"
+      ]
+    },
+    {
+      "id": "A2",
+      "name": "RollingOps (operatori causali)",
+      "file": "ProcioneMGR/Services/Alpha/Alpha158/RollingOps.cs",
+      "category": "feature",
+      "status": "IMPL",
+      "risks": [
+        "punto unico dove un lookahead contaminerebbe tutti i 158 fattori"
+      ]
+    },
+    {
+      "id": "A6",
+      "name": "Genetic alpha miner",
+      "file": "ProcioneMGR/Services/AlphaMining/GeneticAlphaMiner.cs",
+      "category": "discovery",
+      "status": "IMPL",
+      "deterministic": true,
+      "seed": 42,
+      "risks": [
+        "overfitting per costruzione, mitigato da gate CV"
+      ]
+    },
+    {
+      "id": "B1",
+      "name": "Information Coefficient",
+      "file": "ProcioneMGR/Services/Alpha/FactorEvaluator.cs",
+      "category": "factor-analysis",
+      "status": "IMPL"
+    },
+    {
+      "id": "B2",
+      "name": "IC feature selection",
+      "file": "ProcioneMGR/Services/ML/IcFeatureSelector.cs",
+      "category": "feature-selection",
+      "status": "IMPL",
+      "risks": [
+        "G-15: possibile leakage di selezione se fuori dai fold (da verificare)"
+      ]
+    },
+    {
+      "id": "C1",
+      "name": "Linear",
+      "file": "ProcioneMGR/Services/ML/LinearReturnPredictor.cs",
+      "category": "model",
+      "status": "IMPL"
+    },
+    {
+      "id": "C2",
+      "name": "Random Forest (ML.NET FastForest)",
+      "file": "ProcioneMGR/Services/ML/RandomForestReturnPredictor.cs",
+      "category": "model",
+      "status": "IMPL"
+    },
+    {
+      "id": "C3",
+      "name": "Gradient Boosting (ML.NET FastTree, esposto come 'LightGBM')",
+      "file": "ProcioneMGR/Services/ML/GradientBoostingReturnPredictor.cs",
+      "category": "model",
+      "status": "IMPL",
+      "risks": [
+        "G-12: naming fuorviante"
+      ]
+    },
+    {
+      "id": "C4",
+      "name": "MLP",
+      "file": "ProcioneMGR/Services/ML/MlpReturnPredictor.cs",
+      "category": "model",
+      "status": "IMPL",
+      "deterministic": "partial",
+      "risks": [
+        "G-08: new Random(42) cablato a riga 234"
+      ]
+    },
+    {
+      "id": "C5",
+      "name": "Attention",
+      "file": "ProcioneMGR/Services/ML/AttentionReturnPredictor.cs",
+      "category": "model",
+      "status": "IMPL"
+    },
+    {
+      "id": "C6",
+      "name": "Stacked ensemble",
+      "file": "ProcioneMGR/Services/ML/StackedReturnPredictor.cs",
+      "category": "model",
+      "status": "IMPL",
+      "risks": [
+        "G-08: new Random(42) cablato a riga 382"
+      ]
+    },
+    {
+      "id": "C7",
+      "name": "Triple-barrier + meta-labeling",
+      "file": "ProcioneMGR/Services/ML/Labeling/",
+      "category": "labeling",
+      "status": "IMPL"
+    },
+    {
+      "id": "C8",
+      "name": "TreeSHAP",
+      "file": "ProcioneMGR/Services/ML/Shap/TreeShapExplainer.cs",
+      "category": "explainability",
+      "status": "IMPL"
+    },
+    {
+      "id": "D1",
+      "name": "Purged time-series CV",
+      "file": "ProcioneMGR/Services/ML/PurgedTimeSeriesCv.cs",
+      "category": "validation",
+      "status": "IMPL"
+    },
+    {
+      "id": "D2",
+      "name": "Combinatorial Purged CV",
+      "file": "ProcioneMGR/Services/Validation/CombinatorialPurgedCv.cs",
+      "category": "validation",
+      "status": "IMPL",
+      "risks": [
+        "G-07: ICombinatorialPurgedCv non registrata né usata"
+      ]
+    },
+    {
+      "id": "D3",
+      "name": "Deflated Sharpe Ratio",
+      "file": "ProcioneMGR/Services/Validation/DeflatedSharpeRatio.cs",
+      "category": "validation",
+      "status": "IMPL"
+    },
+    {
+      "id": "D5",
+      "name": "Minimum Track Record Length",
+      "file": "ProcioneMGR/Services/Validation/MinTrackRecord.cs",
+      "category": "validation",
+      "status": "IMPL",
+      "used_by": "PowerCheckStage"
+    },
+    {
+      "id": "D6",
+      "name": "Null twin (block bootstrap)",
+      "file": "ProcioneMGR/Services/Validation/NullTwinGenerator.cs",
+      "category": "validation",
+      "status": "IMPL",
+      "deterministic": true,
+      "notes": "200 gemelli, 99 percentile; giudice unico condiviso pipeline/CLI"
+    },
+    {
+      "id": "D7",
+      "name": "PBO",
+      "file": "ProcioneMGR/Services/Validation/BacktestOverfitting.cs",
+      "category": "validation",
+      "status": "IMPL"
+    },
+    {
+      "id": "E1",
+      "name": "RegimeDetector (K-means)",
+      "file": "ProcioneMGR/Services/Regime/RegimeDetector.cs",
+      "category": "regime",
+      "status": "IMPL"
+    },
+    {
+      "id": "E2",
+      "name": "JumpModel (regime con penalita di salto)",
+      "file": "ProcioneMGR/Services/Regime/JumpModel.cs",
+      "category": "regime",
+      "status": "DEAD",
+      "gap": "C-04"
+    },
+    {
+      "id": "G1",
+      "name": "Hierarchical Risk Parity",
+      "file": "ProcioneMGR/Services/Portfolio/HierarchicalRiskParityOptimizer.cs",
+      "category": "portfolio",
+      "status": "IMPL",
+      "integrated_via": "Stages/DecisionStages.cs:90"
+    },
+    {
+      "id": "G2",
+      "name": "Mean-Variance",
+      "file": "ProcioneMGR/Services/Portfolio/MeanVarianceOptimizer.cs",
+      "category": "portfolio",
+      "status": "DISCONNECTED",
+      "gap": "C-05"
+    },
+    {
+      "id": "G3",
+      "name": "Risk Parity / ERC",
+      "file": "ProcioneMGR/Services/Portfolio/RiskParityOptimizer.cs",
+      "category": "portfolio",
+      "status": "DISCONNECTED",
+      "gap": "C-05"
+    },
+    {
+      "id": "H1",
+      "name": "GARCH(1,1)",
+      "file": "ProcioneMGR/Services/TimeSeries/GarchModel.cs",
+      "category": "volatility",
+      "status": "IMPL",
+      "notes": "deliberatamente fuori dal position sizing: non validato per quell'uso"
+    },
+    {
+      "id": "H2",
+      "name": "HAR-RV",
+      "file": "ProcioneMGR/Services/TimeSeries/HarRvForecaster.cs",
+      "category": "volatility",
+      "status": "IMPL",
+      "integrated_via": "Stages/AnalysisStages.cs:295"
+    },
+    {
+      "id": "H4",
+      "name": "Engle-Granger cointegration",
+      "file": "ProcioneMGR/Services/TimeSeries/EngleGrangerCointegrationTest.cs",
+      "category": "stat-arb",
+      "status": "IMPL",
+      "notes": "su log-prezzi"
+    },
+    {
+      "id": "H5",
+      "name": "Volatility scaler (vol realizzata)",
+      "file": "ProcioneMGR/Services/Trading/Internal/VolatilityScaler.cs",
+      "category": "sizing",
+      "status": "IMPL",
+      "notes": "MaxExposureMultiplier=1.0 => puo solo ridurre"
+    },
+    {
+      "id": "I2",
+      "name": "Kalman pairs hedge ratio",
+      "file": "ProcioneMGR/Services/PairsTrading/KalmanPairsSpreadAnalyzer.cs",
+      "category": "stat-arb",
+      "status": "IMPL",
+      "integrated_via": "PairsBacktestEngine.cs:39"
+    },
+    {
+      "id": "L1",
+      "name": "Kelly (binario/continuo/empirico)",
+      "file": "ProcioneMGR/Services/Risk/KellyCalculator.cs",
+      "category": "sizing",
+      "status": "IMPL",
+      "integrated_via": "Stages/ModelStages.cs:590"
+    },
+    {
+      "id": "L2",
+      "name": "Monte Carlo",
+      "file": "ProcioneMGR/Services/Risk/MonteCarloAnalyzer.cs",
+      "category": "risk",
+      "status": "IMPL"
+    },
+    {
+      "id": "L5",
+      "name": "Correlated exposure guard",
+      "file": "ProcioneMGR/Services/Risk/CorrelatedExposureGuard.cs",
+      "category": "risk",
+      "status": "IMPL",
+      "integrated_via": "TradingEngine"
+    },
+    {
+      "id": "M",
+      "name": "Nested execution: Immediate/TWAP/VWAP/Iceberg/Adaptive",
+      "file": "ProcioneMGR/Services/Execution/ExecutionAlgorithms.cs",
+      "category": "execution",
+      "status": "IMPL",
+      "integrated_via": "TradingEngine ctor + ExecutionSlicePlanner"
+    },
+    {
+      "id": "N1",
+      "name": "SafetyChecker",
+      "file": "ProcioneMGR/Services/Trading/SafetyChecker.cs",
+      "category": "safety",
+      "status": "IMPL",
+      "safety_critical": true,
+      "call_sites": [
+        "TradingEngine.cs:956",
+        "ExecutionSlicePlanner.cs:54"
+      ],
+      "notes": "statico e puro, non iniettabile per progetto"
+    },
+    {
+      "id": "O",
+      "name": "Drift: PSI / KS / Page-Hinkley",
+      "file": "ProcioneMGR/Services/Monitoring/Drift/",
+      "category": "drift",
+      "status": "IMPL",
+      "enabled_by": "Drift:Enabled",
+      "default": false,
+      "closed_loop": "FeatureDriftWorker.cs:127 -> registry.RetireAsync(requestRetrain:true)"
+    },
+    {
+      "id": "Q1",
+      "name": "Incremental IC gate",
+      "file": "ProcioneMGR/Services/Microstructure/IncrementalIcGate.cs",
+      "category": "factor-gate",
+      "status": "DISCONNECTED",
+      "gap": "C-03",
+      "seed": 20260728
+    },
+    {
+      "id": "Q2",
+      "name": "Order Flow Imbalance",
+      "file": "ProcioneMGR/Services/Microstructure/OrderFlowImbalance.cs",
+      "category": "microstructure",
+      "status": "DISCONNECTED",
+      "gap": "C-03"
+    }
+  ],
+  "gaps": [
+    {
+      "id": "C-01",
+      "title": "Segreti reali in file tracciato da git",
+      "class": "security",
+      "severity": "Critical",
+      "evidence": "git ls-files include ProcioneMGR/appsettings.json.pre-audit-test-20260729-141448 con MasterKey (44 char), GrpcSharedSecret (44 char) e ConnectionString con Password",
+      "impact": "credenziali exchange cifrate con quella master key sono di fatto in chiaro",
+      "fix": "git rm --cached; pattern .gitignore per la famiglia appsettings.json.*; ROTAZIONE dei tre segreti; purga della storia"
+    },
+    {
+      "id": "C-02",
+      "title": "DriveProtectiveExits default=true contro la misura B3",
+      "class": "missing-config,missing-safety-gate",
+      "severity": "High",
+      "evidence": "RealtimeMarketDataModels.cs:117 = true; appsettings.json.example = true; CLAUDE.md regola 7 e REPORT-B3-EXITLAG dicono false",
+      "impact": "chi accende MarketData:Realtime:Enabled eredita l'assetto misurato come peggiore in 24/24 configurazioni",
+      "fix": "default a false in classe ed example; mostrare l'esito B3 accanto all'interruttore; test sul default"
+    },
+    {
+      "id": "C-03",
+      "title": "Microstructure: modulo completo senza DI ne UI",
+      "class": "missing-di,ui-disconnect",
+      "severity": "High",
+      "evidence": "6 file, 1166 righe, 5 file di test; zero occorrenze in Program.cs; zero riferimenti in Components/; unico consumatore tools/PlatformExpand",
+      "impact": "IncrementalIcGate (il gate anti-ridondanza che servirebbe ad AlphaFactorFactory) e OFI inutilizzabili",
+      "fix": "(A) integrare con DI + stage + persistenza + UI, oppure (B) spostare sotto tools/"
+    },
+    {
+      "id": "C-04",
+      "title": "JumpModel orfano",
+      "class": "dead-code,missing-engine-integration",
+      "severity": "Medium",
+      "evidence": "288 righe, JumpModelTests dimostrano meno transizioni del K-means; zero riferimenti in produzione",
+      "impact": "ricerca fatta e validata, mai raccolta",
+      "fix": "IRegimeModel con KMeans (default) e Jump, selezionabile da MarketRegime:Model"
+    },
+    {
+      "id": "C-05",
+      "title": "Mean-Variance e Risk Parity non raggiungono l'operativita",
+      "class": "missing-contract,broken-flow",
+      "severity": "Medium",
+      "evidence": "DecisionStages.cs:19 inietta HierarchicalRiskParityOptimizer come tipo concreto; MV e RP solo in PortfolioOptimization.razor",
+      "impact": "/portfolio confronta 4 allocazioni e non puo applicarne nessuna",
+      "fix": "IPortfolioOptimizer risolto per nome (default HRP); esporre in /pipeline"
+    },
+    {
+      "id": "C-06",
+      "title": "Sentiment come feature ML spento",
+      "class": "missing-config",
+      "severity": "Medium",
+      "evidence": "AlphaFactorFactory.cs:70 gated da Sentiment:EnableMlFeature=false",
+      "impact": "nessun modello ML vede il sentiment",
+      "fix": "dichiarare la copertura temporale con DataAvailability, poi accendere e misurare l'IC incrementale"
+    },
+    {
+      "id": "G-04",
+      "title": "Deriva dei 158 fattori Alpha158 non sorvegliata",
+      "class": "missing-engine-integration",
+      "severity": "Medium",
+      "evidence": "FactorDriftMonitor.cs:105 li esclude per costo",
+      "impact": "sorveglianza su 8 fattori su 166",
+      "fix": "sorvegliare i soli Alpha158 selezionati da un modello attivo"
+    },
+    {
+      "id": "G-07",
+      "title": "ICombinatorialPurgedCv astrazione morta",
+      "class": "dead-code",
+      "severity": "Low",
+      "evidence": "interfaccia non registrata in DI; i consumatori usano la classe concreta",
+      "fix": "rimuovere o onorare"
+    },
+    {
+      "id": "G-08",
+      "title": "Determinismo incompleto",
+      "class": "missing-reproducibility",
+      "severity": "Medium",
+      "evidence": "new Random(42) cablato in MlpReturnPredictor.cs:234, RegressionPredictorBase.cs:109, StackedReturnPredictor.cs:382; nessun RunSeed globale",
+      "impact": "la varianza fra seed e sottostimata; un run non e riproducibile per intero",
+      "fix": "filtrare il seed; introdurre RunSeed in PipelineContext e ExperimentRun"
+    },
+    {
+      "id": "G-09",
+      "title": "tools/PlatformExpand: 5848 righe di ricerca parallela",
+      "class": "duplicated-logic",
+      "severity": "Medium",
+      "evidence": "il file piu grande del repository; orchestra fasi di ricerca in parallelo a PipelineEngine",
+      "fix": "estrarre i gate condivisi (come gia fatto con NullTwinJudge) e spezzare per fase"
+    },
+    {
+      "id": "G-11",
+      "title": "Nessun punto unico di validazione dei dati",
+      "class": "missing-contract",
+      "severity": "Medium",
+      "fix": "DataQualityReport come artefatto di DataIngestionStage: dichiara, non blocca"
+    },
+    {
+      "id": "G-12",
+      "title": "'LightGBM' e FastTree",
+      "class": "inconsistent-naming",
+      "severity": "Low",
+      "fix": "rinominare l'etichetta UI"
+    },
+    {
+      "id": "G-13",
+      "title": "Nessun DTO fra UI e dominio",
+      "class": "missing-contract",
+      "severity": "Low"
+    },
+    {
+      "id": "G-14",
+      "title": "events.proto senza publisher ne subscriber",
+      "class": "missing-event-wiring,dead-code",
+      "severity": "Low"
+    },
+    {
+      "id": "G-15",
+      "title": "Selezione feature per IC: possibile leakage di selezione",
+      "class": "missing-risk-gate",
+      "severity": "High",
+      "evidence": "non verificato se IcFeatureSelector sia invocato dentro o fuori i fold di CV",
+      "impact": "se fuori, ogni Sharpe della catena con selezione IC e ottimistico e il DSR non lo corregge",
+      "fix": "test che verifichi che le feature selezionate cambiano fra fold",
+      "open_question": "Q6"
+    },
+    {
+      "id": "G-16",
+      "title": "IncrementalIcGate non protegge AlphaFactorFactory",
+      "class": "missing-risk-gate",
+      "severity": "Medium",
+      "depends_on": "C-03"
+    },
+    {
+      "id": "G-17",
+      "title": "Risultati pairs senza persistenza dedicata",
+      "class": "missing-persistence",
+      "severity": "Low"
+    },
+    {
+      "id": "G-18",
+      "title": "Due serie di audit nella stessa cartella",
+      "class": "docs",
+      "severity": "Info",
+      "open_question": "Q1"
+    }
+  ],
+  "not_gaps": [
+    {
+      "item": "GARCH fuori dal position sizing",
+      "reason": "non validato per quell'uso; dichiarato in VolatilityScaler"
+    },
+    {
+      "item": "RegimeRouting:DriveDecisions=false",
+      "reason": "risultato di misura (CLAUDE.md regola 7)"
+    },
+    {
+      "item": "Fleet:Enabled=false + DryRun=true",
+      "reason": "in AF2a il braccio esecutivo non esiste per progetto"
+    },
+    {
+      "item": "Committee:Enabled=false",
+      "reason": "doppio gate deliberato"
+    },
+    {
+      "item": "Carry:Enabled=false",
+      "reason": "forward test opt-in; CarryMode esclude Live a livello di tipo"
+    },
+    {
+      "item": "SafetyChecker non iniettabile",
+      "reason": "statico e puro per progetto (regola 1)"
+    },
+    {
+      "item": "Nessun endpoint REST oltre /health",
+      "reason": "la UI parla ai servizi via DI"
+    },
+    {
+      "item": "EnsembleRebalanceWorker solo nel monolite",
+      "reason": "un solo host per scrittore"
+    }
+  ],
+  "safety_invariants": [
+    {
+      "id": "SI-1",
+      "rule": "SafetyChecker statico e puro",
+      "enforced_by": "nessuna registrazione DI",
+      "verified": true
+    },
+    {
+      "id": "SI-2",
+      "rule": "Un solo scrittore per corsia",
+      "enforced_by": "registrazione condizionale (TradingServiceCollectionExtensions.cs:109-255) + advisory lock Postgres (LaneExecutionLease.cs)",
+      "verified": true
+    },
+    {
+      "id": "SI-3",
+      "rule": "Nessun percorso automatico verso Live",
+      "enforced_by": "PromotionEvaluator conosce solo Paper->Testnet e Live->Testnet; AutoDemoteLiveToTestnet=false, DemoteLiveDryRun=true",
+      "verified": true
+    },
+    {
+      "id": "SI-4",
+      "rule": "Fail-closed su sicurezza, fail-open su diagnostica",
+      "enforced_by": "fail-fast a startup (Program.cs:608) vs metodi Safe* dell'ExperimentTracker",
+      "verified": true
+    },
+    {
+      "id": "SI-5",
+      "rule": "Degradare dicendolo",
+      "enforced_by": "SeriesFreshnessWatchWorker, MasterKeyProbe, DataAvailability, feed STALE",
+      "verified": true
+    },
+    {
+      "id": "SI-6",
+      "rule": "Nessun servizio di esecuzione in Services/Llm/",
+      "enforced_by": "composizione; supervisore solo-veto in RunApplyEvaluator.cs:81-106",
+      "verified": true
+    },
+    {
+      "id": "SI-7",
+      "rule": "DriveProtectiveExits e DriveDecisions false per misura",
+      "enforced_by": "NESSUNO",
+      "verified": false,
+      "gap": "C-02"
+    }
+  ],
+  "chains": [
+    {
+      "name": "dati -> fattori -> modelli -> segnali -> backtest -> validazione -> ensemble -> rischio -> esecuzione -> tracking -> promozione",
+      "status": "closed"
+    },
+    {
+      "name": "drift -> registry -> richiesta di riaddestramento",
+      "status": "closed",
+      "evidence": "FeatureDriftWorker.cs:127",
+      "enabled": false
+    },
+    {
+      "name": "registry champion -> motore (solo Paper/Testnet)",
+      "status": "closed",
+      "evidence": "TradingEngine.cs:81"
+    },
+    {
+      "name": "supervisore AI -> applica (solo veto)",
+      "status": "closed",
+      "evidence": "RunApplyEvaluator.cs:81-106"
+    },
+    {
+      "name": "backtest -> promozione Paper->Testnet",
+      "status": "closed",
+      "evidence": "PromotionEvaluator -> LanePromoter -> PromotionWorker"
+    },
+    {
+      "name": "portfolio MV/RiskParity -> esecuzione",
+      "status": "broken",
+      "gap": "C-05"
+    },
+    {
+      "name": "microstructure -> qualunque consumatore in-app",
+      "status": "broken",
+      "gap": "C-03"
+    },
+    {
+      "name": "JumpModel -> regime detection",
+      "status": "broken",
+      "gap": "C-04"
+    },
+    {
+      "name": "sentiment -> feature ML",
+      "status": "off",
+      "gap": "C-06"
+    },
+    {
+      "name": "GARCH -> position sizing",
+      "status": "deliberately-absent"
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "Q2",
+      "question": "I segreti esposti sono stati ruotati?",
+      "blocking": true
+    },
+    {
+      "id": "Q3",
+      "question": "Valore effettivo di MarketData:Realtime:DriveProtectiveExits nel appsettings.json reale (gitignored, assente dal worktree)",
+      "blocking": true
+    },
+    {
+      "id": "Q6",
+      "question": "La selezione feature per IC avviene dentro o fuori i fold di CV?",
+      "blocking": false,
+      "severity": "High"
+    },
+    {
+      "id": "Q4",
+      "question": "Microstructure: integrare o eliminare?",
+      "decision_required": true
+    },
+    {
+      "id": "Q5",
+      "question": "JumpModel: integrare o cancellare?",
+      "decision_required": true
+    },
+    {
+      "id": "Q1",
+      "question": "Le due serie di audit convivono o una sostituisce l'altra?",
+      "decision_required": true
+    },
+    {
+      "id": "Q7",
+      "question": "MeanVariance e RiskParity servono ancora come soli strumenti di confronto?",
+      "decision_required": true
+    },
+    {
+      "id": "Q8",
+      "question": "Da quale data il sentiment ha copertura continua?",
+      "runtime": true
+    },
+    {
+      "id": "Q9",
+      "question": "Drift:Enabled=false e scelta o dimenticanza?",
+      "decision_required": true
+    },
+    {
+      "id": "Q10",
+      "question": "tools/PlatformExpand e ancora eseguito?",
+      "decision_required": true
+    },
+    {
+      "id": "Q11",
+      "question": "events.proto: previsione o residuo?",
+      "decision_required": true
+    },
+    {
+      "id": "Q12",
+      "question": "Quante corsie girano davvero e in che modalita?",
+      "runtime": true
+    }
+  ],
+  "reconstruction_phases": [
+    {
+      "phase": 0,
+      "name": "Invarianti e sicurezza",
+      "blocking": true,
+      "risk": "low",
+      "value": "critical",
+      "modules": [
+        ".gitignore",
+        "appsettings.json.example",
+        "Services/MarketData",
+        "scripts/k8s-*-secret.ps1"
+      ]
+    },
+    {
+      "phase": 1,
+      "name": "Contratti di dominio",
+      "risk": "low",
+      "value": "high",
+      "modules": [
+        "Services/Regime",
+        "Services/Portfolio",
+        "Services/Pipeline",
+        "Services/ML"
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "Dati e feature",
+      "risk": "medium",
+      "value": "high",
+      "modules": [
+        "Services/Microstructure",
+        "Services/Alpha",
+        "Services/Ingestion",
+        "Services/Sentiment"
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "ML e backtest",
+      "risk": "high",
+      "value": "critical",
+      "modules": [
+        "Services/ML",
+        "Services/Validation",
+        "Services/Backtesting"
+      ]
+    },
+    {
+      "phase": 4,
+      "name": "Strategia, portafoglio, rischio",
+      "risk": "medium",
+      "value": "medium",
+      "modules": [
+        "Services/Portfolio",
+        "Services/Ensemble",
+        "Services/Regime"
+      ]
+    },
+    {
+      "phase": 5,
+      "name": "Esecuzione e sicurezza",
+      "risk": "none",
+      "value": "high",
+      "modules": [
+        "Services/Trading",
+        "Services/Execution",
+        "Services/Carry"
+      ]
+    },
+    {
+      "phase": 6,
+      "name": "Orchestrazione UI",
+      "risk": "low",
+      "value": "medium",
+      "modules": [
+        "Components/Pages"
+      ]
+    },
+    {
+      "phase": 7,
+      "name": "Osservabilita, drift, governo",
+      "risk": "medium",
+      "value": "high",
+      "modules": [
+        "Services/Monitoring",
+        "Services/Observability",
+        "Services/Experiments"
+      ]
+    }
+  ]
+}
