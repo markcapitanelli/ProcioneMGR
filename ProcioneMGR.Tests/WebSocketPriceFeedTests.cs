@@ -339,6 +339,105 @@ public class WebSocketPriceFeedTests
     }
 
     [Fact]
+    public void UpdateSubscriptions_ToleratesTwoLanesOnTheSameSymbol()
+    {
+        // Riproduzione dell'incidente del 2026-08-09 (pod procionemgr-trading): due corsie su
+        // DOT/USDT facevano lanciare "ArgumentException: An item with the same key has already
+        // been added. Key: DOTUSDT" dentro UpdateSubscriptions — l'indice del parsing ha per
+        // chiave il solo simbolo, e due sottoscrizioni distinte (timeframe diversi) collidono.
+        var feed = BuildFeed(new BinanceStreamMapper(), new FakeTransportFactory());
+
+        Assert.True(feed.UpdateSubscriptions([
+            new StreamSubscription(ExchangeName.Binance, "DOT/USDT", "15m", MarketType.Spot),
+            new StreamSubscription(ExchangeName.Binance, "DOT/USDT", "1h", MarketType.Spot),
+        ]));
+
+        // La watchdog vede UNA serie (la salute è per-simbolo, non per-timeframe)…
+        Assert.Equal("DOT/USDT", Assert.Single(feed.SeriesHealthSnapshot).Symbol);
+
+        // …e ripresentare lo stesso set NON è un cambio: il refresh converge invece di riciclare
+        // (o, prima del fix, di fallire) a ogni giro.
+        Assert.False(feed.UpdateSubscriptions([
+            new StreamSubscription(ExchangeName.Binance, "DOT/USDT", "15m", MarketType.Spot),
+            new StreamSubscription(ExchangeName.Binance, "DOT/USDT", "1h", MarketType.Spot),
+        ]));
+    }
+
+    [Fact]
+    public async Task Feed_ServesBothTimeframes_WhenTwoLanesShareTheSymbol_Binance()
+    {
+        // Il seguito dell'incidente: non basta non lanciare, entrambe le corsie devono essere
+        // SERVITE. L'endpoint deve portare un bookTicker solo e TUTTI i kline; la candela va
+        // etichettata col timeframe dichiarato dallo stream, non con quello della sottoscrizione
+        // rappresentante rimasta nell'indice.
+        const string dotTicker = """
+            {"stream":"dotusdt@bookTicker","data":{"s":"DOTUSDT","b":"4.00","B":"1","a":"4.02","A":"1"}}
+            """;
+        const string dotKline1h = """
+            {"stream":"dotusdt@kline_1h","data":{"s":"DOTUSDT","k":{"x":true,"t":1754697600000,"i":"1h","o":"4.00","h":"4.10","l":"3.90","c":"4.05","v":"1000"}}}
+            """;
+        var factory = new FakeTransportFactory(Script(dotTicker, dotKline1h));
+        var feed = BuildFeed(new BinanceStreamMapper(), factory);
+        feed.UpdateSubscriptions([
+            new StreamSubscription(ExchangeName.Binance, "DOT/USDT", "15m", MarketType.Spot),
+            new StreamSubscription(ExchangeName.Binance, "DOT/USDT", "1h", MarketType.Spot),
+        ]);
+
+        var ticks = new ConcurrentBag<PriceTick>();
+        var bars = new ConcurrentBag<BarClosed>();
+        feed.TickReceived += ticks.Add;
+        feed.BarClosed += bars.Add;
+
+        using var cts = new CancellationTokenSource();
+        var run = feed.RunAsync(cts.Token);
+        await WaitForAsync(() => !ticks.IsEmpty && !bars.IsEmpty, "tick e candela sul simbolo condiviso");
+        await cts.CancelAsync();
+        await run;
+
+        var uri = Assert.Single(factory.Connections).AbsoluteUri;
+        Assert.Contains("dotusdt@bookTicker", uri, StringComparison.Ordinal);
+        Assert.Contains("dotusdt@kline_15m", uri, StringComparison.Ordinal);
+        Assert.Contains("dotusdt@kline_1h", uri, StringComparison.Ordinal);
+
+        Assert.Equal("DOT/USDT", Assert.Single(ticks).Symbol);
+        var bar = Assert.Single(bars);
+        Assert.Equal("1h", bar.Timeframe); // il timeframe lo dice lo stream ("i"), non l'indice
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1754697600000).UtcDateTime, bar.OpenTimeUtc);
+    }
+
+    [Fact]
+    public async Task Feed_ToleratesSpotAndFuturesLanes_OnTheSameSymbol_Bitget()
+    {
+        // Variante Bitget della stessa collisione: Spot e Futures condividono la connessione
+        // pubblica, quindi due corsie sulla stessa coppia in mercati diversi sono un caso normale
+        // della flotta — e la chiave dell'indice ("DOTUSDT") è identica per entrambe.
+        const string dotTicker = """
+            {"action":"snapshot","arg":{"instType":"SPOT","channel":"ticker","instId":"DOTUSDT"},"data":[{"instId":"DOTUSDT","bidPr":"4.00","askPr":"4.02","ts":"1754697600000"}]}
+            """;
+        var factory = new FakeTransportFactory(Script(dotTicker));
+        var feed = BuildFeed(new BitgetStreamMapper(), factory);
+        feed.UpdateSubscriptions([
+            new StreamSubscription(ExchangeName.Bitget, "DOT/USDT", "15m", MarketType.Spot),
+            new StreamSubscription(ExchangeName.Bitget, "DOT/USDT", "15m", MarketType.Futures),
+        ]);
+
+        var ticks = new ConcurrentBag<PriceTick>();
+        feed.TickReceived += ticks.Add;
+
+        using var cts = new CancellationTokenSource();
+        var run = feed.RunAsync(cts.Token);
+        await WaitForAsync(() => !ticks.IsEmpty, "il tick sul simbolo condiviso");
+        await cts.CancelAsync();
+        await run;
+
+        // Il frame di sottoscrizione porta ENTRAMBI i mercati: nessuna corsia perde il suo stream.
+        var frame = Assert.Single(factory.Sent, s => s.Contains("subscribe", StringComparison.Ordinal));
+        Assert.Contains("\"SPOT\"", frame, StringComparison.Ordinal);
+        Assert.Contains("\"USDT-FUTURES\"", frame, StringComparison.Ordinal);
+        Assert.Equal("DOT/USDT", Assert.Single(ticks).Symbol);
+    }
+
+    [Fact]
     public void UpdateSubscriptions_IgnoresOtherExchanges()
     {
         var feed = BuildFeed(new BinanceStreamMapper(), new FakeTransportFactory());
