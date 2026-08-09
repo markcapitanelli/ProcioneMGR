@@ -68,50 +68,32 @@ public sealed class ConfigurationUiCoverageTests
         // --- pagine operative ---
         ["Trading:Safety"] = "Components/Pages/Trading.razor",
         ["Execution"] = "Components/Pages/ExecutionLab.razor",
+
+        // --- [Fase 3 PRD-RISANAMENTO] Le ex «deliberatamente non esposte» ---
+        // Mandato del proprietario 2026-08-09: l'amministratore governa TUTTO dall'interfaccia,
+        // nessuna configurazione può esistere senza UI. Le ragioni per cui queste erano fuori non
+        // sono sparite — sono diventate TESTO ACCANTO alla manopola (vincolo di deploy, «vale dal
+        // riavvio», il rischio due-scrittori), perché esporre non significa banalizzare.
+        ["MarketRegime:Model"] = "Components/Pages/Admin/Autonomy.razor",
+        ["MarketData:UseRemoteIngestion"] = "Components/Pages/Admin/Autonomy.razor",
+        ["MarketData:RemoteIngestionUrl"] = "Components/Pages/Admin/Autonomy.razor",
+        ["Trading:UseRemoteTrading"] = "Components/Pages/Admin/Autonomy.razor",
+        ["Ml:RemoteUrl"] = "Components/Pages/Admin/Autonomy.razor",
+        ["Http:DisableHttpsRedirection"] = "Components/Pages/Admin/Autonomy.razor",
+        ["FactorCache"] = "Components/Pages/Admin/Autonomy.razor",
+        ["Database"] = "Components/Pages/Admin/Autonomy.razor",
+        ["Trading:Bitget:SpotMarketBuyVerified"] = "Components/Pages/Admin/Protections.razor",
     };
 
     /// <summary>
-    /// Sezioni deliberatamente SENZA controllo UI, con la ragione. Non sono eccezioni di comodo: o
-    /// scelgono la TOPOLOGIA del processo (chi ospita cosa, deciso una volta a startup e vincolato
-    /// al deploy), o non cambiano alcun comportamento osservabile.
+    /// Sezioni deliberatamente SENZA controllo UI, con la ragione. VUOTO dalla Fase 3
+    /// (2026-08-09): il proprietario ha stabilito che ogni configurazione dev'essere
+    /// amministrabile dall'interfaccia. La struttura resta perché il guardiano continui a
+    /// funzionare: una sezione NUOVA senza pannello fa fallire la suite, e la strada per
+    /// sistemarla è dare un pannello, non aggiungere una riga qui — servono ragioni
+    /// eccezionali (es. un segreto) per usare questa mappa.
     /// </summary>
-    private static readonly Dictionary<string, string> DeliberatelyNotExposed = new()
-    {
-        ["MarketRegime:Model"] =
-            "[2.7 PRD-RISANAMENTO] Contratto C1 del JumpModel: il default resta KMeans finché la " +
-            "MISURA non decide (confronto transizioni nei log di ogni training). Una manopola in UI " +
-            "inviterebbe a cambiare algoritmo di regime a sensazione, prima del ciclo di misura — " +
-            "l'eventuale esposizione arriva con la Fase 3, DOPO che il confronto ha parlato. " +
-            "Il run di pipeline può già forzarlo per-esperimento col parametro di stage 'model'. " +
-            "(La λ del jump, MarketRegime:JumpLambda, segue lo stesso destino: si tara con la misura.)",
-        ["MarketData:UseRemoteIngestion"] =
-            "Topologia: decide se la sync gira in-process o nel servizio Ingestion. Cambiarlo dalla UI " +
-            "senza il deploy corrispondente lascerebbe la watchlist senza aggiornamenti, o con due " +
-            "scrittori. Il commento in appsettings dice esplicitamente NON esporre in /admin/autonomy.",
-        ["MarketData:RemoteIngestionUrl"] = "Coppia del precedente: stesso vincolo di deploy.",
-        ["Trading:UseRemoteTrading"] =
-            "Topologia, ed è il caso più pericoloso: col valore sbagliato si hanno DUE esecutori sulla " +
-            "stessa corsia, o nessuno. Deve cambiare insieme al Deployment, non da un browser.",
-        ["Ml:RemoteUrl"] =
-            "Il canale gRPC si crea una volta sola a startup: il campo esiste comunque nel pannello " +
-            "Diagnostica di /admin/autonomy (sezione Ml), marcato come 'vale dal riavvio'.",
-        ["Http:DisableHttpsRedirection"] =
-            "Proprietà dell'ambiente di hosting (reverse proxy che parla in chiaro), non una scelta " +
-            "dell'operatore: sbagliarla dalla UI significa perdere l'accesso alla UI stessa.",
-        ["FactorCache"] =
-            "Solo memoria e prestazioni: la cache è un memoizzatore con invariante 'cache == ricalcolo', " +
-            "quindi nessun valore prodotto dalla piattaforma cambia al variare di questa sezione.",
-        ["Database"] =
-            "Migrazioni all'avvio (AutoMigrate, LockTimeoutSeconds): lette UNA volta da " +
-            "DatabaseMigrator prima che l'host parta, quindi un interruttore in pagina non potrebbe " +
-            "avere effetto fino al riavvio successivo. Sarebbe un comando che sembra fare qualcosa e " +
-            "non fa nulla — la classe di difetto che questa piattaforma combatte, non un rimedio. " +
-            "L'ESITO invece si vede: la riga di log all'avvio dice se lo schema era allineato o " +
-            "quante migrazioni sono state applicate, ed è un fatto, non una manopola.",
-        ["Trading:Bitget:SpotMarketBuyVerified"] =
-            "Attestazione di una verifica fatta a mano contro l'exchange reale (semantica del campo " +
-            "quantity sugli ordini market spot): è un fatto sul mondo, non una preferenza da cambiare.",
-    };
+    private static readonly Dictionary<string, string> DeliberatelyNotExposed = new();
 
     private static string RepoRoot()
     {

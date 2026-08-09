@@ -5,8 +5,12 @@ richiesta del proprietario: fixare i bug riscontrati, eliminare o sincronizzare 
 riallineare configurazioni e UI, rendere il server indipendente da GitHub, far ripartire tutto
 all'avvio su qualunque dispositivo.*
 
-**Stato (2026-08-09 sera): FASE 0 COMPLETA — ROTAZIONE ESEGUITA · FASE 1 COMPLETA ·
-FASE 2 COMPLETA (2.4 RITIRATA) · FASI 3-6 da fare.**
+**Stato (2026-08-09 notte): FASI 0-1-2-3 COMPLETE (2.4 RITIRATA) · FASI 4-6 da fare.**
+**Mandato aggiuntivo del proprietario (2026-08-09, vincolante da qui in avanti):** nessuna
+configurazione può esistere senza UI — l'amministratore governa ogni parte della macchina
+dall'interfaccia. `DeliberatelyNotExposed` del guardiano è stata SVUOTATA: le ragioni che
+tenevano fuori una chiave (topologia, riavvio, pericolo) sono diventate testo accanto alla
+manopola, non un motivo per nasconderla.
 Le decisioni di prodotto sono state prese il 2026-08-08:
 **Microstructure si integra** (DI + gate IC in `/feature-selection`) · **JumpModel si cabla dietro
 flag** (`IRegimeModel`, K-means resta il default) · **la portabilità si fa con Docker Compose**.
@@ -31,6 +35,8 @@ Suite di partenza: 2.096 metodi di test (inventario in `docs/audit/27_TEST_INVEN
 | 2026-08-09 | **PR #74 MERGED** in master (2.5+2.7+2.8; suite completa con Docker 2.448/2.448) | `ba8d0cf` |
 | 2026-08-09 | **2.6** — `IncrementalFactorFilter` (ponte statico e puro fra la selezione IC e `IncrementalIcGate`): filtro greedy sui tenuti in ordine di \|IC\|, il capostipite si tiene, gli altri devono AGGIUNGERE (IC parziale + nullo per permutazione). In `/feature-selection` come checkbox opzionale (badge «ridondante» col verdetto nel tooltip) e in `FeatureEngineeringStage` come parametro `incrementalIcGate` (default false; applicato PRIMA del top-K, così i posti dei ridondanti vanno al prossimo indipendente). 6 test con edge piantato. Chiude **C-03/G-16** | — |
 | 2026-08-09 | **2.9** — la deriva sorveglia anche i fattori del **Champion** per serie (`ChampionSpecsAsync`: union per FeatureName con la base di 8; Staging/Challenger esclusi; FactorsJson rotto o fattore scomparso = log e si prosegue, fail-open regola 4). Non i 158: solo quelli che un modello in carica dichiara. 3 test su Postgres. Chiude **G-04** | — |
+| 2026-08-09 | **PR #75 MERGED** (2.6+2.9; suite 2.457/2.457) — FASE 2 CHIUSA | `04c4829` |
+| 2026-08-09 | **FASE 3 COMPLETA — mandato «tutto amministrabile da UI»**: (3.A) le 9 chiavi ex-DeliberatelyNotExposed esposte — card **Topologia** in /admin/autonomy (`Trading:UseRemoteTrading`, `Ml:RemoteUrl`, `Http:DisableHttpsRedirection`, `Database`, `FactorCache`, tutte ⟳ col pericolo scritto accanto), topologia ingestion nel pannello Sync (bottone che resta attivo a remoto acceso), `MarketRegime:Model`+`JumpLambda` nel pannello regime con nota C1, attestazione `Trading:Bitget:SpotMarketBuyVerified` in /admin/protections (sezione aggiunta alle Writable del canale motore); `IAppConfigWriter.SaveValueAsync` per gli scalari (scrittura chirurgica, 2 test). (3.B) esito B3 accanto a `DriveProtectiveExits` e campagna 2026-07-25 accanto a `DriveDecisions`; colonna «N gate» in /discovery + nota sui due conteggi; riepilogo stage holdout con combinazioni provate vs N effettivo del gate (divergenza dichiarata, `DsrNominalTrials`/`DsrEffectiveTrials` nel contesto); warning sovrapposizione holdout in /feature-selection (Q6); copertura sentiment in DataAvailability (C-06) accesa su feature-selection/ml/alpha-mining. (3.C) `appsettings.json.example` con `Database` e `PostMortem` (E-05); guardiano: DeliberatelyNotExposed **svuotata**, 9 voci migrate in ExposedBy | — |
 
 **Restano:** `git filter-repo` (DIFFERITO per decisione: coi tre segreti ruotati la storia è
 innocua; si farà se mai il repo dovesse diventare pubblico) · Fasi 3-6 ·
@@ -188,9 +194,11 @@ motivato il default.
    un pannello, ogni pannello scrive un'opzione che qualcuno legge.
 
 **Acceptance criteria.**
-- [ ] partendo dal solo `.example` non esiste sezione letta dal codice che manchi
-- [ ] ogni interruttore di sicurezza mostra il perché del suo default (verifica browser, livello 4)
-- [ ] `ConfigurationUiCoverageTests` verde con le nuove voci
+- [x] partendo dal solo `.example` non esiste sezione letta dal codice che manchi
+      (aggiunte `Database` e `PostMortem`; MarketRegime Model/λ e FactorCache c'erano già)
+- [ ] ogni interruttore di sicurezza mostra il perché del suo default — codice fatto, la
+      **verifica browser (livello 4) si fa dopo il merge** sull'app di master (regola worktree)
+- [x] `ConfigurationUiCoverageTests` verde con le nuove voci (DeliberatelyNotExposed svuotata)
 
 **Rischi.** Bassi.
 **NotebookLM.** Rigenerare 22, 25, 26.

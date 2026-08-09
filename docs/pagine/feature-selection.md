@@ -164,3 +164,15 @@ validati, JSON malformato ignorato).
   (anche gli scartati) per far capire *perché* un fattore non è passato.
 - Il grafico mostra |IC| ma colora per segno: si vede a colpo d'occhio se un fattore informa
   in direzione "normale" o contrarian.
+
+## Aggiunte 2026-08-09 (2.6 + Fase 3)
+
+- **Filtro incrementale** (checkbox avanzate, default spento): passa i tenuti in ordine di |IC|
+  e scarta chi non AGGIUNGE informazione oltre ai già tenuti (`IncrementalFactorFilter` →
+  `IncrementalIcGate`: IC parziale + nullo per permutazione). Gli scartati mostrano il badge
+  «ridondante» col verdetto nel tooltip.
+- **Copertura sentiment dichiarata** (C-06): sotto DataAvailability compare il range delle
+  notizie scorate — molto più corto delle candele; warning se il periodo parte prima.
+- **Warning sovrapposizione holdout** (Q6 residuo): se il periodo esplorato tocca l'holdout
+  dell'ultima configurazione di pipeline, la pagina lo dice — i fattori scelti su dati che
+  l'holdout considera «mai visti» ne indeboliscono il verdetto.

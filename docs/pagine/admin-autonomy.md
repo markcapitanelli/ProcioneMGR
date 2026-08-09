@@ -170,3 +170,24 @@ il pannello è auto-documentante su quale campo ha effetto quando.
   lezione appresa per convivere con l'hot-reload di configurazione senza perdere campi.
 - La distinzione ✅/⟳ per campo evita la domanda ricorrente "serve riavviare?".
 - Default deliberati: esecuzione a fette OFF (rischio), Sentiment ON (dati deperibili).
+
+## Topologia e infrastruttura (Fase 3, 2026-08-09)
+
+Il card in fondo alla pagina espone le chiavi che prima erano «deliberatamente senza UI»
+(mandato: l'amministratore governa tutto dall'interfaccia). Tutte ⟳ (valgono dal riavvio):
+
+- `Trading:UseRemoteTrading` — motore in-process vs Deployment `procionemgr-trading`; il warning
+  accanto spiega la regola «un solo scrittore»: l'interruttore va cambiato INSIEME al deployment.
+- `Ml:RemoteUrl` — canale gRPC del dual-read ML (si crea una volta sola a startup; vuoto = spento).
+- `Http:DisableHttpsRedirection` — proprietà dell'hosting; sbagliarla in locale può rendere la UI
+  irraggiungibile (recovery: correzione a mano nel file + riavvio).
+- `Database:AutoMigrate` + `LockTimeoutSeconds` — migrate-on-startup; l'esito si legge nel log di avvio.
+- `FactorCache:MaxEntries` — solo memoria (invariante cache == ricalcolo).
+
+Nel pannello Sync è comparsa la **topologia ingestion** (`MarketData:UseRemoteIngestion` +
+`RemoteIngestionUrl`), col suo bottone separato che resta attivo anche a ingestion remota accesa —
+altrimenti dalla UI non si potrebbe mai tornare indietro. Nel pannello Retraining regime sono
+esposti `MarketRegime:Model` (KMeans/Jump) e `JumpLambda`, con la nota del contratto C1: il
+confronto delle transizioni sta nei log di ogni training, si cambia dopo averlo letto.
+Gli scalari si salvano con `SaveValueAsync` (scrittura chirurgica): niente POCO dell'intera
+sezione, niente chiavi cancellate per dimenticanza.

@@ -9,6 +9,11 @@
     "_comment_PreviousMasterKeys": "SOLO durante una rotazione (Fase 0 PRD-RISANAMENTO): le chiavi PRECEDENTI del keyring. Si decifra provando la corrente e poi queste, in ordine; si cifra SEMPRE con la corrente. Procedura: vecchia chiave qui + nuova in MasterKey (su ENTRAMBI gli host), riavvio, 'Ri-cifra ora' in /settings/exchanges, poi svuotare. Env equivalente: PROCIONE_MGR_PREVIOUS_MASTER_KEYS (separatore ';').",
     "PreviousMasterKeys": []
   },
+  "Database": {
+    "_comment": "[E-05] Migrazioni all'avvio (dal 2026-08-05). AutoMigrate=true: le migrazioni pendenti si applicano all'avvio del guscio con un advisory lock Postgres (piu' host: uno migra, gli altri aspettano fino a LockTimeoutSeconds). Letta UNA volta prima che l'host parta: cambiarla vale dal riavvio successivo (pannello Topologia in /admin/autonomy). AutoMigrate=false = schema applicato a mano con `dotnet ef database update`.",
+    "AutoMigrate": true,
+    "LockTimeoutSeconds": 120
+  },
   "Llm": {
     "_comment": "Layer AI di supervisione del ciclo di ricerca. La API key NON va qui: si legge SOLO dalla variabile d'ambiente ANTHROPIC_API_KEY (SDK Anthropic, riletta a caldo: niente riavvio). Gli errori transitori (credito API esaurito, rate-limit, rete) aprono un circuit breaker: chiamate sospese dopo BreakerFailureThreshold errori consecutivi, notifica one-shot all'operatore, riprova automatica ogni BreakerCooldownMinutes; nessun advisory d'errore permanente per errori transitori. NotifyDecisions=true notifica (Info) le advisory riuscite con decisioni per l'utente. Confine di sicurezza: il layer AI e' SOLO advisory, non puo' avviare Live ne' bypassare SafetyChecker.",
     "Enabled": true,
@@ -26,6 +31,14 @@
       "DailyTokenLimit": 0,
       "MonthlyTokenLimit": 0
     }
+  },
+  "PostMortem": {
+    "_comment": "[G4/E-05] Post-mortem delle operazioni in perdita (pannello in /admin/ai-supervisor). Default SPENTO. LossThresholdPercent e' POSITIVO (1.0 = perdite oltre l'1%); sotto soglia si tace. UseAi=false = solo le cause calcolabili dal codice, nessuna chiamata AI. MaxPerRun limita il costo per giro; CommitteeContextCount = quanti post-mortem recenti passare al comitato (0 = nessuno).",
+    "Enabled": false,
+    "LossThresholdPercent": 1.0,
+    "UseAi": false,
+    "MaxPerRun": 5,
+    "CommitteeContextCount": 5
   },
   "Committee": {
     "_comment": "[AF3] Comitato AI a scelta vincolata: sui pareggi dell'orchestratore di flotta i provider votano in parallelo su un menu' chiuso preparato dal codice (scelta fuori menu' = astensione; quorum mancato = default deterministico). Serve anche Fleet:UseCommittee. Providers vuoto = nvidia,groq,gemini (il default sta nel codice: il binder APPENDE gli array, un default popolato qui raddoppierebbe a ogni salvataggio). Pannello in /admin/ai-supervisor.",
@@ -211,7 +224,7 @@
     "TimeoutMs": 300
   },
   "Trading": {
-    "_comment_UseRemoteTrading": "Fase 2b microservizi. false (default): il motore di trading gira in-process nel monolite (TradingEngine + TradingWorker + ExecutionWorker per ogni corsia), esattamente come prima. true: il monolite diventa un client puro (RemoteTradingEngineClient via gRPC verso procionemgr-trading) e NON registra alcun motore/worker locale — le candele e gli ordini li elabora il servizio remoto. I due insiemi sono mutuamente esclusivi per costruzione (vedi TradingServiceCollectionExtensions): mai due esecuzioni sulla stessa corsia. RICHIEDE RIAVVIO (il canale gRPC si crea una volta sola). ATTENZIONE: se attivi questo, il Deployment procionemgr-trading DEVE essere vivo, e viceversa non deve MAI essere vivo con il toggle a false (sarebbe un secondo esecutore sullo stesso DB). NON esporre in /admin/autonomy.",
+    "_comment_UseRemoteTrading": "Fase 2b microservizi. false (default): il motore di trading gira in-process nel monolite (TradingEngine + TradingWorker + ExecutionWorker per ogni corsia), esattamente come prima. true: il monolite diventa un client puro (RemoteTradingEngineClient via gRPC verso procionemgr-trading) e NON registra alcun motore/worker locale — le candele e gli ordini li elabora il servizio remoto. I due insiemi sono mutuamente esclusivi per costruzione (vedi TradingServiceCollectionExtensions): mai due esecuzioni sulla stessa corsia. RICHIEDE RIAVVIO (il canale gRPC si crea una volta sola). ATTENZIONE: se attivi questo, il Deployment procionemgr-trading DEVE essere vivo, e viceversa non deve MAI essere vivo con il toggle a false (sarebbe un secondo esecutore sullo stesso DB). Dal 2026-08-09 (Fase 3) e' esposto nel pannello Topologia di /admin/autonomy, col vincolo di deploy scritto accanto: il salvataggio vale dal riavvio.",
     "_comment_RemoteUrl": "Obbligatorio quando UseRemoteTrading=true (fail-fast a startup se vuoto: meglio non partire che avere un trading muto). Monolite sull'host + servizio in kind: port-forward (kubectl port-forward -n procionemgr-trading svc/procionemgr-trading 18092:8080) => http://localhost:18092. Il DNS cluster-interno (http://procionemgr-trading.procionemgr-trading.svc.cluster.local:8080) vale solo quando ANCHE il monolite gira nel cluster. Ignorato dall'host ProcioneMGR.Trading stesso, che esegue sempre in locale.",
     "_comment_GrpcSharedSecret": "Obbligatorio quando UseRemoteTrading=true (fail-fast a startup se vuoto, stesso patto di RemoteUrl). Autorizzazione applicativa sul gRPC di trading (P1-6): il monolite lo manda come header su ogni chiamata, procionemgr-trading (SharedSecretAuthInterceptor) lo confronta col proprio e rifiuta Unauthenticated se assente/diverso — un secondo fattore oltre alla NetworkPolicy K8s, che da sola è bypassabile con kubectl port-forward. DEVE essere lo STESSO valore su entrambi i lati (K8s: stesso Secret trading-secrets su entrambi i pod tramite scripts/k8s-trading-secret.ps1 -GrpcSharedSecret, che lo scrive anche nel Secret ui-secrets via scripts/k8s-ui-secret.ps1). Genera con lo stesso comando della master key.",
     "_comment_LaneCount": "Numero di corsie isolate (LaneId 0..LaneCount-1). Default 3, massimo 12; 8 dal 2026-08-02 (AF0): le corsie 3..7 nascono DORMIENTI — registrate ma mai avviate, zero ordini finche' non le si avvia da /trading. Ogni corsia avvia tre worker (il piu' frequente batte ogni 2 secondi con una lettura di stato), quindi il costo cresce linearmente: il tetto non e' una stima di capacita', e' protezione dal refuso. RICHIEDE RIAVVIO: il valore si congela alla prima lettura, perche' le corsie sono registrate keyed nel contenitore DI e cambiarlo a caldo lascerebbe motori senza corsia o corsie senza motore. DEVE combaciare con Trading__LaneCount della ConfigMap del motore (infra/k8s/trading/trading-config.env) quando UseRemoteTrading=true: il disallineamento lo dichiara all'avvio la LaneCountCoherenceProbe. L'auto-apply della pipeline resta sulle prime 3 corsie (impronta storica, vedi PipelineApplier): le corsie oltre le gestira' l'orchestratore di flotta.",

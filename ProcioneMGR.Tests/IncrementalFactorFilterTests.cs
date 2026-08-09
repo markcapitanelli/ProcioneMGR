@@ -260,7 +260,7 @@ public class IncrementalFactorFilterTests
         var selected = ctx.Features!.SelectedFactorNames;
         Assert.Equal(2, selected.Count);
         Assert.Contains("Indipendente", selected);
-        Assert.Single(selected.Where(n => n is "Base" or "EchoDiBase"));
+        Assert.Single(selected, n => n is "Base" or "EchoDiBase");
         Assert.Contains(lines, l => l.Contains("Gate incrementale"));
     }
 }
