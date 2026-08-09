@@ -16,6 +16,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # [C-01, 2026-08-08] Guardiano dei segreti: nessuna variante di appsettings.json oltre al
+      # template puo' essere tracciata, e nessun file tracciato puo' contenere una MasterKey
+      # valorizzata. Nasce dal backup datato rimasto nell'indice per dieci giorni con dentro
+      # master key AES, password Postgres e segreto gRPC (docs/audit/06_INTEGRATION_GAPS.md C-01).
+      - name: Guardia segreti (nessuna variante appsettings tracciata)
+        shell: bash
+        run: |
+          bad=$(git ls-files | grep -E 'appsettings\.json\.' | grep -v '\.example$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Varianti di appsettings.json tracciate (vietato, vedi .gitignore):"
+            echo "$bad"
+            exit 1
+          fi
+          leak=$(git grep -lE '"MasterKey"\s*:\s*"[A-Za-z0-9+/=]{40,}"' -- '*.json' ':!*.example' || true)
+          if [ -n "$leak" ]; then
+            echo "::error::Possibile MasterKey valorizzata in file tracciati:"
+            echo "$leak"
+            exit 1
+          fi
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
