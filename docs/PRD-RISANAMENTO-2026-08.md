@@ -25,12 +25,13 @@ Suite di partenza: 2.096 metodi di test (inventario in `docs/audit/27_TEST_INVEN
 | 2026-08-08 | **2.2 + 2.3** — registrazione morta di `BayesianSearch` rimossa, `ICombinatorialPurgedCv` eliminata; **G-12 RITIRATO** (è vero LightGBM: errore dell'audit, corretto nei doc 04/06) | `544c34f` |
 | 2026-08-08 | **2.1** — `ISymbolCatalog` con cache e politica dichiarata al posto delle 7 scansioni; invalidazione dalla watchlist | `5c7d1bb` |
 | 2026-08-09 | **PR #72 MERGED** in master (CI tutta verde, inclusi i 458 Testcontainers) | `734560c` |
+| 2026-08-09 | **ROTAZIONE COMPLETA DEI TRE SEGRETI**: gRPC ruotato via script (mai mostrato) · password Postgres ruotata dal proprietario (ALTER ROLE + connection string) · Secret K8s riallineati col nuovo `scripts/update-k8s-secrets-from-appsettings.ps1` (lezione: per i pod `Host=host.docker.internal`) · pod trading/ingestion/ml riavviati, probe del motore pulito, carry Paper operativo | — |
 | 2026-08-09 | **ROTAZIONE MASTER KEY ESEGUITA**: backup DB (315 MB) → vecchia chiave nel keyring → nuova generata e incollata dal proprietario → «Ri-cifra ora» = **7/7 righe** (3 exchange + 4 AI, 0 indecifrabili) → ring svuotato → probe finale «tutte decifrabili» a ring vuoto, app su 5199 | — |
 
-**Restano:** rotazione di `Trading:GrpcSharedSecret` e password Postgres (indipendenti dalla
-master key) · aggiornare i Secret K8s (`k8s-trading-secret.ps1`/`k8s-ui-secret.ps1`) con la nuova
-chiave PRIMA di ritirare su il cluster kind · `git filter-repo` facoltativo · 2.5 `events.proto` ·
-2.6 Microstructure · 2.7 JumpModel · 2.8 optimizer per nome · 2.9 deriva Alpha158 · Fasi 3-6.
+**Restano:** `git filter-repo` (DIFFERITO per decisione: coi tre segreti ruotati la storia è
+innocua; si farà se mai il repo dovesse diventare pubblico) · 2.5 `events.proto` · 2.6
+Microstructure · 2.7 JumpModel · 2.8 optimizer per nome · 2.9 deriva Alpha158 · Fasi 3-6 ·
+bug scoperto dal vivo: RealtimePriceWorker chiave duplicata su simbolo condiviso fra corsie.
 
 ---
 
