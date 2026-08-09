@@ -11,6 +11,7 @@
 @using ProcioneMGR.Services.Alpha.Alpha158
 @using ProcioneMGR.Services.Exchanges
 @using ProcioneMGR.Services.Indicators
+@using ProcioneMGR.Services.Microstructure
 @using ProcioneMGR.Services.ML
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 @implements IAsyncDisposable
@@ -45,6 +46,8 @@
         <dd class="col-sm-9">Quota di finestre in cui l'IC ha lo STESSO segno del full-sample: ≥ 0.5 = segno affidabile.</dd>
         <dt class="col-sm-3">Filtri</dt>
         <dd class="col-sm-9">|IC| minimo, IR minimo e "solo segno consistente" scartano i fattori-rumore; i sopravvissuti (fino a Top N) sono quelli da passare a un modello ML.</dd>
+        <dt class="col-sm-3">Filtro incrementale</dt>
+        <dd class="col-sm-9">Opzionale: molti fattori con |IC| alto dicono la <em>stessa</em> cosa. Il filtro li passa in ordine di |IC| e tiene solo chi <strong>aggiunge</strong> informazione oltre ai già tenuti (IC parziale, con soglia di rumore e nullo per permutazione).</dd>
     </dl>
 </GuidaPanel>
 
@@ -114,6 +117,18 @@
                     <div class="form-check">
                         <input type="checkbox" class="form-check-input" id="fs_sign" @bind="_requireConsistentSign" disabled="@_busy" />
                         <label class="form-check-label" for="fs_sign">Solo segno consistente</label>
+                    </div>
+                </div>
+                <div class="col-auto">
+                    @* [2.6] Il gate anti-ridondanza del modulo Microstructure, applicato ai fattori
+                       tenuti. Default spento: cambia l'insieme selezionato, e chi lo accende deve
+                       sapere che lo sta facendo. *@
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="fs_incgate" @bind="_incrementalGate" disabled="@_busy" />
+                        <label class="form-check-label" for="fs_incgate"
+                               title="Passa i tenuti in ordine di |IC| e scarta chi non aggiunge informazione oltre ai precedenti (IC parziale + nullo per permutazione).">
+                            Filtro incrementale (scarta i ridondanti)
+                        </label>
                     </div>
                 </div>
             </div>
@@ -272,7 +287,26 @@
                             <td class="text-end">@s.Evaluation.InformationRatio.ToString("F3")</td>
                             <td class="text-end">@s.Evaluation.IcConsistency.ToString("P0")</td>
                             <td class="text-end">@s.Evaluation.Observations</td>
-                            <td class="text-center">@(kept ? "✅" : "—")</td>
+                            <td class="text-center">
+                                @if (kept)
+                                {
+                                    <text>✅</text>
+                                }
+                                else if (_redundant.Contains(s.Spec.FeatureName))
+                                {
+                                    @* [2.6] Superava i filtri per |IC|, ma non aggiunge informazione
+                                       oltre ai fattori già tenuti: il tooltip dice quanto ne resta. *@
+                                    var o = _incOutcomes is not null && _incOutcomes.TryGetValue(s.Spec.FeatureName, out var oo) ? oo : null;
+                                    <span class="badge bg-warning text-dark"
+                                          title="@(o is null ? "Ridondante coi fattori già tenuti." : $"IC parziale {o.PartialIc:F4} (grezzo {o.RawIc:F4}, correlazione col tenuto {o.CorrelationWithProxy:F2}): {o.Message}")">
+                                        ridondante
+                                    </span>
+                                }
+                                else
+                                {
+                                    <text>—</text>
+                                }
+                            </td>
                         </tr>
                     }
                 </tbody>
@@ -420,8 +454,14 @@
     /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
     private string AdvancedSummary =>
         $"Orizzonte {_forwardHorizon} · Top {_topN} · |IC| ≥ {_minAbsIc:0.###} · IR ≥ {_minIr:0.###}"
-        + (_requireConsistentSign ? " · solo segno consistente" : "");
+        + (_requireConsistentSign ? " · solo segno consistente" : "")
+        + (_incrementalGate ? " · filtro incrementale" : "");
     private bool _includeAlpha158;
+
+    // [2.6] Filtro incrementale: esiti per fattore dell'ultima valutazione (null = filtro spento).
+    private bool _incrementalGate;
+    private HashSet<string> _redundant = new();
+    private Dictionary<string, IncrementalIcOutcome>? _incOutcomes;
 
     private List<string> _knownSymbols = new();
     private int _alpha158Count;
@@ -488,11 +528,12 @@
     private sealed record PageConfig(
         string Exchange, string Symbol, string Timeframe, DateTime From, DateTime To,
         int ForwardHorizon, int TopN, double MinAbsIc, double MinIr,
-        bool RequireConsistentSign, bool IncludeAlpha158);
+        bool RequireConsistentSign, bool IncludeAlpha158, bool IncrementalGate = false);
 
     private string CaptureConfigJson() => JsonSerializer.Serialize(new PageConfig(
         _exchange.ToString(), _symbol.Trim(), _timeframe, _from, _to,
-        _forwardHorizon, _topN, _minAbsIc, _minIr, _requireConsistentSign, _includeAlpha158));
+        _forwardHorizon, _topN, _minAbsIc, _minIr, _requireConsistentSign, _includeAlpha158,
+        _incrementalGate));
 
     private void ApplyConfigJson(string json)
     {
@@ -512,6 +553,7 @@
         _minIr = cfg.MinIr;
         _requireConsistentSign = cfg.RequireConsistentSign;
         _includeAlpha158 = cfg.IncludeAlpha158;
+        _incrementalGate = cfg.IncrementalGate;
     }
 
     private static bool IsAlpha158(IAlphaFactor f) => Alpha158Catalog.TryCreate(f.Name, out _);
@@ -529,6 +571,7 @@
         if (_presets is not null) await _presets.SaveLastUsedAsync();
 
         _busy = true; _isError = false; _status = null; _ranked = null; _drift = null; _candles = null;
+        _redundant = new(); _incOutcomes = null;
         try
         {
             List<OhlcvData> candles;
@@ -556,22 +599,47 @@
                 RequireConsistentSign = _requireConsistentSign,
             };
             var candidates = Candidates();
+            var useIncremental = _incrementalGate;
+            var horizon = _forwardHorizon;
 
             // CPU-bound (valuta N fattori): fuori dal thread del circuito.
-            var (ranked, selected) = await Task.Run(() =>
+            var (ranked, selected, incremental) = await Task.Run(() =>
             {
                 var r = Selector.Rank(candidates, candles, config);
                 var sel = Selector.Select(candidates, candles, config);
-                return (r, sel);
+
+                // [2.6] Il filtro lavora SUI TENUTI, nell'ordine della classifica (|IC| decrescente):
+                // il migliore fa da capostipite, gli altri devono aggiungere informazione oltre a lui.
+                IncrementalFilterResult? inc = null;
+                if (useIncremental && sel.Count > 1)
+                {
+                    var selNames = sel.Select(s => s.FeatureName).ToHashSet();
+                    var ordered = r.Where(s => selNames.Contains(s.Spec.FeatureName)).Select(s => s.Spec).ToList();
+                    inc = IncrementalFactorFilter.Apply(ordered, candles, horizon);
+                }
+                return (r, sel, inc);
             });
 
             _ranked = ranked;
             _candles = candles;
-            _kept = selected.Select(s => s.FeatureName).ToHashSet();
+            _kept = incremental is not null
+                ? incremental.Kept.Select(k => k.FeatureName).ToHashSet()
+                : selected.Select(s => s.FeatureName).ToHashSet();
+            _redundant = incremental is null
+                ? new()
+                : incremental.Entries.Where(e => !e.Kept).Select(e => e.Spec.FeatureName).ToHashSet();
+            _incOutcomes = incremental?.Entries
+                .Where(e => e.Outcome is not null)
+                .ToDictionary(e => e.Spec.FeatureName, e => e.Outcome!);
             _driftWindow = SuggestDriftWindow(ranked);
             _observations = ranked.Count > 0 ? ranked.Max(s => s.Evaluation.Observations) : 0;
             _chartPending = true;
-            SetStatus($"Valutati {ranked.Count} fattori su {candles.Count} candele: {_kept.Count} superano i filtri.", false);
+            var message = $"Valutati {ranked.Count} fattori su {candles.Count} candele: {_kept.Count} superano i filtri.";
+            if (incremental is not null && incremental.DroppedCount > 0)
+            {
+                message += $" Il filtro incrementale ne ha scartati {incremental.DroppedCount} come ridondanti.";
+            }
+            SetStatus(message, false);
 
             // La serie può essere cambiata rispetto al caricamento della pagina: la storia registrata
             // segue la serie che si sta guardando.
