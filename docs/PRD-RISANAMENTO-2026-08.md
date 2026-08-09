@@ -6,7 +6,7 @@ riallineare configurazioni e UI, rendere il server indipendente da GitHub, far r
 all'avvio su qualunque dispositivo.*
 
 **Stato (2026-08-09 sera): FASE 0 COMPLETA — ROTAZIONE ESEGUITA · FASE 1 COMPLETA ·
-FASE 2: 2.1-2.5, 2.7, 2.8 fatte · 2.4 RITIRATA · 2.6 e 2.9 da fare · FASI 3-6 da fare.**
+FASE 2 COMPLETA (2.4 RITIRATA) · FASI 3-6 da fare.**
 Le decisioni di prodotto sono state prese il 2026-08-08:
 **Microstructure si integra** (DI + gate IC in `/feature-selection`) · **JumpModel si cabla dietro
 flag** (`IRegimeModel`, K-means resta il default) · **la portabilità si fa con Docker Compose**.
@@ -28,11 +28,14 @@ Suite di partenza: 2.096 metodi di test (inventario in `docs/audit/27_TEST_INVEN
 | 2026-08-09 | **2.5 + 2.7 + 2.8** — `events.proto` marcato riservato nel file · JumpModel dietro flag `MarketRegime:Model` (contratto C1 rispettato: default KMeans bit-identico, confronto transizioni nei log di ogni training, formato persistito invariato) · optimizer dell'ensemble per nome (`portfolioOptimizer`, default HRP; `Method` dichiara quello reale; visibile in /pipeline; chiude **C-04** e **C-05**) | `99abd8a`+ |
 | 2026-08-09 | **ROTAZIONE COMPLETA DEI TRE SEGRETI**: gRPC ruotato via script (mai mostrato) · password Postgres ruotata dal proprietario (ALTER ROLE + connection string) · Secret K8s riallineati col nuovo `scripts/update-k8s-secrets-from-appsettings.ps1` (lezione: per i pod `Host=host.docker.internal`) · pod trading/ingestion/ml riavviati, probe del motore pulito, carry Paper operativo | — |
 | 2026-08-09 | **ROTAZIONE MASTER KEY ESEGUITA**: backup DB (315 MB) → vecchia chiave nel keyring → nuova generata e incollata dal proprietario → «Ri-cifra ora» = **7/7 righe** (3 exchange + 4 AI, 0 indecifrabili) → ring svuotato → probe finale «tutte decifrabili» a ring vuoto, app su 5199 | — |
+| 2026-08-09 | **PR #74 MERGED** in master (2.5+2.7+2.8; suite completa con Docker 2.448/2.448) | `ba8d0cf` |
+| 2026-08-09 | **2.6** — `IncrementalFactorFilter` (ponte statico e puro fra la selezione IC e `IncrementalIcGate`): filtro greedy sui tenuti in ordine di \|IC\|, il capostipite si tiene, gli altri devono AGGIUNGERE (IC parziale + nullo per permutazione). In `/feature-selection` come checkbox opzionale (badge «ridondante» col verdetto nel tooltip) e in `FeatureEngineeringStage` come parametro `incrementalIcGate` (default false; applicato PRIMA del top-K, così i posti dei ridondanti vanno al prossimo indipendente). 6 test con edge piantato. Chiude **C-03/G-16** | — |
+| 2026-08-09 | **2.9** — la deriva sorveglia anche i fattori del **Champion** per serie (`ChampionSpecsAsync`: union per FeatureName con la base di 8; Staging/Challenger esclusi; FactorsJson rotto o fattore scomparso = log e si prosegue, fail-open regola 4). Non i 158: solo quelli che un modello in carica dichiara. 3 test su Postgres. Chiude **G-04** | — |
 
 **Restano:** `git filter-repo` (DIFFERITO per decisione: coi tre segreti ruotati la storia è
-innocua; si farà se mai il repo dovesse diventare pubblico) · 2.5 `events.proto` · 2.6
-Microstructure · 2.7 JumpModel · 2.8 optimizer per nome · 2.9 deriva Alpha158 · Fasi 3-6 ·
-bug scoperto dal vivo: RealtimePriceWorker chiave duplicata su simbolo condiviso fra corsie.
+innocua; si farà se mai il repo dovesse diventare pubblico) · Fasi 3-6 ·
+bug scoperto dal vivo: RealtimePriceWorker chiave duplicata su simbolo condiviso fra corsie
+(in lavorazione in sessione parallela).
 
 ---
 
@@ -144,14 +147,16 @@ Include le due decisioni di prodotto (Microstructure, JumpModel).
 | 2.9 | Deriva sorvegliata sui fattori Alpha158 **selezionati** da un modello attivo (non tutti i 158) | G-04 |
 
 **Acceptance criteria.**
-- [ ] zero query `Distinct()` su `OhlcvData` nelle pagine; i menu mostrano gli stessi simboli di prima
-- [ ] `IncrementalIcGate` scarta almeno un fattore ridondante su un caso costruito; con gate off il
-      run è identico a prima
-- [ ] `JumpRegimeModel` produce meno transizioni di `KMeansRegimeModel` sulla stessa serie; con
+- [x] zero query `Distinct()` su `OhlcvData` nelle pagine; i menu mostrano gli stessi simboli di prima
+- [x] `IncrementalIcGate` scarta almeno un fattore ridondante su un caso costruito
+      (`IncrementalFactorFilterTests`: echo piantato scartato, indipendente tenuto); con gate off il
+      run è identico a prima (test sul default)
+- [x] `JumpRegimeModel` produce meno transizioni di `KMeansRegimeModel` sulla stessa serie; con
       `MarketRegime:Model` assente il comportamento è **byte-identico** a oggi
-- [ ] con `Pipeline:PortfolioOptimizer=HRP` i pesi dell'ensemble sono identici a oggi; cambiarlo
+- [x] con `Pipeline:PortfolioOptimizer=HRP` i pesi dell'ensemble sono identici a oggi; cambiarlo
       cambia davvero i pesi proposti
-- [ ] la deriva di un fattore Alpha158 in uso produce un alert visibile
+- [x] la deriva di un fattore Alpha158 in uso è sorvegliata dal job (stesso percorso di alert dei
+      fattori base: snapshot → Home); Staging esclusi, FactorsJson rotto non rompe il giro
 
 **Test minimi.** `SymbolCatalogTests`, `IncrementalIcGateIntegrationTests`,
 `RegimeModelSelectionTests`, `PortfolioOptimizerSelectionTests`,
