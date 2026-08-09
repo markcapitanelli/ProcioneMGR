@@ -63,6 +63,8 @@ spec:
       containers:
         - name: ui
           image: ghcr.io/markcapitanelli/procionemgr:latest
+          # [Fase 4] Immagine da build locale (scripts/build-images-local.ps1), mai pull dal registry.
+          imagePullPolicy: Never
           ports:
             - name: http
               containerPort: 8080

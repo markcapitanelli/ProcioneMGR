@@ -250,6 +250,32 @@ Il bump del tag è **manuale**: il bump *è* la promozione. Automatizzarlo da CI
 "nessuna promozione automatica" applicato dappertutto. Quando servirà, il passo giusto è un workflow
 che apre una **PR** col bump, da approvare a mano.
 
+### [Fase 4] Le immagini si costruiscono in locale: il cluster non dipende da GitHub
+
+Dal 2026-08-10 la via ordinaria è il **build locale** — quella che il 2026-08-06 (guasto maggiore
+di GitHub Actions) era stata la via d'emergenza (`local-c026a67`), formalizzata:
+
+```powershell
+./scripts/build-images-local.ps1               # i 4 servizi
+./scripts/build-images-local.ps1 -Targets all  # anche strategyhunter e dbbackup
+```
+
+Lo script costruisce dal repo locale, tagga ogni immagine `ghcr.io/markcapitanelli/<nome>:local-<sha>`
+(più `procionemgr/<nome>:local` come alias di comodo), la importa nel containerd del nodo kind via
+`docker save | docker exec -i <nodo> ctr -n k8s.io images import -` (la sola via che funziona qui:
+niente CLI `kind`, e il pipe passa da cmd.exe perché quello di PowerShell corrompe i tar) e
+**verifica con `crictl images`** che il runtime la veda davvero.
+
+`local-<sha>` è l'equivalente locale del digest: un build locale non ha un digest di registro
+verificabile, ma il tag dice da quale commit viene il binario e il **bump nel kustomization resta
+la promozione** — la filosofia GitOps non cambia, cambia solo la provenienza dei bit.
+
+I `deployment.yaml` hanno **`imagePullPolicy: Never`**: il kubelet non tenta mai il pull, quindi
+un riavvio pod funziona anche a rete staccata. Se l'immagine manca nel nodo il pod resta in
+`ErrImageNeverPull` — il fallimento giusto (rilanciare lo script), non un pull silenzioso da un
+registro che potrebbe servire bit diversi. ghcr resta utilizzabile da chi usa la CI: basta un
+newTag a uno sha di CI e imagePullPolicy a `IfNotPresent` nel proprio overlay.
+
 > ⚠️ Aggiungere un `kustomization.yaml` a una cartella **rompe `kubectl apply -f <dir>`**: kubectl
 > proverebbe ad applicare anche quel file come se fosse una risorsa. Da qui in poi si usa
 > `kubectl apply -k <dir>`. Gli script e le istruzioni sopra sono già aggiornati.

@@ -50,6 +50,8 @@ spec:
           containers:
             - name: exitlag
               image: ghcr.io/markcapitanelli/strategyhunter:latest
+              # [Fase 4] Immagine da build locale (scripts/build-images-local.ps1 -Targets all).
+              imagePullPolicy: Never
               # Campionamento 1 ingresso ogni 4 barre di corsia, più la sensibilità alla larghezza
               # dello stop: gli stessi parametri della misura originale, così i numeri di un mese
               # sono confrontabili con quelli del mese prima e con il report.

@@ -32,6 +32,8 @@ spec:
       containers:
         - name: ingestion
           image: ghcr.io/markcapitanelli/procionemgr-ingestion:latest
+          # [Fase 4] Immagine da build locale (scripts/build-images-local.ps1), mai pull dal registry.
+          imagePullPolicy: Never
           ports:
             - containerPort: 8080
           envFrom:

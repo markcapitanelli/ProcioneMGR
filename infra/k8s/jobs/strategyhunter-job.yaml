@@ -23,6 +23,8 @@ spec:
       containers:
         - name: strategyhunter
           image: ghcr.io/markcapitanelli/strategyhunter:latest
+          # [Fase 4] Immagine da build locale (scripts/build-images-local.ps1 -Targets all).
+          imagePullPolicy: Never
           args: ["discover"]
           envFrom:
             - secretRef:

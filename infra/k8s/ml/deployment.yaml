@@ -26,6 +26,8 @@ spec:
       containers:
         - name: ml
           image: ghcr.io/markcapitanelli/procionemgr-ml:latest
+          # [Fase 4] Immagine da build locale (scripts/build-images-local.ps1), mai pull dal registry.
+          imagePullPolicy: Never
           # Due porte: il gRPC gira in h2c (solo HTTP/2) su 8080, mentre le probe httpGet qui sotto
           # parlano HTTP/1.1 e devono quindi puntare a un endpoint separato (8081), altrimenti
           # fallirebbero contro l'endpoint solo-HTTP/2 e manderebbero il pod in CrashLoop.
