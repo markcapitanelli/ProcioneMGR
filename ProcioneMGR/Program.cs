@@ -78,6 +78,11 @@ builder.Services.AddSingleton<IEncryptionService, AesGcmEncryptionService>();
 // Stato della master key (placeholder di sviluppo?): stessa istanza del servizio di cifratura,
 // esposta come vista ristretta per i guard fail-fast (startup Production, gate Live del motore).
 builder.Services.AddSingleton<IMasterKeyStatus>(sp => (AesGcmEncryptionService)sp.GetRequiredService<IEncryptionService>());
+// [Fase 0 PRD-RISANAMENTO] Keyring della rotazione: stessa istanza, vista di classificazione
+// (il payload e' sulla chiave corrente?) + servizio di ri-cifratura di massa per il bottone
+// "Ri-cifra ora" di /settings/exchanges. Chiude il TODO storico di AesGcmEncryptionService.
+builder.Services.AddSingleton<IMasterKeyRing>(sp => (AesGcmEncryptionService)sp.GetRequiredService<IEncryptionService>());
+builder.Services.AddSingleton<IMasterKeyRotationService, MasterKeyRotationService>();
 
 // --- Database: PostgreSQL (unico provider) ---
 // Le migrazioni vivono nell'assembly ProcioneMGR.Migrations.Postgres e si applicano come passo

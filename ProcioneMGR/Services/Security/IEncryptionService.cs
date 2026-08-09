@@ -24,3 +24,22 @@ public interface IMasterKeyStatus
     /// <summary>True se la master key configurata è il placeholder di sviluppo committato nel template.</summary>
     bool IsDefaultDevKey { get; }
 }
+
+/// <summary>
+/// Vista sul KEYRING della rotazione (Fase 0 PRD-RISANAMENTO, 2026-08-08). Separata da
+/// <see cref="IEncryptionService"/> per lo stesso principio di <see cref="IMasterKeyStatus"/>:
+/// chi orchestra la rotazione (la pagina /settings/exchanges, il MasterKeyRotationService)
+/// deve poter CLASSIFICARE i payload — non gli serve cifrare in proprio.
+/// </summary>
+public interface IMasterKeyRing
+{
+    /// <summary>True se sono configurate chiavi PRECEDENTI (una rotazione è in corso).</summary>
+    bool HasPreviousKeys { get; }
+
+    /// <summary>
+    /// True se il payload si apre con la chiave CORRENTE (nessun bisogno di ri-cifratura).
+    /// False sia per i payload sulla chiave precedente sia per quelli indecifrabili o corrotti:
+    /// la distinzione fra i due casi la fa il chiamante provando <see cref="IEncryptionService.Decrypt"/>.
+    /// </summary>
+    bool IsEncryptedWithCurrentKey(string ciphertext);
+}

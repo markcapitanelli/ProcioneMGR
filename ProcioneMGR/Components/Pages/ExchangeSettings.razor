@@ -13,6 +13,8 @@
 @inject IExchangeClientFactory ExchangeFactory
 @inject IExchangeCredentialReader CredentialReader
 @inject IMasterKeyProbe KeyProbe
+@inject IMasterKeyRing Ring
+@inject IMasterKeyRotationService KeyRotation
 @inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Le mie credenziali Exchange</PageTitle>
@@ -73,6 +75,28 @@
             via <code>PROCIONE_MGR_MASTER_KEY</code>). Ultima verifica: @keyProbe.CheckedAtUtc.ToString("dd/MM HH:mm") UTC
             — si aggiorna a ogni salvataggio o eliminazione qui sotto.
         </div>
+    </div>
+}
+
+@* [Fase 0 PRD-RISANAMENTO] Rotazione in corso: il keyring ha chiavi precedenti configurate.
+   Il pannello compare SOLO in quello stato — a rotazione chiusa (PreviousMasterKeys vuota)
+   sparisce da solo, quindi non può diventare un bottone che rassicura senza fare. *@
+@if (Ring.HasPreviousKeys)
+{
+    <div class="alert alert-warning">
+        <div class="fw-bold">🔁 Rotazione master key in corso (chiavi precedenti configurate nel keyring).</div>
+        <div class="small mt-1 mb-2">
+            Le credenziali salvate con la chiave precedente restano leggibili grazie al keyring, ma vanno
+            riportate sulla chiave corrente. Al termine, svuota <code>Security:PreviousMasterKeys</code>
+            (o <code>PROCIONE_MGR_PREVIOUS_MASTER_KEYS</code>) e riavvia: questo pannello sparirà.
+        </div>
+        <button class="btn btn-sm btn-warning" @onclick="ReEncryptAsync" disabled="@_reEncrypting">
+            @(_reEncrypting ? "Ri-cifratura in corso…" : "Ri-cifra ora con la chiave corrente")
+        </button>
+        @if (_reEncryptReport is not null)
+        {
+            <div class="small mt-2 fw-bold">@_reEncryptReport</div>
+        }
     </div>
 }
 
@@ -208,6 +232,30 @@
     private string? message;
     private bool isError;
     private bool testing;
+    private bool _reEncrypting;
+    private string? _reEncryptReport;
+
+    /// <summary>[Fase 0] Ri-cifratura di massa con la chiave corrente, poi ricarica + re-probe:
+    /// l'esito deve riflettersi subito sia nell'elenco sia nel banner della master key.</summary>
+    private async Task ReEncryptAsync()
+    {
+        _reEncrypting = true;
+        _reEncryptReport = null;
+        try
+        {
+            var report = await KeyRotation.ReEncryptAllAsync();
+            _reEncryptReport = report.ToString();
+            await ReloadAndRecheckAsync();
+        }
+        catch (Exception ex)
+        {
+            _reEncryptReport = $"Errore durante la ri-cifratura: {ex.Message}";
+        }
+        finally
+        {
+            _reEncrypting = false;
+        }
+    }
 
     // Niente initializer sulla property [SupplyParameterFromForm] (BL0008: nei POST il binder
     // può sovrascriverla con null): il backing nullable + coalescenza nel getter dà lo stesso

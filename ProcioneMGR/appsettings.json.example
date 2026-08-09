@@ -5,7 +5,9 @@
   },
   "Security": {
     "_comment_MasterKey": "Chiave AES-256 (base64 di 32 byte). NON committare il valore reale. Dev: User Secrets. Prod: env PROCIONE_MGR_MASTER_KEY / Key Vault. Genera con: [Convert]::ToBase64String((1..32|%{Get-Random -Max 256}))",
-    "MasterKey": "__CHANGE_ME_BASE64_32_BYTES__"
+    "MasterKey": "__CHANGE_ME_BASE64_32_BYTES__",
+    "_comment_PreviousMasterKeys": "SOLO durante una rotazione (Fase 0 PRD-RISANAMENTO): le chiavi PRECEDENTI del keyring. Si decifra provando la corrente e poi queste, in ordine; si cifra SEMPRE con la corrente. Procedura: vecchia chiave qui + nuova in MasterKey (su ENTRAMBI gli host), riavvio, 'Ri-cifra ora' in /settings/exchanges, poi svuotare. Env equivalente: PROCIONE_MGR_PREVIOUS_MASTER_KEYS (separatore ';').",
+    "PreviousMasterKeys": []
   },
   "Llm": {
     "_comment": "Layer AI di supervisione del ciclo di ricerca. La API key NON va qui: si legge SOLO dalla variabile d'ambiente ANTHROPIC_API_KEY (SDK Anthropic, riletta a caldo: niente riavvio). Gli errori transitori (credito API esaurito, rate-limit, rete) aprono un circuit breaker: chiamate sospese dopo BreakerFailureThreshold errori consecutivi, notifica one-shot all'operatore, riprova automatica ogni BreakerCooldownMinutes; nessun advisory d'errore permanente per errori transitori. NotifyDecisions=true notifica (Info) le advisory riuscite con decisioni per l'utente. Confine di sicurezza: il layer AI e' SOLO advisory, non puo' avviare Live ne' bypassare SafetyChecker.",

@@ -26,12 +26,22 @@ namespace ProcioneMGR.Services.Security;
 /// variabile PROCIONE_MGR_MASTER_KEY, sufficiente per un progetto a operatore singolo.
 /// Azure Key Vault non e' pertinente: lo stack e' Kubernetes-nativo, senza alcuna presenza
 /// Azure altrove — introdurlo sarebbe una dipendenza cloud spuria per un problema gia'
-/// risolto dal Secret K8s. L'unico pezzo TODO reale, deliberatamente rimandato perche'
-/// e' una feature a se' (non un fix puntuale): la rotazione della chiave, per cui il
-/// formato riserva gia' il byte di versione ma manca ancora il supporto multi-chiave
-/// (decifra-con-la-vecchia/cifra-con-la-nuova) e uno strumento di re-cifratura di massa.
+/// risolto dal Secret K8s.
+///
+/// ROTAZIONE DELLA CHIAVE (Fase 0 del PRD-RISANAMENTO, 2026-08-08 — chiude il TODO storico):
+/// il servizio ora e' un KEYRING. Si CIFRA sempre e solo con la chiave corrente; si DECIFRA
+/// provando la corrente e poi, in ordine, le chiavi PRECEDENTI dichiarate in
+/// PROCIONE_MGR_PREVIOUS_MASTER_KEYS (separatore ';') o Security:PreviousMasterKeys (array).
+/// Il formato v1 resta INVARIATO: non serve un key-id nel payload perche' il tag GCM fa gia'
+/// da discriminatore — la chiave sbagliata produce AuthenticationTagMismatchException, e si
+/// passa alla successiva. Un payload manomesso fallisce con TUTTE le chiavi e l'errore emerge
+/// come prima. Procedura di rotazione: (1) la vecchia chiave va in PreviousMasterKeys e la
+/// nuova diventa MasterKey, su ENTRAMBI gli host; (2) riavvio: tutto torna leggibile subito;
+/// (3) "Ri-cifra ora" in /settings/exchanges (MasterKeyRotationService) riporta ogni riga
+/// sulla chiave corrente; (4) si svuota PreviousMasterKeys. Il byte di versione resta riservato
+/// a futuri cambi di FORMATO, non di chiave.
 /// </summary>
-public sealed class AesGcmEncryptionService : IEncryptionService, IMasterKeyStatus
+public sealed class AesGcmEncryptionService : IEncryptionService, IMasterKeyStatus, IMasterKeyRing
 {
     private const byte SchemeVersion = 1;
     private const int NonceSize = 12;   // 96 bit, raccomandato per GCM
@@ -50,8 +60,14 @@ public sealed class AesGcmEncryptionService : IEncryptionService, IMasterKeyStat
 
     private readonly byte[] _key;
 
+    /// <summary>Chiavi PRECEDENTI del keyring, in ordine di dichiarazione. Vuoto = nessuna rotazione in corso.</summary>
+    private readonly byte[][] _previousKeys;
+
     /// <inheritdoc />
     public bool IsDefaultDevKey { get; }
+
+    /// <inheritdoc />
+    public bool HasPreviousKeys => _previousKeys.Length > 0;
 
     public AesGcmEncryptionService(IConfiguration configuration)
     {
@@ -71,6 +87,32 @@ public sealed class AesGcmEncryptionService : IEncryptionService, IMasterKeyStat
         IsDefaultDevKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(configured)))
             .Equals(DevPlaceholderKeySha256Hex, StringComparison.OrdinalIgnoreCase);
         _key = DeriveKey(configured);
+
+        // Chiavi precedenti (rotazione in corso): stessa doppia sorgente della chiave corrente.
+        // La env (separatore ';') e la sezione config si SOMMANO — chi rotola via K8s usa il
+        // Secret, chi rotola in locale usa appsettings: nessuna delle due strade esclude l'altra.
+        // La derivazione e' identica a quella della corrente; i duplicati della corrente si
+        // scartano (proverebbero due volte la stessa chiave).
+        var previous = new List<byte[]>();
+        var envPrev = Environment.GetEnvironmentVariable("PROCIONE_MGR_PREVIOUS_MASTER_KEYS");
+        if (!string.IsNullOrWhiteSpace(envPrev))
+        {
+            foreach (var part in envPrev.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                previous.Add(DeriveKey(part));
+            }
+        }
+        foreach (var child in configuration.GetSection("Security:PreviousMasterKeys").GetChildren())
+        {
+            if (!string.IsNullOrWhiteSpace(child.Value))
+            {
+                previous.Add(DeriveKey(child.Value));
+            }
+        }
+        _previousKeys = previous
+            .Where(k => !k.SequenceEqual(_key))
+            .DistinctBy(Convert.ToHexString)
+            .ToArray();
     }
 
     public string Encrypt(string plaintext)
@@ -98,7 +140,50 @@ public sealed class AesGcmEncryptionService : IEncryptionService, IMasterKeyStat
     public string Decrypt(string ciphertext)
     {
         ArgumentException.ThrowIfNullOrEmpty(ciphertext);
+        var input = ValidateEnvelope(ciphertext);
 
+        try
+        {
+            return DecryptWithKey(_key, input);
+        }
+        catch (AuthenticationTagMismatchException) when (_previousKeys.Length > 0)
+        {
+            // Chiave corrente sbagliata: keyring. SOLO il tag mismatch attiva il fallback —
+            // formato corrotto o versione ignota sono gia' emersi da ValidateEnvelope, e un
+            // payload manomesso fallira' il tag anche con tutte le precedenti.
+            foreach (var oldKey in _previousKeys)
+            {
+                try
+                {
+                    return DecryptWithKey(oldKey, input);
+                }
+                catch (AuthenticationTagMismatchException)
+                {
+                    // La prossima del ring.
+                }
+            }
+            throw; // nessuna chiave del ring lo apre: stesso errore di prima del keyring.
+        }
+    }
+
+    /// <inheritdoc />
+    public bool IsEncryptedWithCurrentKey(string ciphertext)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(ciphertext);
+        try
+        {
+            DecryptWithKey(_key, ValidateEnvelope(ciphertext));
+            return true;
+        }
+        catch (Exception ex) when (ex is CryptographicException or FormatException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Decodifica base64 e valida versione/lunghezza. Il payload torna intatto al chiamante.</summary>
+    private static byte[] ValidateEnvelope(string ciphertext)
+    {
         var input = Convert.FromBase64String(ciphertext);
         if (input.Length < 1 + NonceSize + TagSize)
         {
@@ -109,7 +194,11 @@ public sealed class AesGcmEncryptionService : IEncryptionService, IMasterKeyStat
         {
             throw new CryptographicException($"Versione schema di cifratura non supportata: {input[0]}.");
         }
+        return input;
+    }
 
+    private static string DecryptWithKey(byte[] key, byte[] input)
+    {
         var nonce = new byte[NonceSize];
         var tag = new byte[TagSize];
         var cipherLength = input.Length - 1 - NonceSize - TagSize;
@@ -120,8 +209,8 @@ public sealed class AesGcmEncryptionService : IEncryptionService, IMasterKeyStat
         Buffer.BlockCopy(input, 1 + NonceSize + TagSize, cipherBytes, 0, cipherLength);
 
         var plainBytes = new byte[cipherLength];
-        using var aes = new AesGcm(_key, TagSize);
-        // Lancia AuthenticationTagMismatchException se il dato e' stato manomesso.
+        using var aes = new AesGcm(key, TagSize);
+        // Lancia AuthenticationTagMismatchException se la chiave e' un'altra o il dato manomesso.
         aes.Decrypt(nonce, cipherBytes, tag, plainBytes);
 
         return Encoding.UTF8.GetString(plainBytes);
