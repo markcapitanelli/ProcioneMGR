@@ -6,7 +6,7 @@ riallineare configurazioni e UI, rendere il server indipendente da GitHub, far r
 all'avvio su qualunque dispositivo.*
 
 **Stato (2026-08-08, sessione autonoma): FASE 0 COMPLETA salvo rotazione · FASE 1 COMPLETA ·
-FASE 2 parziale (2.1-2.5 fatte; 2.6-2.9 da fare) · FASI 3-6 da fare.**
+FASE 2 parziale (2.1-2.3 fatte, 2.4 RITIRATA, 2.5-2.9 da fare) · FASI 3-6 da fare.**
 Le decisioni di prodotto sono state prese il 2026-08-08:
 **Microstructure si integra** (DI + gate IC in `/feature-selection`) · **JumpModel si cabla dietro
 flag** (`IRegimeModel`, K-means resta il default) · **la portabilità si fa con Docker Compose**.
@@ -26,7 +26,8 @@ Suite di partenza: 2.096 metodi di test (inventario in `docs/audit/27_TEST_INVEN
 | 2026-08-08 | **2.1** — `ISymbolCatalog` con cache e politica dichiarata al posto delle 7 scansioni; invalidazione dalla watchlist | *(sessione)* |
 
 **Restano:** rotazione effettiva dei segreti (richiede l'operatore: corsie ferme + reinserimento) ·
-2.6 Microstructure · 2.7 JumpModel · 2.8 optimizer per nome · 2.9 deriva Alpha158 · Fasi 3-6.
+2.5 `events.proto` · 2.6 Microstructure · 2.7 JumpModel · 2.8 optimizer per nome · 2.9 deriva
+Alpha158 · Fasi 3-6.
 
 ---
 
@@ -130,7 +131,7 @@ Include le due decisioni di prodotto (Microstructure, JumpModel).
 | 2.1 | **`ISymbolCatalog`**: un servizio unico per l'elenco simboli (politica esplicita: `TrackedSeries` + opzione «includi storici»); le 7 pagine lo consumano al posto delle scansioni su `OhlcvData` | E-04 |
 | 2.2 | Rimuovere la registrazione Singleton di `BayesianSearch` (o factory `Func<int, BayesianSearch>` che dichiari il seed per-run) | E-03 |
 | 2.3 | Rimuovere `ICombinatorialPurgedCv` (interfaccia mai risolta) | G-07 |
-| 2.4 | Etichetta UI «LightGBM» → «Gradient Boosting (FastTree)» | G-12 |
+| ~~2.4~~ | ~~Etichetta LightGBM~~ — **RITIRATA**: verificato `Trainers.LightGbm(...)` + pacchetto `Microsoft.ML.LightGbm`, è vero LightGBM; l'errore era dell'audit (corretto nei doc 04/06) | ~~G-12~~ |
 | 2.5 | `events.proto`: rimuovere o marcare `// riservato, nessun consumatore` nel file | G-14 |
 | 2.6 | **Microstructure — integrazione** (decisione 2026-08-08): registrazione DI del modulo; `IncrementalIcGate` esposto in `/feature-selection` come filtro opzionale sui candidati e in `FeatureEngineeringStage` come gate configurabile (default off = comportamento invariato) | C-03, G-16 |
 | 2.7 | **JumpModel — cablaggio dietro flag** (decisione 2026-08-08): `IRegimeModel` con `KMeansRegimeModel` (default, comportamento invariato) e `JumpRegimeModel`; selezione da `MarketRegime:Model`; `/regimes` mostra quale modello è attivo e il confronto transizioni | C-04 |
