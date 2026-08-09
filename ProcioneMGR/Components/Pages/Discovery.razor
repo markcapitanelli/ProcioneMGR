@@ -174,7 +174,7 @@
         </div>
         <div class="table-responsive">
             <table class="table table-sm table-striped mb-0 align-middle">
-                <thead><tr><th>#</th><th>Strategia</th><th>Coppia</th><th>TF</th><th class="text-end">OOS Sharpe</th><th class="text-end" title="Deflated Sharpe: probabilità che l'edge sia reale dopo la correzione per il numero di combinazioni provate. >95% = difendibile.">DSR</th><th class="text-end">IS Sharpe</th><th class="text-end">Return %</th><th class="text-end">Max DD %</th><th class="text-end">Trade</th><th>Parametri</th><th></th></tr></thead>
+                <thead><tr><th>#</th><th>Strategia</th><th>Coppia</th><th>TF</th><th class="text-end">OOS Sharpe</th><th class="text-end" title="Deflated Sharpe: probabilità che l'edge sia reale dopo la correzione per il numero di combinazioni provate. >95% = difendibile.">DSR</th><th class="text-end" title="[D-01] Il numero di combinazioni contro cui il DSR di questa riga è stato deflazionato: le combinazioni DISTINTE della griglia del suo job. Un DSR senza il suo N non è giudicabile.">N gate</th><th class="text-end">IS Sharpe</th><th class="text-end">Return %</th><th class="text-end">Max DD %</th><th class="text-end">Trade</th><th>Parametri</th><th></th></tr></thead>
                 <tbody>
                     @{ var rank = 0; }
                     @foreach (var c in _result.Candidates)
@@ -196,6 +196,7 @@
                                     <span class="text-muted">—</span>
                                 }
                             </td>
+                            <td class="text-end small">@(c.Validation is { } vt ? vt.Trials.ToString() : "—")</td>
                             <td class="text-end">@c.InSampleSharpe.ToString("F2")</td>
                             <td class="text-end @(c.TotalReturn >= 0 ? "text-success" : "text-danger")">@c.TotalReturn.ToString("F1")</td>
                             <td class="text-end text-danger">@c.MaxDrawdown.ToString("F1")</td>
@@ -207,7 +208,17 @@
                 </tbody>
             </table>
         </div>
-        <div class="card-footer text-muted small">Le strategie salvate compaiono in <a href="strategies">/strategie</a> e sono selezionabili nell'<a href="ensemble">ensemble</a>.</div>
+        <div class="card-footer text-muted small">
+            Le strategie salvate compaiono in <a href="strategies">/strategie</a> e sono selezionabili nell'<a href="ensemble">ensemble</a>.
+            @* [Fase 3, D-01] I due conteggi sono cose diverse, e va detto: confonderli è il bug D-01. *@
+            <div class="mt-1">
+                <strong>Nota sui conteggi:</strong> «@_result.CombinationsTested combinazioni» in testata
+                conta le prove dell'<em>intero run</em> (tutti i job, tutte le finestre walk-forward);
+                «N gate» conta le combinazioni <em>distinte</em> del job della singola riga, ed è il
+                numero contro cui il suo DSR è deflazionato. Se N gate è piccolo rispetto alla griglia
+                che hai chiesto, il DSR di quella riga è più ottimista di quanto la ricerca meriti.
+            </div>
+        </div>
     </div>
 }
 

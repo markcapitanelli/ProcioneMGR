@@ -17,6 +17,16 @@ public interface IAppConfigWriter
     /// (segmenti separati da <c>:</c>, es. <c>"Trading:Safety"</c>; i nodi mancanti vengono creati).
     /// </summary>
     Task SaveSectionAsync<T>(string sectionPath, T options, CancellationToken ct = default);
+
+    /// <summary>
+    /// [Fase 3 PRD-RISANAMENTO] Scrive un SINGOLO valore scalare (es.
+    /// <c>"Trading:UseRemoteTrading"</c>) senza toccare il resto della sezione che lo ospita.
+    /// Esiste perché alcune chiavi vivono da scalari dentro sezioni grandi (Trading, Http): un
+    /// <see cref="SaveSectionAsync{T}"/> lì richiederebbe un POCO dell'intera sezione, e ogni
+    /// proprietà dimenticata verrebbe cancellata dal file. La scrittura chirurgica non ha questo
+    /// modo di rompersi.
+    /// </summary>
+    Task SaveValueAsync<T>(string keyPath, T value, CancellationToken ct = default);
 }
 
 public sealed class AppConfigWriter(IHostEnvironment env, ILogger<AppConfigWriter> logger) : IAppConfigWriter
@@ -92,6 +102,43 @@ public sealed class AppConfigWriter(IHostEnvironment env, ILogger<AppConfigWrite
             var output = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(path, output, ct);
             logger.LogInformation("Sezione '{Section}' salvata in appsettings.json.", sectionPath);
+        }
+        finally
+        {
+            FileLock.Release();
+        }
+    }
+
+    public async Task SaveValueAsync<T>(string keyPath, T value, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyPath);
+        ArgumentNullException.ThrowIfNull(value);
+
+        var path = Path.Combine(env.ContentRootPath, "appsettings.json");
+        await FileLock.WaitAsync(ct);
+        try
+        {
+            var json = await File.ReadAllTextAsync(path, ct);
+            var root = JsonNode.Parse(json)?.AsObject()
+                       ?? throw new InvalidOperationException("appsettings.json non valido.");
+
+            var segments = keyPath.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var parent = root;
+            foreach (var segment in segments[..^1])
+            {
+                if (parent[segment] is not JsonObject child)
+                {
+                    child = new JsonObject();
+                    parent[segment] = child;
+                }
+                parent = child;
+            }
+
+            parent[segments[^1]] = JsonSerializer.SerializeToNode(value, SerializeOptions);
+
+            var output = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(path, output, ct);
+            logger.LogInformation("Chiave '{Key}' salvata in appsettings.json.", keyPath);
         }
         finally
         {

@@ -214,6 +214,47 @@ public sealed class AppConfigWriterTests : IDisposable
         Assert.Equal("{ NON-json ", await File.ReadAllTextAsync(SettingsPath));
     }
 
+    // --- [Fase 3] SaveValueAsync: la scrittura chirurgica di un singolo scalare -----------------
+
+    [Fact]
+    public async Task SaveValue_TouchesOnlyTheTargetKey_SiblingScalarsAndObjectsSurvive()
+    {
+        // È la ragione per cui il metodo esiste: Trading contiene Safety (oggetto di un altro
+        // pannello) e scalari come LaneCount — una scrittura di sezione qui richiederebbe un POCO
+        // completo, e ogni proprietà dimenticata verrebbe cancellata.
+        await File.WriteAllTextAsync(SettingsPath, """
+            {
+              "Trading": {
+                "LaneCount": 8,
+                "UseRemoteTrading": false,
+                "Safety": { "MaxOpenPositions": 5 },
+                "_comment": "doc per il lettore umano"
+              }
+            }
+            """);
+
+        await Writer().SaveValueAsync("Trading:UseRemoteTrading", true);
+
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!.AsObject();
+        var trading = root["Trading"]!.AsObject();
+        Assert.True(trading["UseRemoteTrading"]!.GetValue<bool>());
+        Assert.Equal(8, trading["LaneCount"]!.GetValue<int>());
+        Assert.Equal(5, trading["Safety"]!["MaxOpenPositions"]!.GetValue<int>());
+        Assert.Equal("doc per il lettore umano", trading["_comment"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task SaveValue_CreatesMissingParents_AndWritesStrings()
+    {
+        await File.WriteAllTextAsync(SettingsPath, """{ "AllowedHosts": "*" }""");
+
+        await Writer().SaveValueAsync("Ml:RemoteUrl", "http://procionemgr-ml:8080");
+
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!.AsObject();
+        Assert.Equal("http://procionemgr-ml:8080", root["Ml"]!["RemoteUrl"]!.GetValue<string>());
+        Assert.Equal("*", root["AllowedHosts"]!.GetValue<string>());
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch { }

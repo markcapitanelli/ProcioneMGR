@@ -146,3 +146,15 @@ uno stato che non è quello vero.
 - Il guard delle correlazioni **fallisce verso il permesso**: se la correlazione non è
   stimabile lascia passare e lo registra. Bloccare al buio fermerebbe l'operatività per un
   buco di dati, che è un guasto peggiore del rischio che si evita.
+
+## Aggiunte Fase 3 (2026-08-09)
+
+- **La misura accanto all'interruttore.** `DriveProtectiveExits` mostra l'esito B3
+  (2026-07-28: uscire al tocco è peggio che a barra chiusa in 24/24 configurazioni) e
+  `DriveDecisions` la campagna architetture-esecuzione (il gate di regime non ha migliorato,
+  l'HMM è stato respinto). Chi accende sa contro quale numero scommette.
+- **Attestazioni exchange** (card in fondo): `Trading:Bitget:SpotMarketBuyVerified` — la spunta
+  che sblocca i MARKET-BUY spot Bitget DOPO la verifica manuale con `tools/SpotVerify` (la v2
+  documenta `size` come controvalore quote sui market-buy: senza verifica, ordine rifiutato).
+  È un'attestazione registrata, non una preferenza; sezione aggiunta alle Writable di
+  `EngineConfigSections` (la legge il motore, a ogni ordine).

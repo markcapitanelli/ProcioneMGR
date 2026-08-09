@@ -62,6 +62,11 @@ public static class EngineConfigSections
         // sorveglia quello del guscio) legge la sezione del proprio processo — accenderla dal
         // browser deve raggiungere anche lui, e reloadOnChange non attraversa un mount PVC.
         "Heartbeat",
+        // [Fase 3 PRD-RISANAMENTO] Attestazione della semantica market-buy spot di Bitget: la legge
+        // BitgetClient al momento dell'ordine, cioè nell'host del motore. Nessun segreto nella
+        // sezione (le credenziali exchange vivono cifrate a DB): un solo bool che sblocca un
+        // percorso d'ordine dopo la verifica manuale contro l'exchange reale.
+        "Trading:Bitget",
     ];
 
     /// <summary>

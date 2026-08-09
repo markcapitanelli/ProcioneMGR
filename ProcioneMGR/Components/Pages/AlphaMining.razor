@@ -70,6 +70,7 @@
             </div>
         </div>
         <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" Disabled="_busy" ShowUseFullRange="false"
+                          ShowSentimentCoverage="true"
                           OnHasDataChanged="@(has => _hasData = has)" />
 
         @* Iperparametri del genetic miner: default sensati, pannello avanzate. *@

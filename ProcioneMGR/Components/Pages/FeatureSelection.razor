@@ -91,8 +91,26 @@
         </div>
 
         <DataAvailability Symbol="@_symbol" Timeframe="@_timeframe" From="_from" To="_to" Disabled="_busy"
+                          ShowSentimentCoverage="true"
                           OnApplyRange="@(r => { _from = r.From; _to = r.To; })"
                           OnHasDataChanged="@(has => _hasData = has)" />
+
+        @* [Fase 3, Q6 residuo umano] La selezione IC qui è uno strumento esplorativo, ma i fattori
+           scelti finiscono nei modelli che la pipeline giudica sull'HOLDOUT: se l'esplorazione ha
+           già visto quei dati, il verdetto dell'holdout è indebolito e nessun log lo direbbe. *@
+        @if (_lastHoldout is { } h && _to.Date >= h.From.Date && _from.Date <= h.To.Date)
+        {
+            <div class="alert alert-warning py-2 small mt-2 mb-0">
+                <i class="bi bi-exclamation-triangle me-1"></i>
+                <strong>Sovrapposizione con l'holdout della pipeline.</strong> Il periodo esplorato
+                tocca l'holdout dell'ultima configurazione di pipeline
+                («@_lastHoldoutName», @h.From.ToString("yyyy-MM-dd") → @h.To.ToString("yyyy-MM-dd")):
+                se i fattori selezionati qui alimentano un modello che la pipeline valuterà su quel
+                tratto, l'holdout non è più «mai visto» e il suo verdetto vale meno. Per una
+                selezione da portare in pipeline, ferma l'esplorazione a prima del
+                @h.From.ToString("yyyy-MM-dd").
+            </div>
+        }
 
         @* Orizzonte e filtri di selezione hanno default sensati: pannello avanzate. *@
         <AdvancedPanel Summary="@AdvancedSummary">
@@ -451,6 +469,11 @@
     // Aggiornato dal componente DataAvailability (gating della valutazione).
     private bool _hasData = true;
 
+    // [Fase 3, Q6] Holdout dell'ultima configurazione di pipeline (per il warning di
+    // sovrapposizione). Null se nessuna configurazione esiste o il JSON non è leggibile.
+    private (DateTime From, DateTime To)? _lastHoldout;
+    private string _lastHoldoutName = "";
+
     /// <summary>Riassunto delle impostazioni avanzate, visibile a pannello chiuso.</summary>
     private string AdvancedSummary =>
         $"Orizzonte {_forwardHorizon} · Top {_topN} · |IC| ≥ {_minAbsIc:0.###} · IR ≥ {_minIr:0.###}"
@@ -498,6 +521,26 @@
         _alpha158Count = Factory.Prototypes.Count(IsAlpha158);
         await using var db = await DbFactory.CreateDbContextAsync();
         _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+
+        // [Fase 3, Q6] L'holdout dell'ultima configurazione di pipeline, per il warning di
+        // sovrapposizione. Best-effort: se manca o non si legge, il warning semplicemente non c'è.
+        try
+        {
+            var lastConfig = await db.PipelineConfigurations.AsNoTracking()
+                .OrderByDescending(c => c.UpdatedAt)
+                .Select(c => new { c.Name, c.DateRangesJson })
+                .FirstOrDefaultAsync();
+            if (lastConfig is not null)
+            {
+                var ranges = JsonSerializer.Deserialize<ProcioneMGR.Services.Pipeline.PipelineDateRanges>(lastConfig.DateRangesJson);
+                if (ranges is not null && ranges.HoldoutTo > ranges.HoldoutFrom)
+                {
+                    _lastHoldout = (ranges.HoldoutFrom, ranges.HoldoutTo);
+                    _lastHoldoutName = lastConfig.Name;
+                }
+            }
+        }
+        catch (JsonException) { _lastHoldout = null; }
 
         _recordedIntervalHours = Math.Max(1, Config.GetValue("FactorDrift:IntervalHours", 12));
         _recordedMaxCandles = Math.Clamp(Config.GetValue("FactorDrift:MaxCandles", 20_000), 1_000, 200_000);

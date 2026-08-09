@@ -84,5 +84,10 @@ Salva la combinazione in `SavedStrategies` con `IsOptimized = true` e lo Sharpe 
 
 - Il DSR è calcolato **per candidato** tenendo conto del numero di combinazioni provate:
   con migliaia di job, uno Sharpe OOS alto da solo non basta.
+- **[Fase 3, D-01]** La colonna «N gate» rende visibile il numero contro cui il DSR di ogni
+  riga è deflazionato (combinazioni distinte del suo job); il footer spiega la differenza col
+  conteggio di run in testata (tutti i job × tutte le finestre). In /pipeline il riepilogo
+  dello stage di validazione dichiara combinazioni provate e N effettivo del gate, con la
+  divergenza esplicitata quando le prove superano i candidati osservati.
 - La modalità creativa è deterministica a parità di seed (42) e passa dagli stessi gate
   delle strategie classiche: la creatività non compra sconti sul rigore.
