@@ -146,8 +146,26 @@ public sealed class WebSocketPriceFeed(
             {
                 return false;
             }
+            // Indice del PARSING (simbolo dello stream -> sottoscrizione), chiave = SOLO simbolo:
+            // più grossolana dell'identità del set (simbolo, timeframe, mercato). Due corsie sullo
+            // stesso simbolo con timeframe o mercato diversi sono LEGITTIME e qui collidono: il
+            // ToDictionary usato fino al 2026-08-09 lanciava ArgumentException ("Key: DOTUSDT",
+            // visto dal vivo nel pod con due corsie su DOT/USDT) — e siccome _subscriptions era già
+            // stato aggiornato, il refresh successivo non vedeva più alcun cambio: indice e
+            // connessione restavano sul set vecchio fino al riavvio del pod, mentre il log
+            // prometteva «ritento». Si tiene la PRIMA sottoscrizione nell'ordine deterministico di
+            // `ordered`: al parser serve solo risalire al simbolo canonico, e il timeframe vero
+            // della candela lo dichiara lo stream stesso (vince sulla sottoscrizione: vedi
+            // BinanceStreamMapper.ParseKline). L'indice si costruisce PRIMA di toccare i campi,
+            // così nessun errore può più lasciare lo stato a metà.
+            var bySymbol = new Dictionary<string, StreamSubscription>(StringComparer.OrdinalIgnoreCase);
+            foreach (var sub in ordered)
+            {
+                bySymbol.TryAdd(ExchangeSymbolOf(sub), sub);
+            }
+
             _subscriptions = ordered;
-            _byExchangeSymbol = ordered.ToDictionary(ExchangeSymbolOf, s => s, StringComparer.OrdinalIgnoreCase);
+            _byExchangeSymbol = bySymbol;
 
             // [G2] Contabilità per-serie allineata al set: i simboli nuovi partono ADESSO (è il
             // riferimento della loro grazia), quelli usciti si dimenticano — lasciare voci orfane
