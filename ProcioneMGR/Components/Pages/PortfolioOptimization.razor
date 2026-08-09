@@ -16,6 +16,7 @@
 @inject HierarchicalRiskParityOptimizer Hrp
 @inject IRiskFactorPca Pca
 @inject IJSRuntime JS
+@inject ProcioneMGR.Services.MarketData.ISymbolCatalog SymbolCatalog
 
 <PageTitle>Portafoglio</PageTitle>
 
@@ -228,7 +229,8 @@
     protected override async Task OnInitializedAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        // [E-04] Catalogo condiviso con cache al posto della scansione Distinct su OhlcvData
+        _knownSymbols = (await SymbolCatalog.GetKnownSymbolsAsync()).ToList();
     }
 
     private async Task RunAsync()

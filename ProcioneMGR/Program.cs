@@ -136,6 +136,12 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Servic
 // --- Indicatori tecnici (stateless) ---
 builder.Services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
 
+// [E-04] Catalogo simboli condiviso con cache: sostituisce le sette scansioni Distinct() su
+// OhlcvData (~12M righe per ~30 stringhe) che ogni pagina rifaceva per conto proprio.
+builder.Services.AddSingleton<ProcioneMGR.Services.MarketData.ISymbolCatalog>(sp =>
+    new ProcioneMGR.Services.MarketData.SymbolCatalog(
+        sp.GetRequiredService<IDbContextFactory<ProcioneMGR.Data.ApplicationDbContext>>()));
+
 // --- Market regime detection (Fase 7): feature extraction + clustering ---
 builder.Services.AddSingleton<IMarketFeatureExtractor, MarketFeatureExtractor>();
 builder.Services.AddSingleton<IMarketBreadthCalculator, MarketBreadthCalculator>(); // [3.8a] breadth interna per i regimi

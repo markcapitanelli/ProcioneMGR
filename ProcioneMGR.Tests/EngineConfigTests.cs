@@ -150,7 +150,7 @@ public sealed class EngineConfigTests : IDisposable
         var realtime = Assert.Single(sections);
         var parsed = JsonSerializer.Deserialize<RealtimeFeedOptions>(realtime.Json)!;
         Assert.False(parsed.Enabled);                    // default del codice
-        Assert.True(parsed.DriveProtectiveExits);        // default del codice
+        Assert.False(parsed.DriveProtectiveExits);       // default del codice [C-02: false per misura B3, vedi SecurityDefaultsTests]
         Assert.Equal(60, parsed.StaleAfterSeconds);
         Assert.Equal("default del codice", realtime.Source);
     }

@@ -70,6 +70,10 @@ public class ExchangeSettingsPageTests : BunitContext
         Services.AddSingleton<IExchangeClientFactory>(new ThrowingExchangeFactory());
         Services.AddSingleton<IExchangeCredentialReader>(new FakeReader([bad, good]));
         Services.AddSingleton<IMasterKeyProbe>(new Infrastructure.FakeMasterKeyProbe());
+        // [Fase 0 PRD-RISANAMENTO] La pagina ora inietta anche il keyring della rotazione:
+        // fake inerte (nessuna chiave precedente) = pannello 'Ri-cifra' assente, com'era prima.
+        Services.AddSingleton<IMasterKeyRing>(new FakeRing());
+        Services.AddSingleton<IMasterKeyRotationService>(new ThrowingRotation());
 
         var cut = Render<ProcioneMGR.Components.Pages.ExchangeSettings>();
 
@@ -105,9 +109,25 @@ public class ExchangeSettingsPageTests : BunitContext
         Services.AddSingleton<IExchangeClientFactory>(new ThrowingExchangeFactory());
         Services.AddSingleton<IExchangeCredentialReader>(new FakeReader([]));
         Services.AddSingleton<IMasterKeyProbe>(new Infrastructure.FakeMasterKeyProbe());
+        // [Fase 0 PRD-RISANAMENTO] La pagina ora inietta anche il keyring della rotazione:
+        // fake inerte (nessuna chiave precedente) = pannello 'Ri-cifra' assente, com'era prima.
+        Services.AddSingleton<IMasterKeyRing>(new FakeRing());
+        Services.AddSingleton<IMasterKeyRotationService>(new ThrowingRotation());
 
         var cut = Render<ProcioneMGR.Components.Pages.ExchangeSettings>();
 
         cut.WaitForAssertion(() => Assert.Contains("Nessuna credenziale ancora", cut.Markup));
+    }
+
+    private sealed class FakeRing : IMasterKeyRing
+    {
+        public bool HasPreviousKeys => false;
+        public bool IsEncryptedWithCurrentKey(string ciphertext) => true;
+    }
+
+    private sealed class ThrowingRotation : IMasterKeyRotationService
+    {
+        public Task<MasterKeyReEncryptReport> ReEncryptAllAsync(CancellationToken ct = default)
+            => throw new InvalidOperationException("La ri-cifratura non deve partire in questi test.");
     }
 }

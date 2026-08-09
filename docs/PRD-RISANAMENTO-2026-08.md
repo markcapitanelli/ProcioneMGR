@@ -5,10 +5,28 @@ richiesta del proprietario: fixare i bug riscontrati, eliminare o sincronizzare 
 riallineare configurazioni e UI, rendere il server indipendente da GitHub, far ripartire tutto
 all'avvio su qualunque dispositivo.*
 
-**Stato: APPROVATA, DA ESEGUIRE.** Le decisioni di prodotto sono state prese il 2026-08-08:
+**Stato (2026-08-08, sessione autonoma): FASE 0 COMPLETA salvo rotazione · FASE 1 COMPLETA ·
+FASE 2 parziale (2.1-2.5 fatte; 2.6-2.9 da fare) · FASI 3-6 da fare.**
+Le decisioni di prodotto sono state prese il 2026-08-08:
 **Microstructure si integra** (DI + gate IC in `/feature-selection`) · **JumpModel si cabla dietro
 flag** (`IRegimeModel`, K-means resta il default) · **la portabilità si fa con Docker Compose**.
 Suite di partenza: 2.096 metodi di test (inventario in `docs/audit/27_TEST_INVENTORY.md`).
+
+### Registro di esecuzione
+
+| Data | Cosa | Commit |
+|---|---|---|
+| 2026-08-08 | **Fase 0a** — file dei segreti fuori dall'indice, `.gitignore` di famiglia, guardia in CI | `8c9d887` |
+| 2026-08-08 | **Fase 0b** — keyring multi-chiave (formato v1 invariato), `MasterKeyRotationService`, pannello "Ri-cifra ora" in `/settings/exchanges`, 8 test | `cc0f49b` |
+| 2026-08-08 | **1.2 + 1.3** — esposizione futures in nozionale (`SafetyExposure`), `DriveProtectiveExits` a `false`, `SecurityDefaultsTests` (9 default presidiati) | `9e4a010` |
+| 2026-08-08 | **1.5 + 1.6 + 1.7** — validazione range sul percorso obbligato (`PipelineDateRanges.Validate`), stoppini asimmetrici nel nullo, seed dichiarati | `dd3eff4` |
+| 2026-08-08 | **1.1** — `TrialsExplored` nel contesto, gate DSR su `max(candidati, esplorate)` × rapporto di collasso; retrocompatibile a `trialsExplored=0` | `7bbab82` |
+| 2026-08-08 | **1.4** — `IFundingHistoryProvider` agganciato al backtest (leva > 1), `FundingModelUsed` dichiarato in `/backtest` | `97b8fc1` |
+| 2026-08-08 | **2.2 + 2.3** — registrazione morta di `BayesianSearch` rimossa, `ICombinatorialPurgedCv` eliminata; **G-12 RITIRATO** (è vero LightGBM: errore dell'audit, corretto nei doc 04/06) | `544c34f` |
+| 2026-08-08 | **2.1** — `ISymbolCatalog` con cache e politica dichiarata al posto delle 7 scansioni; invalidazione dalla watchlist | *(sessione)* |
+
+**Restano:** rotazione effettiva dei segreti (richiede l'operatore: corsie ferme + reinserimento) ·
+2.6 Microstructure · 2.7 JumpModel · 2.8 optimizer per nome · 2.9 deriva Alpha158 · Fasi 3-6.
 
 ---
 

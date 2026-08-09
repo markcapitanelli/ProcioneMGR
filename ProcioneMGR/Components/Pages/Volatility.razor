@@ -14,6 +14,7 @@
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IGarchModel Garch
 @inject AuthenticationStateProvider AuthProvider
+@inject ProcioneMGR.Services.MarketData.ISymbolCatalog SymbolCatalog
 
 <PageTitle>Volatilità (GARCH)</PageTitle>
 
@@ -192,7 +193,8 @@
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         await using var db = await DbFactory.CreateDbContextAsync();
-        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        // [E-04] Catalogo condiviso con cache al posto della scansione Distinct su OhlcvData
+        _knownSymbols = (await SymbolCatalog.GetKnownSymbolsAsync()).ToList();
     }
 
     private double AnnualizedVol(double variance) => Math.Sqrt(variance * _periodsPerYear);
