@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -5,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Alpha;
 using ProcioneMGR.Services.Exchanges;
+using ProcioneMGR.Services.ML;
 using ProcioneMGR.Services.Security;
 using ProcioneMGR.Tests.Infrastructure;
 
@@ -552,6 +554,88 @@ public sealed class FactorDriftWorkerTests : IAsyncDisposable
 
         Assert.Equal(2, snapshot.All.Count);
         Assert.Equal(2, snapshot.TrackedSeriesCount);
+    }
+
+    // --- [2.9] I fattori del Champion --------------------------------------------------------------
+
+    /// <summary>Aggiunge un SavedMlModel con i fattori dati (l'utente FK viene creato se manca).</summary>
+    private static async Task SeedModelAsync(IDbContextFactory<ApplicationDbContext> dbFactory,
+        string symbol, string timeframe, ModelStage stage, string factorsJson, string name)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        if (!await db.Users.AnyAsync(u => u.Id == "u"))
+        {
+            db.Users.Add(new ApplicationUser { Id = "u", UserName = "u@t.io" });
+        }
+        db.SavedMlModels.Add(new SavedMlModel
+        {
+            UserId = "u",
+            Name = name,
+            ModelType = "Linear",
+            Symbol = symbol,
+            Timeframe = timeframe,
+            Stage = stage,
+            FactorsJson = factorsJson,
+            ModelBytes = [],
+        });
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task RunOnce_WithAChampion_AlsoWatchesItsFactors_ButNotThoseOfStaging()
+    {
+        // Il perché della 2.9: l'esclusione in blocco di Alpha158 lasciava scoperti proprio i
+        // fattori che un modello IN CARICA sta usando. La base resta di 8; il Champion aggiunge i
+        // suoi; un fattore già nella base (Momentum) non si conta due volte; un modello Staging non
+        // è in carica e non aggiunge nulla.
+        var (worker, snapshot, db) = await BuildAsync();
+        await SeedAsync(db, "BTC/USDT", "1h", 6000);
+        await SeedModelAsync(db, "BTC/USDT", "1h", ModelStage.Champion, JsonSerializer.Serialize(
+            new List<SavedFactorSpecDto>
+            {
+                new("A158_ROC_20", "A158_ROC_20", new()),
+                new("Momentum", "Momentum", new()),
+            }), "Campione");
+        await SeedModelAsync(db, "BTC/USDT", "1h", ModelStage.Staging, JsonSerializer.Serialize(
+            new List<SavedFactorSpecDto> { new("A158_KLEN", "A158_KLEN", new()) }), "Esperimento");
+
+        await worker.RunOnceAsync();
+
+        var reports = snapshot.All.Single().Reports;
+        Assert.Equal(9, reports.Count); // 8 di base + ROC_20 (Momentum non raddoppia)
+        Assert.Contains(reports, r => r.FeatureName == "A158_ROC_20");
+        Assert.DoesNotContain(reports, r => r.FeatureName == "A158_KLEN");
+    }
+
+    [Fact]
+    public async Task RunOnce_AChampionOnAnotherSeries_AddsNothingHere()
+    {
+        // I fattori del Champion valgono per la SUA coppia (Symbol, Timeframe), non per tutte.
+        var (worker, snapshot, db) = await BuildAsync();
+        await SeedAsync(db, "BTC/USDT", "1h", 6000);
+        await SeedModelAsync(db, "ETH/USDT", "4h", ModelStage.Champion, JsonSerializer.Serialize(
+            new List<SavedFactorSpecDto> { new("A158_ROC_20", "A158_ROC_20", new()) }), "Altrove");
+
+        await worker.RunOnceAsync();
+
+        Assert.Equal(8, snapshot.All.Single().Reports.Count);
+    }
+
+    [Fact]
+    public async Task RunOnce_BrokenOrUnknownChampionFactors_DegradeWithoutBreakingTheRound()
+    {
+        // Fail-open (regola 4): il monitor è advisory. Un FactorsJson illeggibile o un fattore che
+        // la factory non conosce più si SALTANO con un log; la base di 8 si calcola comunque.
+        var (worker, snapshot, db) = await BuildAsync();
+        await SeedAsync(db, "BTC/USDT", "1h", 6000);
+        await SeedModelAsync(db, "BTC/USDT", "1h", ModelStage.Champion, "{non-json", "Rotto");
+        await SeedModelAsync(db, "BTC/USDT", "1h", ModelStage.Champion, JsonSerializer.Serialize(
+            new List<SavedFactorSpecDto> { new("FattoreScomparso", "FattoreScomparso", new()) }), "Orfano");
+
+        await worker.RunOnceAsync();
+
+        Assert.Equal(8, snapshot.All.Single().Reports.Count);
+        Assert.NotNull(snapshot.LastRunUtc);
     }
 
     [Fact]
