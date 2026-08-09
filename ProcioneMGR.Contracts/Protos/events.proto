@@ -2,6 +2,11 @@
 // disponibile", ml pubblica "segnale alpha pronto", trading consuma). Solo message: lo schema e'
 // indipendente dal trasporto, cosi' la scelta del bus (Redis Streams vs Postgres NOTIFY) resta
 // aperta per le fasi successive senza bloccare il contratto dati.
+//
+// STATO [G-14, verificato 2026-08-09]: RISERVATO, nessun publisher ne' consumer nel codice.
+// E' una scelta, non una dimenticanza: il contratto dati si fissa prima del trasporto. Chi
+// aggiunge il primo consumatore tolga questa nota; chi non lo trova referenziato NON lo
+// cancelli senza passare dal PRD — la comunicazione fra host oggi e' gRPC + stato su Postgres.
 syntax = "proto3";
 
 package procionemgr.events.v1;

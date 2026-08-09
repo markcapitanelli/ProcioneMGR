@@ -37,6 +37,33 @@ public class TrainingConfiguration
     /// Richiede dati multi-simbolo sullo stesso timeframe (il calcolo è di IMarketBreadthCalculator).
     /// </summary>
     public bool IncludeBreadthFeature { get; set; }
+
+    /// <summary>
+    /// [2.7 PRD-RISANAMENTO, 2026-08-09] Algoritmo di stima dei centroidi:
+    /// <see cref="RegimeModelKinds.KMeans"/> (default, comportamento storico bit-identico) oppure
+    /// <see cref="RegimeModelKinds.Jump"/> (statistical jump model C1: la persistenza entra NELLA
+    /// stima, non a valle). Rispetta il contratto scritto in <see cref="JumpModel"/>: il default
+    /// resta K-means finché la misura non decide — questo flag rende la misura possibile
+    /// dall'app (config <c>MarketRegime:Model</c>) invece che solo dalla fase CLI di PlatformExpand.
+    /// Il formato persistito NON cambia (sempre centroidi + scaling): l'inference nearest-centroid
+    /// + smoothing resta identica per entrambi.
+    /// </summary>
+    public string Model { get; set; } = RegimeModelKinds.KMeans;
+
+    /// <summary>λ del jump model (penalità per salto di stato). Usato solo con Model=Jump.
+    /// 0 = degenera in K-means; il valore va tarato con la misura, mai assunto.</summary>
+    public double JumpLambda { get; set; } = 20.0;
+}
+
+/// <summary>Nomi degli algoritmi di regime selezionabili da <c>MarketRegime:Model</c>.</summary>
+public static class RegimeModelKinds
+{
+    public const string KMeans = "KMeans";
+    public const string Jump = "Jump";
+
+    /// <summary>Parsing tollerante: sconosciuto o vuoto ⇒ KMeans (mai rompere il training per un typo in config).</summary>
+    public static string Normalize(string? value) =>
+        string.Equals(value?.Trim(), Jump, StringComparison.OrdinalIgnoreCase) ? Jump : KMeans;
 }
 
 /// <summary>

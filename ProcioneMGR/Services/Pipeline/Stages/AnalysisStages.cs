@@ -117,7 +117,8 @@ public sealed class FeatureEngineeringStage(
 /// </summary>
 public sealed class RegimeAnalysisStage(
     IRegimeDetector regimeDetector,
-    IMarketFeatureExtractor featureExtractor) : IPipelineStage
+    IMarketFeatureExtractor featureExtractor,
+    IConfiguration appConfiguration) : IPipelineStage
 {
     public string Name => "RegimeAnalysis";
     public string DisplayName => "Analisi di regime";
@@ -177,6 +178,12 @@ public sealed class RegimeAnalysisStage(
                 From = ctx.Ranges.SelectionFrom,
                 To = ctx.Ranges.SelectionTo,
                 NumberOfRegimes = config.GetInt("numberOfRegimes", 4),
+                // [2.7] Stessa sorgente del worker e di /regimes: MarketRegime:Model decide
+                // l'algoritmo (default KMeans, contratto C1). Il parametro di stage "model"
+                // permette a un run di forzarlo per il confronto, senza toccare la config globale.
+                Model = RegimeModelKinds.Normalize(
+                    config.GetString("model", appConfiguration["MarketRegime:Model"] ?? RegimeModelKinds.KMeans)),
+                JumpLambda = appConfiguration.GetValue("MarketRegime:JumpLambda", 20.0),
             }, activate: true, ct);
             trainedNew = true;
         }

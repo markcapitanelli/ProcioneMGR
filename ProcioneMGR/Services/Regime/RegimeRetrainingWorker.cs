@@ -68,6 +68,10 @@ public sealed class RegimeRetrainingWorker(
             To = to,
             NumberOfRegimes = 4,
             MaxIterations = 100,
+            // [2.7] L'algoritmo lo decide MarketRegime:Model (default KMeans, contratto C1):
+            // stessa sorgente per worker, pagina /regimes e stage di pipeline.
+            Model = RegimeModelKinds.Normalize(configuration["MarketRegime:Model"]),
+            JumpLambda = configuration.GetValue("MarketRegime:JumpLambda", 20.0),
         };
 
         var current = await detector.LoadLatestModelAsync(ct);
