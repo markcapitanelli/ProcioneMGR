@@ -358,6 +358,16 @@
             <div class="col-auto">@MetricCard("⚠ LIQUIDAZIONI", $"{result.LiquidationCount}", false)</div>
         }
     </div>
+    @* [E-01] Quale modello di funding ha usato QUESTO run: serie storica reale o costante. Il
+       carry dal vivo legge il dato reale — un backtest leveraged deve dire con che cosa e' stato
+       misurato, altrimenti i due numeri non sono confrontabili ("degradare dicendolo"). *@
+    @if (Svc.FundingModelUsed is { } fundingModel)
+    {
+        <div class="small text-muted mb-3">
+            <span class="badge @(fundingModel.StartsWith("serie") ? "bg-success" : "bg-warning text-dark")">funding</span>
+            @fundingModel
+        </div>
+    }
 
     @* Passaggio di contesto al passo successivo del workflow: Optimization si apre
        già precompilata con simbolo, periodo, strategia e parametri di questo run. *@
