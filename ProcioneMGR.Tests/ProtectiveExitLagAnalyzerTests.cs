@@ -536,4 +536,164 @@ public sealed class ProtectiveExitLagAnalyzerTests
         Assert.Equal(report.PositionsSimulated, report.NeitherExited);
         Assert.Equal(0d, report.MedianDelayCostBps);
     }
+
+    // ------------------------------------------------------------------ separazione per tipo di uscita
+
+    /// <summary>
+    /// Barra di corsia che TOCCA un livello e rientra: il tocco avviene a metà barra e la chiusura
+    /// torna al prezzo d'ingresso. È la forma del caso reale che ha aperto la questione (short ETC
+    /// che tocca 6,31 contro un target di 6,3786 e richiude a 6,39).
+    /// </summary>
+    private static void SpikeAndRevert(
+        List<OhlcvData> lane, List<OhlcvData> fine, int index, decimal spikeHigh, decimal spikeLow)
+    {
+        var b = lane[index];
+        lane[index] = Bar("1h", b.TimestampUtc, 100m, spikeHigh, spikeLow, 100m);
+
+        // 12 barre da 5m: piatte a 100 tranne la settima, che contiene il tocco e poi rientra.
+        for (var k = 0; k < 12; k++)
+        {
+            var t = b.TimestampUtc + TimeSpan.FromMinutes(5 * k);
+            var pos = fine.FindIndex(f => f.TimestampUtc == t);
+            var toccata = k == 6
+                ? Bar("5m", t, 100m, spikeHigh, spikeLow, 100m)
+                : Bar("5m", t, 100m, 100m, 100m, 100m);
+            if (pos >= 0) fine[pos] = toccata; else fine.Add(toccata);
+        }
+    }
+
+    /// <summary>
+    /// LA PROPRIETÀ CHE CONTA, e la ragione per cui questa scomposizione esiste.
+    ///
+    /// <para>Il verdetto del 2026-07-28 («uscire al tocco è peggio, 24 configurazioni su 24»)
+    /// somma stop loss e take profit in un numero solo. Ma il meccanismo che quel report nomina —
+    /// il prezzo che buca il livello e rientra — ha <b>segno opposto sui due lati</b>: su un long,
+    /// rientrare da sotto lo stop fa uscire meglio chi ha aspettato, rientrare da sopra il target
+    /// fa uscire PEGGIO.</para>
+    ///
+    /// <para>Qui la serie è costruita con tre tocchi per lato, tutti che rientrano. L'aggregato
+    /// dice <b>zero</b>: sembrerebbe che la risoluzione non conti. Separato, dice +200 bps sul
+    /// target e −200 sullo stop — cioè due decisioni opposte nascoste dentro una media.</para>
+    /// </summary>
+    [Fact]
+    public void Laggregato_dice_zero_mentre_i_due_lati_dicono_il_contrario()
+    {
+        var lane = FlatLane(12);
+        var fine = FineFromLane(lane, "1h", "5m");
+
+        // Barre dispari = esito dell'ingresso precedente (campionamento 1 su 2, tenuta 1 barra).
+        SpikeAndRevert(lane, fine, 1, spikeHigh: 102m, spikeLow: 100m);   // target toccato
+        SpikeAndRevert(lane, fine, 3, spikeHigh: 100m, spikeLow: 98m);    // stop toccato
+        SpikeAndRevert(lane, fine, 5, spikeHigh: 102m, spikeLow: 100m);
+        SpikeAndRevert(lane, fine, 7, spikeHigh: 100m, spikeLow: 98m);
+        SpikeAndRevert(lane, fine, 9, spikeHigh: 102m, spikeLow: 100m);
+        SpikeAndRevert(lane, fine, 11, spikeHigh: 100m, spikeLow: 98m);
+
+        var report = new ProtectiveExitLagAnalyzer().Measure(lane, fine, new ProtectiveExitLagRequest
+        {
+            Symbol = "TEST/USDT",
+            LaneTimeframe = "1h",
+            FineTimeframe = "5m",
+            StopLossPercent = 2m,        // 98
+            TakeProfitPercent = 2m,      // 102
+            MaxHoldBars = 1,
+            SampleEveryNBars = 2,
+        });
+
+        // L'aggregato: tre casi a +200 e tre a −200, mediana zero. Nessuna indicazione.
+        Assert.Equal(6, report.BothExited);
+        Assert.Equal(0d, report.MedianDelayCostBps, 6);
+
+        // Separato: due verdetti opposti, ciascuno netto.
+        var tp = report.ByKind.Single(k => k.Kind == "TakeProfit");
+        var sl = report.ByKind.Single(k => k.Kind == "StopLoss");
+
+        Assert.Equal(3, tp.Count);
+        Assert.Equal(3, sl.Count);
+        Assert.Equal(200d, tp.MedianDelayCostBps, 6);    // sul target il tocco CONVIENE
+        Assert.Equal(-200d, sl.MedianDelayCostBps, 6);   // sullo stop conviene aspettare
+    }
+
+    /// <summary>
+    /// CONTROLLO della scomposizione: con un solo tipo di uscita in gioco, il numero separato deve
+    /// coincidere <b>esattamente</b> con l'aggregato. Se non coincide, il raggruppamento sta
+    /// perdendo o duplicando osservazioni, e ogni asimmetria che mostrasse sarebbe un artefatto.
+    /// </summary>
+    [Fact]
+    public void ConUnSoloTipo_ilSeparatoCoincideConLaggregato()
+    {
+        var lane = FlatLane(12);
+        var fine = FineFromLane(lane, "1h", "5m");
+        SpikeAndRevert(lane, fine, 1, spikeHigh: 100m, spikeLow: 98m);
+        SpikeAndRevert(lane, fine, 3, spikeHigh: 100m, spikeLow: 98m);
+        SpikeAndRevert(lane, fine, 5, spikeHigh: 100m, spikeLow: 98m);
+
+        var report = new ProtectiveExitLagAnalyzer().Measure(lane, fine, new ProtectiveExitLagRequest
+        {
+            Symbol = "TEST/USDT",
+            LaneTimeframe = "1h",
+            FineTimeframe = "5m",
+            StopLossPercent = 2m,
+            MaxHoldBars = 1,
+            SampleEveryNBars = 2,
+        });
+
+        var solo = Assert.Single(report.ByKind);
+        Assert.Equal("StopLoss", solo.Kind);
+        Assert.Equal(report.BothExited, solo.Count);
+        Assert.Equal(report.MedianDelayCostBps, solo.MedianDelayCostBps, 9);
+        Assert.Equal(report.MeanDelayCostBps, solo.MeanDelayCostBps, 9);
+        Assert.Equal(report.AdverseShare, solo.AdverseShare, 9);
+    }
+
+    /// <summary>
+    /// Le uscite DISCORDI restano fuori. Se il percorso fine esce in take profit e quello a candele
+    /// in stop loss, la differenza di prezzo non misura il ritardo: misura due eventi diversi, e
+    /// contarla come «costo del target» inventerebbe un numero enorme dal nulla.
+    ///
+    /// <para>La barra qui sotto tocca ENTRAMBI i livelli: a risoluzione fine il target arriva
+    /// prima, mentre l'evaluator a candela — che non conosce l'ordine dentro la barra — valuta
+    /// prima lo stop. Escluderle non nasconde nulla: il loro numero è in
+    /// <c>ReasonDisagreements</c>.</para>
+    /// </summary>
+    [Fact]
+    public void LeUsciteDiscordiNonEntranoInNessunTipo()
+    {
+        var lane = FlatLane(6);
+        var b = lane[1];
+        lane[1] = Bar("1h", b.TimestampUtc, 100m, 102m, 98m, 100m);   // tocca stop E target
+
+        var fine = FineFromLane(lane, "1h", "5m");
+        for (var k = 0; k < 12; k++)
+        {
+            var t = b.TimestampUtc + TimeSpan.FromMinutes(5 * k);
+            var pos = fine.FindIndex(f => f.TimestampUtc == t);
+            // Il target arriva PRIMA (k=2), lo stop dopo (k=8): a risoluzione fine l'ordine si vede.
+            fine[pos] = k switch
+            {
+                2 => Bar("5m", t, 100m, 102m, 100m, 100m),
+                8 => Bar("5m", t, 100m, 100m, 98m, 100m),
+                _ => Bar("5m", t, 100m, 100m, 100m, 100m),
+            };
+        }
+
+        var report = new ProtectiveExitLagAnalyzer().Measure(lane, fine, new ProtectiveExitLagRequest
+        {
+            Symbol = "TEST/USDT",
+            LaneTimeframe = "1h",
+            FineTimeframe = "5m",
+            StopLossPercent = 2m,
+            TakeProfitPercent = 2m,
+            MaxHoldBars = 1,
+            SampleEveryNBars = 2,
+        });
+
+        var discorde = report.Observations.Single(o => o.CandleExited && o.FineExited && !o.ReasonsAgree);
+        Assert.Equal("TakeProfit", discorde.FineReason);
+        Assert.Equal("StopLoss", discorde.CandleReason);
+        Assert.Equal(1, report.ReasonDisagreements);
+
+        // Non compare in nessun tipo: la somma dei conteggi separati esclude le discordi.
+        Assert.Equal(report.BothExited - report.ReasonDisagreements, report.ByKind.Sum(k => k.Count));
+    }
 }

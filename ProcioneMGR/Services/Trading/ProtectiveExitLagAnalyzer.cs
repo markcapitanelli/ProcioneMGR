@@ -309,9 +309,42 @@ public sealed class ProtectiveExitLagAnalyzer
             MedianCandleFillOptimismBps = P(optimism, 0.50m),
             MeanCandleFillOptimismBps = optimism.Count == 0 ? 0d : optimism.Average(),
 
+            ByKind = ByExitKind(both),
+
             Observations = obs,
         };
     }
+
+    /// <summary>
+    /// Lo stesso costo del ritardo, separato per tipo di uscita — vedi
+    /// <see cref="ProtectiveExitLagReport.ByKind"/> per il perché.
+    ///
+    /// <para>Solo le uscite <b>concordi</b>: se il percorso fine esce in take profit e quello a
+    /// candele in stop loss, la differenza di prezzo non misura il ritardo ma due eventi diversi.
+    /// Escluderle non nasconde nulla — il loro numero è già in
+    /// <see cref="ProtectiveExitLagReport.ReasonDisagreements"/>.</para>
+    /// </summary>
+    private static List<ProtectiveExitLagByKind> ByExitKind(List<ProtectiveExitLagObservation> both) =>
+        [.. both
+            .Where(o => o.ReasonsAgree && !string.IsNullOrEmpty(o.FineReason))
+            .GroupBy(o => o.FineReason, StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g =>
+            {
+                var c = g.Select(o => o.DelayCostBps).OrderBy(v => v).ToList();
+                var l = g.Select(o => o.LeadSeconds).OrderBy(v => v).ToList();
+                return new ProtectiveExitLagByKind
+                {
+                    Kind = g.Key,
+                    Count = c.Count,
+                    MedianDelayCostBps = P(c, 0.50m),
+                    MeanDelayCostBps = c.Average(),
+                    P10DelayCostBps = P(c, 0.10m),
+                    P90DelayCostBps = P(c, 0.90m),
+                    MedianLeadSeconds = P(l, 0.50m),
+                    AdverseShare = (double)c.Count(v => v < 0d) / c.Count,
+                };
+            })];
 
     /// <summary>Percentile sulla stessa interpolazione lineare usata ovunque nella piattaforma.</summary>
     private static double P(IReadOnlyList<double> sorted, decimal p) =>
@@ -406,5 +439,50 @@ public sealed class ProtectiveExitLagReport
     public double MedianCandleFillOptimismBps { get; init; }
     public double MeanCandleFillOptimismBps { get; init; }
 
+    /// <summary>
+    /// [2026-08-06] Lo STESSO calcolo, separato per tipo di uscita. Nasce da un'obiezione del
+    /// proprietario, e l'obiezione è fondata: il verdetto del 2026-07-28 («uscire al tocco è
+    /// peggio, 24 configurazioni su 24») somma stop loss e take profit in un numero solo, e la
+    /// tabella di sensibilità fa variare solo <c>SL%</c>.
+    ///
+    /// <para>Il meccanismo che quel report nomina per spiegare il segno — «lo stop preso
+    /// sull'ombra», il prezzo che buca il livello e rientra — <b>ha segno opposto sui due lati</b>.
+    /// Su un long: il prezzo tocca lo stop sotto e risale, e chi ha aspettato esce più in alto
+    /// (meglio); tocca il target sopra e ridiscende, e chi ha aspettato esce più in basso
+    /// (PEGGIO). Il controllo sulla passeggiata aleatoria dice che in assenza di ritorno alla
+    /// media il costo dell'attesa è zero da entrambe le parti, quindi l'asimmetria che si vede sui
+    /// dati veri è una proprietà del mercato — e sommarla su due lati opposti la nasconde.</para>
+    ///
+    /// <para>Indizio a favore, dalla storia della piattaforma: <b>32 uscite in stop loss contro 9
+    /// in take profit</b>. Un aggregato pesato così è dominato dallo stop quasi per costruzione.</para>
+    /// </summary>
+    public IReadOnlyList<ProtectiveExitLagByKind> ByKind { get; init; } = [];
+
     public IReadOnlyList<ProtectiveExitLagObservation> Observations { get; init; } = [];
+}
+
+/// <summary>
+/// Il costo del ritardo per UN tipo di uscita. Calcolato solo sulle posizioni in cui i due
+/// percorsi escono per la <b>stessa</b> ragione: se il percorso fine esce in take profit e quello
+/// a candele in stop loss, la differenza di prezzo non misura il ritardo — misura due eventi
+/// diversi, ed è la coppia che <see cref="ProtectiveExitLagReport.ReasonDisagreements"/> conta.
+/// </summary>
+public sealed class ProtectiveExitLagByKind
+{
+    /// <summary>"StopLoss", "TakeProfit" o "Liquidation".</summary>
+    public string Kind { get; init; } = string.Empty;
+
+    /// <summary>Uscite concordi di questo tipo: la base su cui sono calcolati i numeri qui sotto.</summary>
+    public int Count { get; init; }
+
+    /// <summary>Negativo = aspettare la chiusura CONVIENE. Positivo = il tocco conviene.</summary>
+    public double MedianDelayCostBps { get; init; }
+    public double MeanDelayCostBps { get; init; }
+    public double P10DelayCostBps { get; init; }
+    public double P90DelayCostBps { get; init; }
+
+    public double MedianLeadSeconds { get; init; }
+
+    /// <summary>Quota di casi in cui il percorso fine esce PEGGIO: il tocco non è gratis nemmeno qui.</summary>
+    public double AdverseShare { get; init; }
 }
