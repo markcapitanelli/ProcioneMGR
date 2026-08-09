@@ -101,6 +101,9 @@ public sealed class CreativeDiscoveryStage(
             var confirmed = await composer.ComposeAndScreenAsync(composerConfig, screening, progress, ct);
             ctx.Candidates.AddRange(confirmed);
             _injected += confirmed.Count;
+            // [D-01] Ogni serie sottopone allo screening TUTTE le spec generate: sono prove, e il
+            // gate DSR deve saperlo (il Top-N confermato e' il sopravvissuto, non il tentativo).
+            ctx.TrialsExplored += _generated;
             _seriesDone++;
         }
 

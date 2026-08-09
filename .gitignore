@@ -31,10 +31,19 @@ backup/
 # appsettings.json contains dev MasterKey (AES-256) + Postgres password.
 # Kept on disk (app needs it to decrypt existing ciphertext) but NEVER tracked.
 # Commit appsettings.json.example instead.
+#
+# [C-01, 2026-08-08] La regola sul SOLO nome esatto non bastava: il backup datato
+# "appsettings.json.pre-audit-test-20260729-141448" (master key + password Postgres + segreto
+# gRPC valorizzati) e' rimasto TRACCIATO per dieci giorni perche' non combaciava con nessun
+# pattern. Stessa lezione di *.bak-* qui sopra: si copre la FAMIGLIA, non il caso singolo.
+# L'unica eccezione dichiarata e' il template .example (placeholder, mai segreti veri).
 ProcioneMGR/appsettings.json
+ProcioneMGR/appsettings.json.*
+!ProcioneMGR/appsettings.json.example
 appsettings.*.local.json
 *.local.json
 .env
+!.env.example
 .env.*
 secrets.json
 

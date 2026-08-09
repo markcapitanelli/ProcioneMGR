@@ -37,6 +37,10 @@ public sealed class StackedReturnPredictor : IReturnPredictor
     public string Name => "Stacked";
     public bool IsFitted { get; private set; }
 
+    /// <summary>[G-08] Seed delle permutazioni della feature importance — stesso contratto e stesso
+    /// default di <see cref="RegressionPredictorBase.PermutationImportanceSeed"/>.</summary>
+    public int PermutationImportanceSeed { get; set; } = 42;
+
     private List<string> _baseTypes;
     private StackingMode _mode;
     private readonly double _ridgeLambda;
@@ -379,7 +383,7 @@ public sealed class StackedReturnPredictor : IReturnPredictor
         var basePreds = rows.Select(r => (double)Predict(r.Features)).ToArray();
         var baselineR2 = RSquared(basePreds, labels);
 
-        var rnd = new Random(42);
+        var rnd = new Random(PermutationImportanceSeed); // [G-08] dichiarato, non cablato
         const int permutations = 5;
         var results = new List<FeatureImportance>(featureNames.Count);
         for (var f = 0; f < featureNames.Count; f++)

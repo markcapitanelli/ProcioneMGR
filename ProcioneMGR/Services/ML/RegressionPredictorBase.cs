@@ -37,6 +37,14 @@ public abstract class RegressionPredictorBase : IReturnPredictor, IShapExplainab
     public abstract string Name { get; }
     public bool IsFitted { get; private set; }
 
+    /// <summary>
+    /// [G-08] Seed delle permutazioni della feature importance. Era un 42 CABLATO nel corpo del
+    /// metodo: deterministico, ma invisibile e non variabile — chi stima la varianza fra seed
+    /// diversi non toccava questo ramo e la sottostimava. Ora è dichiarato e impostabile; il
+    /// default conserva il comportamento storico byte per byte.
+    /// </summary>
+    public int PermutationImportanceSeed { get; set; } = 42;
+
     private ITransformer? _model;
     private PredictionEngine<FeatureRow, PredictedReturn>? _engine;
     private DataViewSchema? _inputSchema;
@@ -106,7 +114,7 @@ public abstract class RegressionPredictorBase : IReturnPredictor, IShapExplainab
         // Per ogni feature: mescola quello slot nel dataset di valutazione, rimisura R², ripeti.
         var rows = mlContext.Data.CreateEnumerable<FeatureRow>(evaluationData, reuseRowObject: false).ToList();
         var baselineR2 = EvaluateRSquared(mlContext, evaluationData);
-        var rnd = new Random(42);
+        var rnd = new Random(PermutationImportanceSeed);
         const int permutations = 5;
 
         var results = new List<FeatureImportance>(featureNames.Count);

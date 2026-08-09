@@ -78,6 +78,11 @@ builder.Services.AddSingleton<IEncryptionService, AesGcmEncryptionService>();
 // Stato della master key (placeholder di sviluppo?): stessa istanza del servizio di cifratura,
 // esposta come vista ristretta per i guard fail-fast (startup Production, gate Live del motore).
 builder.Services.AddSingleton<IMasterKeyStatus>(sp => (AesGcmEncryptionService)sp.GetRequiredService<IEncryptionService>());
+// [Fase 0 PRD-RISANAMENTO] Keyring della rotazione: stessa istanza, vista di classificazione
+// (il payload e' sulla chiave corrente?) + servizio di ri-cifratura di massa per il bottone
+// "Ri-cifra ora" di /settings/exchanges. Chiude il TODO storico di AesGcmEncryptionService.
+builder.Services.AddSingleton<IMasterKeyRing>(sp => (AesGcmEncryptionService)sp.GetRequiredService<IEncryptionService>());
+builder.Services.AddSingleton<IMasterKeyRotationService, MasterKeyRotationService>();
 
 // --- Database: PostgreSQL (unico provider) ---
 // Le migrazioni vivono nell'assembly ProcioneMGR.Migrations.Postgres e si applicano come passo
@@ -131,6 +136,12 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Servic
 // --- Indicatori tecnici (stateless) ---
 builder.Services.AddSingleton<ITechnicalIndicatorsService, TechnicalIndicatorsService>();
 
+// [E-04] Catalogo simboli condiviso con cache: sostituisce le sette scansioni Distinct() su
+// OhlcvData (~12M righe per ~30 stringhe) che ogni pagina rifaceva per conto proprio.
+builder.Services.AddSingleton<ProcioneMGR.Services.MarketData.ISymbolCatalog>(sp =>
+    new ProcioneMGR.Services.MarketData.SymbolCatalog(
+        sp.GetRequiredService<IDbContextFactory<ProcioneMGR.Data.ApplicationDbContext>>()));
+
 // --- Market regime detection (Fase 7): feature extraction + clustering ---
 builder.Services.AddSingleton<IMarketFeatureExtractor, MarketFeatureExtractor>();
 builder.Services.AddSingleton<IMarketBreadthCalculator, MarketBreadthCalculator>(); // [3.8a] breadth interna per i regimi
@@ -169,7 +180,12 @@ builder.Services.AddScoped<ProcioneMGR.Services.Preferences.IPageConfigStore, Pr
 builder.Services.AddScoped<IOptimizationEngine, OptimizationEngine>();
 // Ottimizzazione bayesiana (Fase 6): surrogato GP + Expected Improvement, affiancabile al grid.
 builder.Services.AddSingleton<ProcioneMGR.Services.Optimization.Bayesian.IHyperparameterOptimizer, ProcioneMGR.Services.Optimization.Bayesian.BayesianOptimizationEngine>();
-builder.Services.AddSingleton<ProcioneMGR.Services.Optimization.Bayesian.BayesianSearch>();
+// [E-03, Fase 2 PRD-RISANAMENTO] BayesianSearch NON si registra piu': era un Singleton mai
+// risolto da nessuno, e per giunta INCOMPATIBILE col disegno reale — l'unico consumatore
+// (OptimizationEngine.cs, ricerca bayesiana) lo costruisce a mano per-run con
+// `new BayesianSearch(new BayesianOptimizationEngine(new BayesianOptions { Seed = config.BayesianSeed }))`
+// perche' il seed e' PER-ESPERIMENTO: un singleton col seed congelato al boot romperebbe la
+// riproducibilita' per-run. La registrazione suggeriva il contrario a chi legge questo file.
 
 // --- Nested decision execution (TWAP/VWAP/Iceberg + simulatore di fill). Additivo: il default
 //     "Immediate" riproduce il comportamento odierno. Rif. docs/archive/ROADMAP-QLIB.md §1.2. ---

@@ -188,10 +188,10 @@ public sealed class PipelinePageService(
         if (string.IsNullOrWhiteSpace(draft.Config.Name)) return PipelineSaveResult.Error("Il nome è obbligatorio.");
         draft.Universe.RemoveAll(u => string.IsNullOrWhiteSpace(u.Symbol));
         if (draft.Universe.Count == 0) return PipelineSaveResult.Error("L'universo deve avere almeno una serie.");
-        if (draft.Ranges.SelectionTo <= draft.Ranges.SelectionFrom || draft.Ranges.HoldoutTo <= draft.Ranges.HoldoutFrom)
-            return PipelineSaveResult.Error("Range di date non validi.");
-        if (draft.Ranges.HoldoutFrom < draft.Ranges.SelectionTo)
-            return PipelineSaveResult.Error("L'holdout deve iniziare DOPO la fine della selezione (mai sovrapposti).");
+        // [D-03] Stessa politica del motore (PipelineDateRanges.Validate): qui produce l'errore
+        // di form, in PipelineEngine.BuildContext blocca il run — una sola implementazione.
+        if (draft.Ranges.Validate() is string rangeError)
+            return PipelineSaveResult.Error(rangeError);
 
         var problems = engine.ValidateConfiguration(draft.Stages);
         if (problems.Count > 0) return PipelineSaveResult.Error("Correggere i problemi delle fasi prima di salvare.", problems);

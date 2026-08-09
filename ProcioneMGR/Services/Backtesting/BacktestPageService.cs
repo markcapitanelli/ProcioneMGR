@@ -62,7 +62,8 @@ public sealed class BacktestPageService(
     KellyCalculator kelly,
     LeverageAdvisor levAdvisor,
     ExcursionAnalyzer excursion,
-    ProcioneMGR.Services.ML.Labeling.IMetaLabelingAnalysisService metaLabeling)
+    ProcioneMGR.Services.ML.Labeling.IMetaLabelingAnalysisService metaLabeling,
+    IFundingHistoryProvider fundingHistory)
 {
     // --- Stato caricato / del run corrente (letto dal markup, mai scritto dal componente) ------
 
@@ -70,6 +71,13 @@ public sealed class BacktestPageService(
 
     /// <summary>[C4] Esito dell'ultima analisi di meta-labeling sulla strategia corrente.</summary>
     public ProcioneMGR.Services.ML.Labeling.MetaLabelingAnalysis? MetaLabeling { get; private set; }
+
+    /// <summary>
+    /// [E-01, Fase 1 PRD-RISANAMENTO] Quale modello di funding ha usato l'ULTIMO run: la UI lo
+    /// dichiara accanto al risultato ("degradare dicendolo"). Null = mercato non leveraged,
+    /// funding non pertinente.
+    /// </summary>
+    public string? FundingModelUsed { get; private set; }
 
     public BacktestResult? Result { get; private set; }
     public TradeReport? TradeReport { get; private set; }
@@ -250,6 +258,29 @@ public sealed class BacktestPageService(
             SlippagePercent = Math.Max(0m, cfg.SlippagePercent),
             FundingRatePercentPer8h = Math.Max(0m, cfg.FundingPercent),
         };
+
+        // [E-01, Fase 1 PRD-RISANAMENTO] L'ultimo anello della catena del funding, quello che
+        // mancava: la serie STORICA (SentimentMetricPoints, raccolta dal sync e riempita
+        // all'indietro da PlatformExpand) raggiunge finalmente il backtest. Prima l'unica
+        // assegnazione di FundingHistory in tutto il repository stava in un file di TEST: ogni
+        // backtest leveraged girava sulla costante — che addebita agli short un funding che nella
+        // realta' avrebbero INCASSATO e cancella i regimi negativi — mentre il CarryWorker dal
+        // vivo usa il dato reale. Il fallback alla costante resta legittimo e DICHIARATO
+        // (FundingModelUsed) quando la serie non copre il periodo.
+        FundingModelUsed = null;
+        if (config.Leverage > 1m)
+        {
+            var history = await fundingHistory.GetAsync(config.Symbol, config.From, config.To, ct);
+            if (history.Count > 0)
+            {
+                config.FundingHistory = history;
+                FundingModelUsed = $"serie storica ({history.Count} eventi, firmati)";
+            }
+            else
+            {
+                FundingModelUsed = $"costante {config.FundingRatePercentPer8h:0.###}%/8h (nessuna serie storica per il periodo)";
+            }
+        }
 
         var result = await engine.RunBacktestAsync(config, ct);
         Result = result;

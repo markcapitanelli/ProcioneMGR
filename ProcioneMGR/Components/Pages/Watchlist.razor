@@ -9,6 +9,7 @@
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IMarketDataSyncService SyncService
+@inject ProcioneMGR.Services.MarketData.ISymbolCatalog SymbolCatalog
 
 <PageTitle>Watchlist</PageTitle>
 
@@ -251,6 +252,7 @@
                 Enabled = true,
             });
             await db.SaveChangesAsync();
+            SymbolCatalog.Invalidate(); // [E-04] i menu delle altre pagine vedono subito la serie nuova/rimossa
             SetStatus($"Aggiunta {_exchange} {symbol} {_timeframe}.", error: false);
             await LoadAsync();
         }
@@ -287,6 +289,7 @@
         {
             s.Enabled = !s.Enabled;
             await db.SaveChangesAsync();
+            SymbolCatalog.Invalidate(); // [E-04] i menu delle altre pagine vedono subito la serie nuova/rimossa
             await LoadAsync();
         }
     }

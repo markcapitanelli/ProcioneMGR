@@ -1,0 +1,27 @@
+namespace ProcioneMGR.Services.Trading;
+
+/// <summary>
+/// [D-02, Fase 1 PRD-RISANAMENTO 2026-08-08] L'esposizione che alimenta il check n.2 del
+/// <see cref="SafetyChecker"/> (<c>MaxTotalExposurePercent</c>): il NOZIONALE delle posizioni
+/// aperte, <c>Σ Quantity × EntryPrice</c>, per ogni tipo di mercato.
+///
+/// PERCHE' esiste come funzione a parte: prima il valore era calcolato inline in
+/// <c>TradingEngine.BuildSafetyStatus</c> e sui Futures usava il MARGINE (Σ MarginBalance), con
+/// un commento che dichiarava l'asimmetria «volutamente conservativa». Era vero sul singolo
+/// ordine (order.Notional e' leveraged) ma FALSO sull'accumulo: ogni posizione gia' aperta
+/// pesava 1/leva della propria esposizione reale, e con <c>MaxOpenPositions</c> alzato il
+/// capitale esposto superava il DOPPIO di MaxTotalExposurePercent senza far scattare il check
+/// (esempio numerico in docs/audit/20_DEEP_DIVE_CODE_ANALYSIS.md §3). Coi default la
+/// coincidenza 10% × 5 = 50% mascherava il buco. Le unita' ora sono omogenee: il limite
+/// vincola cio' che il suo doc-comment dichiara, il capitale complessivamente ESPOSTO.
+///
+/// NB: la vista UI (<c>GetStatusAsync</c>) continua a mostrare il MARGINE come UsedCapital,
+/// perche' li' deve tornare con AvailableCapital. Due domande diverse, due numeri diversi.
+/// Statica e pura come il SafetyChecker che alimenta: stessa regola 1, non mockabile.
+/// </summary>
+internal static class SafetyExposure
+{
+    /// <summary>Nozionale complessivamente esposto dalle posizioni aperte (unita' di order.Notional).</summary>
+    public static decimal ExposedNotional(IEnumerable<OpenPosition> positions)
+        => positions.Sum(p => p.Quantity * p.EntryPrice);
+}

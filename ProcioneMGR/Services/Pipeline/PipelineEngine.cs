@@ -214,17 +214,30 @@ public sealed class PipelineEngine(
     // ------------------------------------------------------------------ internals
 
     private PipelineContext BuildContext(PipelineConfiguration config, string? userId)
-        => new()
+    {
+        var ranges = JsonSerializer.Deserialize<PipelineDateRanges>(config.DateRangesJson) ?? new PipelineDateRanges();
+
+        // [D-03, Fase 1 PRD-RISANAMENTO] L'invariante selezione/holdout sta sul percorso OBBLIGATO
+        // (l'avvio del run), non solo nel salvataggio UI. La politica vive in
+        // PipelineDateRanges.Validate — una politica, una sola implementazione.
+        if (ranges.Validate() is string rangeError)
+        {
+            throw new InvalidOperationException(
+                $"Configurazione '{config.Name}': {rangeError} Il run non parte — correggi le date in /pipeline.");
+        }
+
+        return new()
         {
             RunId = Guid.NewGuid(),
             ExchangeName = config.ExchangeName,
             Universe = JsonSerializer.Deserialize<List<SeriesSpec>>(config.UniverseJson) ?? [],
-            Ranges = JsonSerializer.Deserialize<PipelineDateRanges>(config.DateRangesJson) ?? new PipelineDateRanges(),
+            Ranges = ranges,
             InitialCapital = config.InitialCapital,
             Seed = config.Seed,
             UserId = userId ?? config.CreatedBy,
             ExecutionMode = config.ExecutionMode,
         };
+    }
 
     private void LaunchBackground(PipelineConfiguration config, List<StageConfig> stages, PipelineContext ctx, HashSet<string> completedStages)
     {

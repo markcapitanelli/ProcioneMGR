@@ -1,0 +1,1122 @@
+# 21 — CATALOGO FILE PER FILE
+
+> **Terzo passaggio, 2026-08-08.** Ogni file sorgente del repository con la **sua**
+> descrizione, estratta dal doc-comment `<summary>` del tipo principale — non una
+> parafrasi mia, ma ciò che il codice dichiara di sé.
+>
+> **Perché funziona:** 411 file `.cs` su 434 (95%) portano un `<summary>`, e in questa
+> codebase i doc-comment spiegano il **perché**, spesso con data e riferimento al report
+> che ha motivato la scelta. È documentazione di progetto, non boilerplate.
+
+| Metrica | Valore |
+|---|---:|
+| File analizzati (`.cs` + `.razor`, produzione + test + tool) | 838 |
+| Righe totali | 187.495 |
+| File con `<summary>` di tipo estratto | 663 |
+| Componenti UI `.razor` | 89 |
+
+**Legenda:** `[n]` = righe del file · il testo è il `<summary>` del tipo principale,
+troncato a 400 caratteri dove più lungo.
+
+---
+
+## `ProcioneMGR/` — 1 file, 706 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `Program.cs` | 706 | `—` | — |
+
+## `ProcioneMGR.Contracts/` — 1 file, 42 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `SharedSecretClientInterceptor.cs` | 42 | `SharedSecretClientInterceptor` | Interceptor client-side che aggiunge a ogni chiamata gRPC uscente un header con un segreto condiviso — controparte di SharedSecretAuthInterceptor lato server in ProcioneMGR.Trading . Vive qui (libreria condivisa referenziata da entrambi gli host) perché sia il monolite (client, quando Trading:UseRemoteTrading=true ) sia i test del servizio standalone devono poterlo costruire con lo stesso nome … |
+
+## `ProcioneMGR.Ingestion/` — 2 file, 81 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `NoOpEncryptionService.cs` | 27 | `NoOpEncryptionService` | che lancia sempre eccezione. Serve solo a soddisfare la dipendenza del costruttore di ApplicationDbContext (l'EncryptedStringConverter è applicato alle colonne credenziali degli exchange, che il path di ingestione OHLCV non tocca MAI — i dati di mercato Bitget/Binance sono endpoint pubblici non firmati). Deliberatamente NON un passthrough silenzioso ( Encrypt(x) =&gt; x ): questo è un servizio lon… |
+| `Program.cs` | 54 | `Program` | — |
+
+## `ProcioneMGR.Migrations.Postgres/` — 42 file, 38.363 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `20260704182751_InitialCreate.Designer.cs` | 1345 | `InitialCreate` | — |
+| `20260704182751_InitialCreate.cs` | 810 | `InitialCreate` | — |
+| `20260707031209_AddExperimentTracking.Designer.cs` | 130 | `AddExperimentTracking` | — |
+| `20260707031209_AddExperimentTracking.cs` | 87 | `AddExperimentTracking` | — |
+| `20260707074934_AddSavedFactors.Designer.cs` | 89 | `AddSavedFactors` | — |
+| `20260707074934_AddSavedFactors.cs` | 62 | `AddSavedFactors` | — |
+| `20260707174828_AddExecutionJobs.Designer.cs` | 1586 | `AddExecutionJobs` | — |
+| `20260707174828_AddExecutionJobs.cs` | 59 | `AddExecutionJobs` | — |
+| `20260708011222_AddModelRegistryLifecycle.Designer.cs` | 1617 | `AddModelRegistryLifecycle` | — |
+| `20260708011222_AddModelRegistryLifecycle.cs` | 112 | `AddModelRegistryLifecycle` | — |
+| `20260711015556_AddUserPageConfigs.Designer.cs` | 1665 | `AddUserPageConfigs` | — |
+| `20260711015556_AddUserPageConfigs.cs` | 52 | `AddUserPageConfigs` | — |
+| `20260711123128_AuditHardening.Designer.cs` | 1687 | `AuditHardening` | — |
+| `20260711123128_AuditHardening.cs` | 98 | `AuditHardening` | — |
+| `20260719065404_AddLaneQuarantine.Designer.cs` | 1797 | `AddLaneQuarantine` | — |
+| `20260719065404_AddLaneQuarantine.cs` | 36 | `AddLaneQuarantine` | — |
+| `20260719081441_AddVettingCampaign.Designer.cs` | 1858 | `AddVettingCampaign` | — |
+| `20260719081441_AddVettingCampaign.cs` | 49 | `AddVettingCampaign` | — |
+| `20260719153852_AddSentimentMetricPoints.Designer.cs` | 1898 | `AddSentimentMetricPoints` | — |
+| `20260719153852_AddSentimentMetricPoints.cs` | 51 | `AddSentimentMetricPoints` | — |
+| `20260723180040_AddKlineExtendedFields.Designer.cs` | 1910 | `AddKlineExtendedFields` | — |
+| `20260723180040_AddKlineExtendedFields.cs` | 58 | `AddKlineExtendedFields` | — |
+| `20260723195149_AddSavedMlModelTargetKind.Designer.cs` | 1915 | `AddSavedMlModelTargetKind` | — |
+| `20260723195149_AddSavedMlModelTargetKind.cs` | 32 | `AddSavedMlModelTargetKind` | — |
+| `20260725063106_AddOrderExecutionQuality.Designer.cs` | 1921 | `AddOrderExecutionQuality` | — |
+| `20260725063106_AddOrderExecutionQuality.cs` | 38 | `AddOrderExecutionQuality` | — |
+| `20260727223418_AddFactorIcWindows.Designer.cs` | 1973 | `AddFactorIcWindows` | — |
+| `20260727223418_AddFactorIcWindows.cs` | 55 | `AddFactorIcWindows` | — |
+| `20260728174647_AddProtectiveExitShadows.Designer.cs` | 2044 | `AddProtectiveExitShadows` | — |
+| `20260728174647_AddProtectiveExitShadows.cs` | 56 | `AddProtectiveExitShadows` | — |
+| `20260801101524_AddAiCredentials.Designer.cs` | 2072 | `AddAiCredentials` | — |
+| `20260801101524_AddAiCredentials.cs` | 44 | `AddAiCredentials` | — |
+| `20260802163557_AddHostHeartbeats.Designer.cs` | 2091 | `AddHostHeartbeats` | — |
+| `20260802163557_AddHostHeartbeats.cs` | 35 | `AddHostHeartbeats` | — |
+| `20260802164427_AddLlmUsageRecords.Designer.cs` | 2134 | `AddLlmUsageRecords` | — |
+| `20260802164427_AddLlmUsageRecords.cs` | 48 | `AddLlmUsageRecords` | — |
+| `20260802171324_AddOrchestratorDecisions.Designer.cs` | 2187 | `AddOrchestratorDecisions` | — |
+| `20260802171324_AddOrchestratorDecisions.cs` | 55 | `AddOrchestratorDecisions` | — |
+| `20260805025522_AddTradePostMortems.Designer.cs` | 2251 | `AddTradePostMortems` | — |
+| `20260805025522_AddTradePostMortems.cs` | 57 | `AddTradePostMortems` | — |
+| `ApplicationDbContextModelSnapshot.cs` | 2248 | `ApplicationDbContextModelSnapshot` | — |
+| `PostgresDesignTimeFactory.cs` | 51 | `PostgresDesignTimeFactory` | Factory di design-time usata SOLO per applicare le migrazioni PostgreSQL, es.: dotnet ef database update --project ProcioneMGR.Migrations.Postgres --startup-project ProcioneMGR.Migrations.Postgres . PUNTO CRITICO — SchemaVersion Identity: l'host dell'app imposta IdentityOptions.Stores.SchemaVersion = Version3 via DI, mentre questa factory costruisce un new ApplicationDbContext "nudo" (schema pa… |
+
+## `ProcioneMGR.Ml/` — 3 file, 166 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `InferenceServiceImpl.cs` | 82 | `InferenceServiceImpl` | Implementazione gRPC del servizio di inferenza (Fase 2a). Riceve un vettore di feature GIA' calcolato dal chiamante, carica il modello (per id o Champion del registry), ne fa inferenza e restituisce il rendimento predetto. SOLA LETTURA: nessuna scrittura sul DB nel path di predict. |
+| `NoOpEncryptionService.cs` | 27 | `NoOpEncryptionService` | che lancia sempre eccezione. Serve solo a soddisfare la dipendenza del costruttore di ApplicationDbContext (l'EncryptedStringConverter è applicato alle colonne credenziali degli exchange, che il path di inferenza ML non tocca MAI — legge solo SavedMlModels, sola lettura). Deliberatamente NON un passthrough silenzioso ( Encrypt(x) =&gt; x ): questo è un servizio long-running con un endpoint gRPC. S… |
+| `Program.cs` | 57 | `Program` | — |
+
+## `ProcioneMGR.Trading/` — 3 file, 514 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `Program.cs` | 147 | `Program` | — |
+| `SharedSecretAuthInterceptor.cs` | 55 | `SharedSecretAuthInterceptor` | Autorizzazione applicativa sul gRPC di trading: fino a qui l'unico confine era la NetworkPolicy K8s (topologia di rete, non applicativa) — un confine noto per avere un limite documentato ( kubectl port-forward lo scavalca, vedi infra/k8s/README.md). ConfirmOrder / StartLane possono muovere denaro vero: un secondo fattore applicativo, anche solo un segreto condiviso, alza il costo di uno sbaglio… |
+| `TradingCommandServiceImpl.cs` | 312 | `TradingCommandServiceImpl` | Implementazione gRPC dei comandi di trading (Fase 2b). Ogni RPC risolve l'istanza keyed di della lane indicata nella request e le delega la chiamata: nessuna logica di dominio vive qui, è un adattatore fra il filo e il motore riusato verbatim. SICUREZZA: sblocca il piazzamento REALE di un ordine Live e può avviare una sessione con soldi veri. A questo livello non c'è l'equivalente esatto dell'[… |
+
+## `ProcioneMGR/Components/` — 97 file, 23.201 righe
+
+| File | Righe | Rotta | Servizi iniettati |
+|---|---:|---|---:|
+| `AccessDenied.razor` | 8 | `/Account/AccessDenied` | 0 |
+| `ConfirmEmail.razor` | 49 | `/Account/ConfirmEmail` | 2 |
+| `ConfirmEmailChange.razor` | 69 | `/Account/ConfirmEmailChange` | 3 |
+| `ExternalLogin.razor` | 217 | `/Account/ExternalLogin` | 7 |
+| `ForgotPassword.razor` | 74 | `/Account/ForgotPassword` | 4 |
+| `ForgotPasswordConfirmation.razor` | 8 | `/Account/ForgotPasswordConfirmation` | 0 |
+| `InvalidPasswordReset.razor` | 8 | `/Account/InvalidPasswordReset` | 0 |
+| `InvalidUser.razor` | 7 | `/Account/InvalidUser` | 0 |
+| `Lockout.razor` | 8 | `/Account/Lockout` | 0 |
+| `Login.razor` | 164 | `/Account/Login` | 5 |
+| `LoginWith2fa.razor` | 103 | `/Account/LoginWith2fa` | 4 |
+| `LoginWithRecoveryCode.razor` | 87 | `/Account/LoginWithRecoveryCode` | 4 |
+| `ChangePassword.razor` | 109 | `/Account/Manage/ChangePassword` | 4 |
+| `DeletePersonalData.razor` | 97 | `/Account/Manage/DeletePersonalData` | 4 |
+| `Disable2fa.razor` | 74 | `/Account/Manage/Disable2fa` | 3 |
+| `Email.razor` | 143 | `/Account/Manage/Email` | 4 |
+| `EnableAuthenticator.razor` | 184 | `/Account/Manage/EnableAuthenticator` | 4 |
+| `ExternalLogins.razor` | 162 | `/Account/Manage/ExternalLogins` | 4 |
+| `GenerateRecoveryCodes.razor` | 78 | `/Account/Manage/GenerateRecoveryCodes` | 3 |
+| `Index.razor` | 91 | `/Account/Manage` | 3 |
+| `Passkeys.razor` | 182 | `/Account/Manage/Passkeys` | 3 |
+| `PersonalData.razor` | 42 | `/Account/Manage/PersonalData` | 2 |
+| `RenamePasskey.razor` | 95 | `/Account/Manage/RenamePasskey/{Id}` | 2 |
+| `ResetAuthenticator.razor` | 57 | `/Account/Manage/ResetAuthenticator` | 4 |
+| `SetPassword.razor` | 99 | `/Account/Manage/SetPassword` | 3 |
+| `TwoFactorAuthentication.razor` | 106 | `/Account/Manage/TwoFactorAuthentication` | 3 |
+| `_Imports.razor` | 2 | — (componente) | 0 |
+| `Register.razor` | 159 | `/Account/Register` | 7 |
+| `RegisterConfirmation.razor` | 69 | `/Account/RegisterConfirmation` | 4 |
+| `ResendEmailConfirmation.razor` | 73 | `/Account/ResendEmailConfirmation` | 4 |
+| `ResetPassword.razor` | 108 | `/Account/ResetPassword` | 2 |
+| `ResetPasswordConfirmation.razor` | 7 | `/Account/ResetPasswordConfirmation` | 0 |
+| `_Imports.razor` | 2 | — (componente) | 0 |
+| `ExternalLoginPicker.razor` | 43 | — (componente) | 2 |
+| `ManageLayout.razor` | 17 | — (componente) | 0 |
+| `ManageNavMenu.razor` | 40 | — (componente) | 1 |
+| `PasskeySubmit.razor` | 40 | — (componente) | 1 |
+| `ShowRecoveryCodes.razor` | 28 | — (componente) | 0 |
+| `StatusMessage.razor` | 29 | — (componente) | 0 |
+| `App.razor` | 30 | — (componente) | 0 |
+| `MainLayout.razor` | 32 | — (componente) | 0 |
+| `NavMenu.razor` | 225 | — (componente) | 2 |
+| `ReconnectModal.razor` | 31 | — (componente) | 0 |
+| `AiSupervisor.razor` | 1389 | `/admin/ai-supervisor` | 15 |
+| `Autonomy.razor` | 1974 | `/admin/autonomy` | 29 |
+| `Backup.razor` | 199 | `/admin/backup` | 1 |
+| `Protections.razor` | 533 | `/admin/protections` | 2 |
+| `AdminUsers.razor` | 140 | `/admin/users` | 1 |
+| `AlphaMining.razor` | 374 | `/alpha-mining` | 4 |
+| `Backtest.razor` | 832 | `/backtest` | 3 |
+| `Bot.razor` | 297 | `/bot` | 2 |
+| `Campaign.razor` | 236 | `/campaign` | 2 |
+| `Dashboard.razor` | 385 | `/dashboard` | 5 |
+| `Discovery.razor` | 419 | `/discovery` | 6 |
+| `Ensemble.razor` | 761 | `/ensemble` | 4 |
+| `Error.razor` | 36 | `/Error` | 0 |
+| `ExchangeSettings.razor` | 391 | `/settings/exchanges` | 5 |
+| `ExecutionLab.razor` | 315 | `/execution` | 7 |
+| `Experiments.razor` | 333 | `/experiments` | 1 |
+| `FeatureSelection.razor` | 761 | `/feature-selection` | 8 |
+| `Home.razor` | 288 | `/` | 4 |
+| `InformationBars.razor` | 322 | `/market/bars` | 2 |
+| `MarketAnalysis.razor` | 745 | `/market-analysis` | 10 |
+| `Metrics.razor` | 358 | `/metrics` | 4 |
+| `MlLab.razor` | 1021 | `/ml` | 3 |
+| `NotFound.razor` | 5 | `/not-found` | 0 |
+| `OhlcvChart.razor` | 110 | — (componente) | 1 |
+| `Optimization.razor` | 736 | `/optimization` | 4 |
+| `PairsTrading.razor` | 486 | `/pairs-trading` | 3 |
+| `Pipeline.razor` | 705 | `/pipeline` | 5 |
+| `PortfolioOptimization.razor` | 432 | `/portfolio` | 6 |
+| `Regimes.razor` | 416 | `/regimes` | 6 |
+| `Registry.razor` | 163 | `/registry` | 2 |
+| `Sentiment.razor` | 1137 | `/sentiment` | 15 |
+| `Strategies.razor` | 137 | `/strategies` | 3 |
+| `Trading.razor` | 1574 | `/trading` | 6 |
+| `Volatility.razor` | 288 | `/volatility` | 3 |
+| `Watchlist.razor` | 307 | `/market/watchlist` | 2 |
+| `RedirectToLogin.razor` | 10 | — (componente) | 1 |
+| `Routes.razor` | 10 | — (componente) | 0 |
+| `AdvancedPanel.razor` | 35 | — (componente) | 0 |
+| `Breadcrumb.razor` | 41 | — (componente) | 1 |
+| `CommandPalette.razor` | 190 | — (componente) | 3 |
+| `ConfigPresets.razor` | 139 | — (componente) | 1 |
+| `DataAvailability.razor` | 122 | — (componente) | 1 |
+| `GuidaPanel.razor` | 23 | — (componente) | 0 |
+| `LaneSelector.razor` | 125 | — (componente) | 0 |
+| `Stat.razor` | 38 | — (componente) | 0 |
+| `_Imports.razor` | 14 | — (componente) | 0 |
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `IdentityComponentsEndpointRouteBuilderExtensions.cs` | 152 | `IdentityComponentsEndpointRouteBuilderExtensions` | — |
+| `IdentityNoOpEmailSender.cs` | 20 | `IdentityNoOpEmailSender` | — |
+| `IdentityRedirectManager.cs` | 54 | `IdentityRedirectManager` | — |
+| `IdentityRevalidatingAuthenticationStateProvider.cs` | 47 | `IdentityRevalidatingAuthenticationStateProvider` | — |
+| `PasskeyInputModel.cs` | 7 | `PasskeyInputModel` | — |
+| `PasskeyOperation.cs` | 7 | `PasskeyOperation` | — |
+| `NavModel.cs` | 229 | `NavItem` | Una singola voce di menu. |
+| `PollingTimer.cs` | 77 | `PollingTimer` | Timer di polling per il refresh periodico delle pagine Blazor Server. Sostituisce il pattern fragile new System.Threading.Timer(async _ =&gt; await ..., ...) , la cui lambda è async void : un'eccezione sfuggita al corpo non ha nessuno che la osservi e termina il PROCESSO (non solo il circuito). Qui il loop su avvolge OGNI tick in try/catch — un tick che lancia (es. DB irraggiungibile, circuito in … |
+
+## `ProcioneMGR/Data/` — 23 file, 1.731 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `AiCredential.cs` | 21 | `AiCredential` | Chiave API di un provider AI, cifrata a riposo (AES-256-GCM via converter — stesso pattern di ). Una riga per provider, a livello di PIATTAFORMA e non per-utente: il layer AI (supervisione, e gli usi futuri) è un servizio della piattaforma, come i worker che lo eseguono. La variabile d'ambiente resta il fallback per chi non vuole la chiave a database (vedi AiKeyStore : DB prima, env poi). |
+| `AltDataPoint.cs` | 44 | `AltDataPoint` | Un elemento di dato alternativo (cap. 3): oggi solo notizie via RSS, pensata per essere generica (stesso spirito di TrackedSeries per l'OHLCV) così da poter accogliere in futuro altre fonti (social, on-chain) senza cambiare schema. |
+| `AppRoles.cs` | 15 | `AppRoles` | Ruoli applicativi di ProcioneMGR. Centralizzati come costanti per evitare "magic strings" sparse tra registrazione, seeding e attributi [Authorize]. |
+| `ApplicationDbContext.cs` | 604 | `ApplicationDbContext` | — |
+| `ApplicationUser.cs` | 13 | `ApplicationUser` | — |
+| `DatabaseMigrator.cs` | 219 | `DatabaseMigrationOptions` | Opzioni della migrazione automatica, sezione Database . |
+| `DatabaseServiceCollectionExtensions.cs` | 31 | `DatabaseServiceCollectionExtensions` | Registrazione condivisa del DbContextFactory Postgres per il monolite e gli host satellite (ProcioneMGR.Ingestion oggi; trading/ml nelle fasi successive): unica fonte per le opzioni Npgsql e per il MigrationsAssembly, così gli host non divergono su resilienza/timeout. La connection string viene risolta SUBITO (fail-fast a startup, non alla prima creazione del context) e la lambda delle opzioni … |
+| `DbInitializer.cs` | 34 | `DbInitializer` | Inizializzazione all'avvio: garantisce l'esistenza dei ruoli applicativi (Admin / Manager / User). Lo schema del database si applica come passo separato (migrate-on-deploy, vedi InitializeAsync). La logica "primo utente = Admin" vive invece nel flusso di registrazione. |
+| `EnsembleState.cs` | 37 | `EnsembleState` | Stato persistito dell'ensemble (configurazione + ultimo status), riga singola. I payload sono serializzati in JSON per non vincolare lo schema a strutture in evoluzione. |
+| `ExchangeCredential.cs` | 80 | `ExchangeName` | Exchange supportati. Valori espliciti per stabilita' della serializzazione. |
+| `ExchangeCredentialCiphertext.cs` | 38 | `ExchangeCredentialCiphertext` | Proiezione KEYLESS di sola lettura sulla tabella ExchangeCredentials che espone il CIPHERTEXT così com'è sul DB (nessun EncryptedStringConverter). Serve ai percorsi che devono sopravvivere a una riga cifrata con una master key diversa da quella del processo corrente (bug B2, docs/TEST-UI-2026-07-18.md): col converter la decifratura avviene DENTRO la materializzazione EF, quindi una sola riga in… |
+| `HostHeartbeat.cs` | 27 | `HostHeartbeat` | [AF5.1] Battito di vita di un host, una riga per processo. Il guscio scrive la SUA riga, il motore la SUA: ogni scrittore ha esattamente una riga, quindi la regola "ogni scrittore ha esattamente un host" vale a grana di riga — nessuna contesa, nessun lock. Il punto: se muore il motore, il guscio se ne accorge dagli errori gRPC ma nessuno lo DICE; se muore il guscio, il motore continua a tradare… |
+| `LlmUsageRecord.cs` | 29 | `LlmUsageRecord` | [AF1] Consumo LLM aggregato per giorno/provider/modello/percorso. AGGREGATO e non a eventi di proposito: alla scala reale (decine di chiamate l'ora nei giorni pieni) una riga per chiamata sarebbe rumore da amministrare; una riga per combinazione al giorno resta leggibile per anni. Scritto solo dal LlmUsageFlushWorker del guscio (l'unico host col layer AI). |
+| `ModelStage.cs` | 22 | `ModelStage` | Stadio del ciclo di vita di un modello nel registry (Fase 2). Progressione tipica: Staging → Challenger → Champion , con uscita a Retired . Vincolo di dominio: un solo per (Symbol, Timeframe). Persistito come stringa (come gli altri enum del dominio), così il valore è leggibile a DB e stabile rispetto ai riordini dell'enum. |
+| `OhlcvData.cs` | 63 | `OhlcvData` | Una candela OHLCV (Open/High/Low/Close/Volume) di mercato. Questa tabella e' progettata per ospitare ENORMI volumi time-series (storico di mercato), in netto contrasto con le poche righe delle tabelle Identity. Per questo motivo: - prezzi in (precisione esatta, niente errori float); - volume in (gestisce sia asset interi che frazionari/crypto); - timestamp in UTC ( ) per coerenza globale; - ind… |
+| `OrchestratorDecision.cs` | 37 | `OrchestratorDecision` | [AF2] Il journal della Queen Bee: UNA riga per decisione che porta informazione (assegnazione, ritiro, proposta di fascia grigia, blocco motivato). Persistito perché l'autonomia senza tracciabilità è un racconto: il pannello in /admin/autonomy mostra ESATTAMENTE ciò che l'orchestratore ha deciso, quando, con che motivo e con quale esito — dry-run compreso. |
+| `SavedFactor.cs` | 53 | `SavedFactor` | Un fattore alpha "minato" (formulaic alpha mining, rif. docs/archive/ROADMAP-QLIB.md §1.7 ) salvato per riuso: l'espressione serializzata + la diagnostica IC su selezione e holdout. L'espressione si ricostruisce in un IAlphaFactor (via AlphaExpressionFactor / IAlphaFactorFactory.Create con nome "expr:…"), quindi è riusabile ovunque come qualunque altro fattore. |
+| `SavedMlModel.cs` | 107 | `SavedMlModel` | Modello di previsione dei rendimenti ( IReturnPredictor ) addestrato e salvato da un utente in /ml, per riuso senza dover riaddestrare. A differenza di RegimeModel (che salva solo i parametri numerici del K-means e reimplementa l'inferenza a mano), qui salviamo il modello ML.NET GIÀ SERIALIZZATO (lo stesso blob prodotto da IReturnPredictor.Save ): per Random Forest/LightGBM (decine di alberi) r… |
+| `SavedStrategy.cs` | 42 | `SavedStrategy` | Configurazione di strategia salvata da un utente, riutilizzabile in /backtest. I parametri sono serializzati in JSON (Dictionary&lt;string, decimal&gt;). |
+| `SentimentMetricPoint.cs` | 92 | `SentimentMetricPoint` | Un punto di una serie numerica di "market mood" (Sentiment 2.0): Fear & Greed, long/short ratio, taker buy/sell, open interest, funding. Tabella slim separata da (che è event-shaped: Title/Url/DedupeKey) perché queste sono serie DENSE per-metrica/per-simbolo su cui si calcolano baseline rolling e z-score. La dedupe è l'indice unico composito (Source, Metric, Symbol, TimestampUtc) + un pre-filtr… |
+| `TrackedSeries.cs` | 37 | `TrackedSeries` | Una serie di mercato (Exchange + Symbol + Timeframe) che il sistema mantiene aggiornata automaticamente in background. E' una watchlist GLOBALE: i dati OHLCV non sono per-utente, quindi nemmeno la lista delle serie tracciate lo e'. |
+| `TradePostMortem.cs` | 52 | `TradePostMortem` | [G4] L'analisi a posteriori di UN'operazione chiusa in perdita (o del ritiro di una corsia). Tabella propria e non PipelineArtifact : quelli sono agganciati a un RunId che un trade non ha. E non il journal della flotta: un post-mortem non è una decisione dell'orchestratore, e piegare quello schema si sarebbe pagato dopo. Confine : questa riga è testo e una classificazione. Non entra in nessun p… |
+| `UserPageConfig.cs` | 34 | `UserPageConfig` | Configurazione completa di una pagina (form di Backtest, Optimization, ...) salvata per utente: preset con nome oppure "ultima configurazione usata" (Name vuoto, aggiornata a ogni Run). Il contenuto è un JSON opaco definito dalla pagina stessa (ogni pagina ha il suo DTO). |
+
+## `ProcioneMGR/Services/Admin/` — 2 file, 223 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `DatabaseBackupHelper.cs` | 171 | `PgConnectionInfo` | Parametri di connessione a un database PostgreSQL, estratti dalla connection string. |
+| `DatabaseBackupService.cs` | 52 | `DatabaseBackupService` | Wrapper iniettabile attorno a per l'uso dalla UI (pagina /admin/backup ). Risolve i parametri di connessione PostgreSQL dalla connection string PostgresConnection e la cartella backup/ relativa alla content root, così il chiamante non deve conoscerli. Il backup usa gli strumenti nativi pg_dump / pg_restore (devono essere nel PATH): vedi e docs/POSTGRES_MIGRATION.md. |
+
+## `ProcioneMGR/Services/Agents/` — 4 file, 303 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `ClaudeSupervisorAgent.cs` | 174 | `ClaudeSupervisorAgent` | Optional Claude-backed supervisor. It reuses the existing (Anthropic SDK, key from ANTHROPIC_API_KEY only) through the shared (timeout, circuit breaker, error classification — so the veto path both consults and feeds the same breaker as the advisory path) and degrades gracefully: if the key is missing, the breaker is open, the call times out, or anything throws/parses wrong, it returns ApproveR… |
+| `DelegatingSupervisorAgent.cs` | 30 | `DelegatingSupervisorAgent` | L' registrato in DI: sceglie Logging/Claude PER CHIAMATA da PipelineSupervisor:Provider (hot-reload). Prima la scelta avveniva una volta sola al boot in Program.cs: cambiare provider richiedeva un riavvio e la UI non poteva esporlo. |
+| `IPipelineSupervisorAgent.cs` | 64 | `IPipelineSupervisorAgent` | Qualitative AI supervisor of the continuous re-apply loop. Given a completed pipeline run and the current vs candidate ensemble, it produces a readable judgment plus a VETO signal ( ) that the scheduler ANDs with the objective verdict. SAFETY (non-negotiable): the agent can only ever VETO a replacement the metrics already approved — it can never FORCE one, never start trading, never switch to L… |
+| `LoggingSupervisorAgent.cs` | 35 | `LoggingSupervisorAgent` | Default supervisor: no AI. It logs the run and always approves the replacement, delegating the entire decision to the objective . This is the fallback when the user has not configured a Claude API key — the platform is fully operational without any AI layer. |
+
+## `ProcioneMGR/Services/Alpha/` — 14 file, 2.831 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `Alpha158Catalog.cs` | 172 | `OpDescriptor` | Descrittore di un operatore Alpha158: codice tecnico, categoria, se è parametrizzato da un orizzonte rolling, e la funzione di calcolo (causale) che riceve le serie e l'orizzonte. |
+| `RollingOps.cs` | 518 | `Bars` | Serie di prezzo/volume estratte una sola volta da uno storico di candele, in (coerente con il resto della piattaforma), pronte per gli operatori rolling di . Tutte le colonne hanno la stessa lunghezza dell'input. |
+| `AlphaFactorFactory.cs` | 94 | `IAlphaFactorFactory` | Crea istanze di fattore per nome ed espone i "prototipi" per popolare la UI (elenco fattori + definizioni parametri). Gli 8 fattori "storici" restano uno switch case esplicito; il catalogo (pochi operatori × molti orizzonti) si aggiunge in blocco senza una classe per feature — stesso principio additivo del resto della piattaforma (rif. docs/archive/ROADMAP-QLIB.md §1.1 ). |
+| `AlphaModels.cs` | 207 | `FactorEvaluationConfig` | Configurazione della valutazione di un fattore. |
+| `FactorCache.cs` | 114 | `FactorCacheOptions` | Opzioni della cache dei fattori (sezione config "FactorCache"). |
+| `FactorDriftAnalyzer.cs` | 281 | `FactorIcPoint` | Un punto della serie storica dell'IC: una finestra temporale e il suo IC. |
+| `FactorDriftMonitor.cs` | 335 | `FactorDriftSeriesSnapshot` | Fotografia dell'ultimo calcolo di deriva, per serie. |
+| `FactorEvaluator.cs` | 192 | `FactorEvaluator` | Implementazione del valutatore di fattori. Stateless -&gt; registrato come Singleton. Metriche prodotte: - IC (Information Coefficient) : correlazione di Spearman tra il fattore alla candela i e il rendimento forward su H candele. Misura quanto l'ORDINAMENTO indotto dal fattore predice l'ordinamento dei rendimenti futuri. \|IC\| &gt; ~0.03 su molte osservazioni è già interessante nei mercati reali. - I… |
+| `FactorIcHistory.cs` | 298 | `FactorIcWindow` | ENTITÀ EF (tabella FactorIcWindows ): l'IC di UN fattore su UNA finestra di UNA serie. La riga è l'osservazione elementare della deriva: la serie storica è l'insieme delle righe ordinate per . L'indice unico su (serie, fattore, orizzonte, ampiezza, fine finestra) rende la scrittura IDEMPOTENTE: il worker gira ogni 12 ore sulle stesse candele e ricalcola le stesse finestre — senza quel vincolo l… |
+| `FactorMath.cs` | 106 | `FactorMath` | Utilità numeriche condivise dai fattori. Tutto in per coerenza con il resto della piattaforma (prezzi esatti). Le finestre rolling calcolano il valore alla candela i usando SOLO gli indici ≤ i (anti-look-ahead per costruzione). |
+| `Factors.cs` | 308 | `MomentumFactor` | MOMENTUM con "skip": rendimento su una finestra Lookback che termina Skip candele fa. Lo skip (tipico: saltare le 1-2 barre più recenti) attenua la mean-reversion di brevissimo periodo, isolando il momentum "pulito". value[i] = (c[i-skip] - c[i-skip-lookback]) / c[i-skip-lookback] |
+| `IAlphaFactor.cs` | 65 | `FactorParameterDefinition` | Descrizione di un parametro di un fattore, per UI dinamica (come per le strategie). |
+| `IFactorEvaluator.cs` | 26 | `IFactorEvaluator` | Valuta la capacità predittiva di un fattore alpha rispetto ai rendimenti futuri, senza look-ahead nella COSTRUZIONE del fattore (il rendimento forward è il target , e come tale può guardare avanti: è ciò che vogliamo predire, non un input del fattore). Controparte C# di Alphalens. |
+| `OrderFlowFactors.cs` | 115 | `TakerImbalanceFactor` | SBILANCIAMENTO TAKER: quota della pressione aggressiva in acquisto, mediata su Lookback barre e centrata in [-1, +1]: value[i] = media su [i-Lookback+1, i] di (2·TakerBuyVolume/Volume − 1) +1 = tutto il volume ha attraversato lo spread in acquisto, −1 in vendita, 0 = equilibrio. È l'order flow aggregato — chi paga lo spread pur di eseguire SUBITO — cioè la componente degli scambi che la lettera… |
+
+## `ProcioneMGR/Services/AlphaMining/` — 4 file, 842 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `AlphaExpressionFactor.cs` | 47 | `AlphaExpressionFactor` | Adatta un albero di espressione ( ) all'interfaccia : un alpha "minato" diventa così un fattore di prima classe, riusabile ovunque un IAlphaFactor è consumato oggi (dataset ML, MlStrategy , valutazione IC), senza toccare quei consumatori. Rif. docs/archive/ROADMAP-QLIB.md §1.7 . Il incapsula l'espressione con prefisso expr: così che IAlphaFactorFactory.Create(Name) possa ricostruirlo per parsin… |
+| `AlphaExpressionParser.cs` | 91 | `AlphaExpressionParser` | Parser dell'espressione alpha serializzata (S-expression prodotta da ), per ricostruire l'albero da un SavedFactor o da un nome di feature "expr:...". Ricorsivo discendente; per gli operatori temporali l'ultimo argomento è la finestra (intero). |
+| `AlphaNode.cs` | 267 | `AlphaOp` | Operatore di un nodo dell'albero di espressione alpha. |
+| `GeneticAlphaMiner.cs` | 437 | `MiningConfig` | Configurazione della ricerca genetica di alpha. |
+
+## `ProcioneMGR/Services/AltData/` — 7 file, 800 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `AltDataSyncService.cs` | 124 | `IAltDataSyncService` | — |
+| `ForexFactoryIngestor.cs` | 119 | `ForexFactoryIngestor` | Ingestor del calendario economico di ForexFactory (Fase D.2). ForexFactory non ha un feed RSS pubblico ( /rss risponde 403) — verificato dal vivo che /calendar è invece HTML server-renderizzato con uno User-Agent da browser realistico (senza, il sito risponde comunque con la pagina ma non è mai stato verificato un blocco Cloudflare attivo in questo scraping: la pagina contiene le righe evento r… |
+| `IAltDataSource.cs` | 34 | `RawNewsItem` | Una notizia/evento grezzo, prima di classificazione/sentiment (li applica AltDataSyncService ). Le fonti testuali (RSS) lasciano CategoryOverride / SentimentScoreOverride / SymbolsOverride a null e si affidano alla classificazione automatica ( / ISentimentScorer ). Le fonti strutturali (es. ForexFactoryIngestor per il calendario economico, RetailSentimentIngestor per i dati numerici di posizion… |
+| `NewsImpactAnalyzer.cs` | 214 | `ImpactStats` | Ritorno medio del simbolo di riferimento sui tre orizzonti, per un gruppo di notizie/eventi. |
+| `NewsImpactClassifier.cs` | 134 | `NewsCategory` | Categoria di impatto di una notizia/evento. Regulatory/Security/Institutional/CentralBanks/ Macro sono derivate per keyword dal testo (vedi ). EconomicCalendar e RetailSentiment sono invece categorie STRUTTURALI: non derivano da classificazione testuale ma sono assegnate direttamente dal rispettivo ingestor ( ForexFactoryIngestor , RetailSentimentIngestor ) tramite RawNewsItem.CategoryOverride … |
+| `RetailSentimentIngestor.cs` | 101 | `RetailSentimentIngestor` | Ingestor del posizionamento retail (long % vs short %) per coppia — un CONTRARIAN indicator: il retail è storicamente sul lato sbagliato ai punti di svolta. A differenza delle notizie testuali, qui non c'è testo da classificare/scorare col lessico: e il punteggio di sentiment sono valorizzati direttamente da un dato numerico ( RawNewsItem.CategoryOverride / SentimentScoreOverride ). DEVIAZIONE … |
+| `RssNewsSource.cs` | 74 | `NewsFeeds` | Fonti RSS note: gratuite, senza chiave API, senza rate limit pratico — a differenza di CryptoPanic (piano gratuito chiuso ad aprile 2026) o di provider a pagamento come CryptoCompare. Editorialmente affidabili: CoinDesk/Cointelegraph/The Block/Decrypt sono le fonti più citate negli studi di event-study sull'impatto di notizie regolatorie/ETF sui mercati crypto. FXStreet (Fase D.2, forex/macro) … |
+
+## `ProcioneMGR/Services/Analysis/` — 9 file, 2.230 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `CandlestickPatternDetector.cs` | 313 | `CandlePatternType` | Tipi di pattern candlestick riconosciuti (McAllen, "Charting and Technical Analysis", cap. 4-6 e 14). |
+| `ChartPatternDetector.cs` | 165 | `ChartPatternType` | Tipi di pattern grafici di inversione (McAllen, cap. 9-10). |
+| `CyclicalAnalyzer.cs` | 310 | `CyclicalAnalyzer` | Elementi di analisi ciclica (Trombetta, cap. 5): Activity Factor (volumi medi per ora), bias orario dei prezzi (body medio per ora + robustezza statistica), bias sul giorno della settimana (contributo intraday e overnight) e stagionalita' per giorno dell'anno. Metodo del libro: ripetere ogni analisi su piu' periodi (lungo/medio/breve) e dare piu' peso ai periodi lunghi (ComboStats con pesi 3-2-… |
+| `EventStudy.cs` | 187 | `EventStudyConfig` | Parametri dell'event-study. Le finestre sono in BARRE della serie passata (1h ⇒ ore, 1d ⇒ giorni). |
+| `ExcursionAnalyzer.cs` | 411 | `ExcursionAnalyzer` | Analisi delle escursioni di barra per il posizionamento probabilistico dello stop loss (Trombetta, cap. 4, "Probabilita' e direzione") + effetto memoria (autocorrelazione ritardata delle variazioni percentuali). Idea: nelle giornate che chiudono positive, la massima ricorrezione open-&gt;low e' contenuta; il 95esimo/99esimo percentile di quella distribuzione e' un livello di stop oltre il quale la… |
+| `GapLapAnalyzer.cs` | 325 | `GapLapAnalyzer` | Analisi dei Gap e dei Lap di prezzo (Trombetta, cap. 4): base statistica per i sistemi "Gap Filling" (mean reverting sul riassorbimento) o trend following (continuazione). Definizioni (per ogni barra rispetto alla precedente): - Gap Up: open &gt; high precedente; entita' = open - high[-1] - Gap Down: open &lt; low precedente; entita' = open - low[-1] - Lap Up: close[-1] &lt; open &lt;= high[-1]; entita' = … |
+| `MarketEventDetector.cs` | 153 | `MarketEventKind` | Tipo di evento di mercato rilevato dai soli prezzi/volumi (nessuna fonte esterna). |
+| `SupportResistanceAnalyzer.cs` | 299 | `SupportResistanceAnalyzer` | Supporti, resistenze, trend a massimi/minimi e ritracciamenti percentuali (McAllen, cap. 7-8 e 15). Metodo: si individuano i punti di swing (pivot: massimo/minimo locale su una finestra simmetrica di K barre), si raggruppano i pivot vicini in LIVELLI di prezzo (piu' tocchi = livello piu' significativo, come da libro), si classifica il trend dalla sequenza degli swing (higher highs + higher lows… |
+| `VolumeAnalyzer.cs` | 67 | `VolumeAnalyzer` | Interpretazione del volume come "grande confermatore" del trend (McAllen, cap. 15): in un uptrend sano il volume e' piu' alto sulle barre in rialzo che su quelle in ribasso (e viceversa nei downtrend). Quando i massimi vengono fatti a basso volume e i sell-off ad alto volume, e' distribuzione: il trend non e' confermato e il segnale e' di allerta. |
+
+## `ProcioneMGR/Services/Backtesting/` — 24 file, 3.674 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `BacktestEngine.cs` | 692 | `BacktestEngine` | Motore di backtest event-driven, long/short, una posizione alla volta. Pipeline: 1. carica le candele OHLCV dal DB per il range; 2. la strategia pre-calcola i suoi indicatori UNA volta (InitializeAsync); 3. itera candela per candela (hot loop su array decimal[] , niente LINQ): - chiede il alla strategia; - Long/Short: se serve chiude la posizione opposta (flip) e apre; - Close: chiude la posizi… |
+| `BacktestModels.cs` | 267 | `Signal` | Segnale emesso da una strategia per ogni candela. |
+| `BacktestPageService.cs` | 484 | `BacktestConfigSnapshot` | Fotografia completa del form di Backtest.razor — usata per i preset/memoria dell'ultima configurazione, per l'handoff da/verso Optimization e come input di . |
+| `BollingerMeanReversionStrategy.cs` | 81 | `BollingerMeanReversionStrategy` | Bollinger Mean Reversion: Long quando il prezzo sfonda la banda inferiore (oversold), Short quando sfonda la superiore (overbought), Close quando il prezzo rientra attraversando la banda centrale (media). |
+| `CompositeSignalStrategy.cs` | 165 | `CompositeSignalStrategy` | COMPOSITE strategy: combines up to 3 elementary signals from with AND/OR logic into an entry rule, plus up to 2 OR-combined exit conditions. This is the backbone of the creative-discovery layer: because every signal is normalized to 0-100, the whole "spec" is expressible as PLAIN DECIMAL PARAMETERS — which makes generated strategies natively sweepable by OptimizationEngine, rankable by Discover… |
+| `DonchianBreakoutStrategy.cs` | 111 | `DonchianBreakoutStrategy` | Breakout di canale Donchian (il sistema di riferimento di Trombetta, cap. 6): - Long quando la close supera il Donchian High (HHV) a EntryPeriod della barra precedente; chiusura quando la close viola il Donchian Low (LLV) a ExitPeriod della barra precedente. - Short speculare (breakdown su LLV a EntryPeriod, uscita su HHV a ExitPeriod), abilitabile con il parametro Direction . Il confronto con … |
+| `EmaCrossStrategy.cs` | 70 | `EmaCrossStrategy` | EMA Cross: segnale Long quando l'EMA veloce incrocia SOPRA la lenta, Short quando incrocia SOTTO. Il crossing usa la candela corrente e la precedente. |
+| `EventTriggerStrategy.cs` | 158 | `EventTriggerStrategy` | EVENT-TRIGGERED strategy: enters on a DISCRETE market event (not a continuous price condition) and exits after a maximum holding time — the time-bound trade structure typical of event-driven intraday systems, which NO other strategy in the platform has. Event types (0-100 percentile scale where applicable, from ): 0 VolSpike — realized volatility jumps above the Threshold percentile (crossing, … |
+| `FundingHistoryProvider.cs` | 46 | `IFundingHistoryProvider` | Carica la serie storica dei funding rate per un simbolo, pronta per . |
+| `FundingRateLookup.cs` | 46 | `FundingRatePoint` | Un evento di funding: timestamp e rate in PERCENTO per 8h (×100, convenzione piattaforma). Firmato. |
+| `GridMeanReversionStrategy.cs` | 112 | `GridMeanReversionStrategy` | [Fase 5b — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Mean reversion a gradini fissi attorno a un ancoraggio mobile: entra quando il prezzo si allontana di EntryRungs gradini dall'SMA di riferimento, esce quando ne ha recuperato uno. È il **ciclo finito e restartabile** che il PDF descrive come cuore economico del grid trading. Non è grid trading, e il nome lo dice apposta. Un grid vero a… |
+| `IBacktestEngine.cs` | 23 | `IBacktestEngine` | — |
+| `IStrategy.cs` | 49 | `StrategyParameterDefinition` | Descrizione di un parametro di strategia, usata per generare la UI dinamica. |
+| `MacdTrendStrategy.cs` | 69 | `MacdTrendStrategy` | MACD Trend: Long quando il MACD incrocia SOPRA la Signal (istogramma da negativo a positivo), Short quando incrocia SOTTO (istogramma da positivo a negativo). |
+| `MlStrategy.cs` | 193 | `MlStrategy` | Il "collante" fra i modelli ML (cap. 6-12 del libro) e il backtest: carica un già addestrato, in pre-calcola i fattori usati in addestramento su tutta la serie (stesso schema di DatasetBuilder , ma senza target), e in traduce la predizione di rendimento forward in un tramite soglie long/short. Così ogni modello diventa immediatamente back-testabile, ottimizzabile e inseribile nell'ensemble. DEV… |
+| `MomentumStrategy.cs` | 73 | `MomentumStrategy` | Momentum: Long quando il momentum su LookbackPeriod supera +Threshold, Short quando scende sotto -Threshold, Close quando il momentum rientra vicino a zero (\|momentum\| &lt; Threshold/2). momentum = (price - price[index - lookback]) / price[index - lookback] |
+| `PriceSmaCrossStrategy.cs` | 70 | `PriceSmaCrossStrategy` | La strategia "preferita" di McAllen (Charting and Technical Analysis, cap. 16-17): prezzo contro media mobile semplice di lungo periodo (classico 200 DMA). - Long quando la chiusura attraversa la SMA dal basso verso l'alto; - Close (o Short, se abilitato) quando la viola dall'alto verso il basso. La SMA agisce storicamente da supporto/resistenza: sopra la media si sta nel mercato, sotto si sta … |
+| `RegimeConditionalStrategy.cs` | 131 | `RegimeConditionalStrategy` | REGIME-CONDITIONAL meta-strategy: classifies every bar into one of three CAUSAL market buckets and delegates the signal to a different sub-strategy per bucket — "trend-follow in trends, mean-revert sideways, stand aside in the regime you distrust", as a single backtestable/optimizable strategy. Regime proxy (deliberately DB-free — declared deviation from the original spec, which suggested loadi… |
+| `RsiOversoldStrategy.cs` | 63 | `RsiOversoldStrategy` | RSI Oversold/Overbought: Long quando RSI &lt; soglia oversold, Short quando RSI &gt; soglia overbought, altrimenti Hold. Il motore gestisce il flip della posizione sul segnale opposto. |
+| `SignalCatalog.cs` | 394 | `SignalCatalog` | Catalog of ELEMENTARY SIGNALS for composable strategies, all normalized to a COMMON 0-100 scale so that thresholds are comparable across signals (a "&lt; 20" means "in the bottom quintile of its own recent history" for every unbounded signal, and the native scale for oscillators that already live in 0-100): 0 Rsi — RSI(14), native 0-100 1 StochD — Stochastic %D(14,3), native 0-100 2 BollingerB — %… |
+| `StochasticStrategy.cs` | 101 | `StochasticStrategy` | Oscillatore stocastico (mean-reversion, un secondo oscillatore distinto dall'RSI, molto usato intraday): %K = 100*(close - LLV) / (HHV - LLV) sui minimi/massimi a KPeriod ; %D = SMA(%K, DPeriod ) (linea lenta, filtra il rumore). Long quando %D scende sotto la soglia di ipervenduto, Short quando supera l'ipercomprato — stessa struttura robusta di RsiOversold ma con un oscillatore che reagisce al… |
+| `StrategyFactory.cs` | 54 | `IStrategyFactory` | Crea istanze di strategia per nome (switch case, niente reflection) ed espone i "prototipi" per popolare la UI (dropdown + definizioni parametri). Aggiungere una strategia = nuova classe + un case qui. |
+| `SupertrendStrategy.cs` | 116 | `SupertrendStrategy` | Supertrend (trend-following su ATR, il sistema intraday crypto piu' diffuso): due bande attorno al prezzo medio (H+L)/2 a distanza Multiplier * ATR , con la logica standard di "locking" delle bande finali; il trend commuta quando la close attraversa la banda attiva. Long allo switch rialzista; allo switch ribassista Short (se AllowShort=1 ) oppure Close. ANTI-LOOK-AHEAD: la decisione alla barra… |
+| `VwapReversionStrategy.cs` | 106 | `VwapReversionStrategy` | VWAP Reversion (la strategia intraday "per eccellenza"): il VWAP (Volume Weighted Average Price) di SESSIONE e' il prezzo medio ponderato per i volumi dall'inizio della giornata UTC, il benchmark che ogni operatore intraday osserva. Quando il prezzo si allontana dal VWAP oltre una soglia si assume un rientro verso la media: Long se e' sotto il VWAP di Threshold , Short se e' sopra (con AllowSho… |
+
+## `ProcioneMGR/Services/Carry/` — 5 file, 573 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `CarryBacktestEngine.cs` | 135 | `CarryBacktestEngine` | [E3 roadmap profitto-intraday] Backtest DETERMINISTICO del carry delta-neutro (long spot + short perp). Itera sugli EVENTI DI FUNDING (il passo naturale del carry, ogni 8h): a ogni evento, se in posizione, lo short INCASSA il funding firmato (positivo → income; negativo → costo); la decisione di aprire/chiudere usa la media annualizzata degli ultimi TrailingFundingEvents eventi, con isteresi en… |
+| `CarryDecider.cs` | 49 | `CarryAction` | Cosa fare al prossimo punto di decisione del carry. |
+| `CarryEngine.cs` | 144 | `CarryMode` | Modalità operativa del carry. Contiene DELIBERATAMENTE solo Paper e Testnet: Live è IRRAPPRESENTABILE — non esiste il valore, quindi nessun percorso di codice, nessuna config, nessun bug può portare il carry a operare con denaro reale. È il failsafe più forte possibile (più forte di un controllo a runtime): ciò che non si può esprimere non può accadere. |
+| `CarryModels.cs` | 64 | `CarryConfiguration` | [E3 roadmap profitto-intraday] Configurazione del carry delta-neutro (long spot + short perp sullo stesso simbolo). L'edge è il FUNDING incassato dallo short quando è positivo — un flusso, non una previsione. Delta-neutro: la componente direzionale del prezzo si elide fra le due gambe. |
+| `CarryWorker.cs` | 181 | `CarryOptions` | Configurazione del forward-test del carry (sezione "Carry"). |
+
+## `ProcioneMGR/Services/Config/` — 2 file, 372 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `AdminConfigRules.cs` | 271 | `AdminConfigRules` | Validazione LATO SERVER dei pannelli di configurazione admin (/admin/autonomy, /admin/protections, i parametri di /execution). Perché serve, visto che i campi hanno già min= nell'HTML: l'attributo min di un &lt;input type="number"&gt; vincola la validazione di un FORM, non il binding di Blazor — con @bind il valore digitato arriva al modello comunque, e da lì dritto in appsettings.json . Prima di que… |
+| `AppConfigWriter.cs` | 101 | `IAppConfigWriter` | Persiste una sezione di configurazione in appsettings.json . Il provider JSON dell'host ha reloadOnChange=true , quindi chi legge via IOptionsMonitor&lt;T&gt; (o IConfiguration live) vede i nuovi valori entro ~1s senza riavvio — è lo stesso meccanismo del pannello sicurezza di /trading, generalizzato per /admin/autonomy. Niente tabella DB, niente provider custom: il file resta l'unica fonte di verità… |
+
+## `ProcioneMGR/Services/Discovery/` — 6 file, 1.347 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `DtwMatcher.cs` | 244 | `DtwMatch` | Un'occorrenza del pattern nella serie. |
+| `DtwPatternAnalysisService.cs` | 255 | `DtwPatternAnalysis` | Esito dell'analisi di un pattern: occorrenze, event-study, nullo per forma, verdetto. |
+| `IStrategyDiscovery.cs` | 9 | `IStrategyDiscovery` | — |
+| `StrategyComposer.cs` | 556 | `ComposedCandidate` | A generated strategy spec: a concrete, ready-to-backtest parameterization. |
+| `StrategyDiscoveryEngine.cs` | 211 | `StrategyDiscoveryEngine` | Motore di ricerca strategie. Per ogni combinazione (strategia × coppia × timeframe) lancia un'ottimizzazione walk-forward e ne estrae la migliore configurazione di parametri (per Sharpe out-of-sample medio = robusta, non overfittata). Ordina tutte le candidate per Sharpe OOS: in cima ci sono le strategie più proficue e affidabili. |
+| `StrategyDiscoveryModels.cs` | 72 | `StrategyDiscoveryConfiguration` | Configurazione della ricerca di strategie: spazza un universo di (strategia × coppia × timeframe) e, per ciascuna, ottimizza i parametri in walk-forward. |
+
+## `ProcioneMGR/Services/Ensemble/` — 7 file, 1.596 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `EnsembleAllocator.cs` | 152 | `EnsembleAllocator` | Calcola i pesi di allocazione a partire dagli Sharpe rolling, con vincoli Min/Max. Algoritmo (water-filling vincolato): 1. Sharpe negativi -&gt; 0 (non contribuiscono al peso). 2. Pesi grezzi proporzionali agli Sharpe (se tutti 0 -&gt; equipesi). 3. Si fissa al proprio bound IL SINGOLO peso che viola di più (Max o Min), si ridistribuisce il budget rimanente tra i restanti, e si ripete. 4. Garantisce … |
+| `EnsembleComparator.cs` | 241 | `IEnsembleComparator` | Objective, deterministic comparison of two ensembles (the one currently deployed on the trading lanes vs a candidate produced by a fresh pipeline run) for the continuous auto-reapply loop. The decision is numeric only (no "gut feeling"): a candidate replaces the incumbent ONLY when it is meaningfully better, gated by a configurable hysteresis so the deployed ensemble does not churn on marginal,… |
+| `EnsembleManager.cs` | 642 | `EnsembleManager` | Implementazione dell'ensemble per UNA corsia di trading isolata ( ). Thread-safe via : la configurazione è letta/scritta in modo serializzato; le simulazioni girano su uno snapshot locale della config (fuori dal lock) per non bloccare letture concorrenti (UI polling + worker). Registrato come Keyed Singleton (una istanza per corsia, vedi Program.cs) invece di un singolo Singleton globale come p… |
+| `EnsembleModels.cs` | 189 | `EnsembleConfiguration` | — |
+| `EnsemblePageService.cs` | 290 | `DriftEvaluationResult` | Esito della valutazione drift: messaggio riassuntivo per l'operatore. |
+| `EnsembleRebalanceWorker.cs` | 56 | `EnsembleRebalanceWorker` | Worker che esegue il rebalancing automatico dell'ensemble quando è abilitato. Controlla periodicamente la configurazione; se IsEnabled e se è passato RebalanceIntervalDays dall'ultimo rebalance, ne esegue uno nuovo. |
+| `IEnsembleManager.cs` | 26 | `IEnsembleManager` | Gestione dell'ensemble multi-strategia con allocazione dinamica del capitale basata su Sharpe rolling. La performance è una simulazione storica deterministica: ogni strategia membro viene backtestata sulla finestra, e il capitale viene riallocato periodicamente in base alla Sharpe degli ultimi N giorni. |
+
+## `ProcioneMGR/Services/Exchanges/` — 12 file, 2.260 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `BinanceClient.cs` | 688 | `BinanceClient` | Client Binance Spot via REST pubblica (nessuna firma necessaria per i dati di mercato). Endpoint klines: GET /api/v3/klines, max 1000 candele per richiesta. |
+| `BitgetClient.cs` | 806 | `BitgetClient` | Client Bitget Spot via REST pubblica v2 (dati di mercato non firmati). Endpoint candele: GET /api/v2/spot/market/candles. |
+| `ExchangeClientException.cs` | 20 | `ExchangeClientException` | Errore restituito da un exchange (HTTP non-2xx o payload d'errore). |
+| `ExchangeClientFactory.cs` | 42 | `ExchangeClientFactory` | Factory che risolve il client corretto dal DI. I client sono registrati come typed HttpClient (vedi Program.cs), quindi otteniamo istanze gia' configurate con base address e resilienza. Per aggiungere un exchange: implementa e , registralo in DI e aggiungi un case qui e in . Nessun'altra parte del sistema cambia. |
+| `ExchangeClock.cs` | 167 | `IExchangeClock` | Orologio usato per il campo timestamp delle richieste FIRMATE. Perché non basta : gli exchange rifiutano una richiesta firmata se il suo timestamp si discosta dall'ora del LORO server oltre recvWindow (5s qui). Un orologio locale che deriva di pochi secondi — cosa normale su una macchina desktop che non sincronizza NTP con regolarità, o dopo una sospensione — fa fallire ordini validi con l'erro… |
+| `ExchangeRateLimitHandler.cs` | 156 | `ExchangeRateLimitHandler` | Disciplina di rate-limit verso le API REST degli exchange, applicata come sul typed HttpClient: vale per OGNI chiamata (pubblica o firmata, spot o futures) senza toccare le decine di punti che le compongono. Due meccanismi distinti, entrambi necessari: 1. LIMITE PROATTIVO (token bucket): non si supera un tetto di richieste al secondo. È ciò che evita di finire in ban, invece di reagirvi. Serve … |
+| `ExchangeTrading.cs` | 139 | `TradingCredentials` | Credenziali per le chiamate firmate (private) all'exchange. |
+| `FuturesTrading.cs` | 110 | `SetLeverageResult` | Esito dell'impostazione della leva su un simbolo (richiesta PRIMA di ogni apertura). |
+| `IExchangeClient.cs` | 59 | `IExchangeClient` | Astrazione di un exchange (Strategy Pattern). Aggiungere un nuovo exchange significa implementare questa interfaccia e registrarla nella , senza toccare il codice esistente. I simboli usano la forma canonica "BASE/QUOTE" (es. "BTC/USDT"); ogni client converte internamente nel formato dell'exchange. |
+| `IExchangeClientFactory.cs` | 17 | `IExchangeClientFactory` | Restituisce l'implementazione per un dato exchange. |
+| `Ohlcv.cs` | 24 | `Ohlcv` | Candela OHLCV "di trasporto", restituita dai client exchange. Disaccoppiata dall'entita' di persistenza : il layer di ingestione mappa da questo DTO all'entita'. |
+| `Timeframes.cs` | 32 | `Timeframes` | Timeframe canonici dell'applicazione e relativa durata. Ogni client exchange traduce questi valori nel proprio dialetto (es. Bitget "1day" per "1d"). |
+
+## `ProcioneMGR/Services/Execution/` — 5 file, 470 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `ExecutionAlgorithmFactory.cs` | 35 | `IExecutionAlgorithmFactory` | Crea gli algoritmi di esecuzione per nome ed espone l'elenco per la UI. Stesso pattern di StrategyFactory / AlphaFactorFactory : aggiungere un algoritmo = nuova classe + un case. |
+| `ExecutionAlgorithms.cs` | 214 | `ExecutionPlanning` | Helper condivisi per costruire piani con somma quantità esatta. |
+| `ExecutionModels.cs` | 106 | `ExecutionSide` | Direzione di un ordine di esecuzione (disaccoppiata da OrderSide del layer Trading). |
+| `ExecutionSimulator.cs` | 89 | `IExecutionSimulator` | Simula il riempimento di un sulle candele fini, con impatto di mercato e spread, invece di assumere un fill istantaneo a chiusura candela (assunzione odierna del BacktestEngine ). Serve a MISURARE la differenza fra algoritmi (Immediate vs TWAP/VWAP/ Iceberg) sugli stessi dati — la premessa del 10-20% di miglioramento va misurata qui, non assunta (rif. docs/archive/ROADMAP-QLIB.md §1.2 ). Puro/d… |
+| `IExecutionAlgorithm.cs` | 26 | `IExecutionAlgorithm` | Algoritmo di esecuzione: dato un ordine "intenzione" ( ) e le candele del timeframe di esecuzione (es. 5m dentro una barra di decisione 4h), produce un di ordini figli. È il layer che oggi manca fra "la strategia decide" e "l'ordine parte" (rif. docs/archive/ROADMAP-QLIB.md §1.2 ). riproduce il comportamento ODIERNO (un solo ordine) ed è il default retrocompatibile; TWAP/VWAP/Iceberg distribuis… |
+
+## `ProcioneMGR/Services/Experiments/` — 4 file, 269 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `ExperimentEntities.cs` | 70 | `ExperimentRun` | Un run sperimentale : la registrazione osservabile e confrontabile di UN'esecuzione di ricerca (backtest, sweep di ottimizzazione, training ML, campagna di discovery, pipeline...). Generalizza il tracking che finora esisteva SOLO per il Pipeline a 15 stadi ( PipelineRun / PipelineArtifact ): stesso pattern a colonne JSON (schema stabile mentre parametri/metriche evolvono), ma disaccoppiato da u… |
+| `ExperimentTracker.cs` | 109 | `ExperimentTracker` | Implementazione di su EF Core. Usa (context a vita breve per operazione) così è sicuro come Singleton e utilizzabile da servizi/worker a lunga durata e da componenti Blazor. Disciplina anti-regressione: ogni metodo apre e chiude il proprio context; nessuno stato condiviso. Il tracker NON lancia mai eccezioni verso i calcoli che lo ospitano quando è usato tramite gli helper "best-effort" (vedi ). |
+| `ExperimentTrackerExtensions.cs` | 53 | `ExperimentTrackerExtensions` | Helper "best-effort" per il tracking: incapsulano le chiamate al in un try/catch così un problema di logging (DB occupato, transitorio) NON fa mai cadere il calcolo osservato. Gli engine restano la fonte di verità; il tracker è un osservatore sacrificabile. Un run non aperto è rappresentato da , che gli altri helper trattano come no-op. |
+| `IExperimentTracker.cs` | 37 | `IExperimentTracker` | Logger sperimentale generalizzato (un piccolo MLflow interno). Ogni tipo di esecuzione di ricerca apre un run all'inizio, ne registra le metriche/artefatti, e lo chiude a fine — così backtest, sweep, training e discovery finiscono nella STESSA tabella comparabile, invece di vivere solo nella UI del momento e poi perdersi. Rif. docs/archive/ROADMAP-QLIB.md §1.3 . Additivo per costruzione: non mo… |
+
+## `ProcioneMGR/Services/Fleet/` — 5 file, 978 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `FleetModels.cs` | 147 | `FleetOptions` | [AF2] Opzioni dell'orchestratore di flotta (sezione Fleet ). Default: SPENTO, e anche da acceso parte in DryRun (solo journal, zero azioni) — l'ordine degli incrementi è parte del contratto: prima si osserva il journal per giorni, poi si toglie il dry-run apposta. |
+| `FleetOrchestrator.cs` | 115 | `FleetOrchestrator` | [AF2] Il cuore deterministico della "Queen Bee": è una funzione PURA — stesso stato, stesso piano, sempre — fuzzabile come la promozione. Le AI non abitano qui: al più, in un pareggio fra opzioni equivalenti, il core produce il pareggio e il worker può chiedere al comitato (AF3) quale scegliere; una risposta invalida ricade sul default deterministico che questo stesso metodo definisce. I confin… |
+| `FleetOrchestratorWorker.cs` | 273 | `FleetOrchestratorWorker` | [AF2] Il braccio della Queen Bee: ogni tick legge lo stato (reader), decide (core puro), applica l'ISTERESI sui ritiri e scrive il journal. In questo incremento (AF2a) NON esegue nulla — nemmeno con Fleet:DryRun=false : l'esecuzione arriva con AF2b, e un flag girato in anticipo deve produrre un avviso, non un'azione non collaudata. Vive nel SOLO monolite (è il cervello: scheduler, planner e pro… |
+| `FleetStateReader.cs` | 263 | `IFleetStateReader` | [AF2] Costruisce il in SOLA lettura: corsie (directory + quarantene + possesso campagne + stato vivo dei motori) e coda candidati (run completati + verdetti di validazione). Difensivo per corsia e per run: un guasto su una corsia la rende INTOCCABILE (mai "libera per errore"), un run illeggibile esce dalla coda con un log — l'orchestratore deve poter ragionare su ciò che sa, non inciampare su c… |
+| `GreyDeployer.cs` | 180 | `GreyChoice` | Un candidato grigio schierabile, come lo mostra il form. |
+
+## `ProcioneMGR/Services/Health/` — 1 file, 194 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `HostHeartbeats.cs` | 194 | `HeartbeatOptions` | [AF5.1] Configurazione dell'heartbeat incrociato. Default SPENTO: a config vuota nessun host scrive né sorveglia, comportamento identico a prima della fase (invariante di piattaforma). Sezione Heartbeat , hot-reload via IOptionsMonitor. |
+
+## `ProcioneMGR/Services/Indicators/` — 3 file, 640 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `ITechnicalIndicatorsService.cs` | 69 | `ITechnicalIndicatorsService` | Calcolo di indicatori tecnici lato server. Stateless -&gt; registrato come Singleton. NOTA SULLA FIRMA: lo spec chiedeva List&lt;decimal&gt; con null/NaN per i valori non calcolabili, ma decimal e' un value type non-nullable e non ha NaN. Si usa quindi List&lt;decimal?&gt; : i primi elementi (warm-up dell'indicatore) sono null e la lista risultante ha SEMPRE la stessa lunghezza dell'input, cosi' resta allinea… |
+| `IndicatorSeries.cs` | 40 | `IndicatorSeriesType` | — |
+| `TechnicalIndicatorsService.cs` | 531 | `TechnicalIndicatorsService` | Implementazione stateless degli indicatori tecnici. Tutti gli algoritmi sono O(n) (formula ricorsiva per le EMA, sliding window per SMA/deviazione standard). Il calcolo e' sincrono ma esposto come Task per uniformita' API; la cancellazione e' cooperativa (controllata periodicamente nei loop). |
+
+## `ProcioneMGR/Services/Ingestion/` — 10 file, 902 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `BarBuilder.cs` | 128 | `AggregatedBar` | Barra aggregata a soglia (volume o controvalore) costruita da candele temporali di base. |
+| `IMarketDataSyncService.cs` | 15 | `IMarketDataSyncService` | Sincronizza le serie della watchlist: calcola il delta (dall'ultima candela salvata fino a "ora") e lo ingerisce riusando . Usato sia dal worker schedulato sia dal pulsante "Sync now" della UI. |
+| `IOhlcvIngestionService.cs` | 26 | `IngestionProgress` | Avanzamento dell'ingestione, riportato alla UI/log. |
+| `IngestionServiceCollectionExtensions.cs` | 65 | `IngestionServiceCollectionExtensions` | Infrastruttura di ingestione OHLCV condivisa: client exchange (sorgente dei dati) + . Estratta da Program.cs per essere riusata verbatim dal servizio standalone ProcioneMGR.Ingestion (Fase 1 microservizi). NON registra nè il worker schedulato ( ): quella è la parte che il feature toggle MarketData:UseRemoteIngestion commuta tra implementazione locale e remota, quindi resta responsabilità dell'h… |
+| `MarketDataSyncService.cs` | 132 | `MarketDataSyncService` | Implementazione della sincronizzazione incrementale delle serie tracciate. |
+| `MarketDataSyncWorker.cs` | 78 | `MarketDataSyncWorker` | Worker schedulato: a intervalli regolari sincronizza tutte le serie abilitate della watchlist. Gira nel processo dell'app come . Configurazione (sezione "MarketData" in appsettings.json): - Enabled : true/false per accendere/spegnere il worker (default true) - SyncIntervalMinutes : intervallo tra i cicli (default 5) - DefaultBackfillDays : finestra di backfill alla prima sync di una serie (defa… |
+| `OhlcvIngestionService.cs` | 176 | `OhlcvIngestionService` | Implementazione dell'ingestione storica OHLCV. Strategia: - itera richiedendo all'exchange blocchi di candele (max consentito dal client), avanzando il cursore since finche' non si copre l'intervallo [from, to]; - rispetta i rate-limit con un tra una richiesta e l'altra; - persiste con UPSERT idempotente (vedi ): nessuna candela duplicata grazie all'indice univoco (Symbol, Timeframe, TimestampU… |
+| `RemoteMarketDataSyncService.cs` | 37 | `RemoteMarketDataSyncService` | Implementazione di che delega la sincronizzazione al microservizio remoto ProcioneMGR.Ingestion via HTTP (Fase 1 microservizi). Attiva nel monolite solo con MarketData:UseRemoteIngestion=true . Trasparente per i consumer (es. il pulsante "Sync now" in Watchlist.razor), che iniettano sempre l'interfaccia. |
+| `SeriesFreshness.cs` | 114 | `SeriesFreshness` | [B2] Regola UNICA per dire se una serie è aggiornata o FERMA. Nasce da una cecità del gate B2, trovata il 2026-07-28 guardando il database invece dei documenti. Il gate chiedeva «7 giorni senza buchi nelle candele», ma nessuno dei due strumenti che dovevano misurarlo sapeva vedere una serie che ha smesso di avanzare: - lo stato di sync scriveva OK: N candele guardando quante righe erano state p… |
+| `SeriesFreshnessWatchWorker.cs` | 131 | `SeriesFreshnessWatchWorker` | [E7] Guardia di freschezza delle serie: applica la regola UNICA di a tutte le serie abilitate della watchlist e NOTIFICA la TRANSIZIONE a ferma — una volta per serie, non una per giro. Perché esiste: B2.a ha costruito la regola, ma il suo esito viveva in un LogWarning del pod di ingestion e nel tool CLI coverage — MKR/USDT è stata ferma DIECI MESI con `/watchlist` che diceva «Abilitata». La lez… |
+
+## `ProcioneMGR/Services/Llm/` — 19 file, 3.623 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `AiKeyStore.cs` | 168 | `AiProviders` | Nomi canonici dei provider AI. Stringhe (non enum): un provider nuovo non deve toccare lo schema. |
+| `AnthropicLlmClient.cs` | 268 | `LlmOptions` | Opzioni del layer AI. Le API key NON sono qui: vivono cifrate a database (AiCredentials, gestite da /admin/ai-supervisor) con fallback alle variabili d'ambiente ( ANTHROPIC_API_KEY , NVIDIA_API_KEY ) — vedi . |
+| `AiCommittee.cs` | 213 | `CommitteeOptions` | [AF3] Opzioni del comitato, sezione Committee . Default SPENTO. parte VUOTA per la stessa lezione di : il binder di configurazione APPENDE gli elementi di un array alla lista già inizializzata — con un default popolato la lista raddoppierebbe a ogni salvataggio dal pannello. |
+| `ILlmClient.cs` | 18 | `ILlmClient` | Astrazione minimale su un LLM testuale. Esiste per un solo motivo: isolare l'SDK Anthropic dietro un'interfaccia, così è testabile con un fake e nessun test tocca la rete. Nessuna capacità oltre "prompt → testo": il layer AI è advisory puro. |
+| `LlmCallGuard.cs` | 323 | `LlmCallOutcome` | Esito di una chiamata Claude passata dal guard. |
+| `LlmClientResolver.cs` | 33 | `ILlmClientResolver` | Risolve un per NOME di provider — serve al secondo parere (Fase C), che deve parlare con un provider SPECIFICO e non con quello attivo del . Interfaccia minima al posto della DI keyed: un fake nei test è una lambda, e un provider nuovo è una riga qui accanto a quella in . |
+| `LlmSupervisorWorker.cs` | 122 | `LlmSupervisorWorker` | Worker che collega il layer AI al ciclo di ricerca SENZA accoppiarlo al motore: sonda periodicamente i completati privi di advisory AI e li fa supervisionare da . Decoupling deliberato — il PipelineEngine non conosce il layer AI, e questo worker non conosce trading/esecuzione: legge run e scrive artifact advisory, nient'altro (confine di sicurezza research→esecuzione, come per ). Inattivo per d… |
+| `LlmUsage.cs` | 385 | `LlmCallContext` | [AF1] Etichetta di percorso della chiamata LLM in corso, propagata per contesto asincrono: la conosce solo il (che la riceve come parametro), ma a consumarla è il CLIENT che serve la risposta — e fra i due c'è il failover del , quindi passarla per parametro significherebbe cambiare la firma di e ogni fake dei test. Un AsyncLocal attraversa la catena senza toccare nessuna firma. |
+| `ModelAutoSelector.cs` | 87 | `ModelAutoSelector` | Sceglie in automatico un modello di CHAT sensato dall'elenco che l'API restituisce per la chiave (richiesta del proprietario 2026-08-02: «i modelli vengano scaricati in automatico e uno venga scelto in automatico»). Funzione PURA: niente rete, niente stato — l'elenco arriva da e la scelta è riproducibile e testabile. Strategia: (1) si scartano gli id palesemente non-chat (embedding, tts, immagi… |
+| `DigestNarrator.cs` | 123 | `IDigestNarrator` | — |
+| `PostMortemAnalyzer.cs` | 125 | `PostMortemCauses` | [G4] Il MENÙ CHIUSO delle cause di un'operazione andata male. L'AI può scegliere solo qui dentro: fuori menù, JSON rotto, timeout o assenza ⇒ , esattamente come il comitato AF3 ricade sul suo default. |
+| `PostMortemService.cs` | 275 | `PostMortemOptions` | [G4] Opzioni del post-mortem, sezione PostMortem . Default SPENTO. |
+| `PostMortemWorker.cs` | 49 | `PostMortemWorker` | [G4] Il worker che scrive i post-mortem. Tick lento (l'analisi di un trade chiuso non ha fretta), spento per default, e mai bloccante: un errore si logga e si riprova al giro dopo. Vive nel guscio, come il resto del layer AI: legge trade chiusi e scrive righe di testo, non tocca il motore. |
+| `RejectionDigest.cs` | 190 | `RejectionCauses` | [G6] Le classi di bocciatura di un candidato, ricavate dal che il motore scrive. Sono ETICHETTE per raggruppare, non un giudizio nuovo: il verdetto resta quello del gate che ha respinto. |
+| `RejectionExplainService.cs` | 189 | `IRejectionExplainService` | — |
+| `RejectionNarrator.cs` | 224 | `RejectionNote` | Una nota in prosa riferita a UN candidato bocciato, identificato dalla sua chiave. |
+| `NvidiaLlmClient.cs` | 347 | `IModelCatalogProvider` | Chi sa elencare i modelli disponibili PER LA CHIAVE configurata. Interfaccia separata da di proposito: aggiungerlo lì costringerebbe ogni fake dei test a implementarlo, e non tutti i provider ce l'hanno. Il caso che l'ha resa necessaria (2026-08-02): Google ha ritirato gemini-2.5-flash per le chiavi nuove e perfino l'alias "-latest" puntava al modello morto — l'unico elenco affidabile è quello … |
+| `PipelineSupervisor.cs` | 445 | `LlmArtifactKinds` | Kind dell'artifact che memorizza l'advisory AI di un run. |
+| `SupervisorAdvisory.cs` | 39 | `SupervisorAdvisory` | Esito della supervisione AI di un run del pipeline: un parere LEGGIBILE per l'utente, più suggerimenti sui parametri di caccia e le decisioni che richiedono conferma umana. È solo advisory: non contiene azioni eseguibili, non avvia trading, non tocca SafetyChecker. Persistito come PipelineArtifact (Kind="LlmAdvisory") — nessuna nuova tabella. |
+
+## `ProcioneMGR/Services/ML/` — 37 file, 5.234 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `AttentionReturnPredictor.cs` | 559 | `AttentionReturnPredictor` | Predittore di rendimento basato su self-attention , in C# puro SENZA TorchSharp (bivio §1.4 risolto verso "attention a mano", coerente col precedente ). L'input è una finestra di T timestep × F fattori (vedi e ). Architettura minimale ma reale: X[T,F] → (standardizzazione) → embed lineare E=X·Wᵢₙ+bᵢₙ [T,D] → + positional encoding → self-attention a 1 testa con residuo (Q,K,V,O) → readout sull'U… |
+| `DatasetBuilder.cs` | 74 | `DatasetBuilder` | Implementazione di . Pura/stateless -&gt; registrabile Singleton. |
+| `GradientBoostingReturnPredictor.cs` | 36 | `GradientBoostingReturnPredictor` | Gradient Boosting (ML.NET LightGBM) per la previsione del rendimento forward — cap. 12. Nel libro è il modello con il miglior rapporto performance/sforzo sui dati tabellari di fattori. Come , basato su alberi: nessuna normalizzazione delle feature necessaria. |
+| `HierarchicalClustering.cs` | 105 | `HierarchicalClustering` | Implementazione di . Pura/stateless -&gt; registrabile Singleton. |
+| `IDatasetBuilder.cs` | 29 | `IDatasetBuilder` | Costruisce dataset supervisionati per i modelli di previsione dei rendimenti a partire da una libreria di fattori alpha e un orizzonte di rendimento forward (il target). |
+| `IHierarchicalClustering.cs` | 75 | `LinkageMethod` | Criterio di linkage per l'agglomerative clustering (formula di Lance-Williams). |
+| `IPurgedTimeSeriesCv.cs` | 22 | `IPurgedTimeSeriesCv` | Cross-validation temporale con purging ed embargo (López de Prado, "Advances in Financial Machine Learning"). Su serie storiche con label a rendimento forward, un semplice K-fold casuale causa leakage: un campione di training può avere un orizzonte di label che si sovrappone al periodo di test (o viceversa), gonfiando artificialmente le metriche. Assente in ML.NET di default. |
+| `IReturnPredictor.cs` | 38 | `IReturnPredictor` | Astrazione comune a tutti i modelli di previsione dei rendimenti (lineari, Random Forest, boosting, deep learning nelle fasi successive). Ogni implementazione incapsula un ITransformer di ML.NET addestrato su un con colonne Features/Label; è la via rapida (no IDataView) usata in hot-loop dal backtest ( MlStrategy ). |
+| `IRiskFactorPca.cs` | 17 | `IRiskFactorPca` | PCA sui rendimenti di più simboli per estrarre risk factor statistici (cap. 13): componenti principali ortogonali che spiegano la varianza comune del paniere, utili sia come feature de-correlate per i modelli sia per capire l'esposizione al rischio sistemico. |
+| `ISequencePredictor.cs` | 18 | `ISequencePredictor` | Marca un che ragiona su una SEQUENZA di timestep (non su un solo vettore di feature): il vettore che riceve in Fit / Predict è una finestra di passi × fattori, appiattita in ordine temporale (dal più vecchio al più recente). Serve a MlStrategy per costruire la finestra a inferenza senza stato interno (niente buffer fragili): la strategia vede questa interfaccia e impacchetta gli ultimi T vettor… |
+| `IcFeatureSelector.cs` | 93 | `IcFeatureSelectionConfig` | Configurazione della selezione di feature per Information Coefficient. |
+| `MetaLabeler.cs` | 229 | `PrimarySignal` | Decisione di lato del modello primario su una barra. |
+| `MetaLabelingAnalysisService.cs` | 207 | `MetaLabelingAnalysis` | Esito completo dell'analisi di meta-labeling su una strategia reale. |
+| `MetaModelTrainer.cs` | 178 | `MetaRow` | Riga di addestramento del meta-modello: feature, etichetta binaria, peso. |
+| `TripleBarrierLabeler.cs` | 222 | `TripleBarrierOutcome` | Quale barriera è stata toccata per prima. |
+| `LinearReturnPredictor.cs` | 20 | `LinearReturnPredictor` | Baseline lineare regolarizzata (ML.NET SDCA) per la previsione del rendimento forward. Prima implementazione di (cap. 7 del libro): interpretabile, veloce da addestrare, punto di riferimento prima dei modelli non lineari (Random Forest, boosting) delle fasi successive. |
+| `MlComparisonClient.cs` | 70 | `IMlComparisonClient` | Confronto OSSERVATIVO fra la predizione ML locale (già calcolata dal TradingEngine) e quella del servizio remoto procionemgr-ml (Fase 2a, dual-read). Non ritorna nulla al chiamante e non influenza mai una decisione: registra solo l'esito (metrica + log). Ogni errore/timeout del remoto è assorbito qui — mai propagato. |
+| `MlComparisonOptions.cs` | 20 | `MlComparisonOptions` | Opzioni del dual-read ML (Fase 2a, sezione config "Ml"). Il confronto col servizio remoto è puramente OSSERVATIVO: non influenza mai una decisione di trading. |
+| `MlLabService.cs` | 808 | `MlConfigSnapshot` | Fotografia completa del form di MlLab.razor — usata sia per i preset/memoria dell'ultima configurazione, sia come input dei metodi di orchestrazione (train/backtest/save). |
+| `MlModelLoader.cs` | 85 | `MlModelLoader` | Materializza un in una pronta all'uso (predittore deserializzato dal blob + ricostruiti dai fattori salvati). UNICO punto di verità del caricamento: lo usano sia il backtest (batch) sia il TradingEngine (streaming, Champion su lane Paper/Testnet), così un modello produce lo STESSO segnale nei due contesti — parità batch/stream per costruzione, nessuna logica duplicata che possa divergere. |
+| `MlModels.cs` | 71 | `FactorSpec` | Un fattore alpha con i suoi parametri, associato a un nome di feature stabile (usato nelle colonne del dataset e nella feature-importance dei modelli). Più parametrizzazioni dello stesso fattore (es. Momentum a lookback diversi) sono feature distinte. |
+| `MlStageMapper.cs` | 33 | `MlStageMapper` | Mappatura esplicita bidirezionale fra (dominio/DB) e (contratto gRPC). Switch, NON cast ordinale: un cast si romperebbe in silenzio se uno dei due enum venisse riordinato o esteso: qui invece un valore non gestito lancia rumorosamente (fail-loud), così una divergenza fra i due enum diventa un errore di compilazione/test invece di una predizione servita col modello sbagliato. |
+| `MlTargetKind.cs` | 82 | `MlTargetKind` | [1.V roadmap macchina-ricerca] Cosa predice il modello. Storicamente solo il rendimento forward; dopo 445.280 combinazioni direzionali a zero sopravvissuti, la mossa onesta è predire il RISCHIO: la volatilità è persistente (stesso fatto stilizzato dietro il GARCH già in piattaforma) ed è prevedibile anche quando la direzione non lo è. |
+| `MlpReturnPredictor.cs` | 298 | `MlpReturnPredictor` | Rete neurale feed-forward (MLP) per la previsione dei rendimenti — l'essenza del cap. 17 di ML4T (Jansen) in C# puro, SENZA TorchSharp: un solo strato nascosto con attivazione tanh, uscita lineare, addestramento con mini-batch gradient descent e L2 (weight decay). Scelte di progetto: - implementa direttamente (non RegressionPredictorBase , che incapsula un ITransformer ML.NET): Fit legge le rig… |
+| `PurgedTimeSeriesCv.cs` | 41 | `PurgedTimeSeriesCv` | Implementazione di . Stateless -&gt; registrabile Singleton. |
+| `RandomForestReturnPredictor.cs` | 32 | `RandomForestReturnPredictor` | Random Forest (ML.NET FastForest) per la previsione del rendimento forward — cap. 11. Non lineare, cattura interazioni fra fattori che il modello lineare non vede. Gli alberi sono invarianti alla scala delle feature: nessuna normalizzazione necessaria (a differenza di ). |
+| `RegressionPredictorBase.cs` | 180 | `PredictedReturn` | Colonna di output dei trainer di regressione ML.NET. |
+| `ReturnPredictorCatalog.cs` | 23 | `ReturnPredictorCatalog` | Crea i predittori di rendimento BASE per nome (Linear/RandomForest/GradientBoosting/Mlp). Centralizza lo switch che prima viveva duplicato in /ml, così sia la UI sia lo (che deve istanziare freschi i modelli base per l'OOF) usano la stessa fonte. Non include "Stacked" per costruzione: un ensemble di ensemble non ha senso qui e creerebbe ricorsione. |
+| `RiskFactorPca.cs` | 103 | `RiskFactorPca` | Implementazione di via eigen-decomposizione (MathNet.Numerics). DEVIAZIONE FLAGGATA rispetto al piano (che indicava ML.NET): usiamo MathNet.Numerics invece di mlContext.Transforms.ProjectToPrincipalComponents perché quest'ultimo non espone pubblicamente gli autovalori, necessari per calcolare la varianza spiegata per componente — un dato imprescindibile in finanza per capire quanto rischio comu… |
+| `RiskFactorPcaModels.cs` | 26 | `PrincipalComponent` | Una componente principale: quota di varianza spiegata, loading per simbolo, e la serie temporale del fattore. |
+| `SequenceWindowing.cs` | 83 | `SequenceWindowing` | Trasforma un dataset puntuale (una riga = i fattori di UNA candela, in ordine temporale) in un dataset a SEQUENZE per i modelli che ragionano su una finestra (es. ): la riga i diventa la concatenazione dei vettori di fattori delle candele [i−T+1 .. i], con label quella della candela i. Layout appiattito in ordine temporale (dal più vecchio al più recente), coerente con ciò che l'attention si as… |
+| `MlNetTreeExtractor.cs` | 197 | `MlNetTreeExtractor` | Estrae la struttura degli alberi da un ML.NET addestrato (FastForest o LightGBM) e la converte nella forma neutra , calcolando la copertura per nodo su un dataset di background. Restituisce null — non solleva — quando il modello non è ad alberi (lineare, MLP, attention, stacking): SHAP ad albero semplicemente non si applica, e il chiamante deve poter ripiegare sulla permutation importance senza… |
+| `ShapAnalysis.cs` | 177 | `ShapContextCell` | Una cella della matrice contesto × fattore: importanza media del fattore in quel contesto. |
+| `ShapTree.cs` | 140 | `ShapTree` | Un albero di regressione in forma neutra, con indicizzazione unificata nodi+foglie e la copertura per nodo calcolata da un dataset di background. |
+| `TreeShapExplainer.cs` | 280 | `ShapContribution` | Contributo di una singola feature a una singola predizione. |
+| `StackedReturnPredictor.cs` | 428 | `StackingMode` | Come combinare le predizioni dei modelli base in una singola predizione. |
+| `VolForecastEvaluator.cs` | 135 | `VolForecastEvaluation` | Esito del confronto out-of-sample fra la previsione di volatilità del modello e le due baseline senza ML: EWMA (RiskMetrics, λ=0,94) e naive (la vol realizzata delle ULTIME barre proiettata in avanti). QLIKE è la metrica principale — è la loss robusta standard per le previsioni di varianza (penalizza le sottostime, che per il risk management sono l'errore costoso); l'MSE sulla vol è il contorno… |
+
+## `ProcioneMGR/Services/MarketData/` — 9 file, 1.921 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `BinanceStreamMapper.cs` | 197 | `BinanceStreamMapper` | Dialetto degli stream pubblici Binance (combined streams). Due canali per sottoscrizione: - {sym}@bookTicker : best bid/ask ad ogni variazione — la fonte dei tick per le uscite protettive; - {sym}@kline_{tf} : candele, di cui si usa SOLO quella con k.x == true (chiusa). Le candele NON chiuse vengono scartate di proposito: una candela in formazione ha High/Low provvisori, e darla in pasto alle s… |
+| `BitgetStreamMapper.cs` | 129 | `BitgetStreamMapper` | Dialetto degli stream pubblici Bitget v2. SOLO IL CANALE ticker , deliberatamente. Il canale delle candele di Bitget non espone un flag "barra chiusa" come il k.x di Binance: pubblica ripetutamente la candela IN CORSO, e per dedurne la chiusura bisognerebbe aspettare la comparsa di quella successiva e considerare chiusa la precedente. È un'inferenza fragile — un buco di connessione o un riordin… |
+| `IExchangeStreamMapper.cs` | 43 | `IExchangeStreamMapper` | Traduce fra il modello interno del feed e il dialetto WebSocket di un exchange: come si compone l'URL, quali frame di sottoscrizione mandare dopo la connessione, come si legge un messaggio e come si tiene viva la connessione a livello applicativo. Solo MARKET DATA PUBBLICO: nessun mapper firma richieste né tocca credenziali. Da qui discende che il feed funziona anche dove il trading è precluso … |
+| `IWebSocketTransport.cs` | 111 | `IWebSocketTransport` | Canale WebSocket ridotto all'osso. Esiste come interfaccia per una ragione sola: rendere TESTABILE senza rete né server finto — i test iniettano un transport che consegna messaggi da una coda e simula disconnessioni. La logica difficile (riconnessione, backoff, staleness, resubscribe) sta nel feed, non qui. |
+| `LiquidationAccumulation.cs` | 127 | `LiquidationEvent` | Una liquidazione forzata: quando, che ticker, quale LATO è stato liquidato, quanto nozionale. |
+| `LiquidationSyncWorker.cs` | 270 | `LiquidationsOptions` | Configurazione dell'accumulo liquidazioni (sezione "Liquidations"). |
+| `RealtimeMarketDataModels.cs` | 137 | `StreamSubscription` | Una sottoscrizione al feed real-time: exchange + simbolo canonico ("BTC/USDT") + timeframe canonico ("5m") + tipo di mercato. Il timeframe serve solo allo stream delle candele: i tick di prezzo non ne hanno uno. |
+| `RealtimePriceWorker.cs` | 478 | `RealtimePriceWorker` | Orchestratore del feed real-time: UNO per flotta, non uno per corsia. Tiene una connessione per exchange, ricava le sottoscrizioni dalle corsie effettivamente in esecuzione, e instrada: - i TICK verso delle corsie che operano quel simbolo (solo uscite protettive: il motore non apre mai da un tick); - le CANDELE CHIUSE verso la tabella OHLCV e poi verso il motore, senza attendere il ciclo REST. … |
+| `WebSocketPriceFeed.cs` | 429 | `FeedHealth` | Stato osservabile di una connessione del feed, per UI, metriche e watchdog. |
+
+## `ProcioneMGR/Services/Microstructure/` — 6 file, 1.166 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `BinanceDumpDownloader.cs` | 177 | `DumpMarket` | Mercato del dump: i due domini hanno formati leggermente diversi (vedi BinanceDumpParser). |
+| `BinanceDumpParser.cs` | 201 | `BinanceDumpParser` | Legge i CSV dei dump Binance. Istanza per file (tiene i contatori di quel file). |
+| `IncrementalIcGate.cs` | 467 | `IcCandidate` | Un candidato da confrontare col proxy: valori allineati alle barre, NaN dove manca. |
+| `MicrostructureModels.cs` | 111 | `AggTrade` | Un trade aggregato del tape (una riga di aggTrades ): tutti gli scambi consecutivi allo stesso prezzo, dallo stesso lato, in un colpo solo. è la convenzione di Binance e va letta al contrario di come suona: se il COMPRATORE era il maker, allora l'aggressore — chi ha attraversato lo spread — era il venditore. Sbagliare questo segno capovolgerebbe l'intero order flow, ed è il primo errore che i t… |
+| `OrderFlowImbalance.cs` | 100 | `OrderFlowImbalance` | Order flow imbalance: la formula di Cont-Kukanov-Stoikov e la sua variante su bande di profondità. |
+| `TapeAggregator.cs` | 110 | `TapeAggregator` | Aggrega i trade del tape in barre di durata fissa su una griglia allineata all'epoch. |
+
+## `ProcioneMGR/Services/Monitoring/` — 10 file, 891 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `DriftMath.cs` | 56 | `DriftMath` | Utilità numeriche condivise dai detector di drift. Tutto in double (test statistici). |
+| `DriftModels.cs` | 108 | `DriftSeverity` | Gravità del drift rilevato su una feature. None &lt; Warning &lt; Alert. |
+| `FeatureDriftMonitor.cs` | 95 | `FeatureDriftMonitor` | Implementazione di . Ricostruisce i fattori del modello dal suo FactorsJson (stesso round-trip di SavedMlModel in /ml), calcola le serie sul periodo di training (reference, letto dal DB) e sulle candele recenti (current), e passa i due campioni a ogni detector. Il calcolo dei fattori rispetta l'invariante anti-look-ahead di (nessuna feature legge dati futuri). |
+| `FeatureDriftWorker.cs` | 188 | `DriftMonitorOptions` | Opzioni del (sezione config "Drift"). Default safe-off. |
+| `IFeatureDriftDetector.cs` | 23 | `IFeatureDriftDetector` | Rileva il drift statistico di una feature: quanto la distribuzione dei valori CORRENTI si è spostata rispetto a quella di RIFERIMENTO (tipicamente: finestra di training del modello). È un segnale anticipatore che AFFIANCA — non sostituisce — lo : quest'ultimo misura il PnL realizzato (il giudice finale), il drift misura se gli INPUT del modello sono cambiati prima ancora che il PnL ne risenta (… |
+| `IFeatureDriftMonitor.cs` | 18 | `IFeatureDriftMonitor` | Valuta il drift di TUTTE le feature di un : per ciascun fattore usato dal modello confronta la distribuzione nella finestra di training (reference) con quella nelle candele recenti (current), applicando ogni . Rif. docs/archive/ROADMAP-QLIB.md §1.5 . |
+| `KsDriftDetector.cs` | 49 | `KsDriftDetector` | Test di Kolmogorov-Smirnov a due campioni : la statistica D è la massima distanza fra le due funzioni di ripartizione empiriche (reference vs current). Il p-value asintotico dice quanto è improbabile osservare quella distanza se le due distribuzioni fossero identiche: p piccolo ⇒ drift. Nessuna assunzione di normalità (non parametrico). |
+| `PageHinkleyDetector.cs` | 45 | `PageHinkleyDetector` | Test di Page-Hinkley : change-point online su uno STREAM (non due campioni statici). A differenza di PSI/KS, che confrontano due distribuzioni globali, qui si scorre la serie corrente nell'ordine temporale e si accumula la deviazione persistente della media rispetto al riferimento — utile per cogliere uno spostamento GRADUALE del regime. I valori correnti sono standardizzati (z-score) sulla med… |
+| `PsiDriftDetector.cs` | 63 | `PsiDriftDetector` | Population Stability Index : quanto la distribuzione corrente si è spostata fra i bin definiti dai quantili della distribuzione di riferimento. PSI = Σ (a−e)·ln(a/e), con e/a = frazione attesa (reference) / effettiva (current) per bin. Convenzione: &lt;0.1 stabile, 0.1–0.25 spostamento moderato, &gt;0.25 significativo. |
+| `StrategyDecayMonitor.cs` | 246 | `IStrategyDecayMonitor` | Confronta la performance REALIZZATA (trade chiusi dal vivo, Paper/Testnet/Live) di una gamba dell'ensemble con quella ATTESA dal backtest/holdout che l'ha validata — "l'edge è morto?" come segnale misurabile invece che intuizione. Puro/deterministico: nessuna dipendenza da DB o orologio all'interno del calcolo (i trade e l'istante di analisi sono passati dal chiamante), per restare testabile in… |
+
+## `ProcioneMGR/Services/Notifications/` — 6 file, 593 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `DailyDigest.cs` | 250 | `DigestOptions` | [AF5.4] Il digest giornaliero, sezione Notifications:Digest . Default SPENTO. L'ora è quella LOCALE della macchina (il PC del proprietario): il digest serve a un umano che si sveglia, non a un cron UTC. |
+| `INotifier.cs` | 47 | `NotificationSeverity` | Gravità di una notifica (mappa su livello di log e icona del messaggio). |
+| `LoggingNotifier.cs` | 22 | `LoggingNotifier` | Provider di default: le notifiche finiscono nel log strutturato (nessuna dipendenza esterna). Utile anche come "prova generale" del canale prima di configurare Telegram. |
+| `NotificationDispatcher.cs` | 188 | `NotificationOutcome` | Esito di un tentativo di recapito. Serve alla diagnostica, non ai producer. |
+| `NotificationServiceCollectionExtensions.cs` | 31 | `NotificationServiceCollectionExtensions` | Composizione DI del canale di notifica (Fase 4, PRD Autonomia): condivisa dagli host che hanno producer (monolite; ProcioneMGR.Trading per il watchdog in modalità remota). TryAdd ovunque: i test possono sostituire il notifier registrando prima il proprio fake. |
+| `TelegramNotifier.cs` | 55 | `TelegramNotifier` | Provider Telegram (PRD Autonomia §7: pragmatico per un solo operatore — gratuito, push su mobile). Il token del bot NON sta mai in config/repo: SOLO dalla variabile d'ambiente (stesso patto di ANTHROPIC_API_KEY per il layer AI). La chat di destinazione ( ) non è un segreto e sta in config. |
+
+## `ProcioneMGR/Services/Observability/` — 3 file, 431 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `MetricsCollector.cs` | 228 | `MetricsCollector` | Collettore IN-PROCESSO dei contatori di : un del BCL che accumula i totali (per strumento + tag) e un riassunto degli istogrammi, così la dashboard può mostrarli SENZA un backend OpenTelemetry (che resta l'export opzionale/spento). I totali sono "dalla partenza del processo": si azzerano a un riavvio. Zero dipendenze esterne, thread-safe. [Fase 1] Gli istogrammi seguiti sono passati da uno a tr… |
+| `ObservabilityExtensions.cs` | 52 | `ObservabilityExtensions` | Wiring dell'export OpenTelemetry opt-in (flag Observability:Enabled , default OFF). Estratto da Program.cs per essere testabile in isolamento. Con il flag OFF non registra nulla (costo zero); con il flag ON esporta metriche del meter e log applicativi via OTLP verso il collector locale (infra/observability/docker-compose.yml). L'exporter OTLP è fire-and-forget con retry in background: nessun co… |
+| `ProcioneMetrics.cs` | 151 | `ProcioneMetrics` | Punto unico di strumentazione (Fase 5): un del BCL con i contatori/istogrammi degli eventi che contano per un sistema autonomo 24/7 — promozioni di corsia, drift, ritiri di modelli, run di pipeline, trade, esecuzioni. È basato SOLO su System.Diagnostics.Metrics (nessuna dipendenza esterna): l'export (OpenTelemetry/OTLP) è un layer opzionale sopra, wired in Program.cs e spento di default. Senza … |
+
+## `ProcioneMGR/Services/Optimization/` — 9 file, 2.604 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `BayesianOptimizationEngine.cs` | 205 | `BayesianOptions` | Iperparametri del surrogato Gaussian Process e dell'acquisizione. |
+| `BayesianSearch.cs` | 49 | `BayesianSearchResult` | Esito di una ricerca bayesiana: il punto migliore, il suo punteggio e lo storico completo. |
+| `ParameterSpace.cs` | 53 | `ParameterDimension` | Una dimensione dello spazio di ricerca: intervallo [Min,Max], eventualmente intero o a passo. |
+| `IOptimizationEngine.cs` | 20 | `IOptimizationEngine` | — |
+| `OptimizationEngine.cs` | 755 | `OptimizationEngine` | Ottimizzazione parametri via Grid Search + Walk-Forward Validation. Per ogni finestra walk-forward (train in-sample / test out-of-sample): - testa tutte le combinazioni di parametri IN PARALLELO (Parallel.ForEachAsync); - per ognuna esegue 2 backtest (in-sample e out-of-sample) su candele GIA' caricate (nessuna ricarica dal DB) e ne calcola lo Sharpe annualizzato; - sceglie i parametri migliori… |
+| `OptimizationModels.cs` | 228 | `OptimizationSelectionMetric` | Metrica con cui scegliere i parametri "migliori" di ogni finestra walk-forward. Default = InSampleSharpe (corretto: si seleziona sul train, si misura sul test). OutOfSampleSharpe seleziona sul test set: ottimistico/peeking, da usare con cautela. |
+| `OptimizationPageService.cs` | 538 | `OptRange` | Un range di ricerca del form (Min/Max/Step/Intero) con la sua etichetta di UI. |
+| `Statistics.cs` | 406 | `Statistics` | Statistiche per la valutazione delle strategie (Sharpe ratio annualizzato). |
+| `TradeStatistics.cs` | 350 | `TradeStatistics` | Performance report "alla Trombetta" (Strategie di trading con Python, cap. 6-7): metriche calcolate sulla LISTA DEI TRADE e sull'equity monetaria, complementari al che lavora sui rendimenti percentuali dell'equity curve. Include: Profit Factor, Average Trade, Gross Profit/Loss, media e massimo di guadagni e perdite (con data), Reward/Risk Ratio, Average Draw Down (esclusi gli zeri), rapporto Av… |
+
+## `ProcioneMGR/Services/PairsTrading/` — 7 file, 721 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `IPairsBacktestEngine.cs` | 19 | `IPairsBacktestEngine` | Motore di backtest DEDICATO al pairs trading (cap. 9): a differenza di Services.Backtesting.IBacktestEngine (single-symbol per progettazione), opera su DUE serie di candele contemporaneamente. Scelta architetturale deliberata: estendere il motore single-symbol esistente per gestire un numero variabile di simboli avrebbe richiesto toccare IStrategy , tutte le strategie esistenti e i chiamanti (O… |
+| `KalmanPairsSpreadAnalyzer.cs` | 118 | `KalmanPairsSpreadAnalyzer` | [C2 roadmap integrazione] Hedge ratio via filtro di Kalman : alternativa alla rolling OLS di , da confrontare in A/B sullo stesso walk-forward (la fase pairs di PlatformExpand) prima di qualunque adozione. Modello stato-spazio standard di letteratura (Montana 2009; Chan 2013): stato θ_t = [α_t, β_t]ᵀ, θ_t = θ_{t-1} + w_t, Cov(w) = Q = (δ/(1−δ))·R·I₂ osservazione log Y_t = α_t + β_t·log X_t + v_… |
+| `PairsBacktestEngine.cs` | 284 | `PairsBacktestEngine` | Implementazione di . Pipeline: 1. allinea le due serie di candele per timestamp; 2. calcola hedge ratio/spread/z-score in modo rolling e anti-look-ahead ( ); 3. itera candela per candela: \|z\| oltre EntryZScore apre lo spread (dollar-neutral, stesso notional sulle due gambe), \|z\| sotto ExitZScore chiude; 4. aggiorna l'equity curve mark-to-market ad ogni barra. Deterministico, nessuna dipendenza … |
+| `PairsBacktestModels.cs` | 119 | `PairsBacktestConfiguration` | — |
+| `PairsCandleAligner.cs` | 50 | `PairsCandleAligner` | Allinea due serie di candele per timestamp (intersezione): due simboli possono avere gap diversi (manutenzione exchange, listing in date diverse, ecc.), quindi non si può assumere che siano già sincronizzate indice-per-indice come nel motore single-symbol. |
+| `PairsSpreadSeries.cs` | 31 | `PairsSpreadSeries` | Operazioni condivise sulle serie di spread con warm-up (null iniziali). Estratte da quando è nato il secondo estimatore ( , C2): i due DEVONO standardizzare lo spread nello stesso identico modo, o l'A/B confronterebbe la definizione di z-score invece che l'estimatore dell'hedge ratio. |
+| `RollingPairsSpreadAnalyzer.cs` | 100 | `RollingPairsAnalysis` | Esito dell'analisi rolling dello spread: hedge ratio, spread e z-score, allineati per indice, con null durante il warm-up. |
+
+## `ProcioneMGR/Services/Pipeline/` — 28 file, 6.340 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `AutoBracket.cs` | 59 | `AutoBracket` | Bracket SL/TP data-driven per (symbol, timeframe), estratto da PipelineApplier perché ora ha DUE consumatori (l'applica della raccomandazione e lo schieramento dei candidati grigi) e la regola della piattaforma è una sola implementazione, nessuna deriva. Primario (R1.5): MAE/MFE sull'orizzonte di detenzione condizionato al regime di volatilità corrente ( ), media dei bracket long/short per un l… |
+| `CampaignEntities.cs` | 89 | `VettingCampaign` | Campagna di vaglio (Fase 1, PRD Autonomia Operativa §4): un elenco ORDINATO di configurazioni di caccia ( ) che il ruota da solo — "0 sopravvissuti" non è più un punto morto ma un input per la mossa successiva. La campagna decide COSA fare dopo un run; il motore pipeline resta intoccato (si aggiunge SOPRA, mai DENTRO). SAFETY: doppio gate — la campagna agisce solo se Campaign:Enabled (globale, … |
+| `CampaignOptions.cs` | 16 | `CampaignOptions` | Opzioni del Campaign Planner (Fase 1, PRD Autonomia Operativa §4), sezione Campaign . |
+| `CampaignPageService.cs` | 120 | `CampaignPageService` | Orchestrazione di Components/Pages/Campaign.razor (stesso pattern P1-5 delle altre pagine: la logica sta qui, testabile senza Blazor; il componente fa solo rendering). Registrato Scoped (un'istanza per circuito utente). |
+| `CampaignPlanner.cs` | 404 | `ICampaignPlanner` | Il Campaign Planner (Fase 1, PRD Autonomia Operativa §4): la politica di reazione agli esiti dei run. La pipeline conclude onestamente "0 sopravvissuti" e SI FERMA; nella sessione di esercizio 2026-07-18 la mossa successiva l'ha decisa ogni volta l'operatore. Questo servizio prende ESATTAMENTE quelle decisioni, sopra il motore (mai dentro): - 0 sopravvissuti → prossima config della rotazione, c… |
+| `CampaignPlannerWorker.cs` | 42 | `CampaignPlannerWorker` | Worker del Campaign Planner (Fase 1, PRD Autonomia): loop sottile sul col pattern PeriodicTimer degli altri worker. Il gate Campaign:Enabled è dentro (hot-reload): col default OFF questo worker gira a vuoto e la piattaforma si comporta esattamente come prima. |
+| `IPipelineEngine.cs` | 56 | `IPipelineEngine` | Orchestrates pipeline runs: validates the stage DAG, executes the enabled stages in order in the background, checkpoints the context to the DB after every stage, and exposes a live status for the UI. One run at a time (the underlying engines are heavy). |
+| `IPipelineStage.cs` | 51 | `IPipelineStage` | A composable phase of the autonomous pipeline. Stages are thin orchestrators over the existing platform services (they never re-implement them): each one reads its inputs from the , calls the underlying services, and writes its output back into the context for the following stages. Contract: - stateless: any per-run state lives in the context, so stages can be transient; - deterministic: same c… |
+| `PipelineApplier.cs` | 264 | `IPipelineApplier` | Deploys a onto the isolated trading lanes (0..LaneCount-1), with the exact validated per-leg parameters (from BestStopVariant ) plus a data-driven SL/TP bracket. Extracted verbatim from Pipeline.razor so the SAME apply path is used by both the manual "Applica al Trading" button and the automatic re-apply loop in — one implementation, no drift. SAFETY: this only writes ensemble CONFIGURATION (pe… |
+| `PipelineCandleCache.cs` | 35 | `PipelineCandleCache` | Per-run candle cache: every (symbol, timeframe, from, to) window is loaded from the DB at most once. Instantiated fresh for each run by the engine — the cache lifetime IS the run lifetime, so a resumed run rereads current DB data (which is what we want: candles are the source of truth, not part of the checkpoint). |
+| `PipelineDagValidator.cs` | 51 | `PipelineDagValidator` | Pure DAG validation of a stage list: every enabled stage's dependency groups must be satisfied by at least one enabled stage ordered BEFORE it. Static and side-effect free so it is directly unit-testable (the engine and the UI both delegate here). |
+| `PipelineEngine.cs` | 572 | `PipelineEngine` | Singleton run orchestrator. One run at a time (the underlying discovery/backtest engines are CPU-heavy); executes in the background on a dedicated scope, checkpoints the context to the DB after every stage, supports graceful pause (at stage boundaries), cancellation, and resume-from-checkpoint. Live progress is polled by the UI (2s timer, same pattern as /trading — Blazor Server already streams… |
+| `PipelineEntities.cs` | 107 | `PipelineConfiguration` | A saved, reusable pipeline configuration ("recipe"): universe, date ranges, and the ordered list of stages with their parameters. JSON columns keep the schema stable while stages and parameters evolve (same pattern as EnsembleState / SavedStrategy.ParametersJson). |
+| `PipelineModels.cs` | 639 | `SeriesSpec` | One (symbol, timeframe) entry of the pipeline universe. |
+| `PipelinePageService.cs` | 385 | `PipelineActionResult` | Esito di un'azione con messaggio per l'operatore. |
+| `PipelineRules.cs` | 90 | `PipelineRuleSet` | Deterministic decision rules used by the RecommendationStage (NO LLM: every conclusion is backed by verifiable numbers). Loaded from Config/pipeline_rules.json under the content root so the user can tune thresholds without touching code; falls back to the built-in defaults when the file is missing or malformed. |
+| `PipelineSchedulerWorker.cs` | 392 | `AutoReapplyOptions` | Opzioni della ri-applica automatica dell'ensemble (sezione di config AutoReapply ). |
+| `PipelineStageCatalog.cs` | 79 | `PipelineStageCatalog` | Catalog of the available pipeline stages. Stage classes are resolved via DI (they depend on platform services); the catalog holds the TYPE list, materializes prototypes once for metadata reads (Name/DisplayName/ParameterDefinitions/Dependencies are plain constants on every stage, safe to read after the construction scope is gone), and creates fresh per-run instances inside the engine's scope. |
+| `RegimeChangeDetector.cs` | 188 | `RegimeTriggerOptions` | Opzioni del trigger contestuale (Fase 2, PRD Autonomia §5), sezione RegimeTrigger . |
+| `RegimeChangeTriggerWorker.cs` | 83 | `RegimeChangeTriggerWorker` | Worker del trigger contestuale (Fase 2, PRD Autonomia §5). Il trigger NON lancia mai run direttamente: CHIEDE al di anticipare la prossima esecuzione ( — backoff bypassato, run marcato "Event" ⚡), con cooldown (default 6h) e nel pieno rispetto dello slot singolo del motore (già garantito da StartRunAsync che rifiuta se occupato). Gate a monte: senza Campaign:Enabled il check non parte nemmeno —… |
+| `RunApplyEvaluator.cs` | 171 | `IRunApplyEvaluator` | Valutazione "vale la pena schierare l'ensemble di questo run?" + eventuale applica, estratta VERBATIM da (Fase 1 del PRD Autonomia): la stessa identica catena — supervisore AI (solo veto) → confronto oggettivo con isteresi ( ) → — è ora usata sia dalla ri-applica automatica dello scheduler sia dal : una sola implementazione, nessuna deriva tra i due percorsi automatici. La decisione resta regis… |
+| `AnalysisStages.cs` | 475 | `FeatureEngineeringStage` | Stage 3 — evaluates the alpha-factor library (Information Coefficient) on the primary series over the SELECTION range only, and selects the top-K factors as ML features. |
+| `CreativeDiscoveryStage.cs` | 141 | `CreativeDiscoveryStage` | Stage 8-bis — CREATIVE discovery: instead of sweeping parameters of known strategies, the GENERATES brand-new strategy specs (composite signal rules, event triggers, regime maps), screens them on the selection range and confirms the best per series with a fixed-parameter walk-forward. Confirmed candidates are injected into exactly like classic discovery output, so the holdout gauntlet (validati… |
+| `DataStages.cs` | 199 | `DataIngestionStage` | Stage 1 — verifies OHLCV coverage for the whole universe over [SelectionFrom, HoldoutTo] and (optionally) ingests only the MISSING head/tail deltas via the existing idempotent ingestion service. Never re-downloads what the DB already has. |
+| `DecisionStages.cs` | 579 | `EnsembleAssemblyStage` | Stage 11 — assembles the final survivors into a weighted ensemble proposal. Weights come from HRP on the legs' selection-range equity returns (2+ legs), then get a regime bias from the pipeline rules (mean-reversion legs weigh more in sideways regimes, trend legs in trending ones) and are renormalized. |
+| `ModelStages.cs` | 788 | `MlModelTrainingStage` | Stage 7 — trains a return predictor on the SELECTION range (temporal train/test split with a purge gap of forwardHorizon rows at the boundary, so no test label overlaps the training window), persists it as a SavedMlModel and registers it as an "Ml" strategy candidate for the holdout validation. |
+| `NullTwinValidationStage.cs` | 139 | `NullTwinValidationStage` | Stage 10 (opt-in) — il giudice del gemello nullo sui SOPRAVVISSUTI all'holdout: ogni finalista viene ribattezzato su N mercati nulli ( : stessa volatilità, zero struttura direzionale) e sopravvive solo se il suo Sharpe holdout supera il quantile richiesto della distribuzione nulla. È il terzo giudice indipendente dopo Sharpe/trade e DSR/PBO — quello che nei tool CLI ha smascherato il falso posi… |
+| `PowerCheckStage.cs` | 126 | `PowerCheckStage` | [F4 PRD Valore] Check di potenza MinTRL (Bailey-López de Prado): PRIMA di spendere i backtest, dichiara quale Sharpe annualizzato può superare i gate su QUESTA finestra con QUESTI tentativi. Perché esiste: su 4 mesi di holdout un candidato con Sharpe ~1 non può passare il DSR per aritmetica — la piattaforma lo ha scoperto empiricamente («0 sopravvissuti» dopo ore di CPU, dieci volte). Questo st… |
+
+## `ProcioneMGR/Services/Portfolio/` — 6 file, 559 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `HierarchicalRiskParityOptimizer.cs` | 82 | `HierarchicalRiskParityOptimizer` | Hierarchical Risk Parity (López de Prado, cap. 16 di "Advances in Financial Machine Learning" — citato al cap. 5/13 del libro di Jansen). A differenza di Mean-Variance, non richiede l'inversione della matrice di covarianza (instabile quando gli asset sono molto correlati): raggruppa gli asset per similarità (clustering gerarchico sulla distanza di correlazione, riusando del cap. 13), poi alloca… |
+| `IPortfolioOptimizer.cs` | 75 | `MeanVarianceObjective` | Obiettivo dell'ottimizzazione Mean-Variance (Markowitz). |
+| `MeanVarianceOptimizer.cs` | 53 | `MeanVarianceOptimizer` | Ottimizzazione Mean-Variance di Markowitz (cap. 5): soluzione analitica (non QP iterativo) per due obiettivi classici, poi vincoli long-only/Min/Max applicati riusando l'algoritmo di EnsembleAllocator (coerenza con l'allocatore già esistente per le strategie): - MaxSharpe (portafoglio tangente): w ∝ Σ⁻¹(μ - r_f), la combinazione che massimizza lo Sharpe ratio senza vincoli di segno. - MinVarian… |
+| `PortfolioMath.cs` | 218 | `PortfolioMath` | Helper comuni agli allocatori: validazione input, matrice dei rendimenti, media/covarianza/volatilità. |
+| `ReturnMatrixBuilder.cs` | 94 | `AlignedReturnMatrix` | Matrice di rendimenti ALLINEATI per timestamp: tutte le serie hanno la stessa lunghezza e l'osservazione i-esima di ogni simbolo si riferisce allo stesso periodo. È il contratto d'ingresso di e . |
+| `RiskParityOptimizer.cs` | 37 | `RiskParityOptimizer` | Risk Parity (cap. 5). Due modalità ( ): - EqualRiskContribution (default): ERC ESATTO — ogni asset contribuisce IDENTICAMENTE alla varianza del portafoglio, tenendo conto delle correlazioni. Risolto con l'algoritmo di coordinate cyclical (Griveau-Billion et al. 2013) in , che è robusto e convergente; la covarianza è stimata con Ledoit-Wolf per correlazioni affidabili. - InverseVolatility : w_i … |
+
+## `ProcioneMGR/Services/Preferences/` — 1 file, 78 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `PageConfigStore.cs` | 78 | `IPageConfigStore` | Persistenza delle configurazioni di pagina per utente: preset con nome e "ultima configurazione usata" (nome vuoto, riscritta a ogni Run). Il JSON è opaco: lo schema lo definisce la pagina, il servizio si limita a upsert/lettura/lista/cancellazione. |
+
+## `ProcioneMGR/Services/Regime/` — 12 file, 2.088 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `IMarketFeatureExtractor.cs` | 28 | `IMarketFeatureExtractor` | Estrae le dalle candele OHLCV. Tutte le feature sono calcolate usando esclusivamente dati fino alla candela corrente (no look-ahead). |
+| `IRegimeDetector.cs` | 38 | `IRegimeDetector` | — |
+| `JumpModel.cs` | 288 | `JumpModelFit` | Esito di un fit del jump model: centroidi, percorso di stato e diagnostica. |
+| `LaneRegimeRouter.cs` | 265 | `RegimeRoutingRule` | Regola di instradamento: in questo regime operano SOLO queste strategie. |
+| `MarketBreadthCalculator.cs` | 76 | `IMarketBreadthCalculator` | [3.8a/4.9] Breadth interna del "mercato" che la piattaforma già possiede: a ogni barra, la frazione dei simboli /USDT tracciati la cui chiusura sta sopra la PROPRIA SMA50. È l'indicatore classico di partecipazione: un rally con breadth 0,9 è mosso da tutto il listino, uno con 0,4 da due titani — regimi diversi che le feature per-simbolo non distinguono. |
+| `MarketFeatureExtractor.cs` | 215 | `MarketFeatureExtractor` | Implementazione del feature extractor. ANTI-LOOK-AHEAD: per la candela all'indice i ogni feature usa SOLO valori a indice ≤ i (rendimenti, finestre rolling, regressione su [i-49..i], ecc.). Nessuna feature legge close[i+1] o dati futuri. La conseguenza verificabile: la feature alla candela i è identica sia che si calcoli sull'intera serie sia su una serie troncata dopo i. Le prime Warmup candel… |
+| `MarketFeatures.cs` | 171 | `MarketFeatures` | Features che caratterizzano il CONTESTO di mercato a una data candela. Tutte calcolabili in tempo reale usando SOLO dati fino alla candela corrente (nessun look-ahead). NON predicono il prezzo: descrivono il regime. |
+| `RegimeAssignment.cs` | 192 | `RegimeAssignment` | Funzioni pure per assegnare le candele ai regimi: nearest-centroid, smoothing a conferma di 3 candele (anti flip-flop), e Silhouette Score (qualità del clustering). |
+| `RegimeAugmentation.cs` | 76 | `RegimeAugmentation` | Arricchimento del vettore di feature con il REGIME di mercato corrente, codificato one-hot (follow-up "regime nel meta-learner dello stacking"). Il regime diventa K colonne one-hot APPESE al vettore di fattori esistente: nessuna modifica a IReturnPredictor né a StackedReturnPredictor.Predict (che si adattano alla dimensione del vettore), solo un vettore più largo — così ogni modello (base o sta… |
+| `RegimeDetector.cs` | 548 | `RegimeDetector` | Rilevamento dei regimi di mercato via K-means (Microsoft.ML). Singleton: il modello attivo è in cache e letto in modo thread-safe; l'addestramento è serializzato con un . I servizi scoped (BacktestEngine) sono risolti per-uso. DOPPIA NOZIONE DI REGIME (chiarimento — non è un bug): • QUESTO rilevatore (K-means multi-feature persistito) è la nozione "ricca": guida la pesatura regime-aware dell'en… |
+| `RegimeModels.cs` | 93 | `TrainingConfiguration` | — |
+| `RegimeRetrainingWorker.cs` | 98 | `RegimeRetrainingWorker` | Riallena periodicamente il modello di regime per la serie dell'ensemble (il mercato cambia). Attiva il nuovo modello SOLO se il Silhouette migliora di almeno +0.05, altrimenti lo scarta. Config: appsettings "MarketRegime:RetrainingIntervalDays" (default 7). |
+
+## `ProcioneMGR/Services/Registry/` — 1 file, 161 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `ModelRegistry.cs` | 161 | `ModelRegistryOptions` | Opzioni del registry (sezione config "Registry"). |
+
+## `ProcioneMGR/Services/Risk/` — 8 file, 1.514 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `BotPageService.cs` | 247 | `BotPageService` | [R3] Orchestrazione della Modalità Semplice ( Components/Pages/Bot.razor ). Stessa divisione di responsabilità di : qui vivono le chiamate ai servizi e lo stato che ne deriva, così la logica è testabile senza Blazor; il componente resta responsabile solo di rendering e ciclo di vita. LA MODALITÀ SEMPLICE È UNA VISTA, NON UN MOTORE PARALLELO. Opera su una corsia esistente attraverso gli stessi e… |
+| `CorrelatedExposureGuard.cs` | 244 | `CorrelatedExposureAssessment` | Esito della valutazione di esposizione correlata per una candidata apertura. |
+| `KellyCalculator.cs` | 228 | `KellyCalculator` | Criterio di Kelly per il position sizing (Jansen ML4T, cap. 5): la frazione di capitale da impegnare che massimizza la crescita logaritmica della ricchezza a lungo termine. - Caso binario (dai trade): f* = p - (1-p)/b, con p = probabilita' di vincita e b = payoff ratio (guadagno medio / perdita media). - Caso continuo (dai rendimenti, approssimazione normale): f* = mu / sigma^2; in alternativa … |
+| `LeverageAdvisor.cs` | 140 | `LeverageAdvisor` | Consulente per la leva: dati i trade di un backtest a leva 1, simula per bootstrap (ricampionamento con reimmissione, stile Montecarlo evoluta) migliaia di sequenze di trade a diversi livelli di leva e misura cio' che conta davvero per un capitale piccolo: - crescita mediana del capitale (non la media, gonfiata dalle code fortunate); - probabilita' di DIMEZZARE il capitale almeno una volta lung… |
+| `MarginMath.cs` | 45 | `MarginMath` | Matematica del margine isolato (leva/liquidazione), condivisa tra il motore di backtest ( BacktestEngine.Portfolio ) e il trading live a futures ( TradingEngine ), così il prezzo di liquidazione STIMATO in un contesto e quello nell'altro sono calcolati con la STESSA formula — nessun rischio che backtest e live disegnino un rischio diverso per lo stesso trade. Funzioni pure, nessuna dipendenza d… |
+| `MonteCarloAnalyzer.cs` | 210 | `MonteCarloAnalyzer` | Montecarlo Analysis "evoluta" (Trombetta, cap. 8): ricombina casualmente la lista dei trade per stimare la distribuzione dei draw down possibili, oltre a quello storico. Rispetto alla Montecarlo classica aggiunge tre leve: 1. costi extra per appesantire la curva (stress dei costi fissi/slippage); 2. rumore casuale proporzionale al singolo trade (generalizza i risultati); 3. ricombinazione di un… |
+| `PerformanceControlService.cs` | 212 | `PerformanceControlService` | Controllo dinamico del rischio (Trombetta, cap. 8): inibisce e riattiva una strategia in base allo stato di salute della sua equity line, pagando un "premio di assicurazione" in profitto in cambio di draw down piu' contenuti. Due modalita' implementate: - Performance Control (metrico): profitto a finestra scorrevole degli ultimi N trade; se scende sotto la soglia, i trade successivi vengono sal… |
+| `RiskProfile.cs` | 188 | `RiskProfile` | [R3] Profilo di rischio: l'UNICA scelta tecnica che la Modalità Semplice chiede all'utente, insieme al capitale. COSA UN PROFILO È: un insieme di VINCOLI — quanto capitale per posizione, quanta esposizione totale, quanta perdita si tollera, e soprattutto QUANTO SPESSO si opera. COSA UN PROFILO NON È: una scelta di strategia. Il PDF di partenza proponeva di mappare "aggressivo → scalping", "prud… |
+
+## `ProcioneMGR/Services/Security/` — 6 file, 501 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `AesGcmEncryptionService.cs` | 153 | `AesGcmEncryptionService` | Implementazione AES-256-GCM di . Formato di output (poi codificato base64): [1 byte versione][12 byte nonce][16 byte tag GCM][N byte ciphertext] Il nonce e' casuale per ogni cifratura (mai riusato con la stessa chiave), requisito di sicurezza fondamentale per GCM. La chiave master a 256 bit e' derivata dal valore di configurazione "Security:MasterKey": - se il valore e' base64 di esattamente 32… |
+| `DataProtectionSetup.cs` | 52 | `DataProtectionSetup` | Composizione di Data Protection, estratta da Program.cs per essere verificabile da test. Data Protection è ciò che firma e cifra i cookie di autenticazione. La sua discriminante applicativa decide quali chiavi vengono derivate: due processi con discriminanti diverse non possono leggere i cookie l'uno dell'altro. |
+| `EncryptedStringConverter.cs` | 18 | `EncryptedStringConverter` | ValueConverter EF Core che cifra una stringa quando viene scritta sul DB e la decifra quando viene letta. EF NON invoca il converter per i valori null, quindi le proprieta' nullable (es. Passphrase) sono gestite automaticamente. |
+| `ExchangeCredentialReader.cs` | 129 | `DecryptedExchangeCredential` | Credenziale exchange decifrata riga per riga. Se è false la riga esiste sul DB ma è cifrata con una master key DIVERSA da quella del processo corrente: i campi segreti sono null (mai plaintext parziale) e la UI deve mostrare il badge "reinserire le credenziali" invece di usarla. |
+| `IEncryptionService.cs` | 26 | `IEncryptionService` | Cifratura simmetrica autenticata per i segreti a riposo (API key / secret / passphrase degli exchange). L'implementazione usa AES-256-GCM. |
+| `MasterKeyProbe.cs` | 123 | `MasterKeyProbeResult` | Esito dell'ultimo probe della master key (Fase 3-C2). Null in = probe non ancora eseguito. |
+
+## `ProcioneMGR/Services/Sentiment/` — 21 file, 2.093 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `DelegatingSentimentScorer.cs` | 39 | `SentimentScorerProviders` | Nomi canonici degli scorer di sentiment. Stringhe (non enum): un provider nuovo non tocca lo schema di config. |
+| `HashingTextVectorizer.cs` | 88 | `HashingTextVectorizer` | Vettorizzatore testuale a feature hashing, PURO e DETERMINISTICO: minuscole → token alfanumerici (≥2 caratteri) → unigrammi + bigrammi → hash FNV-1a a 32 bit modulo la dimensione → conteggi, normalizzati L2. È il punto architetturale del pilota ONNX (PRD-ONNX-SENTIMENT-PILOT): la parte testuale resta codice C# CONDIVISO fra addestramento e inferenza — il modello ONNX riceve solo il vettore nume… |
+| `ISentimentScorer.cs` | 20 | `ISentimentScorer` | Assegna un punteggio di sentiment a un testo. Interfaccia pensata per essere intercambiabile: (lessicale, testabile senza alcuna chiave API), (LLM via provider attivo del layer AI) e (inferenza locale) — stesso contratto, i consumatori restano ignari (stesso principio di IReturnPredictor / IPortfolioOptimizer ). Il contratto è asincrono perché un'implementazione può fare I/O di rete (LLM). Chi … |
+| `KeywordSentimentScorer.cs` | 48 | `KeywordSentimentScorer` | Sentiment lessicale: conta parole positive/negative (word-boundary) nel testo e restituisce (positive-negative)/(positive+negative). Semplicistico ma reale e testabile SENZA alcuna chiave API — è il fallback sempre disponibile del layer sentiment: gli scorer che dipendono da un canale esterno ( ) ripiegano qui quando il canale manca. |
+| `LlmSentimentScorer.cs` | 189 | `LlmSentimentScorer` | basato sul layer LLM multi-provider (PRD-AI-MULTIPROVIDER Fase B): chiede al provider ATTIVO ( = DelegatingLlmClient) un punteggio in [-1,+1] per titolo+sommario. Ogni chiamata passa dal condiviso (path "sentiment", metriche separate): se il provider è giù il breaker del layer sospende anche questo percorso — coerente col principio "il breaker è del layer, non del provider". Mai un'eccezione ve… |
+| `BinanceFuturesSentimentClient.cs` | 151 | `BinanceFuturesSentimentClient` | Dati pubblici di posizionamento dai futures USDS-M di Binance — API senza chiave (limite IP 1000 req/5min; questa fonte ne usa ~5 per simbolo ogni tick da 30 min): global long/short account ratio, top-trader long/short position ratio, taker buy/sell volume ratio, open interest, funding rate. È POSIZIONAMENTO REALE sul venue dove la piattaforma trada: la fonte con il riscontro più solido della r… |
+| `FearGreedClient.cs` | 66 | `FearGreedClient` | Fear & Greed Index di alternative.me — API pubblica gratuita SENZA chiave (https://api.alternative.me/fng/), un punto al giorno 0 (extreme fear) - 100 (extreme greed). Fonte scelta dalla ricerca 2026-07: l'indice NON predice i ritorni giornalieri (reagisce ai prezzi), ma gli ESTREMI (≤20 / ≥80) hanno valore contrarian documentato su orizzonti multi-settimana — per questo alimenta i flag Extreme… |
+| `ISentimentMetricSource.cs` | 31 | `SentimentMetricSample` | Un punto di metrica prodotto da una fonte, pronto per SentimentMetricPoints . |
+| `SentimentMetricSyncService.cs` | 121 | `ISentimentMetricSyncService` | — |
+| `OnnxSentimentPilotService.cs` | 180 | `OnnxPilotTrainResult` | Esito dell'addestramento del pilota ONNX, con le misure che il pannello dichiara. |
+| `OnnxSentimentScorer.cs` | 196 | `OnnxSentimentScorer` | a inferenza LOCALE via ONNX Runtime (PRD-ONNX-SENTIMENT-PILOT, Livello 1): carica il modello .onnx del pilota (addestrato in ML.NET dentro l'app, esportato con ConvertToOnnx — filiera 100% C#, zero Python) e lo esegue in-process sulla CPU. Nessuna chiave API, nessun costo per chiamata, nessun rate limit: è il contraltare locale dello scorer LLM, dietro lo stesso contratto. La parte testuale (to… |
+| `SentimentAlphaFactor.cs` | 70 | `ScoredNewsItem` | Una notizia già classificata/scorata, pronta per essere allineata alle candele. |
+| `SentimentCompositeCalculator.cs` | 195 | `SentimentCompositeCalculator` | Calcolo PURO dello dai punti metrici e dai punteggi news: niente DB, niente clock implicito — completamente testabile. Regole: - z-score = (ultimo − media baseline) / σ baseline; con meno di osservazioni o σ=0 lo z è null (meglio nessun numero che un numero rumoroso); - il contributo di uno z al composite è z/2 clampato in [-1,+1] (z=±2, la soglia "estremo" di default, satura il contributo); - … |
+| `SentimentFeatureFactor.cs` | 40 | `SentimentFeatureFactor` | Il fattore "Sentiment" come feature ML di FABBRICA (Sentiment 2.0, opt-in): risolve da solo la dipendenza dalle notizie via e deriva il filtro simbolo dalle candele ("BTC/USDT" → "BTC"), poi delega alla logica rolling anti-look-ahead di (che resta la classe usata direttamente da /sentiment). Caveat FactorCache: la chiave di cache è nome+parametri+impronta candele, quindi una serie sentiment agg… |
+| `SentimentNewsProvider.cs` | 62 | `ISentimentNewsProvider` | Fornisce alle feature ML lo snapshot in-memory delle notizie scorate (l'input che richiede come dipendenza esterna). Singleton con snapshot volatile: Compute dei fattori resta sincrono e senza I/O; il refresh avviene dopo ogni sync delle news (worker, stage pipeline, bottone UI — tutti passano da AltDataSyncService). |
+| `SentimentOptions.cs` | 68 | `SentimentOptions` | Opzioni di Sentiment 2.0 (sezione Sentiment ): raccolta delle serie di market mood (Fear & Greed + derivati Binance, API pubbliche senza chiave), composite con z-score e retention. Hot-reload via IOptionsMonitor (editabile da /admin/autonomy); gli INTERVALLI del worker si leggono al boot (PeriodicTimer) e richiedono riavvio. |
+| `SentimentScorerComparisonService.cs` | 220 | `ScorerComparisonRequest` | Richiesta di confronto scorer (dal pannello in /sentiment). |
+| `SentimentSnapshot.cs` | 56 | `SentimentSnapshot` | Fotografia del "market mood" (Sentiment 2.0): composite per-mercato e per-simbolo con z-score vs baseline rolling e flag contrarian agli estremi. POCO con setter pubblici DI PROPOSITO: viaggia dentro AltDataOutput nel checkpoint serializzato del PipelineContext. Semantica: è il MOOD DELLA FOLLA in [-1,+1] (positivo = folla bullish); la lettura CONTRARIAN vive nei flag — un mood estremo è un ris… |
+| `SentimentSnapshotService.cs` | 90 | `SentimentSnapshotCache` | Ultimo snapshot calcolato, per UI/prompt/pipeline senza ricomputo. Singleton. |
+| `SentimentSourceHealthRegistry.cs` | 36 | `SourceHealth` | Fotografia della salute di una fonte dati (news o metriche) per la UI. |
+| `SentimentSyncWorker.cs` | 127 | `SentimentSyncWorker` | Worker di Sentiment 2.0: raccoglie le serie di market mood (ogni tick), sincronizza le notizie (a cadenza più lenta — supera il vecchio "solo on-demand" di /sentiment), ricalcola lo snapshot composite e applica la retention. Default ON (a differenza delle automazioni decisionali): sole GET pubbliche keyless a cadenza modesta, e le serie derivate di Binance esistono SOLO per 30 giorni — un worke… |
+
+## `ProcioneMGR/Services/TimeSeries/` — 8 file, 718 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `EngleGrangerCointegrationTest.cs` | 196 | `EngleGrangerCointegrationTest` | Implementazione di (Engle-Granger a due passi + ADF sui residui). P0-1: i valori critici sono quelli di MacKinnon (2010) specifici per la COINTEGRAZIONE (residuo di una regressione STIMATA), non i valori ADF standard (−2.86 al 5%). Questi ultimi sono troppo permissivi per uno spread stimato: accetterebbero troppe coppie NON cointegrate (falsi positivi → divergenze → perdite nel pairs trading). … |
+| `GarchFit.cs` | 67 | `GarchFit` | Risultato della stima MLE di un GARCH(1,1). |
+| `GarchModel.cs` | 119 | `GarchModel` | Implementazione di : stima per massima verosimiglianza via Nelder-Mead (derivative-free — la log-verosimiglianza del GARCH è ricorsiva, il gradiente analitico è complesso e facile da sbagliare). I tre parametri (ω, α, β) sono riparametrizzati in uno spazio libero ℝ³ tramite sigmoid/exp in modo che i vincoli (ω&gt;0, α≥0, β≥0, α+β&lt;1 — necessari per varianza positiva e stazionarietà) siano SEMPRE so… |
+| `HarRvForecaster.cs` | 159 | `HarRvForecaster` | [C3 roadmap integrazione] HAR-RV (Corsi 2009): previsione della varianza realizzata giornaliera con una OLS a 3 regressori — RV di ieri, RV media dell'ultima settimana (5 gg), RV media dell'ultimo mese (22 gg). L'idea è la "cascata eterogenea": operatori con orizzonti diversi reagiscono a volatilità misurate su scale diverse. Sui crypto la letteratura la dà migliore del GARCH(1,1) su QLIKE a 1-… |
+| `ICointegrationTest.cs` | 63 | `CointegrationResult` | Esito del test di cointegrazione di Engle-Granger fra due serie di prezzi, in LOG-livello. |
+| `IGarchModel.cs` | 35 | `GarchInnovation` | Distribuzione delle innovazioni standardizzate zₜ = εₜ/σₜ nel GARCH. |
+| `OlsRegression.cs` | 38 | `OlsResult` | Risultato di una regressione OLS: coefficienti, errori standard e residui. |
+| `PairsSpreadAnalyzer.cs` | 41 | `PairsSpreadAnalyzer` | Z-score rolling causale di uno spread (cap. 9): la base statistica del pairs trading. z alto -&gt; spread anomalo in eccesso (Y "caro" rispetto a X) -&gt; short dello spread; z basso -&gt; simmetrico. Il calcolo usa solo valori passati della finestra (causale, anti-look-ahead). Unico consumatore: , che ristima l'hedge ratio in walk-forward e riusa questa finestra sulla parte densa dello spread. Lo scree… |
+
+## `ProcioneMGR/Services/Trading/` — 62 file, 9.465 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `LoggingBehavior.cs` | 30 | `LoggingBehavior` | Punto unico di logging per ogni comando/query di trading (Fase 1, PRD-CONSOLIDAMENTO- ARCHITETTURA.md §4.5): sostituisce, mano a mano che i verbi migrano a Mediator, le chiamate logger.LogInformation / LogWarning oggi sparse nei singoli metodi di . |
+| `ClosePositionCommand.cs` | 15 | `ClosePositionCommand` | — |
+| `ConfirmOrderCommand.cs` | 15 | `ConfirmOrderCommand` | — |
+| `EmergencyStopCommand.cs` | 15 | `EmergencyStopCommand` | — |
+| `RejectOrderCommand.cs` | 15 | `RejectOrderCommand` | — |
+| `SetStopLossTakeProfitCommand.cs` | 21 | `SetStopLossTakeProfitCommand` | — |
+| `StartLaneCommand.cs` | 15 | `StartLaneCommand` | — |
+| `StopLaneCommand.cs` | 15 | `StopLaneCommand` | — |
+| `DecimalValueMapper.cs` | 77 | `DecimalValueMapper` | Conversione fra di dominio e il wrapper di common.proto (convenzione google.type.Decimal-like: value = units + nanos/1e9, con nanos dello stesso segno di units). Esiste per non spargere aritmetica su units/nanos nei mapper: sbagliare il segno dei nanos su un PnL negativo darebbe un errore di 2× il valore, silenzioso. LIMITE NOTO — la rappresentazione tiene 9 cifre decimali; ne tiene fino a 28. … |
+| `EngineConfigSections.cs` | 122 | `EngineConfigSections` | L'elenco CHIUSO delle sezioni di configurazione che il guscio può leggere e riscrivere sul motore via gRPC ( GetEngineConfig / SetEngineConfig ). Questa classe è il confine di sicurezza di quel canale, e vive in un file suo perché sia difficile allargarla per distrazione. SetEngineConfig scrive su un processo che firma ordini veri: senza un elenco chiuso sarebbe un'API di configurazione generic… |
+| `EngineConfigService.cs` | 284 | `EngineConfigSectionView` | Una sezione di configurazione del motore, come il motore la vede adesso. |
+| `EngineConfigStore.cs` | 268 | `IEngineConfigStore` | Da dove arrivano — e dove finiscono — le sezioni di configurazione OSPITATE DAL MOTORE. Stesso patto di IMarketDataSyncService : il pannello inietta l'interfaccia e ignora quale implementazione sia attiva. Col motore in-process si scrive il file di questo processo, che è anche quello che il motore legge; col motore remoto si parla con lui via gRPC, perché il suo file non è il nostro — è la lezi… |
+| `ExecutionJobModels.cs` | 99 | `ExecutionJob` | Un piano di esecuzione live di un'apertura di posizione, distribuita in fette nel tempo reale (TWAP/VWAP/Iceberg) su Testnet/Live (rif. docs/archive/ROADMAP-QLIB.md §1.2 ). Una riga per corsia, persistita così che un piano sopravviva a un riavvio del processo e sia ispezionabile in UI. Le fette vivono in (blob, stesso pattern di PipelineRun.StageSummariesJson ): poche fette per job, pochi job a… |
+| `ExecutionWorker.cs` | 49 | `ExecutionWorker` | Avanza nel tempo reale le fette dei piani di esecuzione (TWAP/VWAP/Iceberg) di UNA corsia: ad ogni tick chiede al motore di piazzare le fette dovute. Uno per corsia (registrato nel loop per-corsia di Program.cs, stesso pattern di ). Rif. ROADMAP-QLIB §1.2. Default safe-off: se è false il tick è un no-op. Lo switch è riletto AD OGNI tick (IOptionsMonitor, hot-reload) — dev'essere spegnibile senz… |
+| `ITradingEngine.cs` | 69 | `ITradingEngine` | — |
+| `AutoStopApplier.cs` | 38 | `AutoStopApplier` | Applica automaticamente stop-loss/take-profit/trailing validati nel backtest alla posizione appena aperta — Intervento B, Fase 1 (PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.5). Estratto da senza alcun cambio di comportamento: pura funzione di calcolo, nessuna dipendenza da I/O. Gira SOLO alla creazione della posizione: nessun altro punto del motore rimette mano a questi valori, quindi una modifica m… |
+| `BracketOrderManager.cs` | 87 | `BracketOrderManager` | Piazzamento/cancellazione degli ordini trigger resting (stop-loss/take-profit lato exchange) sui Futures — Intervento B, Fase 1 (PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.5). Estratto da senza alcun cambio di comportamento: stesse chiamate, stesso ordine, stessa gestione degli errori (mai bloccante — ogni fallimento resta solo loggato, gli stop software restano la fonte di verità). Riceve / come de… |
+| `ExecutionQuality.cs` | 61 | `ExecutionQuality` | [Fase 1 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Qualità di esecuzione degli ordini di corsia. Fino a questa fase la piattaforma misurava l'implementation shortfall solo sugli ordini eseguiti a fette (TWAP/VWAP/Iceberg), dove ExecutionJob.ArrivalPrice era già fissato a t0. Gli ordini di corsia normali — cioè la stragrande maggioranza — catturavano il prezzo di fill ma lo usavano solta… |
+| `ExecutionSlicePlanner.cs` | 124 | `ExecutionSlicePlanner` | Decide fra apertura IMMEDIATA ed esecuzione a fette (TWAP/VWAP/Iceberg) — Intervento B, Fase 1 (PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.5, rif. ROADMAP-QLIB §1.2). Estratto da senza alcun cambio di comportamento: stesso pre-check aggregato sulla quantità PIENA (altrimenti MaxPositionSizePercent sarebbe bypassabile fetta per fetta), stesso calcolo di finestra/numero di fette, stessa prima fetta im… |
+| `FillSanityCheck.cs` | 57 | `FillSanityCheck` | Sanity check sul fill riportato dall'exchange — bug B1 (docs/TEST-UI-2026-07-18.md): il testnet ha risposto "Filled" con quantità cumulative (100x+) e prezzo 0, e il motore le ha adottate così com'erano corrompendo capitale e PnL (-1,8M su 10k). Il SafetyChecker guarda l'ordine PRIMA dell'invio: questo è il gemello sul RITORNO — il fill è verificato contro la quantità RICHIESTA (tolleranza ) e … |
+| `FuturesPositionReconciler.cs` | 80 | `FuturesPositionReconciler` | Ogni candela (solo Futures, Testnet/Live), verifica sull'exchange che le posizioni locali siano ancora aperte — Intervento B, Fase 1 (PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.5). Estratto da senza alcun cambio di comportamento. L'exchange può liquidare/ chiudere una posizione indipendentemente dal ciclo del motore: se risulta flat lato exchange ma aperta localmente, la chiudiamo qui con il miglior… |
+| `OrderReconciler.cs` | 85 | `ReconcileStatus` | — |
+| `PositionCloser.cs` | 367 | `PositionCloser` | Chiusura di posizioni Spot e Futures — Intervento B, Fase 1 (PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.5). Estratto da senza alcun cambio di comportamento: stesse chiamate exchange, stessa gestione della riconciliazione di rete incerta, stesso calcolo di PnL/ capitale disponibile. Riceve e come riferimenti diretti (non copie): le mutazioni (AvailableCapital, RealizedPnl, DailyPnl, rimozione da posi… |
+| `PositionOpener.cs` | 413 | `PositionOpener` | Apertura di posizioni Spot e Futures — Intervento B, Fase 1 (PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.5). Estratto da senza alcun cambio di comportamento: stessa gestione della riconciliazione di rete incerta, stesso calcolo margine/liquidazione sui Futures, stessa fusione via media ponderata quando mergeInto non è null (fetta 2..K di un ExecutionJob). Riceve / / come riferimenti diretti: le mutaz… |
+| `ProtectiveExitEvaluator.cs` | 134 | `ProtectiveExitKind` | Tipo di uscita protettiva scattata su una posizione. |
+| `SignalOrderBuilder.cs` | 116 | `SignalOrderBuilder` | Trasforma un segnale di strategia in un ordine dimensionato — Intervento B, Fase 1 (PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.5). Estratto da senza alcun cambio di comportamento: stesso guard anti-short-su-spot-reale, stesso dimensionamento (margine isolato sui Futures, nozionale pieno sullo Spot), stesso arrotondamento al LOT_SIZE reale (Testnet/Live) o a precisione fissa (Paper), stessa coda di c… |
+| `TradingPersistence.cs` | 130 | `TradingPersistence` | Le operazioni di persistenza DB usate lungo tutta la cascata privata di — Intervento B, Fase 1 (PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.5). Estratte senza alcun cambio di comportamento: stesse query, stesso ordine, stesse colonne aggiornate. Ogni collaboratore estratto dalla stessa cascata ( , gli esecutori Spot/Futures, il chiusore posizioni) riceve un'istanza di questa classe invece di ripetere… |
+| `VolatilityScaler.cs` | 105 | `VolatilityScaler` | Dosaggio della posizione sulla volatilità realizzata: quando il mercato si agita si espone meno capitale, quando si calma se ne espone di più. Onestà sull'evidenza. Nasce da un risultato che poi NON ha replicato: su un paniere di 24 monete portava lo Sharpe da 0,12 a 0,43 (a parità di esposizione media), ma su un insieme diverso di 12 simboli lo peggiora (0,57 contro 0,79) e su singolo simbolo … |
+| `LaneCountCoherenceProbe.cs` | 179 | `LaneCountCoherenceResult` | Esito del confronto fra il numero di corsie del guscio e quello del motore remoto. |
+| `LaneDirectory.cs` | 83 | `LaneSummary` | Riassunto di una corsia: quel tanto che basta per sceglierla senza doverla aprire. |
+| `LaneEpisodes.cs` | 205 | `LaneEpisodeSource` | Da dove viene ciò che si sa di un episodio. La distinzione non è pedanteria: gli episodi PRIMA del 2026-08-06 hanno una voce di `StartEngine` che non registrava simbolo né strategie, quindi il simbolo si ricava dagli ordini stessi e le strategie non si sanno. Dirlo è la differenza fra un'informazione e una ricostruzione. |
+| `LaneExecutionLease.cs` | 109 | `ILaneLease` | [B0 PRD core-caldo] Lease di ESECUZIONE per corsia: advisory lock Postgres a livello di sessione. "Mai due esecutori sulla stessa corsia" era retto dalla registrazione condizionale (vedi ) più la disciplina di deploy — il Deployment remoto non deve mai essere vivo col toggle a false. Il lease trasforma quel patto in invariante applicata dal DATABASE, che è l'unica cosa che i due processi condiv… |
+| `LaneInvariantChecker.cs` | 64 | `LaneInvariantChecker` | Valutazione PURA degli invarianti contabili di una corsia (Fase 0-A3): stato + posizioni → elenco di violazioni leggibili. Separata dal per essere testabile senza database né motore (stesso criterio di FillSanityCheck per il bug B1). |
+| `LaneInvariantOptions.cs` | 26 | `LaneInvariantOptions` | Soglie del watchdog di invarianti contabili per corsia (Fase 0-A3, PRD Autonomia Operativa), sezione Trading:LaneInvariants . Le soglie sono LASCHE apposta: il watchdog non duplica il pre-ordine (che resta il freno fine), è un tripwire per stati contabili ASSURDI che nessun percorso legittimo può produrre — come il caso reale della corsia 2 (PnL -1,8M su capitale 10k con leva 2). Hot-reload via… |
+| `LaneInvariantWatchdog.cs` | 265 | `LaneInvariantWatchdog` | Watchdog degli invarianti contabili per corsia (Fase 0-A3, PRD Autonomia Operativa §3). Motivazione empirica: nella sessione di esercizio 2026-07-18 la corsia 2 Testnet è rimasta a PnL -1.817.925 su capitale 10.000 per ORE senza che nessun automatismo se ne accorgesse — il fill sanity check (A1) impedisce che si ripeta per QUELLA via, questo watchdog è la rete di sicurezza per qualunque via fut… |
+| `LanePromoter.cs` | 72 | `ILanePromoter` | Applies a lane mode change (Paper↔Testnet) as a stop→restart of the lane's keyed trading engine, and records a user-visible audit entry. This is the "action" half of the promotion feature (decisions live in ). SAFETY (defense in depth): this method THROWS if asked to switch a lane to — no automated path may ever put a lane into Live. Switching to Testnet uses the already-configured Testnet cred… |
+| `LaneQuarantineStore.cs` | 103 | `ILaneQuarantineStore` | Accesso alla quarantena corsie (Fase 0-A3): usato dal (scrittura), dalla pagina /trading (lettura + rimozione Admin) e indirettamente da TradingEngine.StartAsync (che però legge la tabella direttamente via dbFactory, senza dipendenza in più). L'audit (LaneQuarantined / LaneQuarantineCleared) vive QUI, così nessun chiamante può quarantenare/liberare una corsia senza lasciare traccia. |
+| `LaneSafetyMonitor.cs` | 70 | `ILaneRiskProfileSink` | Riceve il profilo di rischio della corsia. Separato dal monitor per non costringere chi lo imposta (il all'avvio) a conoscere l'implementazione concreta. |
+| `LiveExecutionOptions.cs` | 22 | `LiveExecutionOptions` | Opzioni dell'esecuzione live "a fette" (TWAP/VWAP/Iceberg su Testnet/Live). Sezione config Trading:LiveExecution . Letta via (hot-reload): è un interruttore di sicurezza, deve poter essere spento senza riavviare l'app. Default safe-off, come ogni automazione della piattaforma. |
+| `PromotionEvaluator.cs` | 273 | `PromotionEvaluatorOptions` | Soglie della promozione/retrocessione automatica delle corsie (sezione di config PromotionEvaluator ). |
+| `PromotionWorker.cs` | 111 | `PromotionWorker` | Rivaluta periodicamente (default ogni 6 ore) le corsie di trading e, se abilitato, promuove automaticamente a Testnet quelle che hanno performato bene abbastanza a lungo — e retrocede a Paper quelle Testnet il cui edge è svanito. La promozione è una decisione importante: cadenza oraria bassa apposta (reagisce in meno di un giorno, non ogni minuto). SAFETY: promuove/retrocede solo tra Paper e Te… |
+| `ProtectiveExitAudit.cs` | 104 | `ProtectiveExitAnomaly` | Una protezione che risulta toccata da barre GIÀ CHIUSE mentre la posizione è ancora aperta. Non è una previsione né una stima: è un confronto fra due fatti registrati. |
+| `ProtectiveExitDiagnosticsService.cs` | 248 | `ProtectiveExitDiagnosticsService` | [B3] Le tre cose che il 2026-07-28 sono state costruite e lasciate senza nessuno che le guardasse: i confronti d'ombra fra tick e candela, le posizioni rimaste su corsie che non esistono più, e la misura del ritardo delle uscite protettive. Il difetto era lo stesso di C4 prima del suo consumo: codice corretto, testato, e **mai chiamato da niente** — verde a livello di classe, inesistente a live… |
+| `ProtectiveExitLagAnalyzer.cs` | 410 | `ProtectiveExitLagAnalyzer` | [B3] Misura del RITARDO delle uscite protettive: quanto tempo, e quanto prezzo, separa il momento in cui il mercato tocca il livello di stop dal momento in cui il percorso a candele se ne accorge — cioè la chiusura della barra di corsia. Nasce da un difetto del gate B3. Il gate chiede «confronto tick-vs-candela nelle metriche», ma in assetto osservativo ( DriveProtectiveExits=false ) i tick ven… |
+| `ProtectiveExitShadow.cs` | 143 | `ProtectiveExitShadow` | [B3, sentinella] Un confronto COMPLETATO fra il momento in cui il feed real-time avrebbe fatto scattare un'uscita protettiva e il momento in cui il percorso a candele l'ha fatta scattare davvero. Una riga per confronto, scritta solo quando entrambi i lati esistono. Non serve a produrre una media: su tre corsie che fanno una dozzina di trade al mese le osservazioni sono troppo poche perché una m… |
+| `GetLaneStatusQuery.cs` | 12 | `GetLaneStatusQuery` | — |
+| `GetOpenPositionsQuery.cs` | 12 | `GetOpenPositionsQuery` | — |
+| `GetOrderHistoryQuery.cs` | 12 | `GetOrderHistoryQuery` | — |
+| `GetPendingOrdersQuery.cs` | 12 | `GetPendingOrdersQuery` | — |
+| `GetPerformanceQuery.cs` | 12 | `GetPerformanceQuery` | — |
+| `RemoteTradingEngineClient.cs` | 180 | `RemoteTradingEngineClient` | Implementazione di che delega l'esecuzione al microservizio procionemgr-trading via gRPC (Fase 2b microservizi). Attiva nel monolite solo con Trading:UseRemoteTrading=true , dove SOSTITUISCE il locale (mai affiancarlo: due motori sulla stessa corsia aprirebbero ordini in doppio). Implementa l'interfaccia INTERA di proposito: i consumer — Trading.razor ma soprattutto gli automatismi / / , che pr… |
+| `SafetyChecker.cs` | 122 | `SafetyCheckResult` | — |
+| `SafetyConfiguration.cs` | 130 | `SafetyConfiguration` | Limiti di sicurezza del trading. Bindato da appsettings.json sezione "Trading:Safety". I default sono CONSERVATIVI: in caso di config mancante il sistema resta prudente. |
+| `TradingContractMapper.cs` | 286 | `TradingContractMapper` | Mappatura fra i modelli di dominio del trading e i messaggi di trading.proto (Fase 2b). Usata da ENTRAMBI i lati del filo — TradingCommandServiceImpl (servizio) e (monolite) — così la proiezione è definita una volta sola e non può divergere fra chi scrive e chi legge. Gli enum sono mappati a switch esaustivo, mai per cast ordinale (stesso patto di MlStageMapper in Fase 2a): TradingMode.Paper va… |
+| `TradingEngine.cs` | 1668 | `TradingEngine` | Trading engine (Fase 8) per UNA corsia di trading isolata ( ). Implementa la modalità PAPER (simulazione con dati reali, nessun soldo vero). Registrato come Keyed Singleton (una istanza per corsia — vedi Program.cs) invece di un singolo Singleton globale come prima del supporto multi-coppia: thread-safe via come prima, ma ora ogni istanza filtra/imposta (e l'equivalente su Order/TradeRecord/Tra… |
+| `TradingEntities.cs` | 95 | `TradingEngineState` | Stato persistito del trading engine (riga singola). Garantisce idempotenza: al restart il sistema ricostruisce lo stato (running/mode/capitale/emergency) dal DB. |
+| `TradingLanes.cs` | 87 | `TradingLanes` | Numero di corsie di trading isolate (LaneId 0..Count-1). UNICA fonte di verità: prima il "3" era ripetuto a mano in Program.cs (registrazioni keyed), Trading.razor, Ensemble.razor e PromotionEvaluator — aumentare le corsie toccandone solo alcuni avrebbe prodotto corsie invisibili in UI o mai valutate dalla promozione. Configurabile da Trading:LaneCount (default ), letto una volta sola all'avvio… |
+| `TradingModels.cs` | 280 | `TradingMode` | — |
+| `TradingOrderQueries.cs` | 40 | `TradingOrderQueries` | Composizione delle query di LETTURA sugli ordini, condivisa fra e (che le esegue in bypass di gRPC: sono query pure su Postgres, senza stato in-memory del motore). Esiste per eliminare una deriva alla radice: in Fase 2b il client remoto portava una COPIA riga-per-riga di queste query, tenuta allineata da un commento ("se cambia là, aggiorna qua") e da test head-to-head. Ma quei test confrontano… |
+| `TradingPageService.cs` | 571 | `TradingPageService` | Orchestrazione di Components/Pages/Trading.razor (P1-5, audit consolidamento 2026-07-17): tutte le chiamate a / / / e lo stato che ne deriva, così la logica di orchestrazione ha test unitari indipendenti da Blazor (vedi TradingPageServiceTests ). Il componente resta responsabile solo di ciò che è intrinsecamente Blazor: rendering, ciclo di vita ( OnInitializedAsync / Dispose , PollingTimer ), S… |
+| `TradingServiceCollectionExtensions.cs` | 360 | `TradingServiceCollectionExtensions` | Composizione DI delle corsie di trading (LaneId 0.. -1). Estratta da Program.cs per essere riusata verbatim dal servizio standalone ProcioneMGR.Trading (Fase 2b microservizi). È QUI che vive la garanzia di sicurezza centrale della Fase 2b: il vincolo "mai due esecuzioni simultanee sulla stessa corsia" non è retto da un lock distribuito ma dalla REGISTRAZIONE CONDIZIONALE — con Trading:UseRemote… |
+| `TradingWorker.cs` | 193 | `TradingWorker` | Guida il trading engine alimentandolo con le candele. Quando l'engine viene avviato (nuova sessione), riproduce progressivamente le ultime ReplayDays giornate di dati storici (a piccoli batch per tick) così l'attività è osservabile in tempo reale nella UI; una volta raggiunto il presente, elabora le nuove candele man mano che arrivano dal MarketDataSyncWorker. |
+
+## `ProcioneMGR/Services/Validation/` — 10 file, 1.154 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `BacktestOverfitting.cs` | 103 | `PboResult` | Esito del calcolo del PBO: la probabilità e le diagnostiche per pannello/UI. |
+| `CombinatorialPurgedCv.cs` | 106 | `CpcvSplit` | Uno split combinatorio: un sottoinsieme di gruppi usati come test, il resto come train, con le bande di purge/embargo già rimosse dal train. Analogo combinatorio di ML.CvSplit , con in più l'indice dei gruppi di test scelti (per tracciare i "percorsi" backtestabili). |
+| `DeflatedSharpeRatio.cs` | 160 | `ReturnMoments` | Momenti di una serie di rendimenti periodici (double), calcolati in forma "population" (biased) per coerenza con le formule di Bailey–López de Prado (che usano γ3 asimmetria e γ4 curtosi non in eccesso , cioè normale = 3). Separato da Optimization.Statistics (che opera su EquityPoint in decimal e annualizza): qui serve lo Sharpe per-periodo e i momenti superiori grezzi che le formule PSR/DSR ri… |
+| `EffectiveTrials.cs` | 100 | `EffectiveTrials` | Numero EFFETTIVO di tentativi indipendenti per la correzione del test multiplo nel Deflated Sharpe. assume N tentativi INDIPENDENTI: se molti candidati sono la stessa strategia provata in varianti correlate (griglia fitta di parametri, simboli gemelli, walk-forward sovrapposti), contarli tutti gonfia la soglia SR* e rende il gate troppo severo — N effettivo &lt; N nominale (López de Prado, "Effect… |
+| `GatePowerAnalyzer.cs` | 192 | `GatePowerAnalyzer` | Potenza del gate anti-overfitting : qual è l'edge più piccolo che questa piattaforma è in grado di CONFERMARE, date la lunghezza dell'holdout e l'ampiezza della ricerca. Nasce da un'osservazione del proprietario (2026-07-28): «di candidati se ne trovano, ma non consolidano mai». Le spiegazioni possibili sono due, opposte, e finora nessuna misura le separava: (a) non c'è edge , e i gate fanno il… |
+| `MinTrackRecord.cs` | 96 | `MinTrackRecord` | [F4 PRD Valore] Minimum Track Record Length e potenza statistica di un run di ricerca, da Bailey & López de Prado ("The Sharpe Ratio Efficient Frontier", J. of Risk 2012; "The Deflated Sharpe Ratio", JPM 2014). Il punto non è aggiungere un giudice — ne abbiamo già (DSR, PBO, gemello nullo) — ma far PARLARE l'aritmetica PRIMA di spendere i backtest: su una finestra corta, lo Sharpe minimo che pu… |
+| `NullTwinGenerator.cs` | 111 | `NullTwinGenerator` | [I2 roadmap frontiere-profitto] Genera "mercati gemelli NULLI": serie sintetiche costruite dai rendimenti reali in cui — per costruzione — non esiste alcuna struttura direzionale sfruttabile, ma la volatilità conserva il suo clustering. Una caccia eseguita su N gemelli produce la distribuzione nulla del proprio "miglior risultato": il candidato sui dati VERI è credibile solo se batte quella dis… |
+| `NullTwinJudge.cs` | 144 | `NullTwinVerdict` | Verdetto del giudice del gemello nullo: la distribuzione dello Sharpe su N mercati nulli ( ) e la posizione del risultato REALE dentro di essa. Passed = il reale supera il quantile richiesto (default 99°): tutto il resto è selezione, non edge. |
+| `PermutationTest.cs` | 68 | `PermutationTest` | [T1.5 roadmap macchina-ricerca] Test di randomizzazione per lo Sharpe: quanto è probabile osservare uno Sharpe almeno così alto se la strategia NON avesse alcuna deriva sistematica? Perché a blocchi e perché lungo il tempo. La lezione pagata il 2026-07-20 (la "t di 141"): randomizzare fra asset correlati dentro una stessa finestra fabbrica significatività finta, perché le repliche non sono indi… |
+| `SelectionValidator.cs` | 74 | `SelectionValidation` | Verdetto di rigore sulla selezione di UN candidato scelto tra molti: incapsula lo Sharpe osservato, la soglia SR* attesa per puro effetto del test multiplo, e il Deflated Sharpe (la probabilità che l'edge sia reale dopo la correzione). Pensato per essere loggato via IExperimentTracker e mostrato nelle UI di selezione accanto allo Sharpe grezzo. |
+
+## `tools/DbBackup/` — 1 file, 98 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `Program.cs` | 98 | `—` | — |
+
+## `tools/FuturesVerify/` — 1 file, 113 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `Program.cs` | 113 | `—` | — |
+
+## `tools/PlatformExpand/` — 1 file, 5.848 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `Program.cs` | 5848 | `PassthroughEncryption` | [Fase 5b] Il gauntlet della strategia a gradini fissi, che era stata aggiunta al catalogo e mai misurata. Il disegno è quello che la piattaforma usa per ogni ipotesi, e serve a non ripetere l'errore classico: si sceglie il parametro migliore su un periodo di SELEZIONE, e poi lo si giudica su un HOLDOUT che quella scelta non ha mai visto. Il numero che conta è il secondo. |
+
+## `tools/SpotVerify/` — 1 file, 164 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `Program.cs` | 164 | `—` | — |
+
+## `tools/StrategyHunter/` — 1 file, 409 righe
+
+| File | Righe | Tipo | Descrizione dichiarata dal codice |
+|---|---:|---|---|
+| `Program.cs` | 409 | `ValidationReport` | — |
+
+## `ProcioneMGR.Tests/` — 268 file, 53.700 righe
+
+| File | Righe | Cosa verifica |
+|---|---:|---|
+| `AddOhlcvIngestionTests.cs` | 46 | Smoke test del wiring DI di (Fase 1 microservizi), stesso stile di ObservabilityWiringTests: verifica che l'infrastruttura condivisa di ingestione si registri e si risolva senza dipendere da un DB reale. |
+| `AdminConfigRulesTests.cs` | 248 | Validazione lato server dei pannelli admin. Il rischio che copre non è teorico: l'attributo min= di un input HTML non vincola il binding di Blazor, quindi prima di qualunque numero digitato finiva in appsettings.json — e da lì nei worker, che in alcuni casi… |
+| `AiCommitteeTests.cs` | 227 | [AF3] Il comitato a scelta vincolata. La proprietà REGINA (livello 2 dello standard): provider che rispondono spazzatura al 100% ⇒ comportamento IDENTICO al comitato spento — decide sempre il default deterministico, mai un'eccezione, mai una scelta fuori menù. |
+| `AiMultiProviderTests.cs` | 584 | [Multi-provider AI 2026-08] Il mattone NVIDIA e l'instradamento per provider: client OpenAI-compatible (parse, errori parlanti, chiave assente), delegante che segue le opzioni a caldo, e store delle chiavi cifrato con fallback env. Il contratto che difendon… |
+| `Alpha158FactorTests.cs` | 240 | Test del catalogo Alpha158 (rif. docs/archive/ROADMAP-QLIB.md §1.1 ). Il cuore è l'invariante ANTI-LOOK-AHEAD verificato in un solo test parametrico su TUTTO il catalogo (~150 feature), non un test scritto a mano per feature. Più: coerenza del round-trip pe… |
+| `AlphaFactorTests.cs` | 251 | Test del modulo Alpha: invariante ANTI-LOOK-AHEAD (il valore a i non cambia troncando la serie dopo i), correttezza dell'Information Coefficient su dati sintetici a segno noto, e proprietà strutturali di quantili / forward returns. |
+| `AlphaMiningTests.cs` | 188 | Test del formulaic alpha mining (rif. docs/archive/ROADMAP-QLIB.md §1.7 ): gli alberi di espressione sono anti-look-ahead per costruzione, la serializzazione fa round-trip, i fattori minati si ricreano dal nome tramite la factory esistente, e il miner genet… |
+| `AltDataSyncServiceTests.cs` | 166 | Test di : inserimento con classificazione/scoring automatici, deduplica fra sync successive, e resilienza a una fonte che lancia un'eccezione (non deve far fallire l'intera sync — stesso principio di MarketDataSyncService ). |
+| `AppConfigWriterTests.cs` | 221 | è il writer generalizzato dietro i pannelli /trading e /admin/autonomy: un bug qui corrompe appsettings.json per TUTTE le sezioni. I contratti chiave: scrive l'intera sezione (nessuna chiave persa per costruzione), non tocca le sezioni sorelle, crea i path … |
+| `AttentionReturnPredictorTests.cs` | 154 | Test dell' (§1.4, attention in C# puro). Il test chiave è di CORRETTEZZA del backprop manuale: la feature predittiva sta sul timestep più VECCHIO della finestra, mentre il readout è sull'ultimo timestep — solo un'attention che instrada correttamente l'infor… |
+| `AuditAlpha158EdgeCaseTests.cs` | 185 | Audit FASE 1 — casi limite del catalogo Alpha158 NON coperti dai test funzionali esistenti: input degeneri (prezzo costante, volume zero, doji perfetti, candele-glitch a prezzo 0, input vuoto/singolo) e valori estremi. Contratto atteso per TUTTO il catalogo… |
+| `AuditBlazorUiTests.cs` | 543 | Audit FASE 4 — test bUnit dei componenti critici: 1. La Dashboard renderizza con dati fittizi (evidenze di promozione incluse) e la UI è in italiano. 2. Il pulsante "Promuovi a Live" in /trading è SEMPRE disabilitato, e "Avvia trading" in modalità Live rest… |
+| `AuditCvLeakageTests.cs` | 167 | Audit FASE 1 — proprietà anti-leakage della cross-validation temporale, verificate come INVARIANTI su griglie di parametri (non su singoli esempi): nessun indice di train dentro le bande purge/embargo, nessuna finestra label del train che tocca il test quan… |
+| `AuditPipelineExperimentLoggingTests.cs` | 247 | Audit FASE 3.3 — ogni run di pipeline (successo O fallimento) deve comporre un ExperimentRun accanto al PipelineRun : parametri (universo, modalità, seed), metriche (stage/sopravvissuti) e stato finale coerente. È ciò che rende i run confrontabili in modo d… |
+| `AuditPortfolioDegenerateTests.cs` | 191 | Audit FASE 1 — ottimizzatori di portafoglio su matrici di covarianza sintetiche DEGENERI: non positive definite, esattamente singolari (asset duplicato), con asset a varianza zero, rendimenti tutti costanti. Contratto atteso: mai eccezioni né NaN (un NaN es… |
+| `AuditPromotionStateMachineTests.cs` | 354 | Audit FASE 3 — la state machine della promozione automatica, attaccata dal lato AVVERSARIALE: (a) fuzz di 20.000 combinazioni metriche×opzioni×modalità su per dimostrare che NESSUN input produce mai un suggerimento Live o un'azione su una corsia Live; (b) i… |
+| `AuditSafetyKellyExtremeTests.cs` | 203 | Audit FASE 1 — SafetyChecker sotto scenari estremi (capitale nullo/negativo, drawdown 100%, perdita catastrofica, clock skew, boundary esatti dei limiti) e criterio di Kelly su distribuzioni patologiche (wipeout totale, covarianza singolare). Principio dell… |
+| `AuditStressIngestionTests.cs` | 183 | Audit FASE 2.1 — stress dell'ingestione OHLCV con un exchange FINTO deterministico (nessuna rete): N simboli in parallelo su Postgres reale (Testcontainers), migliaia di candele 1m per simbolo, con misure di tempo/throughput/allocazioni riportate nell'outpu… |
+| `AuditStressMlTrainingTests.cs` | 170 | Audit FASE 2.2 — training pesante: LightGBM su 100k righe × 30 feature e MLP (C# puro) su 20k righe, con concept-drift detection attiva sulle stesse feature (PSI/KS/Page-Hinkley) e misure di tempo/allocazioni. Verifica: il training completa, le predizioni s… |
+| `AuditStressNestedExecutionTests.cs` | 198 | Audit FASE 2.3 — nested execution ad alta frequenza: il loop decisione-coarse -&gt; piano -&gt; simulazione su candele fini, martellato in parallelo da più thread. Verifiche: purezza e determinismo (stesso input =&gt; stesso risultato da qualunque thread), conservaz… |
+| `BacktestCostAccountingTests.cs` | 177 | [R2] Test della contabilità dei costi nel backtest. Il vincolo più importante è che questa contabilità sia PURAMENTE DIAGNOSTICA: fee e slippage erano già dentro il PnL prima di R2 (le prime dentro il Portfolio, il secondo dentro i prezzi di fill), quindi e… |
+| `BacktestEngineTests.cs` | 126 | Verifica end-to-end del motore di backtest su dati reali BTC/USDT 1h: completamento senza errori, coerenza equity/candele, e DETERMINISMO (stesso input -&gt; stesso output). Saltato se il DB non e' disponibile. |
+| `BacktestLeverageTests.cs` | 213 | Test della contabilita' a margine del motore: leva, liquidazione intrabar, funding e slippage. Con leva 1 e tutto a 0 il comportamento deve restare IDENTICO allo spot. |
+| `BacktestPageServiceTests.cs` | 386 | Test dell'orchestrazione estratta da Backtest.razor (P1-5, PRD-CONSOLIDAMENTO-ARCHITETTURA.md §3.3): prima di questa estrazione tutta la logica — validazione, run del backtest con analitiche derivate, suggerimento SL/TP, handoff dall'Optimization, preset va… |
+| `BacktestStopLossTests.cs` | 229 | Test dell'overlay stop loss / take profit / trailing stop del motore di backtest (McAllen cap. 17: "lo stop loss E' parte del trade"). Candele sintetiche + strategia script che entra long alla prima barra e non emette altro. |
+| `BarBuilderTests.cs` | 95 | Test delle barre a volume/controvalore costante (Jansen ML4T, cap. 2). |
+| `BayesianKernelFitTests.cs` | 66 | E1 — il kernel del GP bayesiano ora STIMA i suoi iperparametri via log-verosimiglianza marginale invece di tenerli fissi (fissi ⇒ il surrogato non si adatta e la ricerca degenera verso il casuale). Verifica che la stima recuperi la scala giusta: lengthscale… |
+| `BayesianOptimizerTests.cs` | 105 | Test dell'ottimizzazione bayesiana (Fase 6): il surrogato Gaussian Process + Expected Improvement converge all'ottimo di funzioni analitiche note in poche valutazioni, rispetta i confini/interi dello spazio, ed è deterministico a parità di seme (requisito n… |
+| `BinanceClientOrderStatusTests.cs` | 167 | Test del lookup di stato ordine per clientOrderId (fix C2): endpoint corretti, media di fill ricavata da cummulativeQuoteQty/executedQty (l'endpoint di QUERY non restituisce fills[] come il place), e soprattutto la distinzione che chiude la finestra dell'or… |
+| `BinanceDumpDownloaderTests.cs` | 141 | [D3] Scarico dei dump storici. Nessun test qui tocca la rete: si verificano gli URL (una lettera sbagliata nel percorso darebbe 404 su tutto e sembrerebbe "dato non disponibile"), la verifica del checksum e il comportamento sul giorno mancante. |
+| `BitgetClientTests.cs` | 419 | Regressione per un bug reale trovato verificando dal vivo le credenziali Bitget appena configurate dall'utente: usava l'endpoint "singolo account" (.../account/account) senza il parametro "symbol" che Bitget richiede, ottenendo sempre un errore applicativo … |
+| `BlockBootstrapPermutationTests.cs` | 196 | [T1.5 roadmap macchina-ricerca] Block bootstrap + permutation test: la randomizzazione GIUSTA (lungo il tempo, a blocchi) dopo la lezione dei 400 panieri correlati che produssero t = 141. I test di calibrazione sono il cuore: un test statistico che non è ca… |
+| `BotPageRenderTests.cs` | 170 | [R3] Rendering della Modalità Semplice ( /bot ). Due cose vanno viste sullo SCHERMO, non solo nei servizi: - il costo annuo implicito del profilo, che è la lezione di R2 tradotta per chi non conosce il dominio: se sparisse dalla pagina, l'utente sceglierebb… |
+| `BotPageServiceTests.cs` | 281 | [R3] Test dell'orchestrazione della Modalità Semplice. Le proprietà che contano di più sono due, entrambe di sicurezza: - da qui si avvia SOLO in Paper, mai in Testnet o Live; - avviare senza strategie viene rifiutato con una spiegazione, invece di accender… |
+| `CampaignPlannerTests.cs` | 576 | Test del Campaign Planner (Fase 1, PRD Autonomia Operativa §4) con motore pipeline FAKE (stesso approccio dei PipelineSchedulerWorkerTests): rotazione su 0 sopravvissuti, backoff, stop-su-successo (Observing + avvio corsie Paper), rotazione-esaurita → Waiti… |
+| `CandlestickPatternDetectorTests.cs` | 171 | Test del riconoscimento dei pattern candlestick (McAllen cap. 4-6 e 14). |
+| `CarryBacktestEngineTests.cs` | 108 | [E3 roadmap profitto-intraday] Motore di backtest del carry delta-neutro. Questi test fissano: (a) a funding costante alto la strategia entra e incassa il funding meno i costi delle due gambe; (b) l'A/B a funding zero: netto = −costi (nessun income, si paga… |
+| `CarryEngineTests.cs` | 171 | [E3 roadmap profitto-intraday] Orchestrazione live del carry. Questi test fissano: (a) la regola di decisione è la STESSA del backtest (CarryDecider — un solo punto di verità); (b) il motore apre due gambe quando il funding è alto e chiude quando scende, tr… |
+| `ChandelierAndGridTests.cs` | 288 | [Fase 5a — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Trailing "chandelier": distanza k×ATR dal miglior prezzo invece di una percentuale fissa. È l'unica raccomandazione del PDF sugli stop che la piattaforma non avesse già in forma migliore, ed entra … |
+| `CointegrationOnRealDataTests.cs` | 135 | Verifica sui DATI REALI del passaggio della cointegrazione ai log-prezzi. Il caso che ha motivato il cambiamento è AAVE/XLM: sulla finestra di selezione 2024-01→2026-03 (4h) la vecchia specificazione sui prezzi grezzi la dichiarava cointegrata, ed è finita … |
+| `CointegrationTests.cs` | 186 | Test di e : una coppia costruita per essere cointegrata deve superare il test con l'elasticità recuperata vicino al vero beta; due random walk indipendenti (nessuna relazione di lungo periodo) non devono risultare cointegrate. Le serie sono costruite nella … |
+| `ConfigurationBindingTests.cs` | 83 | Un refuso nel nome di una sezione di configurazione non rompe niente: lascia semplicemente la funzione spenta in silenzio . È il guasto peggiore per una manopola di sicurezza, perché l'operatore la vede scritta nel file e crede che sia attiva. Questi test l… |
+| `ConfigurationUiCoverageTests.cs` | 212 | LA REGOLA D'ORO DELLA PIATTAFORMA, resa verificabile: nessuna funzione backend può esistere senza essere controllabile dall'interfaccia web. L'audit backend↔frontend del 2026-07-29 ha trovato quattordici sezioni di configurazione che governavano funzioni vi… |
+| `ContractsSmokeTests.cs` | 99 | Test di fumo dei contratti gRPC/Protobuf (Fase 0 microservizi): il C# generato dai .proto di ProcioneMGR.Contracts serializza e deserializza round-trip senza perdita. I contratti NON sono ancora cablati nell'app (accade in Fase 2+): qui si valida solo che s… |
+| `CorrelatedExposureTests.cs` | 306 | [Fase 2 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Prima di questo guard tutti i limiti di rischio a runtime erano scalari e ciechi alla correlazione: tetto sulla singola posizione, tetto sull'esposizione della corsia, numero massimo di posizioni. T… |
+| `CostPropagationTests.cs` | 204 | [R2] REGRESSIONE su un'asimmetria trovata preparando l'ingestione a 1m. Il percorso di SELEZIONE (Optimization, e a cascata Discovery) costruiva i backtest senza mai impostare SlippagePercent : i parametri e i candidati venivano scelti a sole commissioni, m… |
+| `CreativeDiscoveryTests.cs` | 324 | Test puri del layer di scoperta creativa: SignalCatalog (normalizzazione causale), le tre meta-strategie (Composite/EventTrigger/RegimeConditional) e i generatori del composer (determinismo, diversità, plausibilità). Nessun DB, dati sintetici seedati. |
+| `CyclicalAnalyzerTests.cs` | 155 | Test dell'analisi ciclica (Activity Factor, bias orario/settimanale, stagionalita' - cap. 5). |
+| `DataProtectionApplicationNameTests.cs` | 82 | Il nome applicativo di Data Protection è la discriminante con cui vengono derivate le chiavi che firmano i cookie di autenticazione: due processi con discriminanti diverse non possono leggere i cookie l'uno dell'altro. BUG REALE (2026-07-20): SetApplication… |
+| `DatabaseMigratorTests.cs` | 95 | [2026-08-05] Migrate-on-startup. Il contratto: applicare lo schema all'avvio NON deve poter rompere l'avvio. Un host che non ha l'assembly delle migrazioni (i satelliti non lo ricevono), un lock occupato da un altro host, o l'interruttore spento devono prod… |
+| `DelegatingSentimentScorerTests.cs` | 132 | Test di e : instradamento hot-reload sullo scorer configurato (default = lessico, il comportamento storico) e determinismo del vettorizzatore (la premessa di parità del pilota ONNX). |
+| `DigestNarrativeTests.cs` | 205 | [G9] Narrativa di sintesi in cima al digest giornaliero. Il contratto: il digest è il dead-man's-switch del proprietario — se non arriva, la piattaforma è muta. Una funzione di comodo come questa non deve poterlo toccare in alcun modo. Da qui la proprietà c… |
+| `DonchianIndicatorAndStrategyTests.cs` | 171 | Test di SMA, Donchian Channel e della strategia DonchianBreakout (cap. 3 e 6). |
+| `DormantFleetPromotionTests.cs` | 84 | [AF0] La flotta a 8 con cinque corsie DORMIENTI (registrate, mai avviate) attraversa la valutazione di promozione senza eccezioni e senza azioni: una corsia mai partita non ha metriche, e "nessuna metrica" deve restare "nessuna decisione", non un crash né —… |
+| `DriftDetectorTests.cs` | 119 | Test dei detector di concept drift (rif. docs/archive/ROADMAP-QLIB.md §1.5 ): su due campioni dalla STESSA distribuzione non deve scattare drift; su una distribuzione chiaramente spostata deve scattare (PSI alto / KS p→0 / Page-Hinkley oltre soglia). Dati i… |
+| `DtwMatcherTests.cs` | 387 | [D4] Verifica del matching per forma. Segue i quattro livelli di `docs/STANDARD-VERIFICA.md`. I due test che decidono se il pezzo vale qualcosa: - — se LB_Keogh NON fosse un vero limite inferiore, il pruning scarterebbe in silenzio proprio le corrispondenze… |
+| `DtwPatternAnalysisTests.cs` | 282 | [D4, misura] Test della catena completa: forma → occorrenze → event-study col placebo → verdetto. La coppia che decide tutto: - — si pianta un pattern SEGUITO da un movimento vero: la catena deve accorgersene; - — si pianta lo stesso pattern seguito dal nul… |
+| `DynamicLanesTests.cs` | 235 | Il numero di corsie era una costante di compilazione: aumentarlo voleva dire ricompilare, e in pratica ha significato per anni "tre prove in parallelo, non una di più". Ora si configura. La parte delicata non è leggere un intero dalla configurazione: è che … |
+| `EffectiveTrialsTests.cs` | 101 | R1.4 — numero EFFETTIVO di tentativi per il Deflated Sharpe: i tentativi con rendimenti correlati (griglia fitta di parametri, simboli gemelli) vengono clusterizzati e contano una volta sola, così la soglia SR* non sovrastima il test multiplo. Verifica: ser… |
+| `EngineConfigGrpcTests.cs` | 272 | Livello 3 (integrazione) per il canale di configurazione del motore: gli endpoint gRPC serviti dall'host REALE ProcioneMGR.Trading , non chiamate C# dirette a EngineConfigService . Nasce da una lacuna trovata rileggendo docs/STANDARD-VERIFICA.md dopo aver d… |
+| `EngineConfigTests.cs` | 298 | Il canale con cui il guscio legge e riscrive la configurazione DEL MOTORE (2026-07-29). Perché esiste: il disegno originale faceva condividere ai due processi un solo appsettings.json su PVC. Verificato dal vivo che non regge col guscio fuori dal cluster — … |
+| `EnsembleAllocatorTests.cs` | 101 | Test della pesatura vincolata (water-filling) dell'ensemble. |
+| `EnsembleComparatorTests.cs` | 129 | Verifica il confronto oggettivo "nuovo ensemble vs corrente" con hysteresis: sostituzione solo per miglioramenti reali (Sharpe sopra soglia o RF95 nettamente migliore a Sharpe non inferiore), niente cambi per rumore, e il floor strutturale (minimo gambe / s… |
+| `EnsembleManagerDecayTests.cs` | 144 | Test di integrazione di : carica la configurazione reale (JSON su Postgres) e i TradeRecords reali dal DB, verificando che il monitor riceva esattamente i dati giusti per ciascuna gamba. |
+| `EnsemblePageServiceTests.cs` | 381 | Test dell'orchestrazione estratta da Ensemble.razor (P1-5, PRD-CONSOLIDAMENTO- ARCHITETTURA.md §3.3): caricamento per corsia (keyed DI), composizione delle gambe (predefinita/salvata/ML/Champion), ciclo di vita save/start/stop/rebalance, serie di performanc… |
+| `EnsembleSimulationCacheTests.cs` | 180 | [F1 PRD Valore] La cache della simulazione in : prima di questa cache, il poll della pagina Ensemble rieseguiva due simulazioni complete (un backtest per gamba) ogni 15 secondi. Il contratto verificato qui è triplice: (1) a parità di candele e configurazion… |
+| `EventStudyTests.cs` | 238 | [T2.7 roadmap macchina-ricerca] Event-study rigoroso + rilevatore di eventi di mercato. Il criterio di validazione dell'item, dichiarato nella roadmap: (a) un effetto PIANTATO viene recuperato (CAAR post positiva, placebo significativo); (b) il PLACEBO su r… |
+| `EventTriggerGeneratorTests.cs` | 101 | [R3 — ROADMAP-RENDIMENTO] Il generatore di event-trigger emetteva varianti di Threshold anche sugli eventi flip del Supertrend, dove quel parametro non lega (sono cambi di segno, non percentili). Il risultato erano DUPLICATI ESATTI: stessa strategia, stesso… |
+| `ExchangeCredentialReaderTests.cs` | 226 | Bug B2 (docs/TEST-UI-2026-07-18.md): una riga di ExchangeCredentials cifrata con una master key DIVERSA da quella del processo corrente abbatteva l'intera query EF (il converter decifra dentro la materializzazione → AuthenticationTagMismatchException) e con… |
+| `ExchangeRateLimitAndClockTests.cs` | 319 | [R1] Test della disciplina verso le API REST degli exchange: ritiro sui rate-limit e allineamento dell'orologio per le richieste firmate. Entrambi nascono da guasti che colpiscono le CHIUSURE tanto quanto le aperture: un ordine di stop rifiutato perché l'IP… |
+| `ExchangeSettingsPageTests.cs` | 113 | Bug B2 (docs/TEST-UI-2026-07-18.md), lato pagina: /settings/exchanges andava in Internal Server Error (AuthenticationTagMismatchException nella materializzazione EF) se in tabella c'era UNA riga cifrata con una master key diversa. Ora la pagina carica via :… |
+| `ExchangeSigningTests.cs` | 50 | Verifica la firma HMAC della richiesta. Il valore atteso è stato calcolato in modo INDIPENDENTE (HMACSHA256 di sistema, via PowerShell) sullo stesso (secret, query) usato dall'esempio Binance: pinna l'output esatto della funzione di firma. Se la firma è sba… |
+| `ExcursionAnalyzerTests.cs` | 83 | Test dell'analisi delle escursioni e dell'effetto memoria (Trombetta cap. 4). |
+| `ExcursionBracketTests.cs` | 74 | Verifica il calcolo automatico del bracket SL+TP data-driven (percentili di escursione avversa/ favorevole) aggiunto a . È la base del nuovo comportamento "calcola/proponi/applica automaticamente stop loss e take profit". |
+| `ExcursionHorizonTests.cs` | 160 | R1.5 — Auto SL/TP da MAE/MFE sull'ORIZZONTE di detenzione, condizionato per regime di volatilità. Le escursioni a barra singola sottostimano il rischio di stop; qui ogni barra è un ingresso tenuto per H barre e MAE/MFE si accumulano. Verifica: i tre regimi … |
+| `ExecutionQualityTests.cs` | 382 | [Fase 1 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Prima del fix, l'implementation shortfall esisteva solo per gli ordini eseguiti a fette: gli ordini di corsia — cioè quasi tutti — catturavano il prezzo di fill ma lo usavano solo come guardia anti-… |
+| `ExecutionSquareRootImpactTests.cs` | 69 | E1 — modello di impatto di mercato √(partecipazione) (legge empirica di Almgren) al posto del solo lineare. Verifica la concavità: per piccole partecipazioni il √ costa PIÙ del lineare (per unità), e raddoppiando la partecipazione l'impatto √ cresce di ×√-r… |
+| `ExecutionTests.cs` | 219 | Test del layer di esecuzione (rif. docs/archive/ROADMAP-QLIB.md §1.2 ): i piani conservano ESATTAMENTE la quantità totale, VWAP segue il profilo di volume, e il simulatore mostra la tesi centrale — distribuire l'ordine (TWAP/VWAP) riduce l'implementation sh… |
+| `ExperimentTrackerTests.cs` | 122 | Test dell'Experiment Tracker (rif. docs/archive/ROADMAP-QLIB.md §1.3 ): ciclo di vita di un run (Running → metriche → Completed), merge delle metriche, hash "git-like" dei parametri (config identiche ⇒ hash identico), e robustezza best-effort degli helper S… |
+| `FactorCacheTests.cs` | 124 | Test della cache dei fattori (Fase 4): trasparenza (cache == ricalcolo, nessuno skew), hit/miss, invalidazione al cambio di parametri o di dati, e sfratto FIFO sotto capacità. È un memoizzatore puro: non deve mai cambiare il valore calcolato. |
+| `FactorDriftAnalyzerTests.cs` | 307 | [D2] Verifica del monitor di deriva dei fattori. Il metodo è lo stesso usato altrove nella piattaforma: si costruiscono serie in cui la risposta giusta è NOTA per costruzione (un fattore che informa e poi smette, uno che si capovolge, uno che non ha mai inf… |
+| `FactorDriftMonitorTests.cs` | 766 | [D2, completamento] Verifica della fotografia in memoria e del job che la aggiorna — i due pezzi che il PRD §5e chiedeva ("alert accanto al widget in Home" + "job di calcolo periodico") e che mancavano: il pannello in /feature-selection risponde solo a chi … |
+| `FactorIcTStatTests.cs` | 97 | R1.3 — significatività dell'IC con t-stat Newey-West (HAC), robusta all'autocorrelazione dei forward-return sovrapposti (horizon &gt; 1). Verifica che l'overlap ABBASSA la significatività (\|t_NW\| &lt; \|t_ingenua\|), come atteso, e che l'evaluator popola i campi. |
+| `FeatureDriftMonitorTests.cs` | 121 | Test del : dato un modello i cui fattori sono calcolati su una finestra di training a BASSA volatilità (reference, letta dal DB) e su candele recenti ad ALTA volatilità (current), il fattore di volatilità realizzata deve risultare in drift. Verifica l'integ… |
+| `FeatureDriftWorkerPersistenceTests.cs` | 208 | [U4] Prima di questa persistenza gli esiti del drift vivevano SOLO nei log: la UI non poteva mostrare né l'ultimo esito né lo storico, e "nessuna riga" non distingueva "tutto pulito" da "il worker non gira". Contratti: una riga per modello per tick ANCHE se… |
+| `FeatureImportanceTests.cs` | 74 | Test della permutation feature importance ( ): una feature davvero predittiva deve pesare più di una puramente casuale, per qualunque modello (lineare o ad alberi). |
+| `FleetOrchestratorTests.cs` | 239 | [AF2] Il core puro della Queen Bee, attaccato come la promozione: fuzz 20k stati sugli invarianti (mai un'azione su impronta/Live/Testnet/quarantena/campagne/emergency, mai due assegnazioni sulla stessa corsia, mai un candidato senza frequenza sopra soglia)… |
+| `FleetReaderEvaluateTests.cs` | 122 | [AF2/F5] Il verdetto di un run come candidato di flotta. Il caso che ha originato il fix (2026-08-03, primo journal vuoto): un run con ZERO sopravvissuti non ha gambe nella raccomandazione, e il lettore derivava i trade/mese dalle gambe — quindi la fascia g… |
+| `ForexFactoryIngestorTests.cs` | 87 | Test di su un frammento HTML di fixture ricalcato dalla pagina reale (nessuna chiamata di rete — stesso principio di RssNewsSourceTests : solo il fetch HTTP è non deterministico/esterno, non il parsing). |
+| `FundingHistoryTests.cs` | 166 | [T0.2 roadmap macchina-ricerca] Funding storico e FIRMATO nel motore di backtest. Il difetto corretto: il motore addebitava una costante senza segno a qualunque posizione. Nella realtà il funding è firmato e va per lato — con funding positivo il long paga e… |
+| `FuturesPositionReconcilerTests.cs` | 291 | Test DEDICATO di — colma il gap segnalato ma non chiuso in Fase 1 (PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.8: "resta senza un test reale dedicato — copertura solo indiretta via ProcessCandleAsync") ed emerso di nuovo nell'audit leggero §8: il fake futures di … |
+| `GapLapAnalyzerTests.cs` | 118 | Test dell'analisi Gap/Lap (Trombetta cap. 4). |
+| `GarchModelTests.cs` | 193 | Test di : recupero (approssimato) dei parametri di un processo GARCH(1,1) simulato con parametri noti, vincoli di stazionarietà rispettati, "volatility clustering" (uno shock alza la varianza prevista), e mean-reversion della previsione verso la varianza di… |
+| `GatePowerAnalyzerTests.cs` | 156 | [2026-07-28] Potenza del gate anti-overfitting: qual e' l'edge piu' piccolo che la piattaforma potrebbe CONFERMARE, se fosse vero. Nasce dalla domanda del proprietario — «di candidati se ne trovano ma non consolidano mai» — e serve a separare due diagnosi o… |
+| `GeneticMinerCvGateTests.cs` | 136 | E1 — miner genetico: fitness CROSS-VALIDATA (l'IC misurato su fold temporali, la fitness premia consistenza non un \|IC\| di finestra unica gonfiabile) + gate PBO BLOCCANTE (se la selezione è complessivamente overfit il batch viene svuotato). Verifica la disc… |
+| `HarRvForecasterTests.cs` | 168 | Test di e (C3): causalità (invariante di troncamento), warm-up, capacità di battere il naive su un processo di varianza persistente, e la contabilità della RV giornaliera dai 5m (giorni bucati scartati). |
+| `HierarchicalClusteringTests.cs` | 133 | Test di : struttura del dendrogramma su una matrice di distanza nota (2 coppie ben separate), differenza fra i criteri di linkage, e . |
+| `HostHeartbeatTests.cs` | 142 | [AF5.1] L'heartbeat incrociato. I test difendono due proprietà: 1) il RUMORE non accende niente — un battito in ritardo sotto la soglia, o l'assenza totale della riga (feature spenta sull'altro host), non producono notifiche; 2) le transizioni notificano UN… |
+| `HourOfDaySignalTests.cs` | 66 | [2.S roadmap macchina-ricerca] Il segnale "Ora UTC" nel catalogo: la stagionalità oraria che CyclicalAnalyzer misura da tempo diventa CACCIABILE dalla stessa combinatoria degli altri segnali (Composite/StrategyComposer), senza sottosistemi nuovi. Appeso com… |
+| `HrpLinkageTests.cs` | 82 | E1 — l'HRP ora usa un linkage configurabile (default Average/UPGMA) invece del solo single-linkage dell'articolo originale, che soffre di "chaining". Verifica il default, la validità dei pesi e che la scelta del linkage sia effettivamente cablata (su una st… |
+| `IcFeatureSelectorTests.cs` | 101 | Test della selezione feature per Information Coefficient (Fase 3): l'ordinamento è per \|IC\| decrescente, i filtri (\|IC\| minimo, TopN) si applicano correttamente, ed è deterministico — così la scelta delle feature dei modelli ML diventa guidata dalla misura,… |
+| `IncrementalIcGateTests.cs` | 454 | [D3, il gate] Verifica del giudice che risponde alla domanda di C5 §3.3: il book aggiunge informazione OLTRE al proxy trade-flow? Tre livelli, gli stessi che la piattaforma pretende da qualunque misura nuova (vedi docs/STANDARD-VERIFICA.md): 1. RIFERIMENTO … |
+| `IndicatorsOnRealDataTests.cs` | 94 | Test richiesto dallo spec: calcola gli indicatori su dati reali BTC/USDT 1h presenti nel DB Postgres reale (procionemgr) e verifica invarianti strutturali. Se il DB o i dati non sono disponibili, il test viene saltato (non fallisce). |
+| `FakeEngineConfigStore.cs` | 63 | Store di prova per : tiene le sezioni in memoria e registra le scritture. Sostituisce sia il percorso locale che quello gRPC — al chiamante non interessa quale sia, ed è il punto dell'astrazione. Nato in ProtectionsPageRenderTests, estratto qui quando anche… |
+| `FakeLaneQuarantineStore.cs` | 42 | Fake in-memory di (Fase 0-A3): condiviso dai test dell'orchestrazione pagina (TradingPageServiceTests) e bUnit (AuditBlazorUiTests), che non hanno bisogno del Postgres reale — la persistenza vera è coperta da LaneInvariantWatchdogTests. |
+| `FakeMasterKeyProbe.cs` | 21 | Fake di (Fase 3-C2) per i test bUnit delle pagine che mostrano il banner. |
+| `PostgresFixture.cs` | 153 | Setup a livello di assembly di test: attiva lo switch Npgsql "legacy timestamp behavior" PRIMA che qualunque data source venga costruito. Necessario perché lo schema mappa tutte le date a timestamp without time zone e parte del codice/test scrive DateTime c… |
+| `RealMarketDb.cs` | 33 | Accesso al database PostgreSQL REALE popolato ( procionemgr , ~7.4M candele OHLCV) per i pochi test che girano su dati storici reali invece che su schema effimero. La connection string si legge dalla env PROCIONE_TEST_DB , con un default locale. In CI (dove… |
+| `TestOptionsMonitor.cs` | 45 | statico per i test: valore fisso, nessuna notifica di change. Nato con il passaggio delle opzioni di autonomia (Drift/Llm/AutoReapply/PromotionEvaluator) da POCO singleton a Configure&lt;T&gt; + monitor (hot-reload da /admin/autonomy). |
+| `IntradayStrategiesTests.cs` | 230 | Test puri (senza DB) delle strategie intraday nuove — Supertrend, Stochastic, VwapReversion — e dell'indicatore ATR che le abilita. Su serie sintetiche costruite per innescare un comportamento noto, così le asserzioni sono deterministiche e verificabili. |
+| `JumpModelTests.cs` | 175 | [C1 roadmap integrazione] Lo statistical jump model su regimi sintetici PIANTATI: la verità è nota per costruzione, quindi si misura il recupero, non lo si racconta. La proprietà che conta: λ=0 degenera in K-means (flicker), λ moderato recupera la segmentaz… |
+| `KalmanPairsSpreadAnalyzerTests.cs` | 203 | Test di (C2): stesse invarianti della rolling OLS (anti-look-ahead, warm-up, recupero del β vero su coppia sintetica) più la proprietà per cui il filtro esiste — su un β che DERIVA nel tempo, l'errore di inseguimento del Kalman deve essere minore di quello … |
+| `KellyCalculatorTests.cs` | 131 | Test del criterio di Kelly (Jansen ML4T, cap. 5). |
+| `KeywordSentimentScorerTests.cs` | 53 | Test di : segno e range del punteggio, testo neutro, word-boundary. |
+| `KlineExtendedFieldsTests.cs` | 171 | [T0.3 roadmap macchina-ricerca] Stop allo scarto dei campi klines. Le klines Binance consegnano in ogni download quote volume (k[7]), numero di trade (k[8]) e volume TAKER (k[9]/k[10] — l'order flow aggressivo), e il parsing leggeva solo k[0..5]. Questi tes… |
+| `LaneCountCoherenceProbeTests.cs` | 152 | [AF0] La sonda che confronta il numero di corsie del guscio con quello del motore remoto. La distinzione che questi test difendono: disallineamento (entrambi i numeri noti e diversi → allarme Critical) e ignoranza (motore muto o valore illeggibile → nessun … |
+| `LaneEpisodeTests.cs` | 267 | [2026-08-06] Episodi di corsia. Il problema che risolvono, misurato sul database vero: la corsia 0 aveva 610 ordini di 7 strategie diverse su 3 simboli in un elenco unico, e Order.StrategyId è un GUID che non corrisponde a nulla in SavedStrategies — lo stor… |
+| `LaneExecutionLeaseTests.cs` | 86 | [B0 PRD core-caldo] Il lease di esecuzione per corsia su Postgres VERO: "mai due esecutori sulla stessa corsia" deve essere applicato dal database, non dalla disciplina di deploy. Ogni factory qui simula un PROCESSO distinto (connessione propria, senza pool… |
+| `LaneInvariantCheckerTests.cs` | 130 | Test PURI degli invarianti contabili (Fase 0-A3, PRD Autonomia Operativa §3): nessun DB, nessun motore. Il caso guida è quello REALE della corsia 2 Testnet del 2026-07-18 (docs/TEST-UI-2026-07-18.md, bug B1): PnL -1.817.925 su capitale 10.000 con leva 2 — u… |
+| `LaneInvariantWatchdogTests.cs` | 601 | Regressione della Fase 0-A3 (PRD Autonomia Operativa §3): il watchdog degli invarianti contabili deve accorgersi DA SOLO dello stato in cui la corsia 2 è rimasta per ore il 2026-07-18 (PnL -1,8M su capitale 10k) — quarantena persistita, trading fermato, pos… |
+| `LanePromotionFlattenTests.cs` | 275 | [M2] Promozione/retrocessione di corsia senza mescolare i mondi: flatten PRIMA del cambio modalità (senza emergency stop), discriminatore con purge delle righe di un'altra modalità al load, e i confini del (ordine delle chiamate, Live sempre vietato). |
+| `LaneRegimeRouterTests.cs` | 332 | [Fase 4 — docs/archive/ROADMAP-ARCHITETTURE-ESECUZIONE.md] Il router di regime: classifica il regime corrente col K-means vero e lascia operare solo le strategie che vi hanno senso. Fino a qui il routing per regime esisteva soltanto dentro il backtest, e pe… |
+| `LaneRiskProfileEndToEndTests.cs` | 221 | [R3] Verifica che il profilo di rischio arrivi DAVVERO fino alle decisioni del motore. I test di RiskProfileTests provano che il profilo compone le soglie giuste; questi provano che quelle soglie governano il comportamento reale della corsia. È la differenz… |
+| `LaneSelectorTests.cs` | 205 | Il selettore di corsia. Prima era una &lt;select&gt; : la corsia corrente era un numero e basta, e per sapere cosa ci girasse bisognava sceglierla e guardare. Con tre corsie si poteva tenere a mente; con dodici, no. Ciò che questi test difendono non è l'estetica … |
+| `LeverageAdvisorTests.cs` | 83 | Test del consulente per la leva (bootstrap con pavimento di liquidazione). |
+| `LinearReturnPredictorTests.cs` | 88 | Test di : apprendimento di una relazione lineare nota, persistenza (Save/Load) e comportamento prima dell'addestramento. |
+| `LiquidationAccumulationTests.cs` | 180 | [F4 roadmap frontiere-profitto] Accumulo liquidazioni: parsing dello stream pubblico (!forceOrder@arr), aggregazione per (ticker, ora, lato) e flush IDEMPOTENTE su SentimentMetricPoints. Il dato non è ricostruibile a posteriori: il contratto qui fissato è c… |
+| `LlmCallGuardTests.cs` | 254 | Test del chokepoint delle chiamate Claude: classificazione degli errori del SDK (il billing è un 400 riconoscibile solo dal testo), circuit breaker con notifiche one-shot, half-open probe col cooldown, ripristino automatico. Tutto in-memory, nessuna chiamat… |
+| `LlmFailoverTimeoutTests.cs` | 229 | [2026-08-05] Il failover deve partire anche quando un provider SI APPENDE. Il difetto che questi test chiudono , trovato provando l'app dal vivo: il guard crea un token linked (token del chiamante + timeout della chiamata) e passa quello al client; il deleg… |
+| `LlmSentimentScorerTests.cs` | 188 | Test di (Fase B): parsing difensivo, clamp, fallback sul lessico per OGNI esito non-Ok (il contratto "mai un'eccezione verso il chiamante"), batch con allineamento pretenzioso. Il guard è quello VERO (fake solo il client): il comportamento breaker/timeout t… |
+| `LlmUsageTests.cs` | 414 | [AF1] Consumo e budget del layer AI. Le proprietà difese: (1) col tracking SPENTO il comportamento è bit-identico a prima — zero conteggi, zero tetti, zero notifiche; (2) il budget esaurito salta la chiamata SENZA muovere il breaker e avvisa una volta per t… |
+| `MakerFillModelTests.cs` | 256 | [R3] Test del modello di fill per gli ingressi MAKER nel backtest. Il motivo per cui questo modello esiste: la frontiera dei costi (docs/REPORT-RICERCA-2026-07.md) mostrava che a commissioni maker un candidato in perdita diventava profittevole. Quel numero … |
+| `MarginMathTests.cs` | 59 | MarginMath è condivisa tra BacktestEngine e TradingEngine: se questa formula è sbagliata, sia il backtest sia il monitoraggio live del rischio di liquidazione sarebbero sbagliati nello stesso modo. Valori attesi calcolati indipendentemente a mano. |
+| `MasterKeyGuardTests.cs` | 230 | Guard della master key (bundle sicurezza audit 2026-07): con la chiave placeholder del template (committata su git) i segreti "cifrati" sono decifrabili da chiunque legga il repository. Due linee di difesa, entrambe testate qui: 1. riconosce il placeholder … |
+| `MasterKeyProbeTests.cs` | 150 | Fase 3-C2 (PRD Autonomia §6): l'avvio con la master key sbagliata deve diventare RUMOROSO (LogCritical + notifica + stato per il banner UI) invece di morire in silenzio sul percorso credenziali finché una pagina non va in 500. |
+| `MetaLabelerTests.cs` | 201 | [C4] Verifica del meta-labeling. Il test che conta è l'ultimo: un **edge piantato** con asimmetria di barriera nota, che la catena deve recuperare. Senza quello, un risultato positivo su dati reali non direbbe se ha funzionato il metodo o il caso — è lo ste… |
+| `MetaLabelingAnalysisServiceTests.cs` | 184 | [C4, consumo] Test di INTEGRAZIONE della catena completa: strategia reale → segnali barra per barra → etichette triple-barrier → meta-modello out-of-fold → verdetto. È il livello che mancava: le classi erano coperte una per una, ma nessun test verificava ch… |
+| `MetaModelTrainerTests.cs` | 212 | [C4, chiusura] Verifica del meta-modello. Il test che decide se il pezzo vale qualcosa è accoppiato a : il primo pretende che un segnale imparabile venga trovato, il secondo che il rumore NON produca un miglioramento. Solo insieme dicono che il modello impa… |
+| `MicrostructureParserTests.cs` | 158 | [D3] Lettura dei dump Binance. Le righe usate qui sono COPIATE dai file veri (spot e futures del 2026-07-25), non inventate: i due formati differiscono in tre punti — header, unità del timestamp, maiuscole del booleano — e un parser tarato su uno solo legge… |
+| `MinTrackRecordTests.cs` | 171 | [F4 PRD Valore] Il power check MinTRL: la formula (Bailey-López de Prado 2012/2014) e lo stage che la dichiara in testa al run. I numeri di ancoraggio non sono inventati: sono l'aritmetica che la piattaforma ha già incontrato empiricamente (huntdense 2026-0… |
+| `MlComparisonClientTests.cs` | 107 | Prova di sicurezza centrale della Fase 2a: il confronto dual-read col servizio ml remoto è PURAMENTE osservativo. Qualunque risposta (match/mismatch), timeout o errore del remoto deve essere assorbito — MAI un'eccezione che risalga verso il ciclo di trading… |
+| `MlDatasetBuilderTests.cs` | 169 | Test di : allineamento feature/target, scarto delle righe incomplete (warm-up/coda), e correttezza della conversione a IDataView di ML.NET. |
+| `MlDeterminismTests.cs` | 209 | Requisito centrale della Fase 2a (dual-read): l'inferenza del servizio ml remoto deve essere BYTE-IDENTICA a quella locale per lo stesso input. Qui la prova senza DB né rete: si addestra un predittore in memoria, lo si salva su bytes, e si confronta la pred… |
+| `MlGrpcRoundTripTests.cs` | 110 | Prova che il valore attraversa la pipeline gRPC e la (de)serializzazione protobuf senza perdita: la predizione ricevuta sul wire è ESATTAMENTE uguale a quella calcolata in locale. Senza DB: l'IModelRegistry è sostituito con uno fake, la connection string è … |
+| `MlLabServiceTests.cs` | 493 | Test dell'orchestrazione estratta da MlLab.razor (P1-5, PRD-CONSOLIDAMENTO-ARCHITETTURA.md §3.3): prima di questa estrazione tutta la logica — validazione, addestramento/backtest, CRUD dei modelli salvati e (de)serializzazione validata dei preset — viveva n… |
+| `MlSavedModelIntegrationTests.cs` | 235 | Verifica il punto di aggancio che rende i modelli ML utilizzabili da Optimization/Discovery/ Ensemble: con StrategyName="Ml" deve risolvere la strategia caricando un dal DB (via "SavedModelId" nei parametri), esattamente come già fa per nome con le strategi… |
+| `MlStageMapperTests.cs` | 36 | Il proto ml.proto e l'enum di dominio ModelStage hanno numerazioni diverse (proto3 impone lo zero-value UNSPECIFIED): la mappatura deve reggere sui NOMI, non sugli ordinali. Questi test impediscono che un futuro riordino di uno dei due enum introduca un dis… |
+| `MlStrategySequenceTests.cs` | 82 | Verifica l'innesto dei modelli SEQUENZIALI (attention) nel backtest tramite : la strategia riconosce l' e costruisce la finestra degli ultimi T timestep a inferenza (nessun buffer stateful). Test di non-regressione del cablaggio: warm-up → Hold, nessuna ecc… |
+| `MlStrategyTests.cs` | 167 | Test end-to-end della Fase A: dataset dai fattori -&gt; addestramento -&gt; -&gt; backtest reale via . Chiude l'anello "modello addestrabile e back-testabile" descritto nella roadmap (§3.8). |
+| `MlTargetKindTests.cs` | 228 | [1.V roadmap macchina-ricerca] La volatilità come TARGET di predizione. Dopo 445.280 combinazioni direzionali con zero sopravvissuti, predire il rischio è la domanda con più probabilità di risposta (la volatilità è persistente). Questi test fissano: (a) la … |
+| `MlpReturnPredictorTests.cs` | 140 | Test di (cap. 17 ML4T in C# puro): apprendimento di relazioni lineari e NON lineari, determinismo a parità di seed, persistenza JSON e feature importance. |
+| `ModelRegistryTests.cs` | 274 | Test del Model Registry (Fase 2): gate del Deflated Sharpe sulla promozione a Champion, invariante "un solo Champion per (Symbol, Timeframe)", e ciclo chiuso col drift (Champion in Alert → Retired + retrain accodato, mai Live). DB Postgres effimero (Testcon… |
+| `MonteCarloAnalyzerTests.cs` | 106 | Test della Montecarlo Analysis evoluta (Trombetta cap. 8). |
+| `MultiLaneIsolationTests.cs` | 264 | Verifica che le corsie di trading (LaneId) siano isolate a livello dati pur condividendo lo stesso database (colonna discriminante LaneId invece di DbContext separati - vedi docs/REPORT-MULTI-LANE.md): operazioni su una corsia non devono mai leggere, scrive… |
+| `NewStrategiesTests.cs` | 94 | Verifica che le nuove strategie (MACD Trend, Bollinger Mean Reversion, Momentum) — e quelle esistenti — generino trade su dati reali BTC/USDT 1h. Saltato se il DB non è disponibile. |
+| `NewsImpactAnalyzerTests.cs` | 175 | Test di su OHLCV sintetici con un pattern di impatto NOTO (candele costruite apposta perché il ritorno atteso a ogni orizzonte sia calcolabile a mano), così le asserzioni verificano il numero esatto, non solo "diverso da zero"/"non NaN". |
+| `NewsImpactClassifierTests.cs` | 97 | Test di : classificazione per categoria e rilevamento simboli con confronto a WORD BOUNDARY — il caso critico è evitare falsi positivi da semplice substring ("ban" dentro "banana", "sol" dentro "absolute", "ada" dentro "canada"). |
+| `NotificationDispatcherTests.cs` | 284 | Test del canale di notifica (Fase 4, PRD Autonomia §7): gate default OFF, selezione provider, rate-limit a finestra scorrevole con coalescing (i soppressi vengono riportati, mai persi in silenzio), e la garanzia più importante per i producer: il dispatcher … |
+| `NotificationHttpLoggingTests.cs` | 87 | Il token del bot Telegram sta nel PATH dell'URL (vincolo dell'API Telegram) e il logging di default di HttpClientFactory scrive l'URI completo a Information: questi test verificano che il client nominato "telegram-notifier" registrato da AddProcioneNotifica… |
+| `NullTwinGeneratorTests.cs` | 145 | [I2 roadmap frontiere-profitto] Il gemello sintetico NULLO: block bootstrap dei rendimenti + segno i.i.d. per barra. Questi test fissano il contratto del nullo: (a) stessa "anagrafica" della serie reale (lunghezza, timestamp, prima candela); (b) i moduli de… |
+| `NullTwinJudgeTests.cs` | 274 | — |
+| `ObservabilityTests.cs` | 177 | Test dell'osservabilità (Fase 5): i contatori del emettono le misure attese, e i worker di autonomia le producono sugli eventi chiave. Verificato col del BCL — nessuna dipendenza da OpenTelemetry (che è solo l'export). |
+| `OnnxSentimentPilotTests.cs` | 173 | Test end-to-end del pilota ONNX (PRD-ONNX-SENTIMENT-PILOT, Livello 1): addestramento ML.NET su etichette deboli → export ConvertToOnnx → caricamento in ONNX Runtime → PARITÀ fra i due runtime attraverso lo scorer reale. È il livello 1 dello standard di veri… |
+| `OptimizationComboKeyTests.cs` | 74 | Regressione: deve formattare i decimal in InvariantCulture. Bug reale scoperto integrando MlStrategy in Optimization (soglie Long/Short, non intere): sotto cultura it-IT (virgola come separatore decimale) una chiave come "LongThreshold=0,001,ShortThreshold=… |
+| `OptimizationCpcvTests.cs` | 173 | [T1.6 roadmap macchina-ricerca] CPCV esteso al percorso strategie: da UN percorso out-of-sample (walk-forward + holdout) a una DISTRIBUZIONE di Sharpe su C(gruppi, gruppiTest) percorsi. Il test che conta: con un ottimo PIANTATO (qualità massima a X=7, coere… |
+| `OptimizationEmbargoTests.cs` | 214 | [T0.1 roadmap macchina-ricerca] Test dell'embargo nel walk-forward dell'ottimizzatore. Il difetto che l'embargo corregge: GenerateWindows produce finestre IS/OOS CONTIGUE ( oosStart = isEnd ), quindi una posizione aperta a fine in-sample prosegue nell'out-o… |
+| `OptimizationPageServiceTests.cs` | 507 | Test dell'orchestrazione estratta da Optimization.razor (P1-5, PRD-CONSOLIDAMENTO- ARCHITETTURA.md §3.3): prima di questa estrazione tutta la logica — range di default per strategia, preset validati, handoff da Backtest/ML Lab col ricentraggio dei range, co… |
+| `OptimizationSearchStrategyTests.cs` | 163 | Test dell'aggancio Bayesian a (follow-up "Bayesian in /optimization"). Verifica: (a) GridSearch default = comportamento storico (numero esatto di valutazioni, verdetto DSR popolato, trova l'ottimo); (b) ramo Bayesian deterministico a parità di seme; (c) Val… |
+| `OptimizationStatisticsTests.cs` | 63 | Test deterministici del calcolo Sharpe (il punto più delicato dell'ottimizzazione). |
+| `OrderFlowFactorsTests.cs` | 147 | [3.8b roadmap macchina-ricerca] Fattori order-flow sui campi klines recuperati da T0.3. La proprietà più importante: NULL dove i campi estesi mancano — un fattore che leggesse zero su una candela non reingerita produrrebbe un imbalance di -1 finto (tutto ve… |
+| `OrderFlowImbalanceTests.cs` | 160 | [D3] L'OFI vero (Cont-Kukanov-Stoikov) verificato caso per caso contro il valore calcolato A MANO dalla formula pubblicata, che è l'unico riferimento indipendente possibile per una definizione: non esiste una seconda implementazione da confrontare, esistono… |
+| `OverfittingGateTests.cs` | 91 | P0-3: il gate anti-overfitting universale applicato in HoldoutValidation. Verifica i tre comportamenti-cardine su dati sintetici (nessun DB/backtest): rumore/edge debole ⇒ scartato via Deflated Sharpe; edge forte con pochi tentativi ⇒ sopravvive; pannello d… |
+| `PageConfigStoreTests.cs` | 114 | Test del PageConfigStore (preset di configurazione pagina + "ultima configurazione usata"): round-trip salva/carica, upsert sullo stesso nome, isolamento per utente/pagina, e lista dei soli preset con nome (l'ultima configurazione resta fuori dal dropdown). |
+| `PairsBacktestEngineTests.cs` | 242 | Test di : allineamento per timestamp, generazione di trade su uno spread costruito per divergere e rientrare (mean-reverting per costruzione), determinismo, contabilità dollar-neutral a due gambe, e casi limite. |
+| `PairsVolFilterTests.cs` | 109 | [E1 roadmap profitto-intraday] Filtro di volatilità dello spread nel pairs backtest: salta gli ingressi quando la vol recente dello spread supera di un rapporto la vol di base — il regime in cui la mean-reversion diventa un blow-up. Questi test fissano: il … |
+| `PerformanceControlTests.cs` | 98 | Test del Performance/Equity Control (Trombetta cap. 8). |
+| `PipelineAutoResumeTests.cs` | 211 | Fase 3-C1 (PRD Autonomia §6): i run "Paused" con trigger AUTOMATICO riprendono da soli — l'evidenza della sessione 2026-07-18 è un run interrotto dallo spegnimento rimasto Paused tutto il giorno (unico chiamante di ResumeRunAsync = il bottone in /pipeline).… |
+| `PipelineCostsTests.cs` | 61 | P0-4: i backtest della pipeline devono usare i costi reali del venue (Bitget), INCLUSO il funding dei perpetual — che prima restava a 0 (default di BacktestConfiguration) mentre fee e slippage erano già applicati. PipelineCosts centralizza lettura + applica… |
+| `PipelineEngineConcurrencyTests.cs` | 196 | Regressione per un bug reale trovato durante il lavoro sulla schedulazione automatica del pipeline: persisteva un con Status="Running" PRIMA di controllare se un run era già in corso (il controllo viveva solo dentro LaunchBackground, chiamato DOPO il salvat… |
+| `PipelineFunnelMetricsTests.cs` | 110 | [2026-07-28] L'IMBUTO, cioe' dove muoiono i candidati. Fino a oggi la pipeline registrava solo "Candidates" e "Survivors": 32 run, 2.049 candidati, zero sopravvissuti, e nessun modo di sapere quale gate li stesse uccidendo. Sono tre diagnosi opposte — un ca… |
+| `PipelinePageServiceTests.cs` | 434 | Test dell'orchestrazione estratta da Pipeline.razor (P1-5, PRD-CONSOLIDAMENTO- ARCHITETTURA.md §3.3): bozze dell'editor (nuova/da esistente col merge delle fasi nuove), catena di validazione del salvataggio, CRUD config, controllo run, dettaglio con confron… |
+| `PipelineSchedulerWorkerTests.cs` | 483 | Test unitari sulle funzioni pure di (nessun DB). |
+| `PipelineStopTargetVariantTests.cs` | 68 | Verifica il parsing/applicazione delle varianti stop+target della prova di robustezza, esteso per includere il TAKE PROFIT e le combinazioni SL+TP ("SL2_TP4"), e l'auto-inserimento delle varianti TP per le cacce che elencano solo stop (autonomia). |
+| `PipelineSupervisorComparisonTests.cs` | 244 | Test della Fase C (secondo parere multi-provider) di : artifact SEPARATO con Kind proprio (i filtri di worker/pannello/test sull'advisory primaria non devono vederlo), best-effort dichiarato (un fallimento del provider di confronto non tocca mai l'advisory … |
+| `PipelineSupervisorTests.cs` | 394 | Verifica il layer AI di supervisione (SOLO advisory): l'LLM è sostituito da un fake, così nessun test tocca la rete. Copre parsing, persistenza come PipelineArtifact, idempotenza per-run, il percorso d'errore PERMANENTE (che persiste un advisory di errore) … |
+| `PipelineTests.cs` | 676 | Seeded random-walk OHLCV series (deterministic). |
+| `PortfolioOptimizerTests.cs` | 197 | Test degli allocatori di portafoglio (cap. 5/13): Mean-Variance (Max Sharpe / Min Variance), Risk Parity naive (inverse-volatility) e HRP. Casi noti (un asset molto più volatile di un altro, uno con rendimento atteso molto più alto) verificano che il segno … |
+| `PortfolioShrinkageErcTests.cs` | 131 | E1 — potenziamenti portafoglio: covarianza Ledoit-Wolf (shrinkage verso μI, ben condizionata) e Equal Risk Contribution ESATTO (coordinate cyclical, tiene conto delle correlazioni). Verifica le proprietà matematiche degli stimatori in isolamento e che gli a… |
+| `PostMortemTests.cs` | 227 | [G4] Post-mortem delle operazioni chiuse in perdita. Il contratto, in ordine di importanza: (1) dove la causa è ARITMETICA la stabilisce il codice e l'AI non viene nemmeno interpellata; (2) l'AI sceglie SOLO dentro il menù chiuso, e qualunque altra cosa val… |
+| `PromotionEvaluatorTests.cs` | 127 | Verifica la logica pura di promozione/retrocessione delle corsie. Il criterio di SICUREZZA più importante: nessuna metrica, per quanto eccellente, produce mai una promozione a Live — è verificato esplicitamente. Copre anche i singoli criteri di promozione, … |
+| `ProtectionsPageRenderTests.cs` | 295 | Rendering di /admin/protections (audit 2026-07-29). La pagina nasce da un buco preciso: quattro protezioni che decidono se un'operazione può aprirsi o chiudersi — feed real-time, esposizione correlata, router di regime, watchdog degli invarianti — esistevan… |
+| `ProtectiveExitAuditTests.cs` | 139 | [2026-08-06] Il controllo che avrebbe dovuto accorgersi al posto del proprietario. Il caso vero che lo motiva: short ETC/USDT a 7,07 con take profit a 6,378554 ; la barra 4h del 06/08 08:00 ha segnato minimo 6,31 e la posizione è rimasta aperta. Il primo te… |
+| `ProtectiveExitDiagnosticsServiceTests.cs` | 374 | [B3] La sentinella d'ombra scriveva su una tabella che nessuna query leggeva, l'allarme sulle posizioni orfane viveva solo nei log del pod, e la misura del ritardo era raggiungibile solo da riga di comando. Codice corretto, testato, e mai chiamato da niente… |
+| `ProtectiveExitLagAnalyzerTests.cs` | 539 | [B3] Il gate B3 chiede il confronto tick-vs-candela, ma in assetto osservativo i tick vengono scartati e la serie source=tick non può esistere: il confronto che deve autorizzare l'accensione richiedeva l'accensione. chiude la domanda offline usando le cande… |
+| `ProtectiveExitMetricTests.cs` | 265 | [R1/R2] La metrica procione.trading.protective_exits è la PROVA del valore del feed real-time: confrontando source=tick con source=candle si vede quanto ritardo è stato tolto agli stop. Perché quel confronto significhi qualcosa, il conteggio deve registrare… |
+| `ProtectiveExitShadowTests.cs` | 352 | [B3, sentinella] Con le uscite protettive NON guidate dai tick, il tick OSSERVA: registra che avrebbe fatto scattare un'uscita, e quando il percorso a candele la fa scattare davvero ne nasce un confronto. Serve a vedere il caso singolo che il replay offline… |
+| `ProviderCompatibilityTests.cs` | 121 | Verifica che i tipi "sensibili al provider" sopravvivano a un round-trip persistenza→reload SENZA perdita di informazione: blob binari (modelli ML), decimal ad alta precisione (prezzi crypto) e stringhe JSON. Gira su un database PostgreSQL effimero (Testcon… |
+| `PurgedTimeSeriesCvTests.cs` | 114 | Test di : copertura completa del test set attraverso i fold, nessuna sovrapposizione train/test, e correttezza delle bande di purge/embargo. |
+| `RealtimeFeedSwitchTests.cs` | 270 | L'interruttore del feed real-time deve essere una manopola vera (2026-07-29). Fino a questo giro RealtimePriceWorker leggeva Enabled UNA volta e usciva: accendere o spegnere il feed richiedeva un riavvio del processo — cioè, col motore in cluster, il riavvi… |
+| `RealtimeStreamMapperTests.cs` | 211 | [R1] Test dei parser degli stream WebSocket. Nessuna rete: si passano al mapper esattamente i payload che gli exchange pubblicano. Il requisito trasversale più importante è la TOLLERANZA: un frame inatteso, malformato o di un canale che non usiamo deve prod… |
+| `RegimeAugmentationTests.cs` | 260 | Test del regime one-hot appeso al vettore di feature (follow-up "regime nel meta-learner dello stacking"). Copre: (a) regressione — feature disattivata ⇒ comportamento identico; (b) dimensione +K quando attiva; (c) anti-look-ahead — candele future non cambi… |
+| `RegimeAutoKTests.cs` | 109 | R1.2 — robustezza del rilevamento regimi: auto-selezione di K per Silhouette (senza DB, solo ML.NET su matrice sintetica) e invariante anti-look-ahead del feature extractor (la feature alla candela i è identica sia sull'intera serie sia su una serie troncat… |
+| `RegimeChangeTriggerTests.cs` | 232 | Test del trigger contestuale (Fase 2, PRD Autonomia §5): decisione PURA del detector (cambio cluster sintetico, banda vol nei due versi), realized vol, e il worker — cooldown, wake del planner (mai lancio diretto), gate a monte di Campaign:Enabled, notifica. |
+| `RegimeLabelWindowTests.cs` | 93 | Regressione di un difetto SILENZIOSO trovato guardando un run reale della pipeline il 2026-07-25: la configurazione swing giornaliera riportava Regime: sconosciuto a ogni esecuzione, anche subito dopo aver riaddestrato il modello nello stesso run. La causa:… |
+| `RegimeRouterEngineTests.cs` | 234 | [Fase 4] Il router visto dal motore, non in isolamento. Copre il caso che una prima stesura di questo codice sbagliava: filtrare saltando l'intero giro della strategia quando NON c'era una posizione aperta sembrava equivalente, ma lasciava passare il caso p… |
+| `RejectionExplainIntegrationTests.cs` | 341 | [G6] LIVELLO 3 dello standard di verifica: il giro completo su Postgres VERO — artifact dei verdetti letto, digest costruito, narrazione persistita e riletta. Quello che i test di unità non possono dire: che il Kind nuovo non disturbi gli altri artifact del… |
+| `RejectionExplainTests.cs` | 483 | [G6] Spiegazione dei candidati bocciati dai gate. Il contratto che questi test difendono, in ordine di importanza: il riassunto è DETERMINISTICO e non dipende dall'AI (livello 2: AI spenta ⇒ digest identico); l'AI non può far comparire in pagina un candidat… |
+| `RemoteMarketDataSyncServiceTests.cs` | 62 | Test di (Fase 1 microservizi): il client HTTP verso il servizio Ingestion remoto, esercitato con un handler mock (nessuna rete reale). |
+| `RemoteTradingEngineClientTests.cs` | 216 | Test di (Fase 2b microservizi), sui due aspetti che NON passano da gRPC (quello Ã¨ coperto da ): 1. Le due letture di ordini che bypassano il servizio e interrogano Postgres direttamente, confrontate CONTRO IL MOTORE VERO sullo stesso database. Nate come pr… |
+| `RestingBracketPersistenceTests.cs` | 231 | [M3] Persistenza degli id dei bracket "resting" ( / ): prima erano [NotMapped] — un riavvio perdeva i clientOrderId dei trigger REALI ancora armati sull'exchange, e la chiusura non poteva più cancellarli (ordini orfani reduce-only pronti a scattare su una p… |
+| `RestingStopOrderTests.cs` | 107 | [P0-5] Costruzione delle richieste per gli ordini TRIGGER reduce-only "resting" (stop-market / take-profit-market) su Bitget e Binance. Verifica i parametri inviati SENZA rete (fake handler): è ciò che si può controllare in modo deterministico prima della v… |
+| `RetailSentimentIngestorTests.cs` | 117 | Test di : conversione long%→SentimentScore in [-1,+1], mapping dei simboli crypto (BTCUSD→BTC) al ticker canonico già usato dalla piattaforma, e verifica che il formato JSON reale dell'endpoint FXSSI (fixture) sia deserializzabile come ci si aspetta (nessun… |
+| `ReturnMatrixBuilderTests.cs` | 138 | è il punto in cui storici DISALLINEATI (simbolo quotato dopo, buchi di ingestione, candele sporche) diventano la matrice allineata che gli allocatori e la PCA richiedono: un errore qui sfalsa TUTTE le covarianze a valle senza sollevare eccezioni. |
+| `RiskFactorPcaTests.cs` | 148 | Test di : casi limite noti (correlazione perfetta -&gt; una sola componente spiega tutta la varianza; simboli indipendenti -&gt; varianza spiegata ripartita), proprietà strutturali (autovettori normalizzati, lunghezza degli score) e validazione input. |
+| `RiskProfileTests.cs` | 259 | [R3] Test dei profili di rischio della Modalità Semplice e della loro applicazione per corsia. Il test più importante è quello sull'INVARIANTE di sizing: un profilo che lo viola non produce una corsia "aggressiva", produce una corsia che non fa MAI trading,… |
+| `RollingPairsSpreadAnalyzerTests.cs` | 119 | Test di : anti-look-ahead (invariante di troncamento, come per gli IAlphaFactor), recupero approssimato dell'hedge ratio su una coppia sintetica cointegrata, e struttura del warm-up. Come in , le serie sintetiche sono costruite sui LOG (log Y = α + β·log X … |
+| `RssNewsSourceTests.cs` | 119 | Test di su un feed RSS 2.0 campione (nessuna chiamata di rete: il parsing è testato in isolamento, come raccomandato per l'ingestion — la parte realmente non deterministica/esterna è solo il fetch HTTP, non la logica di estrazione). |
+| `SafetyCheckerLeverageTests.cs` | 71 | Copre il check #10 di SafetyChecker.Evaluate (leva massima per Futures) e verifica che lo Spot resti invariato: nessun controllo di leva si applica quando MarketType è Spot, anche se per qualche motivo Order.Leverage fosse valorizzato oltre il limite. |
+| `SafetyCheckerTests.cs` | 165 | Verifica che OGNI safety check rifiuti correttamente l'ordine pericoloso e che un ordine valido passi. Logica pura (SafetyChecker.Evaluate), deterministica. |
+| `SafetySectionPersistenceTests.cs` | 121 | Regressione del bug adiacente a H1: il vecchio SafetyConfigWriter riscriveva Trading:Safety con un elenco di 7 chiavi scritto a mano — ogni salvataggio dal pannello riportava SILENZIOSAMENTE ai default le proprietà dimenticate (MaxLeverageAllowed, Maintenan… |
+| `SentimentAlphaFactorTests.cs` | 132 | Test di : media rolling delle notizie nella finestra, null in assenza di notizie, filtro per simbolo, e l'invariante anti-look-ahead (stesso contratto degli altri IAlphaFactor — verificato per troncamento). |
+| `SentimentCompositeCalculatorTests.cs` | 155 | Test PURI di : z-score sul baseline, rinormalizzazione dei pesi con componenti mancanti, bounds del composite, flag contrarian esattamente alle soglie, Δ7d del Fear & Greed, variazione % dell'open interest, input vuoto → neutro senza flag. |
+| `SentimentFeatureFactorTests.cs` | 94 | Test dell'opt-in ML di Sentiment 2.0: produce gli stessi numeri del diretto (delega pura, filtro simbolo dalle candele) e lo espone nei prototipi SOLO col flag EnableMlFeature, mentre Create("Sentiment") funziona sempre col provider (round-trip dei modelli … |
+| `SentimentMetricClientTests.cs` | 127 | Test dei parser PURI dei client di metriche sentiment (Sentiment 2.0): nessuna rete, fixture JSON REALI catturate dal vivo il 2026-07-19 dalle API pubbliche (alternative.me /fng/ e fapi.binance.com /futures/data/*) — la cattura stessa è la prova di raggiung… |
+| `SentimentMetricSyncServiceTests.cs` | 159 | Test di : inserimento, dedupe fra sync sovrapposte, isolamento per fonte (una che lancia non fa fallire le altre), backfill una tantum delle fonti backfillable, e popolamento del registro di salute. |
+| `SentimentScorerComparisonServiceTests.cs` | 172 | Test di (harness A/B/C): stesse notizie, stesse candele, stesso giudice ( ) per ogni scorer; LLM interamente ripiegato ⇒ riga dichiarata non disponibile (mai un confronto che non confronta); ONNX senza modello ⇒ riga dichiarata; disaccordi calcolati solo do… |
+| `SentimentSyncWorkerTests.cs` | 156 | Test del tick di : metriche + news + snapshot in cache, la cadenza delle news (secondo tick entro l'intervallo NON risincronizza), e la retention con l'esenzione della fonte FearGreed. |
+| `SeriesFreshnessTests.cs` | 138 | [B2] Il gate B2 chiedeva «7 giorni senza buchi nelle candele» e nessuno dei due strumenti che dovevano misurarlo sapeva vedere una serie che ha smesso di avanzare: lo stato di sync scriveva OK: 1 candele perché il cursore incrementale ri-chiedeva l'ultima c… |
+| `SeriesFreshnessWatchWorkerTests.cs` | 196 | [E7] La guardia di freschezza deve accorgersi DA SOLA di una serie che ha smesso di avanzare — il caso MKR/USDT, ferma dieci mesi con «OK: 1 candele» a ogni giro — e dirlo UNA volta per transizione, non una per giro. Il complemento (livello 2 dello standard… |
+| `ShapContextLensTests.cs` | 203 | [D1] Verifica della LENTE con cui la matrice SHAP raggruppa le righe. Il PRD §5a chiedeva i regimi K-means; la lente è iniettabile e ripiega sui terzili di volatilità quando quel modello non c'è. Qui si controlla che il raggruppamento sia corretto, che il r… |
+| `SignalCatalogCacheTests.cs` | 85 | Regressione del bug trovato DAL VIVO la prima notte di Composite su una corsia: la cache del SignalCatalog era per ISTANZA della lista candele — corretta nei backtest (liste immutabili), ma il TradingEngine live riusa UN buffer che cresce/scorre e ri-inizia… |
+| `SignalReversalThrottleTests.cs` | 214 | L'anti-spam n.6 del ( MinOrderIntervalSeconds ) deve frenare gli INGRESSI ravvicinati e nient'altro. PositionCloser segnava LastOrderUtc anche in chiusura, e siccome un'inversione di segnale chiude e riapre sullo STESSO timestamp di candela (vedi TradingEng… |
+| `StackedReturnPredictorTests.cs` | 113 | Test dello (rif. docs/archive/ROADMAP-QLIB.md §1.8 ): ogni modalità di stacking addestra e predice su un dataset apprendibile, e il round-trip Save/Load riproduce le stesse predizioni. Essendo un IReturnPredictor , si comporta come gli altri modelli (nessun… |
+| `StackingNonNegativeRidgeTests.cs` | 116 | E1 — meta-learner dello stacking: pesi NON-NEGATIVI (i pesi negativi estrapolano male fuori campione) e λ scelto per cross-validation invece che fisso. Verifica la proiezione di non-negatività (un base che l'OLS peserebbe negativo viene azzerato), il recupe… |
+| `StrategyDecayMonitorTests.cs` | 300 | Test unitari (dati sintetici, nessun DB) per . Dal fix M5 lo Sharpe realizzato è su base PER-CANDELA (bucket del timeframe, vuoti = 0) come lo Sharpe atteso dell'holdout — prima era "a trade" con sqrt(trade/anno), un'unità di misura diversa che rendeva la s… |
+| `StrategyDiscoveryDefaultsTests.cs` | 43 | Invariante di integrazione: OGNI strategia registrata in deve avere una griglia di default in , con nomi parametro esistenti nelle ParameterDefinitions della strategia. Senza questo, una nuova strategia appare selezionabile in Discovery ma lo sweep non prod… |
+| `SupervisorAgentTests.cs` | 136 | Verifica gli agenti supervisori del ciclo di ri-applica. Punti chiave: il Logging approva sempre (delega alle metriche); il Claude usa un fake ILlmClient (nessuna rete) attraverso il guard condiviso — su assenza di API key, breaker aperto o errore ricade SU… |
+| `SupportResistanceTests.cs` | 221 | Test di pivot, livelli S/R, trend a swing, ritracciamenti e pattern grafici (McAllen cap. 7-10, 15). |
+| `SymbolFiltersTests.cs` | 44 | Arrotondamento quantità/prezzo ai filtri LOT_SIZE/PRICE_FILTER (anti -1100). |
+| `TapeAggregatorTests.cs` | 144 | [D3 / C5 §9.2] Aggregazione del tape in barre da N secondi. I test guardano i BORDI, che è dove un aggregatore sbaglia in silenzio: un trade esattamente sul confine, una barra senza scambi, un trade del giorno dopo in coda al file (i dump giornalieri di Bin… |
+| `TearsheetStatisticsTests.cs` | 289 | Test delle metriche estese del tearsheet (Sortino, Calmar, Omega, VaR/CVaR, drawdown duration, exposure, hit-rate). |
+| `TechnicalIndicatorsTests.cs` | 222 | Test di correttezza degli indicatori su dati noti + cross-validation con implementazioni di riferimento "ingenue" + invarianti strutturali. |
+| `TelegramNotifierTests.cs` | 89 | Test del provider Telegram (Fase 4): payload corretto (chat_id + testo con icona di gravità), token SOLO dall'env (mai config), errori HTTP che diventano eccezioni (che il dispatcher contiene). Handler HTTP scriptato: nessuna chiamata reale. |
+| `TradeStatisticsTests.cs` | 147 | Test del performance report basato sui trade (TradeStatistics, Trombetta cap. 6-7). |
+| `TradingCommandHandlersTests.cs` | 142 | Test dei 7 comandi (Fase 1, PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.6 passo 3): ciascuno deve risolvere il motore della corsia GIUSTA (LaneId sulla richiesta) e passargli gli argomenti esatti, senza alterarli. `CloseAllPositionsCommand` non esiste: il suo uni… |
+| `TradingContractMapperTests.cs` | 288 | Unità della mappatura dominio↔trading.proto (Fase 2b). Copre le due classi di errore che il round-trip gRPC da solo non isolerebbe: la conversione dei decimal (denaro) e la mappatura degli enum (dove un cast ordinale trasformerebbe Paper in Testnet). |
+| `TradingEngineChampionTests.cs` | 311 | Test del Champion del registry come strategia di una lane (follow-up "Champion → TradingEngine"). Copre: (a) CONFINE DI SICUREZZA — una lane Live rifiuta il Champion con throw esplicito, mai un fallback silenzioso; (b) cache per-lane — il modello non si ric… |
+| `TradingEngineCredentialDecryptTests.cs` | 243 | Bug B2, lato motore: l'avvio Testnet/Live con credenziali cifrate da una master key DIVERSA deve fallire con un che spiega il rimedio (reinserire in /settings/exchanges), MAI con una AuthenticationTagMismatchException grezza — e se accanto alla riga indecif… |
+| `TradingEngineEquityRetentionTests.cs` | 211 | [M1] Curva equity in-memory bounded ( ) e max-drawdown di sessione PERSISTITO: prima il MaxDrawdown viveva solo nella curva in-memory, quindi un riavvio lo azzerava — e il gate assoluto HardMaxDrawdownPercent del PromotionEvaluator poteva promuovere una cor… |
+| `TradingEngineExecutionTests.cs` | 316 | Test dell'esecuzione live "a fette" (TWAP/VWAP/Iceberg) nel (rif. docs/archive/ROADMAP-QLIB.md §1.2 ). Verifica gli invarianti critici trovati in fase di design: media ponderata dopo N fette, emergency stop a metà piano che chiude SOLO il riempito e annulla… |
+| `TradingEngineFillSanityTests.cs` | 418 | Regressione del bug CRITICO B1 (docs/TEST-UI-2026-07-18.md): la corsia 2 Testnet è andata a PnL -1,8M su capitale 10k perché il testnet ha risposto "Filled" con quantità cumulative (100x+) e prezzo 0, e il motore le ha adottate così com'erano. Il fix (FillS… |
+| `TradingEngineFuturesEquityTests.cs` | 243 | Regressione del bug CRITICO C1 (audit 2026-07): ComputeEquity applicava il modello di cassa dello SPOT (±qty·prezzo) anche ai FUTURES a margine isolato. Su uno short leveraged l'equity crollava del nozionale intero alla candela di APERTURA (es. leva 5, size… |
+| `TradingEngineReconcileTests.cs` | 400 | Regressione dei bug CRITICI C2/H2 (audit 2026-07): dopo un esito di rete INCERTO il motore controllava solo GetOpenOrdersAsync — ma un MARKET riempito durante il blip NON è tra gli ordini aperti, quindi veniva scambiato per "mai piazzato": posizione reale n… |
+| `TradingEngineSizingTests.cs` | 191 | Regressione H1 (audit 2026-07): con la size hard-coded all'8% e leva 5, il nozionale per posizione era il 40% del capitale — sopra MaxPositionSizePercent (10%) — quindi il SafetyChecker rifiutava OGNI ordine e la corsia futures non faceva mai trading, in si… |
+| `TradingEngineStopTests.cs` | 265 | Test del wiring automatico stop-loss/take-profit/trailing dal backtest (via EnsembleStrategy) al TradingEngine live: applicazione all'apertura, priorità della modifica manuale, e comportamento causale del trailing (livello calcolato sul best-since-entry PRI… |
+| `TradingEngineTickExitTests.cs` | 323 | [R1] Test del percorso a TICK real-time ( ). Due proprietà sono di sicurezza, non di comodità, e i test che le coprono valgono più di tutti gli altri qui dentro: - un tick NON apre mai una posizione (gli ingressi restano governati dalle candele chiuse, l'un… |
+| `TradingGrpcRoundTripTests.cs` | 359 | Prova che il servizio di trading serve davvero via gRPC su HTTP/2 (host reale ProcioneMGR.Trading, non una chiamata C# diretta) e che i comandi attraversano la (de)serializzazione protobuf conservando la loro semantica — in particolare il TRI-STATO di SetSt… |
+| `TradingPageServiceTests.cs` | 563 | Test dell'orchestrazione estratta da Trading.razor (P1-5, audit consolidamento 2026-07-17): prima di questa estrazione, questa logica viveva nel @code del componente e non aveva test indipendenti da Blazor — solo i comportamenti visibili in markup erano cop… |
+| `TradingQueryHandlersTests.cs` | 131 | Test dei 5 handler pilota (Fase 1, PRD-CONSOLIDAMENTO-ARCHITETTURA.md §4.6 "query pilota"): ciascuno deve risolvere il motore della corsia GIUSTA (LaneId sulla richiesta, non un'istanza fissa) e restituirne il risultato inalterato. Due corsie keyed registra… |
+| `TradingServiceCollectionExtensionsTests.cs` | 391 | LA GARANZIA DI SICUREZZA CENTRALE DELLA FASE 2b. Il vincolo "mai due esecuzioni simultanee sulla stessa corsia" non Ã¨ retto da un lock distribuito, ma dal fatto che monolite e servizio remoto non registrano MAI entrambi un motore attivo per la stessa lane.… |
+| `TradingWorkerClosedBarTests.cs` | 106 | [2026-08-06] Il worker deve alimentare il motore SOLO con barre chiuse. Il guasto, trovato dal proprietario : sulla corsia 3 uno short ETC/USDT con take profit a 6,3786 non si è chiuso, benché il minimo della barra 4h delle 08:00 fosse 6,31 . Causa: l'inges… |
+| `TreeReturnPredictorTests.cs` | 137 | Test di e : apprendono una relazione non lineare che il modello lineare non può catturare, e la persistenza (Save/Load) funziona tramite la stessa base condivisa. |
+| `TreeShapTests.cs` | 285 | [D1] Verifica di TreeSHAP. La domanda non è "il codice gira" ma "i numeri sono quelli giusti", e per rispondere servono riferimenti indipendenti dall'implementazione: 1. RICOSTRUZIONE — la struttura estratta da ML.NET riproduce le predizioni del modello ver… |
+| `TripleBarrierLabelerTests.cs` | 260 | [C4] Verifica dell'etichettatura triple-barrier. Come per gli altri strumenti di misura della piattaforma, i test costruiscono serie in cui la risposta giusta è NOTA per costruzione — un percorso che tocca solo il profitto, uno che tocca solo lo stop, uno c… |
+| `ValidationStatisticsTests.cs` | 282 | Test della libreria di rigore statistico (Fase 1): Deflated/Probabilistic Sharpe, Combinatorial Purged CV e Probability of Backtest Overfitting. Verifica identità esatte note dalla letteratura, monotonicità e i due comportamenti-cardine: pannello di rumore … |
+| `VolatilityScalerTests.cs` | 197 | Test del dosaggio della posizione sulla volatilità ( ), l'unico risultato di ricerca sopravvissuto al controllo a esposizione media costante (docs/REPORT-DOSAGGIO-VOLATILITA.md). Il test che conta più di tutti è : il tetto a 1,0 è ciò che rende impossibile,… |
+| `VolumeSignalsAndRegimeFeaturesTests.cs` | 198 | [3.8a roadmap macchina-ricerca] OBV/MFI/VWAP riusabili + volume/breadth nei regimi. Fissa: (a) la correttezza numerica dei tre indicatori contro conti a mano; (b) i due segnali nuovi del catalogo (append-only, anti-look-ahead per troncamento); (c) la retro-… |
+| `WebSocketPriceFeedTests.cs` | 400 | [R1] Test del ciclo di vita della connessione real-time, con un transport finto al posto della rete: connessione, sottoscrizione, riconnessione dopo una caduta, tolleranza ai frame inutili, filtro sulle quotazioni implausibili e rilevamento di staleness. Il… |

@@ -16,6 +16,7 @@
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IPairsBacktestEngine Engine
 @inject AuthenticationStateProvider AuthProvider
+@inject ProcioneMGR.Services.MarketData.ISymbolCatalog SymbolCatalog
 
 <PageTitle>Pairs Trading</PageTitle>
 
@@ -302,7 +303,8 @@
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         await using var db = await DbFactory.CreateDbContextAsync();
-        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        // [E-04] Catalogo condiviso con cache al posto della scansione Distinct su OhlcvData
+        _knownSymbols = (await SymbolCatalog.GetKnownSymbolsAsync()).ToList();
     }
 
     private string? _userId;

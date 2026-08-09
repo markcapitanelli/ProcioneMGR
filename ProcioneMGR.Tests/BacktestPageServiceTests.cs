@@ -91,7 +91,11 @@ public sealed class BacktestPageServiceTests : IAsyncDisposable
                 new ProcioneMGR.Services.ML.Labeling.MetaLabeler(),
                 new ProcioneMGR.Services.ML.Labeling.MetaModelTrainer(),
                 new ProcioneMGR.Services.Alpha.AlphaFactorFactory(),
-                new ProcioneMGR.Services.Indicators.TechnicalIndicatorsService()));
+                new ProcioneMGR.Services.Indicators.TechnicalIndicatorsService()),
+            // [E-01] Il provider VERO sul dbFactory del test: legge SentimentMetricPoints (vuota
+            // nel seed) e restituisce lista vuota → fallback dichiarato alla costante, nessun
+            // comportamento nuovo nei test esistenti (che girano a leverage 1).
+            new FundingHistoryProvider(dbFactory));
         return (svc, dbFactory);
     }
 

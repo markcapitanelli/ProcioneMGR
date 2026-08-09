@@ -27,6 +27,23 @@ public sealed class PipelineDateRanges
     public DateTime SelectionTo { get; set; }
     public DateTime HoldoutFrom { get; set; }
     public DateTime HoldoutTo { get; set; }
+
+    /// <summary>
+    /// [D-03, Fase 1 PRD-RISANAMENTO] L'invariante selezione/holdout in UN SOLO posto (lezione
+    /// NullTwinJudge: una politica, una sola implementazione). Prima viveva solo nel salvataggio
+    /// della UI: una config nata prima del controllo, scritta a mano sul DB o creata da un tool
+    /// girava con l'holdout sovrapposto e ogni numero "out-of-sample" era contaminato in silenzio.
+    /// La chiamano sia <c>PipelinePageService.SaveConfigAsync</c> (errore di form) sia
+    /// <c>PipelineEngine.BuildContext</c> (il run NON parte). Null = valido.
+    /// </summary>
+    public string? Validate() =>
+        SelectionTo <= SelectionFrom || HoldoutTo <= HoldoutFrom
+            ? $"Range di date non validi: selezione [{SelectionFrom:yyyy-MM-dd} → {SelectionTo:yyyy-MM-dd}], " +
+              $"holdout [{HoldoutFrom:yyyy-MM-dd} → {HoldoutTo:yyyy-MM-dd}]."
+        : HoldoutFrom < SelectionTo
+            ? $"L'holdout deve iniziare DOPO la fine della selezione (mai sovrapposti): l'holdout inizia il " +
+              $"{HoldoutFrom:yyyy-MM-dd} ma la selezione finisce il {SelectionTo:yyyy-MM-dd}."
+        : null;
 }
 
 /// <summary>Per-stage configuration inside a pipeline configuration (JSON column).</summary>
@@ -169,6 +186,15 @@ public sealed class PipelineContext
     public MlTrainingOutput? MlTraining { get; set; }
     public List<DiscoveryCandidate> Candidates { get; set; } = new();
     public List<ValidatedCandidate> Validated { get; set; } = new();
+
+    /// <summary>
+    /// [D-01, Fase 1 PRD-RISANAMENTO] Combinazioni REALMENTE provate dal run: ogni stage che
+    /// cerca (StrategyDiscovery, CreativeDiscovery, …) somma qui il proprio conteggio misurato.
+    /// È l'N nominale del gate DSR in <see cref="Stages.OverfittingGate"/> — prima il numero era
+    /// misurato ma finiva solo nella UI, e il gate girava con N ≤ topN (15) contro migliaia di
+    /// combinazioni: la soglia SR* applicata era la metà di quella dovuta.
+    /// </summary>
+    public int TrialsExplored { get; set; }
     public EnsembleProposal? Ensemble { get; set; }
     public RiskAssessment? Risk { get; set; }
     public NewsImpactOutput? NewsImpact { get; set; }

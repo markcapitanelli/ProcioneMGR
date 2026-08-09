@@ -113,8 +113,15 @@ public sealed class RealtimeFeedOptions
     /// apposta: permette di tenere il feed acceso in sola OSSERVAZIONE (log e metriche, nessuna
     /// decisione) per convincersi che i prezzi siano sani prima di dargli potere di chiudere
     /// posizioni. Stesso spirito del dual-read ML della Fase 2a.
+    ///
+    /// DEFAULT FALSE, ED E' UNA MISURA, NON UNA PRUDENZA GENERICA (C-02, Fase 1 PRD-RISANAMENTO):
+    /// il gate B3 (docs/REPORT-B3-EXITLAG-2026-07-28.md) ha misurato che uscire al tocco del tick
+    /// e' PEGGIO che a barra chiusa in 24 configurazioni su 24 — il tick esce sul rumore che la
+    /// barra chiusa avrebbe riassorbito. Il default era rimasto true dall'epoca pre-misura: chi
+    /// accendeva il feed ereditava in silenzio l'assetto bocciato. Regola 7 di CLAUDE.md; il
+    /// default e' presidiato da SecurityDefaultsTests.
     /// </summary>
-    public bool DriveProtectiveExits { get; set; } = true;
+    public bool DriveProtectiveExits { get; set; }
 
     /// <summary>Ogni quanto rileggere le corsie per aggiornare l'insieme delle sottoscrizioni.</summary>
     public int SubscriptionRefreshSeconds { get; set; } = 30;
