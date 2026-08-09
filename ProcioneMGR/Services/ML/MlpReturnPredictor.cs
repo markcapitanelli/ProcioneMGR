@@ -231,7 +231,10 @@ public sealed class MlpReturnPredictor(int hiddenUnits = 16, int epochs = 200, d
         var rows = mlContext.Data.CreateEnumerable<FeatureRow>(evaluationData, reuseRowObject: false).ToList();
         var baseline = RSquared(rows.Select(r => (double)Predict(r.Features)).ToArray(),
                                 rows.Select(r => (double)r.Label).ToArray());
-        var rnd = new Random(42);
+        // [G-08] Il seed del COSTRUTTORE, non un 42 cablato: chi varia il seed per stimare la
+        // varianza del modello deve variare anche le permutazioni dell'importanza, altrimenti la
+        // varianza misurata e' sottostimata proprio dove serve onesta'.
+        var rnd = new Random(seed);
         const int permutations = 5;
 
         var results = new List<FeatureImportance>(featureNames.Count);

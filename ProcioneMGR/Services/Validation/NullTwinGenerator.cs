@@ -47,6 +47,13 @@ public static class NullTwinGenerator
         var srcReturn = new double[m];
         var srcVolume = new decimal[m];
         var srcWick = new double[m]; // (high-low-|body|)/close: la parte di escursione FUORI dal corpo
+        // [D-04, Fase 1 PRD-RISANAMENTO] Quota dello stoppino SOPRA il corpo, campionata dalla
+        // stessa barra sorgente (come volume e ampiezza). Prima lo stoppino era spartito 50/50
+        // sopra e sotto: geometria idealizzata che altera la probabilita' di TOCCO di stop e
+        // target intra-barra — proprio cio' che i backtest usano per decidere le uscite, e
+        // proprio sull'orizzonte intraday di riferimento. Col campionamento accoppiato il nullo
+        // conserva l'asimmetria reale degli stoppini pur restando privo di segnale direzionale.
+        var srcWickUpShare = new double[m];
         for (var i = 1; i < n; i++)
         {
             var prev = real[i - 1].Close;
@@ -56,6 +63,8 @@ public static class NullTwinGenerator
             var body = Math.Abs((double)(c.Close - c.Open));
             var wick = (double)(c.High - c.Low) - body;
             srcWick[i - 1] = c.Close > 0m ? Math.Max(0d, wick) / (double)c.Close : 0d;
+            var upperWick = (double)(c.High - Math.Max(c.Open, c.Close));
+            srcWickUpShare[i - 1] = wick > 0d ? Math.Clamp(upperWick / wick, 0d, 1d) : 0.5d;
         }
 
         // 1) Stationary bootstrap degli INDICI sorgente (wrap-around).
@@ -90,7 +99,12 @@ public static class NullTwinGenerator
             var bodyHi = Math.Max(open, close);
             var bodyLo = Math.Min(open, close);
             var wick = (decimal)srcWick[j] * close;
-            var low = bodyLo - wick / 2m;
+            // [D-04] Ripartizione dello stoppino campionata dalla barra sorgente, SPECCHIATA
+            // quando il segno e' stato invertito: una barra ribaltata porta con se' anche la
+            // propria geometria ribaltata (lo stoppino superiore diventa inferiore), cosi' il
+            // legame |forma|↔|rendimento| sopravvive alla randomizzazione del segno.
+            var upShare = (decimal)(sign < 0d ? 1d - srcWickUpShare[j] : srcWickUpShare[j]);
+            var low = bodyLo - wick * (1m - upShare);
             if (low <= 0m) low = bodyLo * 0.5m;
 
             twin.Add(new OhlcvData
@@ -99,7 +113,7 @@ public static class NullTwinGenerator
                 Timeframe = real[0].Timeframe,
                 TimestampUtc = real[k + 1].TimestampUtc,
                 Open = open,
-                High = bodyHi + wick / 2m,
+                High = bodyHi + wick * upShare,
                 Low = low,
                 Close = close,
                 Volume = srcVolume[j],

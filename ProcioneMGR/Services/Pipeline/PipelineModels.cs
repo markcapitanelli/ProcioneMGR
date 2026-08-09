@@ -27,6 +27,23 @@ public sealed class PipelineDateRanges
     public DateTime SelectionTo { get; set; }
     public DateTime HoldoutFrom { get; set; }
     public DateTime HoldoutTo { get; set; }
+
+    /// <summary>
+    /// [D-03, Fase 1 PRD-RISANAMENTO] L'invariante selezione/holdout in UN SOLO posto (lezione
+    /// NullTwinJudge: una politica, una sola implementazione). Prima viveva solo nel salvataggio
+    /// della UI: una config nata prima del controllo, scritta a mano sul DB o creata da un tool
+    /// girava con l'holdout sovrapposto e ogni numero "out-of-sample" era contaminato in silenzio.
+    /// La chiamano sia <c>PipelinePageService.SaveConfigAsync</c> (errore di form) sia
+    /// <c>PipelineEngine.BuildContext</c> (il run NON parte). Null = valido.
+    /// </summary>
+    public string? Validate() =>
+        SelectionTo <= SelectionFrom || HoldoutTo <= HoldoutFrom
+            ? $"Range di date non validi: selezione [{SelectionFrom:yyyy-MM-dd} → {SelectionTo:yyyy-MM-dd}], " +
+              $"holdout [{HoldoutFrom:yyyy-MM-dd} → {HoldoutTo:yyyy-MM-dd}]."
+        : HoldoutFrom < SelectionTo
+            ? $"L'holdout deve iniziare DOPO la fine della selezione (mai sovrapposti): l'holdout inizia il " +
+              $"{HoldoutFrom:yyyy-MM-dd} ma la selezione finisce il {SelectionTo:yyyy-MM-dd}."
+        : null;
 }
 
 /// <summary>Per-stage configuration inside a pipeline configuration (JSON column).</summary>
