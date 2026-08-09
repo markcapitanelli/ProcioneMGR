@@ -5,7 +5,7 @@ richiesta del proprietario: fixare i bug riscontrati, eliminare o sincronizzare 
 riallineare configurazioni e UI, rendere il server indipendente da GitHub, far ripartire tutto
 all'avvio su qualunque dispositivo.*
 
-**Stato (2026-08-08, sessione autonoma): FASE 0 COMPLETA salvo rotazione · FASE 1 COMPLETA ·
+**Stato (2026-08-09): FASE 0 COMPLETA — ROTAZIONE ESEGUITA · FASE 1 COMPLETA ·
 FASE 2 parziale (2.1-2.3 fatte, 2.4 RITIRATA, 2.5-2.9 da fare) · FASI 3-6 da fare.**
 Le decisioni di prodotto sono state prese il 2026-08-08:
 **Microstructure si integra** (DI + gate IC in `/feature-selection`) · **JumpModel si cabla dietro
@@ -23,11 +23,14 @@ Suite di partenza: 2.096 metodi di test (inventario in `docs/audit/27_TEST_INVEN
 | 2026-08-08 | **1.1** — `TrialsExplored` nel contesto, gate DSR su `max(candidati, esplorate)` × rapporto di collasso; retrocompatibile a `trialsExplored=0` | `7bbab82` |
 | 2026-08-08 | **1.4** — `IFundingHistoryProvider` agganciato al backtest (leva > 1), `FundingModelUsed` dichiarato in `/backtest` | `97b8fc1` |
 | 2026-08-08 | **2.2 + 2.3** — registrazione morta di `BayesianSearch` rimossa, `ICombinatorialPurgedCv` eliminata; **G-12 RITIRATO** (è vero LightGBM: errore dell'audit, corretto nei doc 04/06) | `544c34f` |
-| 2026-08-08 | **2.1** — `ISymbolCatalog` con cache e politica dichiarata al posto delle 7 scansioni; invalidazione dalla watchlist | *(sessione)* |
+| 2026-08-08 | **2.1** — `ISymbolCatalog` con cache e politica dichiarata al posto delle 7 scansioni; invalidazione dalla watchlist | `5c7d1bb` |
+| 2026-08-09 | **PR #72 MERGED** in master (CI tutta verde, inclusi i 458 Testcontainers) | `734560c` |
+| 2026-08-09 | **ROTAZIONE MASTER KEY ESEGUITA**: backup DB (315 MB) → vecchia chiave nel keyring → nuova generata e incollata dal proprietario → «Ri-cifra ora» = **7/7 righe** (3 exchange + 4 AI, 0 indecifrabili) → ring svuotato → probe finale «tutte decifrabili» a ring vuoto, app su 5199 | — |
 
-**Restano:** rotazione effettiva dei segreti (richiede l'operatore: corsie ferme + reinserimento) ·
-2.5 `events.proto` · 2.6 Microstructure · 2.7 JumpModel · 2.8 optimizer per nome · 2.9 deriva
-Alpha158 · Fasi 3-6.
+**Restano:** rotazione di `Trading:GrpcSharedSecret` e password Postgres (indipendenti dalla
+master key) · aggiornare i Secret K8s (`k8s-trading-secret.ps1`/`k8s-ui-secret.ps1`) con la nuova
+chiave PRIMA di ritirare su il cluster kind · `git filter-repo` facoltativo · 2.5 `events.proto` ·
+2.6 Microstructure · 2.7 JumpModel · 2.8 optimizer per nome · 2.9 deriva Alpha158 · Fasi 3-6.
 
 ---
 
