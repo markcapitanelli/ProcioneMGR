@@ -773,6 +773,34 @@
                 <button class="btn btn-primary" @onclick='() => SaveAsync("MarketData", _marketData, "Sync dati")' disabled="@(_busy || _remoteIngestion)">Salva</button>
             </div>
         </div>
+
+        @* [Fase 3] Topologia dell'ingestion (MarketData:UseRemoteIngestion +
+           MarketData:RemoteIngestionUrl). Prima era «deliberatamente senza UI»; la regola della
+           piattaforma è che l'amministratore governa tutto da qui, quindi la manopola c'è — ma il
+           vincolo di deploy resta vero e sta scritto accanto, non nascosto in un commento del file. *@
+        <div class="border rounded p-2 bg-body-tertiary mt-3">
+            <div class="fw-semibold small mb-1">Topologia ingestion @Restart()</div>
+            <div class="alert alert-danger py-2 small mb-2">
+                <strong>Regola «un solo scrittore».</strong> Vale dal riavvio, e va cambiata INSIEME
+                al deployment: con l'ingestion remota accesa serve il servizio
+                <code>procionemgr-ingestion</code> vivo in-cluster; spegnendola, quel servizio va
+                fermato. L'interruttore giusto col deployment sbagliato lascia la watchlist senza
+                aggiornamenti — o con due scrittori sulla stessa serie.
+            </div>
+            <div class="row g-3 align-items-end">
+                <div class="col-auto form-check form-switch ms-2">
+                    <input class="form-check-input" type="checkbox" id="md_remote" @bind="_marketData.UseRemoteIngestion" />
+                    <label class="form-check-label" for="md_remote">Ingestion remota (UseRemoteIngestion) @Restart()</label>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">URL del servizio (RemoteIngestionUrl) @Restart()</label>
+                    <input class="form-control" @bind="_marketData.RemoteIngestionUrl" placeholder="http://procionemgr-ingestion:8080" style="width: 22rem;" />
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-outline-danger" @onclick="SaveIngestionTopologyAsync" disabled="@_busy">Salva topologia</button>
+                </div>
+            </div>
+        </div>
         <hr />
         <div class="row g-3 align-items-end">
             <div class="col-auto form-check form-switch ms-2">
@@ -784,8 +812,27 @@
                 <input type="number" class="form-control" @bind="_marketRegime.RetrainingIntervalDays" min="1" style="width: 9rem;" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary" @onclick='() => SaveAsync("MarketRegime", _marketRegime, "Retraining regime")' disabled="@_busy">Salva</button>
+                <label class="form-label">Algoritmo (MarketRegime:Model) @Hot()</label>
+                <select class="form-select" @bind="_marketRegime.Model" style="width: 13rem;">
+                    <option value="KMeans">KMeans (default)</option>
+                    <option value="Jump">Jump (sperimentale)</option>
+                </select>
             </div>
+            <div class="col-auto">
+                <label class="form-label">λ del Jump (JumpLambda) @Hot()</label>
+                <input type="number" step="any" class="form-control" @bind="_marketRegime.JumpLambda" min="0" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveMarketRegimeAsync" disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        @* [2.7/C1] La misura decide, non la sensazione: il numero da guardare esiste già. *@
+        <div class="form-text mt-1">
+            Contratto C1: il default resta <strong>KMeans</strong> finché la misura non decide.
+            Ogni training scrive nei log il <strong>confronto delle transizioni</strong> fra K-means
+            e Jump sulla stessa serie: cambia algoritmo dopo aver letto quel confronto. Il singolo
+            run di pipeline può già forzarlo col parametro di stage <code>model</code>, senza toccare
+            questo default.
         </div>
     </div>
 </div>
@@ -1352,6 +1399,107 @@
     </div>
 </div>
 
+@* ============================ Topologia e infrastruttura ============================ *@
+@* [Fase 3 PRD-RISANAMENTO] Le chiavi che erano «deliberatamente senza UI». La regola della
+   piattaforma è che l'amministratore governa TUTTO dall'interfaccia: queste manopole esistono,
+   ma ognuna porta scritto il proprio vincolo (⟳ = vale dal riavvio) e il proprio pericolo —
+   esporre non significa banalizzare. *@
+<div class="card mb-3 border-warning" id="p-topology">
+    <div class="card-header"><i class="bi bi-diagram-3 me-1"></i>Topologia e infrastruttura <span class="badge bg-warning text-dark">⟳ riavvio</span></div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Chi ospita cosa. Tutti i campi valgono <strong>dal prossimo riavvio</strong> del
+            processo interessato: il salvataggio scrive <code>appsettings.json</code> subito, ma i
+            canali e i worker si compongono a startup.
+        </p>
+
+        <div class="alert alert-danger py-2 small">
+            <strong>Motore di trading remoto</strong> (<code>Trading:UseRemoteTrading</code>) — regola
+            «un solo scrittore»: con <code>true</code> il guscio NON registra il motore locale e parla
+            col Deployment <code>procionemgr-trading</code> (servono <code>Trading:RemoteUrl</code> e
+            il segreto gRPC, che non passano da qui); con <code>false</code> il motore gira
+            in-process e il Deployment va fermato. Il valore giusto col deployment sbagliato = due
+            esecutori sulla stessa corsia, o nessuno.
+        </div>
+        <div class="row g-3 align-items-end mb-3">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="topo_rt" @bind="_topoUseRemoteTrading" />
+                <label class="form-check-label" for="topo_rt">Motore remoto (UseRemoteTrading) @Restart()</label>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-outline-danger" @onclick='() => SaveScalarAsync("Trading:UseRemoteTrading", _topoUseRemoteTrading, "Topologia trading")' disabled="@_busy">Salva topologia trading</button>
+            </div>
+        </div>
+
+        <div class="row g-3 align-items-end mb-1">
+            <div class="col-auto">
+                <label class="form-label">Servizio ML dual-read (Ml:RemoteUrl) @Restart()</label>
+                <input class="form-control" @bind="_topoMlRemoteUrl" placeholder="vuoto = nessun canale" style="width: 22rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveMlRemoteUrlAsync" disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        <div class="form-text mb-3">
+            Il canale gRPC verso il servizio ML si crea una volta sola a startup: vuoto = dual-read
+            impossibile finché non lo valorizzi e riavvii. <code>Ml:Enabled</code> (nel pannello
+            Diagnostica qui sopra) resta l'interruttore a caldo.
+        </div>
+
+        <div class="alert alert-warning py-2 small">
+            <strong>Redirect HTTPS</strong> (<code>Http:DisableHttpsRedirection</code>) — proprietà
+            dell'ambiente di hosting: <code>true</code> SOLO dietro un reverse proxy che parla in
+            chiaro col processo (il pod ui in K8s). Sbagliarla in locale può rendere la UI
+            irraggiungibile dal browser: se succede, si corregge a mano in
+            <code>appsettings.json</code> e si riavvia.
+        </div>
+        <div class="row g-3 align-items-end mb-3">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="topo_https" @bind="_topoDisableHttpsRedirect" />
+                <label class="form-check-label" for="topo_https">Disattiva redirect HTTPS @Restart()</label>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-outline-danger" @onclick='() => SaveScalarAsync("Http:DisableHttpsRedirection", _topoDisableHttpsRedirect, "Redirect HTTPS")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+
+        <hr />
+        <div class="row g-3 align-items-end mb-1">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="topo_mig" @bind="_database.AutoMigrate" />
+                <label class="form-check-label" for="topo_mig">Migrazioni all'avvio (Database:AutoMigrate) @Restart()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Timeout lock migrazione (s) @Restart()</label>
+                <input type="number" class="form-control" @bind="_database.LockTimeoutSeconds" min="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveDatabaseAsync" disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        <div class="form-text mb-3">
+            Letto una volta, prima che l'host parta: l'effetto si vede nella riga di log del
+            prossimo avvio (schema allineato / N migrazioni applicate). Con AutoMigrate spento lo
+            schema si applica a mano (<code>dotnet ef database update</code>).
+        </div>
+
+        <div class="row g-3 align-items-end mb-1">
+            <div class="col-auto">
+                <label class="form-label">Cache fattori: serie massime (FactorCache:MaxEntries) @Restart()</label>
+                <input type="number" class="form-control" @bind="_factorCache.MaxEntries" min="16" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveFactorCacheAsync" disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        <div class="form-text">
+            Solo memoria e prestazioni: la cache è un memoizzatore con invariante
+            «cache == ricalcolo», nessun valore prodotto dalla piattaforma cambia. Oltre il tetto
+            si sfrattano le serie più vecchie (FIFO).
+        </div>
+    </div>
+</div>
+
 @code {
     // Copie LOCALI modificabili: si parte da CurrentValue e si scrive solo al Salva — così i campi
     // non "saltano" sotto le dita dell'utente quando il monitor ricarica il file appena scritto.
@@ -1455,7 +1603,20 @@
     {
         public bool Enabled { get; set; } = true;
         public int RetrainingIntervalDays { get; set; } = 7;
+
+        // [Fase 3] Prima erano scalari FUORI dal POCO: SaveSectionAsync sostituisce l'intera
+        // sezione e preserva solo gli OGGETTI non modellati, quindi un salvataggio del pannello
+        // li avrebbe cancellati dal file. Modellarli è obbligatorio, esporli è il mandato.
+        public string Model { get; set; } = ProcioneMGR.Services.Regime.RegimeModelKinds.KMeans;
+        public double JumpLambda { get; set; } = 20.0;
     }
+
+    // [Fase 3] Topologia e infrastruttura: scalari del file del guscio, tutti ⟳.
+    private bool _topoUseRemoteTrading;
+    private string? _topoMlRemoteUrl;
+    private bool _topoDisableHttpsRedirect;
+    private ProcioneMGR.Data.DatabaseMigrationOptions _database = new();
+    private ProcioneMGR.Services.Alpha.FactorCacheOptions _factorCache = new();
 
     /// <summary>Sezione Observability (l'export OTLP si compone a startup, senza POCO di opzioni).</summary>
     private sealed class ObservabilityConfig
@@ -1622,6 +1783,23 @@
         {
             Enabled = Config.GetValue("MarketRegime:Enabled", true),
             RetrainingIntervalDays = Config.GetValue("MarketRegime:RetrainingIntervalDays", 7),
+            Model = ProcioneMGR.Services.Regime.RegimeModelKinds.Normalize(
+                Config["MarketRegime:Model"] ?? ProcioneMGR.Services.Regime.RegimeModelKinds.KMeans),
+            JumpLambda = Config.GetValue("MarketRegime:JumpLambda", 20.0),
+        };
+
+        // [Fase 3] Topologia e infrastruttura.
+        _topoUseRemoteTrading = Config.GetValue("Trading:UseRemoteTrading", false);
+        _topoMlRemoteUrl = Config["Ml:RemoteUrl"];
+        _topoDisableHttpsRedirect = Config.GetValue("Http:DisableHttpsRedirection", false);
+        _database = new ProcioneMGR.Data.DatabaseMigrationOptions
+        {
+            AutoMigrate = Config.GetValue("Database:AutoMigrate", true),
+            LockTimeoutSeconds = Config.GetValue("Database:LockTimeoutSeconds", 120),
+        };
+        _factorCache = new ProcioneMGR.Services.Alpha.FactorCacheOptions
+        {
+            MaxEntries = Config.GetValue("FactorCache:MaxEntries", 512),
         };
         _notifications = Clone(NotificationMonitor.CurrentValue);
         _campaign = Clone(CampaignMonitor.CurrentValue);
@@ -1659,6 +1837,100 @@
             .OrderByDescending(r => r.CheckedAtUtc)
             .Take(20)
             .ToListAsync();
+    }
+
+    /// <summary>
+    /// [Fase 3] Scrittura chirurgica di un singolo scalare (SaveValueAsync): niente POCO
+    /// dell'intera sezione, niente rischio di cancellare chiavi non modellate.
+    /// </summary>
+    private async Task SaveScalarAsync<T>(string keyPath, T value, string label) where T : notnull
+    {
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            await ConfigWriter.SaveValueAsync(keyPath, value);
+            SetStatus($"{label}: salvato in appsettings.json — vale dal prossimo riavvio del processo interessato.", false);
+        }
+        catch (Exception ex) { SetStatus($"{label}: salvataggio fallito — {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    /// <summary>
+    /// [Fase 3] La topologia dell'ingestion si salva con la STESSA sezione del pannello sync
+    /// (stesso POCO), ma da un bottone che resta attivo anche quando l'ingestion remota è accesa:
+    /// altrimenti dalla UI non si potrebbe mai tornare indietro.
+    /// </summary>
+    private async Task SaveIngestionTopologyAsync()
+    {
+        if (_marketData.UseRemoteIngestion
+            && !Uri.TryCreate(_marketData.RemoteIngestionUrl, UriKind.Absolute, out var uri))
+        {
+            SetStatus("Topologia ingestion: con l'ingestion remota accesa serve un URL assoluto (es. http://procionemgr-ingestion:8080).", true);
+            return;
+        }
+
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            await ConfigWriter.SaveSectionAsync("MarketData", _marketData);
+            SetStatus("Topologia ingestion: salvata — vale dal prossimo riavvio, e va accompagnata dal deployment corrispondente.", false);
+        }
+        catch (Exception ex) { SetStatus($"Topologia ingestion: salvataggio fallito — {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
+    /// <summary>[Fase 3] Il POCO è privato della pagina: la validazione sta qui, come per l'heartbeat.</summary>
+    private async Task SaveMarketRegimeAsync()
+    {
+        if (_marketRegime.RetrainingIntervalDays < 1)
+        {
+            SetStatus("Retraining regime: l'intervallo dev'essere almeno 1 giorno.", true);
+            return;
+        }
+        if (_marketRegime.Model is not (ProcioneMGR.Services.Regime.RegimeModelKinds.KMeans
+            or ProcioneMGR.Services.Regime.RegimeModelKinds.Jump))
+        {
+            SetStatus("Retraining regime: algoritmi ammessi KMeans oppure Jump.", true);
+            return;
+        }
+        if (_marketRegime.JumpLambda <= 0)
+        {
+            SetStatus("Retraining regime: λ dev'essere > 0 (a 0 il Jump degenera in K-means senza penalità di salto).", true);
+            return;
+        }
+        await SaveAsync("MarketRegime", _marketRegime, "Retraining regime");
+    }
+
+    /// <summary>[Fase 3] Vuoto = canale disattivo (legittimo); valorizzato = URI assoluto.</summary>
+    private async Task SaveMlRemoteUrlAsync()
+    {
+        var url = _topoMlRemoteUrl?.Trim();
+        if (!string.IsNullOrEmpty(url) && !Uri.TryCreate(url, UriKind.Absolute, out _))
+        {
+            SetStatus("Ml:RemoteUrl: serve un URI assoluto (es. http://procionemgr-ml:8080), oppure vuoto per nessun canale.", true);
+            return;
+        }
+        await SaveScalarAsync("Ml:RemoteUrl", url ?? "", "Servizio ML (Ml:RemoteUrl)");
+    }
+
+    private async Task SaveDatabaseAsync()
+    {
+        if (_database.LockTimeoutSeconds < 1)
+        {
+            SetStatus("Database: il timeout del lock dev'essere almeno 1 secondo.", true);
+            return;
+        }
+        await SaveAsync("Database", _database, "Migrazioni database");
+    }
+
+    private async Task SaveFactorCacheAsync()
+    {
+        if (_factorCache.MaxEntries < 16)
+        {
+            SetStatus("FactorCache: servono almeno 16 serie in cache, sotto è un ricalcolo mascherato.", true);
+            return;
+        }
+        await SaveAsync("FactorCache", _factorCache, "Cache fattori");
     }
 
     private async Task SaveAsync<T>(string section, T model, string label) where T : notnull

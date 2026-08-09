@@ -123,6 +123,19 @@ else if (_remoteTrading)
                     I tick guidano le uscite ⚠️ @Hot()
                 </label>
             </div>
+            @* [Fase 3, B3] Il default non è una svista: la misura sta accanto all'interruttore,
+               perché chi lo tocca deve sapere contro quale numero sta scommettendo. *@
+            <div class="col-12">
+                <div class="alert alert-secondary py-2 small mb-0">
+                    <strong>Perché è spento (misurato 2026-07-28, report B3):</strong> uscire al tocco
+                    del tick è risultato <strong>peggiore</strong> che a barra chiusa in
+                    <strong>24 configurazioni su 24</strong> (griglia stop×timeframe×simbolo) — il
+                    tocco intrabar esce sul rumore che poi rientra. Il caso che questo interruttore
+                    protegge (crollo con gap) è sorvegliato dalla sentinella d'ombra qui sotto:
+                    accendilo solo se i suoi esiti in /trading mostrano che il ritardo a barra chiusa
+                    sta costando una categoria diversa di danno, non qualche punto base.
+                </div>
+            </div>
             <div class="col-auto">
                 <label class="form-label">Refresh sottoscrizioni (s) @Hot()</label>
                 <input type="number" class="form-control" @bind="_realtime.SubscriptionRefreshSeconds" min="5" style="width: 8rem;" />
@@ -286,6 +299,17 @@ else if (_remoteTrading)
                     Le regole filtrano davvero ⚠️ @Hot()
                 </label>
             </div>
+            @* [Fase 3] Stesso pattern del feed: la misura che ha deciso il default, accanto al toggle. *@
+            <div class="col-12">
+                <div class="alert alert-secondary py-2 small mb-0">
+                    <strong>Perché è spento (misurato, roadmap architetture-esecuzione 2026-07-25):</strong>
+                    il gate di regime valutato sul backtest <strong>non ha migliorato</strong> i
+                    risultati delle strategie che avrebbe dovuto filtrare (il gate HMM è stato
+                    respinto dalla stessa campagna). Il router resta advisory: classifica e registra
+                    ogni cambio, così la decisione di accenderlo — se mai — si prende sui suoi log,
+                    non sulla teoria che «in mean-reversion il momentum va spento».
+                </div>
+            </div>
             <div class="col-auto form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="rr_unmapped" @bind="_routing.AllowUnmappedRegimes" />
                 <label class="form-check-label" for="rr_unmapped"
@@ -410,6 +434,37 @@ else if (_remoteTrading)
     </div>
 </div>
 
+@* ============================ 6. Attestazioni exchange ============================ *@
+@* [Fase 3] Un'attestazione non è una preferenza: è la registrazione di una verifica fatta a mano
+   contro l'exchange reale. Sta qui perché filtra un percorso d'ordine, come tutto il resto della
+   pagina — e perché l'amministratore deve poterla gestire senza aprire il file. *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-patch-check me-1"></i>Attestazioni exchange</span>
+        <span>@StateBadge(_bitget.SpotMarketBuyVerified)</span>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-warning py-2 small">
+            <strong>MARKET-BUY spot Bitget</strong> (<code>Trading:Bitget:SpotMarketBuyVerified</code>):
+            la v2 di Bitget documenta il campo <code>size</code> dei market-buy spot come controvalore
+            <em>quote</em> (USDT), non quantità base — un ordine con la semantica sbagliata ha una
+            taglia completamente sbagliata. Finché questa spunta è spenta, quei market-buy vengono
+            <strong>rifiutati</strong> (fallire forte batte un ordine di taglia sbagliata).
+            Spuntala solo DOPO aver eseguito <code>tools/SpotVerify</code> contro l'exchange reale:
+            è un'attestazione, non un'opzione.
+        </div>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="bg_verified" @bind="_bitget.SpotMarketBuyVerified" />
+                <label class="form-check-label" for="bg_verified">Semantica verificata con SpotVerify @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("Trading:Bitget", _bitget, "Attestazione Bitget")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 @code {
     // Timeframe supportati per la stima delle correlazioni: gli stessi della watchlist.
     private static readonly string[] Timeframes = ["5m", "15m", "1h", "4h", "1d"];
@@ -421,6 +476,7 @@ else if (_remoteTrading)
     private CorrelatedExposureOptions _correlated = new();
     private RegimeRoutingOptions _routing = new();
     private LaneInvariantOptions _invariants = new();
+    private ProcioneMGR.Services.Exchanges.BitgetAttestationOptions _bitget = new();
 
     // I TimeSpan si editano in unità intere: un campo "00:06:00" da digitare a mano è un invito
     // all'errore di battitura, e il round-trip lo ricompone al salvataggio.
@@ -452,6 +508,7 @@ else if (_remoteTrading)
         _correlated = _snapshot.Bind<CorrelatedExposureOptions>("Trading:CorrelatedExposure");
         _routing = _snapshot.Bind<RegimeRoutingOptions>("Trading:RegimeRouting");
         _invariants = _snapshot.Bind<LaneInvariantOptions>("Trading:LaneInvariants");
+        _bitget = _snapshot.Bind<ProcioneMGR.Services.Exchanges.BitgetAttestationOptions>("Trading:Bitget");
 
         _correlatedCacheHours = Math.Max(1, (int)_correlated.CacheTtl.TotalHours);
         _routingTtlMinutes = Math.Max(1, (int)_routing.ModelCheckTtl.TotalMinutes);
