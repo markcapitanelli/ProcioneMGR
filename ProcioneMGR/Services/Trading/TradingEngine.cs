@@ -1328,6 +1328,10 @@ public sealed class TradingEngine(
                 Symbol = _state.Symbol,
                 TotalCapital = _state.TotalCapital,
                 AvailableCapital = _state.AvailableCapital,
+                // Vista UI: qui UsedCapital e' il capitale IMPEGNATO (margine sui Futures), perche'
+                // deve tornare con AvailableCapital nella contabilita' mostrata all'operatore.
+                // Il percorso di SAFETY usa un'altra semantica — l'ESPOSIZIONE nozionale — in
+                // BuildSafetyStatus [D-02]: due domande diverse, due numeri diversi, di proposito.
                 UsedCapital = _state.MarketType == MarketType.Futures
                     ? _positions.Sum(p => p.MarginBalance)
                     : _positions.Sum(p => p.Quantity * p.EntryPrice),
@@ -1527,12 +1531,9 @@ public sealed class TradingEngine(
             MarketType = _state.MarketType,
             Leverage = _state.Leverage,
             TotalCapital = _state.TotalCapital,
-            // Futures: margine bloccato (non nozionale). NB: SafetyChecker.MaxTotalExposurePercent
-            // somma questo a order.Notional (leveraged) per il nuovo ordine — asimmetria
-            // volutamente conservativa (fa scattare il limite prima, mai dopo), non un bug.
-            UsedCapital = _state.MarketType == MarketType.Futures
-                ? _positions.Sum(p => p.MarginBalance)
-                : _positions.Sum(p => p.Quantity * p.EntryPrice),
+            // [D-02] Esposizione NOZIONALE, unita' omogenea con order.Notional — vedi il
+            // doc-comment di SafetyExposure per il perche' (e per cosa c'era prima).
+            UsedCapital = SafetyExposure.ExposedNotional(_positions),
             DailyPnl = _state.DailyPnl,
             MaxDrawdown = dd,
             OpenPositionCount = _positions.Count,

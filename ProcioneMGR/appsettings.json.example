@@ -187,9 +187,9 @@
     "RemoteIngestionUrl": "http://localhost:18080",
     "Realtime": {
       "_comment": "[R1] Feed di prezzo WebSocket (market data PUBBLICO: nessuna API key, nessun vincolo MiCA). Serve a far reagire le USCITE protettive (stop loss, take profit, trailing, liquidazione) in ~1s invece che alla chiusura della candela successiva, che col solo ciclo REST puo' significare minuti. E' ADDITIVO: MarketDataSyncWorker e TradingWorker restano attivi, quindi Enabled=false riporta esattamente al comportamento precedente. I tick non aprono MAI posizioni: gli ingressi restano governati dalle candele chiuse, l'unico percorso che il backtest valida. Vive nello stesso host del motore (mai nel monolite con Trading:UseRemoteTrading=true).",
-      "_comment_DriveProtectiveExits": "false = feed acceso in sola OSSERVAZIONE (log e metriche, nessuna decisione): utile per verificare che i prezzi arrivino sani prima di dargli potere di chiudere posizioni. Confronta le metriche procione.trading.protective_exits con source=tick vs source=candle.",
+      "_comment_DriveProtectiveExits": "false PER MISURA, non per prudenza generica (B3, docs/REPORT-B3-EXITLAG-2026-07-28.md): uscire al tocco del tick e' PEGGIO che a barra chiusa in 24/24 configurazioni. Col feed acceso i tick restano in sola OSSERVAZIONE (sentinella d'ombra: log e metriche, nessuna decisione). Confronta procione.trading.protective_exits con source=tick vs source=candle prima di riconsiderare.",
       "Enabled": false,
-      "DriveProtectiveExits": true,
+      "DriveProtectiveExits": false,
       "SubscriptionRefreshSeconds": 30,
       "StaleAfterSeconds": 60,
       "ReconnectInitialDelayMs": 1000,
