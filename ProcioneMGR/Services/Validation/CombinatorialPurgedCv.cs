@@ -19,7 +19,11 @@ public sealed record CpcvSplit(
 /// out-of-sample dallo stesso storico, riducendo la varianza della stima e alimentando il calcolo
 /// del PBO. Deterministico (combinazioni in ordine lessicografico), stateless → registrabile Singleton.
 /// </summary>
-public interface ICombinatorialPurgedCv
+// [G-07, Fase 2 PRD-RISANAMENTO] L'interfaccia ICombinatorialPurgedCv e' stata RIMOSSA: non era
+// registrata in DI e nessun consumatore la risolveva — OptimizationEngine e BacktestOverfitting
+// usano la classe concreta, che e' pura e deterministica (non c'e' nulla da sostituire nei test).
+// Un'interfaccia che nessuno risolve e' un falso segnale di estensibilita'.
+public sealed class CombinatorialPurgedCv
 {
     /// <summary>
     /// Divide <paramref name="sampleCount"/> campioni ordinati temporalmente in
@@ -28,12 +32,6 @@ public interface ICombinatorialPurgedCv
     /// esclude i gruppi di test e le bande di <paramref name="purgeWindow"/> prima ed
     /// <paramref name="embargoPeriods"/> dopo ciascun gruppo di test.
     /// </summary>
-    IReadOnlyList<CpcvSplit> Split(int sampleCount, int groups, int testGroups, int purgeWindow, int embargoPeriods);
-}
-
-/// <inheritdoc cref="ICombinatorialPurgedCv"/>
-public sealed class CombinatorialPurgedCv : ICombinatorialPurgedCv
-{
     public IReadOnlyList<CpcvSplit> Split(int sampleCount, int groups, int testGroups, int purgeWindow, int embargoPeriods)
     {
         if (sampleCount < 2) throw new ArgumentOutOfRangeException(nameof(sampleCount));

@@ -174,7 +174,12 @@ builder.Services.AddScoped<ProcioneMGR.Services.Preferences.IPageConfigStore, Pr
 builder.Services.AddScoped<IOptimizationEngine, OptimizationEngine>();
 // Ottimizzazione bayesiana (Fase 6): surrogato GP + Expected Improvement, affiancabile al grid.
 builder.Services.AddSingleton<ProcioneMGR.Services.Optimization.Bayesian.IHyperparameterOptimizer, ProcioneMGR.Services.Optimization.Bayesian.BayesianOptimizationEngine>();
-builder.Services.AddSingleton<ProcioneMGR.Services.Optimization.Bayesian.BayesianSearch>();
+// [E-03, Fase 2 PRD-RISANAMENTO] BayesianSearch NON si registra piu': era un Singleton mai
+// risolto da nessuno, e per giunta INCOMPATIBILE col disegno reale — l'unico consumatore
+// (OptimizationEngine.cs, ricerca bayesiana) lo costruisce a mano per-run con
+// `new BayesianSearch(new BayesianOptimizationEngine(new BayesianOptions { Seed = config.BayesianSeed }))`
+// perche' il seed e' PER-ESPERIMENTO: un singleton col seed congelato al boot romperebbe la
+// riproducibilita' per-run. La registrazione suggeriva il contrario a chi legge questo file.
 
 // --- Nested decision execution (TWAP/VWAP/Iceberg + simulatore di fill). Additivo: il default
 //     "Immediate" riproduce il comportamento odierno. Rif. docs/archive/ROADMAP-QLIB.md §1.2. ---

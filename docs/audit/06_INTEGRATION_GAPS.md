@@ -332,15 +332,15 @@ buchi, duplicati, candele a volume nullo, salti di timestamp. Non blocca — **d
 
 ---
 
-## 🔵 G-12 — "LightGBM" è in realtà FastTree
+## ~~G-12 — "LightGBM" è in realtà FastTree~~ ❌ **RITIRATO il 2026-08-08 — reperto errato**
 
-**Classe:** `inconsistent-naming` · **Severità:** Low
-
-`GradientBoostingReturnPredictor.cs` usa **ML.NET FastTree**. Il dominio, la roadmap e la UI parlano
-di "LightGBM". Non è un difetto funzionale, è un disallineamento del linguaggio di dominio.
-
-**Proposta.** Rinominare l'etichetta UI in «Gradient Boosting (FastTree)» oppure integrare davvero
-LightGBM. La prima è gratis e onesta.
+**Verificato aprendo il file durante l'esecuzione della Fase 2:**
+`GradientBoostingReturnPredictor.BuildPipeline` chiama `mlContext.Regression.Trainers.LightGbm(...)`
+e il progetto referenzia il pacchetto `Microsoft.ML.LightGbm` 5.0.0. **È vero LightGBM**; anche
+`MlNetTreeExtractor` gestisce esplicitamente `LightGbmRegressionModelParameters` per lo SHAP.
+L'etichetta UI «Gradient Boosting (LightGBM)» è corretta. L'errore era nel deep dive (documento 20),
+che aveva dedotto "FastTree" dal nome della classe base senza aprire il `BuildPipeline`.
+Nessuna azione richiesta.
 
 ---
 

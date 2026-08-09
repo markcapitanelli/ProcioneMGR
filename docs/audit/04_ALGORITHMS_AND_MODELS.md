@@ -79,14 +79,14 @@ leakage/lookahead/overfitting · determinismo · metriche prodotte · stato · n
 |---|---|---|---|---|---|---|
 | C1 | Linear | `ML/LinearReturnPredictor.cs` | OLS/ridge | — | ✅ chiuso | `IMPL` |
 | C2 | Random Forest | `ML/RandomForestReturnPredictor.cs` | **ML.NET FastForest** | n. alberi, foglie | ✅ seed | `IMPL` |
-| C3 | "LightGBM" | `ML/GradientBoostingReturnPredictor.cs` | **ML.NET FastTree** | learning rate, alberi | ✅ seed | `IMPL` ⚠️ |
+| C3 | LightGBM | `ML/GradientBoostingReturnPredictor.cs` | **ML.NET LightGBM** (pacchetto `Microsoft.ML.LightGbm`) | foglie, iterazioni, learning rate | ✅ | `IMPL` |
 | C4 | MLP | `ML/MlpReturnPredictor.cs` (298) | rete a mano | `hiddenUnits=16`, `epochs=200`, `lr=0.01`, `seed=42` | ⚠️ vedi sotto | `IMPL` |
 | C5 | Attention | `ML/AttentionReturnPredictor.cs` (559) | attention su finestre | `windowLength=8`, `embedDim=16`, `hiddenUnits=16`, `epochs=150`, `lr=0.01`, `seed=42` | ⚠️ | `IMPL` |
 | C6 | Stacked | `ML/StackedReturnPredictor.cs` (428) | stacking, ridge non-negativa | `StackingMode` | ⚠️ | `IMPL` |
 
-> ⚠️ **C3 — nome fuorviante.** Il dominio dichiara "LightGBM"; l'implementazione è **FastTree di
-> ML.NET**. Non è un difetto funzionale (è comunque gradient boosting), ma è un disallineamento del
-> linguaggio di dominio che confonde chiunque legga la roadmap. → G-12.
+> ✅ **C3 — correzione del 2026-08-08:** un primo passaggio aveva dedotto "FastTree" dal nome
+> della classe base; l'apertura di `BuildPipeline` mostra `Trainers.LightGbm(...)` col pacchetto
+> `Microsoft.ML.LightGbm`. **È vero LightGBM**, etichette corrette, G-12 ritirato.
 
 > ⚠️ **Determinismo parziale (G-08).** I predittori accettano un `seed`, ma in tre punti la sorgente
 > casuale è **cablata**: `MlpReturnPredictor.cs:234`, `RegressionPredictorBase.cs:109`,
