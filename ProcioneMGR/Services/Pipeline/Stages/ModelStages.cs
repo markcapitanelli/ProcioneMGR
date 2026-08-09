@@ -276,6 +276,9 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
 
         var minSharpe = config.GetDecimal("minOosSharpe", 0.3m);
         var minTrades = config.GetInt("minTrades", 12);
+        // [D-01] Le combinazioni provate — non i soli candidati tenuti — alimentano l'N del gate DSR.
+        ctx.TrialsExplored += result.CombinationsTested;
+
         var kept = result.Candidates
             .Where(c => c.OutOfSampleSharpe >= minSharpe && c.TotalTrades >= minTrades)
             .ToList();
@@ -435,7 +438,9 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     /// </summary>
     private void ApplyOverfittingGate(PipelineContext ctx, List<double[]> holdoutReturns, double minDeflatedSharpe, double maxPbo, double trialCorrelationThreshold)
     {
-        var result = OverfittingGate.Apply(ctx.Validated, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrelationThreshold, log: m => ctx.LogLine($"[{Name}] {m}"));
+        var result = OverfittingGate.Apply(ctx.Validated, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrelationThreshold,
+            log: m => ctx.LogLine($"[{Name}] {m}"),
+            trialsExplored: ctx.TrialsExplored); // [D-01] l'N vero della ricerca, non il Top-N
         ctx.LogLine($"[{Name}] Gate DSR/PBO: {result.Survivors}/{ctx.Validated.Count} sopravvissuti"
                   + (result.PanelPbo is double pp ? $"; PBO pannello {pp:P0}" : "; PBO n/d")
                   + $" (soglie DSR>{minDeflatedSharpe:F2}, PBO<{maxPbo:P0}).");
@@ -698,6 +703,12 @@ public static class OverfittingGate
     /// candidati con p ≥ soglia vengono scartati. Default 1.0 = NON blocca (solo informativo): il
     /// p-value va prima osservato sul campo, poi promosso a gate — la stessa strada fatta dal DSR.</param>
     /// <param name="log">Callback opzionale di logging (una riga per evento).</param>
+    /// <param name="trialsExplored">[D-01, Fase 1 PRD-RISANAMENTO] Le combinazioni REALMENTE provate
+    /// dal run (discovery × parametri × composizioni), non i soli sopravvissuti al Top-N. Il DSR
+    /// assolve o condanna in base a QUANTE volte si è provato: con 3.000 combinazioni la soglia SR*
+    /// è il doppio che con 15 (docs/audit/20_DEEP_DIVE_CODE_ANALYSIS.md §2), e prima questo numero —
+    /// già misurato da StrategyDiscoveryEngine — finiva solo nella UI. 0 = ignoto: si usa il solo
+    /// conteggio dei candidati (comportamento storico).</param>
     public static Result Apply(
         IReadOnlyList<ValidatedCandidate> validated,
         IReadOnlyList<double[]> holdoutReturns,
@@ -705,7 +716,8 @@ public static class OverfittingGate
         double maxPbo,
         double trialCorrelationThreshold = 0.5,
         double maxPermutationPValue = 1.0,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        int trialsExplored = 0)
     {
         ArgumentNullException.ThrowIfNull(validated);
         ArgumentNullException.ThrowIfNull(holdoutReturns);
@@ -713,16 +725,28 @@ public static class OverfittingGate
         // Sharpe OOS di selezione annualizzati di TUTTI i candidati = distribuzione dei tentativi.
         var trialSharpes = validated.Select(v => v.SelectionSharpe).ToList();
 
-        // N EFFETTIVO (R1.4): la soglia SR* del DSR assume tentativi INDIPENDENTI. Se i candidati sono
-        // varianti correlate (griglia fitta, simboli gemelli), collassa i correlati per non sovracontare
-        // il test multiplo (≤ N nominale). Riusa il clustering gerarchico sui rendimenti holdout.
-        var nominalTrials = validated.Count;
-        var trials = Math.Min(
+        // N EFFETTIVO, in due mosse dichiarate:
+        //  1. [D-01] N NOMINALE = quante combinazioni la ricerca ha DAVVERO provato, non i soli
+        //     candidati tenuti dal Top-N. PowerCheckStage lo dice nel suo stesso help text:
+        //     «sottostimarlo gonfia la potenza dichiarata» — ed era esattamente ciò che accadeva
+        //     qui, con N ≤ topN (15) contro migliaia di combinazioni esplorate.
+        //  2. (R1.4) COLLASSO dei correlati: i candidati osservati con rendimenti holdout correlati
+        //     (ρ ≥ soglia) contano come un solo test. Il rapporto di collasso osservato sui
+        //     candidati si applica all'intera popolazione esplorata: se il 40% dei sopravvissuti è
+        //     ridondante, si assume la stessa ridondanza fra gli esplorati — meglio un'estensione
+        //     dichiarata che ignorare 99 prove su 100.
+        // Con trialsExplored = 0 il calcolo coincide col comportamento storico (min con nominale).
+        var nominalTrials = Math.Max(validated.Count, trialsExplored);
+        var effectiveAmongObserved = Math.Min(
             EffectiveTrials.Count(holdoutReturns.Select(r => (IReadOnlyList<double>)r).ToList(), trialCorrelationThreshold),
-            nominalTrials);
-        if (trials < nominalTrials)
+            validated.Count);
+        var collapseRatio = validated.Count > 0 ? (double)effectiveAmongObserved / validated.Count : 1.0;
+        var trials = Math.Max(1, (int)Math.Round(nominalTrials * collapseRatio));
+        if (trials != validated.Count)
         {
-            log?.Invoke($"N tentativi DSR: {nominalTrials} nominali → {trials} effettivi (cluster ρ≥{trialCorrelationThreshold:F2}).");
+            log?.Invoke(
+                $"N tentativi DSR: {validated.Count} candidati, {trialsExplored} combinazioni esplorate → " +
+                $"{nominalTrials} nominali × collasso {collapseRatio:F2} (cluster ρ≥{trialCorrelationThreshold:F2}) = {trials} effettivi.");
         }
 
         // PBO di pannello sui rendimenti holdout (serie ≥ 10 punti per il CSCV a 10 partizioni).

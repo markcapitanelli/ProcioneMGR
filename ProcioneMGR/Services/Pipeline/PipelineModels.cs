@@ -186,6 +186,15 @@ public sealed class PipelineContext
     public MlTrainingOutput? MlTraining { get; set; }
     public List<DiscoveryCandidate> Candidates { get; set; } = new();
     public List<ValidatedCandidate> Validated { get; set; } = new();
+
+    /// <summary>
+    /// [D-01, Fase 1 PRD-RISANAMENTO] Combinazioni REALMENTE provate dal run: ogni stage che
+    /// cerca (StrategyDiscovery, CreativeDiscovery, …) somma qui il proprio conteggio misurato.
+    /// È l'N nominale del gate DSR in <see cref="Stages.OverfittingGate"/> — prima il numero era
+    /// misurato ma finiva solo nella UI, e il gate girava con N ≤ topN (15) contro migliaia di
+    /// combinazioni: la soglia SR* applicata era la metà di quella dovuta.
+    /// </summary>
+    public int TrialsExplored { get; set; }
     public EnsembleProposal? Ensemble { get; set; }
     public RiskAssessment? Risk { get; set; }
     public NewsImpactOutput? NewsImpact { get; set; }
