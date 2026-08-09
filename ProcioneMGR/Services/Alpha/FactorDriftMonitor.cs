@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using ProcioneMGR.Data;
@@ -105,12 +106,67 @@ public sealed class FactorDriftWorker(
     /// Solo i fattori scritti a mano, non il catalogo Alpha158: 158 fattori × N serie × finestre
     /// rolling trasformerebbero un monitor in un consumo di CPU permanente. Chi vuole guardare
     /// l'intero catalogo lo fa su richiesta da /feature-selection.
+    ///
+    /// [2.9 PRD-RISANAMENTO] A questa base si AGGIUNGONO, per serie, i fattori del modello Champion
+    /// di quella coppia (vedi <see cref="ChampionSpecsAsync"/>): l'esclusione in blocco del catalogo
+    /// lasciava scoperti proprio i fattori che un modello in carica sta usando — quelli per cui
+    /// "si sta spegnendo?" non è curiosità ma manutenzione. Il costo resta limitato: non 158 × serie,
+    /// ma i pochi (top-K) che un Champion dichiara nel proprio FactorsJson.
     /// </summary>
     private static readonly string[] MonitoredFactors =
     [
         "Momentum", "MeanReversion", "RealizedVol", "ParkinsonVol", "RelativeVolume",
         "RsiFactor", "MacdFactor", "DistanceFromMa",
     ];
+
+    /// <summary>
+    /// [2.9] I fattori dichiarati dai modelli <see cref="ModelStage.Champion"/>, per serie.
+    /// Champion e non Staging/Challenger: il monitor sorveglia ciò che è IN CARICA, non ogni
+    /// esperimento salvato. FeatureName come chiave (due varianti parametriche dello stesso
+    /// fattore sono feature diverse); un FactorName che la factory non conosce più si salta con
+    /// un log invece di far cadere il giro — il monitor è advisory, fail-open per regola 4.
+    /// </summary>
+    private async Task<Dictionary<string, List<FactorSpec>>> ChampionSpecsAsync(
+        ApplicationDbContext db, CancellationToken ct)
+    {
+        var bySeries = new Dictionary<string, List<FactorSpec>>(StringComparer.Ordinal);
+        var champions = await db.SavedMlModels
+            .Where(m => m.Stage == ModelStage.Champion)
+            .Select(m => new { m.Name, m.Symbol, m.Timeframe, m.FactorsJson })
+            .ToListAsync(ct);
+
+        foreach (var model in champions)
+        {
+            List<SavedFactorSpecDto> dtos;
+            try
+            {
+                dtos = JsonSerializer.Deserialize<List<SavedFactorSpecDto>>(model.FactorsJson) ?? [];
+            }
+            catch (JsonException ex)
+            {
+                logger.LogWarning(ex, "FactorsJson illeggibile per il Champion '{Name}' ({Symbol} {Tf}): fattori non sorvegliati.",
+                    model.Name, model.Symbol, model.Timeframe);
+                continue;
+            }
+
+            var key = $"{model.Symbol}|{model.Timeframe}";
+            foreach (var dto in dtos)
+            {
+                try
+                {
+                    var factor = factorFactory.Create(dto.FactorName);
+                    if (!bySeries.TryGetValue(key, out var list)) bySeries[key] = list = [];
+                    list.Add(new FactorSpec(dto.FeatureName, factor, dto.Parameters));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Fattore '{Factor}' del Champion '{Name}' non ricostruibile: non sorvegliato.",
+                        dto.FactorName, model.Name);
+                }
+            }
+        }
+        return bySeries;
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -255,16 +311,34 @@ public sealed class FactorDriftWorker(
             .Take(maxSeries)
             .ToList();
 
-        var specs = MonitoredFactors.Select(name =>
+        var baseSpecs = MonitoredFactors.Select(name =>
         {
             var factor = factorFactory.Create(name);
             return new FactorSpec(name, factor, factor.ParameterDefinitions.ToDictionary(d => d.Key, d => d.Default));
         }).ToList();
 
+        // [2.9] I fattori dei Champion, per serie: si sommano alla base scritta a mano.
+        var championSpecs = await ChampionSpecsAsync(db, ct);
+
         var results = new List<FactorDriftSeriesSnapshot>(series.Count);
         foreach (var s in series)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Unione per FeatureName: se il Champion usa un fattore già nella base (stesso nome e
+            // parametri di default) non lo si calcola due volte.
+            var specs = baseSpecs;
+            if (championSpecs.TryGetValue($"{s.Symbol}|{s.Timeframe}", out var extra))
+            {
+                var known = baseSpecs.Select(sp => sp.FeatureName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var added = extra.Where(sp => known.Add(sp.FeatureName)).ToList();
+                if (added.Count > 0)
+                {
+                    specs = [.. baseSpecs, .. added];
+                    logger.LogInformation("Deriva fattori: {Symbol} {Tf} sorveglia anche {Count} fattori del Champion ({Names}).",
+                        s.Symbol, s.Timeframe, added.Count, string.Join(", ", added.Select(a => a.FeatureName)));
+                }
+            }
 
             // Il tentativo conta comunque per la rotazione, anche se la serie verrà saltata subito
             // dopo per mancanza di candele: altrimenti resterebbe in cima alla coda per sempre.

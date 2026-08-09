@@ -1,5 +1,6 @@
 ﻿using ProcioneMGR.Services.Alpha;
 using ProcioneMGR.Services.Exchanges;
+using ProcioneMGR.Services.ML;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.PairsTrading;
 using ProcioneMGR.Services.Regime;
@@ -28,6 +29,9 @@ public sealed class FeatureEngineeringStage(
         new("minAbsIc", "Soglia |IC| minima", "0.01", "sotto questa soglia il fattore non viene selezionato"),
         new("minIcTStat", "Soglia |t-stat| IC (Newey-West)", "0", "0 = disattivo; es. 2 = tiene solo fattori con IC statisticamente significativo"),
         new("forwardHorizon", "Orizzonte forward (candele)", "1", "target dell'IC"),
+        // [2.6] Default false: il gate cambia l'insieme selezionato e quindi il modello a valle —
+        // si accende per scelta esplicita del run, non di nascosto.
+        new("incrementalIcGate", "Filtro incrementale (IC parziale)", "false", "true = scarta i fattori che non aggiungono informazione oltre ai già selezionati"),
     ];
 
     public string? ValidateInput(PipelineContext ctx)
@@ -74,11 +78,35 @@ public sealed class FeatureEngineeringStage(
         }
 
         // Selezione per |IC| ≥ soglia e (opzionale) significatività Newey-West |t| ≥ soglia.
-        var selected = results
+        var survivors = results
             .Where(r => Math.Abs(r.InformationCoefficient) >= minAbsIc && (minIcTStat <= 0d || Math.Abs(r.IcTStatistic) >= minIcTStat))
             .OrderByDescending(r => Math.Abs(r.InformationCoefficient))
-            .Take(topK)
             .ToList();
+
+        // [2.6] Gate incrementale (opt-in): prima del taglio a top-K si scartano i fattori che non
+        // AGGIUNGONO informazione oltre ai già tenuti (IC parziale + nullo per permutazione, dal
+        // modulo Microstructure). Applicarlo PRIMA del Take significa che i posti liberati da un
+        // ridondante vanno al prossimo fattore indipendente, non persi.
+        if (config.GetBool("incrementalIcGate", false) && survivors.Count > 1)
+        {
+            ct.ThrowIfCancellationRequested();
+            var protoByName = prototypes.ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
+            var ordered = survivors
+                .Select(r => protoByName[r.FactorName])
+                .Select(p => new FactorSpec(p.Name, p, p.ParameterDefinitions.ToDictionary(d => d.Key, d => d.Default)))
+                .ToList();
+            var filter = IncrementalFactorFilter.Apply(ordered, candles, horizon);
+            foreach (var entry in filter.Entries.Where(e => !e.Kept))
+            {
+                var o = entry.Outcome!;
+                ctx.LogLine($"[{Name}] Gate incrementale: {entry.Spec.FeatureName} scartato — IC parziale {o.PartialIc:F4} (grezzo {o.RawIc:F4}, corr. col tenuto {o.CorrelationWithProxy:F2}).");
+            }
+            var keptNames = filter.Kept.Select(k => k.FeatureName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            survivors = survivors.Where(r => keptNames.Contains(r.FactorName)).ToList();
+            ctx.LogLine($"[{Name}] Gate incrementale: {filter.DroppedCount} ridondanti scartati, {survivors.Count} indipendenti restano.");
+        }
+
+        var selected = survivors.Take(topK).ToList();
         foreach (var s in selected) s.Selected = true;
 
         ctx.Features = new FeatureSelectionOutput
