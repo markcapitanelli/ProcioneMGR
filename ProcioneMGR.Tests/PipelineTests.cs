@@ -513,7 +513,8 @@ public class EnsembleAssemblyStageTests
     {
         var stage = new EnsembleAssemblyStage(
             new UnusedBacktestEngine(),
-            new ProcioneMGR.Services.Portfolio.HierarchicalRiskParityOptimizer(new ProcioneMGR.Services.ML.HierarchicalClustering()),
+            // [2.8] Lo stage ora riceve TUTTI gli optimizer e risolve per nome (default HRP).
+            [new ProcioneMGR.Services.Portfolio.HierarchicalRiskParityOptimizer(new ProcioneMGR.Services.ML.HierarchicalClustering())],
             new FakeRulesProvider());
 
         var ctx = new PipelineContext

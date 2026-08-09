@@ -10,27 +10,50 @@ namespace ProcioneMGR.Services.Pipeline.Stages;
 
 /// <summary>
 /// Stage 11 — assembles the final survivors into a weighted ensemble proposal. Weights come
-/// from HRP on the legs' selection-range equity returns (2+ legs), then get a regime bias
-/// from the pipeline rules (mean-reversion legs weigh more in sideways regimes, trend legs in
-/// trending ones) and are renormalized.
+/// from a portfolio optimizer on the legs' selection-range equity returns (2+ legs), then get a
+/// regime bias from the pipeline rules (mean-reversion legs weigh more in sideways regimes,
+/// trend legs in trending ones) and are renormalized.
+///
+/// [2.8 PRD-RISANAMENTO, chiude C-05] L'allocatore non è più HRP cablato come tipo concreto:
+/// si sceglie PER NOME col parametro di stage <c>portfolioOptimizer</c> fra le implementazioni
+/// registrate di <see cref="IPortfolioOptimizer"/> (HRP · MeanVariance · RiskParity). Il default
+/// resta HRP: a parametro assente i pesi sono IDENTICI a prima (regressione presidiata da
+/// EnsembleAssemblyWeightsRegressionTests). Prima /portfolio confrontava quattro allocazioni che
+/// l'operatore non poteva applicare — ora la scelta vive dove passa l'operatività, e resta
+/// dentro i gate della pipeline: nessun percorso diretto verso l'esecuzione.
 /// </summary>
 public sealed class EnsembleAssemblyStage(
     IBacktestEngine backtest,
-    HierarchicalRiskParityOptimizer hrp,
+    IEnumerable<IPortfolioOptimizer> optimizers,
     IPipelineRulesProvider rulesProvider) : IPipelineStage
 {
     public string Name => "EnsembleAssembly";
     public string DisplayName => "Assemblaggio ensemble";
-    public string Description => "Pesa i sopravvissuti (HRP + bias di regime) in una proposta di ensemble.";
+    public string Description => "Pesa i sopravvissuti (optimizer selezionabile + bias di regime) in una proposta di ensemble.";
     public int DefaultOrder => 11;
     public IReadOnlyList<StageDependency> Dependencies => [StageDependency.On("HoldoutValidation")];
 
     public IReadOnlyList<StageParameterDefinition> ParameterDefinitions =>
     [
         new("maxLegs", "Gambe massime", "3", ""),
+        new("portfolioOptimizer", "Optimizer dei pesi", "HRP",
+            "HRP (default storico) | MeanVariance | RiskParity — nome sconosciuto = HRP, dichiarato nel log"),
         .. PipelineCosts.ParameterDefinitions,
         new("positionSizePercent", "Size posizione (%)", "10", ""),
     ];
+
+    /// <summary>Risolve l'optimizer per nome; sconosciuto ⇒ HRP con riga di log (mai rompere il run per un typo).</summary>
+    private IPortfolioOptimizer ResolveOptimizer(string requested, Action<string> log)
+    {
+        var chosen = optimizers.FirstOrDefault(o => string.Equals(o.Name, requested, StringComparison.OrdinalIgnoreCase));
+        if (chosen is null)
+        {
+            chosen = optimizers.First(o => o.Name == "HRP");
+            log($"Optimizer '{requested}' sconosciuto: uso {chosen.Name} (default). Disponibili: "
+                + string.Join(", ", optimizers.Select(o => o.Name)) + ".");
+        }
+        return chosen;
+    }
 
     public string? ValidateInput(PipelineContext ctx)
         => ctx.Validated.Count(v => v.Survived) == 0 ? "Nessun sopravvissuto da assemblare." : null;
@@ -40,6 +63,10 @@ public sealed class EnsembleAssemblyStage(
         var rules = rulesProvider.GetRules();
         var maxLegs = config.GetInt("maxLegs", rules.MaxLegs);
         var costs = PipelineCosts.FromConfig(config);
+        // [2.8] Optimizer per nome (default HRP = pesi identici allo storico).
+        var optimizer = ResolveOptimizer(config.GetString("portfolioOptimizer", "HRP"),
+            m => ctx.LogLine($"[{Name}] {m}"));
+        ctx.LogLine($"[{Name}] Optimizer dei pesi: {optimizer.Name}.");
 
         // Ordered by SELECTION-phase walk-forward Sharpe (the holdout stays verdict-only).
         var legs = ctx.Validated
@@ -87,9 +114,9 @@ public sealed class EnsembleAssemblyStage(
                 var aligned = returnsByLeg.ToDictionary(
                     kv => kv.Key,
                     kv => (IReadOnlyList<decimal>)commonDates.Select(d => kv.Value[d]).ToList());
-                var allocation = hrp.Optimize(aligned);
+                var allocation = optimizer.Optimize(aligned);
                 weights = allocation.Weights.ToDictionary(kv => kv.Key, kv => kv.Value * 100m);
-                proposal.Method = "HRP";
+                proposal.Method = optimizer.Name; // [2.8] il metodo dichiarato segue l'optimizer REALE, non un'etichetta fissa
             }
         }
 
