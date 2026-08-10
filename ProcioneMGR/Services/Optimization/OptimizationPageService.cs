@@ -61,7 +61,8 @@ public sealed class OptimizationPageService(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IOptimizationEngine optEngine,
     IStrategyFactory strategyFactory,
-    IExperimentTracker tracker)
+    IExperimentTracker tracker,
+    ProcioneMGR.Services.MarketData.ISymbolCatalog symbolCatalog)
 {
     public const string MlStrategyName = "Ml";
 
@@ -83,8 +84,9 @@ public sealed class OptimizationPageService(
     /// <summary>NB: come nell'originale, i modelli ML NON sono filtrati per utente (la select filtra poi per symbol/timeframe).</summary>
     public async Task LoadInitialDataAsync(CancellationToken ct = default)
     {
+        // [E-04] Catalogo condiviso con cache al posto della scansione Distinct su OhlcvData
+        KnownSymbols = await symbolCatalog.GetKnownSymbolsAsync(ct);
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        KnownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync(ct);
         MlModels = await db.SavedMlModels.OrderByDescending(m => m.CreatedAtUtc).ToListAsync(ct);
     }
 

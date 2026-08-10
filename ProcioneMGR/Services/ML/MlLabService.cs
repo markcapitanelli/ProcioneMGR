@@ -65,6 +65,7 @@ public sealed class MlLabService(
     IAlphaFactorFactory factorFactory,
     IDatasetBuilder datasetBuilder,
     IExperimentTracker tracker,
+    ProcioneMGR.Services.MarketData.ISymbolCatalog symbolCatalog,
     ProcioneMGR.Services.Regime.IRegimeDetector? regimeDetector = null,
     ProcioneMGR.Services.Regime.IMarketFeatureExtractor? featureExtractor = null) : IDisposable
 {
@@ -133,8 +134,9 @@ public sealed class MlLabService(
     /// <summary>Simboli disponibili + fattori minati e modelli salvati dell'utente (OnInitializedAsync).</summary>
     public async Task LoadInitialDataAsync(string? userId, CancellationToken ct = default)
     {
+        // [E-04] Catalogo condiviso con cache al posto della scansione Distinct su OhlcvData
+        KnownSymbols = await symbolCatalog.GetKnownSymbolsAsync(ct);
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        KnownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync(ct);
         SavedFactors = userId is null
             ? []
             : await db.SavedFactors.Where(f => f.UserId == userId).OrderByDescending(f => f.CreatedAtUtc).ToListAsync(ct);

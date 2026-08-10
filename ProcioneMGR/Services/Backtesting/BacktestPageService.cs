@@ -63,7 +63,8 @@ public sealed class BacktestPageService(
     LeverageAdvisor levAdvisor,
     ExcursionAnalyzer excursion,
     ProcioneMGR.Services.ML.Labeling.IMetaLabelingAnalysisService metaLabeling,
-    IFundingHistoryProvider fundingHistory)
+    IFundingHistoryProvider fundingHistory,
+    ProcioneMGR.Services.MarketData.ISymbolCatalog symbolCatalog)
 {
     // --- Stato caricato / del run corrente (letto dal markup, mai scritto dal componente) ------
 
@@ -89,8 +90,8 @@ public sealed class BacktestPageService(
 
     public async Task LoadKnownSymbolsAsync(CancellationToken ct = default)
     {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        KnownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync(ct);
+        // [E-04] Catalogo condiviso con cache al posto della scansione Distinct su OhlcvData
+        KnownSymbols = await symbolCatalog.GetKnownSymbolsAsync(ct);
     }
 
     // --- Catalogo strategie --------------------------------------------------------------------

@@ -24,6 +24,7 @@
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthProvider
+@inject ProcioneMGR.Services.MarketData.ISymbolCatalog SymbolCatalog
 
 <PageTitle>Selezione feature (IC)</PageTitle>
 
@@ -520,7 +521,8 @@
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
         _alpha158Count = Factory.Prototypes.Count(IsAlpha158);
         await using var db = await DbFactory.CreateDbContextAsync();
-        _knownSymbols = await db.OhlcvData.Select(c => c.Symbol).Distinct().OrderBy(s => s).ToListAsync();
+        // [E-04] Catalogo condiviso con cache al posto della scansione Distinct su OhlcvData
+        _knownSymbols = (await SymbolCatalog.GetKnownSymbolsAsync()).ToList();
 
         // [Fase 3, Q6] L'holdout dell'ultima configurazione di pipeline, per il warning di
         // sovrapposizione. Best-effort: se manca o non si legge, il warning semplicemente non c'è.

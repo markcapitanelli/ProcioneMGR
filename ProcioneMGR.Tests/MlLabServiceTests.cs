@@ -137,6 +137,8 @@ public sealed class MlLabServiceTests : IAsyncDisposable
             _provider.GetRequiredService<IAlphaFactorFactory>(),
             new DatasetBuilder(),
             new NoopTracker(),
+            // [E-04] Il catalogo VERO sul dbFactory del test, come in produzione.
+            new ProcioneMGR.Services.MarketData.SymbolCatalog(dbFactory),
             regimeDetector,
             featureExtractor);
         return (svc, dbFactory);

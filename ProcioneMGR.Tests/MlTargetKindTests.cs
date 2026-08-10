@@ -116,7 +116,7 @@ public class MlTargetKindTests
         // [1.V fase 2] La guardia si è SPOSTATA dal salvataggio al consumo: senza modello
         // addestrato l'errore è quello storico ("nessun modello"), NON un rifiuto di semantica.
         // La semantica è fatta rispettare da MlModelLoader/ModelRegistry (test sotto).
-        var svc = new MlLabService(null!, null!, null!, null!, null!);
+        var svc = new MlLabService(null!, null!, null!, null!, null!, null!);
         var cfg = new MlConfigSnapshot(
             ExchangeName.Binance, "BTC/USDT", "1d", DateTime.UtcNow.AddDays(-30), DateTime.UtcNow,
             70, 5, ["Momentum"], [], "LightGbm", [], StackingMode.Average, 16, 8,
@@ -160,7 +160,7 @@ public class MlTargetKindTests
     {
         // Il target del MODELLO IN SESSIONE decide, non il form: senza sessione la guardia non può
         // scattare (SessionTargetKind default = ForwardReturn), quindi qui si verifica il default...
-        var svc = new MlLabService(null!, null!, null!, null!, null!);
+        var svc = new MlLabService(null!, null!, null!, null!, null!, null!);
         Assert.Equal(MlTargetKind.ForwardReturn, svc.SessionTargetKind);
 
         // ...e il messaggio storico per l'assenza di modello.

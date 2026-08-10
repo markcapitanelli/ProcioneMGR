@@ -201,6 +201,16 @@ scan. Il risultato sono ~30 simboli distinti.
 Contesto: il Filone H (prestazioni, 2026-08-05) ha lavorato sulla configurazione del DB
 (`random_page_cost` 4→1,1 su NVMe, 15×). Questo pattern è rimasto.
 
+> **Esito (chiuso in due tempi, 2026-08-10):** la 2.1 del PRD-RISANAMENTO (2026-08-08) ha
+> introdotto `ISymbolCatalog` (cache TTL 5 min, invalidazione dalla watchlist) e convertito le
+> pagine dell'elenco sopra — ma il censimento **per pagine** non contava i page service: quattro
+> copie sono sopravvissute (`FeatureSelection.razor`, `BacktestPageService`,
+> `OptimizationPageService`, `MlLabService`), riscoperte dalla verifica browser del 2026-08-10
+> (aperture di /feature-selection e /backtest da ~5 s). Convertite anche quelle; da allora
+> `SymbolScanGuardTests` scandisce i sorgenti e vieta ogni scansione diretta nuova, con allowlist
+> motivata (il catalogo stesso e `Discovery.razor`, che chiede le coppie simbolo+timeframe
+> realmente presenti — semantica che il catalogo non copre).
+
 ---
 
 ## 5. 🔵 E-05 — Il template di configurazione è indietro rispetto al codice
