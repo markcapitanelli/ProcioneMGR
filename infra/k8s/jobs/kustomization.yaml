@@ -21,7 +21,9 @@ images:
   # [B3, 2026-07-28] Bump NECESSARIO, non cosmetico: la CronJob mensile `exitlag-monthly` invoca una
   # fase che nel tag precedente non esiste. Con 5ad93ae il job sarebbe partito puntuale e avrebbe
   # stampato "Fase sconosciuta" con uscita 0 — verde, mensile e inutile.
+  # [Fase 4, 2026-08-10] Prima promozione a build locale (scripts/build-images-local.ps1 -Targets all;
+  # vedi ui/kustomization.yaml). Precedenti (build CI): strategyhunter 562b359d, dbbackup 5ad93ae7.
   - name: ghcr.io/markcapitanelli/strategyhunter
-    newTag: 562b359db3733aec8f222d76fad59c18ff7aefdd
+    newTag: local-cde4dda1
   - name: ghcr.io/markcapitanelli/dbbackup
-    newTag: 5ad93ae73c53dc5390a147b3a004f7cbb2210314
+    newTag: local-cde4dda1

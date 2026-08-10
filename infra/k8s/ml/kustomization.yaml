@@ -12,4 +12,6 @@ resources:
 
 images:
   - name: ghcr.io/markcapitanelli/procionemgr-ml
-    newTag: f59845c4897420ff64a33fc2c36eb3ea5429cd9c
+    # [Fase 4, 2026-08-10] Prima promozione a build locale (vedi ui/kustomization.yaml).
+    # Precedente (build CI): f59845c4897420ff64a33fc2c36eb3ea5429cd9c.
+    newTag: local-cde4dda1

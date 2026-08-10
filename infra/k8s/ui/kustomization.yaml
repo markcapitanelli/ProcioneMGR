@@ -38,4 +38,8 @@ configMapGenerator:
 
 images:
   - name: ghcr.io/markcapitanelli/procionemgr
-    newTag: f59845c4897420ff64a33fc2c36eb3ea5429cd9c
+    # [Fase 4, 2026-08-10] Prima promozione a build LOCALE (scripts/build-images-local.ps1):
+    # local-<sha> e' l'equivalente locale del digest — dice da quale commit vengono i bit.
+    # Il bump resta manuale, la CI resta possibile (newTag a uno sha di CI in un overlay).
+    # Precedente (build CI): f59845c4897420ff64a33fc2c36eb3ea5429cd9c.
+    newTag: local-cde4dda1
