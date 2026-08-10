@@ -208,8 +208,11 @@ Contesto: il Filone H (prestazioni, 2026-08-05) ha lavorato sulla configurazione
 > `OptimizationPageService`, `MlLabService`), riscoperte dalla verifica browser del 2026-08-10
 > (aperture di /feature-selection e /backtest da ~5 s). Convertite anche quelle; da allora
 > `SymbolScanGuardTests` scandisce i sorgenti e vieta ogni scansione diretta nuova, con allowlist
-> motivata (il catalogo stesso e `Discovery.razor`, che chiede le coppie simbolo+timeframe
-> realmente presenti — semantica che il catalogo non copre).
+> motivata e controllo delle voci stantie. Ultimo tassello (sempre 2026-08-10): il catalogo ora
+> risponde anche sulle **coppie** con `GetKnownSeriesAsync` — serie con dati più quelle tracciate,
+> MAI il cartesiano simboli × timeframe, stesso snapshot in cache dei simboli — così anche
+> `Discovery.razor` (che chiede le coppie, non i soli simboli) è convertita e l'allowlist contiene
+> solo il catalogo stesso.
 
 ---
 

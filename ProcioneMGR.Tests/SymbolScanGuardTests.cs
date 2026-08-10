@@ -23,14 +23,11 @@ public sealed class SymbolScanGuardTests
     /// </summary>
     private static readonly Dictionary<string, string> AllowedScans = new()
     {
-        // Il catalogo stesso: l'UNICA scansione che deve esistere, è il suo mestiere.
+        // Il catalogo stesso: l'UNICA scansione che deve esistere, è il suo mestiere. Dal
+        // 2026-08-10 copre anche le coppie (GetKnownSeriesAsync), quindi pure Discovery.razor —
+        // che chiedeva le coppie, non i soli simboli — passa dal catalogo e non sta più qui.
         ["ProcioneMGR/Services/MarketData/SymbolCatalog.cs"] =
             "punto unico dichiarato della scansione, con cache e politica testata",
-        // Chiede le COPPIE (Symbol, Timeframe) realmente presenti a DB: il catalogo copre solo
-        // l'asse simboli, e il prodotto cartesiano simboli × timeframe mentirebbe sulle serie
-        // senza dati. Candidata a un'estensione del catalogo, non a una sostituzione ingenua.
-        ["ProcioneMGR/Components/Pages/Discovery.razor"] =
-            "coppie simbolo+timeframe con dati: semantica non coperta dal catalogo",
     };
 
     /// <summary>
