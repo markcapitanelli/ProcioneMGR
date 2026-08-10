@@ -17,6 +17,7 @@
 @inject ProcioneMGR.Services.Experiments.IExperimentTracker Tracker
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject AuthenticationStateProvider AuthProvider
+@inject ProcioneMGR.Services.MarketData.ISymbolCatalog SymbolCatalog
 
 <PageTitle>Strategy Discovery</PageTitle>
 <h1>Strategy Discovery <span class="badge bg-secondary">walk-forward</span></h1>
@@ -253,12 +254,13 @@
         var state = await AuthProvider.GetAuthenticationStateAsync();
         _userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var pairs = await db.OhlcvData.Select(c => new { c.Symbol, c.Timeframe }).Distinct().ToListAsync();
-        _symbols = pairs.Select(p => p.Symbol).Distinct().OrderBy(s => s).ToList();
-        _timeframes = pairs.Select(p => p.Timeframe).Distinct().OrderBy(t => t).ToList();
+        // [E-04] Catalogo condiviso con cache al posto della scansione Distinct su OhlcvData:
+        // le COPPIE note (con dati o tracciate), da cui i due assi del form.
+        var series = await SymbolCatalog.GetKnownSeriesAsync();
+        _symbols = series.Select(k => k.Symbol).Distinct().ToList();
+        _timeframes = series.Select(k => k.Timeframe).Distinct().OrderBy(t => t).ToList();
 
-        // Default: tutte le coppie con dati, 1h, tutte le strategie.
+        // Default: tutte le coppie note, 1h, tutte le strategie.
         foreach (var s in _symbols) _selSymbols.Add(s);
         if (_timeframes.Contains("1h")) _selTfs.Add("1h"); else if (_timeframes.Count > 0) _selTfs.Add(_timeframes[0]);
         foreach (var p in StrategyFactory.Prototypes) _selStrats.Add(p.Name);
