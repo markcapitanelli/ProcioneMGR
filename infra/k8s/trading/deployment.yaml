@@ -64,6 +64,11 @@ spec:
       containers:
         - name: trading
           image: ghcr.io/markcapitanelli/procionemgr-trading:latest
+          # [Fase 4] Mai il pull dal registry: l'immagine arriva da scripts/build-images-local.ps1
+          # (build locale + import nel containerd del nodo). Il cluster riparte a rete staccata,
+          # e nessun riavvio pod dipende piu' da GitHub. Se l'immagine manca nel nodo il pod resta
+          # in ErrImageNeverPull: e' il fallimento GIUSTO (rilanciare lo script), non un pull silenzioso.
+          imagePullPolicy: Never
           ports:
             # Due porte separate per necessità, non per gusto: gRPC richiede HTTP/2 (h2c), mentre le
             # probe httpGet qui sotto parlano HTTP/1.1. Un endpoint solo-HTTP/2 le farebbe fallire e

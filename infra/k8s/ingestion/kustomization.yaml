@@ -14,4 +14,6 @@ images:
   - name: ghcr.io/markcapitanelli/procionemgr-ingestion
     # [B2, 2026-07-28] Lo stato di sync distingue "aggiornata" da "ferma": prima deduceva la salute
     # dal numero di righe processate, e su una serie morta scriveva "OK: 1 candele" per sempre.
-    newTag: 562b359db3733aec8f222d76fad59c18ff7aefdd
+    # [Fase 4, 2026-08-10] Prima promozione a build locale (vedi ui/kustomization.yaml).
+    # Precedente (build CI): 562b359db3733aec8f222d76fad59c18ff7aefdd.
+    newTag: local-cde4dda1

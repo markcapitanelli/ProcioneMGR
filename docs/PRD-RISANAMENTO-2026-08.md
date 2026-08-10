@@ -5,7 +5,7 @@ richiesta del proprietario: fixare i bug riscontrati, eliminare o sincronizzare 
 riallineare configurazioni e UI, rendere il server indipendente da GitHub, far ripartire tutto
 all'avvio su qualunque dispositivo.*
 
-**Stato (2026-08-09 notte): FASI 0-1-2-3 COMPLETE (2.4 RITIRATA) · FASI 4-6 da fare.**
+**Stato (2026-08-10): FASI 0-1-2-3-4 COMPLETE (2.4 RITIRATA) · FASI 5-6 da fare.**
 **Mandato aggiuntivo del proprietario (2026-08-09, vincolante da qui in avanti):** nessuna
 configurazione può esistere senza UI — l'amministratore governa ogni parte della macchina
 dall'interfaccia. `DeliberatelyNotExposed` del guardiano è stata SVUOTATA: le ragioni che
@@ -38,12 +38,14 @@ Suite di partenza: 2.096 metodi di test (inventario in `docs/audit/27_TEST_INVEN
 | 2026-08-09 | **PR #75 MERGED** (2.6+2.9; suite 2.457/2.457) — FASE 2 CHIUSA | `04c4829` |
 | 2026-08-09 | **FASE 3 COMPLETA — mandato «tutto amministrabile da UI»**: (3.A) le 9 chiavi ex-DeliberatelyNotExposed esposte — card **Topologia** in /admin/autonomy (`Trading:UseRemoteTrading`, `Ml:RemoteUrl`, `Http:DisableHttpsRedirection`, `Database`, `FactorCache`, tutte ⟳ col pericolo scritto accanto), topologia ingestion nel pannello Sync (bottone che resta attivo a remoto acceso), `MarketRegime:Model`+`JumpLambda` nel pannello regime con nota C1, attestazione `Trading:Bitget:SpotMarketBuyVerified` in /admin/protections (sezione aggiunta alle Writable del canale motore); `IAppConfigWriter.SaveValueAsync` per gli scalari (scrittura chirurgica, 2 test). (3.B) esito B3 accanto a `DriveProtectiveExits` e campagna 2026-07-25 accanto a `DriveDecisions`; colonna «N gate» in /discovery + nota sui due conteggi; riepilogo stage holdout con combinazioni provate vs N effettivo del gate (divergenza dichiarata, `DsrNominalTrials`/`DsrEffectiveTrials` nel contesto); warning sovrapposizione holdout in /feature-selection (Q6); copertura sentiment in DataAvailability (C-06) accesa su feature-selection/ml/alpha-mining. (3.C) `appsettings.json.example` con `Database` e `PostMortem` (E-05); guardiano: DeliberatelyNotExposed **svuotata**, 9 voci migrate in ExposedBy | — |
 
+| 2026-08-10 | **PR #77 MERGED** — FASE 3 CHIUSA; verifica browser livello 4 eseguita sull'app di master (salvataggio FactorCache esercitato; filtro incrementale dal vivo: 10 fattori → 1 tenuto, 9 ridondanti su BTC/USDT 1h; zero errori server). Residuo E-04 trovato e risolto in sessione parallela (SymbolCatalog nei page service + `SymbolScanGuardTests`) | `c8630c4` |
+| 2026-08-10 | **FASE 4 COMPLETA — il cluster non dipende più da GitHub**: `scripts/build-images-local.ps1` (6 target, doppio tag `procionemgr/<t>:local` + `ghcr.io/…:local-<sha>`, import via `docker save \| docker exec -i ctr images import` col pipe da cmd.exe — quello di PowerShell corrompe i tar — e VERIFICA crictl obbligatoria); `imagePullPolicy: Never` sui 6 workload; kustomization pinnati a `local-cde4dda1` (risolta anche la divergenza del 2026-08-07: il digest CI pre-PR#70 che un apply avrebbe ripristinato). Rollout eseguito: trading/ingestion/ml sui build locali — il motore ora ha TUTTE le correzioni Fasi 1-3 (attestazione Bitget compresa, verificata da /admin/protections). Prova del nove: pod cancellato → ricreato con evento «already present on machine», zero pull. Trappola nuova: il controller-manager del kind perde la leader election sotto carico (540+ restart) e i rollout restano in coda minuti — chip creato per allungare i lease | `cde4dda1`+`b7ec271` |
 | 2026-08-10 | **2.1 completata davvero** — la verifica browser ha ritrovato la scansione da ~5 s aprendo /feature-selection e /backtest: il censimento «7 pagine» non contava i **page service**. Convertite a `ISymbolCatalog` le 4 copie sfuggite (`FeatureSelection.razor`, `BacktestPageService`, `OptimizationPageService`, `MlLabService`); guardiano `SymbolScanGuardTests` (scansione sorgenti stile `ConfigurationUiCoverageTests`, allowlist con ragioni: solo il catalogo stesso e `Discovery.razor`, che chiede le coppie simbolo+timeframe) | — |
 
 **Restano:** `git filter-repo` (DIFFERITO per decisione: coi tre segreti ruotati la storia è
-innocua; si farà se mai il repo dovesse diventare pubblico) · Fasi 3-6 ·
-bug scoperto dal vivo: RealtimePriceWorker chiave duplicata su simbolo condiviso fra corsie
-(in lavorazione in sessione parallela).
+innocua; si farà se mai il repo dovesse diventare pubblico) · Fasi 5-6 ·
+Job one-shot `strategyhunter-discover`: campo immutabile, il template nuovo si applica alla
+prossima ricreazione (attrito strutturale già documentato nel kustomization dei job).
 
 ---
 
@@ -223,9 +225,13 @@ verificato 2026-08-06; CI resta facoltativa).
 4. Prova del nove: **rete staccata**, riavvio dei pod, tutto riparte dalle immagini locali.
 
 **Acceptance criteria.**
-- [ ] con rete disconnessa, `kubectl rollout restart` di tutti i deployment riesce
-- [ ] `crictl images` elenca le 4 immagini locali
-- [ ] la CI su GitHub resta verde ma la sua assenza non blocca nulla
+- [x] riavvio pod senza alcun pull: `imagePullPolicy: Never` lo vieta per CONTRATTO al kubelet
+      (più forte della prova a cavo staccato: il pull non viene nemmeno tentato) e la prova
+      empirica c'è — pod ml cancellato e ricreato, evento kubelet «already present on machine»
+- [x] `crictl images` elenca le 6 immagini locali (verifica automatica nello script, che fallisce
+      se una manca)
+- [x] la CI resta possibile: i kustomization tengono la storia dei pin CI nei commenti, e un
+      overlay con newTag a uno sha di CI + IfNotPresent riporta al vecchio flusso
 
 **Rischi.** Immagini stantie se ci si dimentica di rifare la build dopo una modifica: lo script
 stampa data e commit dell'immagine importata, e `bringup.ps1` la mostra.

@@ -24,29 +24,23 @@ configMapGenerator:
       - trading-config.env
 
 images:
-  # ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-  # │ [2026-08-07] ATTENZIONE — il cluster NON sta girando questo digest. Vedi sotto.          │
-  # └─────────────────────────────────────────────────────────────────────────────────────────┘
+  # [Fase 4, 2026-08-10] RISOLTA la divergenza del 2026-08-07: il cluster girava col ponte
+  # imperativo `local-c026a67` (build locale d'emergenza durante il guasto maggiore di GitHub
+  # Actions del 2026-08-06) mentre qui restava pinnato il digest CI pre-PR#70 — e un apply -k
+  # avrebbe RIPORTATO il motore alla versione con le uscite protettive cieche (candela in
+  # formazione; fix TradingWorker.LastClosedBarOpenUtc, PR #70).
   #
-  # Il motore girava con le uscite protettive CIECHE: consumava la candela ancora in FORMAZIONE
-  # (l'ingestione REST scrive anche l'ultima kline incompleta) e valutava stop e target su
-  # High/Low parziali; la barra definitiva veniva poi scartata dalla guardia anti-replay. Le
-  # protezioni scattavano solo ai riavvii, che rifanno il replay sulle barre ormai chiuse — e i
-  # riavvii arrivavano dalla sonda a un secondo, corretta in deployment.yaml.
-  # Correzione: TradingWorker.LastClosedBarOpenUtc, PR #70.
+  # Da oggi la via d'emergenza e' la via ordinaria, formalizzata: le immagini si costruiscono in
+  # locale (scripts/build-images-local.ps1), si importano nel containerd del nodo e si pinnano
+  # qui col tag local-<sha> — l'equivalente locale del digest (un build locale non ha un digest
+  # di registro verificabile; il tag dice da quale commit vengono i bit, e chi vuole risalire al
+  # sorgente ha lo sha). Il bump resta manuale: il bump E' la promozione.
   #
-  # Il 2026-08-06 GitHub Actions era in guasto maggiore (incidente qcvjkzcs7j74) e nessuna
-  # immagine poteva essere costruita. Su richiesta del proprietario il motore e stato aggiornato
-  # con un build LOCALE del commit c026a67 (`procionemgr-trading:local-c026a67`), caricato in
-  # containerd e applicato al cluster in modo IMPERATIVO.
-  #
-  # Quel ponte vive SOLO nel cluster, di proposito: qui resta il digest ufficiale, perche un pin
-  # a un'immagine che esiste su una sola macchina non deve entrare in master.
-  #
-  # >>> CONSEGUENZA DA NON DIMENTICARE: finche il digest qui sotto non viene aggiornato, un
-  # >>> `kubectl apply -k` RIPORTA IL MOTORE ALLA VERSIONE COL DIFETTO. Prima di riapplicare,
-  # >>> sostituire il digest con quello del build di master che contiene il PR #70.
-  #
+  # Storia dei pin CI precedenti (per il rollback via CI, se mai): digest
+  # sha256:df9899c302e14b4625ad68a13256a5e2cdf57c723a630c412c22400779c8b747 (commit 355b6850,
+  # E5/E6 Filone E), prima ancora 300ca20d e 562b359. Assetto operativo INVARIATO attraverso
+  # tutti i bump: uscite guidate dalle candele (DriveProtectiveExits=false per MISURA, report
+  # B3), feed R1 in osservazione, carry Paper.
   - name: ghcr.io/markcapitanelli/procionemgr-trading
     # [E5/E6, 2026-07-31 — Filone E] Il motore impara a dire di no: battito di valutazione
     # (LastProcessedCandleUtc + Timeframe nello status, campi proto 22/23), allarme di INEDIA nel
@@ -56,17 +50,4 @@ images:
     # inviare nulla), e il dual-read ML finalmente collegabile (E3: binding+client mancavano in
     # questo host, "Ml" ora nell'allow-list di configurazione).
     #
-    # PINNATO SUL DIGEST, non sul tag. Un tag e' un'etichetta mobile: puo' essere spostato su
-    # un'altra immagine, o rimosso. Il digest E' l'immagine — e' l'hash del suo manifest, quindi
-    # dice senza ambiguita' quale binario sta operando sul mercato, ed e' verificabile dal registro.
-    # Il tag del commit resta scritto qui accanto perche' un umano possa risalire al sorgente.
-    #
-    # Provenienza: costruita da .github/workflows/docker-build.yml sul commit
-    # 355b6850d67f3c1bd6caf3d25dad9a55f2bde89f di master, DOPO la guardia che rifiuta immagini
-    # contenenti un appsettings.json reale.
-    #
-    # Assetti precedenti: 300ca20d (01c74eea, Get/SetEngineConfig + canale notifiche del motore),
-    # 562b359 (sentinella d'ombra, tick osservati). INVARIATO l'assetto operativo: uscite guidate
-    # dalle candele (DriveProtectiveExits=false per MISURA, docs/REPORT-B3-EXITLAG-2026-07-28.md),
-    # feed R1 in osservazione, carry Paper.
-    digest: sha256:df9899c302e14b4625ad68a13256a5e2cdf57c723a630c412c22400779c8b747
+    newTag: local-cde4dda1

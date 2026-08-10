@@ -34,6 +34,8 @@ spec:
           containers:
             - name: dbbackup
               image: ghcr.io/markcapitanelli/dbbackup:latest
+              # [Fase 4] Immagine da build locale (scripts/build-images-local.ps1 -Targets all).
+              imagePullPolicy: Never
               args: ["backup"]
               env:
                 - name: BACKUP_DIR
