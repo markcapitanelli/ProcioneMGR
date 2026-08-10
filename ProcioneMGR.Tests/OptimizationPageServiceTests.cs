@@ -136,7 +136,8 @@ public sealed class OptimizationPageServiceTests : IAsyncDisposable
         }
 
         var engine = new CapturingOptEngine();
-        var svc = new OptimizationPageService(dbFactory, engine, new StrategyFactory(), new NoopTracker());
+        var svc = new OptimizationPageService(dbFactory, engine, new StrategyFactory(), new NoopTracker(),
+            new ProcioneMGR.Services.MarketData.SymbolCatalog(dbFactory)); // [E-04] il catalogo vero, come in produzione
         return (svc, engine, dbFactory);
     }
 

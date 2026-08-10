@@ -95,7 +95,9 @@ public sealed class BacktestPageServiceTests : IAsyncDisposable
             // [E-01] Il provider VERO sul dbFactory del test: legge SentimentMetricPoints (vuota
             // nel seed) e restituisce lista vuota → fallback dichiarato alla costante, nessun
             // comportamento nuovo nei test esistenti (che girano a leverage 1).
-            new FundingHistoryProvider(dbFactory));
+            new FundingHistoryProvider(dbFactory),
+            // [E-04] Il catalogo VERO sul dbFactory del test, come in produzione.
+            new ProcioneMGR.Services.MarketData.SymbolCatalog(dbFactory));
         return (svc, dbFactory);
     }
 
