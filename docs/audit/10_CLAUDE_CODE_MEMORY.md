@@ -123,6 +123,25 @@ Trading isolato in **corsie** (lane) indipendenti via keyed DI — 8 attive, tut
 | Testare senza Docker | i test d'integrazione con Testcontainers falliscono |
 | Credere che il file si chiami come il suo contenuto | `AnthropicLlmClient.cs` contiene cinque provider e quello attivo è NVIDIA |
 
+## Il cluster kind sotto carico (aggiornamento 2026-08-10/11)
+
+- kube-controller-manager e kube-scheduler morivano di «leaderelection lost» in modo cronico
+  (546/555 restart in 14 giorni): sotto carico host la VM WSL satura — misurato load average 59
+  con 543 MB in swap — e l'apiserver resta muto oltre i timeout di lease.
+- **Fix**: leader election a `120s/80s/15s` su entrambi i componenti. Prima terna 60/40/10
+  superata dai fatti lo stesso giorno (i blackout dell'apiserver superano anche gli 80s durante
+  le tempeste). Applicata a caldo nei manifest statici del nodo e resa permanente in
+  `infra/k8s/kind-config.yaml` (`kubeadmConfigPatches`). **Esito misurato**: da ~39 restart al
+  giorno a 4 in 36 ore, riavvio del nodo incluso; fuori dalle tempeste i contatori sono fermi.
+- **Trappola kubeadm v1beta4** (k8s ≥ 1.31): `extraArgs` è una lista name/value e il merge del
+  patch la **rimpiazza intera** — `enable-hostpath-provisioner` (default kind sul
+  controller-manager) va ripetuto nel patch, altrimenti si perde alla ricreazione.
+- **Diagnosi durante una tempesta**: kubectl va in TLS handshake timeout; i log si leggono
+  sempre dal nodo, `/var/log/pods/` via `docker exec`.
+- **Leve non ancora azionate** (decisioni del proprietario): memoria WSL (`.wslconfig` o
+  `autoMemoryReclaim=gradual`) per eliminare lo swap — la radice vera —, tolleranza della
+  livenessProbe dell'apiserver, non sovrapporre build/test pesanti alle ore operative.
+
 ## Cose da non rompere
 
 1. **Le cinque barriere verso Live.** `PromotionEvaluator`, `PromotionWorker`, `LanePromoter`,
