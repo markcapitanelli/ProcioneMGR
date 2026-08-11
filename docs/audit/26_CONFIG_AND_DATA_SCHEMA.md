@@ -5,8 +5,8 @@
 
 | | |
 |---|---:|
-| Classi di configurazione | 44 |
-| Opzioni totali | 359 |
+| Classi di configurazione | 45 |
+| Opzioni totali | 362 |
 | Tabelle (`DbSet`) | 34 |
 | Campi di entità | 398 |
 | File `.proto` | 5 |
@@ -81,6 +81,16 @@ default (`false` per bool, `0` per numerici, `null` per riferimenti).
 | `OptimizeHyperparameters` | `bool` | `true` | Se true (default), e vengono STIMATI dai dati massimizzando la log-verosimiglianza marginale del GP a ogni passo, invece di restare fissi (fissi ⇒ il surrogato non si adatta e la ricerca degenera verso il casuale). I valori nelle proprietà fungono da fallback… |
 | `MinPointsForHyperparameterFit` | `int` | `4` | Numero minimo di osservazioni per stimare gli iperparametri via marginal-likelihood. |
 | `Seed` | `int` | `42` | Seme di base: la ricerca è deterministica a parità di seme e di storia. |
+
+### `BitgetAttestationOptions`
+
+<sub>`ProcioneMGR/Services/Exchanges/BitgetAttestationOptions.cs`</sub>
+
+> [Fase 3 PRD-RISANAMENTO] Sezione Trading:Bitget : l'attestazione che sblocca i MARKET-BUY spot su Bitget. Il POCO esiste per il pannello di /admin/protections — il consumo vero resta la lettura puntuale in BitgetClient.PlaceOrderAsync (hot, a ogni ordine). Non è una preferenza: è la registrazione di un FATTO («ho verificato dal vivo con tools/SpotVerify che la semantica del campo size è quella che il client manda»). Il default false blocca il percorso d'ordine perché la v2 di Bitget documenta size come controvalore QUOTE sui market-buy spot, e un ordine di taglia sbagliata è il danno che il blocco previene.
+
+| Opzione | Tipo | Default | Descrizione |
+|---|---|---|---|
+| `SpotMarketBuyVerified` | `bool` | `—` | — |
 
 ### `CampaignOptions`
 
@@ -597,7 +607,7 @@ default (`false` per bool, `0` per numerici, `null` per riferimenti).
 |---|---|---|---|
 | `SectionName` | `string` | `"MarketData:Realtime"` | — |
 | `Enabled` | `bool` | `—` | Interruttore generale. DEFAULT FALSE: il feed è additivo rispetto alla sincronizzazione REST già esistente, quindi spegnerlo riporta esattamente al comportamento a sole candele. |
-| `DriveProtectiveExits` | `bool` | `true` | Se true i tick alimentano le uscite protettive del motore. Separato da apposta: permette di tenere il feed acceso in sola OSSERVAZIONE (log e metriche, nessuna decisione) per convincersi che i prezzi siano sani prima di dargli potere di chiudere posizioni. St… |
+| `DriveProtectiveExits` | `bool` | `—` | Se true i tick alimentano le uscite protettive del motore. Separato da apposta: permette di tenere il feed acceso in sola OSSERVAZIONE (log e metriche, nessuna decisione) per convincersi che i prezzi siano sani prima di dargli potere di chiudere posizioni. St… |
 | `SubscriptionRefreshSeconds` | `int` | `30` | Ogni quanto rileggere le corsie per aggiornare l'insieme delle sottoscrizioni. |
 | `StaleAfterSeconds` | `int` | `60` | Silenzio oltre il quale il feed è considerato STALE. Non blocca nulla (la sincronizzazione REST resta comunque attiva e indipendente), ma smette di essere considerato una fonte viva e genera un allarme: non si opera mai credendo di avere prezzi aggiornati qua… |
 | `ReconnectInitialDelayMs` | `int` | `1_000` | Attesa iniziale prima di un tentativo di riconnessione. |
@@ -736,6 +746,8 @@ default (`false` per bool, `0` per numerici, `null` per riferimenti).
 | `MaxRegimes` | `int` | `6` | Estremo superiore del range di K per l'auto-selezione. Usato solo se . |
 | `IncludeVolumeFeature` | `bool` | `—` | [3.8a] Quinta feature di clustering: VolumeRatio (volume / media 20 periodi). Default OFF = comportamento storico bit-identico. ATTENZIONE dichiarata: accenderla CAMBIA le etichette dei regimi del modello riaddestrato — l'impatto sull'allocazione regime-aware… |
 | `IncludeBreadthFeature` | `bool` | `—` | [3.8a/4.9] Sesta feature di clustering: breadth interna (% dei simboli /USDT sopra la propria SMA50 — "quanti partecipano al movimento"). Default OFF; stessa avvertenza del volume. Richiede dati multi-simbolo sullo stesso timeframe (il calcolo è di IMarketBre… |
+| `Model` | `string` | `RegimeModelKinds.KMeans` | [2.7 PRD-RISANAMENTO, 2026-08-09] Algoritmo di stima dei centroidi: (default, comportamento storico bit-identico) oppure (statistical jump model C1: la persistenza entra NELLA stima, non a valle). Rispetta il contratto scritto in : il default resta K-means fi… |
+| `JumpLambda` | `double` | `20.0` | λ del jump model (penalità per salto di stato). Usato solo con Model=Jump. 0 = degenera in K-means; il valore va tarato con la misura, mai assunto. |
 
 ### `VolatilityTargetingOptions`
 
@@ -1509,7 +1521,7 @@ default (`false` per bool, `0` per numerici, `null` per riferimenti).
 
 **Messaggi (2):** `DecimalValue`, `Instrument`
 
-### `Protos/events.proto` — 33 righe
+### `Protos/events.proto` — 38 righe
 
 **Messaggi (2):** `MarketDataSyncedEvent`, `AlphaSignalReadyEvent`
 

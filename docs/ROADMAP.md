@@ -912,3 +912,33 @@ raggiungerlo al momento del deploy? Finché non c'è risposta, S2 resta indecidi
 
 **Raccomandazione**: S1 + S2 subito (chiudono il buco vero), S3 quando si passa al server. S4 solo
 se la risposta alla domanda qui sopra è «senza GitHub».
+
+> **[2026-08-11] Tavola S superata dalla Fase 4 del Risanamento**: il cluster non fa PIÙ pull da
+> ghcr (build locali + `imagePullPolicy: Never` + kustomization pinnati a `local-<sha>`). S2
+> (chiudere i pacchetti) non blocca più nulla e si può fare quando si vuole; S1 serve solo a chi
+> tornasse al flusso CI; S4 è risolto senza registro (import diretto nel containerd del nodo).
+
+---
+
+## Ondata Risanamento (2026-08-08 → 2026-08-11) — CHIUSA
+
+Quattordicesima ondata (la numerazione segue il PRD), nata dall'audit in cinque passaggi
+(`docs/audit/` 00-28) e dal mandato del
+proprietario: bug, sincronizzazione, config↔UI, indipendenza da GitHub, portabilità. Registro
+completo in [PRD-RISANAMENTO-2026-08](PRD-RISANAMENTO-2026-08.md); verifiche finali in
+[REPORT-RISANAMENTO-CHIUSURA-2026-08](REPORT-RISANAMENTO-CHIUSURA-2026-08.md).
+
+| Fase | Esito |
+|---|---|
+| 0 Segreti | rotazione COMPLETA dei tre segreti (master key via keyring multi-chiave 7/7, gRPC, password PG); guardia CI sui file segreti |
+| 1 Bug di merito | 7 fix: conteggio DSR sulle prove vere (D-01), esposizione futures nozionale, default B3, funding storico nel backtest, range obbligati, stoppini specchiati, seed dichiarati |
+| 2 Sincronizzazione | ISymbolCatalog, DI morte rimosse, gate anti-ridondanza raggiungibile (2.6), JumpModel dietro flag col contratto C1 (2.7), optimizer per nome (2.8), deriva sui fattori del Champion (2.9) |
+| 3 Config↔UI | **mandato: tutto amministrabile da UI** — DeliberatelyNotExposed SVUOTATA, card Topologia, misure accanto agli interruttori, N del gate visibile |
+| 4 No-GitHub | build locali + import in kind + `imagePullPolicy: Never`; il motore in-cluster aggiornato con le Fasi 1-3; prova senza pull |
+| 5 Compose | `docker compose up -d` autosufficiente su macchina pulita; **bug grave chiuso**: migrate-on-startup rotto in silenzio da versioni EF disallineate (guardia + test guardiano) |
+| 6 Chiusura | suite 2.474/2.474; carry RIMISURATO e riprodotto (netto 5,5-11,9%/anno, tabella nel report); serie funding dal 2019 ripristinata (+35.006 punti) dopo la SECONDA perdita silenziosa — chip per il guardiano di profondità; doc meccanici 21-27 rigenerati (+426/−150 = changelog) |
+
+**Lezione dell'ondata da portare avanti**: tre difetti gravi trovati non dall'analisi ma dal
+PRIMO USO REALE di un percorso nuovo (DB vergine → migrazioni mute; rimisura → serie sparita;
+compose → pipe PowerShell che corrompe i tar). I guardiani nuovi trasformano ciascuno in suite
+rossa alla prossima occorrenza.

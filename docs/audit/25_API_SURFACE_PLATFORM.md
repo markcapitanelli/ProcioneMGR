@@ -10,7 +10,7 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 |---|---:|
 | File coperti | 153 |
 | Tipi | 356 |
-| Membri (metodi, proprietà, costruttori, costanti) | 1435 |
+| Membri (metodi, proprietà, costruttori, costanti) | 1442 |
 
 **Legenda:** 🔌 interface · 📦 class · 🧾 record · 🔢 enum · ▫️ struct · `m` metodo · `p` proprietà · `c` costruttore · `k` costante
 
@@ -321,6 +321,7 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 | `p` | `DateTime SelectionTo` | — |
 | `p` | `DateTime HoldoutFrom` | — |
 | `p` | `DateTime HoldoutTo` | — |
+| `m` | `string? Validate()` | [D-03, Fase 1 PRD-RISANAMENTO] L'invariante selezione/holdout in UN SOLO posto (lezione NullTwinJudge: una politica, una sola implementazione). Prima viveva solo nel salvataggio della UI: una config nata prima del contr… |
 
 ### 📦 `StageConfig`
 
@@ -400,6 +401,9 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 | `p` | `MlTrainingOutput? MlTraining` | — |
 | `p` | `List&lt;DiscoveryCandidate&gt; Candidates` | — |
 | `p` | `List&lt;ValidatedCandidate&gt; Validated` | — |
+| `p` | `int TrialsExplored` | [D-01, Fase 1 PRD-RISANAMENTO] Combinazioni REALMENTE provate dal run: ogni stage che cerca (StrategyDiscovery, CreativeDiscovery, …) somma qui il proprio conteggio misurato. È l'N nominale del gate DSR in — prima il nu… |
+| `p` | `int DsrNominalTrials` | [Fase 3, D-01 lato UI] I numeri con cui il gate DSR ha davvero deflazionato: N nominale (max fra candidati e combinazioni provate) e N effettivo dopo il collasso dei correlati. Scritti da HoldoutValidationStage, mostrat… |
+| `p` | `int DsrEffectiveTrials` | — |
 | `p` | `EnsembleProposal? Ensemble` | — |
 | `p` | `RiskAssessment? Risk` | — |
 | `p` | `NewsImpactOutput? NewsImpact` | — |
@@ -1102,7 +1106,7 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 
 ### 📦 `EnsembleAssemblyStage` `(`
 
-> Stage 11 — assembles the final survivors into a weighted ensemble proposal. Weights come from HRP on the legs' selection-range equity
+> Stage 11 — assembles the final survivors into a weighted ensemble proposal. Weights come from a portfolio optimizer on the legs' selection-range equity
 
 | | Firma | Descrizione |
 |---|---|---|
@@ -1253,7 +1257,9 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 
 > Gate anti-overfitting universale (P0-3) applicato dall' sull'intero batch di candidati dopo l'holdout. Puro e testabile in isolamento (nessun DB/backtest): muta i flag / / dei candidati passati. Riusa la libreria di rigore ( , ) — stesso pattern di OptimizationEngine e ModelRegistry.
 
-### ▫️ `Result` `(int Survivors, double? PanelPbo);`
+### ▫️ `Result` `(int Survivors, double? PanelPbo, int NominalTrials, int EffectiveTrials);`
+
+> [Fase 3, D-01 lato UI] Oltre all'esito, il gate DICHIARA i suoi numeri: quante combinazioni nominali ha considerato e quanti tentativi effettivi ha usato dopo il collasso dei correlati. Prima vivevano solo in una riga di log: per giudicare un DSR serve sapere contro quale N è stato deflazionato.
 
 ## `ProcioneMGR/Services/Pipeline/Stages/NullTwinValidationStage.cs`
 
@@ -3281,12 +3287,14 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 | | Firma | Descrizione |
 |---|---|---|
 | `m` | `Task SaveSectionAsync&lt;T&gt;(string sectionPath, T options, CancellationToken ct = default)` | Serializza e lo scrive alla sezione (segmenti separati da : , es. "Trading:Safety" ; i nodi mancanti vengono creati). |
+| `m` | `Task SaveValueAsync&lt;T&gt;(string keyPath, T value, CancellationToken ct = default)` | [Fase 3 PRD-RISANAMENTO] Scrive un SINGOLO valore scalare (es. "Trading:UseRemoteTrading" ) senza toccare il resto della sezione che lo ospita. Esiste perché alcune chiavi vivono da scalari dentro sezioni grandi (Tradin… |
 
 ### 📦 `AppConfigWriter` `(IHostEnvironment env, ILogger&lt;AppConfigWriter&gt; logger) : IAppConfigWriter`
 
 | | Firma | Descrizione |
 |---|---|---|
 | `m` | `Task SaveSectionAsync&lt;T&gt;(string sectionPath, T options, CancellationToken ct = default)` | — |
+| `m` | `Task SaveValueAsync&lt;T&gt;(string keyPath, T value, CancellationToken ct = default)` | — |
 
 # `Services/Admin/`
 
@@ -3480,6 +3488,7 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 | | Firma | Descrizione |
 |---|---|---|
 | `k` | `string MigrationsAssemblyName` | Nome dell'assembly che ospita le migrazioni (deve combaciare con MigrationsAssembly(...) ). |
+| `m` | `bool MigrationsDllPresent()` | La DLL delle migrazioni è fisicamente accanto all'eseguibile di QUESTO host? |
 | `m` | `void EnsureMigrationsAssemblyResolvable(ILogger? logger = null)` | Insegna al runtime a trovare l'assembly delle migrazioni accanto all'eseguibile. Perché non basta copiarci la DLL : un'app .NET framework-dependent risolve gli assembly dal proprio deps.json , non dai file che trova nel… |
 
 ## `ProcioneMGR/Data/DatabaseServiceCollectionExtensions.cs`

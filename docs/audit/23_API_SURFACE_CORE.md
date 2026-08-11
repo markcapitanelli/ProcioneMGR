@@ -8,9 +8,9 @@ Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muo
 
 | | |
 |---|---:|
-| File coperti | 115 |
-| Tipi | 264 |
-| Membri (metodi, proprietà, costruttori, costanti) | 1009 |
+| File coperti | 119 |
+| Tipi | 277 |
+| Membri (metodi, proprietà, costruttori, costanti) | 1036 |
 
 **Legenda:** 🔌 interface · 📦 class · 🧾 record · 🔢 enum · ▫️ struct · `m` metodo · `p` proprietà · `c` costruttore · `k` costante
 
@@ -828,7 +828,23 @@ Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muo
 | `p` | `double AdverseShare` | Quota di posizioni in cui il percorso fine esce PEGGIO: il feed non è gratis per definizione. |
 | `p` | `double MedianCandleFillOptimismBps` | — |
 | `p` | `double MeanCandleFillOptimismBps` | — |
+| `p` | `IReadOnlyList&lt;ProtectiveExitLagByKind&gt; ByKind` | [2026-08-06] Lo STESSO calcolo, separato per tipo di uscita. Nasce da un'obiezione del proprietario, e l'obiezione è fondata: il verdetto del 2026-07-28 («uscire al tocco è peggio, 24 configurazioni su 24») somma stop l… |
 | `p` | `IReadOnlyList&lt;ProtectiveExitLagObservation&gt; Observations` | — |
+
+### 📦 `ProtectiveExitLagByKind`
+
+> Il costo del ritardo per UN tipo di uscita. Calcolato solo sulle posizioni in cui i due percorsi escono per la stessa ragione: se il percorso fine esce in take profit e quello a candele in stop loss, la differenza di prezzo non misura il ritardo — misura due eventi diversi, ed è la coppia che conta.
+
+| | Firma | Descrizione |
+|---|---|---|
+| `p` | `string Kind` | "StopLoss", "TakeProfit" o "Liquidation". |
+| `p` | `int Count` | Uscite concordi di questo tipo: la base su cui sono calcolati i numeri qui sotto. |
+| `p` | `double MedianDelayCostBps` | Negativo = aspettare la chiusura CONVIENE. Positivo = il tocco conviene. |
+| `p` | `double MeanDelayCostBps` | — |
+| `p` | `double P10DelayCostBps` | — |
+| `p` | `double P90DelayCostBps` | — |
+| `p` | `double MedianLeadSeconds` | — |
+| `p` | `double AdverseShare` | Quota di casi in cui il percorso fine esce PEGGIO: il tocco non è gratis nemmeno qui. |
 
 ## `ProcioneMGR/Services/Trading/ProtectiveExitShadow.cs`
 
@@ -1001,6 +1017,16 @@ Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muo
 | `p` | `decimal MaxFillPriceDeviationPercent` | [B1] Banda massima (± % dal prezzo corrente di mercato) entro cui il prezzo di fill riportato dall'exchange è considerato plausibile. Fuori banda (o ≤ 0) il fill è SOSPETTO e non viene mai adottato: vedi e il bug B1 in … |
 | `p` | `decimal MaxFillQuantityDeviationPercent` | [B1] Tolleranza massima (± % dalla quantità RICHIESTA) entro cui la quantità di fill riportata dall'exchange è considerata plausibile. Fuori tolleranza (es. quantità cumulative 100x dal testnet, bug B1) il fill è SOSPET… |
 | `p` | `decimal FeePercent` | [P2-8] Fee dell'exchange in % del nozionale, applicata sia in apertura sia in chiusura. Prima era una costante fissa in TradingEngine (stesso valore di default, 0.1%), scollegata dal fee reale e dal parametro equivalent… |
+
+## `ProcioneMGR/Services/Trading/SafetyExposure.cs`
+
+### 📦 `SafetyExposure`
+
+> [D-02, Fase 1 PRD-RISANAMENTO 2026-08-08] L'esposizione che alimenta il check n.2 del ( MaxTotalExposurePercent ): il NOZIONALE delle posizioni aperte, Σ Quantity × EntryPrice , per ogni tipo di mercato. PERCHE' esiste come funzione a parte: prima il valore era calcolato inline in TradingEngine.BuildSafetyStatus e sui Futures usava il MARGINE (Σ MarginBalance), con un commento che dichiarava l'asimmetria «volutamente conservativa». Era vero sul singolo ordine (order.Notional e' leveraged) ma FALSO sull'accumulo: ogni posizione gia' aperta pesava 1/leva della propria esposizione reale, e con MaxOpenPositions alzato il capitale esposto superava il DOPPIO di MaxTotalExposurePercent senza far scattare il check (esempio numerico in docs/audit/20_DEEP_DIVE_CODE_ANALYSIS.md §3). Coi default la coincidenza 10% × 5 = 50% mascherava il buco. Le unita' ora sono omogenee: il limite vincola cio' che…
+
+| | Firma | Descrizione |
+|---|---|---|
+| `m` | `decimal ExposedNotional(IEnumerable&lt;OpenPosition&gt; positions)` | Nozionale complessivamente esposto dalle posizioni aperte (unita' di order.Notional). |
 
 ## `ProcioneMGR/Services/Trading/TradingContractMapper.cs`
 
@@ -2045,16 +2071,18 @@ Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muo
 
 ## `ProcioneMGR/Services/Security/AesGcmEncryptionService.cs`
 
-### 📦 `AesGcmEncryptionService` `: IEncryptionService, IMasterKeyStatus`
+### 📦 `AesGcmEncryptionService` `: IEncryptionService, IMasterKeyStatus, IMasterKeyRing`
 
 > Implementazione AES-256-GCM di . Formato di output (poi codificato base64): [1 byte versione][12 byte nonce][16 byte tag GCM][N byte ciphertext] Il nonce e' casuale per ogni cifratura (mai riusato con la stessa chiave), requisito di sicurezza fondamentale per GCM. La chiave master a 256 bit e' derivata dal valore di configurazione "Security:MasterKey": - se il valore e' base64 di esattamente 32 byte, viene usato direttamente; - altrimenti viene derivata via SHA-256 della stringa UTF-8. STATO (verificato 2026-07-17): in produzione la master key NON vive in appsettings.json. I deployment K8s (infra/k8s/trading/deployment.yaml, infra/k8s/ui/deployment.yaml) la iniettano gia' via Secret dedicato (rispettivamente trading-secrets/ui-secrets, chiave Security__MasterKey, mai nell'immagine) — le due copie devono restare identiche perche' entrambi i processi decifrano le stesse credenziali exchan…
 
 | | Firma | Descrizione |
 |---|---|---|
 | `p` | `bool IsDefaultDevKey` | — |
+| `p` | `bool HasPreviousKeys` | — |
 | `c` | `AesGcmEncryptionService(IConfiguration configuration)` | — |
 | `m` | `string Encrypt(string plaintext)` | — |
 | `m` | `string Decrypt(string ciphertext)` | — |
+| `m` | `bool IsEncryptedWithCurrentKey(string ciphertext)` | — |
 
 ## `ProcioneMGR/Services/Security/DataProtectionSetup.cs`
 
@@ -2123,6 +2151,15 @@ Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muo
 |---|---|---|
 | `p` | `bool IsDefaultDevKey` | True se la master key configurata è il placeholder di sviluppo committato nel template. |
 
+### 🔌 `IMasterKeyRing`
+
+> Vista sul KEYRING della rotazione (Fase 0 PRD-RISANAMENTO, 2026-08-08). Separata da per lo stesso principio di : chi orchestra la rotazione (la pagina /settings/exchanges, il MasterKeyRotationService) deve poter CLASSIFICARE i payload — non gli serve cifrare in proprio.
+
+| | Firma | Descrizione |
+|---|---|---|
+| `p` | `bool HasPreviousKeys` | True se sono configurate chiavi PRECEDENTI (una rotazione è in corso). |
+| `m` | `bool IsEncryptedWithCurrentKey(string ciphertext)` | True se il payload si apre con la chiave CORRENTE (nessun bisogno di ri-cifratura). False sia per i payload sulla chiave precedente sia per quelli indecifrabili o corrotti: la distinzione fra i due casi la fa il chiaman… |
+
 ## `ProcioneMGR/Services/Security/MasterKeyProbe.cs`
 
 ### 🧾 `MasterKeyProbeResult` `(int Total, int Unreadable, DateTime CheckedAtUtc)`
@@ -2159,6 +2196,36 @@ Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muo
 |---|---|---|
 | `m` | `Task ExecuteAsync(CancellationToken stoppingToken)` | — |
 
+## `ProcioneMGR/Services/Security/MasterKeyRotationService.cs`
+
+### 🧾 `MasterKeyReEncryptReport` `(int Total, int ReEncrypted, int AlreadyCurrent, int Unreadable)`
+
+> Esito della ri-cifratura di massa: quante righe viste, riportate sulla chiave corrente, saltate. Righe cifrate censite (credenziali exchange + chiavi AI). Righe riscritte con la chiave corrente (erano su una chiave precedente). Righe già sulla chiave corrente: non toccate. Righe che NESSUNA chiave del ring apre: restano com'erano, vanno reinserite a mano (badge in /settings/exchanges).
+
+| | Firma | Descrizione |
+|---|---|---|
+| `m` | `string ToString()` | — |
+
+### 🔌 `IMasterKeyRotationService`
+
+> Ri-cifratura di massa dei segreti a riposo con la chiave CORRENTE (Fase 0 PRD-RISANAMENTO: lo "strumento di re-cifratura" che il TODO storico di dichiarava mancante). Si usa DURANTE una rotazione, quando il keyring ha la vecchia chiave in PreviousMasterKeys: le righe ancora sulla vecchia vengono decifrate col ring e riscritte con la corrente. Al termine si può svuotare PreviousMasterKeys.
+
+| | Firma | Descrizione |
+|---|---|---|
+| `m` | `Task&lt;MasterKeyReEncryptReport&gt; ReEncryptAllAsync(CancellationToken ct = default)` | Ri-cifra tutte le righe apribili col keyring che NON sono già sulla chiave corrente. Idempotente: una seconda esecuzione trova tutto AlreadyCurrent. Le righe indecifrabili non vengono mai toccate (nessuna perdita di dat… |
+
+### 📦 `MasterKeyRotationService` `(`
+
+> COME funziona la riscrittura: si carica l'entità EF (il converter decifra col RING, quindi le righe su chiave precedente ora materializzano), si marca la proprietà cifrata come modificata a parità di valore, e al SaveChanges il converter ri-cifra con la chiave CORRENTE. Il forcing di IsModified è necessario perché lo snapshot di EF confronta il valore in chiaro — identico — e senza il flag non scriverebbe nulla. RESILIENZA (lezione del bug B2): la materializzazione EF decifra DENTRO la query, quindi una sola riga indecifrabile abbatterebbe una query cumulativa. Qui si classifica prima dal ciphertext grezzo (vista keyless per le credenziali exchange, SqlQueryRaw per le chiavi AI) e si caricano SOLO le righe di cui il ring risponde, una per una.
+
+| | Firma | Descrizione |
+|---|---|---|
+| `m` | `Task&lt;MasterKeyReEncryptReport&gt; ReEncryptAllAsync(CancellationToken ct = default)` | — |
+
+### 🧾 `AiCredentialCiphertextRow` `(int Id, string Provider, string ApiKey);`
+
+> Proiezione grezza di una riga AiCredentials: il ciphertext così com'è sul DB.
+
 # `Services/Exchanges/`
 
 ## `ProcioneMGR/Services/Exchanges/BinanceClient.cs`
@@ -2192,6 +2259,16 @@ Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muo
 | `m` | `Task&lt;FuturesBalance&gt; GetFuturesBalanceAsync(TradingCredentials credentials, CancellationToken ct = default)` | — |
 | `m` | `Task&lt;SymbolFilters&gt; GetFuturesSymbolFiltersAsync(string symbol, bool testnet, CancellationToken ct = default)` | — |
 | `m` | `Task&lt;decimal&gt; GetFundingRateAsync(string symbol, bool testnet, CancellationToken ct = default)` | — |
+
+## `ProcioneMGR/Services/Exchanges/BitgetAttestationOptions.cs`
+
+### 📦 `BitgetAttestationOptions`
+
+> [Fase 3 PRD-RISANAMENTO] Sezione Trading:Bitget : l'attestazione che sblocca i MARKET-BUY spot su Bitget. Il POCO esiste per il pannello di /admin/protections — il consumo vero resta la lettura puntuale in BitgetClient.PlaceOrderAsync (hot, a ogni ordine). Non è una preferenza: è la registrazione di un FATTO («ho verificato dal vivo con tools/SpotVerify che la semantica del campo size è quella che il client manda»). Il default false blocca il percorso d'ordine perché la v2 di Bitget documenta size come controvalore QUOTE sui market-buy spot, e un ordine di taglia sbagliata è il danno che il blocco previene.
+
+| | Firma | Descrizione |
+|---|---|---|
+| `p` | `bool SpotMarketBuyVerified` | — |
 
 ## `ProcioneMGR/Services/Exchanges/BitgetClient.cs`
 
@@ -2716,6 +2793,44 @@ Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muo
 | `m` | `Task ExecuteAsync(CancellationToken stoppingToken)` | Ciclo esterno: sorveglia l'INTERRUTTORE e apre/chiude una sessione di feed di conseguenza. Prima del 2026-07-29 questo metodo usciva subito con Enabled=false e non tornava più: accendere il feed richiedeva un riavvio de… |
 | `m` | `bool ShouldAlertStale(FeedHealth health, TimeSpan threshold, DateTime nowUtc, DateTime sessionStartedUtc)` | Quando un canale silenzioso merita un allarme. «Non ha ancora cominciato» NON è «ha smesso». Appena connesso, il primo messaggio può tardare più della soglia in tutta legittimità — mercato calmo, handshake, sottoscrizio… |
 | `m` | `bool ShouldAlertStale(DateTime? lastUtc, TimeSpan threshold, DateTime nowUtc, DateTime graceStartUtc)` | [G2] Il cuore della regola, riusato per-feed (overload sopra, coi suoi test) e per-serie: silenzio da sempre dentro la grazia ⇒ non ancora un allarme; tutto il resto del silenzio oltre soglia ⇒ allarme, incluso chi non … |
+
+## `ProcioneMGR/Services/MarketData/SymbolCatalog.cs`
+
+### ▫️ `SeriesKey` `(string Symbol, string Timeframe);`
+
+> Una serie nota al catalogo: la coppia (simbolo, timeframe).
+
+### 🔌 `ISymbolCatalog`
+
+> [E-04, Fase 2 PRD-RISANAMENTO] L'elenco dei simboli noti, in UN posto solo. Prima SETTE pagine eseguivano ciascuna per conto proprio db.OhlcvData.Select(c =&gt; c.Symbol).Distinct() — una scansione (pur solo-indice) su ~12M righe per ottenere ~30 stringhe, ripetuta a ogni apertura di pagina, con la POLITICA dei simboli decisa implicitamente da ogni copia. POLITICA DICHIARATA: unione di TrackedSeries (le serie tracciate ora — copre quelle appena aggiunte e ancora senza candele) e delle serie storiche presenti in OhlcvData (una serie rimossa dalla watchlist resta selezionabile per l'analisi: i suoi dati esistono). È la stessa semantica che le sette copie producevano di fatto, ora scritta e testabile. La stessa politica vale per le COPPIE di : coppie realmente presenti a DB più quelle tracciate — MAI il prodotto cartesiano simboli × timeframe, che mentirebbe sulle serie senza dati.
+
+| | Firma | Descrizione |
+|---|---|---|
+| `m` | `ValueTask&lt;IReadOnlyList&lt;string&gt;&gt; GetKnownSymbolsAsync(CancellationToken ct = default)` | Simboli noti, ordinati. Cache condivisa: la scansione grossa gira al più una volta per finestra. |
+| `m` | `ValueTask&lt;IReadOnlyList&lt;SeriesKey&gt;&gt; GetKnownSeriesAsync(CancellationToken ct = default)` | Le coppie (simbolo, timeframe) note, ordinate per simbolo e poi timeframe. Stessa cache e stessa politica dei simboli: serie con dati a DB più quelle tracciate, non il cartesiano. |
+| `m` | `void Invalidate()` | Invalida la cache (es. dopo l'aggiunta di una serie in watchlist). |
+
+### 📦 `SymbolCatalog` `(`
+
+> Singleton con cache a scadenza (default 5 minuti): i simboli cambiano solo quando si aggiunge o ingerisce una serie nuova, non a ogni apertura di pagina. Il costo passa da "una scansione per pagina per utente" a "una scansione per finestra per processo". La UI può forzare il refresh via (lo fa la watchlist al salvataggio). Simboli e coppie vivono in UNO snapshot solo, caricato in un colpo: i simboli sono la proiezione delle coppie, quindi chiedere entrambi non raddoppia la scansione.
+
+### 🧾 `Snapshot` `(IReadOnlyList&lt;string&gt; Symbols, IReadOnlyList&lt;SeriesKey&gt; Series);`
+
+| | Firma | Descrizione |
+|---|---|---|
+| `m` | `ValueTask&lt;IReadOnlyList&lt;string&gt;&gt; GetKnownSymbolsAsync(CancellationToken ct = default)` | — |
+| `m` | `ValueTask&lt;IReadOnlyList&lt;SeriesKey&gt;&gt; GetKnownSeriesAsync(CancellationToken ct = default)` | — |
+| `m` | `void Invalidate()` | — |
+
+### 📦 `SeriesKeyIgnoreCase` `: IEqualityComparer&lt;SeriesKey&gt;`
+
+> Uguaglianza case-insensitive sulla coppia, coerente con l'unione dei simboli.
+
+| | Firma | Descrizione |
+|---|---|---|
+| `p` | `SeriesKeyIgnoreCase Instance` | — |
+| `m` | `bool Equals(SeriesKey x, SeriesKey y)` | — |
+| `m` | `int GetHashCode(SeriesKey k)` | — |
 
 ## `ProcioneMGR/Services/MarketData/WebSocketPriceFeed.cs`
 
