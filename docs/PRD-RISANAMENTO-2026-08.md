@@ -5,7 +5,7 @@ richiesta del proprietario: fixare i bug riscontrati, eliminare o sincronizzare 
 riallineare configurazioni e UI, rendere il server indipendente da GitHub, far ripartire tutto
 all'avvio su qualunque dispositivo.*
 
-**Stato (2026-08-10): FASI 0-1-2-3-4 COMPLETE (2.4 RITIRATA) · FASI 5-6 da fare.**
+**Stato (2026-08-11): FASI 0-1-2-3-4-5 COMPLETE (2.4 RITIRATA) · FASE 6 da fare.**
 **Mandato aggiuntivo del proprietario (2026-08-09, vincolante da qui in avanti):** nessuna
 configurazione può esistere senza UI — l'amministratore governa ogni parte della macchina
 dall'interfaccia. `DeliberatelyNotExposed` del guardiano è stata SVUOTATA: le ragioni che
@@ -43,10 +43,16 @@ Suite di partenza: 2.096 metodi di test (inventario in `docs/audit/27_TEST_INVEN
 | 2026-08-10 | **2.1 completata davvero** — la verifica browser ha ritrovato la scansione da ~5 s aprendo /feature-selection e /backtest: il censimento «7 pagine» non contava i **page service**. Convertite a `ISymbolCatalog` le 4 copie sfuggite (`FeatureSelection.razor`, `BacktestPageService`, `OptimizationPageService`, `MlLabService`); guardiano `SymbolScanGuardTests` (scansione sorgenti stile `ConfigurationUiCoverageTests`, allowlist con ragioni: solo il catalogo stesso e `Discovery.razor`, che chiede le coppie simbolo+timeframe) | — |
 | 2026-08-10 | **2.1, ultimo tassello** — il catalogo esteso alle **coppie**: `GetKnownSeriesAsync` (serie con dati ∪ tracciate, MAI il cartesiano simboli × timeframe; stesso snapshot in cache TTL 5 min, stessa `Invalidate()`). `Discovery.razor` convertita e tolta dall'allowlist del guardiano, che ora contiene solo il catalogo stesso | — |
 
+| 2026-08-11 | **Riallineamento Config↔UI su master verificato a browser** (app riavviata su `c06efea`, guardiani 14/14): D-01 su run reale («Gate DSR su N=12.263 tentativi effettivi, 18.394 combinazioni provate, 144 candidati osservati») · badge «funding **serie storica** (94 eventi, firmati)» su backtest a leva — FundingHistory è popolata e usata · DISTINCT dei simboli una volta sola (catalogo) · salvataggio Model/λ esercitato. Zero errori | — |
+| 2026-08-11 | **FASE 5 COMPLETA — assetto Docker Compose**: `docker compose up -d` su macchina con solo Docker = Postgres 18 (volume, healthcheck, MAI pubblicato: isola per costruzione) + guscio su 5199 con **migrate-on-startup autosufficiente** + motore opzionale (`--profile engine`); tutti `restart: always`; segreti solo in `.env` gitignored + `.env.example`; Data Protection e appsettings-dei-pannelli su volumi (symlink, versione a un container dell'init-config K8s); `bringup.ps1`/`watchdog.ps1` riconoscono l'assetto dai label compose. **BUG GRAVE TROVATO E CHIUSO dal primo `up` su DB vergine**: il migrate-on-startup era rotto in silenzio OVUNQUE (host incluso) — Design 10.0.9 nel progetto migrazioni vs EF 10.0.8 dell'app ⇒ ogni classe Migration falliva il load, EF dichiarava «zero migrazioni» ⇒ «già allineato» su DB vuoto. Tre difese: versione allineata, guardia in DatabaseMigrator (DLL presente + zero migrazioni = ERRORE, mai «allineato»), `MigrationsEfVersionAlignmentTests`. Verificato: 20 migrazioni applicate da sole, riavvio pulito, welcome page a browser | `34c9a04`+`32014d3` |
+
 **Restano:** `git filter-repo` (DIFFERITO per decisione: coi tre segreti ruotati la storia è
-innocua; si farà se mai il repo dovesse diventare pubblico) · Fasi 5-6 ·
+innocua; si farà se mai il repo dovesse diventare pubblico) · **Fase 6** (verifica finale +
+rimisura carry col funding storico) ·
 Job one-shot `strategyhunter-discover`: campo immutabile, il template nuovo si applica alla
-prossima ricreazione (attrito strutturale già documentato nel kustomization dei job).
+prossima ricreazione (attrito strutturale già documentato nel kustomization dei job) ·
+il bin dell'HOST ha ancora la DLL migrazioni stantia (10.0.9): si riallinea col primo build
+della soluzione dopo il merge, e da lì vigila la guardia nuova.
 
 ---
 
@@ -265,11 +271,15 @@ Postgres, guscio (UI su 5199), motore — e **risopravvive ai riavvii** con `res
    comunque per costruzione.
 
 **Acceptance criteria.**
-- [ ] macchina pulita con solo Docker: `docker compose up -d` → UI su `http://localhost:5199`,
-      migrazioni applicate, login funzionante
-- [ ] riavvio del demone Docker (o del PC) → tutto riparte da solo, UI inclusa
-- [ ] `dotnet test` verde; smoke test browser (livello 4) sull'assetto compose
-- [ ] i due assetti non possono scrivere sulla stessa corsia insieme (lease verificato)
+- [x] macchina pulita con solo Docker: `docker compose up -d` → UI servita, **20 migrazioni
+      applicate da sole** al primo avvio su DB vergine, pagina di benvenuto con Login/Registrati
+      (verificato a browser su porta di collaudo 5299)
+- [x] riavvio → riparte da solo: `restart: always` su tutti i servizi + prova col restart del
+      container («già allineato (20 note)»)
+- [x] `dotnet test` verde (suite completa a chiusura); smoke browser eseguito
+- [x] i due assetti non si pestano per costruzione: il Postgres del compose NON è pubblicato
+      sull'host (isola), `bringup.ps1` esce se il compose è attivo, `watchdog.ps1` riconosce
+      l'assetto dai label; il lease per corsia resta il guardrail di ultima istanza
 
 **Rischi.** Doppio scrittore se qualcuno avvia compose col cluster kind attivo sullo stesso DB → il
 lease per corsia è il guardrail, e il README lo dichiara a caratteri grandi.

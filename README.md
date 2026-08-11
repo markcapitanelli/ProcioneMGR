@@ -181,6 +181,30 @@ Nato come **monolite modulare** Blazor Server, il progetto è stato progressivam
 
 ## Setup e avvio
 
+La piattaforma supporta **due assetti**, e la regola che li governa è una sola:
+
+> ⚠️ **UN SOLO SCRITTORE.** Mai i due assetti insieme sullo stesso database: sarebbero due motori
+> sulle stesse corsie. Il compose usa di default un Postgres SUO (isolato, non pubblicato
+> sull'host), quindi da solo non può violare la regola; il lease per corsia è il guardrail di
+> ultima istanza, non un permesso. `bringup.ps1` e `watchdog.ps1` riconoscono da soli quale
+> assetto è attivo.
+
+### Assetto A — Docker Compose (portabile: qualunque dispositivo con Docker) [Fase 5]
+
+```bash
+cp .env.example .env
+# compila POSTGRES_PASSWORD e PROCIONE_MGR_MASTER_KEY (generatori nei commenti del file)
+docker compose up -d
+```
+
+UI su `http://localhost:5199`, **migrazioni applicate da sole al primo avvio** (la DLL sta
+nell'immagine), tutto `restart: always`: sopravvive al riavvio del demone Docker e del PC.
+Il motore separato è opzionale: `TRADING_REMOTE=true` nel `.env` e
+`docker compose --profile engine up -d`. Le scritture dei pannelli admin e il keyring di Data
+Protection vivono su volumi dedicati: la ricreazione dei container non li perde.
+
+### Assetto B — Windows host + cluster kind (l'assetto storico di sviluppo)
+
 1. **Configurazione** — copia il template e compila i segreti (il file è gitignorato):
    ```bash
    cp ProcioneMGR/appsettings.json.example ProcioneMGR/appsettings.json
@@ -195,13 +219,17 @@ Nato come **monolite modulare** Blazor Server, il progetto è stato progressivam
 
    > 🔐 `appsettings.json` **non va mai committato**: contiene MasterKey e password. La API key di Anthropic si legge **solo** dalla env `ANTHROPIC_API_KEY`, mai dal file. Con la master key placeholder di sviluppo, il trading **Live è bloccato** per costruzione.
 
-2. **Schema DB** — applica le migrazioni PostgreSQL:
+2. **Schema DB** — dal 2026-08-05 le migrazioni si applicano **da sole all'avvio**
+   (`Database:AutoMigrate=true`, con advisory lock per gli avvii concorrenti), a patto che la DLL
+   `ProcioneMGR.Migrations.Postgres.dll` stia accanto a `ProcioneMGR.dll`:
+   ```powershell
+   dotnet build ProcioneMGR.Migrations.Postgres
+   cp ProcioneMGR.Migrations.Postgres/bin/Debug/net10.0/ProcioneMGR.Migrations.Postgres.dll ProcioneMGR/bin/Debug/net10.0/
+   ```
+   In alternativa (o con `AutoMigrate=false`) lo schema si applica a mano:
    ```powershell
    dotnet ef database update --project ProcioneMGR.Migrations.Postgres --startup-project ProcioneMGR
    ```
-   ⚠️ Passo **obbligatorio**: l'app **non** applica le migrazioni all'avvio (pattern
-   migrate-on-deploy). All'avvio crea soltanto i ruoli Identity — vedi `DbInitializer`, che lo
-   dichiara esplicitamente. Saltarlo lascia un database senza tabelle.
 
 3. **Avvio:**
    ```powershell

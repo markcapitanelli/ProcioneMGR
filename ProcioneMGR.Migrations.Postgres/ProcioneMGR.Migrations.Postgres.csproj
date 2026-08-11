@@ -16,7 +16,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9">
+    <!-- [Fase 5, 2026-08-11] La versione DEVE combaciare con gli EF di ProcioneMGR.csproj (10.0.8).
+         Con Design a 10.0.9 questa DLL usciva compilata contro Relational 10.0.9 mentre l'app ne
+         pubblica la 10.0.8: al load OGNI classe Migration falliva (FileNotFound sulla versione più
+         alta), EF ingoiava l'eccezione e dichiarava ZERO migrazioni — cioè «schema già allineato»
+         su un database VUOTO. Rotto in silenzio sia nel container sia sull'host (mascherato solo
+         dallo schema già migrato a mano). Guardiani: MigrationsEfVersionAlignmentTests (versioni)
+         e la guardia in DatabaseMigrator (DLL presente + zero migrazioni = errore, mai «allineato»). -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.8">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>

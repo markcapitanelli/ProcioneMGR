@@ -26,7 +26,9 @@ docs/
 infra/
 scripts/
 ProcioneMGR.Tests/
-ProcioneMGR.Migrations.Postgres/
+# [Fase 5] ProcioneMGR.Migrations.Postgres NON è più esclusa: il migrate-on-startup del guscio
+# vuole la sua DLL accanto a ProcioneMGR.dll (vedi Dockerfile), altrimenti il primo
+# `docker compose up` su una macchina pulita parte senza schema.
 *.db
 *.db-*
 *.md

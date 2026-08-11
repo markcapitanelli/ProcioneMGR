@@ -94,6 +94,17 @@ if (-not $dockerUp) {
 }
 Log "Docker   : pronto." 'Green'
 
+# --- 1b. [Fase 5] Assetto Docker Compose gia' attivo? -----------------------------------------
+# Se il progetto compose 'procionemgr' ha il guscio in esecuzione, la piattaforma e' SERVITA da
+# compose (restart: always la fa ripartire da sola col demone): questo bring-up non deve fare
+# nulla -- e soprattutto NON deve lanciare un secondo guscio sulla 5199. Un solo scrittore, sempre.
+$composeUi = docker ps --filter 'label=com.docker.compose.project=procionemgr' `
+    --filter 'label=com.docker.compose.service=ui' --filter 'status=running' --format '{{.Names}}' 2>$null
+if ($composeUi) {
+    Log "Compose  : assetto compose attivo ($composeUi, restart: always) - il bring-up kind non serve, esco." 'Green'
+    exit 0
+}
+
 # --- 2. Proxy kind-apiproxy (la porta riservata di Windows) ----------------------------------
 # "Container running" NON basta (2026-08-11): il socat riparte con Docker ma inoltra all'IP che
 # il nodo aveva PRIMA del riavvio, e Docker riassegna gli IP della rete kind a ogni avvio.

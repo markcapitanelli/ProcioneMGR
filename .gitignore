@@ -43,11 +43,14 @@ ProcioneMGR/appsettings.json.*
 appsettings.*.local.json
 *.local.json
 .env
-!.env.example
 .env.*
+# L'eccezione DOPO i pattern che ignorano: in gitignore vince l'ultima regola che matcha,
+# e con !.env.example prima di .env.* l'example restava ignorato.
+!.env.example
 secrets.json
 
 # ---- Misc ----
+TestResults/
 *.log
 
 # Artefatti che si materializzano nella radice del repo quando un tool gira con HOME sbagliata

@@ -1,0 +1,115 @@
+# =============================================================================================
+#  ProcioneMGR — assetto Docker Compose [Fase 5 PRD-RISANAMENTO, decisione 2026-08-08].
+#
+#  Su QUALUNQUE dispositivo con Docker: copia .env.example in .env, riempi i segreti, poi
+#      docker compose up -d
+#  e riparte tutto: Postgres (volume dati), il guscio su http://localhost:5199 (migrazioni
+#  applicate da solo al primo avvio: la DLL sta nell'immagine), e — opzionale — il motore:
+#      docker compose --profile engine up -d      (con TRADING_REMOTE=true nel .env)
+#  Tutti `restart: always`: sopravvivono al riavvio del demone Docker e del PC.
+#
+#  ⚠⚠ UN SOLO SCRITTORE (regola 2) ⚠⚠
+#  MAI questo assetto e quello Windows+kind INSIEME sullo stesso database. Questo compose usa un
+#  Postgres SUO (volume `pgdata`, non pubblicato sull'host): di default è quindi un'isola, e va
+#  bene così. Se punti la connection string al DB del cluster, spegni prima l'altro assetto —
+#  il lease per corsia è il guardrail di ultima istanza, non un permesso.
+#
+#  I segreti stanno SOLO in .env (gitignored): qui nessun valore, solo riferimenti.
+# =============================================================================================
+
+# Nome di progetto FISSO: bringup.ps1 e watchdog.ps1 riconoscono l'assetto compose dai label
+# `com.docker.compose.project=procionemgr` — col default (nome della cartella) il riconoscimento
+# dipenderebbe da dove il repo e' stato clonato.
+name: procionemgr
+
+services:
+  postgres:
+    image: postgres:18
+    restart: always
+    environment:
+      POSTGRES_USER: procione
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?definisci POSTGRES_PASSWORD nel file .env}
+      POSTGRES_DB: procionemgr
+    volumes:
+      # Da postgres:18 il mount consigliato e' la DIRECTORY PADRE (/var/lib/postgresql), non il
+      # sottopercorso /data: l'immagine mette i dati in una sottocartella versionata, cosi'
+      # `pg_upgrade --link` restera' possibile. Montare /data col 18 fa fallire il primo avvio.
+      - pgdata:/var/lib/postgresql
+    # NIENTE ports: il DB resta raggiungibile solo dalla rete compose. Pubblicarlo sull'host
+    # inviterebbe a puntarci l'altro assetto — il modo classico di violare la regola 2.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U procione -d procionemgr"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  ui:
+    build:
+      context: .
+      target: procionemgr
+    image: procionemgr/procionemgr:compose
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # UI_PORT per i collaudi fianco-a-fianco con l'assetto host (che occupa la 5199).
+      - "${UI_PORT:-5199}:8080"
+    environment:
+      ConnectionStrings__PostgresConnection: Host=postgres;Port=5432;Database=procionemgr;Username=procione;Password=${POSTGRES_PASSWORD}
+      Security__MasterKey: ${PROCIONE_MGR_MASTER_KEY:?definisci PROCIONE_MGR_MASTER_KEY nel file .env}
+      # Dietro il mapping di porta il processo parla HTTP in chiaro: stesso ragionamento del pod ui.
+      Http__DisableHttpsRedirection: "true"
+      # Il keyring di Data Protection su volume: senza, ogni ricreazione del container
+      # invaliderebbe i cookie e butterebbe fuori tutti gli utenti.
+      DataProtection__KeyRingPath: /keys
+      # false (default) = motore in-process, l'assetto a un container. true (col profilo engine
+      # attivo) = il guscio comanda il container `trading` via gRPC. MAI true senza il profilo:
+      # il guscio resterebbe senza alcun motore.
+      Trading__UseRemoteTrading: ${TRADING_REMOTE:-false}
+      Trading__RemoteUrl: http://trading:8080
+      Trading__GrpcSharedSecret: ${PROCIONE_MGR_TRADING_GRPC_SECRET:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    volumes:
+      - uikeys:/keys
+      - uiconfig:/config
+    # Il file scritto dai pannelli admin (AppConfigWriter → /app/appsettings.json) deve
+    # SOPRAVVIVERE alla ricreazione del container: vive sul volume `uiconfig` e viene symlinkato
+    # dove l'app lo cerca. È la versione a un solo container dell'init-config del pod K8s
+    # (`test -s` = idempotente: a file già scritto non tocca nulla).
+    entrypoint: ["/bin/sh", "-c", "test -s /config/appsettings.json || echo '{}' > /config/appsettings.json; ln -sf /config/appsettings.json /app/appsettings.json; exec dotnet ProcioneMGR.dll"]
+
+  # Il motore separato (profilo `engine`): stessa immagine e stessi contratti del Deployment K8s.
+  # Al PRIMO avvio assoluto può riavviarsi una volta o due mentre il guscio applica le migrazioni:
+  # è il restart: always che converge, non un errore.
+  trading:
+    profiles: ["engine"]
+    build:
+      context: .
+      target: procionemgr-trading
+    image: procionemgr/procionemgr-trading:compose
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ui:
+        condition: service_started
+    environment:
+      ConnectionStrings__PostgresConnection: Host=postgres;Port=5432;Database=procionemgr;Username=procione;Password=${POSTGRES_PASSWORD}
+      Security__MasterKey: ${PROCIONE_MGR_MASTER_KEY}
+      # Niente guardia `:?` qui: compose interpola TUTTI i servizi anche coi profili spenti, e la
+      # guardia romperebbe il `docker compose up` senza engine. Il fail-fast vero sta nei processi:
+      # col profilo attivo e il segreto vuoto, guscio e motore rifiutano di partire (P1-6).
+      Trading__GrpcSharedSecret: ${PROCIONE_MGR_TRADING_GRPC_SECRET:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    volumes:
+      - tradingconfig:/config
+    # Stesso patto del guscio: il motore scrive la propria configurazione in /app/appsettings.json
+    # (EngineConfigStore) e quella scrittura deve sopravvivere alla ricreazione del container.
+    entrypoint: ["/bin/sh", "-c", "test -s /config/appsettings.json || echo '{}' > /config/appsettings.json; ln -sf /config/appsettings.json /app/appsettings.json; exec dotnet ProcioneMGR.Trading.dll"]
+
+volumes:
+  pgdata:
+  uikeys:
+  uiconfig:
+  tradingconfig:
