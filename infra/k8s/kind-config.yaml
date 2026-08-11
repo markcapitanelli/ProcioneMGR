@@ -3,6 +3,40 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: procionemgr-dev
+# Leader election allungata su controller-manager e scheduler (2026-08-10). Coi default (15/10/2s),
+# sotto carico host (build Docker, suite test) etcd/apiserver rispondono oltre la scadenza della
+# lease e i due componenti muoiono di «leaderelection lost»: 540+ restart in 14 giorni, e un
+# kubectl apply può restare observedGeneration indietro per minuti finché il controller non
+# risorge. Su un cluster mono-nodo dev non c'è un secondo candidato: una lease lunga non costa
+# failover, compra solo tolleranza all'I/O. Gli stessi valori sono stati applicati a caldo ai
+# manifest statici del cluster esistente; questo patch li rende permanenti alla ricreazione.
+# 120/80/15 e non 60/40/10: misurato lo stesso giorno (tempesta ~05:00Z, VM WSL a load 59 con
+# 543MB in swap) che i blackout dell'apiserver superano i 40s — il rinnovo falliva anche con la
+# prima terna. 80s di renew-deadline coprono i blackout osservati; il prezzo è solo una finestra
+# di riacquisizione più lunga (max 120s) dopo un kill non pulito.
+# NB: kubeadm v1beta4 (k8s >= 1.31) usa extraArgs a LISTA e il merge del patch la RIMPIAZZA:
+# enable-hostpath-provisioner (default di kind sul controller-manager) va ripetuto qui, o si perde.
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    controllerManager:
+      extraArgs:
+        - name: enable-hostpath-provisioner
+          value: "true"
+        - name: leader-elect-lease-duration
+          value: "120s"
+        - name: leader-elect-renew-deadline
+          value: "80s"
+        - name: leader-elect-retry-period
+          value: "15s"
+    scheduler:
+      extraArgs:
+        - name: leader-elect-lease-duration
+          value: "120s"
+        - name: leader-elect-renew-deadline
+          value: "80s"
+        - name: leader-elect-retry-period
+          value: "15s"
 networking:
   # Calico al posto di kindnet (Fase 3, consolidamento). kindnet ACCETTA le NetworkPolicy ma le
   # IGNORA: la policy davanti a procionemgr-trading — l'unico controllo di accesso su ConfirmOrder,
