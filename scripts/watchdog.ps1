@@ -9,9 +9,14 @@
 #
 #  Cosa controlla:
 #    1. guscio  : GET  http://localhost:5199/health
-#    2. motore  : GET  http://localhost:18092/health (via port-forward; se giu', PRIMA prova a
-#                 ripararlo con ensure-trading-portforward.ps1 e ricontrolla — il tunnel stantio
-#                 e' di gran lunga la causa piu' frequente, non il motore morto)
+#    2. motore  : GET  http://localhost:18093/health (la porta HEALTH del servizio, 8081, via
+#                 port-forward; se giu', PRIMA prova a ripararlo con
+#                 ensure-trading-portforward.ps1 e ricontrolla — il tunnel stantio e' di gran
+#                 lunga la causa piu' frequente, non il motore morto).
+#                 MAI la 18092: quella e' la 8080 gRPC h2c-only, che a un GET HTTP/1.x risponde
+#                 400 SEMPRE — il check puntava li' ed era strutturalmente incapace di dire
+#                 "motore sano", scoperto il 2026-08-11 (l'anti-spam sulle transizioni aveva
+#                 zittito il falso "giu'" permanente).
 #    3. Postgres: TCP  localhost:5432
 #
 #  Anti-spam: notifica UNA volta per transizione (OK->GUASTO e GUASTO->OK), mai a raffica. Lo
@@ -116,13 +121,14 @@ $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $shellOk = Test-Http 'http://localhost:5199/health'
 
 # --- 2. Motore (con auto-riparazione del tunnel prima di gridare) ----------------------------
-$engineOk = Test-Http 'http://localhost:18092/health'
+# 18093 = porta health (8081) del servizio; la 18092 e' gRPC e a HTTP/1.x risponde sempre 400.
+$engineOk = Test-Http 'http://localhost:18093/health'
 if (-not $engineOk) {
     $ensure = Join-Path $repoRoot 'scripts\ensure-trading-portforward.ps1'
     if (Test-Path $ensure) {
         & $ensure | Out-Null
         Start-Sleep -Seconds 3
-        $engineOk = Test-Http 'http://localhost:18092/health'
+        $engineOk = Test-Http 'http://localhost:18093/health'
     }
 }
 

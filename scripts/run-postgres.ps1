@@ -51,16 +51,10 @@ if ($pfListening) {
 # feed R1 ne' carry — comanda il servizio procionemgr-trading via gRPC su localhost:18092.
 # NB: a differenza dell'ingestion questo port-forward e' NECESSARIO alla pagina /trading (senza,
 # la UI mostra errori di connessione — il core continua a operare da solo, e' il punto di B3).
-$tfListening = Test-NetConnection -ComputerName localhost -Port 18092 -InformationLevel Quiet -WarningAction SilentlyContinue
-if ($tfListening) {
-    Write-Host "Trading  : port-forward 18092 gia' attivo (motore in-cluster)." -ForegroundColor Green
-} elseif ((Get-Command kubectl -ErrorAction SilentlyContinue) -and
-          (kubectl get svc procionemgr-trading -n procionemgr-trading --context kind-procionemgr-dev 2>$null)) {
-    Start-Process -WindowStyle Hidden kubectl -ArgumentList "port-forward","-n","procionemgr-trading","svc/procionemgr-trading","18092:8080","--context","kind-procionemgr-dev"
-    Write-Host "Trading  : port-forward 18092 avviato (motore in-cluster)." -ForegroundColor Green
-} else {
-    Write-Host "Trading  : cluster kind non raggiungibile - /trading non potra' comandare il motore finche' non torna." -ForegroundColor Yellow
-}
+# Delegato a ensure-trading-portforward.ps1 (2026-08-11): il blocco inline che stava qui
+# controllava solo "porta in ascolto" — il tunnel stantio (pod sostituito, container ripartito)
+# lo riconosce solo lo script dedicato, che apre anche la porta health 18093 per il watchdog.
+& (Join-Path $PSScriptRoot 'ensure-trading-portforward.ps1')
 if ($env:ANTHROPIC_API_KEY) {
     Write-Host "Layer AI : ANTHROPIC_API_KEY rilevata (supervisione AI abilitabile via Llm:Enabled)." -ForegroundColor Green
 } else {
