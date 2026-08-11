@@ -61,6 +61,10 @@ public static class DatabaseMigrator
     /// <summary>Nome dell'assembly che ospita le migrazioni (deve combaciare con <c>MigrationsAssembly(...)</c>).</summary>
     internal const string MigrationsAssemblyName = "ProcioneMGR.Migrations.Postgres";
 
+    /// <summary>La DLL delle migrazioni è fisicamente accanto all'eseguibile di QUESTO host?</summary>
+    internal static bool MigrationsDllPresent()
+        => File.Exists(Path.Combine(AppContext.BaseDirectory, MigrationsAssemblyName + ".dll"));
+
     private static int _resolverInstalled;
 
     /// <summary>
@@ -153,7 +157,26 @@ public static class DatabaseMigrator
 
         if (pending.Count == 0)
         {
-            logger.LogInformation("Schema del database già allineato: nessuna migrazione pendente.");
+            // [Fase 5, 2026-08-11] «Zero pendenti» ha DUE cause possibili, e confonderle è già
+            // costato un primo avvio senza schema: (a) lo schema è davvero allineato; (b) l'assembly
+            // si è CARICATO ma non espone alcuna migrazione — succede quando le versioni EF di app e
+            // progetto migrazioni divergono: ogni classe Migration fallisce il load sulla versione
+            // più alta, EF ingoia l'eccezione e la lista esce vuota. La discriminante è il conteggio
+            // TOTALE delle migrazioni note: un assembly di migrazioni vero non è mai vuoto.
+            var known = db.Database.GetMigrations().Count();
+            if (known == 0 && MigrationsDllPresent())
+            {
+                logger.LogError(
+                    "La DLL '{Assembly}' è accanto all'eseguibile ma NON espone alcuna migrazione: " +
+                    "quasi certamente le versioni EF di app e progetto migrazioni sono disallineate " +
+                    "(il load dei tipi fallisce in silenzio). Lo schema NON è verificato — non lo " +
+                    "dichiaro allineato. Allineare Microsoft.EntityFrameworkCore.Design nel progetto " +
+                    "migrazioni alla versione EF dell'app e ricostruire.",
+                    MigrationsAssemblyName);
+                return new MigrationOutcome(false, [], [], "assembly caricato ma senza migrazioni (versioni EF disallineate?)");
+            }
+
+            logger.LogInformation("Schema del database già allineato: nessuna migrazione pendente ({Known} note).", known);
             return new MigrationOutcome(true, [], [], null);
         }
 

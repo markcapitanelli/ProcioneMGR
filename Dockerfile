@@ -22,12 +22,14 @@ COPY ProcioneMGR.Contracts/ProcioneMGR.Contracts.csproj ProcioneMGR.Contracts/
 COPY ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj ProcioneMGR.Ingestion/
 COPY ProcioneMGR.Ml/ProcioneMGR.Ml.csproj ProcioneMGR.Ml/
 COPY ProcioneMGR.Trading/ProcioneMGR.Trading.csproj ProcioneMGR.Trading/
+COPY ProcioneMGR.Migrations.Postgres/ProcioneMGR.Migrations.Postgres.csproj ProcioneMGR.Migrations.Postgres/
 COPY tools/DbBackup/DbBackup.csproj tools/DbBackup/
 COPY tools/StrategyHunter/StrategyHunter.csproj tools/StrategyHunter/
 RUN dotnet restore ProcioneMGR/ProcioneMGR.csproj \
  && dotnet restore ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj \
  && dotnet restore ProcioneMGR.Ml/ProcioneMGR.Ml.csproj \
  && dotnet restore ProcioneMGR.Trading/ProcioneMGR.Trading.csproj \
+ && dotnet restore ProcioneMGR.Migrations.Postgres/ProcioneMGR.Migrations.Postgres.csproj \
  && dotnet restore tools/DbBackup/DbBackup.csproj \
  && dotnet restore tools/StrategyHunter/StrategyHunter.csproj
 
@@ -36,6 +38,7 @@ COPY ProcioneMGR.Contracts/ ProcioneMGR.Contracts/
 COPY ProcioneMGR.Ingestion/ ProcioneMGR.Ingestion/
 COPY ProcioneMGR.Ml/ ProcioneMGR.Ml/
 COPY ProcioneMGR.Trading/ ProcioneMGR.Trading/
+COPY ProcioneMGR.Migrations.Postgres/ ProcioneMGR.Migrations.Postgres/
 COPY tools/DbBackup/ tools/DbBackup/
 COPY tools/StrategyHunter/ tools/StrategyHunter/
 
@@ -52,6 +55,15 @@ RUN dotnet publish ProcioneMGR/ProcioneMGR.csproj -c Release -o /out/procionemgr
           /out/procionemgr-ml/appsettings.Development.json /out/procionemgr-ml/appsettings.Production.json \
           /out/procionemgr-trading/appsettings.Development.json /out/procionemgr-trading/appsettings.Production.json \
           /out/dbbackup/appsettings.*.json /out/strategyhunter/appsettings.*.json
+
+# [Fase 5] La DLL delle migrazioni accanto a ProcioneMGR.dll: il migrate-on-startup del guscio la
+# risolve da AppContext.BaseDirectory (il resolver di DatabaseMigrator copre il buco del deps.json,
+# che non la conosce — ProcioneMGR NON referenzia il progetto per evitare il ciclo). Senza questa
+# copia il primo `docker compose up` su una macchina pulita partirebbe SENZA schema: il guscio si
+# comporterebbe da satellite («migrazioni non raggiungibili») e ogni pagina fallirebbe. Solo nel
+# monolite: i satelliti non migrano per contratto.
+RUN dotnet build ProcioneMGR.Migrations.Postgres/ProcioneMGR.Migrations.Postgres.csproj -c Release --no-restore \
+ && cp ProcioneMGR.Migrations.Postgres/bin/Release/net10.0/ProcioneMGR.Migrations.Postgres.dll /out/procionemgr/
 
 # --- Target: monolite ---
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS procionemgr
