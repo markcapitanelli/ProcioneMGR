@@ -6,8 +6,9 @@
 #    2. proxy kind-apiproxy: Windows RISERVA la porta dell'API server dopo un riavvio e Docker
 #       non ripristina il binding (docker restart NON basta — visto il 2026-07-27, due volte).
 #       Rimedio permanente: container socat con --restart unless-stopped che ripubblica 6443 del
-#       nodo su 127.0.0.1:16443 + kubectl config set-cluster. Qui si verifica e, se manca, si
-#       ricrea.
+#       nodo su 127.0.0.1:16443 + kubectl config set-cluster. Qui si verifica che l'API server
+#       RISPONDA attraverso il proxy (running non basta: l'IP del nodo cambia a ogni riavvio di
+#       Docker, 2026-08-04 e 2026-08-11) e, se non risponde, si ricrea puntando al nome DNS.
 #    3. attesa del nodo kind Ready e del pod di trading Running (il core caldo riparte da solo:
 #       qui si aspetta, non si comanda)
 #    4. port-forward: motore 18092 (ensure-trading-portforward.ps1, con il controllo del pod
@@ -94,22 +95,40 @@ if (-not $dockerUp) {
 Log "Docker   : pronto." 'Green'
 
 # --- 2. Proxy kind-apiproxy (la porta riservata di Windows) ----------------------------------
-$proxyRunning = docker ps --filter "name=$proxyName" --filter 'status=running' --format '{{.Names}}' 2>$null
-if (-not $proxyRunning) {
-    # Il container e' --restart unless-stopped, quindi di norma riparte con Docker. Se manca del
-    # tutto (cluster ricreato, container rimosso), lo si ricrea puntando all'IP corrente del nodo.
-    $nodeIp = docker inspect procionemgr-dev-control-plane --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>$null
-    if ([string]::IsNullOrWhiteSpace($nodeIp)) {
+# "Container running" NON basta (2026-08-11): il socat riparte con Docker ma inoltra all'IP che
+# il nodo aveva PRIMA del riavvio, e Docker riassegna gli IP della rete kind a ogni avvio.
+# Successo identico due volte a ruoli invertiti: 2026-08-04 (socat->.3, nodo su .2) e 2026-08-11
+# (socat->.2, nodo su .3) — un'ora di "TLS handshake timeout" con proxy e nodo entrambi "sani".
+# Il verdetto e' quindi la RISPOSTA dell'API server ATTRAVERSO il proxy; e il proxy si (ri)crea
+# puntando al NOME del container sulla rete kind (DNS interno di Docker, stabile), mai all'IP.
+$proxyAnswers = $false
+try {
+    # /livez del kube-apiserver risponde anche anonimo; il certificato e' self-signed, quindi
+    # per questa sola sonda si sospende la validazione (PS 5.1 non ha -SkipCertificateCheck).
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+    $resp = Invoke-WebRequest -Uri "https://127.0.0.1:$proxyPort/livez" -UseBasicParsing -TimeoutSec 8
+    $proxyAnswers = ($resp.StatusCode -eq 200)
+} catch { }
+finally {
+    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $null
+}
+
+if ($proxyAnswers) {
+    Log "Proxy    : kind-apiproxy attivo e l'API server RISPONDE attraverso il proxy." 'Green'
+} else {
+    $nodeExists = docker inspect procionemgr-dev-control-plane --format '{{.Name}}' 2>$null
+    if ([string]::IsNullOrWhiteSpace("$nodeExists")) {
         Log "Proxy    : nodo kind non trovato - cluster assente? (k8s-bootstrap.ps1 e' il prerequisito)." 'Red'
     } else {
         docker rm -f $proxyName *> $null
+        # Nome DNS, non IP: se il nodo sta ancora partendo il socat puo' morire al primo giro,
+        # ma --restart unless-stopped lo ripresenta finche' la risoluzione non riesce.
         docker run -d --name $proxyName --network kind --restart unless-stopped `
             -p "127.0.0.1:${proxyPort}:6443" alpine/socat `
-            'tcp-listen:6443,fork,reuseaddr' "tcp-connect:${nodeIp}:6443" *> $null
-        Log "Proxy    : kind-apiproxy ricreato verso $nodeIp (porta $proxyPort)." 'Green'
+            'tcp-listen:6443,fork,reuseaddr' 'tcp-connect:procionemgr-dev-control-plane:6443' *> $null
+        Log "Proxy    : kind-apiproxy ricreato verso procionemgr-dev-control-plane:6443 (porta $proxyPort)." 'Green'
     }
-} else {
-    Log "Proxy    : kind-apiproxy gia' attivo." 'Green'
 }
 
 # kubectl deve puntare al proxy: set-cluster e' idempotente e sopravvive ai riavvii, ma se il

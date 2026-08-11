@@ -1,5 +1,6 @@
 # =============================================================================================
-#  Garantisce il port-forward 18092 -> core di trading in-cluster (procionemgr-trading:8080).
+#  Garantisce il port-forward verso il core di trading in-cluster, in UN processo kubectl:
+#  18092 -> 8080 (gRPC del guscio) e 18093 -> 8081 (health HTTP, per il watchdog).
 #
 #  PERCHE' ESISTE: con Trading:UseRemoteTrading=true il monolite e' il GUSCIO e comanda il motore
 #  via gRPC su localhost:18092. Senza questo tunnel la pagina /trading mostra
@@ -32,7 +33,14 @@
 
 $ErrorActionPreference = 'Continue'
 
+#  --- LA PORTA HEALTH VIAGGIA NELLO STESSO TUNNEL (2026-08-11) --------------------------------
+#  La 8080 del servizio e' gRPC h2c-only: a un GET HTTP/1.x risponde SEMPRE 400. Il watchdog
+#  interrogava http://localhost:18092/health e quindi non poteva mai vedere il motore sano —
+#  per mesi, senza che nessuno se ne accorgesse (l'anti-spam sulle transizioni ha taciuto il
+#  falso "giu'" permanente). Il servizio espone da sempre una porta health HTTP dedicata (8081):
+#  da oggi il tunnel la porta su 18093, nello stesso processo kubectl del 18092.
 $port = 18092
+$healthPort = 18093
 $context = 'kind-procionemgr-dev'
 $namespace = 'procionemgr-trading'
 $service = 'svc/procionemgr-trading'
@@ -96,11 +104,11 @@ if (-not $svc) {
 
 $currentPod = Get-CurrentPodIdentity
 
-if (Test-PortListening $port) {
+if ((Test-PortListening $port) -and (Test-PortListening $healthPort)) {
     $servedPod = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { '' }
 
     if ($currentPod -and $servedPod -eq $currentPod) {
-        Write-Host "Trading  : port-forward $port gia' attivo verso $($currentPod.Split('#')[0]) (restart $($currentPod.Split('#')[1]))." -ForegroundColor Green
+        Write-Host "Trading  : port-forward $port+$healthPort gia' attivo verso $($currentPod.Split('#')[0]) (restart $($currentPod.Split('#')[1]))." -ForegroundColor Green
         exit 0
     }
 
@@ -109,23 +117,32 @@ if (Test-PortListening $port) {
     $detail = if ($servedPod) { "serviva $servedPod, ora c'e' $currentPod" } else { "pod servito sconosciuto" }
     Write-Host "Trading  : port-forward $port STANTIO ($detail) - lo ricreo." -ForegroundColor Yellow
     Stop-StalePortForward $port
+    Stop-StalePortForward $healthPort
+}
+elseif ((Test-PortListening $port) -or (Test-PortListening $healthPort)) {
+    # Tunnel a meta': una porta sola in ascolto. Succede col tunnel aperto dalla versione di
+    # questo script precedente alla porta health, o con un kubectl morente. Si rifa' intero.
+    Write-Host "Trading  : tunnel incompleto (manca una delle due porte $port/$healthPort) - lo ricreo." -ForegroundColor Yellow
+    Stop-StalePortForward $port
+    Stop-StalePortForward $healthPort
 }
 
 Start-Process -WindowStyle Hidden kubectl -ArgumentList `
-    'port-forward', '-n', $namespace, $service, "${port}:8080", '--context', $context
+    'port-forward', '-n', $namespace, $service, "${port}:8080", "${healthPort}:8081", '--context', $context
 
 # Il tunnel impiega un attimo ad aprirsi: si aspetta e si VERIFICA, invece di dare per scontato
-# che l'avvio del processo equivalga alla porta in ascolto.
-for ($i = 0; $i -lt 10; $i++) {
+# che l'avvio del processo equivalga alla porta in ascolto. Fino a 10 s: con l'apiserver appena
+# ripartito i primi 5 non bastavano (visto il 2026-08-11: messaggio d'allarme, tunnel poi sano).
+for ($i = 0; $i -lt 20; $i++) {
     Start-Sleep -Milliseconds 500
-    if (Test-PortListening $port) {
+    if ((Test-PortListening $port) -and (Test-PortListening $healthPort)) {
         # Si annota QUALE pod sta servendo: e' il dato che al prossimo giro distingue "gia' attivo"
         # da "attivo verso un pod che non c'e' piu'".
         if ($currentPod) { Set-Content -Path $marker -Value $currentPod -Encoding utf8 }
-        Write-Host "Trading  : port-forward $port avviato verso $currentPod." -ForegroundColor Green
+        Write-Host "Trading  : port-forward $port (gRPC) + $healthPort (health) avviato verso $currentPod." -ForegroundColor Green
         exit 0
     }
 }
 
-Write-Host "Trading  : port-forward $port avviato ma la porta non risulta in ascolto - controlla il cluster." -ForegroundColor Yellow
+Write-Host "Trading  : port-forward avviato ma le porte $port/$healthPort non risultano in ascolto - controlla il cluster." -ForegroundColor Yellow
 exit 0
