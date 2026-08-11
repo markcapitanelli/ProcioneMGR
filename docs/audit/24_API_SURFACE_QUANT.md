@@ -8,9 +8,9 @@ ML, fattori alpha, validazione anti-overfitting, regime, portafoglio, serie stor
 
 | | |
 |---|---:|
-| File coperti | 165 |
-| Tipi | 424 |
-| Membri (metodi, proprietà, costruttori, costanti) | 1504 |
+| File coperti | 166 |
+| Tipi | 427 |
+| Membri (metodi, proprietà, costruttori, costanti) | 1513 |
 
 **Legenda:** 🔌 interface · 📦 class · 🧾 record · 🔢 enum · ▫️ struct · `m` metodo · `p` proprietà · `c` costruttore · `k` costante
 
@@ -210,6 +210,25 @@ ML, fattori alpha, validazione anti-overfitting, regime, portafoglio, serie stor
 > Selezione automatica delle feature per Information Coefficient (Fase 3): ordina/filtra un insieme di candidati usando il ESISTENTE (IC di Spearman, Information Ratio, consistenza), così la scelta delle feature per i modelli ML smette di essere manuale e diventa guidata dalla misura. L'output è un sottoinsieme di pronto per — zero modifiche a valle. Deterministico (l'IC è deterministico). Rif. Fase 3 §3.3 (strumenti sottoutilizzati).
 
 ### 📦 `IcFeatureSelector` `: IIcFeatureSelector`
+
+## `ProcioneMGR/Services/ML/IncrementalFactorFilter.cs`
+
+### 🧾 `IncrementalFilterEntry` `(FactorSpec Spec, bool Kept, IncrementalIcOutcome? Outcome);`
+
+> Esito del filtro per un singolo fattore: tenuto o scartato, col verdetto del gate. Il fattore valutato. True se entra nell'insieme selezionato. Verdetto del gate (null per il capostipite: è il primo controllo, non un candidato).
+
+### 🧾 `IncrementalFilterResult` `(IReadOnlyList&lt;IncrementalFilterEntry&gt; Entries)`
+
+> Risultato del filtro incrementale: ogni fattore col suo verdetto, più i soli tenuti.
+
+| | Firma | Descrizione |
+|---|---|---|
+| `p` | `IReadOnlyList&lt;FactorSpec&gt; Kept` | — |
+| `p` | `int DroppedCount` | — |
+
+### 📦 `IncrementalFactorFilter`
+
+> [2.6 PRD-RISANAMENTO, chiude C-03/G-16] Il ponte fra la selezione per IC e l' del modulo Microstructure — il gate anti-ridondanza che l'audit ha trovato completo, testato e irraggiungibile («il dato c'è, chi lo legge no»). La domanda a cui risponde: con 158+ fattori Alpha158 nel catalogo, molti candidati portano la STESSA informazione a orizzonti vicini. La selezione per \|IC\| assoluto li tiene tutti; questo filtro GREEDY li passa in ordine di priorità (\|IC\| decrescente, l'ordine della selezione) e tiene solo chi AGGIUNGE informazione oltre ai già tenuti — IC parziale contro l'insieme corrente, con soglia di rumore e nullo per permutazione, tutto dentro il gate. Statico e puro come il gate che usa: nessuna registrazione DI, deterministico a parità di input (il gate ha il suo seed interno). Le convenzioni di calcolo (Compute del fattore, ForwardReturns) sono le STESSE del : il filtro …
 
 ## `ProcioneMGR/Services/ML/Labeling/MetaLabeler.cs`
 
@@ -593,6 +612,7 @@ ML, fattori alpha, validazione anti-overfitting, regime, portafoglio, serie stor
 |---|---|---|
 | `p` | `string Name` | — |
 | `p` | `bool IsFitted` | — |
+| `p` | `int PermutationImportanceSeed` | [G-08] Seed delle permutazioni della feature importance. Era un 42 CABLATO nel corpo del metodo: deterministico, ma invisibile e non variabile — chi stima la varianza fra seed diversi non toccava questo ramo e la sottos… |
 | `m` | `IEstimator&lt;ITransformer&gt; BuildPipeline(MLContext mlContext)` | Costruisce la pipeline di addestramento (eventuale pre-processing + trainer). |
 | `m` | `void Fit(MLContext mlContext, IDataView trainingData)` | — |
 | `m` | `float Predict(float[] features)` | — |
@@ -776,6 +796,7 @@ ML, fattori alpha, validazione anti-overfitting, regime, portafoglio, serie stor
 |---|---|---|
 | `p` | `string Name` | — |
 | `p` | `bool IsFitted` | — |
+| `p` | `int PermutationImportanceSeed` | [G-08] Seed delle permutazioni della feature importance — stesso contratto e stesso default di . |
 | `c` | `StackedReturnPredictor(IPurgedTimeSeriesCv? cv = null)` | Costruttore per il CARICAMENTO: lo stato reale arriva da . |
 | `m` | `void Fit(MLContext mlContext, IDataView trainingData)` | — |
 | `m` | `float Predict(float[] features)` | — |
@@ -1490,19 +1511,13 @@ ML, fattori alpha, validazione anti-overfitting, regime, portafoglio, serie stor
 
 > Uno split combinatorio: un sottoinsieme di gruppi usati come test, il resto come train, con le bande di purge/embargo già rimosse dal train. Analogo combinatorio di ML.CvSplit , con in più l'indice dei gruppi di test scelti (per tracciare i "percorsi" backtestabili).
 
-### 🔌 `ICombinatorialPurgedCv`
+### 📦 `CombinatorialPurgedCv`
 
 > Combinatorial Purged Cross-Validation (López de Prado, "Advances in Financial ML", cap. 12): invece di un solo blocco di test contiguo per fold (come PurgedTimeSeriesCv ), si scelgono TUTTE le combinazioni di testGroups gruppi su groups totali → C(groups, testGroups) split, ciascuno con purge/embargo attorno a OGNI gruppo di test. Genera molti più percorsi out-of-sample dallo stesso storico, riducendo la varianza della stima e alimentando il calcolo del PBO. Deterministico (combinazioni in ordine lessicografico), stateless → registrabile Singleton.
 
 | | Firma | Descrizione |
 |---|---|---|
 | `m` | `IReadOnlyList&lt;CpcvSplit&gt; Split(int sampleCount, int groups, int testGroups, int purgeWindow, int embargoPeriods)` | Divide campioni ordinati temporalmente in gruppi contigui (l'ultimo assorbe il resto) e produce C( , ) split. Per ogni split il train esclude i gruppi di test e le bande di prima ed dopo ciascun gruppo di test. |
-
-### 📦 `CombinatorialPurgedCv` `: ICombinatorialPurgedCv`
-
-| | Firma | Descrizione |
-|---|---|---|
-| `m` | `IReadOnlyList&lt;CpcvSplit&gt; Split(int sampleCount, int groups, int testGroups, int purgeWindow, int embargoPeriods)` | — |
 | `m` | `IEnumerable&lt;int[]&gt; Combinations(int n, int k)` | Combinazioni di indici su , ordine lessicografico. |
 
 ## `ProcioneMGR/Services/Validation/DeflatedSharpeRatio.cs`
@@ -1850,6 +1865,18 @@ ML, fattori alpha, validazione anti-overfitting, regime, portafoglio, serie stor
 | `p` | `int MaxRegimes` | Estremo superiore del range di K per l'auto-selezione. Usato solo se . |
 | `p` | `bool IncludeVolumeFeature` | [3.8a] Quinta feature di clustering: VolumeRatio (volume / media 20 periodi). Default OFF = comportamento storico bit-identico. ATTENZIONE dichiarata: accenderla CAMBIA le etichette dei regimi del modello riaddestrato —… |
 | `p` | `bool IncludeBreadthFeature` | [3.8a/4.9] Sesta feature di clustering: breadth interna (% dei simboli /USDT sopra la propria SMA50 — "quanti partecipano al movimento"). Default OFF; stessa avvertenza del volume. Richiede dati multi-simbolo sullo stes… |
+| `p` | `string Model` | [2.7 PRD-RISANAMENTO, 2026-08-09] Algoritmo di stima dei centroidi: (default, comportamento storico bit-identico) oppure (statistical jump model C1: la persistenza entra NELLA stima, non a valle). Rispetta il contratto … |
+| `p` | `double JumpLambda` | λ del jump model (penalità per salto di stato). Usato solo con Model=Jump. 0 = degenera in K-means; il valore va tarato con la misura, mai assunto. |
+
+### 📦 `RegimeModelKinds`
+
+> Nomi degli algoritmi di regime selezionabili da MarketRegime:Model .
+
+| | Firma | Descrizione |
+|---|---|---|
+| `k` | `string KMeans` | — |
+| `k` | `string Jump` | — |
+| `m` | `string Normalize(string? value)` | Parsing tollerante: sconosciuto o vuoto ⇒ KMeans (mai rompere il training per un typo in config). |
 
 ### 📦 `RegimeModel`
 
@@ -2762,6 +2789,7 @@ ML, fattori alpha, validazione anti-overfitting, regime, portafoglio, serie stor
 |---|---|---|
 | `p` | `IReadOnlyList&lt;string&gt; KnownSymbols` | — |
 | `p` | `ProcioneMGR.Services.ML.Labeling.MetaLabelingAnalysis? MetaLabeling` | [C4] Esito dell'ultima analisi di meta-labeling sulla strategia corrente. |
+| `p` | `string? FundingModelUsed` | [E-01, Fase 1 PRD-RISANAMENTO] Quale modello di funding ha usato l'ULTIMO run: la UI lo dichiara accanto al risultato ("degradare dicendolo"). Null = mercato non leveraged, funding non pertinente. |
 | `p` | `BacktestResult? Result` | — |
 | `p` | `TradeReport? TradeReport` | — |
 | `p` | `KellySuggestion? Kelly` | — |

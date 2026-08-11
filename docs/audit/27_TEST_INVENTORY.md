@@ -5,21 +5,21 @@
 
 | | |
 |---|---:|
-| File di test | 262 |
-| Classi di test | 262 |
-| **Metodi di test** | **2096** |
-| Righe di test | 53.343 |
+| File di test | 276 |
+| Classi di test | 276 |
+| **Metodi di test** | **2164** |
+| Righe di test | 55.600 |
 
 I file con prefisso `Audit*` nascono da audit precedenti e presidiano regressioni specifiche:
 sono le invarianti rese eseguibili.
 
 ---
 
-## `FactorDriftMonitorTests.cs` — 29 test, 766 righe
+## `FactorDriftMonitorTests.cs` — 32 test, 850 righe
 
 > Lo store della storia dell'IC, sul database vero: le due domande che la UI gli fa (la serie di un fattore, la fotografia di una serie) e il caso spinoso della griglia che cambia ampiezza.
 
-`AnEmptySnapshot_HasNoAlertsAndNoRun`, `Alerts_PutTheMostSevereFirst`, `Replace_SwapsTheWholePictureInsteadOfMerging`, `SeriesSnapshot_ExposesOnlyItsAlerts`, `RunOnce_PopulatesTheSnapshotForEachTrackedSeries`, `RunOnce_OnASeriesWhereAFactorDies_RaisesAnAlert`, `RunOnce_SkipsSeriesWithTooFewCandles`, `RunOnce_IgnoresDisabledSeries`, `RunOnce_RespectsTheMaxSeriesCap`, `RunOnce_WithNoTrackedSeries_LeavesAnEmptyButValidSnapshot`, `RunOnce_WritesTheIcWindowsToTheHistory`, `RunningTwice_UpdatesTheSameRowsInsteadOfDuplicatingThem`, `AfterAShellRestart_TheAlertIsAlreadyThereWithoutRecomputing`, `Hydrate_DoesNotResurrectASeriesRemovedFromTheWatchlist`, `Hydrate_WithAnEmptyHistory_LeavesTheSnapshotEmptyAndSilent`, `OnPureNoise_TheHistoryRecordsWindowsButRaisesNoAlert`, `WindowSizeFor_IsQuantizedSoTheRecordedSeriesKeepsOneDefinition`, `TheJobAndThePanel_ProposeTheSameWindowOnTheSameSample`, `TheJobRotates_TheSecondRoundPicksTheSeriesItHasNotSeenYet`, `ASeriesThatCannotBeComputed_DoesNotStarveTheOthers`, `AfterARotatedRound_TheSnapshotStillShowsTheSeriesOfPreviousRounds`, `TheSnapshotDeclaresHowManySeriesAreInTheWatchlist`, `SaveThenLoad_GivesBackTheSeriesInChronologicalOrder`, `SavingTheSameWindowTwice_OverwritesTheValueAndInsertsNothing`, `WhenTheWindowSizeChanges_OnlyTheMostRecentGridIsReturned`, `WindowsFromDifferentRounds_AreNeverReturnedOverlapping`, `LoadSnapshot_ReturnsOnlyTheRequestedSeries`, `LoadSeries_ForAFactorNeverRecorded_IsEmptyNotAnError`, `DifferentForwardHorizons_AreDifferentSeriesAndDoNotMix`
+`AnEmptySnapshot_HasNoAlertsAndNoRun`, `Alerts_PutTheMostSevereFirst`, `Replace_SwapsTheWholePictureInsteadOfMerging`, `SeriesSnapshot_ExposesOnlyItsAlerts`, `RunOnce_PopulatesTheSnapshotForEachTrackedSeries`, `RunOnce_OnASeriesWhereAFactorDies_RaisesAnAlert`, `RunOnce_SkipsSeriesWithTooFewCandles`, `RunOnce_IgnoresDisabledSeries`, `RunOnce_RespectsTheMaxSeriesCap`, `RunOnce_WithNoTrackedSeries_LeavesAnEmptyButValidSnapshot`, `RunOnce_WritesTheIcWindowsToTheHistory`, `RunningTwice_UpdatesTheSameRowsInsteadOfDuplicatingThem`, `AfterAShellRestart_TheAlertIsAlreadyThereWithoutRecomputing`, `Hydrate_DoesNotResurrectASeriesRemovedFromTheWatchlist`, `Hydrate_WithAnEmptyHistory_LeavesTheSnapshotEmptyAndSilent`, `OnPureNoise_TheHistoryRecordsWindowsButRaisesNoAlert`, `WindowSizeFor_IsQuantizedSoTheRecordedSeriesKeepsOneDefinition`, `TheJobAndThePanel_ProposeTheSameWindowOnTheSameSample`, `TheJobRotates_TheSecondRoundPicksTheSeriesItHasNotSeenYet`, `ASeriesThatCannotBeComputed_DoesNotStarveTheOthers`, `AfterARotatedRound_TheSnapshotStillShowsTheSeriesOfPreviousRounds`, `RunOnce_WithAChampion_AlsoWatchesItsFactors_ButNotThoseOfStaging`, `RunOnce_AChampionOnAnotherSeries_AddsNothingHere`, `RunOnce_BrokenOrUnknownChampionFactors_DegradeWithoutBreakingTheRound`, `TheSnapshotDeclaresHowManySeriesAreInTheWatchlist`, `SaveThenLoad_GivesBackTheSeriesInChronologicalOrder`, `SavingTheSameWindowTwice_OverwritesTheValueAndInsertsNothing`, `WhenTheWindowSizeChanges_OnlyTheMostRecentGridIsReturned`, `WindowsFromDifferentRounds_AreNeverReturnedOverlapping`, `LoadSnapshot_ReturnsOnlyTheRequestedSeries`, `LoadSeries_ForAFactorNeverRecorded_IsEmptyNotAnError`, `DifferentForwardHorizons_AreDifferentSeriesAndDoNotMix`
 
 ## `TradingPageServiceTests.cs` — 28 test, 563 righe
 
@@ -31,7 +31,7 @@ sono le invarianti rese eseguibili.
 
 `Nvidia_SendsOpenAiShape_AndParsesContent`, `Nvidia_HttpError_SurfacesStatusAndBody`, `Nvidia_MissingKey_FailsWithTheRemedy`, `Nvidia_EmptyContent_IsAnExplainedError_NotAnEmptyAdvisory`, `Guard_ClassifiesNvidiaErrors_BySameTaxonomy`, `NewProviders_SendToTheirDefaultEndpoint_WithTheirModel`, `NewProviders_MissingKey_FailsWithTheirEnvVarRemedy`, `Guard_ClassifiesAnyCompatProvider_BySameTaxonomy`, `EnvVarNames_AreTheDocumentedOnes`, `Failover_ActiveFails_NextInChainServes_AndTruthIsTraceable`, `Failover_SkipsProvidersWithoutKey`, `Failover_AllFail_ThrowsLastError_ClassifiableByGuard`, `Failover_Disabled_OnlyActiveIsTried`, `Failover_CancellationIsNotAFailure_NoHopping`, `AutoSelector_Gemini_PicksLatestNonPreviewFlash_FromTheRealCatalogShape`, `AutoSelector_Groq_PrefersVersatileLlama`, `AutoSelector_EmptyOrAllNonChat_ReturnsNull`, `AutoSelector_UnknownProviderStillPicksSomethingChatLike`, `FailoverChain_EmptyConfigUsesDefault_PollutedConfigIsDeduplicated`, `ListModels_SendsGetToModelsEndpoint_AndParsesSortedIds`, `ListModels_HttpError_KeepsTheSpeakingContract`, `ListModels_Anthropic_UsesItsOwnDialect`, `Delegating_WithResolver_RoutesToEveryKnownProvider`, `Delegating_RoutesByProvider_HotReload`, `SetGetRemove_Roundtrip_WithSourceReporting`, `DatabaseKey_SurvivesProcessRestart_ViaReload`
 
-## `PipelineTests.cs` — 26 test, 676 righe
+## `PipelineTests.cs` — 26 test, 677 righe
 
 `TypedGetters_ParseInvariantCulture_AndFallBack`, `ValidChain_NoProblems`, `MissingDependency_IsReported`, `AnyOfDependency_SatisfiedByEitherStage`, `DependencyOrderedAfter_IsNotSatisfied`, `UnknownStage_IsReported`, `NoEnabledStages_IsReported`, `ApplyVariant_SetsTheRightStops`, `ProfitFactor_ComputedFromTrades`, `Context_RoundTripsThroughJson`, `WithSurvivor_TemplateContainsTheNumbers`, `NoSurvivors_SaysDoNotTrade`, `Deterministic_SameContextSameText`, `WithMoodSnapshot_LabelComesFromComposite_AndFieldsArePopulated`, `WithMoodExtremes_TheyBecomeAlerts_AndAppearInFullText`, `WithoutSnapshot_LegacyPathIsUnchanged`, `NormalVol_SizingIsFractionalKellyCapped`, `HighVol_ReducesSizing`, `DuplicateStrategySymbolTimeframe_DifferentParameters_BothSizedCorrectly`, `SingleLeg_CarriesBestStopVariantIntoProposedLeg`, `LiveMode_NeverAutoExecutes_AndWarnsAboutSafety`, `PaperMode_ProducesActionsFromLegs`, `FeatureEngineering_EvaluatesAndSelectsFactors_Deterministically`, `VolatilityRegime_FitsGarchAndClassifies`, `PairsScreening_TestsEveryPairOnce`, `ValidateInput_PairsScreening_RequiresTwoSymbols`
 
@@ -77,7 +77,7 @@ sono le invarianti rese eseguibili.
 
 `PartialSpearman_TwoIndependentRoutesGiveTheSameNumber`, `PartialSpearman_WhenTheCandidateIsTheProxy_IsZeroNotUndefined`, `PartialSpearman_RemovesWhatTheProxyAlreadyExplains`, `APlantedIncrementalEdge_IsFound`, `ACandidateThatOnlyEchoesTheProxy_IsRejected`, `PureNoise_FalsePositiveRate_StaysAtItsNominalLevel`, `AnEdgeTooSmallToPayTheCosts_IsRejectedEvenIfStatisticallyReal`, `PartialSpearmanMulti_WithOneControl_AgreesWithTheTwoSeriesFormula`, `WithTwoControls_ACandidateThatIsAMixOfThem_IsRejected`, `WithTwoControls_AGenuinelyNewSignal_IsStillFound`, `WithNoControls_TheGateRefusesToJudge`, `ASignalThatInformsButCannotPayTheRoundTrip_IsNotCalledTradable`, `WithNoCostModel_TheSecondLevelIsSilentInsteadOfInventingNumbers`, `AnEdgeBigEnoughToPayTheRoundTrip_IsCalledTradable`, `TheNullOfTheBest_IsStricterThanTheNullOfASingleCandidate`, `RowsWhereAnythingIsMissing_AreDroppedForEveryone`, `TooFewObservations_DeclaresInsteadOfGuessing`, `RanksOfARotatedSeries_AreTheRotatedRanks`, `TheOptimisedNull_GivesTheSameNumbersAsTheStraightforwardOne`, `TheGateIsDeterministic_SameInputSameVerdict`
 
-## `OptimizationPageServiceTests.cs` — 20 test, 507 righe
+## `OptimizationPageServiceTests.cs` — 20 test, 508 righe
 
 > Test dell'orchestrazione estratta da Optimization.razor (P1-5, PRD-CONSOLIDAMENTO- ARCHITETTURA.md §3.3): prima di questa estrazione tutta la logica — range di default per strategia, preset validati, handoff da Backtest/ML Lab col ricentraggio dei range, costruzione della config di sweep (incluso il range "pinnato" SavedModelId per i modelli ML), parsing della matrice heatmap e salvataggio della configurazione migliore — viveva nel blocco @code del componente, senza test indipendenti da Blazor. Il motore di ottimizzazione qui è un fake che cattura la config e restituisce un risultato predefinito: il walk-forward reale ha già i propri test — questo file verifica l'ORCHESTRAZIONE, alla giusta altitudine.
 
@@ -113,6 +113,12 @@ sono le invarianti rese eseguibili.
 
 `DecimalValue_NegativeValue_HasNanosWithTheSameSignAsUnits`, `DecimalValue_RoundingCarry_DoesNotProduceInvalidNanos`, `DecimalValue_BeyondNineDecimals_RoundsInsteadOfTruncating`, `DecimalValue_Malformed_Throws`, `DecimalValue_ZeroUnits_AllowsEitherSignOfNanos`, `DecimalValue_Nullable_KeepsAbsentDistinctFromZero`, `TradingMode_RoundTrips`, `TradingMode_IsNotMappedByOrdinal`, `TradingMode_Unspecified_Throws`, `MarketType_RoundTrips`, `MarketType_Unspecified_Throws`, `OrderSide_RoundTrips`, `OrderSide_Unspecified_Throws`, `Timestamp_AcceptsUnspecifiedKind_FromPostgres`, `OpenPosition_RoundTrips_IncludingOptionalFields`, `Performance_RoundTrips_WithEquityCurveAndTrades`, `LaneStatus_EmptyReason_MapsBackToNull`
 
+## `WebSocketPriceFeedTests.cs` — 17 test, 499 righe
+
+> [R1] Test del ciclo di vita della connessione real-time, con un transport finto al posto della rete: connessione, sottoscrizione, riconnessione dopo una caduta, tolleranza ai frame inutili, filtro sulle quotazioni implausibili e rilevamento di staleness. Il comportamento più importante è che una CADUTA È NORMALE: la rete cade, e un feed che non riprende da solo lascia gli stop ciechi senza che nessuno se ne accorga.
+
+`Feed_EmitsTicks_FromReceivedFrames`, `SeriesHealth_TracksPerSymbol_ASilentSymbolIsVisible`, `SeriesHealth_ForgetsUnsubscribedSymbols`, `Feed_Reconnects_AfterChannelDrop`, `Feed_SendsSubscribeFrames_WhenExchangeRequiresThem`, `Feed_DropsImplausibleTicks`, `Feed_SurvivesThrowingHandler`, `Feed_RecyclesLiveConnection_WhenSubscriptionsChange_Binance`, `Feed_RecyclesLiveConnection_WhenSubscriptionsChange_Bitget`, `UpdateSubscriptions_ReportsChangeOnlyWhenActuallyDifferent`, `UpdateSubscriptions_ToleratesTwoLanesOnTheSameSymbol`, `Feed_ServesBothTimeframes_WhenTwoLanesShareTheSymbol_Binance`, `Feed_ToleratesSpotAndFuturesLanes_OnTheSameSymbol_Bitget`, `UpdateSubscriptions_IgnoresOtherExchanges`, `Health_IsStale_WhenSilentBeyondThreshold`, `Feed_WithNoSubscriptions_NeverConnects`, `BackoffDelay_GrowsAndStaysWithinCap`
+
 ## `AiCommitteeTests.cs` — 16 test, 227 righe
 
 > [AF5.4] Lo scheduling del digest: un orario, una volta al giorno, mai a raffica.
@@ -143,6 +149,12 @@ sono le invarianti rese eseguibili.
 
 `Extract_PortaIFattiVeriEStimaIlLordo`, `Extract_MotivoDiUscitaAssente_LoDichiara`, `DeterministicCause_CostiCheMangianoIlLordo`, `DeterministicCause_LiquidazioneVincesuTutto`, `DeterministicCause_PerditaVera_LasciaIlDubbio`, `Menu_OgniVoceHaUnEtichetta`, `Menu_LeCauseCalcolabiliNonSonoOffrbileAllAi`, `BuildPrompt_ContieneIFattiEIlMenu`, `ParseVerdict_CausaDelMenu_Accettata`, `ParseVerdict_FuoriMenu_ValeComeNessunaRisposta`, `ParseVerdict_SopravviveAiFencesMarkdown`, `ParseVerdict_SenzaJson_Lancia`, `Summarize_NessunPostMortem_StringaVuota`, `Summarize_ContaLeCauseInOrdineDiFrequenza`, `Summarize_Deterministico_APariMerito`, `Opzioni_SpentePerDefault`
 
+## `ProtectiveExitLagAnalyzerTests.cs` — 16 test, 699 righe
+
+> [B3] Il gate B3 chiede il confronto tick-vs-candela, ma in assetto osservativo i tick vengono scartati e la serie source=tick non può esistere: il confronto che deve autorizzare l'accensione richiedeva l'accensione. chiude la domanda offline usando le candele fini come surrogato dei tick. Una misura del genere è pericolosa proprio perché è facile che dia il risultato che si spera: basta sbagliare di un passo il momento in cui un percorso "scopre" l'uscita e il feed sembra anticipare di un'intera barra senza aver fatto nulla. Da qui il primo test, che è il controllo della misura e non una sua applicazione: con risoluzione fine UGUALE a quella di corsia l'anticipo deve essere ESATTAMENTE zero. Se lo strumento non sa dire "nessun vantaggio" quando non ce n'è, nessuno dei numeri successivi va…
+
+`Stessa_risoluzione_nessun_anticipo`, `Barre_fini_senza_informazione_nessun_anticipo`, `Anticipo_piantato_ritrovato_col_valore_esatto`, `Rottura_che_prosegue_il_ritardo_costa`, `Ottimismo_del_fill_a_candela_misurato`, `Short_simmetrico_al_long`, `Prezzi_precedenti_allingresso_non_fanno_uscire`, `Il_trailing_dei_due_percorsi_non_si_contamina`, `Su_rumore_puro_il_ritardo_non_costa_ne_rende`, `Risoluzione_fine_piu_grossa_della_corsia_e_rifiutata`, `Timeframe_sconosciuto_e_rifiutato_invece_di_ripiegare`, `Senza_stop_non_ce_uscita_protettiva_da_misurare`, `Serie_piatta_nessuna_uscita_e_lo_dichiara`, `Laggregato_dice_zero_mentre_i_due_lati_dicono_il_contrario`, `ConUnSoloTipo_ilSeparatoCoincideConLaggregato`, `LeUsciteDiscordiNonEntranoInNessunTipo`
+
 ## `TradingServiceCollectionExtensionsTests.cs` — 16 test, 391 righe
 
 > LA GARANZIA DI SICUREZZA CENTRALE DELLA FASE 2b. Il vincolo "mai due esecuzioni simultanee sulla stessa corsia" non Ã¨ retto da un lock distribuito, ma dal fatto che monolite e servizio remoto non registrano MAI entrambi un motore attivo per la stessa lane. Qui lo si verifica per COSTRUZIONE (composizione DI, deterministica e istantanea) invece che a runtime con due processi vivi â€” un test del genere sarebbe lento, e soprattutto fallirebbe a intermittenza proprio nello scenario che deve escludere con certezza. Si RISOLVONO davvero le istanze invece di ispezionare i ServiceDescriptor: le registrazioni sono factory lambda, quindi il descriptor non espone il tipo concreto e un test su di essi passerebbe anche se la factory costruisse la classe sbagliata.
@@ -167,7 +179,7 @@ sono le invarianti rese eseguibili.
 
 `EveryProfile_RespectsTheSizingInvariant`, `EveryProfile_HasCoherentAndPositiveLimits`, `Profiles_AreOrderedFromProudentToDynamic`, `TurnoverCaps_StayWithinWhatR2MeasuredAsSustainable`, `EstimatedAnnualCost_GrowsWithTurnover_AndIsReadable`, `NoScalpingProfile_IsOffered`, `Find_UnknownOrEmpty_ReturnsNull_MeaningGlobalThresholds`, `Find_IsCaseInsensitive`, `Apply_ProfileOwnsRiskAppetite`, `Apply_GlobalKeepsVenueFactsAndSafetyNets`, `LaneMonitor_WithoutProfile_IsTransparent`, `LaneMonitor_WithProfile_OverlaysIt`, `LaneMonitor_ProfileCanBeCleared`, `LaneMonitors_AreIndependentOfEachOther`, `LaneMonitor_StillSeesGlobalChanges_ForFieldsTheProfileDoesNotOwn`
 
-## `BacktestPageServiceTests.cs` — 14 test, 386 righe
+## `BacktestPageServiceTests.cs` — 14 test, 392 righe
 
 > Test dell'orchestrazione estratta da Backtest.razor (P1-5, PRD-CONSOLIDAMENTO-ARCHITETTURA.md §3.3): prima di questa estrazione tutta la logica — validazione, run del backtest con analitiche derivate, suggerimento SL/TP, handoff dall'Optimization, preset validati e CRUD delle strategie salvate — viveva nel blocco @code del componente, senza test indipendenti da Blazor. Qui è esercitata direttamente su con le dipendenze reali (motore di backtest, StrategyFactory, analitiche di rischio, Postgres effimero) e un tracker no-op.
 
@@ -202,12 +214,6 @@ sono le invarianti rese eseguibili.
 > [C4] Verifica dell'etichettatura triple-barrier. Come per gli altri strumenti di misura della piattaforma, i test costruiscono serie in cui la risposta giusta è NOTA per costruzione — un percorso che tocca solo il profitto, uno che tocca solo lo stop, uno che non tocca niente, e il caso ambiguo in cui li tocca entrambi nella stessa barra.
 
 `PriceReachingUpperBarrier_IsLabelledProfit`, `PriceReachingLowerBarrier_IsLabelledStop`, `PriceTouchingNeitherBarrier_IsLabelledVertical`, `WhenBothBarriersAreTouchedInTheSameBar_TheStopWins`, `LabelIgnoresTheEntryBarItself_OnlyTheFutureCounts`, `TailBarsWithoutEnoughFuture_AreLeftUnlabelled`, `ForAShort_ADroppingPriceIsProfit`, `ForAShort_ARisingPriceIsStop`, `TripleBarrier_DisagreesWithFixedHorizon_WhenThePathHitsTheStopFirst`, `NonOverlappingLabels_AllHaveFullUniqueness`, `FullyOverlappingLabels_ShareTheirWeight`, `OverlappingLabelsFromRealSeries_GetWeightsBelowOne`, `SuggestConfig_DerivesBarriersFromTheSeriesExcursions`, `Labelling_IsDeterministic`
-
-## `WebSocketPriceFeedTests.cs` — 14 test, 400 righe
-
-> [R1] Test del ciclo di vita della connessione real-time, con un transport finto al posto della rete: connessione, sottoscrizione, riconnessione dopo una caduta, tolleranza ai frame inutili, filtro sulle quotazioni implausibili e rilevamento di staleness. Il comportamento più importante è che una CADUTA È NORMALE: la rete cade, e un feed che non riprende da solo lascia gli stop ciechi senza che nessuno se ne accorga.
-
-`Feed_EmitsTicks_FromReceivedFrames`, `SeriesHealth_TracksPerSymbol_ASilentSymbolIsVisible`, `SeriesHealth_ForgetsUnsubscribedSymbols`, `Feed_Reconnects_AfterChannelDrop`, `Feed_SendsSubscribeFrames_WhenExchangeRequiresThem`, `Feed_DropsImplausibleTicks`, `Feed_SurvivesThrowingHandler`, `Feed_RecyclesLiveConnection_WhenSubscriptionsChange_Binance`, `Feed_RecyclesLiveConnection_WhenSubscriptionsChange_Bitget`, `UpdateSubscriptions_ReportsChangeOnlyWhenActuallyDifferent`, `UpdateSubscriptions_IgnoresOtherExchanges`, `Health_IsStale_WhenSilentBeyondThreshold`, `Feed_WithNoSubscriptions_NeverConnects`, `BackoffDelay_GrowsAndStaysWithinCap`
 
 ## `AuditSafetyKellyExtremeTests.cs` — 13 test, 203 righe
 
@@ -251,12 +257,6 @@ sono le invarianti rese eseguibili.
 
 `BuildNewConfigDraft_HasSafeDefaults`, `BuildEditDraft_MergesNewPrototypesDisabled_AndOrdersByOrder`, `MoveStage_SwapsAndRenumbers_OutOfRangeIsNoOp`, `SaveConfig_ValidationChain`, `SaveConfig_NewRow_Persists_AndReloads`, `SaveConfig_Edit_ScheduleChange_ResetsNextRunAt`, `CloneAndDelete_RoundTrip`, `Reload_ParsesLastRecommendation_FromMostRecentCompletedRun`, `SelectRun_LoadsSummaries_PreviousComparison_AndDecisionArtifact`, `RefreshLive_SignalsJustFinished_OnlyOnRunningToNullTransition`, `StartAndResume_DelegateToEngine_PauseCancelUseLiveRunId`, `ApplyRecommendation_NullOrEmpty_IsSilentNoOp_WithLegs_Delegates`, `ExportHref_And_UniverseSummary`
 
-## `ProtectiveExitLagAnalyzerTests.cs` — 13 test, 539 righe
-
-> [B3] Il gate B3 chiede il confronto tick-vs-candela, ma in assetto osservativo i tick vengono scartati e la serie source=tick non può esistere: il confronto che deve autorizzare l'accensione richiedeva l'accensione. chiude la domanda offline usando le candele fini come surrogato dei tick. Una misura del genere è pericolosa proprio perché è facile che dia il risultato che si spera: basta sbagliare di un passo il momento in cui un percorso "scopre" l'uscita e il feed sembra anticipare di un'intera barra senza aver fatto nulla. Da qui il primo test, che è il controllo della misura e non una sua applicazione: con risoluzione fine UGUALE a quella di corsia l'anticipo deve essere ESATTAMENTE zero. Se lo strumento non sa dire "nessun vantaggio" quando non ce n'è, nessuno dei numeri successivi va…
-
-`Stessa_risoluzione_nessun_anticipo`, `Barre_fini_senza_informazione_nessun_anticipo`, `Anticipo_piantato_ritrovato_col_valore_esatto`, `Rottura_che_prosegue_il_ritardo_costa`, `Ottimismo_del_fill_a_candela_misurato`, `Short_simmetrico_al_long`, `Prezzi_precedenti_allingresso_non_fanno_uscire`, `Il_trailing_dei_due_percorsi_non_si_contamina`, `Su_rumore_puro_il_ritardo_non_costa_ne_rende`, `Risoluzione_fine_piu_grossa_della_corsia_e_rifiutata`, `Timeframe_sconosciuto_e_rifiutato_invece_di_ripiegare`, `Senza_stop_non_ce_uscita_protettiva_da_misurare`, `Serie_piatta_nessuna_uscita_e_lo_dichiara`
-
 ## `Alpha158FactorTests.cs` — 12 test, 240 righe
 
 > Test del catalogo Alpha158 (rif. docs/archive/ROADMAP-QLIB.md §1.1 ). Il cuore è l'invariante ANTI-LOOK-AHEAD verificato in un solo test parametrico su TUTTO il catalogo (~150 feature), non un test scritto a mano per feature. Più: coerenza del round-trip per nome (persistenza), dimensione del catalogo, e correttezza numerica di alcuni operatori rappresentativi.
@@ -281,7 +281,7 @@ sono le invarianti rese eseguibili.
 
 `Fit_OnSimulatedGarchProcess_RecoversPersistenceApproximately`, `Fit_Parameters_SatisfyStationarityConstraints`, `ConditionalVariances_AreAlignedWithInput_AndAllPositive`, `VolatilityClustering_ShockRaisesForecastVariance`, `ForecastVariance_LongHorizon_ConvergesToLongRunVariance`, `ForecastVariance_OneStep_MatchesGarchRecursion`, `Fit_TooFewObservations_Throws`, `ForecastVariance_InvalidHorizon_Throws`, `Fit_Gaussian_LeavesDegreesOfFreedomNull`, `TailQuantile_Gaussian_MatchesNormalQuantile`, `Fit_StudentT_EstimatesFiniteFatTailDegreesOfFreedom`, `TailQuantile_StudentT_IsWiderThanGaussian_OnFatTailedData`
 
-## `MlLabServiceTests.cs` — 12 test, 493 righe
+## `MlLabServiceTests.cs` — 12 test, 495 righe
 
 > Test dell'orchestrazione estratta da MlLab.razor (P1-5, PRD-CONSOLIDAMENTO-ARCHITETTURA.md §3.3): prima di questa estrazione tutta la logica — validazione, addestramento/backtest, CRUD dei modelli salvati e (de)serializzazione validata dei preset — viveva nel blocco @code del componente, senza test indipendenti da Blazor. Qui è esercitata direttamente su con le dipendenze reali (factory alpha, dataset builder, backtest engine, Postgres effimero) e un tracker no-op, incluso il round-trip completo train→backtest→save→load.
 
@@ -398,6 +398,12 @@ sono le invarianti rese eseguibili.
 > Prova che il servizio di trading serve davvero via gRPC su HTTP/2 (host reale ProcioneMGR.Trading, non una chiamata C# diretta) e che i comandi attraversano la (de)serializzazione protobuf conservando la loro semantica — in particolare il TRI-STATO di SetStopLossTakeProfit, dove collassare "assente" e "zero" significherebbe disarmare uno stop loss per sbaglio. Il motore vero è sostituito da un fake che REGISTRA le chiamate: qui si verifica il filo (wire, mapping, codici di stato), non la logica di esecuzione — quella è già coperta dai test del TradingEngine e non cambia in Fase 2b, dato che il motore è riusato verbatim. Nessun DB.
 
 `GetLaneStatus_OverRealGrpc_PreservesEveryFieldExactly`, `GetLaneStatus_UnknownLane_IsNotFound`, `ConfirmOrder_OverRealGrpc_ReachesTheEngineWithTheOperator`, `ConfirmOrder_EmptyUserId_ArrivesAsNull`, `SetStopLossTakeProfit_PreservesTriState_AcrossTheWire`, `SetStopLossTakeProfit_PassesRealValues`, `StartLane_MapsModeExplicitly_NotByOrdinal`, `StartLane_UnspecifiedMode_IsInvalidArgument_NotARawException`, `StartLane_DomainRefusal_BecomesFailedPrecondition`, `MissingSharedSecretHeader_IsRejected_Unauthenticated`, `ServerWithoutConfiguredSecret_RejectsEveryCall_FailClosed`
+
+## `AppConfigWriterTests.cs` — 10 test, 262 righe
+
+> è il writer generalizzato dietro i pannelli /trading e /admin/autonomy: un bug qui corrompe appsettings.json per TUTTE le sezioni. I contratti chiave: scrive l'intera sezione (nessuna chiave persa per costruzione), non tocca le sezioni sorelle, crea i path mancanti, preserva le chiavi di documentazione "_comment*".
+
+`Roundtrip_WritesAllProperties_AndSiblingSectionsSurvive`, `NestedPath_CreatesMissingNodes`, `NestedPath_DoesNotClobberSiblingSubsections`, `CommentKeys_ArePreserved`, `ParentSection_KeepsNestedSubsectionsThePocoDoesNotModel`, `NestedObject_ThePocoDOESModel_IsOverwritten_NotPreserved`, `Enums_AreWrittenByName_NotByOrdinal`, `InvalidJson_ThrowsWithoutDestroyingFile`, `SaveValue_TouchesOnlyTheTargetKey_SiblingScalarsAndObjectsSurvive`, `SaveValue_CreatesMissingParents_AndWritesStrings`
 
 ## `AuditAlpha158EdgeCaseTests.cs` — 10 test, 185 righe
 
@@ -585,6 +591,12 @@ sono le invarianti rese eseguibili.
 
 `PerfectlyCorrelatedSymbols_FirstComponentExplainsAllVariance`, `IndependentSymbols_VarianceIsSpreadAcrossComponents`, `Loadings_AreUnitNormalized_PerComponent`, `Scores_HaveSameLengthAsInputSeries`, `ExplainedVarianceRatios_AreDescending`, `TooFewSymbols_Throws`, `MismatchedSeriesLengths_Throws`, `TooFewObservations_Throws`, `ComponentCountOutOfRange_Throws`
 
+## `SecurityDefaultsTests.cs` — 9 test, 86 righe
+
+> [C-02, Fase 1 PRD-RISANAMENTO] Le "regole da non violare" di CLAUDE.md rese ESEGUIBILI. Fin qui vivevano solo in un file Markdown, e infatti una era già stata violata senza che nessuno se ne accorgesse: DriveProtectiveExits aveva default true mentre la misura B3 (docs/REPORT-B3-EXITLAG-2026-07-28.md: uscire al tocco è peggio in 24/24 configurazioni) e la regola 7 dicevano false — chi accendeva il feed ereditava in silenzio l'assetto bocciato. Da oggi un default di sicurezza che cambia fa fallire la CI, e chi lo cambia DELIBERATAMENTE deve aggiornare anche questo file, cioè dichiararlo.
+
+`RealtimeFeed_IsObservationalByDefault`, `RegimeRouting_ClassifiesButDoesNotDecide`, `Promotion_NeverAutomatesTowardsLive`, `LiveOrders_RequireManualConfirmation`, `VolatilityScaling_CanOnlyReduceExposure`, `CarryMode_CannotRepresentLive`, `FleetOrchestrator_IsOffAndDryRunByDefault`, `SlicedLiveExecution_IsOffByDefault`, `CarryForwardTest_IsOffByDefault`
+
 ## `TapeAggregatorTests.cs` — 9 test, 144 righe
 
 > [D3 / C5 §9.2] Aggregazione del tape in barre da N secondi. I test guardano i BORDI, che è dove un aggregatore sbaglia in silenzio: un trade esattamente sul confine, una barra senza scambi, un trade del giorno dopo in coda al file (i dump giornalieri di Binance ne contengono).
@@ -602,12 +614,6 @@ sono le invarianti rese eseguibili.
 > Test del formulaic alpha mining (rif. docs/archive/ROADMAP-QLIB.md §1.7 ): gli alberi di espressione sono anti-look-ahead per costruzione, la serializzazione fa round-trip, i fattori minati si ricreano dal nome tramite la factory esistente, e il miner genetico è deterministico e trova un segnale su una serie con momentum reale.
 
 `ExpressionTree_IsAntiLookAhead`, `Serialization_RoundTrips`, `MinedFactor_RoundTripsThrough_SavedFactorSpecDto`, `MinedFactor_RoundTripsThroughAlphaFactory`, `Miner_FindsPredictiveFactor_OnMomentumSeries`, `Miner_IsDeterministic_ForSameSeed`, `ComputeSelectionPbo_OnMinedPanel_IsValidProbability_AndDeterministic`, `ComputeSelectionPbo_FewerThanTwoFactors_ReturnsNull`
-
-## `AppConfigWriterTests.cs` — 8 test, 221 righe
-
-> è il writer generalizzato dietro i pannelli /trading e /admin/autonomy: un bug qui corrompe appsettings.json per TUTTE le sezioni. I contratti chiave: scrive l'intera sezione (nessuna chiave persa per costruzione), non tocca le sezioni sorelle, crea i path mancanti, preserva le chiavi di documentazione "_comment*".
-
-`Roundtrip_WritesAllProperties_AndSiblingSectionsSurvive`, `NestedPath_CreatesMissingNodes`, `NestedPath_DoesNotClobberSiblingSubsections`, `CommentKeys_ArePreserved`, `ParentSection_KeepsNestedSubsectionsThePocoDoesNotModel`, `NestedObject_ThePocoDOESModel_IsOverwritten_NotPreserved`, `Enums_AreWrittenByName_NotByOrdinal`, `InvalidJson_ThrowsWithoutDestroyingFile`
 
 ## `AuditCvLeakageTests.cs` — 8 test, 167 righe
 
@@ -674,6 +680,12 @@ sono le invarianti rese eseguibili.
 > [R3] Test del modello di fill per gli ingressi MAKER nel backtest. Il motivo per cui questo modello esiste: la frontiera dei costi (docs/REPORT-RICERCA-2026-07.md) mostrava che a commissioni maker un candidato in perdita diventava profittevole. Quel numero però assumeva che ogni ordine limite venisse riempito al suo prezzo, che è l'assunzione ottimistica per eccellenza: un limite passivo si riempie solo quando il mercato ci viene addosso. Senza modellare il mancato riempimento, "passare a maker" sembra uno sconto sulle commissioni e basta. I test qui sotto fissano le proprietà del modello; la misura di quanto costi davvero la selezione avversa sulle strategie reali va fatta sui dati, non qui.
 
 `PriceNeverComesBack_LimitIsNotFilled_AndTheSignalIsLost`, `PriceDipsToTheLimit_FillsAtTheLimitPrice_WithMakerFee`, `QueuePenetration_WickThatOnlyKissesTheLimit_DoesNotFill`, `QueuePenetration_DecisiveMoveThroughTheLimit_Fills`, `QueuePenetration_Zero_IsBitIdenticalToTouchFill`, `LimitExpiresUnfilled_WithFallback_EntersAtMarketInstead`, `PersistentSignal_PlacesOneLimitPerOpportunity_NotOnePerCandle`, `TakerIsTheDefault_AndLeavesBehaviourUnchanged`
+
+## `MasterKeyRotationTests.cs` — 8 test, 151 righe
+
+> Keyring della rotazione master key (Fase 0 PRD-RISANAMENTO, 2026-08-08 — chiude il TODO storico di : "manca il supporto multi-chiave"). Le proprietà che contano, tutte qui: 1. un payload cifrato con la chiave VECCHIA si decifra quando la vecchia è in PreviousMasterKeys; 2. si CIFRA sempre con la corrente (un servizio con la SOLA corrente rilegge tutto il nuovo); 3. la classificazione distingue vecchio da nuovo — è ciò che guida la ri-cifratura di massa; 4. SENZA keyring il payload vecchio fallisce come sempre (nessun ammorbidimento di default); 5. un payload MANOMESSO fallisce anche col keyring pieno (il fallback prova altre chiavi, non perdona i tag rotti); 6. il formato v1 è invariato: niente migrazione dei payload esistenti.
+
+`OldPayload_DecryptsViaRing`, `Encrypt_AlwaysUsesCurrentKey`, `IsEncryptedWithCurrentKey_ClassifiesOldAndNew`, `WithoutRing_OldPayload_StillThrows`, `TamperedPayload_ThrowsEvenWithFullRing`, `RingOrder_TriesAllPreviousKeys`, `DuplicateOfCurrentKey_InPrevious_IsIgnored`, `V1Format_Unchanged_NoMigrationNeeded`
 
 ## `MicrostructureParserTests.cs` — 8 test, 158 righe
 
@@ -897,6 +909,12 @@ sono le invarianti rese eseguibili.
 
 `NoRow_IsUnknown_NotStale`, `Staleness_IsAThreshold_NotAMood`, `Transitions_NotifyOncePerDirection`, `StaleAtFirstObservation_StillNotifies`, `UnknownForever_NeverNotifies`, `Writer_UpsertsItsOwnRow_NeverDuplicates`
 
+## `IncrementalFactorFilterTests.cs` — 6 test, 266 righe
+
+> [2.6 PRD-RISANAMENTO] Il ponte che rende raggiungibile l'IncrementalIcGate dalla selezione fattori (C-03/G-16: «il gate c'è, chi lo chiama no»). Il metodo è quello dell'edge piantato (docs/STANDARD-VERIFICA.md): si costruisce una serie dove la ridondanza è VERA per costruzione — il rendimento dipende da due componenti indipendenti x e y, un fattore legge x, il suo echo rilegge x, un terzo legge y — e si pretende che il filtro tenga x e y e scarti l'echo.
+
+`EchoDelCapostipite_Scartato_IndipendenteTenuto`, `ITenutiDiventanoControlli_UnEchoDelSecondoTenuto_VieneScartato`, `FattoreSingolo_TenutoSenzaVerdetto_EListaVuotaResiste`, `Deterministico_StessiInput_StessoVerdetto`, `Stage_GateSpentoDiDefault_SelezionaAncheIlRidondante`, `Stage_GateAcceso_ScartaIlRidondante_ELoDiceNeiLog`
+
 ## `KalmanPairsSpreadAnalyzerTests.cs` — 6 test, 203 righe
 
 > Test di (C2): stesse invarianti della rolling OLS (anti-look-ahead, warm-up, recupero del β vero su coppia sintetica) più la proprietà per cui il filtro esiste — su un β che DERIVA nel tempo, l'errore di inseguimento del Kalman deve essere minore di quello della rolling OLS (che β lo vede solo attraverso una finestra in ritardo).
@@ -1076,6 +1094,12 @@ sono le invarianti rese eseguibili.
 > [2026-07-28] L'IMBUTO, cioe' dove muoiono i candidati. Fino a oggi la pipeline registrava solo "Candidates" e "Survivors": 32 run, 2.049 candidati, zero sopravvissuti, e nessun modo di sapere quale gate li stesse uccidendo. Sono tre diagnosi opposte — un candidato bocciato per «solo 8 trade in holdout» non dice niente sul mercato, dice che la finestra e' troppo corta per la sua frequenza; uno bocciato con Sharpe -1,9 dice che perde davvero; uno bocciato dal DSR dice che guadagna ma non e' distinguibile dal caso. Confonderle era il motivo per cui la domanda «perche' non consolida mai» e' rimasta aperta per settimane. Il raggruppamento in CLASSI e' la parte che puo' rompersi in silenzio: i motivi contengono il valore misurato («DSR 0,677 ≤ 0,95»), quindi contarli per stringa darebbe una cat…
 
 `I_motivi_con_valori_diversi_finiscono_nella_stessa_classe`, `I_sopravvissuti_non_sono_scarti`, `Un_guasto_non_si_confonde_con_un_verdetto`, `Un_motivo_sconosciuto_resta_visibile`, `Senza_scarti_non_si_producono_righe`
+
+## `PipelineRangeValidationTests.cs` — 5 test, 60 righe
+
+> [D-03, Fase 1 PRD-RISANAMENTO] L'invariante selezione/holdout come politica unica ( ): prima viveva SOLO nel salvataggio della UI, e una configurazione nata altrove (pre-controllo, SQL a mano, tool) girava con l'holdout sovrapposto alla selezione — ogni numero "out-of-sample" contaminato in silenzio. Ora la stessa funzione blocca il form E l'avvio del run.
+
+`ValidRanges_PassValidation`, `HoldoutTouchingSelectionEnd_IsAllowed`, `OverlappingHoldout_IsRejected`, `InvertedOrEmptyWindows_AreRejected`, `DefaultInstance_IsRejected_NotSilentlyAccepted`
 
 ## `RegimeRouterEngineTests.cs` — 5 test, 234 righe
 
@@ -1263,6 +1287,12 @@ sono le invarianti rese eseguibili.
 
 `FromConfig_EmptyConfig_UsesVenueDefaults_IncludingFunding`, `FromConfig_ReadsOverrides`, `ApplyTo_SetsAllThreeCostsOnBacktestConfig`, `ParameterDefinitions_ExposeTheThreeCostKnobs`
 
+## `PortfolioOptimizerSelectionTests.cs` — 4 test, 145 righe
+
+> [2.8 PRD-RISANAMENTO, chiude C-05] L'allocatore dei pesi dell'ensemble è selezionabile per nome (parametro di stage portfolioOptimizer ) invece che HRP cablato come tipo concreto. Le proprietà che contano: 1. REGRESSIONE: default e "HRP" esplicito producono pesi identici (il comportamento storico non cambia per chi non tocca nulla); 2. la scelta CAMBIA davvero i pesi (MeanVariance ≠ HRP su gambe con profili diversi); 3. nome sconosciuto ⇒ HRP con dichiarazione nel log, mai un run rotto per un typo; 4. il Method della proposta dichiara l'optimizer REALE (prima era l'etichetta fissa "HRP").
+
+`Default_And_ExplicitHrp_ProduceIdenticalWeights`, `MeanVariance_ProducesDifferentWeights_ThanHrp`, `ChosenOptimizer_IsDeclaredInProposalMethod`, `UnknownName_FallsBackToHrp_AndSaysSo`
+
 ## `RegimeLabelWindowTests.cs` — 4 test, 93 righe
 
 > Regressione di un difetto SILENZIOSO trovato guardando un run reale della pipeline il 2026-07-25: la configurazione swing giornaliera riportava Regime: sconosciuto a ogni esecuzione, anche subito dopo aver riaddestrato il modello nello stesso run. La causa: la finestra di etichettatura è espressa in giorni ( labelLookbackDays , default 30) mentre il warmup dell'estrattore di feature è in barre (50, la finestra più lunga che usa). Su 1h trenta giorni fanno 720 barre e tutto funziona; su 1d ne fanno 30 , cioè sotto il warmup — l'estrattore restituiva zero feature, nessuna candela veniva etichettata, e il regime usciva "sconosciuto" senza che niente segnalasse il perché. È il tipo di guasto che non rompe niente e non compare nei log: produce un valore plausibile ("sconosciuto" è una risposta…
@@ -1274,6 +1304,12 @@ sono le invarianti rese eseguibili.
 > [P0-5] Costruzione delle richieste per gli ordini TRIGGER reduce-only "resting" (stop-market / take-profit-market) su Bitget e Binance. Verifica i parametri inviati SENZA rete (fake handler): è ciò che si può controllare in modo deterministico prima della verifica dal vivo su Demo/Testnet.
 
 `Bitget_TriggerOrder_BuildsReduceOnlyPlanOrder`, `Binance_StopLoss_UsesStopMarketReduceOnlyMarkPrice`, `Binance_TakeProfit_UsesTakeProfitMarket`, `TriggerOrder_MissingTriggerPrice_FailsWithoutCallingExchange`
+
+## `SafetyCheckerFuturesExposureTests.cs` — 4 test, 107 righe
+
+> [D-02, Fase 1 PRD-RISANAMENTO] MaxTotalExposurePercent deve vincolare l'esposizione NOZIONALE aggregata anche sui Futures. Prima del fix lo stato di safety sommava il MARGINE delle posizioni aperte al NOZIONALE del nuovo ordine (unita' diverse): con leva 5x e MaxOpenPositions alzato, il capitale esposto raggiungeva il 100% contro un limite dichiarato del 50% senza che il check scattasse — coi default la coincidenza 10%×5=50% mascherava tutto. Qui si riproduce ESATTAMENTE lo scenario numerico dell'audit (docs/audit/20_DEEP_DIVE_CODE_ANALYSIS.md §3) e si verifica che ora il limite morda.
+
+`ExposedNotional_UsesNotional_NotMargin`, `AuditScenario_TenthPosition_IsNowRejected`, `WithinDeclaredLimit_IsStillAllowed`, `SpotSemantics_Unchanged`
 
 ## `SentimentMetricSyncServiceTests.cs` — 4 test, 159 righe
 
@@ -1292,6 +1328,12 @@ sono le invarianti rese eseguibili.
 > Test dello (rif. docs/archive/ROADMAP-QLIB.md §1.8 ): ogni modalità di stacking addestra e predice su un dataset apprendibile, e il round-trip Save/Load riproduce le stesse predizioni. Essendo un IReturnPredictor , si comporta come gli altri modelli (nessun consumatore va toccato).
 
 `EveryMode_FitsAndPredictsLearnableTarget`, `SaveLoad_RoundTrip_ReproducesPredictions`, `FeatureImportance_RanksTheStrongestFeatureFirst`, `SingleBase_IsValid`
+
+## `SymbolCatalogTests.cs` — 4 test, 155 righe
+
+> [E-04, Fase 2 PRD-RISANAMENTO] Il catalogo simboli condiviso: la POLITICA (unione di TrackedSeries e simboli storici in OhlcvData, ordinata) dichiarata e verificata in un punto solo, al posto delle sette copie implicite nelle pagine. La sfumatura che contava: una serie RIMOSSA dalla watchlist resta selezionabile (i suoi dati esistono), e una APPENA AGGIUNTA compare anche senza candele — nessuna delle due sarebbe sopravvissuta a una sostituzione ingenua con la sola TrackedSeries. Stessa politica per le COPPIE (simbolo, timeframe) di GetKnownSeriesAsync, con in più il vincolo che NON siano il prodotto cartesiano simboli × timeframe: quello mentirebbe sulle serie senza dati.
+
+`Union_TrackedAndHistorical_Ordered`, `Cache_ServesWithoutRescan_UntilInvalidated`, `Series_UnionTrackedAndHistorical_NoCartesianProduct`, `Series_ShareTheCacheAndTheInvalidate_WithSymbols`
 
 ## `TelegramNotifierTests.cs` — 4 test, 89 righe
 
@@ -1317,7 +1359,13 @@ sono le invarianti rese eseguibili.
 
 `QuattroOre_AlleSedici48_LUltimaChiusaEQuellaDelleDodici`, `AppenaChiusa_LaBarraDiventaAlimentabile`, `TimeframeIgnoto_NienteDaAlimentare`, `AlimentandoLUltimaChiusa_IlBattitoDiceZeroBarreIndietro`
 
-## `AuditPipelineExperimentLoggingTests.cs` — 3 test, 247 righe
+## `TrialsCountPropagationTests.cs` — 4 test, 108 righe
+
+> [D-01, Fase 1 PRD-RISANAMENTO] Il gate DSR deve usare le combinazioni REALMENTE provate, non i soli sopravvissuti al Top-N. Prima nello stesso run convivevano tre conteggi che non si parlavano: PowerCheckStage ne assumeva 300, StrategyDiscoveryEngine misurava il numero vero (solo per la UI), e il gate usava validated.Count ≤ topN = 15 — con 3.000 combinazioni la soglia SR* applicata era la metà di quella dovuta (1,77σ contro 3,56σ, docs/audit/20_DEEP_DIVE_CODE_ANALYSIS.md §2).
+
+`MoreExploredTrials_LowerDeflatedSharpe`, `UnknownExploration_PreservesHistoricalBehaviour`, `ExploredFewerThanCandidates_NeverLowersN`, `PipelineContext_AccumulatesAcrossStages`
+
+## `AuditPipelineExperimentLoggingTests.cs` — 3 test, 250 righe
 
 > Audit FASE 3.3 — ogni run di pipeline (successo O fallimento) deve comporre un ExperimentRun accanto al PipelineRun : parametri (universo, modalità, seed), metriche (stage/sopravvissuti) e stato finale coerente. È ciò che rende i run confrontabili in modo deterministico nella tabella di /experiments. Il wiring esiste in PipelineEngine.FinalizeRun ma nessun test lo verificava end-to-end.
 
@@ -1335,7 +1383,7 @@ sono le invarianti rese eseguibili.
 
 `CorrelatedExposureSection_BindsFromTheShippedExample`, `RegimeRoutingSection_BindsFromTheShippedExample_AndStaysInObservation`, `RegimeRoutingRules_NameOnlyStrategiesThatExist`
 
-## `ConfigurationUiCoverageTests.cs` — 3 test, 212 righe
+## `ConfigurationUiCoverageTests.cs` — 3 test, 201 righe
 
 > LA REGOLA D'ORO DELLA PIATTAFORMA, resa verificabile: nessuna funzione backend può esistere senza essere controllabile dall'interfaccia web. L'audit backend↔frontend del 2026-07-29 ha trovato quattordici sezioni di configurazione che governavano funzioni vive — il feed real-time e il suo potere di chiudere posizioni, il limite di esposizione correlata, il router di regime, il watchdog delle corsie, il canale Telegram, il forward test del carry — e che si potevano toccare SOLO editando appsettings.json a mano. Nessuna era rotta: erano invisibili, che per una manopola di sicurezza è lo stesso guasto della ConfigurationBindingTests vista da un altro lato. Questo test impedisce che il buco si riapra. Scandisce i sorgenti alla ricerca delle sezioni lette dal codice e pretende che ognuna compai…
 
@@ -1389,6 +1437,12 @@ sono le invarianti rese eseguibili.
 
 `ToProto_ThenFromProto_RoundTrips`, `FromProto_Unspecified_Throws`, `ToProto_MapsChampion_ToChampion`
 
+## `NullTwinWickAsymmetryTests.cs` — 3 test, 116 righe
+
+> [D-04, Fase 1 PRD-RISANAMENTO] Il gemello nullo conserva l'ASIMMETRIA degli stoppini. Prima li spartiva 50/50 sopra e sotto il corpo: geometria idealizzata che sposta la probabilita' di tocco di stop e target intra-barra — proprio cio' che i backtest usano per decidere le uscite, e proprio sull'orizzonte intraday di riferimento. Ora la quota sopra/sotto e' campionata dalla stessa barra sorgente (accoppiata come volume e ampiezza) e SPECCHIATA quando il segno del rendimento e' stato invertito.
+
+`Twin_PreservesWickAsymmetry_InsteadOfHalving`, `Twin_IsStillDeterministic_PerSeed`, `Twin_HighLowEnvelope_StaysCoherent`
+
 ## `OptimizationComboKeyTests.cs` — 3 test, 74 righe
 
 > Regressione: deve formattare i decimal in InvariantCulture. Bug reale scoperto integrando MlStrategy in Optimization (soglie Long/Short, non intere): sotto cultura it-IT (virgola come separatore decimale) una chiave come "LongThreshold=0,001,ShortThreshold=0,001" spezza il parsing dell'heatmap (che separa i parametri per virgola), mai emerso prima perché tutte le strategie a regole sweepano solo parametri interi (FastPeriod, SlowPeriod, ...).
@@ -1413,11 +1467,17 @@ sono le invarianti rese eseguibili.
 
 `SpreadVolRatio_IsCausal_AndFiresOnTheVolRegimeTransition`, `VolFilter_On_NeverOpensMoreTradesThanOff`, `VolFilter_Disabled_IsBitIdenticalToNoFilter`
 
-## `PipelineEngineConcurrencyTests.cs` — 3 test, 196 righe
+## `PipelineEngineConcurrencyTests.cs` — 3 test, 199 righe
 
 > Regressione per un bug reale trovato durante il lavoro sulla schedulazione automatica del pipeline: persisteva un con Status="Running" PRIMA di controllare se un run era già in corso (il controllo viveva solo dentro LaunchBackground, chiamato DOPO il salvataggio). Con un solo utente che clicca a mano la race era quasi impossibile da osservare, ma lo scheduler introduce chiamate concorrenti reali (due config dovute nello stesso tick, o lo scheduler che corre con un clic manuale) — il secondo StartRunAsync concorrente creava una riga "Running" orfana per sempre, perché il suo lancio in background falliva ma la riga restava già salvata. Fix: la guardia "un run è già in corso" ora gira PRIMA di qualunque scrittura sul DB. Per rendere la race deterministica (non affidata ai tempi macchina) il …
 
 `ConcurrentStartRunAsync_SecondCallThrows_WithoutPersistingOrphanedRun`, `RecoverOrphanedRuns_TurnsInheritedRunningRows_IntoResumablePaused`, `RecoverOrphanedRuns_WithNothingToRecover_IsANoOp`
+
+## `RegimeModelSelectionTests.cs` — 3 test, 120 righe
+
+> [2.7 PRD-RISANAMENTO] Il jump model dietro flag ( MarketRegime:Model ), nel rispetto del contratto C1 scritto in : il DEFAULT resta K-means finché la misura non decide, e il flag rende la misura possibile dall'app. Qui si verificano le proprietà della CUCITURA (il seam in RegimeDetector.TrainAsync), non l'algoritmo in sé — quello è già coperto da JumpModelTests: 1. parsing tollerante del flag (un typo in config non deve rompere il training); 2. compatibilità del formato persistito: i centroidi del fit (double) convertiti in float funzionano con l'inference nearest-centroid ESISTENTE (nessuna migrazione, stessa pipeline di assegnazione); 3. la proprietà per cui il flag esiste: sul percorso usato dal seam, il jump produce meno transizioni del K-means a parità di dati rumorosi.
+
+`TrainingConfiguration_DefaultsToKMeans`, `JumpCentroids_ConvertedToFloat_WorkWithExistingNearestCentroidInference`, `OnSeamPath_Jump_ProducesFewerTransitions_ThanKMeans`
 
 ## `RemoteMarketDataSyncServiceTests.cs` — 3 test, 62 righe
 
@@ -1473,6 +1533,12 @@ sono le invarianti rese eseguibili.
 
 `EmaCross_OnRealData_Completes_And_IsDeterministic`, `EmptyRange_ReturnsInitialCapital_NoTrades`
 
+## `BacktestFeeTests.cs` — 2 test, 131 righe
+
+> Regressione: una commissione negativa (bug d'uso dalla pagina Backtest, Fee % = -1) non deve comportarsi come un rebate che paga a ogni fill gonfiando i rendimenti. Il Portfolio la clampa a &gt;= 0 — stessa difesa già in uso per leva e slippage — quindi una fee negativa deve produrre ESATTAMENTE il risultato di fee 0, mai uno superiore. Nato nella PR #34 (2026-07-20, mai mergiata) e riportato sul motore attuale il 2026-08-09, dopo aver verificato che il difetto era ancora vivo: _feeFrac veniva calcolato senza guardia.
+
+`NegativeFee_DoesNotBoostReturnAboveZeroFee`, `PositiveFee_ReducesReturnVsZeroFee`
+
 ## `CointegrationOnRealDataTests.cs` — 2 test, 135 righe
 
 > Verifica sui DATI REALI del passaggio della cointegrazione ai log-prezzi. Il caso che ha motivato il cambiamento è AAVE/XLM: sulla finestra di selezione 2024-01→2026-03 (4h) la vecchia specificazione sui prezzi grezzi la dichiarava cointegrata, ed è finita fra le otto candidate salvo poi risultare la peggiore (−14,14%, maxDD 15,1% — docs/REPORT-RICERCA-2026-07.md). Il risultato interessante della verifica è che a bocciarla NON è il filtro sull'elasticità: quella vale ~0,69 ed è dentro la banda di sanità. È l'ADF stesso a rifiutarla, una volta che gira sui log. In altre parole la stazionarietà dello spread era un artefatto della regressione in unità di prezzo fra due monete con scale di prezzo lontanissime — il rilievo "cointegrazione troppo liberale" dell'audit 2026-07, che sui log si chi…
@@ -1485,7 +1551,7 @@ sono le invarianti rese eseguibili.
 
 `GetDecayReportsAsync_OneReportPerLeg_OnlyItsOwnTradesCounted`, `GetDecayReportsAsync_NoTrades_ReturnsReportsWithZeroCount`
 
-## `ExchangeSettingsPageTests.cs` — 2 test, 113 righe
+## `ExchangeSettingsPageTests.cs` — 2 test, 133 righe
 
 > Bug B2 (docs/TEST-UI-2026-07-18.md), lato pagina: /settings/exchanges andava in Internal Server Error (AuthenticationTagMismatchException nella materializzazione EF) se in tabella c'era UNA riga cifrata con una master key diversa. Ora la pagina carica via : la riga indecifrabile deve comparire col badge "reinserire le credenziali" (Test disabilitato), le altre righe restare pienamente usabili.
 
@@ -1496,6 +1562,12 @@ sono le invarianti rese eseguibili.
 > [2.S roadmap macchina-ricerca] Il segnale "Ora UTC" nel catalogo: la stagionalità oraria che CyclicalAnalyzer misura da tempo diventa CACCIABILE dalla stessa combinatoria degli altri segnali (Composite/StrategyComposer), senza sottosistemi nuovi. Appeso come id 9: gli id 0-8 delle strategie Composite già salvate restano validi.
 
 `Catalog_SignalIdsAreAppendOnly_AndTheTenthIsUtcHour`, `HourSignal_DependsOnlyOnItsOwnTimestamp_NoLookAheadPossible`
+
+## `MigrationsEfVersionAlignmentTests.cs` — 2 test, 84 righe
+
+> [Fase 5, 2026-08-11] Il guardiano nato da un primo avvio SENZA schema: il progetto delle migrazioni aveva Microsoft.EntityFrameworkCore.Design a 10.0.9 mentre l'app pubblicava EF 10.0.8 — la DLL delle migrazioni chiedeva Relational 10.0.9, il binder rifiutava (la versione trovata era più bassa della richiesta), OGNI classe Migration falliva il load, EF ingoiava l'eccezione e dichiarava «zero migrazioni» ⇒ «schema già allineato» su un database VUOTO. Rotto in silenzio sia nel container sia sull'host, mascherato solo dallo schema già migrato a mano. La regola è una sola e vive qui: le versioni della famiglia EF di app e progetto migrazioni devono combaciare. Chi fa un bump lo fa su ENTRAMBI i csproj, o la suite diventa rossa — che è esattamente il momento giusto per accorgersene.
+
+`LaFamigliaEfDellApp_ViaggiaSuUnaVersioneSola`, `IlProgettoMigrazioni_UsaLaStessaVersioneEfDellApp`
 
 ## `MlDeterminismTests.cs` — 2 test, 209 righe
 
@@ -1533,6 +1605,12 @@ sono le invarianti rese eseguibili.
 
 `SignalReversal_OpensOppositePosition_OnTheSameCandle`, `TwoEntriesOnTheSameCandle_SecondIsStillThrottled`
 
+## `SymbolScanGuardTests.cs` — 2 test, 104 righe
+
+> [E-04, Fase 2 PRD-RISANAMENTO] Il guardiano del catalogo simboli. La 2.1 aveva sostituito con ISymbolCatalog le scansioni OhlcvData…Select(Symbol)…Distinct() che ogni pagina rifaceva per conto proprio — una scansione solo-indice su ~12M righe per ~30 stringhe — ma QUATTRO copie erano sfuggite (FeatureSelection, e Backtest/Optimization/MlLab attraverso i loro page service, che il censimento per pagine non aveva contato), scoperte alla verifica browser del 2026-08-10 dai ~5 s di apertura di /feature-selection e /backtest. Questo test impedisce che il buco si riapra, come per i pannelli: scandisce i sorgenti e pretende che ogni scansione diretta o non esista, o sia iscritta nell'inventario qui sotto con la ragione per cui il catalogo non le basta.
+
+`NoDirectSymbolScan_OutsideTheDeclaredAllowList`, `TheAllowListHasNoStaleEntries`
+
 ## `DormantFleetPromotionTests.cs` — 1 test, 84 righe
 
 > [AF0] La flotta a 8 con cinque corsie DORMIENTI (registrate, mai avviate) attraversa la valutazione di promozione senza eccezioni e senza azioni: una corsia mai partita non ha metriche, e "nessuna metrica" deve restare "nessuna decisione", non un crash né — peggio — una promozione costruita su zeri.
@@ -1568,6 +1646,12 @@ sono le invarianti rese eseguibili.
 > Verifica che i tipi "sensibili al provider" sopravvivano a un round-trip persistenza→reload SENZA perdita di informazione: blob binari (modelli ML), decimal ad alta precisione (prezzi crypto) e stringhe JSON. Gira su un database PostgreSQL effimero (Testcontainers), l'unico provider supportato.
 
 `Postgres_PreservesBlobDecimalAndJson`
+
+## `RealtimeSharedSymbolLanesTests.cs` — 1 test, 215 righe
+
+> Regressione dell'incidente del 2026-08-09 (pod procionemgr-trading), stavolta con la catena VERA: due corsie persistite a DB sullo stesso simbolo facevano fallire il refresh delle sottoscrizioni di con «ArgumentException: An item with the same key has already been added. Key: DOTUSDT» — il log prometteva «ritento» ma il set non convergeva mai, e nessuna delle due corsie riceveva i tick. Qui si monta il worker reale su un Postgres reale (Testcontainers) con due in esecuzione sulla stessa coppia, e si verifica la proprietà che l'incidente aveva negato: il refresh converge senza errori ed ENTRAMBE le corsie ricevono lo stesso tick.
+
+`TwoRunningLanesOnTheSameSymbol_BothReceiveTheTick_AndTheRefreshConverges`
 
 ## `StrategyDiscoveryDefaultsTests.cs` — 1 test, 43 righe
 

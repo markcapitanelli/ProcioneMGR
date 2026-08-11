@@ -5,7 +5,10 @@ richiesta del proprietario: fixare i bug riscontrati, eliminare o sincronizzare 
 riallineare configurazioni e UI, rendere il server indipendente da GitHub, far ripartire tutto
 all'avvio su qualunque dispositivo.*
 
-**Stato (2026-08-11): FASI 0-1-2-3-4-5 COMPLETE (2.4 RITIRATA) · FASE 6 da fare.**
+**Stato (2026-08-11): ONDATA CHIUSA — TUTTE LE FASI COMPLETE (2.4 RITIRATA).**
+Verifiche finali e confronto del carry in
+[REPORT-RISANAMENTO-CHIUSURA-2026-08](REPORT-RISANAMENTO-CHIUSURA-2026-08.md); esito sintetico
+nella [ROADMAP](ROADMAP.md).
 **Mandato aggiuntivo del proprietario (2026-08-09, vincolante da qui in avanti):** nessuna
 configurazione può esistere senza UI — l'amministratore governa ogni parte della macchina
 dall'interfaccia. `DeliberatelyNotExposed` del guardiano è stata SVUOTATA: le ragioni che
@@ -46,13 +49,11 @@ Suite di partenza: 2.096 metodi di test (inventario in `docs/audit/27_TEST_INVEN
 | 2026-08-11 | **Riallineamento Config↔UI su master verificato a browser** (app riavviata su `c06efea`, guardiani 14/14): D-01 su run reale («Gate DSR su N=12.263 tentativi effettivi, 18.394 combinazioni provate, 144 candidati osservati») · badge «funding **serie storica** (94 eventi, firmati)» su backtest a leva — FundingHistory è popolata e usata · DISTINCT dei simboli una volta sola (catalogo) · salvataggio Model/λ esercitato. Zero errori | — |
 | 2026-08-11 | **FASE 5 COMPLETA — assetto Docker Compose**: `docker compose up -d` su macchina con solo Docker = Postgres 18 (volume, healthcheck, MAI pubblicato: isola per costruzione) + guscio su 5199 con **migrate-on-startup autosufficiente** + motore opzionale (`--profile engine`); tutti `restart: always`; segreti solo in `.env` gitignored + `.env.example`; Data Protection e appsettings-dei-pannelli su volumi (symlink, versione a un container dell'init-config K8s); `bringup.ps1`/`watchdog.ps1` riconoscono l'assetto dai label compose. **BUG GRAVE TROVATO E CHIUSO dal primo `up` su DB vergine**: il migrate-on-startup era rotto in silenzio OVUNQUE (host incluso) — Design 10.0.9 nel progetto migrazioni vs EF 10.0.8 dell'app ⇒ ogni classe Migration falliva il load, EF dichiarava «zero migrazioni» ⇒ «già allineato» su DB vuoto. Tre difese: versione allineata, guardia in DatabaseMigrator (DLL presente + zero migrazioni = ERRORE, mai «allineato»), `MigrationsEfVersionAlignmentTests`. Verificato: 20 migrazioni applicate da sole, riavvio pulito, welcome page a browser | `34c9a04`+`32014d3` |
 
-**Restano:** `git filter-repo` (DIFFERITO per decisione: coi tre segreti ruotati la storia è
-innocua; si farà se mai il repo dovesse diventare pubblico) · **Fase 6** (verifica finale +
-rimisura carry col funding storico) ·
-Job one-shot `strategyhunter-discover`: campo immutabile, il template nuovo si applica alla
-prossima ricreazione (attrito strutturale già documentato nel kustomization dei job) ·
-il bin dell'HOST ha ancora la DLL migrazioni stantia (10.0.9): si riallinea col primo build
-della soluzione dopo il merge, e da lì vigila la guardia nuova.
+| 2026-08-11 | **FASE 6 COMPLETA — ONDATA CHIUSA**: host riallineato (DLL migrazioni 10.0.8, guardia viva: «già allineato (20 note)») · **carry RIMISURATO e riprodotto** (netto 5,5-11,9%/anno alle soglie storiche; robustezza 10/3 confermata) — ma prima la rimisura ha scoperto che la serie funding dal 2019 era andata PERSA di nuovo (~14 mesi residui): ripristinata con `fundingbackfill` (+35.006 punti), chip creato per il guardiano di profondità delle serie-patrimonio; il tratto 2025-06→oggi da solo dà carry NEGATIVO al netto (regime magro: aspettativa corretta per il forward Paper) · tabella verifica 4-livelli fasi 1-2 nel report di chiusura · doc meccanici 21-27 rigenerati (+426/−150 = changelog dell'ondata) · fallback con password pre-rotazione rimosso da PlatformExpand (fail-fast) · ROADMAP aggiornata (tavola S su GHCR dichiarata superata dalla Fase 4) | — |
+
+**Fuori ondata, tracciato:** `git filter-repo` (DIFFERITO per decisione) · guardiano di
+profondità serie-patrimonio (chip) · Job one-shot `strategyhunter-discover` (template alla
+prossima ricreazione) · leader election kind (sessione parallela, PR #82 già in master).
 
 ---
 

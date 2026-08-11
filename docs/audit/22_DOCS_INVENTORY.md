@@ -1,6 +1,6 @@
 # 22 — INVENTARIO DOCUMENTO PER DOCUMENTO
 
-> Tutti i documenti Markdown del repository: **115** in `docs/` più 4 in radice.
+> Tutti i documenti Markdown del repository: **124** in `docs/` più 4 in radice.
 > Per ciascuno: titolo, scopo dichiarato nella prima riga, data più recente citata nel testo.
 
 **Come leggere la colonna «ultima data»:** è la data più recente che compare *dentro* il
@@ -9,14 +9,14 @@ l'ultimo aggiornamento sostanziale.
 
 | Categoria | Documenti | Righe |
 |---|---:|---:|
-| Radice del repository | 4 | 845 |
-| Documenti operativi vivi | 7 | 1.832 |
-| PRD — documenti di prodotto | 10 | 2.579 |
-| REPORT — esiti misurati | 24 | 4.493 |
-| Audit | 27 | 8.978 |
-| Documentazione per pagina UI | 33 | 3.333 |
+| Radice del repository | 4 | 873 |
+| Documenti operativi vivi | 7 | 1.860 |
+| PRD — documenti di prodotto | 11 | 2.897 |
+| REPORT — esiti misurati | 25 | 4.578 |
+| Audit | 34 | 24.070 |
+| Documentazione per pagina UI | 33 | 3.383 |
 | Roadmap archiviate (chiuse o superate) | 14 | 5.053 |
-| **Totale** | **119** | **27.113** |
+| **Totale** | **128** | **42.714** |
 
 ---
 
@@ -27,7 +27,7 @@ l'ultimo aggiornamento sostanziale.
 | `AUDIT-VALORE.md` | 201 | 2026-08-01 | **AUDIT DI VALORE — ProcioneMGR (2026-08-01)**<br/>Domanda a cui risponde: *l'aggiornamento massiccio ha creato valore o feature bloat, rigidità e |
 | `AUDIT_REPORT.md` | 283 | 2026-07-31 | **AUDIT REPORT — ProcioneMGR (analisi a freddo, 2026-07-31)**<br/>**Metodo.** Analisi da contesto fresco, solo su ciò che è scritto nei file: inventario con |
 | `CLAUDE.md` | 111 | 2026-08-04 | **ProcioneMGR — istruzioni per Claude Code**<br/>Questo progetto ha una memoria esterna già costruita e mantenuta. **Interrogala prima di esplorare |
-| `README.md` | 250 | — | **ProcioneMGR**<br/>**Piattaforma di ricerca e trading algoritmico** per criptovalute, costruita in **.NET 10 / Blazor Server**. Copre l'intero ciclo di vita di una strategia — dall'ingestione dei dati di me… |
+| `README.md` | 278 | 2026-08-05 | **ProcioneMGR**<br/>**Piattaforma di ricerca e trading algoritmico** per criptovalute, costruita in **.NET 10 / Blazor Server**. Copre l'intero ciclo di vita di una strategia — dall'ingestione dei dati di me… |
 
 ## Documenti operativi vivi
 
@@ -36,7 +36,7 @@ l'ultimo aggiornamento sostanziale.
 | `docs/NAVBAR.md` | 102 | — | **NavBar — struttura per workflow utente**<br/>La sidebar di navigazione è organizzata in **blocchi per workflow** invece di una lista piatta. |
 | `docs/POSTGRES_MIGRATION.md` | 287 | 2026-07-09 | **Migrazione a PostgreSQL**<br/>Guida operativa (storica) per la migrazione di ProcioneMGR da SQLite a **PostgreSQL**. La migrazione |
 | `docs/REVISIONE-STATO-ARTE-2026-07.md` | 166 | 2026-07-25 | **Revisione contro lo stato dell'arte — 2026-07-25**<br/>Revisione completa su richiesta: ogni area della piattaforma (pagine, roadmap, codice) confrontata |
-| `docs/ROADMAP.md` | 886 | 2026-08-06 | **ROADMAP — Integrazione, core caldo e scoperta pattern (viva, 2026-07-28)**<br/>*Questa è l'unica roadmap corrente. Le otto precedenti sono in `docs/archive/` — chiuse o |
+| `docs/ROADMAP.md` | 914 | 2026-08-06 | **ROADMAP — Integrazione, core caldo e scoperta pattern (viva, 2026-07-28)**<br/>*Questa è l'unica roadmap corrente. Le otto precedenti sono in `docs/archive/` — chiuse o |
 | `docs/STANDARD-VERIFICA.md` | 149 | 2026-08-01 | **Standard di verifica per ogni fase della roadmap**<br/>*Nato il 2026-07-27 da un'osservazione del proprietario: «servono più tipi di test per convalidare |
 | `docs/STATO-DELLA-PIATTAFORMA.md` | 106 | 2026-07-26 | **Stato della piattaforma — cosa c'è, cosa funziona, cosa non c'è**<br/>*Aggiornato 2026-07-20. Da leggere prima di usare la piattaforma per decidere qualcosa.* |
 | `docs/TEST-UI-2026-07-18.md` | 136 | 2026-07-19 | **Test completo UI + Vaglio strategie — 2026-07-18 (sessione autonoma)**<br/>**Contesto di mercato** (concordi tra pipeline, GARCH e K-means): 1h-4h-1d = **Bear Low-Vol** |
@@ -53,6 +53,7 @@ l'ultimo aggiornamento sostanziale.
 | `docs/PRD-INTEGRAZIONE-CORE-CALDO.md` | 174 | 2026-07-28 | **PRD — Integrazione "core caldo / guscio freddo" (2026-07-26)**<br/>*Documento di prodotto del filone B della [ROADMAP](ROADMAP.md). Le fasi A (consolidamento) e C |
 | `docs/PRD-ONNX-SENTIMENT-PILOT-2026-08.md` | 77 | 2026-08-01 | **PRD — Pilota di inferenza locale ONNX per il sentiment (2026-08)**<br/>*Nasce dal PDF di ricerca esterna "Architetture AI per Trading in C#" (2026-08-01), che proponeva |
 | `docs/PRD-PRESTAZIONI-2026-08.md` | 198 | 2026-08-05 | **PRD — Prestazioni e risorse (Filone H, 2026-08-05)**<br/>*Nato dalla richiesta del proprietario: «ottimizzare tutti i processi della piattaforma e il suo |
+| `docs/PRD-RISANAMENTO-2026-08.md` | 318 | 2026-08-11 | **PRD — Risanamento: bug, sincronizzazione, autonomia dal cloud (2026-08-08)**<br/>*Quattordicesima ondata. Nasce dall'audit in cinque passaggi di `docs/audit/` (00-10, 20-28) e dalla |
 | `docs/PRD-SCOPERTA-PATTERN-ANTIOVERFITTING.md` | 304 | 2026-07-28 | **PRD — Scoperta di pattern e interpretabilità anti-overfitting (2026-07-27)**<br/>*Valutazione di fattibilità del report "Dalla Ricerca di Pattern alla Validazione Anti-Overfitting" |
 | `docs/PRD-VALORE-2026-08.md` | 219 | 2026-08-01 | **PRD — Valore: costo del calcolo, voce della validazione, igiene dei verdetti (2026-08)**<br/>*Undicesima ondata. Nasce dall'[audit di valore 2026-08-01](../AUDIT-VALORE.md) (statica + test |
 
@@ -66,6 +67,7 @@ l'ultimo aggiornamento sostanziale.
 | `docs/REPORT-AUTONOMY.md` | 97 | 2026-07-05 | **Gli ultimi 3 passi verso l'autonomia — Report di implementazione**<br/>Data: 2026-07-05 · Build: 0 errori, 0 warning nuovi · Test: **507/507** (28 nuovi) · Verificato dal vivo su PostgreSQL. |
 | `docs/REPORT-B2-FRESCHEZZA-2026-07-28.md` | 90 | 2026-08-02 | **B2 — Il gate non sapeva vedere una serie ferma (2026-07-28)**<br/>*Chiude una cecità del gate B2 del [PRD-INTEGRAZIONE-CORE-CALDO](PRD-INTEGRAZIONE-CORE-CALDO.md), |
 | `docs/REPORT-B3-EXITLAG-2026-07-28.md` | 163 | 2026-07-28 | **B3 — Il gate tick-vs-candela, sbloccato e misurato (2026-07-28)**<br/>*Chiude il secondo tempo del gate B3 del [PRD-INTEGRAZIONE-CORE-CALDO](PRD-INTEGRAZIONE-CORE-CALDO.md). |
+| `docs/REPORT-B3BIS-USCITE-PER-TIPO-2026-08-06.md` | 85 | 2026-08-06 | **B3-bis — Il verdetto sulle uscite, separato per tipo (2026-08-06)**<br/>*Riapre [REPORT-B3-EXITLAG-2026-07-28](REPORT-B3-EXITLAG-2026-07-28.md) su obiezione del |
 | `docs/REPORT-CACCIA-STRATEGIE-2026-07.md` | 152 | 2026-07-02 | **Report caccia alle strategie — 2 luglio 2026**<br/>Ingestione da Binance (klines pubbliche): **10 coppie × 3 timeframe (1h/4h/1d), dal |
 | `docs/REPORT-CREATIVE-DISCOVERY.md` | 173 | 2026-07-03 | **Report — Creative Strategy Discovery (2026-07-03)**<br/>Implementazione completa del layer di scoperta creativa: genera automaticamente strategie |
 | `docs/REPORT-D3-OFI-2026-07-28.md` | 322 | 2026-07-28 | **Report — D3: l'OFI vero, misurato senza il pilota di raccolta**<br/>*2026-07-28. Chiusura dell'ultimo item aperto del Filone D della [ROADMAP](ROADMAP.md), che era |
@@ -90,14 +92,14 @@ l'ultimo aggiornamento sostanziale.
 | Documento | Righe | Ultima data | Titolo e scopo |
 |---|---:|---|---|
 | `docs/audit/00_INDEX.md` | 106 | 2026-08-04 | **00 — Indice dell'audit**<br/>**Progetto:** ProcioneMGR |
-| `docs/audit/00_MASTER_INDEX.md` | 248 | 2026-08-08 | **00 — MASTER INDEX (audit di ricostruzione)**<br/>`docs/audit/` conteneva **già** un audit del 2026-08-04 in 14 documenti (`00_INDEX.md` … |
+| `docs/audit/00_MASTER_INDEX.md` | 306 | 2026-08-08 | **00 — MASTER INDEX (audit di ricostruzione)**<br/>`docs/audit/` conteneva **già** un audit del 2026-08-04 in 14 documenti (`00_INDEX.md` … |
 | `docs/audit/01_PROJECT_MAP.md` | 355 | — | **01 — PROJECT MAP**<br/>Mappa navigabile del progetto. Per l'elenco esaustivo e sintetico di **tutti** i file vedi |
 | `docs/audit/01_PROJECT_OVERVIEW.md` | 162 | 2026-08-04 | **01 — Panoramica del progetto**<br/>**ProcioneMGR** è una piattaforma personale di **quant research e trading algoritmico** su |
 | `docs/audit/02_ARCHITECTURE.md` | 206 | — | **02 — Architettura**<br/>**Monolite modulare Blazor Server** con **microservizi opzionali estratti dietro feature-toggle**. |
 | `docs/audit/02_ARCHITECTURE_AS_IS.md` | 378 | — | **02 — ARCHITETTURA AS-IS (reale, non teorica)**<br/>Tutto ciò che segue è ricavato dal codice. Dove una cosa **non** è come ci si aspetterebbe, è |
 | `docs/audit/03_CODE_MAP.md` | 256 | 2026-08-04 | **03 — Mappa del codice**<br/>Riferimenti verificati per navigare il progetto senza aprirlo a caso. Conteggi al 2026-08-04. |
 | `docs/audit/03_DOMAIN_QUANT_MACHINE.md` | 450 | 2026-07-31 | **03 — LA MACCHINA QUANTITATIVA**<br/>Un blocco per meccanismo. Per ciascuno: **esiste? · completo? · integrato? · usato dalla UI? · |
-| `docs/audit/04_ALGORITHMS_AND_MODELS.md` | 422 | 2026-07-28 | **04 — CATALOGO ALGORITMI E MODELLI**<br/>Ogni voce riporta: nome · file · classe/metodo · categoria · scopo · formula/pseudocodice quando |
+| `docs/audit/04_ALGORITHMS_AND_MODELS.md` | 422 | 2026-08-08 | **04 — CATALOGO ALGORITMI E MODELLI**<br/>Ogni voce riporta: nome · file · classe/metodo · categoria · scopo · formula/pseudocodice quando |
 | `docs/audit/04_RUNTIME_AND_DATA_FLOW.md` | 206 | 2026-08-04 | **04 — Runtime e flusso dei dati**<br/>[Program.cs:24](../../ProcioneMGR/Program.cs#L24) attiva il *Npgsql legacy timestamp behavior*, che |
 | `docs/audit/05_UI_BACKEND_BINDING.md` | 189 | 2026-07-31 | **05 — UI ↔ BACKEND BINDING**<br/>89 file `.razor` (22.607 righe), di cui **35 file** in `Components/Pages/` (18.604 righe): |
 | `docs/audit/05_UI_PAGES_AND_ROUTES.md` | 158 | — | **05 — Pagine, route e protezioni**<br/>**66 route** dichiarate con `@page`: 34 pagine applicative + 32 pagine Identity scaffolded. |
@@ -109,13 +111,20 @@ l'ultimo aggiornamento sostanziale.
 | `docs/audit/08_TRACEABILITY_MATRIX.md` | 86 | — | **08 — MATRICE DI TRACCIABILITÀ**<br/>**dominio → file/classi → stato → gap → azione**, per tutti i domini dichiarati nel mandato. |
 | `docs/audit/09_OPEN_QUESTIONS.md` | 210 | 2026-08-08 | **09 — DOMANDE APERTE**<br/>Ciò che **non** ho potuto determinare con certezza dal codice, e le decisioni che spettano a un |
 | `docs/audit/09_RISKS_AND_TECH_DEBT.md` | 329 | 2026-08-04 | **09 — Rischi e debito tecnico**<br/>Ordinati per priorità. Ogni voce ha: cosa, dove si verifica, perché conta, cosa farci. |
-| `docs/audit/10_CLAUDE_CODE_MEMORY.md` | 196 | 2026-08-04 | **10 — Memoria per Claude Code**<br/>ProcioneMGR è una piattaforma personale di **quant research e trading algoritmico su cripto**, |
+| `docs/audit/10_CLAUDE_CODE_MEMORY.md` | 215 | 2026-08-10 | **10 — Memoria per Claude Code**<br/>ProcioneMGR è una piattaforma personale di **quant research e trading algoritmico su cripto**, |
 | `docs/audit/10_FILE_INVENTORY.md` | 832 | 2026-08-08 | **10 — INVENTARIO FILE-BY-FILE**<br/>Inventario consultabile di tutti i file sorgente del repository, raggruppati per area. |
 | `docs/audit/11_NOTEBOOKLM_EXPORT.md` | 557 | 2026-08-04 | **ProcioneMGR — memoria completa del progetto**<br/>**ProcioneMGR** è una piattaforma personale di **ricerca quantitativa e trading algoritmico su |
 | `docs/audit/12_UI_WALKTHROUGH.md` | 328 | 2026-08-04 | **12 — Giro completo dell'applicazione, dal vivo**<br/>**Data:** 2026-08-04, 21:00–21:40 CEST · **Target:** `http://localhost:5199` · **Sessione:** autenticata |
 | `docs/audit/13_DEEP_DIVE_CODE.md` | 265 | 2026-07-26 | **13 — Approfondimento del codice**<br/>Secondo passaggio, più in profondità del primo. Qui si guarda dentro i file, non solo la struttura. |
-| `docs/audit/20_DEEP_DIVE_CODE_ANALYSIS.md` | 491 | 2026-08-08 | **20 — DEEP DIVE: lettura del codice riga per riga**<br/>E, altrettanto importante, **ciò che ho verificato essere corretto** — vedi §7. |
-| `docs/audit/21_FILE_BY_FILE_CATALOG.md` | 1122 | 2026-08-08 | **21 — CATALOGO FILE PER FILE**<br/>**Legenda:** `[n]` = righe del file · il testo è il `&lt;summary>` del tipo principale, |
+| `docs/audit/20_DEEP_DIVE_CODE_ANALYSIS.md` | 549 | 2026-08-08 | **20 — DEEP DIVE: lettura del codice riga per riga**<br/>E, altrettanto importante, **ciò che ho verificato essere corretto** — vedi §7. |
+| `docs/audit/21_FILE_BY_FILE_CATALOG.md` | 1141 | 2026-08-11 | **21 — CATALOGO FILE PER FILE**<br/>**Legenda:** `[n]` = righe del file · il testo è il `&lt;summary>` del tipo principale, |
+| `docs/audit/22_DOCS_INVENTORY.md` | 175 | 2026-08-08 | **22 — INVENTARIO DOCUMENTO PER DOCUMENTO**<br/>**Come leggere la colonna «ultima data»:** è la data più recente che compare *dentro* il |
+| `docs/audit/23_API_SURFACE_CORE.md` | 2895 | 2026-08-08 | **23 — SUPERFICIE API: nucleo operativo**<br/>Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muovere denaro**. Ogni tipo e ogni membro con firma e doc-comment. |
+| `docs/audit/24_API_SURFACE_QUANT.md` | 4363 | 2026-08-09 | **24 — SUPERFICIE API: macchina quantitativa**<br/>ML, fattori alpha, validazione anti-overfitting, regime, portafoglio, serie storiche, backtest, ottimizzazione, discovery, microstruttura, analisi tecnica. |
+| `docs/audit/25_API_SURFACE_PLATFORM.md` | 3951 | 2026-08-06 | **25 — SUPERFICIE API: piattaforma, automazioni e UI**<br/>Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabilità, registry, esperimenti, configurazione, UI e strumenti CLI. |
+| `docs/audit/26_CONFIG_AND_DATA_SCHEMA.md` | 1556 | 2026-08-09 | **26 — CONFIGURAZIONE E SCHEMA DATI (completo)**<br/>Il **default** è il valore inizializzato nella classe; se vuoto, il tipo usa il proprio |
+| `docs/audit/27_TEST_INVENTORY.md` | 1664 | 2026-08-11 | **27 — INVENTARIO DEI TEST: cosa è realmente garantito**<br/>I file con prefisso `Audit*` nascono da audit precedenti e presidiano regressioni specifiche: |
+| `docs/audit/28_GRAPH_REACHABILITY_AND_FLOW.md` | 334 | 2026-08-10 | **28 — GRAFO, RAGGIUNGIBILITÀ E FLUSSI: il livello che i passaggi precedenti non potevano ve**<br/>Costruito un grafo delle dipendenze **fra tipi**, ricavato dai riferimenti testuali reali, con i |
 
 ## Documentazione per pagina UI
 
@@ -124,19 +133,19 @@ l'ultimo aggiornamento sostanziale.
 | `docs/pagine/README.md` | 98 | 2026-07-19 | **Documentazione delle pagine — ProcioneMGR**<br/>Un file per ogni pagina della piattaforma: **a cosa serve, come è strutturata la UI, come |
 | `docs/pagine/account.md` | 72 | — | **Pagine Account (Identity) — `/Account/*`**<br/>È il blocco di autenticazione e gestione del profilo utente, basato sullo scaffold Identity |
 | `docs/pagine/admin-ai-supervisor.md` | 98 | 2026-08-02 | **Supervisione AI — `/admin/ai-supervisor`**<br/>Mostra i pareri dell'**advisory layer Claude** sul ciclo di ricerca: a ogni run di pipeline |
-| `docs/pagine/admin-autonomy.md` | 172 | 2026-07-31 | **Autonomia — `/admin/autonomy`**<br/>Il **pannello unico di tutti gli automatismi** della piattaforma, prima controllabili solo |
+| `docs/pagine/admin-autonomy.md` | 193 | 2026-08-09 | **Autonomia — `/admin/autonomy`**<br/>Il **pannello unico di tutti gli automatismi** della piattaforma, prima controllabili solo |
 | `docs/pagine/admin-backup.md` | 63 | 2026-07-09 | **Backup Database — `/admin/backup`**<br/>Backup e restore del **database PostgreSQL** (che contiene tutto lo stato: strategie, |
-| `docs/pagine/admin-protections.md` | 148 | 2026-07-29 | **Protezioni di trading — `/admin/protections`**<br/>Le soglie del pannello sicurezza di [`/trading`](trading.md) agiscono sul **singolo ordine di |
+| `docs/pagine/admin-protections.md` | 160 | 2026-08-09 | **Protezioni di trading — `/admin/protections`**<br/>Le soglie del pannello sicurezza di [`/trading`](trading.md) agiscono sul **singolo ordine di |
 | `docs/pagine/admin-users.md` | 56 | — | **Gestione Utenti — `/admin/users`**<br/>Gestisce **utenti e ruoli**. Il modello a tre ruoli con permessi crescenti (dal `GuidaPanel`): |
 | `docs/pagine/alpha-mining.md` | 84 | — | **Alpha Mining — `/alpha-mining`**<br/>Cerca **NUOVE formule**, non combinazioni di fattori esistenti: un algoritmo **genetico** |
 | `docs/pagine/backtest.md` | 120 | — | **Backtest — `/backtest`**<br/>Simula una strategia sui dati storici: la piattaforma rilegge le candele una a una come se |
 | `docs/pagine/campaign.md` | 83 | — | **Campagne — `/campaign`**<br/>Il **Campaign Planner** decide **cosa fare DOPO un run di pipeline**, automaticamente. Una |
 | `docs/pagine/dashboard.md` | 96 | — | **Dashboard — `/dashboard`**<br/>La Dashboard fa due cose, spiegate anche dal `GuidaPanel` in cima alla pagina (righe 23–41): |
-| `docs/pagine/discovery.md` | 88 | — | **Discovery — `/discovery`**<br/>"**Non so quale strategia usare, trovamela tu**": mentre Optimization ottimizza UNA strategia |
+| `docs/pagine/discovery.md` | 93 | — | **Discovery — `/discovery`**<br/>"**Non so quale strategia usare, trovamela tu**": mentre Optimization ottimizza UNA strategia |
 | `docs/pagine/ensemble.md` | 128 | 2026-07-25 | **Ensemble — `/ensemble`**<br/>Combina **più strategie in un unico portafoglio** su una corsia di trading, dividendo il |
 | `docs/pagine/execution.md` | 83 | — | **Execution Lab — `/execution`**<br/>Misura **quanto costa davvero eseguire un ordine**: su size significative, distribuire |
 | `docs/pagine/experiments.md` | 77 | — | **Esperimenti — `/experiments`**<br/>È il **registro degli esperimenti** (in stile MLflow): ogni backtest, ottimizzazione, |
-| `docs/pagine/feature-selection.md` | 166 | 2026-07-28 | **Feature Selection (IC) — `/feature-selection`**<br/>Prima di addestrare un modello ML, misura **quali fattori (indicatori) hanno davvero un |
+| `docs/pagine/feature-selection.md` | 178 | 2026-08-09 | **Feature Selection (IC) — `/feature-selection`**<br/>Prima di addestrare un modello ML, misura **quali fattori (indicatori) hanno davvero un |
 | `docs/pagine/home.md` | 90 | 2026-07-28 | **Home — `/`**<br/>La Home è il **punto di ingresso e orientamento** della piattaforma. Non esegue operazioni: |
 | `docs/pagine/market-analysis.md` | 103 | — | **Analisi Serie — `/market-analysis`**<br/>Applica alla serie storica le **analisi "a priori" del metodo quantitativo** (impostazione |
 | `docs/pagine/market-bars.md` | 93 | — | **Barre informative — `/market/bars`**<br/>Costruisce e confronta le **barre informative** (ML4T cap. 2): invece di chiudere una candela |

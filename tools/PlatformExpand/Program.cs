@@ -28,8 +28,13 @@ using ProcioneMGR.Services.Risk;
 // Va impostato PRIMA di costruire qualunque data source Npgsql.
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
+// [Fase 6, 2026-08-11] Niente fallback hardcoded: conteneva la password PRE-rotazione (morta dal
+// 2026-08-09) — un fallback che non funziona è peggio di nessun fallback, e una password nel
+// sorgente è comunque la classe di errore che la Fase 0 ha chiuso. Fail-fast con l'istruzione.
 var pgConn = Environment.GetEnvironmentVariable("ConnectionStrings__PostgresConnection")
-    ?? "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=Procione2026Pg_secure";
+    ?? throw new InvalidOperationException(
+        "Variabile d'ambiente ConnectionStrings__PostgresConnection non impostata: " +
+        "il tool non indovina il database. Esporta la connection string reale prima di lanciarlo.");
 
 // --- Universo di espansione ---
 // 18 coppie storiche (gia' presenti) + 12 nuove liquide su Binance.
