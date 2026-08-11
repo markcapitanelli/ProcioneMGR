@@ -117,29 +117,60 @@ function Send-Telegram([string]$text) {
 $previous = Read-State
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 
+# --- [Fase 5] Riconoscimento dell'assetto ----------------------------------------------------
+# Con l'assetto Docker Compose (progetto 'procionemgr', nome fissato nel docker-compose.yml) il
+# DB non e' pubblicato sull'host e il motore non ha tunnel: i controlli 2 e 3 passano dallo STATO
+# DEI CONTAINER, non dalla rete. Il controllo del guscio resta identico (stessa 5199).
+function Get-ComposeService([string]$service) {
+    docker ps --filter 'label=com.docker.compose.project=procionemgr' `
+        --filter "label=com.docker.compose.service=$service" --filter 'status=running' `
+        --format '{{.Names}}' 2>$null
+}
+$composeMode = [bool](Get-ComposeService 'ui')
+
 # --- 1. Guscio -------------------------------------------------------------------------------
 $shellOk = Test-Http 'http://localhost:5199/health'
 
-# --- 2. Motore (con auto-riparazione del tunnel prima di gridare) ----------------------------
-# 18093 = porta health (8081) del servizio; la 18092 e' gRPC e a HTTP/1.x risponde sempre 400.
-$engineOk = Test-Http 'http://localhost:18093/health'
-if (-not $engineOk) {
-    $ensure = Join-Path $repoRoot 'scripts\ensure-trading-portforward.ps1'
-    if (Test-Path $ensure) {
-        & $ensure | Out-Null
-        Start-Sleep -Seconds 3
-        $engineOk = Test-Http 'http://localhost:18093/health'
-    }
-}
+if ($composeMode) {
+    # --- 2c. Motore: solo se il profilo engine fa parte dell'assetto (container esistente,
+    # anche se fermo). Assente del tutto = non previsto, nessun allarme.
+    $engineDefined = docker ps -a --filter 'label=com.docker.compose.project=procionemgr' `
+        --filter 'label=com.docker.compose.service=trading' --format '{{.Names}}' 2>$null
+    $engineOk = if ($engineDefined) { [bool](Get-ComposeService 'trading') } else { $true }
 
-# --- 3. Postgres -----------------------------------------------------------------------------
-$pgOk = Test-Tcp 'localhost' 5432
+    # --- 3c. Postgres: container running (la porta non e' pubblicata di proposito).
+    $pgOk = [bool](Get-ComposeService 'postgres')
+
+    $shellFix = 'docker compose up -d; se insiste: docker logs del container ui.'
+    $engineFix = 'docker compose --profile engine up -d (di norma il restart: always lo rialza da solo).'
+    $pgFix = 'docker compose up -d postgres; se insiste: docker logs del container postgres.'
+}
+else {
+    # --- 2. Motore (con auto-riparazione del tunnel prima di gridare) ------------------------
+    # 18093 = porta health (8081) del servizio; la 18092 e' gRPC e a HTTP/1.x risponde sempre 400.
+    $engineOk = Test-Http 'http://localhost:18093/health'
+    if (-not $engineOk) {
+        $ensure = Join-Path $repoRoot 'scripts\ensure-trading-portforward.ps1'
+        if (Test-Path $ensure) {
+            & $ensure | Out-Null
+            Start-Sleep -Seconds 3
+            $engineOk = Test-Http 'http://localhost:18093/health'
+        }
+    }
+
+    # --- 3. Postgres -------------------------------------------------------------------------
+    $pgOk = Test-Tcp 'localhost' 5432
+
+    $shellFix = 'scripts\bringup.ps1 lo rilancia; oppure run-postgres.ps1 a mano.'
+    $engineFix = 'tunnel gia'' ritentato; se persiste guarda il pod procionemgr-trading nel cluster.'
+    $pgFix = 'verifica il servizio PostgreSQL locale (porta 5432).'
+}
 
 # --- Transizioni: una notifica per cambio di stato, in entrambe le direzioni -----------------
 $checks = @(
-    @{ Name = 'guscio';  Now = $shellOk;  Was = [bool]$previous.shell;    Fix = 'scripts\bringup.ps1 lo rilancia; oppure run-postgres.ps1 a mano.' },
-    @{ Name = 'motore';  Now = $engineOk; Was = [bool]$previous.engine;   Fix = 'tunnel gia'' ritentato; se persiste guarda il pod procionemgr-trading nel cluster.' },
-    @{ Name = 'Postgres'; Now = $pgOk;    Was = [bool]$previous.postgres; Fix = 'verifica il servizio PostgreSQL locale (porta 5432).' }
+    @{ Name = 'guscio';  Now = $shellOk;  Was = [bool]$previous.shell;    Fix = $shellFix },
+    @{ Name = 'motore';  Now = $engineOk; Was = [bool]$previous.engine;   Fix = $engineFix },
+    @{ Name = 'Postgres'; Now = $pgOk;    Was = [bool]$previous.postgres; Fix = $pgFix }
 )
 
 foreach ($c in $checks) {
