@@ -63,6 +63,34 @@ public sealed class RealtimePriceWorker(
     /// <summary>[G2] Serie già segnalate come ferme (exchange + simbolo maiuscolo): allarme sulla transizione.</summary>
     private readonly HashSet<(ExchangeName Exchange, string Symbol)> _staleAlerted = [];
 
+    // ---- [2026-08-13] Anti-raffica sulle NOTIFICHE di staleness. ----------------------------
+    // Il log segnala ogni transizione (è diagnostica, e deve restare fitta). La NOTIFICA no: su
+    // STX/USDT — simbolo illiquido, dove un silenzio di un paio di minuti è il ritmo normale e non
+    // un guasto — la coppia «non risponde»/«ripristinato» partiva ogni 1-2 minuti, fino a saturare
+    // il rate-limit del canale («+2 notifiche soppresse» osservato su Telegram il 2026-08-13).
+    // Il danno non è il fastidio: è che le notifiche VERE (corsia in quarantena, posizioni orfane)
+    // condividono quel budget di 20 messaggi/ora e sarebbero state soppresse dal rumore.
+
+    /// <summary>Controlli consecutivi oltre soglia per serie: la notifica pretende PERSISTENZA, non un campione.</summary>
+    private readonly Dictionary<(ExchangeName Exchange, string Symbol), int> _staleStreak = [];
+
+    /// <summary>Ultima notifica inviata per serie: cooldown, così una serie che oscilla parla una volta all'ora.</summary>
+    private readonly Dictionary<(ExchangeName Exchange, string Symbol), DateTime> _staleNotifiedUtc = [];
+
+    /// <summary>Serie per cui è partita davvero una NOTIFICA: solo per queste si annuncia il rientro.</summary>
+    private readonly HashSet<(ExchangeName Exchange, string Symbol)> _staleNotified = [];
+
+    /// <summary>
+    /// Controlli consecutivi oltre soglia prima di notificare. Il giro è
+    /// <see cref="RealtimeFeedOptions.SubscriptionRefreshSeconds"/> (30s di default), quindi con 3
+    /// il silenzio deve durare la soglia PIÙ un paio di giri: un simbolo che consegna a strappi
+    /// non allarma, uno stream davvero morto sì (con al più un minuto e mezzo di ritardo).
+    /// </summary>
+    private const int StaleChecksBeforeNotify = 3;
+
+    /// <summary>Fra due notifiche sulla STESSA serie: un guasto che dura resta vero, ma si dice una volta all'ora.</summary>
+    private static readonly TimeSpan StaleNotifyCooldown = TimeSpan.FromHours(1);
+
     /// <summary>
     /// Inizio della sessione di feed corrente: serve a distinguere "non ha ancora cominciato" da
     /// "ha smesso di ricevere" nella watchdog di staleness. Si azzera a ogni riaccensione.
@@ -140,6 +168,9 @@ public sealed class RealtimePriceWorker(
         // non solo per la prima dopo l'avvio del processo.
         _sessionStartedUtc = DateTime.UtcNow;
         _staleAlerted.Clear();
+        _staleStreak.Clear();
+        _staleNotified.Clear();
+        _staleNotifiedUtc.Clear();
 
         var feeds = mappers
             .Select(m => new WebSocketPriceFeed(m, transportFactory, options, logger, metrics))
@@ -294,7 +325,7 @@ public sealed class RealtimePriceWorker(
                 // toglie dal set al prossimo refresh; qui si riarma solo l'allarme.
                 if (!routedSymbols.Contains(series.Symbol))
                 {
-                    _staleAlerted.Remove(key);
+                    ForgetSeries(key);
                     continue;
                 }
 
@@ -304,27 +335,56 @@ public sealed class RealtimePriceWorker(
                 var graceStart = series.SubscribedSinceUtc > _sessionStartedUtc ? series.SubscribedSinceUtc : _sessionStartedUtc;
                 var stale = ShouldAlertStale(series.LastEventUtc, threshold, now, graceStart);
 
-                if (stale && _staleAlerted.Add(key))
+                if (stale)
                 {
-                    logger.LogError("Serie {Exchange} {Symbol} STALE sul feed: nessun evento da oltre {Sec}s (ultimo: {Last}).",
-                        feed.Exchange, series.Symbol, threshold.TotalSeconds, series.LastEventUtc?.ToString("u") ?? "mai");
-                    newlyStale.Add($"{feed.Exchange} {series.Symbol} (ultimo: {series.LastEventUtc?.ToString("HH:mm:ss") ?? "mai"})");
+                    // Il LOG segue ogni transizione: è la diagnostica, e deve restare fitta.
+                    if (_staleAlerted.Add(key))
+                    {
+                        logger.LogWarning("Serie {Exchange} {Symbol} STALE sul feed: nessun evento da oltre {Sec}s (ultimo: {Last}).",
+                            feed.Exchange, series.Symbol, threshold.TotalSeconds, series.LastEventUtc?.ToString("u") ?? "mai");
+                    }
+
+                    var streak = _staleStreak.GetValueOrDefault(key) + 1;
+                    _staleStreak[key] = streak;
+
+                    if (ShouldNotifyStale(key, streak, series.LastEventUtc is null, now))
+                    {
+                        _staleNotifiedUtc[key] = now;
+                        _staleNotified.Add(key);
+                        newlyStale.Add($"{feed.Exchange} {series.Symbol} (ultimo: {series.LastEventUtc?.ToString("HH:mm:ss") ?? "mai"})");
+                    }
                 }
-                else if (!stale && _staleAlerted.Remove(key))
+                else
                 {
-                    logger.LogInformation("Serie {Exchange} {Symbol}: tornata a ricevere sul feed.", feed.Exchange, series.Symbol);
-                    recovered.Add($"{feed.Exchange} {series.Symbol}");
+                    _staleStreak.Remove(key);
+                    if (_staleAlerted.Remove(key))
+                    {
+                        logger.LogInformation("Serie {Exchange} {Symbol}: tornata a ricevere sul feed.", feed.Exchange, series.Symbol);
+                        // Il rientro si annuncia SOLO a chi aveva ricevuto l'allarme: un «ripristinato»
+                        // senza il guasto corrispondente è rumore puro (metà dei messaggi su STX).
+                        if (_staleNotified.Remove(key)) recovered.Add($"{feed.Exchange} {series.Symbol}");
+                    }
                 }
             }
         }
 
         if (newlyStale.Count > 0)
         {
+            // Il testo dice la conseguenza VERA nell'assetto corrente. Quello precedente («per
+            // queste serie gli stop reagiscono solo alla chiusura candela») descriveva come guasto
+            // ciò che, con le uscite guidate dalle candele, è il comportamento normale e deliberato
+            // di TUTTE le serie (B3, 24 configurazioni su 24): allarmante e falso insieme.
+            var conseguenza = options.CurrentValue.DriveProtectiveExits
+                ? "Le uscite protettive sono guidate dai tick: finché il feed tace, per queste serie restano "
+                  + "solo le chiusure candela del percorso REST, con un ritardo che può arrivare a minuti."
+                : "Il feed è in sola osservazione (le uscite le guidano le candele), quindi gli stop non cambiano "
+                  + "comportamento: la serie però non ha MAI consegnato in questa sessione, il che indica uno "
+                  + "stream bloccato o un simbolo non instradato.";
+
             Notify(NotificationSeverity.Warning,
                 $"{newlyStale.Count} serie del feed real-time non rispondono",
-                $"Nessun tick/candela da oltre {threshold.TotalSeconds:F0}s su: {string.Join(", ", newlyStale)}. " +
-                "Per queste serie gli stop reagiscono solo alla chiusura candela (percorso REST), " +
-                "con un ritardo che può arrivare a diversi minuti.");
+                $"Nessun tick/candela da oltre {threshold.TotalSeconds:F0}s su: {string.Join(", ", newlyStale)} "
+                + $"(silenzio confermato per {StaleChecksBeforeNotify} controlli consecutivi). {conseguenza}");
         }
         if (recovered.Count > 0)
         {
@@ -360,6 +420,55 @@ public sealed class RealtimePriceWorker(
     {
         if (lastUtc is null && nowUtc - graceStartUtc < threshold) return false;
         return lastUtc is not DateTime last || nowUtc - last > threshold;
+    }
+
+    /// <summary>
+    /// [2026-08-13] Se la staleness di questa serie merita una NOTIFICA (il log l'ha già detta).
+    /// Tre filtri, in ordine di severità del giudizio:
+    ///
+    /// <para><b>Persistenza</b>: un solo campione oltre soglia non è un guasto. Su un simbolo
+    /// illiquido come STX/USDT un silenzio di poco più di un minuto è il ritmo normale, e la coppia
+    /// «non risponde»/«ripristinato» partiva ogni 1-2 minuti.</para>
+    ///
+    /// <para><b>Azionabilità</b>: con le uscite guidate dalle candele (<c>DriveProtectiveExits</c>
+    /// false, che è il default PER MISURA — B3) un'intermittenza del feed non ha conseguenze
+    /// operative: gli stop passano dal percorso REST per tutte le serie, sempre. Notificarla è
+    /// rumore che consuma il budget del canale (20 messaggi/ora) condiviso con gli allarmi veri —
+    /// corsia in quarantena, posizioni orfane — che verrebbero soppressi. Resta invece azionabile
+    /// anche in osservazione il caso STRUTTURALE: uno stream che non ha MAI consegnato è rotto o
+    /// bloccato (è il blocco EEA/MiCA visto sulle liquidazioni), e quello si dice.</para>
+    ///
+    /// <para><b>Cooldown</b>: un guasto che dura resta vero, ma va ripetuto una volta all'ora, non
+    /// a ogni giro.</para>
+    /// </summary>
+    internal static bool ShouldNotifyStale(
+        int streak, bool drivesProtectiveExits, bool neverDelivered,
+        DateTime? lastNotifiedUtc, DateTime nowUtc,
+        int checksBeforeNotify = StaleChecksBeforeNotify, TimeSpan? cooldown = null)
+    {
+        if (streak < checksBeforeNotify) return false;
+        if (!drivesProtectiveExits && !neverDelivered) return false;
+        if (lastNotifiedUtc is DateTime last && nowUtc - last < (cooldown ?? StaleNotifyCooldown)) return false;
+        return true;
+    }
+
+    /// <summary>Applica la regola sopra allo stato tenuto per questa serie.</summary>
+    private bool ShouldNotifyStale(
+        (ExchangeName Exchange, string Symbol) key, int streak, bool neverDelivered, DateTime nowUtc)
+        => ShouldNotifyStale(
+            streak,
+            options.CurrentValue.DriveProtectiveExits,
+            neverDelivered,
+            _staleNotifiedUtc.TryGetValue(key, out var last) ? last : null,
+            nowUtc);
+
+    /// <summary>Dimentica ogni traccia di una serie non più instradata (nessuna corsia la opera).</summary>
+    private void ForgetSeries((ExchangeName Exchange, string Symbol) key)
+    {
+        _staleAlerted.Remove(key);
+        _staleStreak.Remove(key);
+        _staleNotified.Remove(key);
+        _staleNotifiedUtc.Remove(key);
     }
 
     private void Notify(NotificationSeverity severity, string title, string body)

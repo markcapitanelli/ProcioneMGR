@@ -95,6 +95,21 @@
         @* [E7] Il conteggio delle ferme sta SOPRA la tabella: una serie morta in fondo all'elenco
            non deve dipendere dallo scroll per farsi vedere — MKR è stata ferma dieci mesi con la
            pagina che diceva «Abilitata». *@
+        @* [2026-08-13] La divergenza fra questa pagina e il trading vero. Sta in cima e in rosso
+           perché è la combinazione PEGGIORE: una corsia che opera una serie che nessuno aggiorna
+           più. Disabilitare qui ferma il sync, non il motore — e nulla lo diceva. *@
+        @if (LaneOnDisabledSeries() is { Count: > 0 } divergenti)
+        {
+            <div class="alert alert-danger py-2 small mb-0 rounded-0">
+                🔌 <strong>@divergenti.Count corsi@(divergenti.Count == 1 ? "a opera" : "e operano") una serie DISABILITATA qui</strong>:
+                @string.Join(", ", divergenti.Select(d => $"corsia {d.Lane.LaneId} ({d.Lane.Mode}) su {d.Series.Symbol} {d.Series.Timeframe}")).
+                Questo interruttore governa <strong>l'aggiornamento delle candele</strong>, non il trading: la corsia
+                continua a operare su dati che non si aggiornano più, e il feed real-time continua a sorvegliarla
+                (si instrada dalle corsie in esecuzione, non da questa pagina).
+                Decidi: <a href="trading" class="alert-link">ferma la corsia in Trading</a> oppure riabilita la serie qui sotto.
+            </div>
+        }
+
         @if (StaleEnabledCount() is > 0 and var staleCount)
         {
             <div class="alert alert-danger py-2 small mb-0 rounded-0">
@@ -189,7 +204,12 @@
     private bool _isError;
     private string? _status;
 
+    /// <summary>Corsie in esecuzione: servono a confrontare la watchlist col trading vero.</summary>
+    private List<LaneRow> _runningLanes = [];
+
     private sealed record Row(TrackedSeries Series, int CandleCount, DateTime? LastCandleUtc);
+
+    private sealed record LaneRow(int LaneId, string Symbol, string Timeframe, string Mode);
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -220,6 +240,33 @@
                 var (count, last) = aggregates.GetValueOrDefault((s.Symbol, s.Timeframe));
                 return new Row(s, count, last);
             })
+            .ToList();
+
+        // [2026-08-13] Le corsie IN ESECUZIONE, per scoprire quelle che operano una serie
+        // disabilitata qui: vedi LaneOnDisabledSeries().
+        _runningLanes = await db.TradingEngineStates.AsNoTracking()
+            .Where(t => t.IsRunning)
+            .Select(t => new LaneRow(t.LaneId, t.Symbol, t.Timeframe, t.Mode.ToString()))
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// [2026-08-13] Corsie che operano una serie DISABILITATA in watchlist. È l'equivoco che è
+    /// costato una mattinata di notifiche su STX/USDT: le quattro serie erano state disabilitate
+    /// per far tacere gli allarmi, ma la corsia 7 continuava a operare STX/USDT 4h — questo
+    /// interruttore governa il SYNC DELLE CANDELE, non il trading, e i due non si parlano. Il
+    /// risultato era il peggiore dei due mondi: corsia viva su una serie che nessuno aggiorna più.
+    /// </summary>
+    private List<(LaneRow Lane, TrackedSeries Series)> LaneOnDisabledSeries()
+    {
+        if (_rows is null) return [];
+        return _runningLanes
+            .Select(l => (Lane: l, Series: _rows.FirstOrDefault(r =>
+                !r.Series.Enabled
+                && string.Equals(r.Series.Symbol, l.Symbol, StringComparison.OrdinalIgnoreCase)
+                && r.Series.Timeframe == l.Timeframe)?.Series))
+            .Where(x => x.Series is not null)
+            .Select(x => (x.Lane, x.Series!))
             .ToList();
     }
 
@@ -290,6 +337,25 @@
             s.Enabled = !s.Enabled;
             await db.SaveChangesAsync();
             SymbolCatalog.Invalidate(); // [E-04] i menu delle altre pagine vedono subito la serie nuova/rimossa
+
+            // [2026-08-13] Dirlo NEL MOMENTO in cui l'equivoco nasce, non dopo: disabilitare una
+            // serie che una corsia sta operando la lascia viva su candele che smettono di arrivare.
+            if (!s.Enabled)
+            {
+                var lanes = await db.TradingEngineStates.AsNoTracking()
+                    .Where(t => t.IsRunning && t.Symbol == s.Symbol && t.Timeframe == s.Timeframe)
+                    .Select(t => new { t.LaneId, t.Mode })
+                    .ToListAsync();
+                if (lanes.Count > 0)
+                {
+                    SetStatus(
+                        $"Serie disabilitata, ma {string.Join(" e ", lanes.Select(l => $"la corsia {l.LaneId} ({l.Mode})"))} "
+                        + "la sta operando: qui si ferma solo l'aggiornamento delle candele, NON il trading. "
+                        + "La corsia continuerà a decidere su dati che non si aggiornano più — fermala in /trading "
+                        + "oppure riabilita la serie.", error: true);
+                }
+            }
+
             await LoadAsync();
         }
     }
