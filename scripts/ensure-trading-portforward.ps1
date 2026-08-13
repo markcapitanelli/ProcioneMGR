@@ -31,6 +31,22 @@
 #  deterministico, nessuna inferenza sul comportamento della rete.
 # =============================================================================================
 
+#  --- ANCHE L'INGESTION HA IL SUO TUNNEL (2026-08-13) ------------------------------------------
+#  Il pulsante «Sync now» di /market/watchlist chiama il servizio di ingestione in-cluster su
+#  http://localhost:18080 (MarketData:RemoteIngestionUrl). Quel tunnel lo apriva SOLO
+#  run-postgres.ps1 — che pero' e' sconsigliato (muore col cluster giu') e non e' la via con cui
+#  l'app viene avviata: i profili di .claude/launch.json chiamano questo script, che fino a oggi
+#  apriva soltanto le porte del trading. Risultato: «Sync now» falliva con "Rifiuto persistente del
+#  computer di destinazione (localhost:18080)" a OGNI avvio, e il tunnel andava aperto a mano —
+#  una funzione della UI rotta per costruzione, che si scopre solo provandola.
+#  La logica di questo script (identita' del tunnel = nome pod + conteggio restart) e' gia' quella
+#  giusta anche per l'ingestion, quindi si PARAMETRIZZA invece di duplicarla: una sola verita' su
+#  come si stabilisce se un tunnel e' ancora buono.
+param(
+    [ValidateSet('trading', 'ingestion')]
+    [string[]]$Targets = @('trading', 'ingestion')
+)
+
 $ErrorActionPreference = 'Continue'
 
 #  --- LA PORTA HEALTH VIAGGIA NELLO STESSO TUNNEL (2026-08-11) --------------------------------
@@ -39,15 +55,32 @@ $ErrorActionPreference = 'Continue'
 #  per mesi, senza che nessuno se ne accorgesse (l'anti-spam sulle transizioni ha taciuto il
 #  falso "giu'" permanente). Il servizio espone da sempre una porta health HTTP dedicata (8081):
 #  da oggi il tunnel la porta su 18093, nello stesso processo kubectl del 18092.
-$port = 18092
-$healthPort = 18093
 $context = 'kind-procionemgr-dev'
-$namespace = 'procionemgr-trading'
-$service = 'svc/procionemgr-trading'
 
-# Traccia del pod servito dal tunnel corrente. In TEMP e non nel repo: e' stato di macchina, non
-# configurazione da versionare.
-$marker = Join-Path $env:TEMP 'procionemgr-trading-portforward.pod'
+# I due tunnel, con la stessa disciplina. Il trading ne ha DUE porte nello stesso processo kubectl
+# (gRPC + health); l'ingestion una sola (HTTP), quindi PortMap ha un elemento solo.
+$tunnels = @{
+    trading   = @{
+        Etichetta = 'Trading  '
+        Namespace = 'procionemgr-trading'
+        Service   = 'svc/procionemgr-trading'
+        Component = 'trading'
+        PortMap   = @('18092:8080', '18093:8081')
+        Porte     = @(18092, 18093)
+        Marker    = Join-Path $env:TEMP 'procionemgr-trading-portforward.pod'
+        Serve     = '/trading e il comando del motore via gRPC'
+    }
+    ingestion = @{
+        Etichetta = 'Ingestion'
+        Namespace = 'procionemgr-ingestion'
+        Service   = 'svc/procionemgr-ingestion'
+        Component = 'ingestion'
+        PortMap   = @('18080:8080')
+        Porte     = @(18080)
+        Marker    = Join-Path $env:TEMP 'procionemgr-ingestion-portforward.pod'
+        Serve     = "il pulsante 'Sync now' di /market/watchlist"
+    }
+}
 
 function Test-PortListening([int]$p) {
     return [bool](Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue)
@@ -64,9 +97,9 @@ function Test-PortListening([int]$p) {
 # morto da 8 ore, /trading mostrava ZERO corsie mentre il motore in cluster stava operando -- e la
 # porta locale risultava regolarmente in ascolto. Ora l'identita' del tunnel e' la coppia
 # NOME + CONTEGGIO RESTART: se il container e' ripartito, il tunnel si rifa'.
-function Get-CurrentPodIdentity {
+function Get-CurrentPodIdentity([string]$namespace, [string]$component) {
     $out = kubectl get pods -n $namespace --context $context `
-        -l app.kubernetes.io/component=trading `
+        -l "app.kubernetes.io/component=$component" `
         --field-selector status.phase=Running `
         -o jsonpath='{.items[0].metadata.name}|{.items[0].status.containerStatuses[0].restartCount}' 2>$null
     if ([string]::IsNullOrWhiteSpace($out)) { return $null }
@@ -90,59 +123,70 @@ function Stop-StalePortForward([int]$p) {
     }
 }
 
+function Ensure-Tunnel([hashtable]$t) {
+    $etichetta = $t.Etichetta
+    $porte = $t.Porte
+    $elencoPorte = ($porte -join '+')
+    $svcNome = $t.Service -replace '^svc/', ''
+
+    $svc = kubectl get svc $svcNome -n $t.Namespace --context $context 2>$null
+    if (-not $svc) {
+        Write-Host "${etichetta}: cluster kind non raggiungibile - $($t.Serve) restera' in errore finche' non torna." -ForegroundColor Yellow
+        Write-Host "           Se e' appena stato riavviato Docker, vedi il proxy kind-apiproxy in docs/." -ForegroundColor Yellow
+        return
+    }
+
+    $currentPod = Get-CurrentPodIdentity $t.Namespace $t.Component
+    $tutteInAscolto = @($porte | Where-Object { Test-PortListening $_ }).Count -eq $porte.Count
+    $qualcunaInAscolto = @($porte | Where-Object { Test-PortListening $_ }).Count -gt 0
+
+    if ($tutteInAscolto) {
+        $servedPod = if (Test-Path $t.Marker) { (Get-Content $t.Marker -Raw).Trim() } else { '' }
+
+        if ($currentPod -and $servedPod -eq $currentPod) {
+            Write-Host "${etichetta}: port-forward $elencoPorte gia' attivo verso $($currentPod.Split('#')[0]) (restart $($currentPod.Split('#')[1]))." -ForegroundColor Green
+            return
+        }
+
+        # Il caso che prima passava inosservato -- ora comprende anche il solo restart del container,
+        # che lascia il nome del pod invariato ma uccide il tunnel.
+        $detail = if ($servedPod) { "serviva $servedPod, ora c'e' $currentPod" } else { "pod servito sconosciuto" }
+        Write-Host "${etichetta}: port-forward $elencoPorte STANTIO ($detail) - lo ricreo." -ForegroundColor Yellow
+        foreach ($p in $porte) { Stop-StalePortForward $p }
+    }
+    elseif ($qualcunaInAscolto) {
+        # Tunnel a meta': una porta sola in ascolto. Succede col tunnel aperto da una versione
+        # precedente di questo script, o con un kubectl morente. Si rifa' intero.
+        Write-Host "${etichetta}: tunnel incompleto (manca una delle porte $elencoPorte) - lo ricreo." -ForegroundColor Yellow
+        foreach ($p in $porte) { Stop-StalePortForward $p }
+    }
+
+    $argomenti = @('port-forward', '-n', $t.Namespace, $t.Service) + $t.PortMap + @('--context', $context)
+    Start-Process -WindowStyle Hidden kubectl -ArgumentList $argomenti
+
+    # Il tunnel impiega un attimo ad aprirsi: si aspetta e si VERIFICA, invece di dare per scontato
+    # che l'avvio del processo equivalga alla porta in ascolto. Fino a 10 s: con l'apiserver appena
+    # ripartito i primi 5 non bastavano (visto il 2026-08-11: messaggio d'allarme, tunnel poi sano).
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Milliseconds 500
+        if (@($porte | Where-Object { Test-PortListening $_ }).Count -eq $porte.Count) {
+            # Si annota QUALE pod sta servendo: e' il dato che al prossimo giro distingue "gia' attivo"
+            # da "attivo verso un pod che non c'e' piu'".
+            if ($currentPod) { Set-Content -Path $t.Marker -Value $currentPod -Encoding utf8 }
+            Write-Host "${etichetta}: port-forward $elencoPorte avviato verso $currentPod ($($t.Serve))." -ForegroundColor Green
+            return
+        }
+    }
+
+    Write-Host "${etichetta}: port-forward avviato ma le porte $elencoPorte non risultano in ascolto - controlla il cluster." -ForegroundColor Yellow
+}
+
 if (-not (Get-Command kubectl -ErrorAction SilentlyContinue)) {
-    Write-Host "Trading  : kubectl non trovato - /trading non potra' comandare il motore." -ForegroundColor Yellow
+    Write-Host "Tunnel   : kubectl non trovato - /trading non potra' comandare il motore e «Sync now» fallira'." -ForegroundColor Yellow
     exit 0
 }
 
-$svc = kubectl get svc procionemgr-trading -n $namespace --context $context 2>$null
-if (-not $svc) {
-    Write-Host "Trading  : cluster kind non raggiungibile - /trading restera' in errore finche' non torna." -ForegroundColor Yellow
-    Write-Host "           Se e' appena stato riavviato Docker, vedi il proxy kind-apiproxy in docs/." -ForegroundColor Yellow
-    exit 0
-}
-
-$currentPod = Get-CurrentPodIdentity
-
-if ((Test-PortListening $port) -and (Test-PortListening $healthPort)) {
-    $servedPod = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { '' }
-
-    if ($currentPod -and $servedPod -eq $currentPod) {
-        Write-Host "Trading  : port-forward $port+$healthPort gia' attivo verso $($currentPod.Split('#')[0]) (restart $($currentPod.Split('#')[1]))." -ForegroundColor Green
-        exit 0
-    }
-
-    # Il caso che prima passava inosservato -- ora comprende anche il solo restart del container,
-    # che lascia il nome del pod invariato ma uccide il tunnel.
-    $detail = if ($servedPod) { "serviva $servedPod, ora c'e' $currentPod" } else { "pod servito sconosciuto" }
-    Write-Host "Trading  : port-forward $port STANTIO ($detail) - lo ricreo." -ForegroundColor Yellow
-    Stop-StalePortForward $port
-    Stop-StalePortForward $healthPort
-}
-elseif ((Test-PortListening $port) -or (Test-PortListening $healthPort)) {
-    # Tunnel a meta': una porta sola in ascolto. Succede col tunnel aperto dalla versione di
-    # questo script precedente alla porta health, o con un kubectl morente. Si rifa' intero.
-    Write-Host "Trading  : tunnel incompleto (manca una delle due porte $port/$healthPort) - lo ricreo." -ForegroundColor Yellow
-    Stop-StalePortForward $port
-    Stop-StalePortForward $healthPort
-}
-
-Start-Process -WindowStyle Hidden kubectl -ArgumentList `
-    'port-forward', '-n', $namespace, $service, "${port}:8080", "${healthPort}:8081", '--context', $context
-
-# Il tunnel impiega un attimo ad aprirsi: si aspetta e si VERIFICA, invece di dare per scontato
-# che l'avvio del processo equivalga alla porta in ascolto. Fino a 10 s: con l'apiserver appena
-# ripartito i primi 5 non bastavano (visto il 2026-08-11: messaggio d'allarme, tunnel poi sano).
-for ($i = 0; $i -lt 20; $i++) {
-    Start-Sleep -Milliseconds 500
-    if ((Test-PortListening $port) -and (Test-PortListening $healthPort)) {
-        # Si annota QUALE pod sta servendo: e' il dato che al prossimo giro distingue "gia' attivo"
-        # da "attivo verso un pod che non c'e' piu'".
-        if ($currentPod) { Set-Content -Path $marker -Value $currentPod -Encoding utf8 }
-        Write-Host "Trading  : port-forward $port (gRPC) + $healthPort (health) avviato verso $currentPod." -ForegroundColor Green
-        exit 0
-    }
-}
-
-Write-Host "Trading  : port-forward avviato ma le porte $port/$healthPort non risultano in ascolto - controlla il cluster." -ForegroundColor Yellow
+# Un tunnel che non si apre NON blocca gli altri ne' l'avvio dell'app: il resto della piattaforma
+# funziona comunque (stessa politica best-effort di sempre).
+foreach ($nome in $Targets) { Ensure-Tunnel $tunnels[$nome] }
 exit 0
