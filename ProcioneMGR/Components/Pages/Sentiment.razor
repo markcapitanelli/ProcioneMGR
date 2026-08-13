@@ -23,6 +23,8 @@
 @inject ISentimentSnapshotService MoodService
 @inject SentimentSourceHealthRegistry SourceHealth
 @inject SentimentSyncWorker SentimentWorker
+@inject SentimentHeritageSnapshot HeritageSnapshot
+@inject SentimentHeritageGuardWorker HeritageGuard
 @inject SentimentScorerComparisonService ScorerComparison
 @inject OnnxSentimentPilotService OnnxPilot
 @inject OnnxSentimentScorer OnnxScorer
@@ -173,6 +175,89 @@
                 </span>
             }
             <span class="text-muted small ms-2">verde = ultima sync ok; rosso = ultima sync in errore (tooltip col dettaglio). Una fonte giù non ferma le altre.</span>
+        }
+    </div>
+</div>
+
+@* ---- Guardiano di profondità delle serie-patrimonio (funding, F&G, liquidazioni) ---- *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            <i class="bi bi-shield-exclamation me-1"></i>Profondità delle serie-patrimonio
+            @if (HeritageSnapshot.Violations.Count > 0)
+            {
+                <span class="badge bg-danger ms-2">@HeritageSnapshot.Violations.Count sotto soglia</span>
+            }
+            else if (HeritageSnapshot.LastRunUtc is not null)
+            {
+                <span class="badge bg-success ms-2">OK</span>
+            }
+        </span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="RunHeritageCheckAsync" disabled="@_heritageBusy">
+            @if (_heritageBusy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Controlla ora
+        </button>
+    </div>
+    <div class="card-body py-2">
+        <p class="text-muted small mb-2">
+            Le tre serie ESENTI dalla purge (funding storico dal 2019, Fear &amp; Greed, liquidazioni)
+            sono un patrimonio non ricostruibile o costoso da ricostruire — e la storia del funding è
+            già andata persa <strong>due volte in silenzio</strong>, con carry e backtest a leva che
+            leggevano una serie corta credendola profonda. Questo guardiano misura profondità e
+            conteggio contro le soglie dichiarate (modificabili in
+            <a href="admin/autonomy#p-sentiment">/admin/autonomy</a>); ripristino del funding:
+            <code>dotnet run --project tools/PlatformExpand -- fundingbackfill</code>.
+        </p>
+        @if (!SentimentOptionsMonitor.CurrentValue.HeritageGuard.Enabled)
+        {
+            <div class="alert alert-warning py-2 mb-2">
+                Guardiano <strong>SPENTO</strong> (Sentiment:HeritageGuard:Enabled = false): una perdita
+                di profondità resterebbe invisibile fino alla prossima rimisura manuale. «Controlla ora»
+                esegue comunque un giro.
+            </div>
+        }
+        @if (HeritageSnapshot.LastRunUtc is null)
+        {
+            <span class="text-muted small"><em>Nessun controllo ancora eseguito da questo avvio (il worker parte ~2 minuti dopo il boot, poi ogni @SentimentOptionsMonitor.CurrentValue.HeritageGuard.CheckIntervalHours h).</em></span>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm mb-1">
+                    <thead class="table-light">
+                        <tr><th>Serie</th><th>Storia da</th><th class="text-end">Punti</th><th>Atteso</th><th>Stato</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var d in HeritageSnapshot.All)
+                        {
+                            <tr>
+                                <td>@d.DisplayName</td>
+                                <td>@(d.OldestUtc is null ? "—" : d.OldestUtc.Value.ToString("yyyy-MM-dd"))</td>
+                                <td class="text-end">@d.Count.ToString("N0")</td>
+                                <td class="text-muted small">@d.Expected</td>
+                                <td>
+                                    @if (!d.Enforced)
+                                    {
+                                        @* Mai un OK finto: misurata ma non giudicata, e si dice. *@
+                                        <span class="badge bg-secondary" title="Sorveglianza spenta in /admin/autonomy (Sentiment:HeritageGuard). La riga resta misurata, ma non genera allarmi.">NON SORVEGLIATA</span>
+                                        <span class="small text-muted ms-1">interruttore spento — nessun allarme da questa riga</span>
+                                    }
+                                    else if (d.Violated)
+                                    {
+                                        <span class="badge bg-danger" title="@d.Problem">VIOLATA</span>
+                                        <span class="small text-danger ms-1">@d.Problem</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-success">OK</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <span class="text-muted small">Ultimo controllo: @HeritageSnapshot.LastRunUtc.Value.ToString("yyyy-MM-dd HH:mm") UTC.</span>
         }
     </div>
 </div>
@@ -742,6 +827,17 @@
     private SentimentSnapshot? _mood;
     private IReadOnlyList<SourceHealth> _health = [];
     private bool _moodBusy;
+
+    // Guardiano serie-patrimonio: la fotografia si legge dal singleton (zero I/O al rendering);
+    // «Controlla ora» esegue un giro vero sulla STESSA istanza del hosted service.
+    private bool _heritageBusy;
+
+    private async Task RunHeritageCheckAsync()
+    {
+        _heritageBusy = true;
+        try { await HeritageGuard.RunOnceAsync(CancellationToken.None); }
+        finally { _heritageBusy = false; }
+    }
 
     // [Fase B + pilota ONNX] Scorer attivo, addestramento pilota, confronto IC.
     private string _scorerProvider = SentimentScorerProviders.Keyword;

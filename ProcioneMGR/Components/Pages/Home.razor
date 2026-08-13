@@ -10,6 +10,7 @@
 @inject AuthenticationStateProvider AuthProvider
 @inject IEnsembleManager EnsembleMgr
 @inject FactorDriftSnapshot FactorDrift
+@inject ProcioneMGR.Services.Sentiment.SentimentHeritageSnapshot HeritageSnapshot
 
 <PageTitle>ProcioneMGR</PageTitle>
 
@@ -44,6 +45,33 @@
                 <div class="alert alert-info d-flex align-items-center gap-2">
                     <i class="bi bi-info-circle-fill fs-5"></i>
                     <span>Non hai ancora dati di mercato scaricati. Il primo passo è il punto 1 qui sotto: aggiungi una serie in <a href="market/watchlist" class="alert-link">Watchlist</a> o scaricane una da <a href="dashboard" class="alert-link">Dashboard</a>.</span>
+                </div>
+            }
+
+            @* Guardiano serie-patrimonio: la storia del funding è già sparita due volte in silenzio
+               (2026-08-11) — una serie esente dalla purge che si accorcia deve gridare QUI, non
+               aspettare che qualcuno apra /sentiment. *@
+            @if (_heritageViolations.Count > 0)
+            {
+                <div class="alert alert-danger">
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <i class="bi bi-shield-exclamation fs-5"></i>
+                        <strong>
+                            @_heritageViolations.Count serie-patrimonio sotto la profondità attesa
+                        </strong>
+                    </div>
+                    <ul class="mb-2 small">
+                        @foreach (var v in _heritageViolations.Take(6))
+                        {
+                            <li><strong>@v.DisplayName</strong> — @v.Problem</li>
+                        }
+                    </ul>
+                    <a href="sentiment" class="alert-link">Dettaglio e soglie in Sentiment →</a>
+                    <div class="form-text mt-1">
+                        Carry e backtest a leva leggono queste serie: finché la profondità non rientra,
+                        i loro numeri sono calcolati su una storia corta.
+                        @(HeritageSnapshot.LastRunUtc is { } lastRun ? $"Ultimo controllo {lastRun:yyyy-MM-dd HH:mm} UTC." : "")
+                    </div>
                 </div>
             }
 
@@ -143,6 +171,10 @@
     private HomeStats? _stats;
     private List<ProcioneMGR.Services.Monitoring.DecayReport> _decayAlerts = new();
 
+    // Serie-patrimonio sotto soglia: stessa filosofia della deriva — fotografia in memoria del
+    // guardiano, zero I/O al rendering.
+    private IReadOnlyList<ProcioneMGR.Services.Sentiment.HeritageSeriesDepth> _heritageViolations = [];
+
     // [D2] Deriva dei fattori: lettura della fotografia in memoria aggiornata dal worker — nessun
     // calcolo sul caricamento della Home, che deve restare veloce.
     private IReadOnlyList<(FactorDriftSeriesSnapshot Series, FactorDriftReport Report)> _factorDriftAlerts = [];
@@ -209,6 +241,12 @@
 
         // Sola lettura in memoria: se il worker non ha ancora girato la lista è vuota e il widget
         // non compare, senza far aspettare nessuno.
+        try
+        {
+            _heritageViolations = HeritageSnapshot.Violations;
+        }
+        catch { /* stesso principio del widget sopra */ }
+
         try
         {
             _factorDriftAlerts = FactorDrift.Alerts;

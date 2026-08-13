@@ -80,4 +80,24 @@ public sealed class ConfigurationBindingTests
             }
         }
     }
+
+    [Fact]
+    public void HeritageGuardSection_BindsFromTheShippedExample()
+    {
+        var options = new ProcioneMGR.Services.Sentiment.SentimentOptions();
+        ExampleConfiguration().GetSection("Sentiment").Bind(options);
+
+        // FundingSymbols è VUOTA nel POCO (trappola del binder che appende ai default): trovarla
+        // popolata è la prova che la sezione annidata si lega davvero — un refuso nel percorso
+        // lascerebbe il guardiano sui default incorporati SENZA dirlo.
+        Assert.True(options.HeritageGuard.Enabled);
+        Assert.Equal(["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"], options.HeritageGuard.FundingSymbols);
+        // 2020-10-01, non 2020-01-01: l'àncora deve stare DOPO il listing più tardo (SOL,
+        // 2020-09-13) — trovato dal collaudo a browser con quattro serie complete marcate violate.
+        Assert.Equal(new DateTime(2020, 10, 1), options.HeritageGuard.FundingMinStartUtc.Date);
+        Assert.Equal(5000, options.HeritageGuard.FundingMinEventsPerSymbol);
+        Assert.Equal(2019, options.HeritageGuard.FearGreedMinStartUtc.Year);
+        Assert.True(options.HeritageGuard.LiquidationsEnforced);
+        Assert.Equal(new DateTime(2026, 8, 1), options.HeritageGuard.LiquidationsMinStartUtc.Date);
+    }
 }

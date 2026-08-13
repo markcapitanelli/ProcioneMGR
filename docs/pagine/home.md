@@ -31,6 +31,7 @@ bottoni Login / Registrati (righe 86–97).
 | Quick actions | 24–29 | 4 scorciatoie: Nuovo Backtest, Aggiorna Dati, Avvia Trading, Apri Dashboard |
 | Card statistiche | 31–38 | 4 `StatCard` renderizzate da `_stats` (record `HomeStats`) |
 | Alert "nessun dato" | 40–46 | Mostrato solo se `TrackedSeries == 0`: invita ad andare in Watchlist |
+| **Alert serie-patrimonio** | — | [2026-08-13] Se `_heritageViolations` non è vuoto: alert **rosso** con le serie-patrimonio sotto la profondità attesa (funding storico, F&G, liquidazioni), il perché in una riga per serie, l'ora dell'ultimo controllo e il link a `/sentiment`. Esiste perché il funding dal 2019 è sparito due volte senza che nessun controllo lo dicesse |
 | Alert decadimento | 48–63 | Se `_decayAlerts` non è vuoto: elenco gambe ensemble in alert con Sharpe realizzato vs atteso e link a `ensemble#decay-monitor` |
 | **Alert deriva fattori** | 66–105 | **[D2]** Se `_factorDriftAlerts` non è vuoto: fattori che si sono spenti o hanno invertito il segno, con IC da/a e soglia, link a `feature-selection#drift-panel`. Il gradino sotto al decadimento delle strategie: qui si guarda il *fattore*, non la gamba. Se non ci sono allarmi ma il job ha già calcolato qualcosa, compare comunque una riga sobria con la **copertura**: "nessun allarme" senza sapere su quante serie si legge come un via libera sull'intera watchlist |
 | Percorso piattaforma | 66–74 | 5 `WorkflowStep` numerati, ognuno linka la pagina corrispondente |
@@ -71,6 +72,7 @@ costruiti a mano: piccole factory di markup che tengono il template della pagina
 | `IEnsembleManager` | `GetDecayReportsAsync()` per l'alert di decadimento delle gambe ensemble | [`Services/Ensemble/EnsembleManager.cs`](../../ProcioneMGR/Services/Ensemble/EnsembleManager.cs) |
 | `DecayReport` (modello) | Sharpe realizzato vs atteso per gamba, flag `IsAlert` | [`Services/Monitoring/StrategyDecayMonitor.cs`](../../ProcioneMGR/Services/Monitoring/StrategyDecayMonitor.cs) |
 | `FactorDriftSnapshot` | **[D2]** Fotografia in memoria degli allarmi di deriva dei fattori (scritta dal job, letta qui) | [`Services/Alpha/FactorDriftMonitor.cs`](../../ProcioneMGR/Services/Alpha/FactorDriftMonitor.cs) |
+| `SentimentHeritageSnapshot` | Fotografia in memoria della profondità delle serie-patrimonio (scritta dal guardiano, qui si leggono solo le violazioni) | [`Services/Sentiment/SentimentHeritageGuard.cs`](../../ProcioneMGR/Services/Sentiment/SentimentHeritageGuard.cs) |
 
 ## Dati letti / scritti
 
