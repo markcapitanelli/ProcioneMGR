@@ -50,4 +50,9 @@ images:
     # inviare nulla), e il dual-read ML finalmente collegabile (E3: binding+client mancavano in
     # questo host, "Ml" ora nell'allow-list di configurazione).
     #
-    newTag: local-cde4dda1
+    # [2026-08-13] Promozione: il feed real-time smette di notificare le intermittenze non
+    # azionabili (caso STX/USDT illiquido, che inondava Telegram e saturava il rate-limit
+    # condiviso con gli allarmi veri) — persistenza, azionabilità e cooldown sulla notifica,
+    # log invariato. Vedi docs/REPORT-FEED-STALENESS-STX-2026-08-13.md.
+    # Precedente: local-cde4dda1.
+    newTag: local-0e97f5ea
