@@ -168,6 +168,31 @@ public class AdminConfigRulesTests
         => Assert.NotNull(AdminConfigRules.Validate(new SentimentOptions { FearGreedExtremeLow = 80, FearGreedExtremeHigh = 20 }));
 
     [Fact]
+    public void HeritageGuard_IntervalAtZero_IsRejected()
+        // Un PeriodicTimer a 0 lancia all'avvio: il guardiano morirebbe in silenzio — lo stesso
+        // guasto che deve sorvegliare.
+        => Assert.NotNull(AdminConfigRules.Validate(new SentimentOptions
+        {
+            HeritageGuard = new SentimentHeritageGuardOptions { CheckIntervalHours = 0 },
+        }));
+
+    [Fact]
+    public void HeritageGuard_ZeroPointThreshold_IsRejected()
+        // Soglia 0 punti = ogni serie passa sempre: un controllo che rassicura a prescindere.
+        => Assert.NotNull(AdminConfigRules.Validate(new SentimentOptions
+        {
+            HeritageGuard = new SentimentHeritageGuardOptions { FundingMinEventsPerSymbol = 0 },
+        }));
+
+    [Fact]
+    public void HeritageGuard_FutureAnchorDate_IsRejected()
+        // Una data-àncora nel futuro è una violazione perpetua: allarme sempre acceso = mai letto.
+        => Assert.NotNull(AdminConfigRules.Validate(new SentimentOptions
+        {
+            HeritageGuard = new SentimentHeritageGuardOptions { FundingMinStartUtc = DateTime.UtcNow.AddYears(1) },
+        }));
+
+    [Fact]
     public void Realtime_BackoffCeilingBelowInitialDelay_IsRejected()
         => Assert.NotNull(AdminConfigRules.Validate(
             new RealtimeFeedOptions { ReconnectInitialDelayMs = 10_000, ReconnectMaxDelayMs = 1_000 }));

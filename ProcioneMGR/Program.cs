@@ -315,6 +315,11 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.ISentimentNewsProvi
 // Worker anche singleton risolvibile: "Esegui ora" dalla UI usa la stessa istanza del hosted service.
 builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Sentiment.SentimentSyncWorker>());
+// Guardiano di profondità delle serie-patrimonio (funding perso due volte in silenzio, 2026-08-11):
+// misura min/count contro le soglie di Sentiment:HeritageGuard, fotografia letta da Home e /sentiment.
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentHeritageSnapshot>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentHeritageGuardWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Sentiment.SentimentHeritageGuardWorker>());
 
 // --- [E3] Forward test del carry delta-neutro (default OFF, mai Live per costruzione) ---
 // [B3 core caldo] Il CarryWorker NON è più registrato qui: vive nell'host del MOTORE (AddTradingLanes,

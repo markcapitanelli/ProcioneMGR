@@ -942,3 +942,21 @@ completo in [PRD-RISANAMENTO-2026-08](PRD-RISANAMENTO-2026-08.md); verifiche fin
 PRIMO USO REALE di un percorso nuovo (DB vergine → migrazioni mute; rimisura → serie sparita;
 compose → pipe PowerShell che corrompe i tar). I guardiani nuovi trasformano ciascuno in suite
 rossa alla prossima occorrenza.
+
+> **[2026-08-13] Chip del guardiano di profondità ESEGUITO.** `SentimentHeritageGuardWorker`
+> misura ogni 6h la profondità delle tre serie-patrimonio esenti dalla purge (funding per simbolo,
+> Fear & Greed, liquidazioni) contro soglie dichiarate in `Sentiment:HeritageGuard` (pannello in
+> `/admin/autonomy`, regole server-side). Su violazione: log Error a ogni giro, notifica Critical
+> aggregata sulla transizione (pattern `SeriesFreshnessWatchWorker`), tabella con «Controlla ora»
+> in `/sentiment` e alert rosso in Home. Test: fotografia+opzioni a unità, 8 casi su Postgres
+> (troncatura tipo incidente 2026-08-11, serie assente, conteggio, riarmo dopo ripristino,
+> aggregazione, filtri Source+Metric+Symbol); su serie profonde il guardiano tace (controllo sul
+> rumore). **Verifica a browser eseguita la sera stessa (profilo procione-reale, DB vero) — e il
+> primo giro reale ha trovato due cose**: (1) l'àncora di default 2020-01-01 marcava VIOLATE
+> quattro serie funding COMPLETE, perché una serie non può precedere il listing del suo mercato
+> (XRP 2020-01, BNB 2020-02, DOGE 2020-07, SOL 2020-09) → default corretto a **2020-10-01**;
+> (2) violazione VERA: **l'accumulo liquidazioni è a ZERO punti totali** — dalle postazioni EEA lo
+> stream futures è muto (blocco MiCA, già noto dal 2026-07-24) e l'accumulo non è mai partito.
+> L'allarme resta acceso di default (è la verità); per le postazioni bloccate esiste ora
+> l'interruttore «Sorveglia liquidazioni» che declassa la riga a «NON SORVEGLIATA» dichiarata —
+> mai un OK finto. Home verificata con l'alert rosso in entrambe le configurazioni.

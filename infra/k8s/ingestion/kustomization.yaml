@@ -16,4 +16,8 @@ images:
     # dal numero di righe processate, e su una serie morta scriveva "OK: 1 candele" per sempre.
     # [Fase 4, 2026-08-10] Prima promozione a build locale (vedi ui/kustomization.yaml).
     # Precedente (build CI): 562b359db3733aec8f222d76fad59c18ff7aefdd.
-    newTag: local-cde4dda1
+    # [2026-08-13] Promozione: budget di ciclo nel MarketDataSyncWorker — una chiamata appesa
+    # costa al massimo un ciclo invece di parcheggiare il worker (30 minuti muto, 89 serie oltre
+    # tolleranza). Vedi docs/REPORT-INGESTION-PROBE-2026-08-13.md.
+    # Precedente: local-cde4dda1.
+    newTag: local-0e97f5ea

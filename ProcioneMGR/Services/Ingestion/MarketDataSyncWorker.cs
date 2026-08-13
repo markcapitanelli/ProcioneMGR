@@ -38,6 +38,11 @@ public sealed class MarketDataSyncWorker(
             return;
         }
 
+        // Budget di ciclo = 2× l'intervallo: largo per un recupero profondo legittimo (il cursore
+        // è incrementale, un arretrato grosso converge attraverso più tick), stretto abbastanza da
+        // non lasciare il worker parcheggiato. Vedi RunCycleAsync per l'incidente che lo motiva.
+        var budget = interval * 2;
+
         using var timer = new PeriodicTimer(interval);
         do
         {
@@ -45,9 +50,7 @@ public sealed class MarketDataSyncWorker(
             {
                 if (configuration.GetValue("MarketData:Enabled", true))
                 {
-                    using var scope = scopeFactory.CreateScope();
-                    var sync = scope.ServiceProvider.GetRequiredService<IMarketDataSyncService>();
-                    await sync.SyncAllEnabledAsync(stoppingToken);
+                    await RunCycleAsync(budget, stoppingToken);
                 }
             }
             catch (OperationCanceledException)
@@ -62,6 +65,38 @@ public sealed class MarketDataSyncWorker(
         while (await SafeWaitAsync(timer, stoppingToken));
 
         logger.LogInformation("MarketDataSyncWorker fermato.");
+    }
+
+    /// <summary>
+    /// Un ciclo di sync con TETTO DI TEMPO. Il tetto esiste per misura, non per scrupolo: il
+    /// 2026-08-13 una richiesta klines è rimasta appesa senza risposta (thread starvation nel pod,
+    /// cpu limit 1) e il worker — che aspettava il completamento del ciclo per riarmare il timer —
+    /// è rimasto muto per 30 minuti, con 89 serie oltre tolleranza. Una chiamata appesa deve
+    /// costare al massimo un ciclo, mai un pod zombie.
+    /// <para>Pubblico per i test. Restituisce false se il budget è scaduto (ciclo interrotto:
+    /// il cursore incrementale riprende da dov'era al tick successivo); true se completato.
+    /// La cancellazione del CHIAMANTE (shutdown) ripropaga: non è un timeout.</para>
+    /// </summary>
+    public async Task<bool> RunCycleAsync(TimeSpan budget, CancellationToken stoppingToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var sync = scope.ServiceProvider.GetRequiredService<IMarketDataSyncService>();
+
+        using var cycleCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        cycleCts.CancelAfter(budget);
+        try
+        {
+            await sync.SyncAllEnabledAsync(cycleCts.Token);
+            return true;
+        }
+        catch (OperationCanceledException) when (cycleCts.IsCancellationRequested && !stoppingToken.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                "Ciclo di sincronizzazione oltre il budget di {Budget}: interrotto (una chiamata appesa non deve " +
+                "parcheggiare il worker). Il cursore incrementale riprende dal punto raggiunto al prossimo tick.",
+                budget);
+            return false;
+        }
     }
 
     private static async Task<bool> SafeWaitAsync(PeriodicTimer timer, CancellationToken ct)

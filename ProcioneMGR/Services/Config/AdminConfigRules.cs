@@ -161,7 +161,19 @@ public static class AdminConfigRules
                 "La soglia Fear & Greed bassa dev'essere < della alta."),
             (o.FearGreedExtremeLow is >= 0 and <= 100 && o.FearGreedExtremeHigh is >= 0 and <= 100,
                 "Le soglie Fear & Greed stanno fra 0 e 100."),
-            (o.NewsRetentionDays >= 1 && o.MetricRetentionDays >= 1, "Le retention devono essere almeno 1 giorno.")),
+            (o.NewsRetentionDays >= 1 && o.MetricRetentionDays >= 1, "Le retention devono essere almeno 1 giorno."),
+            // Guardiano serie-patrimonio: un intervallo a 0 fa esplodere il PeriodicTimer all'avvio
+            // (funzione morta in silenzio), una soglia a 0 punti rende il controllo un via libera
+            // vuoto, una data-àncora nel futuro è una violazione perpetua per costruzione.
+            (o.HeritageGuard.CheckIntervalHours >= 1, "Il controllo di profondità dev'essere almeno ogni 1 ora."),
+            (o.HeritageGuard.FundingMinEventsPerSymbol >= 1
+                && o.HeritageGuard.FearGreedMinPoints >= 1
+                && o.HeritageGuard.LiquidationsMinPoints >= 1,
+                "Le soglie di punti del guardiano devono essere almeno 1: a 0 il controllo è un via libera vuoto."),
+            (o.HeritageGuard.FundingMinStartUtc < DateTime.UtcNow
+                && o.HeritageGuard.FearGreedMinStartUtc < DateTime.UtcNow
+                && o.HeritageGuard.LiquidationsMinStartUtc < DateTime.UtcNow,
+                "Le date-àncora del guardiano devono stare nel passato: nel futuro sono una violazione perpetua.")),
 
         DriftMonitorOptions o => Check(
             (o.IntervalHours >= 1, "L'intervallo dev'essere almeno 1 ora."),

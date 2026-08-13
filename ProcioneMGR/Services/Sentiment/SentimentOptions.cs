@@ -65,4 +65,85 @@ public sealed class SentimentOptions
     /// dal pannello in /sentiment.
     /// </summary>
     public string OnnxModelPath { get; set; } = Path.Combine("models", "sentiment-pilot.onnx");
+
+    /// <summary>Guardiano di profondità delle serie-patrimonio (vedi <see cref="SentimentHeritageGuardOptions"/>).</summary>
+    public SentimentHeritageGuardOptions HeritageGuard { get; set; } = new();
+}
+
+/// <summary>
+/// Soglie del guardiano di PROFONDITÀ delle serie-patrimonio di <c>SentimentMetricPoints</c> —
+/// le tre esenti dalla purge del worker (FundingRate, FearGreed, BinanceLiquidations).
+///
+/// <para>Perché esiste: il backfill profondo del funding (dal 2019, T0.2) è andato perso DUE volte
+/// in silenzio (2026-07-24 e 2026-08-11) nonostante l'esenzione dalla purge fosse al suo posto —
+/// restava ~ la finestra di <c>MetricRetentionDays</c>, e carry e backtest a leva leggevano una
+/// serie corta senza che nessun controllo lo dicesse. L'esenzione protegge dal worker; questo
+/// guardiano misura che la storia CI SIA davvero, qualunque sia stata la via della perdita.</para>
+///
+/// <para>La soglia è una DICHIARAZIONE: «questa serie deve arrivare almeno fino a quella data, con
+/// almeno tanti punti». Su violazione: log Error a ogni giro + notifica (una per transizione, come
+/// SeriesFreshnessWatchWorker) + badge in /sentiment e alert in Home. Nessuna azione automatica:
+/// il ripristino (es. <c>fundingbackfill</c>) resta una scelta umana.</para>
+/// </summary>
+public sealed class SentimentHeritageGuardOptions
+{
+    /// <summary>Default ON: sola lettura di aggregati, a cadenza lenta — spento, una perdita resta invisibile.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Cadenza del controllo (ore). Richiede riavvio (PeriodicTimer letto al boot).</summary>
+    public int CheckIntervalHours { get; set; } = 6;
+
+    /// <summary>
+    /// Ticker base (BTC, ETH, …) su cui si pretende la storia profonda del funding. VUOTO di
+    /// proposito nel codice: il binder .NET APPENDE gli elementi del JSON ai default invece di
+    /// sostituirli (trappola già pagata) — i default reali sono <see cref="DefaultFundingSymbols"/>,
+    /// usati quando la lista configurata è vuota.
+    /// </summary>
+    public List<string> FundingSymbols { get; set; } = [];
+
+    /// <summary>I sei mercati del backfill T0.2 (tools/PlatformExpand fundingbackfill).</summary>
+    public static readonly IReadOnlyList<string> DefaultFundingSymbols =
+        ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+
+    /// <summary>Simboli effettivi: la lista configurata, o i default incorporati se è vuota.</summary>
+    public IReadOnlyList<string> EffectiveFundingSymbols =>
+        FundingSymbols.Count > 0 ? FundingSymbols : DefaultFundingSymbols;
+
+    /// <summary>
+    /// La storia del funding deve arrivare almeno a questa data. 2020-10-01 e non 2020-01-01:
+    /// una serie non può precedere il LISTING del suo mercato USDS-M (misurato sul DB vero il
+    /// 2026-08-13: BTC 2019-09, ETH 2019-11, XRP 2020-01, BNB 2020-02, DOGE 2020-07, SOL 2020-09)
+    /// — con l'àncora a gennaio quattro serie COMPLETE risultavano violate. Il taglio
+    /// dell'incidente (storia dal 2025-06) resta preso con anni di margine.
+    /// </summary>
+    public DateTime FundingMinStartUtc { get; set; } = new(2020, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>Eventi di funding minimi per simbolo (~3/giorno: dal 2019 sono ~7.000; 5.000 lascia margine).</summary>
+    public int FundingMinEventsPerSymbol { get; set; } = 5000;
+
+    /// <summary>Il baseline lungo del Fear &amp; Greed deve arrivare almeno a questa data (la fonte parte dal 2018-02).</summary>
+    public DateTime FearGreedMinStartUtc { get; set; } = new(2019, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>Punti minimi del Fear &amp; Greed (un punto/giorno: dal 2018 sono ~2.500).</summary>
+    public int FearGreedMinPoints { get; set; } = 2000;
+
+    /// <summary>
+    /// Se sorvegliare la serie delle liquidazioni. Default ON (è patrimonio come le altre), ma
+    /// spegnibile con cognizione: dalle postazioni EEA lo stream futures Binance è MUTO (blocco
+    /// MiCA sul market-data derivati, trovato dal vivo il 2026-07-24 — vedi LiquidationSyncWorker)
+    /// e l'accumulo resta a zero PER COSTRUZIONE: lì l'allarme sarebbe perpetuo, e un allarme
+    /// perpetuo smette di essere letto. Da spenta, la riga resta MISURATA e mostrata in /sentiment
+    /// come «non sorvegliata» — mai un OK finto.
+    /// </summary>
+    public bool LiquidationsEnforced { get; set; } = true;
+
+    /// <summary>
+    /// L'accumulo delle liquidazioni (F4, iniziato il 2026-07-24) deve arrivare almeno a questa
+    /// data. Il dato NON è ricostruibile a posteriori: se il punto più vecchio è più recente di
+    /// questa àncora, l'accumulo è andato perso.
+    /// </summary>
+    public DateTime LiquidationsMinStartUtc { get; set; } = new(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>Punti minimi complessivi della fonte liquidazioni (4 metriche/ora/simbolo).</summary>
+    public int LiquidationsMinPoints { get; set; } = 100;
 }

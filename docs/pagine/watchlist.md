@@ -28,7 +28,21 @@ Concetti chiave spiegati nel `GuidaPanel` (righe 17–42):
 | GuidaPanel | 17–42 | Spiegazione di exchange/symbol/timeframe/stato/candele/azioni |
 | Form "Aggiungi serie" | 44–75 | Select exchange (enum `ExchangeName`), input symbol, select timeframe (`Timeframes.Supported`) |
 | Alert di stato | 77–80 | Esito dell'ultima azione (verde/rosso) |
+| **Banner divergenza corsie** | — | [2026-08-13] Rosso, sopra la tabella: elenca le **corsie in esecuzione che operano una serie disabilitata qui**. Vedi sotto |
 | Tabella "Serie tracciate" | 82–140 | Exchange, Symbol, TF, Stato + `LastSyncStatus`, conteggio candele, **ultima candela / ritardo** (E7), ultima sync, azioni per riga (Sync now / Abilita-Disabilita / Elimina) |
+
+### Questo interruttore NON ferma il trading (2026-08-13)
+
+`Enabled` governa **l'aggiornamento delle candele**, non le corsie. Il feed real-time, in
+particolare, si instrada dalle **corsie in esecuzione** (`TradingEngineStates`) e ignora del tutto
+questa pagina. L'equivoco è costato una mattinata di notifiche: quattro serie STX/USDT disabilitate
+qui per far tacere gli allarmi del feed, mentre la **corsia 7 continuava a operare STX/USDT 4h** —
+con il risultato peggiore possibile, una corsia viva su una serie che nessuno aggiornava più
+(report: [REPORT-FEED-STALENESS-STX](../REPORT-FEED-STALENESS-STX-2026-08-13.md)).
+
+Ora la pagina lo dice in due punti: un **banner rosso** quando la divergenza esiste già, e un
+**avviso al momento del toggle**, dove l'equivoco nasce. La decisione resta umana: o si riabilita
+la serie, o si ferma la corsia in `/trading`.
 
 ### La colonna di freschezza (E7, 2026-07-31)
 

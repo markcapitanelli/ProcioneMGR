@@ -98,6 +98,87 @@ public class RealtimeFeedSwitchTests
             subscribedAt.AddMinutes(1), threshold, subscribedAt.AddMinutes(3), graceStartUtc: subscribedAt));
     }
 
+    // --- Anti-raffica sulle NOTIFICHE di staleness (2026-08-13) ---------------------------------
+    // L'incidente: su STX/USDT — illiquido, dove un silenzio di un paio di minuti è il ritmo
+    // normale — la coppia «non risponde»/«ripristinato» partiva su Telegram ogni 1-2 minuti, fino
+    // a «+2 notifiche soppresse dal rate-limit». Il danno vero non è il fastidio: quel budget
+    // (20 messaggi/ora) è lo stesso degli allarmi che contano — corsia in quarantena, posizioni
+    // orfane — che sarebbero stati soppressi dal rumore.
+
+    private static readonly DateTime T0 = new(2026, 8, 13, 11, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void UnSoloCampioneOltreSoglia_NonEUnGuasto()
+    {
+        // Il primo controllo stale non notifica: serve persistenza. È ciò che separa
+        // «illiquido a strappi» da «stream morto».
+        Assert.False(RealtimePriceWorker.ShouldNotifyStale(
+            streak: 1, drivesProtectiveExits: true, neverDelivered: false, lastNotifiedUtc: null, nowUtc: T0));
+        Assert.False(RealtimePriceWorker.ShouldNotifyStale(
+            streak: 2, drivesProtectiveExits: true, neverDelivered: false, lastNotifiedUtc: null, nowUtc: T0));
+        Assert.True(RealtimePriceWorker.ShouldNotifyStale(
+            streak: 3, drivesProtectiveExits: true, neverDelivered: false, lastNotifiedUtc: null, nowUtc: T0));
+    }
+
+    [Fact]
+    public void InSolaOsservazione_UnIntermittenzaNonSiNotifica()
+    {
+        // Con le uscite guidate dalle candele (DriveProtectiveExits=false, default PER MISURA —
+        // B3, 24 configurazioni su 24) un feed che tace non cambia NULLA di operativo: gli stop
+        // passano dal percorso REST per tutte le serie, sempre. È il caso di STX.
+        Assert.False(RealtimePriceWorker.ShouldNotifyStale(
+            streak: 99, drivesProtectiveExits: false, neverDelivered: false, lastNotifiedUtc: null, nowUtc: T0));
+    }
+
+    [Fact]
+    public void InSolaOsservazione_UnoStreamCheNonHaMaiConsegnato_SiNotificaComunque()
+    {
+        // Il caso che NON va perso, e che vale anche in osservazione: connesso e mai una consegna
+        // è un guasto STRUTTURALE (è il blocco EEA/MiCA visto sulle liquidazioni), non un ritmo.
+        Assert.True(RealtimePriceWorker.ShouldNotifyStale(
+            streak: 3, drivesProtectiveExits: false, neverDelivered: true, lastNotifiedUtc: null, nowUtc: T0));
+    }
+
+    [Fact]
+    public void UnGuastoCheDura_SiRipeteUnaVoltaAllOra_NonAOgniGiro()
+    {
+        // Dentro il cooldown: silenzio (il guasto è già stato detto).
+        Assert.False(RealtimePriceWorker.ShouldNotifyStale(
+            streak: 10, drivesProtectiveExits: true, neverDelivered: false,
+            lastNotifiedUtc: T0, nowUtc: T0.AddMinutes(30)));
+
+        // Oltre il cooldown: il guasto dura ancora ed è giusto ricordarlo.
+        Assert.True(RealtimePriceWorker.ShouldNotifyStale(
+            streak: 10, drivesProtectiveExits: true, neverDelivered: false,
+            lastNotifiedUtc: T0, nowUtc: T0.AddMinutes(61)));
+    }
+
+    [Fact]
+    public void IlRitmoDiStxConIlFeedCheGuida_ProduceAlPiuUnMessaggioAllOra()
+    {
+        // Simulazione del caso reale con l'assetto PEGGIORE (feed che guida le uscite, quindi la
+        // staleness è azionabile e va detta): STX alterna ~90s di silenzio e un evento, per un'ora.
+        // Prima: una coppia stale/ripristino ogni volta. Ora: al massimo un messaggio.
+        var notifiche = 0;
+        DateTime? ultimaNotifica = null;
+
+        for (var minuto = 0; minuto < 60; minuto++)
+        {
+            // tre controlli stale (90s) e poi un evento che azzera la serie
+            for (var streak = 1; streak <= 3; streak++)
+            {
+                var now = T0.AddMinutes(minuto).AddSeconds(streak * 30);
+                if (RealtimePriceWorker.ShouldNotifyStale(streak, true, false, ultimaNotifica, now))
+                {
+                    notifiche++;
+                    ultimaNotifica = now;
+                }
+            }
+        }
+
+        Assert.Equal(1, notifiche);
+    }
+
     /// <summary>Monitor con valore MUTABILE: è il modo di simulare il salvataggio dal pannello.</summary>
     private sealed class MutableOptionsMonitor<T>(T value) : IOptionsMonitor<T>
     {
