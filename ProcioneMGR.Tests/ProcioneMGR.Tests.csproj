@@ -13,6 +13,17 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.8" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="Testcontainers.PostgreSql" Version="4.6.0" />
+    <!--
+      [2026-08-13] Pin TRANSITIVO di sicurezza, non una dipendenza che usiamo.
+      Testcontainers trascina SSH.NET (per il forwarding SSH verso host Docker remoti, funzione che
+      questa suite non tocca: i container girano su Docker locale). GHSA-q939-rpr3-3284 — scrittura
+      arbitraria di file via nomi controllati dal server durante un download SCP ricorsivo, severità
+      HIGH — colpisce tutto fino a 2025.1.0 compresa, ed è corretta solo in 2026.0.0. Nemmeno
+      l'ultima Testcontainers (4.13.0) l'ha ancora recepita: dichiara 2025.1.0, quindi aggiornare
+      Testcontainers NON basterebbe. Il riferimento diretto forza la versione sana nel grafo.
+      Da togliere quando Testcontainers dipenderà da >= 2026.0.0 (il gate CI se ne accorgerà da sé).
+    -->
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
