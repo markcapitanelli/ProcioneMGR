@@ -39,18 +39,29 @@ spec:
           envFrom:
             - secretRef:
                 name: postgres-conn   # fornisce ConnectionStrings__PostgresConnection
+          # [2026-08-13] timeoutSeconds ESPLICITO — la stessa lezione del deployment trading
+          # (2026-08-06), che qui non era stata portata: senza, Kubernetes usa 1 SECONDO, e con
+          # failureThreshold 3 il pod viene ucciso con SIGKILL se /health è lento tre volte.
+          #
+          # Non è teoria nemmeno qui: 8 riavvii in 3 giorni, tutti `Liveness probe failed:
+          # context deadline exceeded`, SEMPRE a metà recupero candele — e ogni kill allungava
+          # l'arretrato del giro successivo (si vedeva «OK: 337 candele»), fino a 89 serie oltre
+          # tolleranza il 2026-08-13. Su un nodo affollato (cpu limit 1, WSL stretta) un endpoint
+          # di salute può superare il secondo per puro scheduling.
           readinessProbe:
             httpGet:
               path: /health
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health
               port: 8080
             initialDelaySeconds: 15
             periodSeconds: 30
+            timeoutSeconds: 5
           resources:
             requests:
               cpu: "100m"
