@@ -36,6 +36,7 @@ La suddivisione segue la navigazione della piattaforma (fonte unica:
 | Portafoglio | `/portfolio` | [portfolio.md](portfolio.md) |
 | Registry Modelli | `/registry` | [registry.md](registry.md) |
 | Esperimenti | `/experiments` | [experiments.md](experiments.md) |
+| Archivio candidati | `/research` | [research.md](research.md) |
 
 ## 🚀 Trading
 

@@ -21,7 +21,18 @@ namespace ProcioneMGR.Services.Trading;
 /// </summary>
 internal static class SafetyExposure
 {
-    /// <summary>Nozionale complessivamente esposto dalle posizioni aperte (unita' di order.Notional).</summary>
+    /// <summary>
+    /// Nozionale complessivamente esposto dalle posizioni aperte (unita' di order.Notional).
+    ///
+    /// [T5, PRD memoria-caccia 2026-08-14] LORDO deliberato, in due sensi. (1) Il Side e'
+    /// ignorato: long 1.000 + short 1.000 sullo stesso simbolo consumano 2.000 di budget, non 0 —
+    /// con piu' gambe concorrenti sulla stessa corsia (ensemble multi-strategia, incluse le gambe
+    /// grigie) e' la lettura fail-closed: un "hedge" fra strategie diverse non e' un hedge
+    /// garantito, le due gambe escono in momenti diversi. (2) <c>Math.Abs</c> come cintura:
+    /// Quantity e' non-segnata per convenzione (la direzione sta in Side), ma se un giorno una
+    /// quantita' negativa arrivasse fin qui RIDURREBBE l'esposizione conteggiata in silenzio —
+    /// l'abs la fa pesare, mai scontare. Fail-closed sulla sicurezza, regola 4.
+    /// </summary>
     public static decimal ExposedNotional(IEnumerable<OpenPosition> positions)
-        => positions.Sum(p => p.Quantity * p.EntryPrice);
+        => positions.Sum(p => Math.Abs(p.Quantity * p.EntryPrice));
 }

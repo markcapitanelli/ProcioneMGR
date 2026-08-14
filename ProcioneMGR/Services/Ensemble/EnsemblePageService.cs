@@ -35,10 +35,18 @@ public sealed class EnsemblePageService(
     IStrategyFactory strategyFactory,
     IFeatureDriftMonitor driftMonitor,
     IModelRegistry registry,
-    IDbContextFactory<ApplicationDbContext> dbFactory)
+    IDbContextFactory<ApplicationDbContext> dbFactory,
+    IBacktestEngine backtestEngine,
+    ProcioneMGR.Services.Analysis.ExcursionAnalyzer excursionAnalyzer)
 {
     /// <summary>Finestra "recente" per la valutazione drift (candele).</summary>
     public const int DriftRecentCandles = 200;
+
+    /// <summary>Finestra (giorni) su cui si misura la ridondanza fra le gambe della corsia.</summary>
+    public const int CorrelationWindowDays = 90;
+
+    /// <summary>Tetto dei candidati grigi proposti come fonte gamba (i più recenti prima).</summary>
+    public const int MaxGreyChoices = 20;
 
     private static readonly string[] Palette = ["#2962FF", "#E53935", "#43A047", "#FB8C00", "#8E24AA", "#00897B"];
 
@@ -54,6 +62,12 @@ public sealed class EnsemblePageService(
     public List<ExecutionJob> ExecutionJobs { get; private set; } = [];
     public List<FactorDriftReport> DriftReports { get; private set; } = [];
     public SavedMlModel? Champion { get; private set; }
+
+    /// <summary>[T3] Candidati grigi compatibili con la corsia (stessa coppia e timeframe), dall'archivio della caccia.</summary>
+    public List<Research.ResearchCandidate> GreyCandidates { get; private set; } = [];
+
+    /// <summary>[T2] Ultimo report di ridondanza calcolato con <see cref="EvaluateLegCorrelationAsync"/>.</summary>
+    public Portfolio.LegCorrelationReport? LegCorrelation { get; private set; }
 
     /// <summary>Ensemble della corsia (keyed DI): risolto ad ogni accesso, mai in cache tra cambi corsia.</summary>
     private IEnsembleManager Manager(int laneId) => services.GetRequiredKeyedService<IEnsembleManager>(laneId);
@@ -185,6 +199,173 @@ public sealed class EnsemblePageService(
     }
 
     public void RemoveStrategy(string strategyId) => Config?.Strategies.RemoveAll(s => s.StrategyId == strategyId);
+
+    // --- [T3] Fascia grigia come fonte gamba ----------------------------------------------------
+
+    /// <summary>
+    /// Candidati grigi della STESSA coppia/timeframe della corsia, dall'indice dell'archivio
+    /// (<c>ResearchCandidates</c>). Dedup per chiave identità tenendo il run più recente: lo
+    /// stesso candidato riscoperto da tre cacce è UN candidato, non tre. Stesso principio del
+    /// filtro dei modelli ML compatibili: una gamba di un'altra coppia qui non ha senso.
+    /// </summary>
+    public async Task LoadGreyCandidatesAsync(CancellationToken ct = default)
+    {
+        GreyCandidates = [];
+        if (Config is null || string.IsNullOrEmpty(Config.Symbol)) return;
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var raw = await db.ResearchCandidates.AsNoTracking()
+            .Where(c => c.IsGrey && c.Symbol == Config.Symbol && c.Timeframe == Config.Timeframe)
+            .OrderByDescending(c => c.RunCompletedUtc)
+            .ToListAsync(ct);
+        GreyCandidates = DedupGreyChoices(raw, MaxGreyChoices);
+    }
+
+    /// <summary>
+    /// Dedup per chiave identità sull'input ordinato dal run più recente: la prima occorrenza di
+    /// ogni chiave è la misura più fresca dello stesso candidato. Statica e pura per essere
+    /// testabile senza il circuito.
+    /// </summary>
+    internal static List<Research.ResearchCandidate> DedupGreyChoices(
+        IReadOnlyList<Research.ResearchCandidate> rawNewestFirst, int max) =>
+        rawNewestFirst
+            .GroupBy(c => c.CandidateKey, StringComparer.Ordinal)
+            .Select(g => g.First())
+            .OrderByDescending(c => c.HoldoutSharpe)
+            .Take(max)
+            .ToList();
+
+    /// <summary>
+    /// Aggiunge un candidato grigio come gamba: parametri esatti del candidato, attese holdout per
+    /// il decay monitor, bracket SL/TP data-driven dalle escursioni (stesso <c>AutoBracket</c> del
+    /// GreyDeployer — un forward test senza protezioni non si aggiunge da un click), e
+    /// <c>SourceVerdict="Grey"</c> perché il badge non dipenda dal percorso. Il messaggio dichiara
+    /// il bracket applicato o la sua assenza.
+    /// </summary>
+    public async Task<string> AddFromGreyAsync(long researchCandidateId, CancellationToken ct = default)
+    {
+        if (Config is null) return "Nessuna configurazione caricata.";
+        var c = GreyCandidates.FirstOrDefault(x => x.Id == researchCandidateId);
+        if (c is null) return "Candidato non trovato fra i grigi compatibili.";
+        // Identità canonica del candidato (PipelineCandidateKey), mai un confronto fatto a mano
+        // sui parametri: la chiave è già l'impronta dei parametri.
+        if (Config.Strategies.Any(s =>
+                Pipeline.PipelineCandidateKey.Build(s.StrategyName, Config.Symbol, Config.Timeframe, s.Parameters) == c.CandidateKey))
+        {
+            return "Questa gamba grigia è già nella corsia.";
+        }
+
+        var (sl, tp) = await Pipeline.AutoBracket.ComputeAsync(dbFactory, excursionAnalyzer, c.Symbol, c.Timeframe, ct);
+        Config.Strategies.Add(new EnsembleStrategy
+        {
+            StrategyName = c.StrategyName,
+            DisplayName = $"{c.StrategyName} (fascia grigia, run {c.RunId.ToString()[..8]})",
+            Parameters = ParseParams(c.ParametersJson),
+            StopLossPercent = sl > 0m ? sl : null,
+            TakeProfitPercent = tp > 0m ? tp : null,
+            ExpectedSharpe = c.HoldoutSharpe != 0m ? c.HoldoutSharpe : null,
+            ExpectedProfitFactor = c.HoldoutProfitFactor != 0m ? c.HoldoutProfitFactor : null,
+            ExpectedMaxDrawdown = c.HoldoutMaxDrawdown != 0m ? c.HoldoutMaxDrawdown : null,
+            SourceVerdict = "Grey",
+        });
+        return sl > 0m || tp > 0m
+            ? $"Gamba grigia aggiunta con bracket dalle escursioni (SL {sl:F2}% / TP {tp:F2}%). Ricorda: Save per persistere."
+            : "Gamba grigia aggiunta SENZA bracket (escursioni non derivabili: impostare SL/TP a mano prima di avviare).";
+    }
+
+    private static Dictionary<string, decimal> ParseParams(string json)
+    {
+        try { return JsonSerializer.Deserialize<Dictionary<string, decimal>>(json) ?? new(); }
+        catch (JsonException) { return new(); }
+    }
+
+    // --- [T2] Ridondanza fra le gambe della corsia ----------------------------------------------
+
+    /// <summary>
+    /// Misura la correlazione dei rendimenti giornalieri fra le gambe ATTIVE della corsia,
+    /// backtestandole sulla stessa finestra recente (<see cref="CorrelationWindowDays"/> giorni) —
+    /// stessa formula dell'assemblaggio in pipeline (<see cref="Portfolio.ReturnCorrelation"/>).
+    /// Gambe non backtestabili da qui (es. Champion, che è una sentinella del motore) vengono
+    /// SALTATE e dichiarate nel report, mai conteggiate come "non correlate".
+    /// </summary>
+    public async Task<Portfolio.LegCorrelationReport> EvaluateLegCorrelationAsync(int laneId, CancellationToken ct = default)
+    {
+        var report = new Portfolio.LegCorrelationReport
+        {
+            Window = $"ultimi {CorrelationWindowDays} giorni",
+        };
+        LegCorrelation = report;
+        if (Config is null || string.IsNullOrEmpty(Config.Symbol))
+        {
+            report.Note = "Nessuna configurazione caricata.";
+            return report;
+        }
+
+        var active = Config.Strategies.Where(s => s.IsActive).ToList();
+        if (active.Count < 2)
+        {
+            report.Note = "Servono almeno 2 gambe attive per misurare una ridondanza.";
+            return report;
+        }
+
+        var to = DateTime.UtcNow;
+        var from = to.AddDays(-CorrelationWindowDays);
+        var returnsByLeg = new Dictionary<string, Dictionary<DateTime, decimal>>();
+        var display = new Dictionary<string, string>(StringComparer.Ordinal);
+        var skipped = new List<string>();
+        foreach (var leg in active)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var result = await backtestEngine.RunBacktestAsync(new BacktestConfiguration
+                {
+                    ExchangeName = Config.ExchangeName,
+                    Symbol = Config.Symbol,
+                    Timeframe = Config.Timeframe,
+                    From = from,
+                    To = to,
+                    InitialCapital = 10_000m,
+                    StrategyName = leg.StrategyName,
+                    StrategyParameters = new(leg.Parameters),
+                }, ct);
+                returnsByLeg[leg.StrategyId] = Portfolio.ReturnCorrelation.DailyReturns(result.EquityCurve);
+                display[leg.StrategyId] = leg.DisplayName;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                skipped.Add($"{leg.DisplayName} ({ex.Message})");
+            }
+        }
+
+        if (returnsByLeg.Count < 2)
+        {
+            report.Note = "Meno di 2 gambe backtestabili da qui"
+                + (skipped.Count > 0 ? $" — saltate: {string.Join("; ", skipped)}" : ".");
+            return report;
+        }
+
+        var commonDates = returnsByLeg.Values
+            .Select(d => d.Keys.AsEnumerable())
+            .Aggregate((a, b) => a.Intersect(b))
+            .OrderBy(d => d)
+            .ToList();
+        if (commonDates.Count < Portfolio.ReturnCorrelation.MinObservations)
+        {
+            report.Note = $"Solo {commonDates.Count} giorni comuni fra le gambe "
+                + $"(minimo {Portfolio.ReturnCorrelation.MinObservations}): ρ sarebbe rumore.";
+            return report;
+        }
+
+        report.Pairs = Portfolio.ReturnCorrelation.AllPairs(
+            returnsByLeg.Select(kv => (kv.Key, display[kv.Key],
+                (IReadOnlyList<decimal>)commonDates.Select(d => kv.Value[d]).ToList())).ToList());
+        report.Window = $"ultimi {CorrelationWindowDays} giorni, {commonDates.Count} giorni comuni";
+        if (skipped.Count > 0)
+        {
+            report.Note = $"Gambe saltate (non backtestabili da qui): {string.Join("; ", skipped)}";
+        }
+        return report;
+    }
 
     // --- Ciclo di vita dell'ensemble ------------------------------------------------------------
 

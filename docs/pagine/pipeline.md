@@ -102,6 +102,18 @@ all'holdout, gambe ensemble proposte con SL/TP e limiti di rischio. Due strade:
 - **Scrive**: configurazioni (CRUD), avvio/pausa/annulla/riprendi run, applicazione
   raccomandazione → configurazione ensemble della corsia.
 
+## [2026-08-14] Fascia grigia nell'assemblaggio + ridondanza (PRD memoria-caccia)
+
+Lo stage **Assemblaggio ensemble** ha due parametri nuovi nell'editor delle fasi:
+`includeGreyZone` (default **false**: i candidati grigi — giudice unico `GreyZone.IsGrey` —
+riempiono SOLO i posti che i sopravvissuti pieni lasciano liberi, etichettati `SourceVerdict=Grey`
+e "(fascia grigia)" nel nome) e `redundancyWarnRho` (default 0,7: sopra questa correlazione fra i
+rendimenti di due gambe la proposta dichiara la ridondanza). La correlazione è la stessa matrice
+che l'HRP usa per pesare, ora esposta in `EnsembleProposal.Correlations`; gli avvisi finiscono
+negli **Alert della raccomandazione** insieme alla dichiarazione delle gambe grigie ("N delle M
+gambe proposte vengono dalla FASCIA GRIGIA … solo Paper"). A flag spento il comportamento è
+quello storico (regressione fissata da `EnsembleAssemblyGreyZoneTests`).
+
 ## Collegamenti con le altre pagine
 
 - [Ensemble](ensemble.md) — destinazione di "Applica al Trading".

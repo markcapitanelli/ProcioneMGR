@@ -1,0 +1,300 @@
+@page "/research"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using ProcioneMGR.Data
+@using ProcioneMGR.Services.Pipeline
+@using ProcioneMGR.Services.Research
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
+
+@inject ResearchPageService Svc
+
+<PageTitle>Archivio candidati</PageTitle>
+
+<h1>Archivio candidati</h1>
+
+<GuidaPanel Title="Archivio candidati — leggere la caccia invece di ripeterla">
+    <p>
+        Ogni run della pipeline archivia da luglio <strong>tutti</strong> i candidati provati, con
+        24 metriche e il motivo di scarto (tabella <code>ValidatedCandidates</code>). Questa pagina
+        li rende leggibili: aggregati trasversali sui run, filtro per coppia, e la
+        <strong>fascia grigia</strong> in evidenza — i candidati bocciati per <em>sola finestra
+        corta</em> ("Solo N trade…") o con DSR in [@GreyZone.DsrFloor.ToString("F2")–@GreyZone.DsrCeiling.ToString("F2")),
+        con Sharpe holdout positivo. Non sono promozioni: sono i candidati che meritano il
+        <strong>forward test Paper</strong>, l'unico giudice immune al multiple testing su
+        finestre corte.
+    </p>
+    <p class="mb-0">
+        <strong>Rianalizza</strong> apre Optimization precompilata col candidato (nessuna
+        scrittura). <strong>Componi</strong> porta in Ensemble, dove i candidati grigi della stessa
+        coppia si possono combinare su una corsia — etichettati come grigi, mai spacciati per
+        sopravvissuti pieni. L'indice è <em>derivato</em> dagli artifact dei run: «Ricostruisci»
+        lo riallinea da zero in ogni momento.
+    </p>
+</GuidaPanel>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (Svc.Summary is { } sum)
+{
+    <div class="row g-2 mb-3">
+        <div class="col-auto">
+            <div class="card px-3 py-2"><span class="small text-muted">Candidati</span><strong>@sum.TotalCandidates.ToString("N0")</strong></div>
+        </div>
+        <div class="col-auto">
+            <div class="card px-3 py-2"><span class="small text-muted">Run</span><strong>@sum.TotalRuns</strong></div>
+        </div>
+        <div class="col-auto">
+            <div class="card px-3 py-2"><span class="small text-muted">Promossi</span><strong class="text-success">@sum.Survivors</strong></div>
+        </div>
+        <div class="col-auto">
+            <div class="card px-3 py-2">
+                <span class="small text-muted">Fascia grigia</span>
+                <strong class="text-warning">@sum.Grey</strong>
+                <span class="small text-muted">di cui @sum.GreyShortWindow per finestra corta</span>
+            </div>
+        </div>
+        <div class="col-auto">
+            <div class="card px-3 py-2"><span class="small text-muted">Scartati nel merito</span><strong class="text-danger">@sum.RejectedOnMerit.ToString("N0")</strong></div>
+        </div>
+        @if (sum.NewestRunUtc is { } newest)
+        {
+            <div class="col-auto">
+                <div class="card px-3 py-2"><span class="small text-muted">Periodo</span><strong>@sum.OldestRunUtc?.ToString("dd/MM") → @newest.ToString("dd/MM")</strong></div>
+            </div>
+        }
+    </div>
+}
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label mb-0">Coppia</label>
+                <select class="form-select form-select-sm" @bind="_symbol" @bind:after="ApplyFiltersAsync">
+                    <option value="">Tutte</option>
+                    @foreach (var s in Svc.Symbols)
+                    {
+                        <option value="@s">@s</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Timeframe</label>
+                <select class="form-select form-select-sm" @bind="_timeframe" @bind:after="ApplyFiltersAsync">
+                    <option value="">Tutti</option>
+                    @foreach (var t in Svc.Timeframes)
+                    {
+                        <option value="@t">@t</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Verdetto</label>
+                <select class="form-select form-select-sm" @bind="_verdict" @bind:after="ApplyFiltersAsync">
+                    <option value="all">Tutti</option>
+                    <option value="survived">Promosso</option>
+                    <option value="grey">Fascia grigia</option>
+                    <option value="rejected">Scartato nel merito</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Famiglia</label>
+                <select class="form-select form-select-sm" @bind="_family" @bind:after="ApplyFiltersAsync">
+                    <option value="">Tutte</option>
+                    @foreach (var f in Svc.Families)
+                    {
+                        <option value="@f">@f</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-0">Cerca</label>
+                <input class="form-control form-control-sm" @bind="_search" @bind:after="ApplyFiltersAsync" placeholder="testo nella chiave" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="RebuildAsync" disabled="@_busy"
+                        title="Cancella e ricostruisce l'indice dagli artifact dei run — la tabella è derivata, nessun dato si perde">
+                    ↻ Ricostruisci indice
+                </button>
+            </div>
+            <div class="col-auto text-muted small">
+                @Svc.Candidates.Count visualizzati su @Svc.FilteredCount filtrati
+                @if (Svc.LastIndex is { } idx && (idx.RunsIndexed > 0 || idx.RunsSkipped > 0))
+                {
+                    <span> · indice: +@idx.RunsIndexed run (+@idx.CandidatesIndexed candidati)@(idx.RunsSkipped > 0 ? $", {idx.RunsSkipped} illeggibili" : "")</span>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-lg-7">
+        <div class="card h-100">
+            <div class="card-header">Resa per famiglia di strategie</div>
+            <div class="card-body table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead><tr><th>Famiglia</th><th class="text-end">Provati</th><th class="text-end">Promossi</th><th class="text-end">Grigi</th><th class="text-end">Tasso</th></tr></thead>
+                    <tbody>
+                        @foreach (var f in Svc.FamilyStats)
+                        {
+                            <tr>
+                                <td>@f.Family</td>
+                                <td class="text-end">@f.Tested.ToString("N0")</td>
+                                <td class="text-end">@f.Survived</td>
+                                <td class="text-end">@f.Grey</td>
+                                <td class="text-end">@((f.Survived + f.Grey) * 100.0 / Math.Max(1, f.Tested) is var rate ? rate.ToString("F1") : "")%</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card h-100">
+            <div class="card-header">Motivi di scarto</div>
+            <div class="card-body table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead><tr><th>Motivo</th><th class="text-end">Candidati</th><th class="text-end" title="Sharpe holdout medio dei bocciati con questo motivo">Sharpe medio</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in Svc.RejectReasons)
+                        {
+                            <tr>
+                                <td>@r.Category</td>
+                                <td class="text-end">@r.Count.ToString("N0")</td>
+                                <td class="text-end @(r.AvgHoldoutSharpe > 0 ? "text-success" : "text-danger")">@r.AvgHoldoutSharpe.ToString("F2")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Candidati</div>
+    <div class="card-body table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Coppia</th>
+                    <th>TF</th>
+                    <th>Strategia</th>
+                    <th>Parametri</th>
+                    <th class="text-end" title="Sharpe walk-forward della selezione">Sharpe sel.</th>
+                    <th class="text-end" title="Sharpe sull'holdout (mai usato per selezionare)">Sharpe hold.</th>
+                    <th class="text-end">DSR</th>
+                    <th class="text-end">Trade</th>
+                    <th>Verdetto</th>
+                    <th title="Data di completamento del run">Run</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var c in Svc.Candidates)
+                {
+                    <tr class="@(c.IsGrey ? "table-warning" : "")">
+                        <td><strong>@c.Symbol</strong></td>
+                        <td class="text-muted">@c.Timeframe</td>
+                        <td>@c.StrategyName</td>
+                        <td><code class="small">@ResearchPageService.FormatParams(c.ParametersJson)</code></td>
+                        <td class="text-end">@c.WalkForwardOosSharpe.ToString("F2")</td>
+                        <td class="text-end @(c.HoldoutSharpe > 0 ? "text-success" : "text-danger")">@c.HoldoutSharpe.ToString("F2")</td>
+                        <td class="text-end">@(c.DeflatedSharpe is { } dsr ? dsr.ToString("F2") : "—")</td>
+                        <td class="text-end">@c.HoldoutTrades</td>
+                        <td>
+                            @if (c.Survived)
+                            {
+                                <span class="badge bg-success">Promosso</span>
+                            }
+                            else if (c.IsGrey)
+                            {
+                                <span class="badge bg-warning text-dark" title="@c.RejectReason">Fascia grigia</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-danger" title="@c.RejectReason">Scartato</span>
+                            }
+                        </td>
+                        <td class="text-muted small">@c.RunCompletedUtc.ToString("dd/MM")</td>
+                        <td class="text-nowrap">
+                            <a class="btn btn-sm btn-outline-primary" href="@ResearchPageService.OptimizationHandoffUrl(c)"
+                               title="Apre Optimization precompilata con strategia, coppia e parametri di questo candidato">Rianalizza</a>
+                            @if (c.IsGrey || c.Survived)
+                            {
+                                <a class="btn btn-sm btn-outline-warning" href="ensemble"
+                                   title="Vai in Ensemble: i candidati grigi di una coppia compaiono lì come fonte gamba per la corsia con la stessa coppia">Componi →</a>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        @if (Svc.FilteredCount > Svc.Candidates.Count)
+        {
+            <div class="small text-muted mt-2">
+                Mostrati i primi @ResearchPageService.MaxRows per data di run e Sharpe holdout — restringi i filtri per il resto.
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private string _symbol = "";
+    private string _timeframe = "";
+    private string _verdict = "all";
+    private string _family = "";
+    private string _search = "";
+    private bool _busy;
+    private string? _error;
+
+    private ResearchFilter Filter => new(_symbol, _timeframe, _verdict, _family, _search);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await Svc.InitializeAsync(Filter);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Caricamento archivio fallito: {ex.Message}";
+        }
+    }
+
+    private async Task ApplyFiltersAsync()
+    {
+        _error = null;
+        try
+        {
+            await Svc.LoadAsync(Filter);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Filtro fallito: {ex.Message}";
+        }
+    }
+
+    private async Task RebuildAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            await Svc.RebuildIndexAsync(Filter);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Ricostruzione indice fallita: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

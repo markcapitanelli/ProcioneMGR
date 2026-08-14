@@ -38,6 +38,13 @@ public sealed class EnsembleAssemblyStage(
         new("maxLegs", "Gambe massime", "3", ""),
         new("portfolioOptimizer", "Optimizer dei pesi", "HRP",
             "HRP (default storico) | MeanVariance | RiskParity — nome sconosciuto = HRP, dichiarato nel log"),
+        new("includeGreyZone", "Includi fascia grigia", "false",
+            "true = i candidati grigi (bocciati per sola finestra corta o DSR in [0,80–0,95), Sharpe holdout positivo) "
+            + "riempiono i posti che i sopravvissuti pieni lasciano liberi — mai al loro posto. Le gambe grigie sono "
+            + "etichettate come tali ovunque: è un secondo giro di selezione, non una promozione."),
+        new("redundancyWarnRho", "Soglia avviso ridondanza (|ρ|)", "0.7",
+            "Sopra questa correlazione fra i rendimenti di due gambe la proposta dichiara la ridondanza: "
+            + "due gambe correlate sono la stessa scommessa raddoppiata, non diversificazione."),
         .. PipelineCosts.ParameterDefinitions,
         new("positionSizePercent", "Size posizione (%)", "10", ""),
     ];
@@ -56,12 +63,21 @@ public sealed class EnsembleAssemblyStage(
     }
 
     public string? ValidateInput(PipelineContext ctx)
-        => ctx.Validated.Count(v => v.Survived) == 0 ? "Nessun sopravvissuto da assemblare." : null;
+        // [T1] Il gate resta chiuso solo quando non c'è NIENTE da assemblare: né sopravvissuti né
+        // grigi. Con soli grigi lo stage gira e decide dentro ExecuteAsync (ValidateInput non vede
+        // la StageConfig, quindi non può leggere includeGreyZone): a flag spento non propone nulla
+        // e lo dichiara nel log — comportamento equivalente allo skip storico, ma detto.
+        => ctx.Validated.Count(v => v.Survived) == 0 && !ctx.Validated.Any(GreyZone.IsGrey)
+            ? "Nessun sopravvissuto né candidato in fascia grigia da assemblare."
+            : null;
 
     public async Task ExecuteAsync(PipelineContext ctx, StageConfig config, CancellationToken ct)
     {
         var rules = rulesProvider.GetRules();
         var maxLegs = config.GetInt("maxLegs", rules.MaxLegs);
+        var includeGrey = config.GetBool("includeGreyZone", false);
+        var warnRho = Math.Clamp((double)config.GetDecimal("redundancyWarnRho",
+            (decimal)Portfolio.ReturnCorrelation.DefaultWarnThreshold), 0.0, 1.0);
         var costs = PipelineCosts.FromConfig(config);
         // [2.8] Optimizer per nome (default HRP = pesi identici allo storico).
         var optimizer = ResolveOptimizer(config.GetString("portfolioOptimizer", "HRP"),
@@ -75,7 +91,47 @@ public sealed class EnsembleAssemblyStage(
             .Take(maxLegs)
             .ToList();
 
+        // [T1] La fascia grigia riempie SOLO i posti che i sopravvissuti lasciano liberi: un
+        // grigio non spiazza mai un sopravvissuto, qualunque Sharpe abbia — sono verdetti di
+        // rango diverso, non punteggi sulla stessa scala.
+        var greyPool = ctx.Validated.Where(GreyZone.IsGrey).ToList();
+        var greyKeys = new HashSet<string>(StringComparer.Ordinal);
+        if (includeGrey && legs.Count < maxLegs && greyPool.Count > 0)
+        {
+            var taken = greyPool
+                .OrderByDescending(v => v.WalkForwardOosSharpe)
+                .Take(maxLegs - legs.Count)
+                .ToList();
+            foreach (var g in taken) greyKeys.Add(g.Key);
+            legs.AddRange(taken);
+            ctx.LogLine($"[{Name}] Fascia grigia inclusa: {taken.Count} gambe su {greyPool.Count} ammissibili "
+                + "(scelta deterministica per Sharpe walk-forward; etichettate come grigie ovunque).");
+        }
+        else if (!includeGrey && legs.Count == 0 && greyPool.Count > 0)
+        {
+            // Zero sopravvissuti e flag spento: nessuna proposta, come lo skip storico — ma il
+            // log dice cosa c'era e come ammetterlo, invece di tacere.
+            ctx.LogLine($"[{Name}] 0 sopravvissuti; {greyPool.Count} candidati in fascia grigia ESCLUSI "
+                + "(includeGreyZone=false — attivabile dall'editor delle fasi).");
+            return;
+        }
+
         var proposal = new EnsembleProposal();
+
+        // Creative discovery can confirm MULTIPLE distinct specs of the same meta-strategy on
+        // the same pair (e.g. two different "Composite" rules) — disambiguate the DisplayName
+        // with the same short fingerprint used in Key, but only for groups that actually
+        // collide (keeps the common case's DisplayName clean). Calcolato QUI perché il nome
+        // serve anche al report di ridondanza, e due formule darebbero due nomi.
+        var groupSizes = legs.GroupBy(l => (l.StrategyName, l.Symbol, l.Timeframe)).ToDictionary(g => g.Key, g => g.Count());
+        string Display(ValidatedCandidate leg)
+        {
+            var ambiguous = groupSizes[(leg.StrategyName, leg.Symbol, leg.Timeframe)] > 1;
+            var hashIdx = leg.Key.LastIndexOf('#');
+            var suffix = ambiguous && hashIdx >= 0 ? $" {leg.Key[hashIdx..]}" : "";
+            var grey = greyKeys.Contains(leg.Key) ? " (fascia grigia)" : "";
+            return $"{leg.StrategyName} {leg.Symbol} {leg.Timeframe} [{leg.BestStopVariant}]{suffix}{grey}";
+        }
 
         // HRP weights from daily equity returns of each leg over the selection range.
         var weights = new Dictionary<string, decimal>();
@@ -117,6 +173,33 @@ public sealed class EnsembleAssemblyStage(
                 var allocation = optimizer.Optimize(aligned);
                 weights = allocation.Weights.ToDictionary(kv => kv.Key, kv => kv.Value * 100m);
                 proposal.Method = optimizer.Name; // [2.8] il metodo dichiarato segue l'optimizer REALE, non un'etichetta fissa
+
+                // [T2] Ridondanza fra gambe: la stessa matrice che l'optimizer usa per pesare,
+                // dichiarata invece che scartata. Stessi rendimenti allineati, stessa finestra.
+                proposal.Correlations = new Portfolio.LegCorrelationReport
+                {
+                    Pairs = Portfolio.ReturnCorrelation.AllPairs(
+                        legs.Select(l => (l.Key, Display(l), aligned[l.Key])).ToList()),
+                    WarnThreshold = warnRho,
+                    Window = $"selezione {ctx.Ranges.SelectionFrom:yyyy-MM-dd}→{ctx.Ranges.SelectionTo:yyyy-MM-dd}, {commonDates.Count} giorni comuni",
+                };
+                foreach (var pair in proposal.Correlations.AboveThreshold)
+                {
+                    ctx.LogLine($"[{Name}] Ridondanza: {pair.DisplayA} ↔ {pair.DisplayB} con ρ={pair.Rho:F2} "
+                        + $"(soglia {warnRho:F2}) — combinarle diversifica poco.");
+                }
+            }
+            else
+            {
+                // Degradare dicendolo: senza storico comune sufficiente né i pesi né la
+                // correlazione sono stimabili — il report lo dichiara invece di sparire.
+                proposal.Correlations = new Portfolio.LegCorrelationReport
+                {
+                    WarnThreshold = warnRho,
+                    Window = $"selezione {ctx.Ranges.SelectionFrom:yyyy-MM-dd}→{ctx.Ranges.SelectionTo:yyyy-MM-dd}",
+                    Note = $"Correlazione non calcolabile: {commonDates.Count} giorni comuni fra le gambe "
+                        + $"(minimo {Portfolio.ReturnCorrelation.MinObservations}).",
+                };
             }
         }
 
@@ -149,20 +232,12 @@ public sealed class EnsembleAssemblyStage(
             }
         }
 
-        // Creative discovery can confirm MULTIPLE distinct specs of the same meta-strategy on
-        // the same pair (e.g. two different "Composite" rules) — disambiguate the DisplayName
-        // with the same short fingerprint used in Key, but only for groups that actually
-        // collide (keeps the common case's DisplayName clean).
-        var groupSizes = legs.GroupBy(l => (l.StrategyName, l.Symbol, l.Timeframe)).ToDictionary(g => g.Key, g => g.Count());
         foreach (var leg in legs)
         {
-            var ambiguous = groupSizes[(leg.StrategyName, leg.Symbol, leg.Timeframe)] > 1;
-            var hashIdx = leg.Key.LastIndexOf('#');
-            var suffix = ambiguous && hashIdx >= 0 ? $" {leg.Key[hashIdx..]}" : "";
             proposal.Legs.Add(new ProposedLeg
             {
                 StrategyName = leg.StrategyName,
-                DisplayName = $"{leg.StrategyName} {leg.Symbol} {leg.Timeframe} [{leg.BestStopVariant}]{suffix}",
+                DisplayName = Display(leg),
                 Symbol = leg.Symbol,
                 Timeframe = leg.Timeframe,
                 Parameters = new(leg.Parameters),
@@ -172,27 +247,30 @@ public sealed class EnsembleAssemblyStage(
                 HoldoutProfitFactor = leg.HoldoutProfitFactor,
                 HoldoutMaxDrawdown = leg.HoldoutMaxDrawdown,
                 HoldoutTrades = leg.HoldoutTrades,
+                SourceVerdict = greyKeys.Contains(leg.Key) ? "Grey" : "Survived",
             });
         }
+
+        // [T4] La dichiarazione del secondo giro di selezione: quante gambe grigie, su quanti
+        // grigi ammissibili, con quale regola di scelta. Va nella Note (che finisce nel summary
+        // dello stage) perché un lettore della proposta non deve poter scambiare una gamba
+        // grigia per un sopravvissuto pieno.
+        if (greyKeys.Count > 0)
+        {
+            var greyNote = $"Include {greyKeys.Count} gambe da fascia grigia su {greyPool.Count} ammissibili nel run "
+                + "(scelta deterministica per Sharpe walk-forward) — bocciate per sola finestra corta o DSR in "
+                + $"[{GreyZone.DsrFloor:F2}–{GreyZone.DsrCeiling:F2}): secondo giro di selezione, non sopravvissuti pieni.";
+            proposal.Note = string.IsNullOrEmpty(proposal.Note) ? greyNote : $"{proposal.Note} {greyNote}";
+        }
+
         ctx.Ensemble = proposal;
         ctx.LogLine($"[{Name}] {proposal.Legs.Count} gambe, metodo {proposal.Method}: {string.Join(", ", proposal.Legs.Select(l => $"{l.DisplayName} {l.WeightPercent}%"))}");
     }
 
+    // Last equity point of each day → daily % returns keyed by date. [T2] Trasferita in
+    // ReturnCorrelation.DailyReturns: la stessa formula serve anche al pannello Ensemble.
     private static Dictionary<DateTime, decimal> DailyReturns(IReadOnlyList<EquityPoint> equity)
-    {
-        // Last equity point of each day → daily % returns keyed by date.
-        var daily = equity
-            .GroupBy(p => p.Timestamp.Date)
-            .ToDictionary(g => g.Key, g => g.OrderBy(p => p.Timestamp).Last().Capital);
-        var dates = daily.Keys.OrderBy(d => d).ToList();
-        var returns = new Dictionary<DateTime, decimal>();
-        for (var i = 1; i < dates.Count; i++)
-        {
-            var prev = daily[dates[i - 1]];
-            if (prev > 0m) returns[dates[i]] = (daily[dates[i]] - prev) / prev;
-        }
-        return returns;
-    }
+        => Portfolio.ReturnCorrelation.DailyReturns(equity);
 
     public StageSummary Summarize(PipelineContext ctx)
     {
@@ -268,6 +346,15 @@ public sealed class RiskSizingStage(IPipelineRulesProvider rulesProvider) : IPip
         if (volFactor < 1m)
         {
             risk.Notes.Add($"Volatilità prevista ALTA: sizing ridotto del {rules.HighVolSizingReductionPercent}% su tutte le gambe.");
+        }
+        // [T1] Le gambe grigie non passano dal probe di robustezza (gira sui soli sopravvissuti):
+        // niente Kelly né Monte Carlo per loro — sizing al default conservativo qui sopra, e la
+        // guardia di drawdown si basa sulle sole gambe misurate. Dichiararlo, non lasciarlo dedurre.
+        var greyCount = legs.Count(l => l.SourceVerdict == "Grey");
+        if (greyCount > 0)
+        {
+            risk.Notes.Add($"{greyCount} gambe da fascia grigia SENZA probe di robustezza (Kelly/Monte Carlo non stimati): "
+                + "sizing al default conservativo; la guardia di drawdown considera solo le gambe misurate.");
         }
         risk.Notes.Add($"Frazione di Kelly usata: {rules.KellyFraction:P0} del Kelly pieno (cap {rules.MaxSizingPercent}% per gamba).");
 
@@ -437,6 +524,26 @@ public sealed class RecommendationStage(IPipelineRulesProvider rulesProvider) : 
         }
 
         rec.Alerts.AddRange(ctx.NewsImpact?.Alerts ?? []);
+        // [T2] Ridondanza fra le gambe proposte: sopra la soglia dichiarata del report è un
+        // ALERT della raccomandazione, non una riga di log — chi legge la proposta deve vederlo
+        // nello stesso posto degli altri avvisi operativi.
+        foreach (var pair in ctx.Ensemble?.Correlations?.AboveThreshold ?? [])
+        {
+            rec.Alerts.Add($"Gambe correlate: {pair.DisplayA} ↔ {pair.DisplayB} con ρ={pair.Rho:F2} "
+                + $"(soglia {ctx.Ensemble!.Correlations!.WarnThreshold:F2}) — combinarle diversifica poco.");
+        }
+        if (ctx.Ensemble?.Correlations?.Note is { } corrNote)
+        {
+            rec.Alerts.Add(corrNote);
+        }
+        // [T1] Gambe da fascia grigia nella proposta: la dichiarazione viaggia anche qui, dove
+        // finisce nel FullText della raccomandazione.
+        var greyLegs = rec.EnsembleLegs.Count(l => l.SourceVerdict == "Grey");
+        if (greyLegs > 0)
+        {
+            rec.Alerts.Add($"{greyLegs} delle {rec.EnsembleLegs.Count} gambe proposte vengono dalla FASCIA GRIGIA: "
+                + "secondo giro di selezione su candidati bocciati per finestra corta o DSR — solo Paper, il forward test è il giudice.");
+        }
         if (ctx.Volatility?.Level == "Alta")
         {
             rec.Alerts.Add($"Volatilità prevista in aumento (forecast {ctx.Volatility.ForecastVolatility24:P2} vs lungo periodo {ctx.Volatility.LongRunVolatility:P2}).");

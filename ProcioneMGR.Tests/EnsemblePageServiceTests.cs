@@ -118,8 +118,20 @@ public sealed class EnsemblePageServiceTests : IAsyncDisposable
             await db.Database.EnsureCreatedAsync();
         }
 
-        var svc = new EnsemblePageService(_provider, new StrategyFactory(), _drift, _registry, dbFactory);
+        var svc = new EnsemblePageService(_provider, new StrategyFactory(), _drift, _registry, dbFactory,
+            new UnusedBacktestEngine(), new ProcioneMGR.Services.Analysis.ExcursionAnalyzer());
         return (svc, dbFactory);
+    }
+
+    /// <summary>Le prove esistenti non toccano ridondanza/gambe grigie: se qualcosa lo chiamasse, meglio un errore che un finto zero.</summary>
+    private sealed class UnusedBacktestEngine : IBacktestEngine
+    {
+        public Task<BacktestResult> RunBacktestAsync(BacktestConfiguration config, CancellationToken ct)
+            => throw new NotImplementedException("Nessun backtest previsto in questi test.");
+        public Task<BacktestResult> RunBacktestAsync(BacktestConfiguration config, IReadOnlyList<OhlcvData> candles, CancellationToken ct)
+            => throw new NotImplementedException("Nessun backtest previsto in questi test.");
+        public Task<BacktestResult> RunBacktestAsync(BacktestConfiguration config, IReadOnlyList<OhlcvData> candles, IStrategy strategy, CancellationToken ct)
+            => throw new NotImplementedException("Nessun backtest previsto in questi test.");
     }
 
     // --- Caricamento per corsia ----------------------------------------------------------------

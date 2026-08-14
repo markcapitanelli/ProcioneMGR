@@ -252,6 +252,9 @@ public sealed class PipelineApplier(
             ExpectedSharpe = l.HoldoutSharpe != 0m ? l.HoldoutSharpe : null,
             ExpectedProfitFactor = l.HoldoutProfitFactor != 0m ? l.HoldoutProfitFactor : null,
             ExpectedMaxDrawdown = l.HoldoutMaxDrawdown != 0m ? l.HoldoutMaxDrawdown : null,
+            // [T1] La provenienza del verdetto viaggia con la gamba fino alla corsia: il badge
+            // "Grigia" in /ensemble e /trading nasce da qui, non dal DisplayName.
+            SourceVerdict = l.SourceVerdict,
         };
     }
 

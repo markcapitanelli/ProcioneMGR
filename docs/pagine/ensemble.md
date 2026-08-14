@@ -33,7 +33,7 @@ operazioni della pagina sono per-corsia.
 | Toast flottante | 114–124 | Esito azioni in position:fixed (i bottoni sono in fondo pagina, l'esito resta visibile) |
 | Configurazione | 132–351 | Exchange/symbol/timeframe/capitale, rebalance/rolling days, Min/Max %, **Futures+leva** (con avviso margine isolato e warning MiCA per Binance), tabella strategie, aggiunta gambe, azioni |
 | Tabella strategie | 209–253 | Per gamba: parametri, attiva, alloc %, **SL/TP/Trailing %**, **Sharpe/PF/MaxDD attesi** (alimentano il decay monitor), **algoritmo di esecuzione** (Immediato/TWAP/VWAP/Iceberg/Adaptive + finestra minuti), rimozione |
-| Aggiunta gambe | 255–335 | Da predefinite, da salvate (badge "Optimized" con Sharpe), da **modelli ML compatibili** (solo stesso symbol/timeframe), e il **Champion del registry** (banner dedicato: si auto-aggiorna, "Solo Paper/Testnet — mai Live, rifiutato dal motore per costruzione") |
+| Aggiunta gambe | 255–335 | Da predefinite, da salvate (badge "Optimized" con Sharpe), da **modelli ML compatibili** (solo stesso symbol/timeframe), da **fascia grigia** (vedi sotto, 2026-08-14) e il **Champion del registry** (banner dedicato: si auto-aggiorna, "Solo Paper/Testnet — mai Live, rifiutato dal motore per costruzione") |
 | Azioni | 337–349 | Save, Rebalance Now, Enable/Disable Ensemble, Aggiorna status |
 | Status live | 353–388 | KPI (capitale, PnL, last/next rebalance) + tabella strategie live ordinata per rolling Sharpe (migliore evidenziata) |
 | Monitor decadimento | 390–450 | Card per gamba: Sharpe atteso vs realizzato sui **trade realmente eseguiti**, delta, % dell'atteso, badge Alert/In attesa/In linea, filtro "solo alert" |
@@ -109,6 +109,20 @@ simbolo, modalità e un puntino verde quando sta operando — così si sa cosa g
 in ogni corsia. Oltre sei corsie le altre si raccolgono sotto `+N`, ma chi resta a vista lo decide
 l'utilità e non l'id: prima chi opera, poi chi è configurato, infine le vuote; e la corsia
 selezionata è sempre visibile.
+
+## [2026-08-14] Fascia grigia come fonte gamba + ridondanza dichiarata (PRD memoria-caccia)
+
+- **Quinta fonte gamba «Da fascia grigia»**: i candidati grigi dell'[Archivio candidati](research.md)
+  con la STESSA coppia/timeframe della corsia (dedup per chiave identità, misura più recente),
+  aggiunti con bracket SL/TP dalle escursioni (stesso `AutoBracket` del GreyDeployer) e
+  `SourceVerdict="Grey"`. Badge **Grigia** nella tabella delle gambe: una gamba grigia non deve
+  mai potersi leggere come un sopravvissuto pieno. Il pannello dichiara il secondo giro di
+  selezione (N candidati visti).
+- **«Valuta ridondanza gambe»**: correlazione dei rendimenti giornalieri fra le gambe attive
+  (backtest sugli ultimi 90 giorni, stessa formula dell'assemblaggio in pipeline —
+  `ReturnCorrelation`). Sopra |ρ|≥0,7 il badge avverte: due gambe correlate sono la stessa
+  scommessa raddoppiata. Gambe non backtestabili da qui (es. Champion) vengono saltate e
+  dichiarate, mai contate come "non correlate".
 
 ## Collegamenti con le altre pagine
 

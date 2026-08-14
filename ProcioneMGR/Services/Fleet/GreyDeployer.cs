@@ -118,6 +118,7 @@ public sealed class GreyDeployer(
                 ExpectedSharpe = candidate.HoldoutSharpe != 0m ? candidate.HoldoutSharpe : null,
                 ExpectedProfitFactor = candidate.HoldoutProfitFactor != 0m ? candidate.HoldoutProfitFactor : null,
                 ExpectedMaxDrawdown = candidate.HoldoutMaxDrawdown != 0m ? candidate.HoldoutMaxDrawdown : null,
+                SourceVerdict = "Grey", // [T1] stessa etichetta della pipeline: il badge non dipende dal percorso di schieramento
             },
         ];
         await manager.UpdateConfigurationAsync(cfg, ct);

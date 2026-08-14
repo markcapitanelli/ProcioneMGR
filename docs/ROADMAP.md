@@ -885,6 +885,18 @@ esattamente il gesto che fabbrica falsa significatività se fatto male (lezione 
 445k combinazioni → 0). Va fatto come esperimento con la sua ipotesi scritta prima, e col controllo
 sul rumore del [Standard di verifica](STANDARD-VERIFICA.md) — altrimenti non si fa.
 
+> **[2026-08-14] R1/R2 ripresi ed estesi, più un secondo filo nuovo.** Il proprietario ha
+> richiesto (in chat) esattamente ciò che R1/R2 avevano già diagnosticato l'8/6 e che non era
+> mai stato costruito, più un'idea nuova: comporre più strategie di fascia grigia sulla stessa
+> coppia in un'unica corsia. Misurato che il pezzo di composizione esiste già
+> (`EnsembleAssemblyStage`, Pipeline stage 11, HRP di default) ma è fermo dal 2026-07-09 perché
+> ammette solo candidati "sopravvissuti pieni" — zero da un mese. Piano completo in
+> [PRD-MEMORIA-CACCIA-COMPOSIZIONE-2026-08](PRD-MEMORIA-CACCIA-COMPOSIZIONE-2026-08.md): Fase 0
+> = R1+R2+R5 (lettura, invariata da qui); Fasi 1-5 = ammettere la fascia grigia
+> nell'assemblatore dietro un interruttore esplicito, con avviso di ridondanza/correlazione fra
+> gambe (calcolato dall'HRP e oggi scartato) reso visibile prima di ogni applicazione a
+> trading. Nessun automatismo nuovo verso Live; non blocca né scavalca F/G/Risanamento.
+
 ---
 
 ## Filone S — Distribuzione sul server: immagini private e build in casa (2026-08-06)
