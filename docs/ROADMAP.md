@@ -885,17 +885,19 @@ esattamente il gesto che fabbrica falsa significatività se fatto male (lezione 
 445k combinazioni → 0). Va fatto come esperimento con la sua ipotesi scritta prima, e col controllo
 sul rumore del [Standard di verifica](STANDARD-VERIFICA.md) — altrimenti non si fa.
 
-> **[2026-08-14] R1/R2 ripresi ed estesi, più un secondo filo nuovo.** Il proprietario ha
-> richiesto (in chat) esattamente ciò che R1/R2 avevano già diagnosticato l'8/6 e che non era
-> mai stato costruito, più un'idea nuova: comporre più strategie di fascia grigia sulla stessa
-> coppia in un'unica corsia. Misurato che il pezzo di composizione esiste già
-> (`EnsembleAssemblyStage`, Pipeline stage 11, HRP di default) ma è fermo dal 2026-07-09 perché
-> ammette solo candidati "sopravvissuti pieni" — zero da un mese. Piano completo in
-> [PRD-MEMORIA-CACCIA-COMPOSIZIONE-2026-08](PRD-MEMORIA-CACCIA-COMPOSIZIONE-2026-08.md): Fase 0
-> = R1+R2+R5 (lettura, invariata da qui); Fasi 1-5 = ammettere la fascia grigia
-> nell'assemblatore dietro un interruttore esplicito, con avviso di ridondanza/correlazione fra
-> gambe (calcolato dall'HRP e oggi scartato) reso visibile prima di ogni applicazione a
-> trading. Nessun automatismo nuovo verso Live; non blocca né scavalca F/G/Risanamento.
+> **[2026-08-14] R1/R2 ripresi ed estesi, più un secondo filo nuovo — ED ESEGUITI (Fasi 0-4).**
+> Il proprietario ha richiesto (in chat) esattamente ciò che R1/R2 avevano già diagnosticato
+> l'8/6 e che non era mai stato costruito, più un'idea nuova: comporre più strategie di fascia
+> grigia sulla stessa coppia in un'unica corsia. Misurato che il pezzo di composizione esiste
+> già (`EnsembleAssemblyStage`, Pipeline stage 11, HRP di default) ma era fermo dal 2026-07-09
+> perché ammetteva solo candidati "sopravvissuti pieni" — zero da un mese. Piano ED esecuzione
+> in [PRD-MEMORIA-CACCIA-COMPOSIZIONE-2026-08](PRD-MEMORIA-CACCIA-COMPOSIZIONE-2026-08.md):
+> **R1+R2+R5 FATTI** (pagina `/research` su indice a righe derivato `ResearchCandidates`,
+> giudice unico `GreyZone.IsGrey` promosso da FleetStateReader), **T1-T5 FATTI**
+> (`includeGreyZone` default-off sull'assemblaggio, correlazione dell'HRP dichiarata invece che
+> scartata, quinta fonte gamba in `/ensemble` col badge Grigia, semantica lorda dell'esposizione
+> fissata dai test). Review avversaria multi-lente: 15 finding confermati e corretti (1 HIGH),
+> 3 refutati. Nessun automatismo nuovo verso Live; R3/R4 del filone restano aperti.
 
 ---
 

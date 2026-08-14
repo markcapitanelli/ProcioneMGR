@@ -1,6 +1,22 @@
 # PRD — Memoria della caccia e composizione multi-strategia
 
-**Data:** 2026-08-14 · **Mandato:** proprietario, in chat · **Stato:** proposta, nessuna riga scritta
+**Data:** 2026-08-14 · **Mandato:** proprietario, in chat · **Stato:** FASI 0–4 ESEGUITE (stesso giorno), Fase 5 in corso
+
+> **[2026-08-14, sera] Esecuzione.** Fasi 0–4 implementate, testate e passate dalla review
+> avversaria multi-lente (15 finding confermati e TUTTI corretti — fra cui uno HIGH: le stringhe
+> non troncate ai limiti di colonna potevano far fallire l'intera indicizzazione; 3 refutati).
+> Suite completa 2536/2536 prima delle correzioni, ri-verificata dopo. Consegnato:
+> `/research` (archivio candidati: indice a righe derivato `ResearchCandidates`, aggregati per
+> famiglia, motivi di scarto classificati, fascia grigia in evidenza, Rianalizza→Optimization),
+> `includeGreyZone`+`redundancyWarnRho` sull'assemblaggio (giudice unico `GreyZone.IsGrey`,
+> grigi mai al posto dei sopravvissuti, correlazione dell'HRP dichiarata in proposta e negli
+> alert), quinta fonte gamba «Da fascia grigia» in `/ensemble` col badge e «Valuta ridondanza
+> gambe», dichiarazioni T4 in Note/azioni, semantica lorda dell'esposizione fissata dai test
+> (T5). Risposte alle domande aperte del §9, prese in autonomia per procedere: una coppia per
+> corsia (vincolo architetturale attuale confermato); stessa soglia grigia già in produzione
+> (mai due giudici); `maxLegs` invariato a 3 anche coi grigi (i grigi riempiono solo i posti
+> liberi). Fase 5 (verifica in browser + applicazione su corsia Paper) documentata nel report
+> di chiusura.
 
 ## 0. Le due domande, testuali
 
