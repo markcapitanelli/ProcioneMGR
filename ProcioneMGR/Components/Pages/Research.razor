@@ -36,6 +36,11 @@
 {
     <div class="alert alert-danger">@_error</div>
 }
+@if (Svc.IndexError is not null)
+{
+    @* Degradare dicendolo: l'archivio già indicizzato resta consultabile, il buco è dichiarato. *@
+    <div class="alert alert-warning">@Svc.IndexError</div>
+}
 
 @if (Svc.Summary is { } sum)
 {
@@ -71,9 +76,11 @@
 <div class="card mb-3">
     <div class="card-body">
         <div class="row g-2 align-items-end">
+            @* I filtri sono spenti durante il rebuild: interrogare una tabella mezza ricostruita
+               mostrerebbe aggregati parziali come se fossero veri (review 2026-08-14). *@
             <div class="col-auto">
                 <label class="form-label mb-0">Coppia</label>
-                <select class="form-select form-select-sm" @bind="_symbol" @bind:after="ApplyFiltersAsync">
+                <select class="form-select form-select-sm" @bind="_symbol" @bind:after="ApplyFiltersAsync" disabled="@_busy">
                     <option value="">Tutte</option>
                     @foreach (var s in Svc.Symbols)
                     {
@@ -83,7 +90,7 @@
             </div>
             <div class="col-auto">
                 <label class="form-label mb-0">Timeframe</label>
-                <select class="form-select form-select-sm" @bind="_timeframe" @bind:after="ApplyFiltersAsync">
+                <select class="form-select form-select-sm" @bind="_timeframe" @bind:after="ApplyFiltersAsync" disabled="@_busy">
                     <option value="">Tutti</option>
                     @foreach (var t in Svc.Timeframes)
                     {
@@ -93,7 +100,7 @@
             </div>
             <div class="col-auto">
                 <label class="form-label mb-0">Verdetto</label>
-                <select class="form-select form-select-sm" @bind="_verdict" @bind:after="ApplyFiltersAsync">
+                <select class="form-select form-select-sm" @bind="_verdict" @bind:after="ApplyFiltersAsync" disabled="@_busy">
                     <option value="all">Tutti</option>
                     <option value="survived">Promosso</option>
                     <option value="grey">Fascia grigia</option>
@@ -102,7 +109,7 @@
             </div>
             <div class="col-auto">
                 <label class="form-label mb-0">Famiglia</label>
-                <select class="form-select form-select-sm" @bind="_family" @bind:after="ApplyFiltersAsync">
+                <select class="form-select form-select-sm" @bind="_family" @bind:after="ApplyFiltersAsync" disabled="@_busy">
                     <option value="">Tutte</option>
                     @foreach (var f in Svc.Families)
                     {
@@ -112,7 +119,7 @@
             </div>
             <div class="col-auto">
                 <label class="form-label mb-0">Cerca</label>
-                <input class="form-control form-control-sm" @bind="_search" @bind:after="ApplyFiltersAsync" placeholder="testo nella chiave" />
+                <input class="form-control form-control-sm" @bind="_search" @bind:after="ApplyFiltersAsync" placeholder="testo nella chiave" disabled="@_busy" />
             </div>
             <div class="col-auto">
                 <button class="btn btn-sm btn-outline-secondary" @onclick="RebuildAsync" disabled="@_busy"
@@ -269,6 +276,7 @@
 
     private async Task ApplyFiltersAsync()
     {
+        if (_busy) return; // il rebuild sta riscrivendo la tabella: niente letture interleavate
         _error = null;
         try
         {

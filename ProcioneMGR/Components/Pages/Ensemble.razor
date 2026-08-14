@@ -319,7 +319,9 @@ else
                    promozione. *@
                 <div class="row g-2 align-items-end mt-1 p-2 border rounded border-warning-subtle bg-body-tertiary">
                     <div class="col-12">
-                        <label class="form-label small mb-0 fw-semibold">Da fascia grigia (@_config!.Symbol @_config.Timeframe) — @_greyCandidates.Count candidati</label>
+                        @* L'intestazione dichiara la coppia PER CUI la lista è stata caricata (la config
+                           salvata), non i campi live editabili sopra: se divergono, l'aggiunta rifiuta. *@
+                        <label class="form-label small mb-0 fw-semibold">Da fascia grigia (@(Svc.GreyCandidatesFor?.Symbol) @(Svc.GreyCandidatesFor?.Timeframe)) — @_greyCandidates.Count candidati</label>
                         <div class="form-text mt-0">
                             Bocciati per <strong>sola finestra corta</strong> o DSR in [0,80–0,95), con Sharpe holdout positivo:
                             candidabili al forward test Paper, <strong>non promossi</strong>. Scegliere fra @_greyCandidates.Count
@@ -738,23 +740,31 @@ else
 
     private async Task LoadGreyCandidatesAsync()
     {
+        // La selezione grigia appartiene alla corsia caricata: al cambio corsia un id stantio
+        // punterebbe a un candidato di un'altra coppia (review 2026-08-14).
+        _addGreyId = 0;
         try { await Svc.LoadGreyCandidatesAsync(); }
         catch (Exception ex) { SetMsg($"Errore candidati fascia grigia: {ex.Message}", true); }
     }
 
     private async Task AddFromGreyAsync()
     {
-        if (_addGreyId == 0) return;
-        var msg = await Svc.AddFromGreyAsync(_addGreyId);
-        _addGreyId = 0;
-        SetMsg(msg, false);
+        if (_addGreyId == 0 || _busy) return; // _busy: il bottone è disabled="@_busy", la guardia chiude il doppio click
+        _busy = true;
+        try
+        {
+            var outcome = await Svc.AddFromGreyAsync(_addGreyId);
+            _addGreyId = 0;
+            SetMsg(outcome.Message, outcome.IsError);
+        }
+        finally { _busy = false; StateHasChanged(); }
     }
 
     private async Task EvaluateLegCorrelationAsync()
     {
         if (_corrBusy) return;
         _corrBusy = true;
-        try { await Svc.EvaluateLegCorrelationAsync(_laneId); }
+        try { await Svc.EvaluateLegCorrelationAsync(); }
         catch (Exception ex) { SetMsg($"Errore misura ridondanza: {ex.Message}", true); }
         finally { _corrBusy = false; StateHasChanged(); }
     }

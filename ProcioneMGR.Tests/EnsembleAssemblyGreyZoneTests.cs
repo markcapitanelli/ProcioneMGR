@@ -270,6 +270,102 @@ public sealed class EnsembleAssemblyGreyZoneTests
     }
 
     [Fact]
+    public async Task RiskSizing_GreyZeros_StayOutOfAverages()
+    {
+        // [Review 2026-08-14] 1 sopravvissuto misurato (RF95 2,4×, half-Kelly 4%) + 1 grigio mai
+        // sondato: le medie devono restare quelle del sopravvissuto, non diluirsi a metà — un
+        // "RF95 medio" più basso del misurato farebbe sembrare il sistema PIÙ sicuro.
+        var survivor = new ValidatedCandidate
+        {
+            StrategyName = "Steady", Symbol = "AAA/USDT", Timeframe = "1h", Survived = true,
+            HalfKelly = 0.04m, KellyFraction = 0.08m, MonteCarloRiskFactor95 = 2.4m, MonteCarloDrawdown95 = 950m,
+        };
+        var grey = new ValidatedCandidate
+        {
+            StrategyName = "Ortho", Symbol = "AAA/USDT", Timeframe = "1h", Survived = false,
+            HoldoutSharpe = 0.9m, HoldoutTrades = 8, RejectReason = "Solo 8 trade in holdout (< 10)",
+        };
+        var ctx = new PipelineContext
+        {
+            InitialCapital = 10_000m,
+            Validated = [survivor, grey],
+            Ensemble = new EnsembleProposal
+            {
+                Legs =
+                [
+                    new ProposedLeg { StrategyName = "Steady", Symbol = "AAA/USDT", Timeframe = "1h", WeightPercent = 60m, SourceVerdict = "Survived" },
+                    new ProposedLeg { StrategyName = "Ortho", Symbol = "AAA/USDT", Timeframe = "1h", WeightPercent = 40m, SourceVerdict = "Grey" },
+                ],
+            },
+        };
+
+        await new RiskSizingStage(new FakeRules()).ExecuteAsync(ctx, new StageConfig(), CancellationToken.None);
+
+        Assert.Equal(2.4m, ctx.Risk!.AverageRiskFactor95);   // non 1,2: lo zero del grigio resta fuori
+        Assert.Equal(0.04m, ctx.Risk.AverageHalfKelly);
+        Assert.True(ctx.Risk.ShutdownDrawdownPercent > 0m);   // la guardia viene dal solo misurato
+        Assert.True(ctx.Ensemble.Legs[1].SizingPercent > 0m); // il grigio ha comunque il sizing conservativo
+        Assert.Contains(ctx.Risk.Notes, n => n.Contains("sole gambe misurate"));
+    }
+
+    [Fact]
+    public async Task RiskSizing_GreyOnly_DeclaresGuardNotEstimable()
+    {
+        var grey = new ValidatedCandidate
+        {
+            StrategyName = "Ortho", Symbol = "AAA/USDT", Timeframe = "1h", Survived = false,
+            HoldoutSharpe = 0.9m, HoldoutTrades = 8, RejectReason = "Solo 8 trade in holdout (< 10)",
+        };
+        var ctx = new PipelineContext
+        {
+            InitialCapital = 10_000m,
+            Validated = [grey],
+            Ensemble = new EnsembleProposal
+            {
+                Legs = [new ProposedLeg { StrategyName = "Ortho", Symbol = "AAA/USDT", Timeframe = "1h", WeightPercent = 100m, SourceVerdict = "Grey" }],
+            },
+        };
+
+        await new RiskSizingStage(new FakeRules()).ExecuteAsync(ctx, new StageConfig(), CancellationToken.None);
+
+        // Gli zeri NON devono sembrare misure: la nota lo dice con tutte le lettere.
+        Assert.Contains(ctx.Risk!.Notes, n => n.Contains("NON stimabili"));
+    }
+
+    [Fact]
+    public async Task Recommendation_GreyOnly_ActionsFollowTheLegs_NotTheDeadEnd()
+    {
+        // [Review 2026-08-14] Zero sopravvissuti ma gambe grigie proposte: il report non può dire
+        // "NON operare" tre righe sotto l'ENSEMBLE PROPOSTO — le azioni seguono le gambe, con la
+        // natura grigia dichiarata.
+        var ctx = new PipelineContext
+        {
+            Validated = [Grey("Ortho", 0.8m)],
+            Ensemble = new EnsembleProposal
+            {
+                Legs = [new ProposedLeg { StrategyName = "Ortho", DisplayName = "Ortho AAA/USDT 1h [base] (fascia grigia)", Symbol = "AAA/USDT", Timeframe = "1h", WeightPercent = 100m, SourceVerdict = "Grey" }],
+            },
+        };
+
+        await new RecommendationStage(new FakeRules()).ExecuteAsync(ctx, new StageConfig(), CancellationToken.None);
+
+        var actions = ctx.Recommendation!.SuggestedActions;
+        Assert.Contains(actions, a => a.StartsWith("Paper trading:") && a.Contains("Ortho"));
+        Assert.Contains(actions, a => a.Contains("FASCIA GRIGIA") && a.Contains("Paper"));
+        Assert.DoesNotContain(actions, a => a.Contains("NON operare"));
+    }
+
+    [Fact]
+    public async Task Recommendation_NoLegsAtAll_StillSaysDoNotOperate()
+    {
+        var ctx = new PipelineContext { Validated = [] };
+
+        await new RecommendationStage(new FakeRules()).ExecuteAsync(ctx, new StageConfig(), CancellationToken.None);
+
+        Assert.Contains(ctx.Recommendation!.SuggestedActions, a => a.Contains("NON operare"));
+    }
+
+    [Fact]
     public async Task Recommendation_NoCorrelationAlert_BelowThreshold()
     {
         var ctx = new PipelineContext

@@ -241,9 +241,108 @@ public sealed class ResearchCandidateIndexerTests : IAsyncDisposable
         Assert.Equal("Finestra corta (pochi trade)", ResearchPageService.RejectCategory("Solo 8 trade in holdout (< 10)"));
         Assert.Equal("DSR sotto soglia", ResearchPageService.RejectCategory("DSR 0,62 ≤ 0,95 dopo 128 tentativi"));
         Assert.Equal("Sharpe holdout sotto soglia", ResearchPageService.RejectCategory("Sharpe holdout -1,50 < 0,30"));
+        // Il testo VERO del gate T1.5 (ModelStages): inglese "permutation" e con "Sharpe" dentro
+        // — la review 2026-08-14 lo ha trovato classificato come Sharpe. Deve vincere il ramo giusto.
+        Assert.Equal("Permutation test", ResearchPageService.RejectCategory("permutation p 0,123 ≥ 0,10 (Sharpe holdout compatibile col rumore)"));
         Assert.Equal("(nessun motivo registrato)", ResearchPageService.RejectCategory(null));
         // Un motivo mai visto resta com'e': onesto, mai un "altro" muto.
         Assert.Equal("Motivo inedito", ResearchPageService.RejectCategory("Motivo inedito"));
+    }
+
+    // ------------------------------------------------------------------ 6. robustezza (review 2026-08-14)
+
+    [Fact]
+    public async Task OverlongRejectReason_IsTruncated_RunStillIndexed()
+    {
+        // Il RejectReason può portare un messaggio d'eccezione ILLIMITATO ("Backtest fallito:
+        // {ex.Message}") contro varchar(256): senza troncamento UN candidato storico fuori misura
+        // faceva fallire l'intero giro e svuotava la pagina.
+        var (dbFactory, indexer) = await BuildAsync();
+        var longReason = "Backtest fallito: " + new string('x', 600);
+        await SeedRunAsync(dbFactory, [Candidate("A", "BTC/USDT", false, -0.5m, reject: longReason)], DateTime.UtcNow.AddDays(-1));
+
+        var result = await indexer.IndexNewRunsAsync();
+
+        Assert.Equal(1, result.RunsIndexed);
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var row = await db.ResearchCandidates.SingleAsync();
+        Assert.Equal(256, row.RejectReason!.Length);
+        Assert.StartsWith("Backtest fallito:", row.RejectReason);
+    }
+
+    [Fact]
+    public async Task ConcurrentlyIndexedRun_IsSkipped_OthersStillIndexed()
+    {
+        // Fra processi diversi (guscio + pod ui) la gara sul read-then-insert resta possibile: il
+        // perdente riceve la violazione dell'indice unico e deve trattare QUEL run come "già
+        // indicizzato da un altro", non abortire il giro. Si riproduce ESATTAMENTE la finestra:
+        // la lista dei run già indicizzati viene letta (vuota), POI "l'altro processo" scrive la
+        // sua riga, e il nostro giro parte con la lista ormai stantia — via IndexAsync internal.
+        var (dbFactory, indexer) = await BuildAsync();
+        var winner = Candidate("A", "BTC/USDT", true, 1.5m);
+        var runId = await SeedRunAsync(dbFactory, [winner], DateTime.UtcNow.AddDays(-2));
+        await SeedRunAsync(dbFactory, [Candidate("B", "ETH/USDT", true, 1.1m)], DateTime.UtcNow.AddDays(-1));
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            // La riga "dell'altro processo": stesso (RunId, CandidateKey) che il nostro giro proverà a scrivere.
+            db.ResearchCandidates.Add(new ResearchCandidate
+            {
+                RunId = runId, RunCompletedUtc = DateTime.UtcNow, StrategyName = winner.StrategyName,
+                Symbol = winner.Symbol, Timeframe = winner.Timeframe, CandidateKey = winner.Key,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        ResearchIndexResult result;
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            result = await indexer.IndexAsync(db, [], CancellationToken.None); // lista stantia: la finestra della gara
+        }
+
+        Assert.Equal(1, result.RunsIndexed);   // il secondo run passa
+        Assert.Equal(1, result.RunsSkipped);   // il run "vinto dall'altro" è saltato, non fatale
+        await using var check = await dbFactory.CreateDbContextAsync();
+        Assert.Equal(1, await check.ResearchCandidates.CountAsync(c => c.RunId != runId));
+        Assert.Equal(1, await check.ResearchCandidates.CountAsync(c => c.RunId == runId)); // nessun duplicato
+    }
+
+    [Fact]
+    public async Task NullCompletedAt_FallsBackToArtifactCreatedAt_StableAcrossRebuilds()
+    {
+        // DateTime.UtcNow come fallback fabbricherebbe una recency diversa a ogni rebuild: il
+        // riferimento stabile è il CreatedAt dell'artifact (stessa transazione di fine run).
+        var (dbFactory, indexer) = await BuildAsync();
+        var artifactCreated = new DateTime(2026, 8, 1, 10, 0, 0, DateTimeKind.Utc);
+        var runId = Guid.NewGuid();
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            db.PipelineRuns.Add(new PipelineRun
+            {
+                Id = runId, ConfigurationId = 1, StartedAt = artifactCreated.AddMinutes(-30),
+                CompletedAt = null, Status = "Completed", Trigger = "Manual",
+            });
+            db.PipelineArtifacts.Add(new PipelineArtifact
+            {
+                RunId = runId, StageName = "HoldoutValidation", Kind = "ValidatedCandidates",
+                PayloadJson = JsonSerializer.Serialize(new List<ValidatedCandidate> { Candidate("A", "BTC/USDT", true, 1.5m) }),
+                CreatedAt = artifactCreated,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await indexer.IndexNewRunsAsync();
+        var first = await ReadCompletedUtcAsync(dbFactory);
+        await indexer.RebuildAsync();
+        var second = await ReadCompletedUtcAsync(dbFactory);
+
+        Assert.Equal(artifactCreated, first);
+        Assert.Equal(first, second); // stabile: due rebuild, stessa data
+    }
+
+    private static async Task<DateTime> ReadCompletedUtcAsync(IDbContextFactory<ApplicationDbContext> dbFactory)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        return (await db.ResearchCandidates.SingleAsync()).RunCompletedUtc;
     }
 
     // ------------------------------------------------------------------ 5. la scelta grigia deduplica

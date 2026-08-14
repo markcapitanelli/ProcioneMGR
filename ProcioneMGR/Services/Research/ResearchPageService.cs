@@ -53,13 +53,26 @@ public sealed class ResearchPageService(
     public int FilteredCount { get; private set; }
     public ResearchIndexResult? LastIndex { get; private set; }
 
+    /// <summary>Valorizzato quando l'ultima indicizzazione è fallita: la pagina lo dichiara e mostra comunque l'archivio esistente.</summary>
+    public string? IndexError { get; private set; }
+
     /// <summary>
     /// Indicizzazione incrementale a ogni apertura della pagina: a regime è una no-op (nessun run
     /// nuovo), dopo una caccia porta dentro i run freschi senza che nessuno debba ricordarsene.
+    /// [Review 2026-08-14] Un'indicizzazione fallita NON svuota la pagina: l'archivio già
+    /// indicizzato si mostra comunque, col fallimento dichiarato — degradare dicendolo.
     /// </summary>
     public async Task InitializeAsync(ResearchFilter filter, CancellationToken ct = default)
     {
-        LastIndex = await indexer.IndexNewRunsAsync(ct);
+        IndexError = null;
+        try
+        {
+            LastIndex = await indexer.IndexNewRunsAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            IndexError = $"Indicizzazione dei run nuovi fallita ({ex.Message}): mostro l'archivio già indicizzato.";
+        }
         await LoadAsync(filter, ct);
     }
 
@@ -186,7 +199,12 @@ public sealed class ResearchPageService(
         var r when r.Contains("DSR", StringComparison.OrdinalIgnoreCase) => "DSR sotto soglia",
         var r when r.Contains("PBO", StringComparison.OrdinalIgnoreCase) => "PBO (overfitting di pannello)",
         var r when r.Contains("gemell", StringComparison.OrdinalIgnoreCase) => "Gemello nullo non battuto",
-        var r when r.Contains("permutazion", StringComparison.OrdinalIgnoreCase) => "Permutation test",
+        // Il gate scrive "permutation p 0,123 ≥ … (Sharpe holdout compatibile col rumore)":
+        // inglese, e con la parola "Sharpe" dentro — quindi va riconosciuto PRIMA del ramo
+        // Sharpe, e con la grafia vera (review 2026-08-14: "permutazion" non è un prefisso di
+        // "permutation", il caso finiva nella classe sbagliata).
+        var r when r.Contains("permutation", StringComparison.OrdinalIgnoreCase)
+            || r.Contains("permutazion", StringComparison.OrdinalIgnoreCase) => "Permutation test",
         var r when r.Contains("Sharpe", StringComparison.OrdinalIgnoreCase) => "Sharpe holdout sotto soglia",
         var r => r.Length <= 60 ? r : r[..60] + "…",
     };

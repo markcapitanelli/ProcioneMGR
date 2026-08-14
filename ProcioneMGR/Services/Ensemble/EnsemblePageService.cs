@@ -66,6 +66,13 @@ public sealed class EnsemblePageService(
     /// <summary>[T3] Candidati grigi compatibili con la corsia (stessa coppia e timeframe), dall'archivio della caccia.</summary>
     public List<Research.ResearchCandidate> GreyCandidates { get; private set; } = [];
 
+    /// <summary>
+    /// La coppia/timeframe PER CUI la lista grigia è stata caricata: l'intestazione del pannello
+    /// mostra questa, non il valore live dei campi (che l'operatore può editare senza salvare) —
+    /// altrimenti l'etichetta mentirebbe sui candidati elencati (review 2026-08-14).
+    /// </summary>
+    public (string Symbol, string Timeframe)? GreyCandidatesFor { get; private set; }
+
     /// <summary>[T2] Ultimo report di ridondanza calcolato con <see cref="EvaluateLegCorrelationAsync"/>.</summary>
     public Portfolio.LegCorrelationReport? LegCorrelation { get; private set; }
 
@@ -211,13 +218,17 @@ public sealed class EnsemblePageService(
     public async Task LoadGreyCandidatesAsync(CancellationToken ct = default)
     {
         GreyCandidates = [];
+        GreyCandidatesFor = null;
         if (Config is null || string.IsNullOrEmpty(Config.Symbol)) return;
+        var symbol = Config.Symbol;
+        var timeframe = Config.Timeframe;
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var raw = await db.ResearchCandidates.AsNoTracking()
-            .Where(c => c.IsGrey && c.Symbol == Config.Symbol && c.Timeframe == Config.Timeframe)
+            .Where(c => c.IsGrey && c.Symbol == symbol && c.Timeframe == timeframe)
             .OrderByDescending(c => c.RunCompletedUtc)
             .ToListAsync(ct);
         GreyCandidates = DedupGreyChoices(raw, MaxGreyChoices);
+        GreyCandidatesFor = (symbol, timeframe);
     }
 
     /// <summary>
@@ -234,27 +245,40 @@ public sealed class EnsemblePageService(
             .Take(max)
             .ToList();
 
+    /// <summary>Esito di un'azione della pagina: messaggio + gravità, così il toast non può mai colorare di verde un fallimento.</summary>
+    public sealed record ActionOutcome(string Message, bool IsError);
+
     /// <summary>
     /// Aggiunge un candidato grigio come gamba: parametri esatti del candidato, attese holdout per
     /// il decay monitor, bracket SL/TP data-driven dalle escursioni (stesso <c>AutoBracket</c> del
     /// GreyDeployer — un forward test senza protezioni non si aggiunge da un click), e
     /// <c>SourceVerdict="Grey"</c> perché il badge non dipenda dal percorso. Il messaggio dichiara
-    /// il bracket applicato o la sua assenza.
+    /// il bracket applicato o la sua assenza; i fallimenti tornano con IsError=true.
     /// </summary>
-    public async Task<string> AddFromGreyAsync(long researchCandidateId, CancellationToken ct = default)
+    public async Task<ActionOutcome> AddFromGreyAsync(long researchCandidateId, CancellationToken ct = default)
     {
-        if (Config is null) return "Nessuna configurazione caricata.";
+        if (Config is null) return new("Nessuna configurazione caricata.", IsError: true);
         var c = GreyCandidates.FirstOrDefault(x => x.Id == researchCandidateId);
-        if (c is null) return "Candidato non trovato fra i grigi compatibili.";
+        if (c is null) return new("Candidato non trovato fra i grigi compatibili.", IsError: true);
+        // [Review 2026-08-14] La lista grigia è stata caricata per la coppia SALVATA della
+        // corsia; se l'operatore ha editato Symbol/Timeframe senza salvare, aggiungere ora
+        // creerebbe una gamba cross-coppia con attese di un'altra serie. Fail-closed.
+        if (GreyCandidatesFor is not { } loadedFor
+            || loadedFor.Symbol != Config.Symbol || loadedFor.Timeframe != Config.Timeframe)
+        {
+            return new($"La lista dei grigi è per {GreyCandidatesFor?.Symbol} {GreyCandidatesFor?.Timeframe}, "
+                + $"ma la corsia ora dice {Config.Symbol} {Config.Timeframe}: salva (o ricarica) la corsia prima di aggiungere.", IsError: true);
+        }
         // Identità canonica del candidato (PipelineCandidateKey), mai un confronto fatto a mano
         // sui parametri: la chiave è già l'impronta dei parametri.
-        if (Config.Strategies.Any(s =>
-                Pipeline.PipelineCandidateKey.Build(s.StrategyName, Config.Symbol, Config.Timeframe, s.Parameters) == c.CandidateKey))
-        {
-            return "Questa gamba grigia è già nella corsia.";
-        }
+        bool AlreadyPresent() => Config.Strategies.Any(s =>
+            Pipeline.PipelineCandidateKey.Build(s.StrategyName, Config.Symbol, Config.Timeframe, s.Parameters) == c.CandidateKey);
+        if (AlreadyPresent()) return new("Questa gamba grigia è già nella corsia.", IsError: true);
 
         var (sl, tp) = await Pipeline.AutoBracket.ComputeAsync(dbFactory, excursionAnalyzer, c.Symbol, c.Timeframe, ct);
+        // Ricontrollo DOPO l'await: un doppio click fa partire due handler e il secondo passa il
+        // primo controllo mentre il primo è ancora dentro AutoBracket (review 2026-08-14).
+        if (AlreadyPresent()) return new("Questa gamba grigia è già nella corsia.", IsError: true);
         Config.Strategies.Add(new EnsembleStrategy
         {
             StrategyName = c.StrategyName,
@@ -268,8 +292,8 @@ public sealed class EnsemblePageService(
             SourceVerdict = "Grey",
         });
         return sl > 0m || tp > 0m
-            ? $"Gamba grigia aggiunta con bracket dalle escursioni (SL {sl:F2}% / TP {tp:F2}%). Ricorda: Save per persistere."
-            : "Gamba grigia aggiunta SENZA bracket (escursioni non derivabili: impostare SL/TP a mano prima di avviare).";
+            ? new($"Gamba grigia aggiunta con bracket dalle escursioni (SL {sl:F2}% / TP {tp:F2}%). Ricorda: Save per persistere.", IsError: false)
+            : new("Gamba grigia aggiunta SENZA bracket (escursioni non derivabili: impostare SL/TP a mano prima di avviare).", IsError: false);
     }
 
     private static Dictionary<string, decimal> ParseParams(string json)
@@ -285,9 +309,11 @@ public sealed class EnsemblePageService(
     /// backtestandole sulla stessa finestra recente (<see cref="CorrelationWindowDays"/> giorni) —
     /// stessa formula dell'assemblaggio in pipeline (<see cref="Portfolio.ReturnCorrelation"/>).
     /// Gambe non backtestabili da qui (es. Champion, che è una sentinella del motore) vengono
-    /// SALTATE e dichiarate nel report, mai conteggiate come "non correlate".
+    /// SALTATE e dichiarate nel report, mai conteggiate come "non correlate". Gambe e contesto
+    /// (exchange/coppia/timeframe) sono FOTOGRAFATI all'avvio: un cambio corsia a metà misura non
+    /// deve mischiare due corsie nello stesso report (review 2026-08-14).
     /// </summary>
-    public async Task<Portfolio.LegCorrelationReport> EvaluateLegCorrelationAsync(int laneId, CancellationToken ct = default)
+    public async Task<Portfolio.LegCorrelationReport> EvaluateLegCorrelationAsync(CancellationToken ct = default)
     {
         var report = new Portfolio.LegCorrelationReport
         {
@@ -300,6 +326,7 @@ public sealed class EnsemblePageService(
             return report;
         }
 
+        var (exchangeName, symbol, timeframe) = (Config.ExchangeName, Config.Symbol, Config.Timeframe);
         var active = Config.Strategies.Where(s => s.IsActive).ToList();
         if (active.Count < 2)
         {
@@ -319,9 +346,9 @@ public sealed class EnsemblePageService(
             {
                 var result = await backtestEngine.RunBacktestAsync(new BacktestConfiguration
                 {
-                    ExchangeName = Config.ExchangeName,
-                    Symbol = Config.Symbol,
-                    Timeframe = Config.Timeframe,
+                    ExchangeName = exchangeName,
+                    Symbol = symbol,
+                    Timeframe = timeframe,
                     From = from,
                     To = to,
                     InitialCapital = 10_000m,

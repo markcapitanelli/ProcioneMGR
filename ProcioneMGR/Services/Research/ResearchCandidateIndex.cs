@@ -83,32 +83,69 @@ public sealed class ResearchCandidateIndexer(
     /// <summary>Stesso KindTag scritto da PipelineEngine.SaveArtifacts e letto da FleetStateReader.</summary>
     internal const string ArtifactKind = "ValidatedCandidates";
 
+    /// <summary>
+    /// [Review 2026-08-14] Serializza le chiamate DENTRO il processo: due circuiti Blazor che
+    /// aprono /research insieme non devono correre sullo stesso read-then-insert. Fra processi
+    /// diversi (guscio + pod ui) la gara resta possibile: lì decide l'indice unico, e il
+    /// perdente tratta il run come "già indicizzato da un altro" (vedi catch in IndexAsync).
+    /// </summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
     public async Task<ResearchIndexResult> IndexNewRunsAsync(CancellationToken ct = default)
     {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var alreadyIndexed = await db.ResearchCandidates.AsNoTracking()
-            .Select(r => r.RunId).Distinct().ToListAsync(ct);
-        return await IndexAsync(db, alreadyIndexed, ct);
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var alreadyIndexed = await db.ResearchCandidates.AsNoTracking()
+                .Select(r => r.RunId).Distinct().ToListAsync(ct);
+            return await IndexAsync(db, alreadyIndexed, ct);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task<ResearchIndexResult> RebuildAsync(CancellationToken ct = default)
     {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        // Tabella derivata: cancellare e rifare È il contratto di coerenza col giudice corrente
-        // (se la definizione di grigio cambia, il rebuild riallinea il flag su tutto lo storico).
-        await db.ResearchCandidates.ExecuteDeleteAsync(ct);
-        return await IndexAsync(db, [], ct);
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            // Tabella derivata: cancellare e rifare È il contratto di coerenza col giudice corrente
+            // (se la definizione di grigio cambia, il rebuild riallinea il flag su tutto lo storico).
+            await db.ResearchCandidates.ExecuteDeleteAsync(ct);
+            return await IndexAsync(db, [], ct);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
-    private async Task<ResearchIndexResult> IndexAsync(ApplicationDbContext db, List<Guid> alreadyIndexed, CancellationToken ct)
+    /// <summary>
+    /// [Review 2026-08-14] Tronca ai limiti di colonna PRIMA dell'insert: il RejectReason può
+    /// contenere un messaggio d'eccezione ILLIMITATO ("Backtest fallito: {ex.Message}",
+    /// ModelStages) contro varchar(256) — senza troncamento un solo candidato storico fuori
+    /// misura farebbe fallire l'intero giro di indicizzazione e svuoterebbe la pagina.
+    /// </summary>
+    private static string? Truncate(string? s, int max) =>
+        s is null || s.Length <= max ? s : s[..max];
+
+    // Internal e non private: il test della gara fra processi deve poter passare una lista
+    // "stantia" di run già indicizzati — dall'API pubblica la finestra non è riproducibile.
+    internal async Task<ResearchIndexResult> IndexAsync(ApplicationDbContext db, List<Guid> alreadyIndexed, CancellationToken ct)
     {
         // Gli artifact esistono solo per run "Completed" (PipelineEngine.SaveArtifacts), quindi il
-        // join filtra da solo; CompletedAt si denormalizza qui, una volta.
+        // join filtra da solo; CompletedAt si denormalizza qui, una volta. Il fallback per un
+        // CompletedAt assente è il CreatedAt dell'artifact (stessa transazione di fine run):
+        // STABILE fra rebuild — DateTime.UtcNow fabbricherebbe una recency diversa a ogni giro.
         var sources = await db.PipelineArtifacts.AsNoTracking()
             .Where(a => a.Kind == ArtifactKind && !alreadyIndexed.Contains(a.RunId))
             .Join(db.PipelineRuns.AsNoTracking(),
                 a => a.RunId, r => r.Id,
-                (a, r) => new { a.RunId, a.PayloadJson, r.CompletedAt })
+                (a, r) => new { a.RunId, a.PayloadJson, r.CompletedAt, a.CreatedAt })
             .ToListAsync(ct);
 
         var runsIndexed = 0;
@@ -140,11 +177,11 @@ public sealed class ResearchCandidateIndexer(
                 .Select(v => new ResearchCandidate
                 {
                     RunId = source.RunId,
-                    RunCompletedUtc = source.CompletedAt ?? DateTime.UtcNow,
-                    StrategyName = v.StrategyName,
-                    Symbol = v.Symbol,
-                    Timeframe = v.Timeframe,
-                    CandidateKey = v.Key,
+                    RunCompletedUtc = source.CompletedAt ?? source.CreatedAt,
+                    StrategyName = Truncate(v.StrategyName, 64)!,
+                    Symbol = Truncate(v.Symbol, 32)!,
+                    Timeframe = Truncate(v.Timeframe, 8)!,
+                    CandidateKey = Truncate(v.Key, 160)!,
                     ParametersJson = JsonSerializer.Serialize(v.Parameters),
                     WalkForwardOosSharpe = v.WalkForwardOosSharpe,
                     SelectionSharpe = v.SelectionSharpe,
@@ -157,12 +194,12 @@ public sealed class ResearchCandidateIndexer(
                     HoldoutProfitFactor = v.HoldoutProfitFactor,
                     HoldoutTrades = v.HoldoutTrades,
                     Survived = v.Survived,
-                    RejectReason = v.RejectReason,
+                    RejectReason = Truncate(v.RejectReason, 256),
                     DeflatedSharpe = v.DeflatedSharpe,
                     PanelPbo = v.PanelPbo,
                     PermutationPValue = v.PermutationPValue,
                     NullTwinPercentile = v.NullTwinPercentile,
-                    BestStopVariant = v.BestStopVariant,
+                    BestStopVariant = Truncate(v.BestStopVariant, 32)!,
                     IsGrey = GreyZone.IsGrey(v),
                 })
                 .ToList();
@@ -173,7 +210,24 @@ public sealed class ResearchCandidateIndexer(
             }
 
             db.ResearchCandidates.AddRange(rows);
-            await db.SaveChangesAsync(ct);
+            try
+            {
+                await db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex)
+            {
+                // [Review 2026-08-14] "Difensivo per run" vale anche qui: la violazione tipica è
+                // l'indice unico quando un ALTRO processo (guscio + pod ui sullo stesso Postgres)
+                // ha già indicizzato questo run nella finestra fra la nostra lettura e questo
+                // insert. Il run è a posto — lo ha scritto qualcun altro — quindi si sgancia
+                // tutto dal change tracker (altrimenti il prossimo SaveChanges rifallirebbe con
+                // le stesse righe) e si prosegue col run successivo.
+                db.ChangeTracker.Clear();
+                runsSkipped++;
+                logger.LogWarning(ex, "Run {Run} saltato dall'indice candidati (probabile indicizzazione concorrente da un altro processo).",
+                    source.RunId);
+                continue;
+            }
             runsIndexed++;
             candidatesIndexed += rows.Count;
         }

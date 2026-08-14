@@ -329,6 +329,14 @@ public sealed class RiskSizingStage(IPipelineRulesProvider rulesProvider) : IPip
             if (sizing <= 0m) sizing = Math.Min(5m, rules.MaxSizingPercent); // no Kelly estimate → conservative default
             leg.SizingPercent = Math.Round(sizing, 1);
 
+            // [T1, review 2026-08-14] Le gambe grigie NON hanno il probe di robustezza (gira sui
+            // soli sopravvissuti): i loro Kelly/Monte Carlo sono zeri di default, non misure.
+            // Metterli nelle medie le DILUIREBBE presentando come misurato un numero che non lo
+            // è (RF95 "medio" più basso del misurato = il sistema sembra PIÙ sicuro), e la media
+            // diluita arriva fino al comparatore del re-apply automatico. Gli aggregati si
+            // calcolano sulle sole gambe misurate; il sizing conservativo qui sopra resta.
+            if (leg.SourceVerdict == "Grey") continue;
+
             halfKellies.Add(v.HalfKelly);
             riskFactors.Add(v.MonteCarloRiskFactor95);
             if (ctx.InitialCapital > 0m) shutdownLevels.Add(v.MonteCarloDrawdown95 / ctx.InitialCapital * 100m);
@@ -348,13 +356,18 @@ public sealed class RiskSizingStage(IPipelineRulesProvider rulesProvider) : IPip
             risk.Notes.Add($"Volatilità prevista ALTA: sizing ridotto del {rules.HighVolSizingReductionPercent}% su tutte le gambe.");
         }
         // [T1] Le gambe grigie non passano dal probe di robustezza (gira sui soli sopravvissuti):
-        // niente Kelly né Monte Carlo per loro — sizing al default conservativo qui sopra, e la
-        // guardia di drawdown si basa sulle sole gambe misurate. Dichiararlo, non lasciarlo dedurre.
+        // niente Kelly né Monte Carlo per loro — sizing al default conservativo, ed escluse dagli
+        // aggregati qui sopra. Dichiararlo, non lasciarlo dedurre; e col caso solo-grigie dire
+        // chiaro che la guardia NON è stimabile, invece di mostrare uno 0% che sembra una misura.
         var greyCount = legs.Count(l => l.SourceVerdict == "Grey");
         if (greyCount > 0)
         {
-            risk.Notes.Add($"{greyCount} gambe da fascia grigia SENZA probe di robustezza (Kelly/Monte Carlo non stimati): "
-                + "sizing al default conservativo; la guardia di drawdown considera solo le gambe misurate.");
+            risk.Notes.Add(greyCount == legs.Count
+                ? $"TUTTE le {greyCount} gambe vengono dalla fascia grigia, nessuna è passata dal probe di robustezza: "
+                    + "Kelly/RF95/guardia di drawdown NON stimabili (gli zeri qui sopra non sono misure). "
+                    + "Sizing al default conservativo; impostare la guardia a mano prima di operare in Paper."
+                : $"{greyCount} gambe da fascia grigia SENZA probe di robustezza (Kelly/Monte Carlo non stimati): "
+                    + "sizing al default conservativo; medie e guardia di drawdown calcolate sulle sole gambe misurate.");
         }
         risk.Notes.Add($"Frazione di Kelly usata: {rules.KellyFraction:P0} del Kelly pieno (cap {rules.MaxSizingPercent}% per gamba).");
 
@@ -554,7 +567,10 @@ public sealed class RecommendationStage(IPipelineRulesProvider rulesProvider) : 
         }
 
         // Suggested actions (paper): concrete, verifiable, human-in-the-loop.
-        if (rec.Survivors == 0)
+        // [T1, review 2026-08-14] Con zero sopravvissuti ma gambe grigie proposte (il caso per
+        // cui includeGreyZone esiste), "NON operare" contraddirebbe la sezione ENSEMBLE PROPOSTO
+        // dello stesso report: le azioni seguono le GAMBE, e la natura grigia resta dichiarata.
+        if (rec.EnsembleLegs.Count == 0)
         {
             rec.SuggestedActions.Add("Nessun sopravvissuto all'holdout: NON operare. Ripetere il run con più dati o attendere condizioni diverse.");
         }
@@ -564,7 +580,15 @@ public sealed class RecommendationStage(IPipelineRulesProvider rulesProvider) : 
             {
                 rec.SuggestedActions.Add($"Paper trading: {leg.DisplayName} — peso {leg.WeightPercent}%, sizing {leg.SizingPercent}% del capitale.");
             }
-            rec.SuggestedActions.Add($"Impostare la guardia di spegnimento a {rec.RiskLimits.ShutdownDrawdownPercent}% di drawdown (MC 95°).");
+            if (rec.Survivors == 0)
+            {
+                rec.SuggestedActions.Add("Tutte le gambe vengono dalla FASCIA GRIGIA (zero sopravvissuti pieni): SOLO Paper, "
+                    + "guardia di spegnimento da impostare a mano (nessun Monte Carlo disponibile), e il forward test è il giudice.");
+            }
+            else
+            {
+                rec.SuggestedActions.Add($"Impostare la guardia di spegnimento a {rec.RiskLimits.ShutdownDrawdownPercent}% di drawdown (MC 95°).");
+            }
             rec.SuggestedActions.Add("Osservare 1-3 mesi in paper prima di considerare Testnet/Live (conferma manuale sempre attiva).");
         }
 
