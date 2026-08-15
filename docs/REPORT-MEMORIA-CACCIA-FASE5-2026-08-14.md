@@ -9,11 +9,11 @@ candidato migliore»). Fasi 0-4 in PR
 
 ## Cosa è stato fatto, in ordine
 
-### 1. Merge bloccato — PR pronta
+### 1. Merge — FATTO dal proprietario
 
-`gh pr merge` è stato **rifiutato dal classificatore dei permessi** della sessione (azione
-riservata al proprietario). Nessun aggiramento: la PR #87 resta aperta con suite 2543/2543 e
-review avversaria passata. **Il merge è un tuo click.**
+`gh pr merge` era stato **rifiutato dal classificatore dei permessi** della sessione (azione
+riservata al proprietario); il proprietario ha mergiato la PR #87 il 2026-08-15
+(`18efd19` su master), con suite 2543/2543 e review avversaria passata.
 
 ### 2. Il guscio sulla 5199 gira col codice del branch
 
@@ -30,13 +30,34 @@ avvio sulla stessa porta fallirebbe a voce alta sul bind).
   `[EnsembleAssembly] 0 sopravvissuti; 21 candidati in fascia grigia ESCLUSI (includeGreyZone=false…)`
   — il default-off dichiarato, su un run vero.
 
-### 3. Verifica in browser: fin dove si può senza il tuo login
+### 3. Verifica in browser — ESEGUITA (2026-08-15, dopo il login del proprietario)
 
-`/research` e `/ensemble` sono raggiungibili sull'app viva ma **dietro autenticazione**: inserire
-password è fuori dal mio perimetro (regola assoluta) e il tuo Chrome con la sessione era chiuso.
-Il giro visivo delle due pagine resta quindi **a te, al risveglio** (l'app sulla 5199 ha già
-tutto). In cambio, l'intero flusso che i click eseguono è stato esercitato **sui servizi reali**
-(punto 4) — stessa catena, stessi dati, stesso motore.
+Livello 4 completato sull'app viva, dati reali:
+
+- **`/research`**: KPI **11.300 candidati · 134 run · 37 promossi · 1.024 in fascia grigia ·
+  10.239 scartati nel merito**, periodo 02/07→15/08. Filtri popolati dai dati veri (36 coppie,
+  6 timeframe, 15 famiglie), resa per famiglia, motivi di scarto classificati, tabella coi badge
+  e le azioni Rianalizza/Componi. Tetto dichiarato: «200 visualizzati su 11.300 filtrati».
+- **`/ensemble` corsia 2**: entrambe le gambe col badge **Grigia**, SL 4,21 / TP 11,64 e le attese
+  holdout compilate; pannello **«Da fascia grigia (ADA/USDT 4h) — 2 candidati»** con la
+  dichiarazione del secondo giro di selezione; **«Valuta ridondanza gambe» cliccato dal vivo** →
+  `(ultimi 90 giorni, 89 giorni comuni · soglia |ρ| 0,70) Supertrend ↔ Composite · ρ=0,59`,
+  sotto soglia, badge neutro.
+- Voce **«Archivio candidati»** presente in NavMenu sotto Ricerca & Sviluppo.
+
+#### Due fatti misurati che vale la pena sapere
+
+1. **La banda DSR della fascia grigia è, oggi, vuota.** Tutti e **1.024** i grigi sono tali per
+   *sola finestra corta*; **zero** entrano dalla banda DSR [0,80–0,95). Nello stesso archivio ci
+   sono **343 candidati bocciati dal DSR con Sharpe holdout medio +1,05** che NON sono grigi,
+   perché il loro DSR sta *sotto* 0,80 — effetto atteso del conteggio corretto dei tentativi
+   (fix D-01). Risponde di fatto alla domanda aperta §9.2 del PRD: la soglia grigia non va
+   irrigidita, semmai è il ramo DSR a non mordere mai. Se un giorno volessi pescare anche lì,
+   la leva è il *pavimento* `GreyZone.DsrFloor`, non il tetto.
+2. **Il rolling Sharpe non conferma l'holdout, come da copione.** Nella ri-simulazione a 90
+   giorni: **Supertrend −0,24** (holdout 3,19), **Composite +2,03** (holdout 1,06). Finestre
+   diverse, quindi non è una smentita — ma è esattamente il motivo per cui la corsia sta in
+   Paper e non altrove.
 
 ### 4. La corsia — eseguito via i servizi reali (harness fuori repo, nello scratchpad)
 
@@ -69,11 +90,20 @@ mediana delle posizioni la misurerà il forward test — che è il giudice, come
 - Notebook NotebookLM non aggiornato: l'autenticazione era scaduta e il login è interattivo —
   al prossimo `nlm login` va ricaricato `docs/ROADMAP.md` + questo report.
 
-## Cosa resta a te (pochi minuti)
+## Cosa resta a te
 
-1. **Merge PR #87** (bloccato per me dal classificatore).
-2. Giro visivo di `/research` e `/ensemble` (corsia 2: badge «Grigia» sulle gambe, pannello
-   «Valuta ridondanza», fonte «Da fascia grigia»).
-3. Decidere se la corsia 2 ti sta bene lì o va spostata su una corsia di flotta quando se ne
-   libera una (le 3-7 erano tutte occupate da forward test in corso — non spetta a me ucciderne
-   uno).
+1. ~~Merge PR #87~~ **fatto** (`18efd19`). ~~Giro visivo~~ **fatto** (§3).
+2. **Riavviare il guscio dal repo principale** quando ti fa comodo: ora la 5199 gira dal
+   worktree, e master ha tutto. La configurazione vive a DB, non si perde nulla.
+3. **Decidere la casa della corsia 2**: sta nell'impronta auto-apply (0-2) perché le corsie di
+   flotta 3-7 erano tutte occupate da forward test in corso. Se se ne libera una, spostarla è
+   una riconfigurazione di due minuti.
+4. **NotebookLM**: `nlm login` (interattivo) e poi ricaricare `docs/ROADMAP.md` + questo report.
+
+## Nota di metodo, per il prossimo giro
+
+Il livello 4 ha confermato tutto il costruito e in più ha prodotto **due misure che nessun test
+poteva dare** (§3): la banda DSR della fascia grigia è vuota nell'archivio reale, e il rolling
+Sharpe delle due gambe non conferma l'holdout. Nessuna delle due è un difetto del codice: sono
+esattamente il genere di cosa per cui la pagina `/research` è stata costruita — leggere la
+caccia invece di ripeterla.
