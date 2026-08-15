@@ -117,6 +117,17 @@ public class EnsembleStrategy
 
     /// <summary>Finestra di esecuzione in minuti per questa gamba; null = usa il default globale.</summary>
     public int? ExecutionWindowMinutes { get; set; }
+
+    /// <summary>
+    /// [T1/T3, PRD memoria-caccia 2026-08-14] Provenienza del verdetto di validazione:
+    /// "Grey" = candidato di fascia grigia (bocciato per sola finestra corta o DSR in
+    /// [0,80–0,95), mai un sopravvissuto pieno) — mostrato come badge in ogni tabella che
+    /// elenca la gamba. "Survived" = sopravvissuto pieno dalla pipeline. Null = gamba
+    /// aggiunta per altra via (predefinita, salvata, ML, Champion) o config precedente a
+    /// questo campo: blob JSON, nessuna migrazione. Stringa e non enum per la stessa ragione
+    /// di <see cref="ExecutionAlgorithmName"/>: il JSON storico deve restare leggibile.
+    /// </summary>
+    public string? SourceVerdict { get; set; }
 }
 
 public class EnsembleStatus

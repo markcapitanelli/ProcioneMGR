@@ -30,8 +30,7 @@ public sealed class FleetStateReader(
     IOptionsMonitor<FleetOptions> fleetOptions,
     ILogger<FleetStateReader> logger) : IFleetStateReader
 {
-    /// <summary>Soglia F5: DSR in [GreyDsrFloor, soglia di sopravvivenza) = fascia grigia.</summary>
-    private const double GreyDsrFloor = 0.80;
+    // Soglia F5 (GreyDsrFloor): trasferita in GreyZone.DsrFloor insieme al giudice — vedi IsGrey.
 
     public async Task<FleetState> ReadAsync(CancellationToken ct = default)
     {
@@ -228,17 +227,12 @@ public sealed class FleetStateReader(
     }
 
     /// <summary>
-    /// IL filtro della fascia grigia — l'unica definizione, condivisa fra il lettore (le proposte)
-    /// e il GreyDeployer (il click umano): bocciato per SOLA finestra corta (ContoTrade "Solo N
-    /// trade…" o DSR in [0.80, 0.95)) CON Sharpe holdout positivo e almeno un trade. Un grigio che
-    /// perde non è grigio: è bocciato nel merito.
+    /// Il filtro della fascia grigia. La DEFINIZIONE vive in <see cref="GreyZone.IsGrey"/> —
+    /// promossa lì il 2026-08-14 quando i consumatori sono diventati tre (questo lettore, il
+    /// GreyDeployer e l'archivio candidati/assemblaggio ensemble); questo alias resta per i
+    /// chiamanti interni della flotta. Mai duplicare la soglia qui.
     /// </summary>
-    internal static bool IsGrey(ValidatedCandidate candidate) =>
-        !candidate.Survived
-        && candidate.HoldoutSharpe > 0m
-        && candidate.HoldoutTrades > 0
-        && ((candidate.RejectReason?.StartsWith("Solo ", StringComparison.Ordinal) ?? false)
-            || candidate.DeflatedSharpe is >= GreyDsrFloor and < 0.95);
+    internal static bool IsGrey(ValidatedCandidate candidate) => GreyZone.IsGrey(candidate);
 
     /// <summary>
     /// Mesi della finestra holdout della config. Null se non derivabile (e allora il run non è un

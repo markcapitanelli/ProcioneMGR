@@ -108,6 +108,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[G4] Post-mortem delle operazioni chiuse in perdita: testo e classificazione, mai un parametro.</summary>
     public DbSet<TradePostMortem> TradePostMortems => Set<TradePostMortem>();
 
+    /// <summary>[R2] Indice a righe dei candidati della caccia — derivato dagli artifact "ValidatedCandidates", ricostruibile.</summary>
+    public DbSet<ProcioneMGR.Services.Research.ResearchCandidate> ResearchCandidates => Set<ProcioneMGR.Services.Research.ResearchCandidate>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         // IMPORTANTISSIMO: lasciare che Identity configuri le sue tabelle
@@ -572,6 +575,27 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // La lettura tipica è "gli ultimi confronti di questa corsia" — e, sulla sentinella,
             // "i peggiori": entrambe passano da qui.
             e.HasIndex(x => new { x.LaneId, x.ActualExitAtUtc });
+        });
+
+        builder.Entity<ProcioneMGR.Services.Research.ResearchCandidate>(e =>
+        {
+            e.ToTable("ResearchCandidates");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.StrategyName).HasMaxLength(64);
+            e.Property(x => x.Symbol).HasMaxLength(32);
+            e.Property(x => x.Timeframe).HasMaxLength(8);
+            // La chiave = "Strategia Simbolo TF #fingerprint8" (PipelineCandidateKey): 160 copre
+            // i nomi composti della discovery creativa con margine.
+            e.Property(x => x.CandidateKey).HasMaxLength(160);
+            e.Property(x => x.RejectReason).HasMaxLength(256);
+            e.Property(x => x.BestStopVariant).HasMaxLength(32);
+            // UNICO: l'indicizzazione dev'essere idempotente per run — rilanciare l'incrementale
+            // o incrociare due gusci non deve mai duplicare un candidato.
+            e.HasIndex(x => new { x.RunId, x.CandidateKey })
+                .IsUnique()
+                .HasDatabaseName("IX_ResearchCandidates_Run_Candidato");
+            // La lettura tipica della pagina è "questa coppia, i più recenti prima".
+            e.HasIndex(x => new { x.Symbol, x.Timeframe, x.RunCompletedUtc });
         });
 
         // --- Adattamenti specifici PostgreSQL ---

@@ -94,6 +94,8 @@ public static class NavModel
                 "Champion models validati e promuovibili al trading.", ManagerAndAdmin),
             new NavItem("experiments", "Esperimenti", "bi-journals",
                 "Tracking degli esperimenti ML: run, parametri, risultati.", ManagerAndAdmin),
+            new NavItem("research", "Archivio candidati", "bi-inboxes-fill",
+                "Tutti i candidati della caccia: promossi, fascia grigia, scartati.", ManagerAndAdmin),
         ]),
 
         // 🚀 TRADING — l'operatività vera e propria.

@@ -216,6 +216,12 @@ else
                                     {
                                         <span class="badge bg-purple text-white ms-1" style="background-color:#8E24AA;">ML</span>
                                     }
+                                    @if (s.SourceVerdict == "Grey")
+                                    {
+                                        @* [T3] Una gamba grigia non deve MAI potersi leggere come un sopravvissuto pieno. *@
+                                        <span class="badge bg-warning text-dark ms-1"
+                                              title="Candidato di fascia grigia: bocciato per sola finestra corta o DSR in [0,80–0,95). Il forward test Paper è il giudice.">Grigia</span>
+                                    }
                                 </td>
                                 <td><code class="small">@FormatParams(s.Parameters)</code></td>
                                 <td><input type="checkbox" class="form-check-input" @bind="s.IsActive" /></td>
@@ -304,6 +310,75 @@ else
                     <div class="col-auto"><button class="btn btn-sm" style="background-color:#8E24AA;color:white;" @onclick="AddFromMlModel">+ Aggiungi</button></div>
                 }
             </div>
+
+            @if (_greyCandidates.Count > 0)
+            {
+                @* [T3, PRD memoria-caccia] Quinta fonte gamba: i candidati grigi della caccia per
+                   la STESSA coppia/timeframe della corsia. La scelta di quali combinare è un
+                   secondo giro di selezione, e va dichiarato — mai un canale che sembra una
+                   promozione. *@
+                <div class="row g-2 align-items-end mt-1 p-2 border rounded border-warning-subtle bg-body-tertiary">
+                    <div class="col-12">
+                        @* L'intestazione dichiara la coppia PER CUI la lista è stata caricata (la config
+                           salvata), non i campi live editabili sopra: se divergono, l'aggiunta rifiuta. *@
+                        <label class="form-label small mb-0 fw-semibold">Da fascia grigia (@(Svc.GreyCandidatesFor?.Symbol) @(Svc.GreyCandidatesFor?.Timeframe)) — @_greyCandidates.Count candidati</label>
+                        <div class="form-text mt-0">
+                            Bocciati per <strong>sola finestra corta</strong> o DSR in [0,80–0,95), con Sharpe holdout positivo:
+                            candidabili al forward test Paper, <strong>non promossi</strong>. Scegliere fra @_greyCandidates.Count
+                            candidati è un secondo giro di selezione — usa «Valuta ridondanza» prima di salvare.
+                            <a href="research">→ Archivio candidati</a>
+                        </div>
+                    </div>
+                    <div class="col-auto">
+                        <select class="form-select form-select-sm" @bind="_addGreyId">
+                            <option value="0">—</option>
+                            @foreach (var g in _greyCandidates)
+                            {
+                                <option value="@g.Id">@g.StrategyName · Sharpe hold. @g.HoldoutSharpe.ToString("F2") su @g.HoldoutTrades trade@(g.DeflatedSharpe is { } d ? $" · DSR {d:F2}" : "")</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto"><button class="btn btn-sm btn-warning" @onclick="AddFromGreyAsync" disabled="@_busy">+ Aggiungi grigia</button></div>
+                </div>
+            }
+
+            @* [T2] Ridondanza fra le gambe: la correlazione che l'HRP calcola e scartava, misurata
+               qui sulle gambe attive della corsia con la stessa formula della pipeline. *@
+            @if (_config!.Strategies.Count(s => s.IsActive) >= 2)
+            {
+                <div class="row g-2 align-items-center mt-1 p-2 border rounded bg-body-tertiary">
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="EvaluateLegCorrelationAsync" disabled="@_corrBusy">
+                            @(_corrBusy ? "Misuro…" : "Valuta ridondanza gambe")
+                        </button>
+                    </div>
+                    <div class="col">
+                        @if (_legCorrelation is { } corr)
+                        {
+                            @if (corr.Note is not null)
+                            {
+                                <span class="small text-muted">@corr.Note</span>
+                            }
+                            @if (corr.Pairs.Count > 0)
+                            {
+                                <span class="small text-muted me-2">(@corr.Window · soglia |ρ| @corr.WarnThreshold.ToString("F2"))</span>
+                                @foreach (var p in corr.Pairs)
+                                {
+                                    var warn = Math.Abs(p.Rho) >= corr.WarnThreshold;
+                                    <span class="badge @(warn ? "bg-warning text-dark" : "bg-secondary") me-1"
+                                          title="@(warn ? "Correlate: combinarle diversifica poco — sono in gran parte la stessa scommessa." : "Correlazione sotto soglia.")">
+                                        @p.DisplayA ↔ @p.DisplayB · ρ=@p.Rho.ToString("F2")
+                                    </span>
+                                }
+                            }
+                        }
+                        else
+                        {
+                            <span class="small text-muted">Misura la correlazione dei rendimenti fra le gambe attive prima di salvare: due gambe correlate sono la stessa scommessa raddoppiata.</span>
+                        }
+                    </div>
+                </div>
+            }
 
             <div class="row g-2 align-items-end mt-1 p-2 border rounded bg-body-tertiary">
                 <div class="col-auto">
@@ -601,6 +676,8 @@ else
     private List<ProcioneMGR.Services.Trading.ExecutionJob> _executionJobs => Svc.ExecutionJobs;
     private List<FactorDriftReport> _driftReports => Svc.DriftReports;
     private SavedMlModel? _champion => Svc.Champion;
+    private List<ProcioneMGR.Services.Research.ResearchCandidate> _greyCandidates => Svc.GreyCandidates;
+    private ProcioneMGR.Services.Portfolio.LegCorrelationReport? _legCorrelation => Svc.LegCorrelation;
 
     private bool _onlyAlerts;
     private bool _decayBusy;
@@ -614,6 +691,8 @@ else
     private string _addPredefined = "EmaCross";
     private int _addSavedId;
     private int _addMlModelId;
+    private long _addGreyId;
+    private bool _corrBusy;
     private decimal _addChampionLong = 0.002m;
     private decimal _addChampionShort = 0.002m;
     private decimal _addMlLongThreshold = 0.005m;
@@ -653,9 +732,41 @@ else
         // Granulare come l'originale: un errore su un pannello non impedisce agli altri di popolarsi.
         _lanes = await LaneDirectory.ListAsync();
         await Svc.LoadConfigAndChampionAsync(_laneId);
+        await LoadGreyCandidatesAsync();
         await RefreshAsync();
         await LoadDecayReportsAsync();
         await LoadExecutionJobsAsync();
+    }
+
+    private async Task LoadGreyCandidatesAsync()
+    {
+        // La selezione grigia appartiene alla corsia caricata: al cambio corsia un id stantio
+        // punterebbe a un candidato di un'altra coppia (review 2026-08-14).
+        _addGreyId = 0;
+        try { await Svc.LoadGreyCandidatesAsync(); }
+        catch (Exception ex) { SetMsg($"Errore candidati fascia grigia: {ex.Message}", true); }
+    }
+
+    private async Task AddFromGreyAsync()
+    {
+        if (_addGreyId == 0 || _busy) return; // _busy: il bottone è disabled="@_busy", la guardia chiude il doppio click
+        _busy = true;
+        try
+        {
+            var outcome = await Svc.AddFromGreyAsync(_addGreyId);
+            _addGreyId = 0;
+            SetMsg(outcome.Message, outcome.IsError);
+        }
+        finally { _busy = false; StateHasChanged(); }
+    }
+
+    private async Task EvaluateLegCorrelationAsync()
+    {
+        if (_corrBusy) return;
+        _corrBusy = true;
+        try { await Svc.EvaluateLegCorrelationAsync(); }
+        catch (Exception ex) { SetMsg($"Errore misura ridondanza: {ex.Message}", true); }
+        finally { _corrBusy = false; StateHasChanged(); }
     }
 
     private void AddChampion() => Svc.AddChampion(_addChampionLong, _addChampionShort);

@@ -613,6 +613,12 @@ builder.Services.AddScoped<ProcioneMGR.Services.Ensemble.EnsemblePageService>();
 // Orchestrazione di Pipeline.razor estratta in un service testabile (P1-5, PRD §3.3). Scoped come sopra.
 builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.PipelinePageService>();
 
+// [R1+R2, PRD memoria-caccia 2026-08-14] Archivio candidati: indexer (tabella derivata dagli
+// artifact, ricostruibile — senza stato: singleton) + orchestrazione di Research.razor (Scoped
+// come le altre page service).
+builder.Services.AddSingleton<ProcioneMGR.Services.Research.IResearchCandidateIndexer, ProcioneMGR.Services.Research.ResearchCandidateIndexer>();
+builder.Services.AddScoped<ProcioneMGR.Services.Research.ResearchPageService>();
+
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
         // Fase 1: nessun server email reale (IdentityNoOpEmailSender), quindi

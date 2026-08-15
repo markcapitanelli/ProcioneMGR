@@ -885,6 +885,20 @@ esattamente il gesto che fabbrica falsa significatività se fatto male (lezione 
 445k combinazioni → 0). Va fatto come esperimento con la sua ipotesi scritta prima, e col controllo
 sul rumore del [Standard di verifica](STANDARD-VERIFICA.md) — altrimenti non si fa.
 
+> **[2026-08-14] R1/R2 ripresi ed estesi, più un secondo filo nuovo — ED ESEGUITI (Fasi 0-4).**
+> Il proprietario ha richiesto (in chat) esattamente ciò che R1/R2 avevano già diagnosticato
+> l'8/6 e che non era mai stato costruito, più un'idea nuova: comporre più strategie di fascia
+> grigia sulla stessa coppia in un'unica corsia. Misurato che il pezzo di composizione esiste
+> già (`EnsembleAssemblyStage`, Pipeline stage 11, HRP di default) ma era fermo dal 2026-07-09
+> perché ammetteva solo candidati "sopravvissuti pieni" — zero da un mese. Piano ED esecuzione
+> in [PRD-MEMORIA-CACCIA-COMPOSIZIONE-2026-08](PRD-MEMORIA-CACCIA-COMPOSIZIONE-2026-08.md):
+> **R1+R2+R5 FATTI** (pagina `/research` su indice a righe derivato `ResearchCandidates`,
+> giudice unico `GreyZone.IsGrey` promosso da FleetStateReader), **T1-T5 FATTI**
+> (`includeGreyZone` default-off sull'assemblaggio, correlazione dell'HRP dichiarata invece che
+> scartata, quinta fonte gamba in `/ensemble` col badge Grigia, semantica lorda dell'esposizione
+> fissata dai test). Review avversaria multi-lente: 15 finding confermati e corretti (1 HIGH),
+> 3 refutati. Nessun automatismo nuovo verso Live; R3/R4 del filone restano aperti.
+
 ---
 
 ## Filone S — Distribuzione sul server: immagini private e build in casa (2026-08-06)

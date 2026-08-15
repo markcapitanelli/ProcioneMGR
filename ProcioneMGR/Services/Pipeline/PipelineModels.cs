@@ -544,6 +544,15 @@ public sealed class ProposedLeg
     /// </summary>
     public int HoldoutTrades { get; set; }
 
+    /// <summary>
+    /// [T1, PRD memoria-caccia 2026-08-14] Provenienza del verdetto: "Survived" = sopravvissuto
+    /// pieno, "Grey" = fascia grigia ammessa da <c>includeGreyZone</c>. Null nei JSON storici
+    /// (tutte le proposte precedenti erano di soli sopravvissuti). Serve al badge in UI e al
+    /// monitor di decadimento: una gamba grigia non deve MAI potersi leggere come un
+    /// sopravvissuto pieno — è la classe di difetto "controlli che rassicurano" del Filone E.
+    /// </summary>
+    public string? SourceVerdict { get; set; }
+
     /// <summary>Same identity key as the originating <see cref="ValidatedCandidate"/> — use this for lookups, never rebuild it inline.</summary>
     public string Key => PipelineCandidateKey.Build(StrategyName, Symbol, Timeframe, Parameters);
 }
@@ -553,6 +562,12 @@ public sealed class EnsembleProposal
     public List<ProposedLeg> Legs { get; set; } = new();
     public string Method { get; set; } = "EqualWeight";
     public string? Note { get; set; }
+
+    /// <summary>
+    /// [T2] Ridondanza fra le gambe sulla finestra di selezione — la matrice che l'HRP calcolava
+    /// e scartava, ora dichiarata. Null nei JSON storici e nelle proposte a gamba singola.
+    /// </summary>
+    public Portfolio.LegCorrelationReport? Correlations { get; set; }
 }
 
 public sealed class RiskAssessment

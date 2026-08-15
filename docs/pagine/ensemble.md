@@ -31,16 +31,19 @@ operazioni della pagina sono per-corsia.
 | Selettore corsia | 37–46 | Cambio corsia → ricarica tutto |
 | GuidaPanel | 48–112 | Spiegazione completa, inclusa la distinzione cruciale Rolling Sharpe (ri-simulazione) vs Monitor decadimento (trade reali) |
 | Toast flottante | 114–124 | Esito azioni in position:fixed (i bottoni sono in fondo pagina, l'esito resta visibile) |
-| Configurazione | 132–351 | Exchange/symbol/timeframe/capitale, rebalance/rolling days, Min/Max %, **Futures+leva** (con avviso margine isolato e warning MiCA per Binance), tabella strategie, aggiunta gambe, azioni |
-| Tabella strategie | 209–253 | Per gamba: parametri, attiva, alloc %, **SL/TP/Trailing %**, **Sharpe/PF/MaxDD attesi** (alimentano il decay monitor), **algoritmo di esecuzione** (Immediato/TWAP/VWAP/Iceberg/Adaptive + finestra minuti), rimozione |
-| Aggiunta gambe | 255–335 | Da predefinite, da salvate (badge "Optimized" con Sharpe), da **modelli ML compatibili** (solo stesso symbol/timeframe), e il **Champion del registry** (banner dedicato: si auto-aggiorna, "Solo Paper/Testnet — mai Live, rifiutato dal motore per costruzione") |
-| Azioni | 337–349 | Save, Rebalance Now, Enable/Disable Ensemble, Aggiorna status |
-| Status live | 353–388 | KPI (capitale, PnL, last/next rebalance) + tabella strategie live ordinata per rolling Sharpe (migliore evidenziata) |
-| Monitor decadimento | 390–450 | Card per gamba: Sharpe atteso vs realizzato sui **trade realmente eseguiti**, delta, % dell'atteso, badge Alert/In attesa/In linea, filtro "solo alert" |
-| Piani di esecuzione | 452–485 | Job TWAP/VWAP/Iceberg recenti della corsia con stato e prezzo medio |
-| Drift fattori | 487–554 | Per un modello ML scelto: distribuzione training vs ultime N candele con tre detector — **PSI, KS (p-value), Page-Hinkley** — e severità per fattore |
-| Performance | 556–562 | Equity totale + per strategia (`OhlcvChart` solo indicatori) |
-| Rebalancing history | 564–584 | Ogni evento con motivo e transizioni di allocazione per gamba |
+| Configurazione | 132–427 | Exchange/symbol/timeframe/capitale, rebalance/rolling days, Min/Max %, **Futures+leva** (con avviso margine isolato e warning MiCA per Binance), tabella strategie, aggiunta gambe, azioni |
+| Tabella strategie | 202–260 | Per gamba: badge di provenienza (Optimized/ML/**Grigia**), parametri, attiva, alloc %, **SL/TP/Trailing %**, **Sharpe/PF/MaxDD attesi** (alimentano il decay monitor), **algoritmo di esecuzione** (Immediato/TWAP/VWAP/Iceberg/Adaptive + finestra minuti), rimozione |
+| Aggiunta gambe | 262–320 | Da predefinite, da salvate (badge "Optimized" con Sharpe), da **modelli ML compatibili** (solo stesso symbol/timeframe) |
+| Da fascia grigia | 314–341 | **[2026-08-14]** candidati grigi dell'archivio per la coppia/timeframe SALVATA della corsia (l'intestazione dichiara quella, non i campi live), con dichiarazione del secondo giro di selezione |
+| Valuta ridondanza | 344–377 | **[2026-08-14]** correlazione dei rendimenti fra le gambe attive (90 giorni, stessa formula della pipeline), badge di avviso sopra soglia |
+| Champion registry | 380–411 | Banner dedicato: si auto-aggiorna, "Solo Paper/Testnet — mai Live, rifiutato dal motore per costruzione" |
+| Azioni | 414–427 | Save, Rebalance Now, Enable/Disable Ensemble, Aggiorna status |
+| Status live | ~430–465 | KPI (capitale, PnL, last/next rebalance) + tabella strategie live ordinata per rolling Sharpe (migliore evidenziata) |
+| Monitor decadimento | 468–528 | Card per gamba: Sharpe atteso vs realizzato sui **trade realmente eseguiti**, delta, % dell'atteso, badge Alert/In attesa/In linea, filtro "solo alert" |
+| Piani di esecuzione | 530–562 | Job TWAP/VWAP/Iceberg recenti della corsia con stato e prezzo medio |
+| Drift fattori | 565–632 | Per un modello ML scelto: distribuzione training vs ultime N candele con tre detector — **PSI, KS (p-value), Page-Hinkley** — e severità per fattore |
+| Performance | ~634–640 | Equity totale + per strategia (`OhlcvChart` solo indicatori) |
+| Rebalancing history | ~642–662 | Ogni evento con motivo e transizioni di allocazione per gamba |
 
 ## Come funziona (flusso del codice)
 
@@ -109,6 +112,20 @@ simbolo, modalità e un puntino verde quando sta operando — così si sa cosa g
 in ogni corsia. Oltre sei corsie le altre si raccolgono sotto `+N`, ma chi resta a vista lo decide
 l'utilità e non l'id: prima chi opera, poi chi è configurato, infine le vuote; e la corsia
 selezionata è sempre visibile.
+
+## [2026-08-14] Fascia grigia come fonte gamba + ridondanza dichiarata (PRD memoria-caccia)
+
+- **Quinta fonte gamba «Da fascia grigia»**: i candidati grigi dell'[Archivio candidati](research.md)
+  con la STESSA coppia/timeframe della corsia (dedup per chiave identità, misura più recente),
+  aggiunti con bracket SL/TP dalle escursioni (stesso `AutoBracket` del GreyDeployer) e
+  `SourceVerdict="Grey"`. Badge **Grigia** nella tabella delle gambe: una gamba grigia non deve
+  mai potersi leggere come un sopravvissuto pieno. Il pannello dichiara il secondo giro di
+  selezione (N candidati visti).
+- **«Valuta ridondanza gambe»**: correlazione dei rendimenti giornalieri fra le gambe attive
+  (backtest sugli ultimi 90 giorni, stessa formula dell'assemblaggio in pipeline —
+  `ReturnCorrelation`). Sopra |ρ|≥0,7 il badge avverte: due gambe correlate sono la stessa
+  scommessa raddoppiata. Gambe non backtestabili da qui (es. Champion) vengono saltate e
+  dichiarate, mai contate come "non correlate".
 
 ## Collegamenti con le altre pagine
 
