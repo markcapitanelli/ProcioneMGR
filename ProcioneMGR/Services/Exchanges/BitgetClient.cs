@@ -112,6 +112,34 @@ public sealed class BitgetClient(
         return symbols;
     }
 
+    public async Task<IReadOnlyDictionary<string, string>> GetSymbolStatusesAsync(CancellationToken ct = default)
+    {
+        // Stesso listino di GetSymbolsAsync, ma lo status viene RESTITUITO invece che usato come
+        // filtro-e-scarto (valori Bitget v2: online/offline/gray/halt).
+        using var response = await http.GetAsync("/api/v2/spot/public/symbols", ct);
+        await EnsureSuccessAsync(response, ct);
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+
+        EnsureBitgetOk(doc.RootElement);
+
+        var statuses = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in doc.RootElement.GetProperty("data").EnumerateArray())
+        {
+            var baseCoin = s.TryGetProperty("baseCoin", out var b) ? b.GetString() : null;
+            var quoteCoin = s.TryGetProperty("quoteCoin", out var q) ? q.GetString() : null;
+            if (string.IsNullOrEmpty(baseCoin) || string.IsNullOrEmpty(quoteCoin))
+            {
+                continue;
+            }
+            statuses[$"{baseCoin}/{quoteCoin}"] =
+                s.TryGetProperty("status", out var status) ? status.GetString() ?? "sconosciuto" : "sconosciuto";
+        }
+
+        return statuses;
+    }
+
     public async Task<bool> TestConnectionAsync(CancellationToken ct = default)
     {
         try

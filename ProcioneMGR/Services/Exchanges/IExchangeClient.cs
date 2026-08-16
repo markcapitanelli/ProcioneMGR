@@ -30,6 +30,18 @@ public interface IExchangeClient
     /// <summary>Elenco dei simboli negoziabili in forma canonica "BASE/QUOTE".</summary>
     Task<List<string>> GetSymbolsAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// Stato di quotazione di TUTTI i simboli spot: canonico "BASE/QUOTE" → stato grezzo
+    /// dell'exchange (Binance: "TRADING"/"BREAK"/"HALT"/…; Bitget: "online"/"offline"/"gray"/"halt").
+    /// Una sola chiamata pubblica copre l'intero listino: la pagina watchlist la usa per dire se
+    /// una serie ferma è ferma perché il simbolo è SOSPESO — prima lo status veniva letto e
+    /// buttato via come filtro in <see cref="GetSymbolsAsync"/>, e la verifica restava un compito
+    /// manuale dell'utente. Implementazione di default vuota: è una capacità diagnostica opzionale
+    /// e gli otto client finti dei test non devono pagarla.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, string>> GetSymbolStatusesAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
+
     /// <summary>Verifica la raggiungibilita' dell'exchange (endpoint pubblico).</summary>
     Task<bool> TestConnectionAsync(CancellationToken ct = default);
 

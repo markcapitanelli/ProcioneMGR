@@ -619,6 +619,10 @@ builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.PipelinePageService>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Research.IResearchCandidateIndexer, ProcioneMGR.Services.Research.ResearchCandidateIndexer>();
 builder.Services.AddScoped<ProcioneMGR.Services.Research.ResearchPageService>();
 
+// [2026-08-15, revisione post-incidente 122 serie ferme] Orchestrazione di Watchlist.razor:
+// timbro del ciclo di sync, freschezza per-serie sull'indice, verifica stato simboli su exchange.
+builder.Services.AddScoped<ProcioneMGR.Services.Ingestion.WatchlistPageService>();
+
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
         // Fase 1: nessun server email reale (IdentityNoOpEmailSender), quindi

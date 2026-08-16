@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Notifications;
 
@@ -23,7 +24,8 @@ public sealed class SeriesFreshnessWatchWorker(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     ILogger<SeriesFreshnessWatchWorker> logger,
     INotifier? notifier = null,
-    TimeProvider? timeProvider = null) : BackgroundService
+    TimeProvider? timeProvider = null,
+    IConfiguration? configuration = null) : BackgroundService
 {
     /// <summary>Cadenza fissa: la freschezza si muove al passo delle barre, non serve di più.</summary>
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(15);
@@ -108,15 +110,30 @@ public sealed class SeriesFreshnessWatchWorker(
 
             if (notifier is not null)
             {
+                // [2026-08-15] La notifica dice DOVE guardare, non solo cosa è fermo. Il timbro di
+                // ciclo (HostHeartbeats, ruolo ingestion-sync) distingue «è il sync fermo» da
+                // «è il simbolo sospeso»: nell'incidente del 2026-08-14 il consiglio fisso
+                // «verifica BREAK» era sbagliato — l'imputato era il worker morto alle 22:44.
+                var stamp = await db.HostHeartbeats.AsNoTracking()
+                    .Where(h => h.Host == HostHeartbeat.IngestionSyncRole)
+                    .Select(h => new { h.LastUtc, h.Version })
+                    .FirstOrDefaultAsync(ct);
+                // L'intervallo dichiarato NEL timbro vince sulla config locale: chi timbra (pod
+                // ingestion) e chi giudica (guscio) hanno appsettings indipendenti.
+                var interval = SyncPulse.TryParseStampedInterval(stamp?.Version)
+                    ?? TimeSpan.FromMinutes(Math.Max(1,
+                        configuration?.GetValue("MarketData:SyncIntervalMinutes", 5) ?? 5));
+                var causa = SyncPulse.DescribeCause(
+                    newlyStale.Count, stamp?.LastUtc, nowUtc, interval, stamp?.Version);
+
                 // UNA notifica aggregata per giro, non una per serie: un'interruzione di rete che
                 // ferma 200 serie insieme deve produrre un messaggio, non duecento.
                 var elenco = string.Join("\n", newlyStale.Take(10));
                 if (newlyStale.Count > 10) elenco += $"\n… e altre {newlyStale.Count - 10}";
                 await notifier.NotifyAsync(NotificationSeverity.Warning,
                     $"{newlyStale.Count} serie della watchlist FERM{(newlyStale.Count == 1 ? "A" : "E")}",
-                    $"L'ultima candela chiusa è oltre la tolleranza ({SeriesFreshness.DefaultToleranceBars} barre) "
-                    + $"e il sync non le sta aggiornando:\n{elenco}\n"
-                    + "Verifica su exchange se il simbolo è sospeso (BREAK) e valuta se disabilitarle in /watchlist.", ct);
+                    $"L'ultima candela chiusa è oltre la tolleranza ({SeriesFreshness.DefaultToleranceBars} barre):\n"
+                    + $"{elenco}\n{causa}", ct);
             }
         }
 

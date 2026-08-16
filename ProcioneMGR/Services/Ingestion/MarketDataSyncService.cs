@@ -25,11 +25,46 @@ public sealed class MarketDataSyncService(
 
     public async Task<int> SyncSeriesAsync(int trackedSeriesId, CancellationToken ct = default)
     {
+        // Attesa LIMITATA, non infinita: se il gate è tenuto da un ciclo abbandonato dal backstop
+        // (un task zombie parcheggiato su un await che non riprende mai), un'attesa senza tetto
+        // qui appenderebbe la sync manuale per l'intero timeout HTTP. Meglio dirlo subito.
         var gate = SeriesLocks.GetOrAdd(trackedSeriesId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(ct);
+        if (!await gate.WaitAsync(TimeSpan.FromSeconds(10), ct))
+        {
+            throw new InvalidOperationException(
+                "Un'altra sincronizzazione di questa serie è già in corso (o è rimasta appesa): riprova fra poco.");
+        }
         try
         {
             return await SyncSeriesLockedAsync(trackedSeriesId, ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Variante del CICLO: se il gate della serie è occupato NON aspetta — salta e riprova al tick
+    /// successivo. È la lezione della review post-incidente: un gate tenuto per sempre da un ciclo
+    /// abbandonato (backstop) non deve affamare tutte le serie che vengono dopo nell'elenco — una
+    /// serie bloccata deve costare UNA serie, mai il resto del ciclo. Il vincolo un-solo-scrittore
+    /// resta intatto: chi non prende il gate non scrive.
+    /// </summary>
+    private async Task<bool> TrySyncSeriesForCycleAsync(int trackedSeriesId, CancellationToken ct)
+    {
+        var gate = SeriesLocks.GetOrAdd(trackedSeriesId, _ => new SemaphoreSlim(1, 1));
+        if (!await gate.WaitAsync(TimeSpan.FromSeconds(2), ct))
+        {
+            logger.LogWarning(
+                "Serie {Id}: gate occupato (sync manuale in corso o ciclo abbandonato che non l'ha mai rilasciato); "
+                + "saltata in questo ciclo, si riprova al prossimo.", trackedSeriesId);
+            return false;
+        }
+        try
+        {
+            await SyncSeriesLockedAsync(trackedSeriesId, ct);
+            return true;
         }
         finally
         {
@@ -94,8 +129,15 @@ public sealed class MarketDataSyncService(
             await db.SaveChangesAsync(ct);
             return (int)result.CandlesProcessed;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            // Cancellazione VERA del chiamante (budget di ciclo o shutdown): risale. Il filtro sul
+            // token è l'unico discriminatore affidabile — l'incidente del 2026-08-14 (22:44, 122
+            // serie ferme per 6 ore) è nato da una TaskCanceledException di TIMEOUT DI RETE
+            // (ExchangeRateLimitHandler la sintetizza con Token=None) che, rilanciata da qui senza
+            // filtro, il worker leggeva come shutdown e usciva dal loop per sempre. Un timeout di
+            // rete è un errore della serie come gli altri: cade nel catch sotto, scrive «Errore:»
+            // e il ciclo prosegue con la serie successiva.
             throw;
         }
         catch (Exception ex)
@@ -118,14 +160,28 @@ public sealed class MarketDataSyncService(
             .ToListAsync(ct);
 
         logger.LogInformation("Sync ciclo: {Count} serie abilitate.", ids.Count);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
 
+        var skipped = 0;
         foreach (var id in ids)
         {
             ct.ThrowIfCancellationRequested();
-            // SyncSeriesAsync e' gia' resiliente agli errori della singola serie.
-            await SyncSeriesAsync(id, ct);
+            // Il percorso per-serie e' resiliente agli errori della singola serie, INCLUSI i
+            // timeout di rete travestiti da cancellazione (filtrati sul token in
+            // SyncSeriesLockedAsync) e il gate occupato (saltato, non atteso): qui risale solo la
+            // cancellazione vera del token di ciclo.
+            if (!await TrySyncSeriesForCycleAsync(id, ct))
+            {
+                skipped++;
+            }
             await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
         }
+
+        // Il log di ciclo COMPLETATO è il battito che mancava nell'incidente del 2026-08-14:
+        // c'era solo quello di inizio, e un worker morto dopo un ciclo riuscito era
+        // indistinguibile, nei log, da uno vivo fra un tick e l'altro.
+        logger.LogInformation("Sync ciclo completato: {Count} serie ({Skipped} saltate per gate occupato) in {Elapsed:hh\\:mm\\:ss}.",
+            ids.Count, skipped, sw.Elapsed);
     }
 
     private static string Trunc(string s) => s.Length <= 200 ? s : s[..200];
