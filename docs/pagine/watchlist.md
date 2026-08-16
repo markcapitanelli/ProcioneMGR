@@ -123,6 +123,9 @@ tiene solo rendering, PollingTimer e stato di UI):
 
 ## Test
 
+`WatchlistPageRenderTests` (bUnit, la PAGINA vera): quel che l'utente legge in ogni scenario —
+sync fermo, sync vivo, worker spento, nessun timbro, serie sane.
 `WatchlistPageServiceTests` (integrazione Postgres): verdetti, timbro vivo/fermo/stimato,
-recupero, verifica BREAK + annotazione, avviso corsia al toggle. `SyncPulseTests` (puri):
-soglie e diagnosi. `SeriesFreshnessWatchWorkerTests`: notifiche con diagnosi.
+recupero, verifica BREAK + annotazione, verifica fallita, avviso corsia al toggle.
+`SyncPulseTests` (puri): soglie e diagnosi. `SeriesFreshnessWatchWorkerTests`: notifiche con
+diagnosi. `MarketDataSyncSeriesGateTests`: il gate che non affama il ciclo.

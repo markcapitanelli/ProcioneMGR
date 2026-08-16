@@ -111,10 +111,18 @@ badge di stato vecchi presentati sotto un timestamp di verifica nuovo.
 
 ## Verifica
 
-- Unit: `MarketDataSyncWorkerTests` (5, inclusi timeout-di-rete e catena-che-ignora-il-token),
-  `SyncPulseTests` (13). Integrazione Postgres: `MarketDataSyncSeriesGateTests` (2, il gate che
+- **Livello 1-2** (unità vs riferimento indipendente, controllo sul rumore):
+  `MarketDataSyncWorkerTests` (5, inclusi timeout-di-rete e catena-che-ignora-il-token),
+  `SyncPulseTests` (13).
+- **Livello 3** (integrazione reale, Postgres): `MarketDataSyncSeriesGateTests` (2, il gate che
   non affama il ciclo), `SeriesFreshnessWatchWorkerTests` (9, con i 3 casi di diagnosi),
-  `WatchlistPageServiceTests` (13). Suite completa verde.
-- Dal vivo: pod riavviato, drenaggio osservato (122 → 0 in 4 minuti); poi immagine nuova nel kind,
-  `/health/live` col battito, timbro `ingestion-sync` che avanza, pagina verificata nel browser
-  (livello 4 dello standard).
+  `WatchlistPageServiceTests` (13). Suite completa **2577/2577**.
+- **Livello 4** (la pagina vera): `WatchlistPageRenderTests` (5) rende `/market/watchlist` con
+  bUnit e verifica ciò che l'utente LEGGE in ogni scenario — sync fermo («l'imputato è il sync»,
+  niente consiglio BREAK), sync vivo (bottone «Verifica su exchange»), worker spento, nessun
+  timbro, e serie sane (nessun banner rosso). Reso permanente in un test invece che guardato una
+  volta in uno screenshot: il collaudo interattivo richiede un login che l'assistente non può fare.
+- **Dal vivo, sul cluster**: pod riavviato → arretrato drenato (122 → 0 in 4 minuti). Poi immagine
+  `local-43340a6c` importata nel kind e promossa: `/health` e `/health/live` rispondono col
+  battito del loop, il timbro compare a DB (`ingestion-sync | ciclo ok · intervallo 5m`) e il log
+  dichiara «Sync ciclo completato: 222 serie (0 saltate per gate occupato) in 00:03:47».

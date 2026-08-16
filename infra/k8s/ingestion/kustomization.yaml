@@ -20,4 +20,9 @@ images:
     # costa al massimo un ciclo invece di parcheggiare il worker (30 minuti muto, 89 serie oltre
     # tolleranza). Vedi docs/REPORT-INGESTION-PROBE-2026-08-13.md.
     # Precedente: local-cde4dda1.
-    newTag: local-0e97f5ea
+    # [2026-08-15] Promozione OBBLIGATORIA insieme al deployment.yaml (la liveness passa a
+    # /health/live, che esiste solo da questa immagine): il worker non muore più su un timeout di
+    # rete letto come shutdown, il ciclo abbandonato non affama le serie successive, e il pod si fa
+    # riavviare da solo se il loop si parcheggia. Vedi docs/REPORT-SYNC-WORKER-STALL-2026-08-15.md.
+    # Precedente: local-0e97f5ea.
+    newTag: local-43340a6c
