@@ -62,6 +62,7 @@ public sealed class WatchlistPageRenderTests : BunitContext
         Services.AddSingleton<IExchangeClientFactory, NoopExchangeFactory>();
         Services.AddSingleton<ProcioneMGR.Services.MarketData.ISymbolCatalog, NoopCatalog>();
         Services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+        Services.AddSingleton<SeriesCandleCountCache>();
         Services.AddScoped<WatchlistPageService>();
 
         var auth = AddAuthorization();

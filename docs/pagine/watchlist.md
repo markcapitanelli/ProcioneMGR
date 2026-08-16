@@ -86,8 +86,13 @@ tiene solo rendering, PollingTimer e stato di UI):
 - **`LoadAsync`** — serie ordinate, ultima candela per serie con **MAX per-serie sull'indice**
   (mai la `GROUP BY` sull'intera `OhlcvData`: era un seq scan da 15 s misurati su 12,6M righe,
   pagato a ogni apertura), corsie in esecuzione, timbro del sync. **Niente conteggi qui.**
-- **`LoadCountsAsync`** — i conteggi per serie, fuori dal percorso critico (la colonna mostra «…»
-  finché non arrivano; l'auto-refresh non riconta mai).
+- **`LoadCountsAsync`** — i conteggi per serie da
+  [`SeriesCandleCountCache`](../../ProcioneMGR/Services/Ingestion/SeriesCandleCountCache.cs)
+  (singleton): una `GROUP BY` unica in background, **una alla volta nel processo** e condivisa fra
+  i circuiti, valida 10 minuti — 7,4 s misurati per 239 serie, poi zero. La colonna mostra «…»
+  finché la prima passata non finisce e il tooltip dichiara l'ora del conteggio. La versione
+  precedente contava per serie sull'indice (417 ms × 234 = ~97 s **per ogni apertura di pagina**,
+  tutte accavallate): trovato nella verifica browser del 2026-08-16.
 - **`RefreshFreshnessAsync`** — il tick leggero del polling (60 s): MAX per serie, corsie, timbro,
   flag di recupero (confronto con l'osservazione precedente tenuta nel service).
 - **`CheckExchangeStatusesAsync`** — stati simboli via `IExchangeClientFactory`, ritorna quante

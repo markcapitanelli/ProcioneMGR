@@ -93,6 +93,26 @@ come guasto; corsa tick-vs-azione sul service Scoped (lost update); colonne `Las
 chiamate agli exchange fallite; timeout di rete nel percorso UI che uccideva il circuito Blazor;
 badge di stato vecchi presentati sotto un timestamp di verifica nuovo.
 
+## Cosa ha trovato la verifica nel browser (2026-08-16)
+
+Un difetto che né i test né la review avevano visto, perché lo si vede solo aprendo la pagina
+vera con i dati veri: **la colonna «Candele» restava «…» per sempre**.
+
+La revisione aveva tolto la `GROUP BY` da 15 s dal percorso critico sostituendola con un `COUNT`
+per serie sull'indice, in background. Misurato sull'archivio reale: **417 ms per serie × 234 serie
+≈ 97 secondi a passata** — e una passata per ogni caricamento di pagina, tutte accavallate
+(pagavo sei volte tanto il problema che volevo risolvere). La forma giusta era la terza: la
+`GROUP BY` unica — che è il totale più basso — fatta in background, **una alla volta nel processo**
+e **condivisa fra i circuiti** con validità di 10 minuti (`SeriesCandleCountCache`, singleton).
+
+Misura dopo la cura: **una passata da 7,4 secondi** per 239 serie, e le aperture successive di
+pagina a costo zero. Il tooltip della colonna dichiara l'ora del conteggio: è un valore condiviso
+che può avere qualche minuto, e dirlo è la Regola 5.
+
+La lezione di metodo: i test e la review avversaria hanno preso dieci difetti di logica, ma il
+costo reale di una query si vede solo sui dati veri. **Il livello 4 dello standard non è una
+formalità.**
+
 ## Le lezioni
 
 - **Un catch di `OperationCanceledException` senza filtro sul token è un bug dormiente**: le TCE

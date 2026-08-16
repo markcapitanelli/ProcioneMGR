@@ -252,7 +252,7 @@
                             }
                             <div class="small text-muted">@r.Series.LastSyncStatus</div>
                         </td>
-                        <td>@(r.CandleCount?.ToString() ?? "…")</td>
+                        <td title="@(Service.CountsComputedAtUtc is { } c ? $"conteggio delle {c:HH:mm} UTC (condiviso, ricalcolato ogni {(int)ProcioneMGR.Services.Ingestion.SeriesCandleCountCache.Ttl.TotalMinutes} min)" : "conteggio in corso")">@(r.CandleCount?.ToString() ?? "…")</td>
                         <td>
                             @* [E7] Freschezza misurata contro ADESSO con la regola unica di
                                SeriesFreshness — non contro la serie stessa, che è il riferimento

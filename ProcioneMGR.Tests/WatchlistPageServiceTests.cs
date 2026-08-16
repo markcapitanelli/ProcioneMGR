@@ -126,6 +126,7 @@ public sealed class WatchlistPageServiceTests : IAsyncDisposable
             sync ?? new NoopSyncService(),
             exchanges ?? new StatusOnlyFactory(statuses ?? new Dictionary<string, string>()),
             new FakeCatalog(),
+            new SeriesCandleCountCache(dbFactory, NullLogger<SeriesCandleCountCache>.Instance),
             config,
             NullLogger<WatchlistPageService>.Instance);
         return (service, dbFactory);
@@ -338,6 +339,7 @@ public sealed class WatchlistPageServiceTests : IAsyncDisposable
         var (service2, db2) = (service, db);
         var failing = new WatchlistPageService(
             db2, new NoopSyncService(), new FailingStatusFactory(), new FakeCatalog(),
+            new SeriesCandleCountCache(db2, NullLogger<SeriesCandleCountCache>.Instance),
             new ConfigurationBuilder().Build(), NullLogger<WatchlistPageService>.Instance);
         await failing.LoadAsync();
         var esito = await failing.CheckExchangeStatusesAsync();

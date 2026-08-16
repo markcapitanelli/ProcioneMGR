@@ -24,6 +24,7 @@ public sealed class WatchlistPageService(
     IMarketDataSyncService syncService,
     IExchangeClientFactory exchangeFactory,
     ProcioneMGR.Services.MarketData.ISymbolCatalog symbolCatalog,
+    SeriesCandleCountCache countCache,
     IConfiguration configuration,
     ILogger<WatchlistPageService> logger)
 {
@@ -69,6 +70,9 @@ public sealed class WatchlistPageService(
 
     /// <summary>Quando sono stati verificati gli stati su exchange (UTC); null = mai in questa sessione.</summary>
     public DateTime? StatusesCheckedAtUtc { get; private set; }
+
+    /// <summary>Quando è stato calcolato il conteggio candele mostrato: è condiviso e può avere qualche minuto.</summary>
+    public DateTime? CountsComputedAtUtc { get; private set; }
 
     /// <summary>Memoria dell'ultima candela vista per serie: serve al rilevamento del recupero.</summary>
     private readonly Dictionary<int, DateTime?> _previousLastCandle = [];
@@ -210,42 +214,25 @@ public sealed class WatchlistPageService(
     }
 
     /// <summary>
-    /// Conteggi per serie, FUORI dal percorso critico. Un Count per serie sull'indice
-    /// (Symbol, Timeframe, TimestampUtc) al posto della GROUP BY sull'intera tabella: la storia di
-    /// questa query è istruttiva — prima N+1 CountAsync (collo di bottiglia), poi GROUP BY unica
-    /// (fix del collo… diventato seq scan da 15 s a 12,6M righe), ora di nuovo per-serie ma
-    /// sull'indice e in background, dove il costo non blocca nessuno. Il token è OBBLIGATORIO nei
-    /// fatti: senza, una passata continuava a scandire l'indice dopo che l'utente aveva navigato via.
+    /// Conteggi per serie, FUORI dal percorso critico e da una cache CONDIVISA fra i circuiti
+    /// (<see cref="SeriesCandleCountCache"/>): il numero di candele è uno solo per tutti, e
+    /// calcolarlo una volta per finestra invece che a ogni apertura di pagina è la differenza fra
+    /// secondi di database e zero. Vedi la cache per la storia completa delle tre forme provate.
     /// </summary>
     public async Task LoadCountsAsync(CancellationToken ct = default)
     {
-        var snapshot = Rows;
-        if (snapshot is null) return;
+        if (Rows is null) return;
 
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var countByKey = new Dictionary<(string, string), int>();
-        foreach (var row in snapshot)
-        {
-            ct.ThrowIfCancellationRequested();
-            var key = (row.Series.Symbol, row.Series.Timeframe);
-            if (!countByKey.ContainsKey(key))
-            {
-                countByKey[key] = await db.OhlcvData
-                    .Where(c => c.Symbol == row.Series.Symbol && c.Timeframe == row.Series.Timeframe)
-                    .CountAsync(ct);
-            }
-        }
+        var counts = await countCache.GetAsync(ct);
 
         await _stateGate.WaitAsync(ct);
         try
         {
             foreach (var row in Rows ?? [])
             {
-                if (countByKey.TryGetValue((row.Series.Symbol, row.Series.Timeframe), out var n))
-                {
-                    row.CandleCount = n;
-                }
+                row.CandleCount = counts.GetValueOrDefault((row.Series.Symbol, row.Series.Timeframe));
             }
+            CountsComputedAtUtc = countCache.ComputedAtUtc;
         }
         finally
         {
