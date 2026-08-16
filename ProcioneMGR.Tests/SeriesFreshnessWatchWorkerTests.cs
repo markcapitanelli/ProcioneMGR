@@ -176,6 +176,32 @@ public sealed class SeriesFreshnessWatchWorkerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Tick_SerieDaUnMinutoConIlNormaleRitardoDelSync_NonAllarma()
+    {
+        // [2026-08-16] Misurato dal vivo: con il ciclo ogni 5 minuti la 1m oscilla fra 0 e 4 barre
+        // di ritardo, a cavallo della vecchia soglia di 3 — e notificava a ripetizione senza alcun
+        // guasto, erodendo il budget di 20 allarmi/ora condiviso con quelli veri (lo stesso
+        // meccanismo dell'inondazione STX). Una serie non può essere più fresca del sync.
+        var (worker, db, notifier) = await BuildAsync();
+        await SeedSeriesAsync(db, "XRP/USDT", "1m", DateTime.UtcNow.AddMinutes(-5));
+
+        Assert.Empty(await worker.TickAsync(CancellationToken.None));
+        Assert.Empty(notifier.Sent);
+    }
+
+    [Fact]
+    public async Task Tick_SerieDaUnMinutoDavveroBloccata_AllarmaComunque()
+    {
+        // La tolleranza più larga non deve diventare cecità: mezz'ora di silenzio su una 1m è un
+        // guasto vero e va detto.
+        var (worker, db, notifier) = await BuildAsync();
+        await SeedSeriesAsync(db, "XRP/USDT", "1m", DateTime.UtcNow.AddMinutes(-30));
+
+        Assert.Single(await worker.TickAsync(CancellationToken.None));
+        Assert.Single(notifier.Sent);
+    }
+
+    [Fact]
     public async Task Tick_ConTimbroDelSyncStantio_LaNotificaIncolpaIlSync()
     {
         // [2026-08-15] La diagnosi che mancava nell'incidente: 122 serie ferme e il consiglio

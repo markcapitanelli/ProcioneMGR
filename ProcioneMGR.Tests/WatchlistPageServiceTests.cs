@@ -433,6 +433,35 @@ public sealed class WatchlistPageServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task SerieDaUnMinuto_ConIlNormaleRitardoDelSync_NonRisultaFermaInPagina()
+    {
+        // [2026-08-16] Il banner rosso e il badge FERMA devono corrispondere a un guasto: con il
+        // sync ogni 5 minuti, 4 barre di ritardo su una 1m sono la fisiologia della cadenza.
+        var (service, db) = await BuildAsync();
+        await SeedSeriesAsync(db, "XRP/USDT", "1m", DateTime.UtcNow.AddMinutes(-5));
+        await StampCycleAsync(db, DateTime.UtcNow.AddMinutes(-2));
+
+        await service.LoadAsync();
+
+        Assert.Equal(0, service.StaleEnabledCount());
+        Assert.False(service.Rows!.Single().IsStale);
+
+        // Ma un blocco vero resta visibile.
+        await using (var ctx = await db.CreateDbContextAsync())
+        {
+            await ctx.OhlcvData.Where(o => o.Symbol == "XRP/USDT").ExecuteDeleteAsync();
+            ctx.OhlcvData.Add(new OhlcvData
+            {
+                Symbol = "XRP/USDT", Timeframe = "1m", TimestampUtc = DateTime.UtcNow.AddMinutes(-30),
+                Open = 1m, High = 1m, Low = 1m, Close = 1m, Volume = 1m,
+            });
+            await ctx.SaveChangesAsync();
+        }
+        await service.RefreshFreshnessAsync();
+        Assert.Equal(1, service.StaleEnabledCount());
+    }
+
+    [Fact]
     public async Task Toggle_SerieOperataDaCorsia_AvvisaCheIlTradingNonSiFerma()
     {
         // L'equivoco dell'incidente STX (2026-08-13): disabilitare qui NON ferma la corsia.

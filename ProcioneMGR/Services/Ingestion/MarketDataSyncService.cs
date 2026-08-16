@@ -107,7 +107,14 @@ public sealed class MarketDataSyncService(
                 .MaxAsync(c => (DateTime?)c.TimestampUtc, ct);
 
             var now = DateTime.UtcNow;
-            var tolerance = configuration.GetValue("MarketData:StaleAfterBars", SeriesFreshness.DefaultToleranceBars);
+            // [2026-08-16] La tolleranza tiene conto della CADENZA di sync: una serie non può
+            // essere più fresca di quanto il ciclo permetta, e sui timeframe più fini
+            // dell'intervallo (1m) la soglia in barre era insoddisfacibile — «FERMA» scritto in
+            // LastSyncStatus a ogni giro su una serie perfettamente sana.
+            var interval = TimeSpan.FromMinutes(Math.Max(1, configuration.GetValue("MarketData:SyncIntervalMinutes", 5)));
+            var tolerance = SeriesFreshness.EffectiveToleranceBars(
+                series.Timeframe, interval,
+                configuration.GetValue("MarketData:StaleAfterBars", SeriesFreshness.DefaultToleranceBars));
 
             series.LastSyncUtc = now;
             series.LastSyncStatus = SeriesFreshness.Describe(

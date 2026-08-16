@@ -31,6 +31,36 @@ public static class SeriesFreshness
     public const int DefaultToleranceBars = 3;
 
     /// <summary>
+    /// [2026-08-16] La tolleranza VERA per un timeframe, dato ogni quanto passa il sync: mai meno
+    /// di <see cref="DefaultToleranceBars"/>, ma almeno due giri di sync espressi in barre.
+    ///
+    /// <para>Nasce da una misura sull'assetto reale: XRP/USDT <b>1m</b> oscillava fra 0 e 4 barre
+    /// di ritardo, sfiorando di continuo la soglia di 3 — senza alcun guasto. È aritmetica: il
+    /// ciclo parte ogni 5 minuti e ne impiega ~4 per il giro delle 222 serie, quindi una serie a
+    /// un minuto <b>non può</b> stare entro tre minuti di freschezza. La soglia era
+    /// insoddisfacibile in questo assetto (la classe di difetto «gate senza strumento» del
+    /// 2026-07-28), e produceva allarmi ricorrenti che erodevano il budget di notifiche condiviso
+    /// con quelli veri — lo stesso meccanismo dell'inondazione STX del 2026-08-13.</para>
+    ///
+    /// <para>Due giri, non uno: uno solo verrebbe sfiorato a ogni ciclo un po' più lento. Col
+    /// default (5 min) la 1m passa a 10 barre — un blocco vero si vede comunque in dieci minuti —
+    /// mentre 15m/30m/1h/4h/1d restano a 3 barre esatte, cioè invariate: la cura tocca solo i
+    /// timeframe più fini della cadenza di sync, che sono gli unici a soffrirne.</para>
+    /// </summary>
+    public static int EffectiveToleranceBars(string timeframe, TimeSpan syncInterval,
+        int toleranceBars = DefaultToleranceBars)
+    {
+        if (!Timeframes.Supported.TryGetValue(timeframe, out var step) || step <= TimeSpan.Zero
+            || syncInterval <= TimeSpan.Zero)
+        {
+            return toleranceBars;
+        }
+
+        var barsPerTwoCycles = (int)Math.Ceiling(2 * syncInterval.TotalSeconds / step.TotalSeconds);
+        return Math.Max(toleranceBars, barsPerTwoCycles);
+    }
+
+    /// <summary>
     /// [2026-08-06] L'istante di APERTURA dell'ultima barra che ha già CHIUSO. <c>null</c> se il
     /// timeframe non è riconosciuto.
     ///

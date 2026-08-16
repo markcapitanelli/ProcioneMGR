@@ -256,11 +256,14 @@
                         <td>
                             @* [E7] Freschezza misurata contro ADESSO con la regola unica di
                                SeriesFreshness — non contro la serie stessa, che è il riferimento
-                               che si sposta col guasto (B2.a). *@
+                               che si sposta col guasto (B2.a). Il verdetto arriva dal page service
+                               (r.IsStale/r.BarsBehind): la tolleranza dipende dalla cadenza di
+                               sync, e ricalcolarla qui darebbe un secondo verdetto sulla stessa
+                               serie. *@
                             @if (r.LastCandleUtc is DateTime last)
                             {
-                                var behind = SeriesFreshness.BarsBehind(r.Series.Timeframe, last, DateTime.UtcNow);
-                                var stale = SeriesFreshness.IsStale(r.Series.Timeframe, last, DateTime.UtcNow);
+                                var behind = r.BarsBehind;
+                                var stale = r.IsStale;
                                 <div class="small">@last.ToString("u")</div>
                                 @if (!r.Series.Enabled)
                                 {
@@ -358,13 +361,7 @@
     private IEnumerable<WatchlistPageService.Row> VisibleRows()
     {
         var rows = Service.Rows ?? [];
-        if (!_soloFerme)
-        {
-            return rows;
-        }
-        var now = DateTime.UtcNow;
-        return rows.Where(r => r.Series.Enabled
-            && SeriesFreshness.IsStale(r.Series.Timeframe, r.LastCandleUtc, now));
+        return _soloFerme ? rows.Where(r => r.Series.Enabled && r.IsStale) : rows;
     }
 
     private static string AgeText(DateTime utc)
