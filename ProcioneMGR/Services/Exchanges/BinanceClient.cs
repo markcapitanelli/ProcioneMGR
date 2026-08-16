@@ -92,6 +92,32 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
         return symbols;
     }
 
+    public async Task<IReadOnlyDictionary<string, string>> GetSymbolStatusesAsync(CancellationToken ct = default)
+    {
+        // Stesso exchangeInfo di GetSymbolsAsync, ma lo status viene RESTITUITO invece che usato
+        // come filtro-e-scarto: un simbolo in BREAK deve poter essere visto, non solo sparire.
+        using var response = await http.GetAsync("/api/v3/exchangeInfo", ct);
+        await EnsureSuccessAsync(response, ct);
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+
+        var statuses = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in doc.RootElement.GetProperty("symbols").EnumerateArray())
+        {
+            var baseAsset = s.TryGetProperty("baseAsset", out var b) ? b.GetString() : null;
+            var quoteAsset = s.TryGetProperty("quoteAsset", out var q) ? q.GetString() : null;
+            if (string.IsNullOrEmpty(baseAsset) || string.IsNullOrEmpty(quoteAsset))
+            {
+                continue;
+            }
+            statuses[$"{baseAsset}/{quoteAsset}"] =
+                s.TryGetProperty("status", out var status) ? status.GetString() ?? "sconosciuto" : "sconosciuto";
+        }
+
+        return statuses;
+    }
+
     public async Task<bool> TestConnectionAsync(CancellationToken ct = default)
     {
         try

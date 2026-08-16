@@ -619,6 +619,14 @@ builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.PipelinePageService>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Research.IResearchCandidateIndexer, ProcioneMGR.Services.Research.ResearchCandidateIndexer>();
 builder.Services.AddScoped<ProcioneMGR.Services.Research.ResearchPageService>();
 
+// [2026-08-15, revisione post-incidente 122 serie ferme] Orchestrazione di Watchlist.razor:
+// timbro del ciclo di sync, freschezza per-serie sull'indice, verifica stato simboli su exchange.
+// Il conteggio candele sta in una cache SINGLETON: è lo stesso numero per tutti i circuiti e
+// costa secondi di database — calcolarlo per circuito, come faceva la prima versione, moltiplicava
+// il costo per il numero di schede aperte (misurato nella verifica browser del 2026-08-16).
+builder.Services.AddSingleton<ProcioneMGR.Services.Ingestion.SeriesCandleCountCache>();
+builder.Services.AddScoped<ProcioneMGR.Services.Ingestion.WatchlistPageService>();
+
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
         // Fase 1: nessun server email reale (IdentityNoOpEmailSender), quindi

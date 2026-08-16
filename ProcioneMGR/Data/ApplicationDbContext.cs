@@ -173,8 +173,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.HasIndex(e => e.UserId);
         });
 
-        // [AF5.1] Battiti di vita: chiave naturale = ruolo dell'host. Due righe in tutto, mai
-        // cancellate: la stantiezza si legge da LastUtc, non dall'assenza.
+        // [AF5.1] Battiti di vita: chiave naturale = ruolo dell'host (shell/engine) o del lavoro
+        // (ingestion-sync, dal 2026-08-15). Poche righe fisse, mai cancellate: la stantiezza si
+        // legge da LastUtc, non dall'assenza.
         builder.Entity<HostHeartbeat>(entity =>
         {
             entity.ToTable("HostHeartbeats");

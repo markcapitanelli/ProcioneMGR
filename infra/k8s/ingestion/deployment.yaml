@@ -55,9 +55,16 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
+          # [2026-08-15] La liveness batte su /health/live, che VEDE il worker di sync (503 se il
+          # loop non batte da oltre max(30 min, 6× intervallo)): il 2026-08-14 il worker è morto
+          # alle 22:44 e il pod è rimasto «healthy» 6 ore con 122 serie ferme — /health statico
+          # provava solo che Kestrel rispondeva. La readiness resta su /health (sempre 200): un
+          # worker parcheggiato NON deve togliere il traffico al POST /sync manuale, che è la via
+          # di rimedio. ⚠ /health/live esiste solo dalle immagini ≥ 2026-08-15: applicare questo
+          # manifest SOLO insieme (o dopo) il bump dell'immagine nel kustomization.
           livenessProbe:
             httpGet:
-              path: /health
+              path: /health/live
               port: 8080
             initialDelaySeconds: 15
             periodSeconds: 30

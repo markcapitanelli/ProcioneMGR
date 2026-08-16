@@ -176,6 +176,68 @@ public sealed class SeriesFreshnessWatchWorkerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Tick_ConTimbroDelSyncStantio_LaNotificaIncolpaIlSync()
+    {
+        // [2026-08-15] La diagnosi che mancava nell'incidente: 122 serie ferme e il consiglio
+        // fisso «verifica BREAK» — mentre l'imputato era il worker di sync morto alle 22:44.
+        // Con il timbro di ciclo stantio, la notifica deve nominare il sync, non i simboli.
+        var (worker, db, notifier) = await BuildAsync();
+        await SeedSeriesAsync(db, "AAA/USDT", "1h", DateTime.UtcNow.AddHours(-30));
+        await using (var ctx = await db.CreateDbContextAsync())
+        {
+            ctx.HostHeartbeats.Add(new HostHeartbeat
+            {
+                Host = HostHeartbeat.IngestionSyncRole,
+                LastUtc = DateTime.UtcNow.AddHours(-6),
+                Version = "ciclo ok",
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        await worker.TickAsync(CancellationToken.None);
+
+        var alert = Assert.Single(notifier.Sent);
+        Assert.Contains("SYNC", alert.Body);
+        Assert.DoesNotContain("BREAK", alert.Body);
+    }
+
+    [Fact]
+    public async Task Tick_ConSyncVivo_LaNotificaConsigliaLaVerificaBreak()
+    {
+        var (worker, db, notifier) = await BuildAsync();
+        await SeedSeriesAsync(db, "MKR/USDT", "1h", DateTime.UtcNow.AddHours(-30));
+        await using (var ctx = await db.CreateDbContextAsync())
+        {
+            ctx.HostHeartbeats.Add(new HostHeartbeat
+            {
+                Host = HostHeartbeat.IngestionSyncRole,
+                LastUtc = DateTime.UtcNow.AddMinutes(-2),
+                Version = "ciclo ok",
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        await worker.TickAsync(CancellationToken.None);
+
+        var alert = Assert.Single(notifier.Sent);
+        Assert.Contains("BREAK", alert.Body); // sync vivo + una serie ferma: l'ipotesi giusta è la sospensione
+    }
+
+    [Fact]
+    public async Task Tick_SenzaTimbroDiCiclo_LaNotificaPuntaAlWorker()
+    {
+        // Nessun timbro a DB (worker mai partito, o immagine del pod vecchia): la notifica non
+        // deve inventare né BREAK né orari — dice che il giro di sync non risulta mai completato.
+        var (worker, db, notifier) = await BuildAsync();
+        await SeedSeriesAsync(db, "AAA/USDT", "1h", DateTime.UtcNow.AddHours(-30));
+
+        await worker.TickAsync(CancellationToken.None);
+
+        var alert = Assert.Single(notifier.Sent);
+        Assert.Contains("mai completato", alert.Body);
+    }
+
+    [Fact]
     public async Task Tick_PiuSerieFermeInsieme_UnaNotificaAggregata()
     {
         // Un'interruzione che ferma molte serie insieme deve produrre UN messaggio, non uno per

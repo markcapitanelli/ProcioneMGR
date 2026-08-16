@@ -27,6 +27,7 @@ builder.Services.AddProcioneDatabase(builder.Configuration);
 // scheduling periodico, a differenza del monolite quando delega a questo servizio).
 builder.Services.AddOhlcvIngestion();
 builder.Services.AddScoped<IMarketDataSyncService, MarketDataSyncService>();
+builder.Services.AddSingleton<IngestionSyncHeartbeat>();
 builder.Services.AddHostedService<MarketDataSyncWorker>();
 
 // Telemetria verso lo stack observability di Fase 0 (stesso wiring opt-in del monolite:
@@ -46,7 +47,54 @@ app.MapPost("/sync/{trackedSeriesId:int}", async (
     return Results.Ok(new { candlesProcessed });
 });
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+// [2026-08-15] Due endpoint, due domande diverse (review post-incidente):
+//  - /health (READINESS + diagnostica): «il processo serve richieste?» — sempre 200 finché Kestrel
+//    risponde, col battito del worker nel corpo. NON deve fallire per il worker parcheggiato:
+//    durante l'incidente il POST /sync manuale era proprio la via di rimedio, e una readiness
+//    fallita gli toglierebbe il traffico.
+//  - /health/live (LIVENESS): «il worker di sync è vivo?» — prima l'health era statico e il
+//    2026-08-14 il worker è morto alle 22:44 UTC col pod «healthy» per 6 ore e 122 serie ferme.
+//    Loop senza battito oltre la soglia ⇒ 503 ⇒ kubelet riavvia il pod da solo (~30 min di
+//    latenza massima: il riavvio è esattamente il rimedio che quella notte ha richiesto un umano).
+//    La soglia è larga (mai sotto 30 min, ≫ del backstop di ciclo): scatta solo un loop davvero
+//    parcheggiato, mai un recupero profondo legittimo — lezione delle probe a 1s del 2026-08-13.
+app.MapGet("/health", (IngestionSyncHeartbeat heartbeat) =>
+{
+    var last = heartbeat.LastLoopTickUtc;
+    var now = DateTime.UtcNow;
+    return Results.Ok(new
+    {
+        status = "ok",
+        lastLoopTickUtc = last,
+        ageSeconds = last is DateTime ok ? (int)(now - ok).TotalSeconds : (int?)null,
+    });
+});
+
+app.MapGet("/health/live", (IngestionSyncHeartbeat heartbeat, IConfiguration configuration) =>
+{
+    var interval = TimeSpan.FromMinutes(Math.Max(1, configuration.GetValue("MarketData:SyncIntervalMinutes", 5)));
+    var staleAfter = IngestionSyncHeartbeat.StaleAfter(interval);
+    var last = heartbeat.LastLoopTickUtc;
+    var now = DateTime.UtcNow;
+
+    if (IngestionSyncHeartbeat.IsParked(last, now, staleAfter))
+    {
+        return Results.Json(new
+        {
+            status = "sync-worker-parked",
+            lastLoopTickUtc = last,
+            ageSeconds = last is DateTime l ? (int)(now - l).TotalSeconds : (int?)null,
+            staleAfterSeconds = (int)staleAfter.TotalSeconds,
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    return Results.Ok(new
+    {
+        status = "ok",
+        lastLoopTickUtc = last,
+        ageSeconds = last is DateTime ok ? (int)(now - ok).TotalSeconds : (int?)null,
+    });
+});
 
 app.Run();
 

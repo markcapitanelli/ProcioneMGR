@@ -16,7 +16,17 @@ public class HostHeartbeat
     public const string ShellRole = "shell";
     public const string EngineRole = "engine";
 
-    /// <summary>Chiave: il ruolo dell'host ("shell" | "engine").</summary>
+    /// <summary>
+    /// [2026-08-15] Timbro del CICLO di sync OHLCV, scritto da MarketDataSyncWorker a fine ciclo
+    /// (ovunque giri: pod ingestion o monolite). Non è il battito di un host ma di un LAVORO — è
+    /// il dato che mancava nell'incidente del 2026-08-14, quando «l'ultimo giro è delle 22:44» non
+    /// era scritto da nessuna parte e 122 serie sono rimaste ferme 6 ore in silenzio.
+    /// HeartbeatMonitorWorker NON sorveglia questo ruolo (guarda solo shell/engine): i giudici
+    /// sono la pagina /market/watchlist e la guardia di freschezza.
+    /// </summary>
+    public const string IngestionSyncRole = "ingestion-sync";
+
+    /// <summary>Chiave: il ruolo dell'host ("shell" | "engine") o del lavoro ("ingestion-sync").</summary>
     public string Host { get; set; } = string.Empty;
 
     /// <summary>Ultimo battito (UTC). La riga non si cancella mai: si aggiorna.</summary>
