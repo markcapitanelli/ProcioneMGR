@@ -27,6 +27,8 @@ public class TradingPageServiceTests
         public TradingPerformance PerformanceToReturn { get; set; } = new();
         public Exception? ThrowOnRefresh { get; set; }
         public Exception? ThrowOnStart { get; set; }
+        /// <summary>[2026-08-17] Fa fallire ogni comando: è il motore remoto che non risponde.</summary>
+        public Exception? ThrowOnCommand { get; set; }
         public (decimal? Sl, decimal? Tp, decimal? Tsl)? LastSlTp { get; private set; }
         public string? LastConfirmedOrderId { get; private set; }
         public string? LastConfirmedUserId { get; private set; }
@@ -45,25 +47,40 @@ public class TradingPageServiceTests
             StartedWith = mode;
             return Task.CompletedTask;
         }
-        public Task StopAsync(CancellationToken ct = default) { StopCalled = true; return Task.CompletedTask; }
-        public Task EmergencyStopAsync(string reason, CancellationToken ct = default) { LastEmergencyReason = reason; return Task.CompletedTask; }
+        public Task StopAsync(CancellationToken ct = default)
+        {
+            if (ThrowOnCommand is not null) return Task.FromException(ThrowOnCommand);
+            StopCalled = true; return Task.CompletedTask;
+        }
+        public Task EmergencyStopAsync(string reason, CancellationToken ct = default)
+        {
+            if (ThrowOnCommand is not null) return Task.FromException(ThrowOnCommand);
+            LastEmergencyReason = reason; return Task.CompletedTask;
+        }
         public Task<List<OpenPosition>> GetOpenPositionsAsync(CancellationToken ct = default) => Task.FromResult(PositionsToReturn);
-        public Task ClosePositionAsync(string positionId, CancellationToken ct = default) { LastClosedPositionId = positionId; return Task.CompletedTask; }
+        public Task ClosePositionAsync(string positionId, CancellationToken ct = default)
+        {
+            if (ThrowOnCommand is not null) return Task.FromException(ThrowOnCommand);
+            LastClosedPositionId = positionId; return Task.CompletedTask;
+        }
         public Task CloseAllPositionsAsync(string reason, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetStopLossTakeProfitAsync(string positionId, decimal? stopLoss, decimal? takeProfit, decimal? trailingStopPercent = null, CancellationToken ct = default)
         {
+            if (ThrowOnCommand is not null) return Task.FromException(ThrowOnCommand);
             LastSlTp = (stopLoss, takeProfit, trailingStopPercent);
             return Task.CompletedTask;
         }
         public Task<List<Order>> GetPendingOrdersAsync(CancellationToken ct = default) => Task.FromResult(PendingToReturn);
         public Task ConfirmOrderAsync(string orderId, string? userId, CancellationToken ct = default)
         {
+            if (ThrowOnCommand is not null) return Task.FromException(ThrowOnCommand);
             LastConfirmedOrderId = orderId;
             LastConfirmedUserId = userId;
             return Task.CompletedTask;
         }
         public Task RejectOrderAsync(string orderId, string? userId, CancellationToken ct = default)
         {
+            if (ThrowOnCommand is not null) return Task.FromException(ThrowOnCommand);
             LastRejectedOrderId = orderId;
             LastRejectedUserId = userId;
             return Task.CompletedTask;
@@ -124,6 +141,33 @@ public class TradingPageServiceTests
         return (service, engine0);
     }
 
+    /// <summary>
+    /// [2026-08-17] Harness a DUE corsie keyed: il <see cref="Build"/> storico ne registra una sola,
+    /// e i difetti di identità della corsia non erano quindi nemmeno esprimibili come test.
+    /// </summary>
+    private static (TradingPageService Service, FakeTradingEngine Engine0, FakeTradingEngine Engine1) BuildTwoLanes()
+    {
+        var engine0 = new FakeTradingEngine(0);
+        var engine1 = new FakeTradingEngine(1);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddKeyedSingleton<ITradingEngine>(0, engine0);
+        services.AddKeyedSingleton<ITradingEngine>(1, engine1);
+        services.AddMediator();
+        var provider = services.BuildServiceProvider();
+
+        var store = new FakeEngineConfigStore();
+        store.Seed("Trading:Safety", new SafetyConfiguration());
+
+        var service = new TradingPageService(
+            provider.GetRequiredService<IMediator>(),
+            new FakePromotionEvaluator([]),
+            new RecordingPromoter(),
+            store,
+            new FakeLaneQuarantineStore());
+        return (service, engine0, engine1);
+    }
+
     // --- RefreshAsync: successo e staleness -----------------------------------------------------
 
     [Fact]
@@ -174,19 +218,144 @@ public class TradingPageServiceTests
         Assert.Null(service.LastStaleReason);
     }
 
+    /// <summary>
+    /// [2026-08-17] Questo test è stato RIMIRATO sul suo intento reale. Prima pretendeva che un
+    /// fallimento non-gRPC lasciasse la staleness INTATTA, e con ciò consacrava un buco nella
+    /// regola 5 del progetto («degradare dicendolo»): in topologia in-process nessun guasto è una
+    /// RpcException, quindi il banner era irraggiungibile e un Postgres giù lasciava a schermo
+    /// equity, PnL e posizioni dell'ultimo giro riuscito spacciandoli per attuali.
+    ///
+    /// L'intento legittimo che il test difendeva — non accusare il gRPC quando il gRPC non c'entra
+    /// — è ora un campo esplicito, <c>StaleIsTransport</c>, invece del silenzio.
+    /// </summary>
     [Fact]
-    public async Task RefreshAsync_NonRpcException_IsSwallowed_WithoutTouchingStaleness()
+    public async Task RefreshAsync_NonRpcException_DeclaresStaleness_WithoutBlamingGrpc()
     {
-        // Contratto esatto del @code originale: il catch generico non imposta StaleSince/LastStaleReason
-        // (solo RpcException lo fa) — un'eccezione non-gRPC (es. bug nel mapping locale) non deve far
-        // comparire il banner "servizio di trading non risponde", che parla specificamente di gRPC.
         var (service, engine) = Build();
         engine.ThrowOnRefresh = new InvalidOperationException("bug locale");
 
         await service.RefreshAsync(0);
 
-        Assert.Null(service.StaleSince);
-        Assert.Null(service.LastStaleReason);
+        Assert.NotNull(service.StaleSince);
+        Assert.Equal(nameof(InvalidOperationException), service.LastStaleReason);
+        Assert.False(service.StaleIsTransport);   // non è il motore remoto a non rispondere
+    }
+
+    [Fact]
+    public async Task RefreshAsync_RpcException_MarksStalenessAsTransport()
+    {
+        var (service, engine) = Build();
+        engine.ThrowOnRefresh = new RpcException(new Status(StatusCode.Unavailable, "down"));
+
+        await service.RefreshAsync(0);
+
+        Assert.NotNull(service.StaleSince);
+        Assert.True(service.StaleIsTransport);
+    }
+
+    /// <summary>
+    /// [2026-08-17] Un fallimento a corsia INVARIATA deve conservare gli ultimi numeri buoni
+    /// (svuotare la pagina durante un riavvio di pochi secondi sarebbe peggio) — ma dichiarandoli
+    /// vecchi. Le due metà vanno provate insieme: una senza l'altra è il difetto.
+    /// </summary>
+    [Fact]
+    public async Task RefreshAsync_Failure_KeepsLastGoodValues_AndDeclaresThemStale()
+    {
+        var (service, engine) = Build();
+        engine.PositionsToReturn = [new OpenPosition { PositionId = "p1", Symbol = "ADA/USDT" }];
+        await service.RefreshAsync(0);
+        Assert.Single(service.Positions);
+
+        engine.ThrowOnRefresh = new InvalidOperationException("Postgres giù");
+        await service.RefreshAsync(0);
+
+        Assert.Single(service.Positions);          // i numeri restano...
+        Assert.NotNull(service.StaleSince);        // ...ma sono dichiarati vecchi
+    }
+
+    /// <summary>
+    /// [2026-08-17, trovato nel BROWSER] Il polling è ogni 2s e la deadline di lettura è 10s: quando
+    /// il motore è lento, ogni giro viene superato dai successivi. Guardando lo stantio col token di
+    /// generazione, NESSUN fallimento arrivava più a schermo — la pagina restava muta e vuota
+    /// esattamente nel caso che il banner esiste per raccontare. Un fallimento non è un dato da
+    /// pubblicare in ordine: è una notizia sulla corsia, e vale finché la corsia è quella.
+    /// </summary>
+    [Fact]
+    public async Task RefreshAsync_SupersededFailure_StillDeclaresStaleness_ForTheSameLane()
+    {
+        var (service, engine) = Build();
+        engine.ThrowOnRefresh = new RpcException(new Status(StatusCode.DeadlineExceeded, "lento"));
+
+        // Due giri sulla STESSA corsia si sovrappongono: il primo è superato dal secondo.
+        var lento = service.RefreshAsync(0);
+        var nuovo = service.RefreshAsync(0);
+        await Task.WhenAll(lento, nuovo);
+
+        Assert.NotNull(service.StaleSince);
+        Assert.Equal("DeadlineExceeded", service.LastStaleReason);
+    }
+
+    // --- Identità della corsia -----------------------------------------------------------------
+
+    /// <summary>
+    /// [2026-08-17] Cambiando corsia, i dati della PRECEDENTE non devono restare a schermo sotto
+    /// l'etichetta della nuova. Prima non c'era alcun tag di provenienza: se la lettura della corsia
+    /// nuova falliva, KPI, posizioni e ordini restavano quelli di prima mentre l'intestazione, il
+    /// grafico e la quarantena erano già della nuova — e i pulsanti di riga mandavano al motore
+    /// della corsia B il positionId della corsia A, che il motore non trova e ignora in silenzio.
+    /// </summary>
+    [Fact]
+    public async Task RefreshAsync_LaneChanged_DoesNotShowThePreviousLaneData()
+    {
+        var (service, engine0, engine1) = BuildTwoLanes();
+        engine0.PositionsToReturn = [new OpenPosition { PositionId = "p0", Symbol = "ADA/USDT" }];
+        await service.RefreshAsync(0);
+        Assert.Single(service.Positions);
+        Assert.Equal(0, service.LoadedLaneId);
+
+        // La corsia 1 non risponde: l'unica cosa vera da mostrare è «nessun dato per questa corsia».
+        engine1.ThrowOnRefresh = new RpcException(new Status(StatusCode.Unavailable, "down"));
+        await service.RefreshAsync(1);
+
+        Assert.Empty(service.Positions);
+        Assert.Null(service.Status);
+        Assert.Equal(1, service.LoadedLaneId);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_LaneChanged_ClearsPendingEdits()
+    {
+        var (service, engine0, _) = BuildTwoLanes();
+        var pos = new OpenPosition { PositionId = "p0", StopLoss = 10m };
+        engine0.PositionsToReturn = [pos];
+        await service.RefreshAsync(0);
+        service.SetSlEdit("p0", "9");
+        Assert.Equal("9", service.SlValue(pos));
+
+        await service.RefreshAsync(1);
+        await service.RefreshAsync(0);
+
+        // Un edit in sospeso appartiene alla corsia su cui è nato: tornando indietro non deve
+        // riapparire come se l'operatore l'avesse appena digitato.
+        Assert.Equal("10", service.SlValue(pos));
+    }
+
+    /// <summary>
+    /// L'esito di un comando NON viene azzerato dal refresh che lo segue (altrimenti nessun
+    /// messaggio sarebbe mai visibile), ma la pagina lo azzera al cambio di corsia: quei testi non
+    /// nominano la corsia, e resterebbero a descrivere un'azione avvenuta altrove.
+    /// </summary>
+    [Fact]
+    public async Task ClearMessage_RemovesTheOutcomeOfThePreviousCommand()
+    {
+        var (service, _) = Build();
+        await service.StopAsync(0);
+        Assert.NotNull(service.Message);
+
+        service.ClearMessage();
+
+        Assert.Null(service.Message);
+        Assert.False(service.IsError);
     }
 
     // --- Start/Stop/Emergency/Close/Confirm/Reject: pass-through al motore ---------------------
@@ -383,6 +552,70 @@ public class TradingPageServiceTests
         Assert.Contains("Valutazione promozioni fallita", service.PromoMessage);
     }
 
+    /// <summary>
+    /// [2026-08-17] Il caso reale: il tunnel gRPC cade un istante all'apertura della pagina, il form
+    /// si riempie dei DEFAULT DEL CODICE, poi il canale torna. Un salvataggio in quel momento
+    /// riusciva e SOSTITUIVA l'intera sezione — leva massima, drawdown, posizioni aperte —
+    /// riportando tutto ai default, con un messaggio verde «soglie salvate sul MOTORE».
+    /// </summary>
+    [Fact]
+    public async Task SaveSafetyAsync_AfterFailedRead_RefusesToOverwriteTheEngineWithCodeDefaults()
+    {
+        var store = new FakeEngineConfigStore(remote: true);
+        store.Seed("Trading:Safety", new SafetyConfiguration { MaxLeverageAllowed = 2, MaxDrawdownPercent = 8m, MaxOpenPositions = 1 });
+        var (service, _) = Build(engineConfig: store);
+
+        store.Reachable = false;
+        await service.ReloadSafetyAsync();          // lettura fallita: il form ha i default
+        Assert.False(service.SafetyReachable);
+
+        store.Reachable = true;                     // il canale si riapre: la SCRITTURA riuscirebbe
+        await service.SaveSafetyAsync();
+
+        Assert.Empty(store.Saved);                  // nulla è stato scritto
+        Assert.True(service.IsError);
+        Assert.Contains("default del codice", service.Message);
+    }
+
+    /// <summary>Dopo una scrittura riuscita la spia «sono i default» non deve sopravvivere alla propria causa.</summary>
+    [Fact]
+    public async Task SaveSafetyAsync_Success_ClearsTheUnreachableFlag()
+    {
+        var store = new FakeEngineConfigStore(remote: true);
+        store.Seed("Trading:Safety", new SafetyConfiguration());
+        var (service, _) = Build(engineConfig: store);
+        await service.ReloadSafetyAsync();
+
+        await service.SaveSafetyAsync();
+
+        Assert.True(service.SafetyReachable);
+        Assert.Null(service.SafetyError);
+        Assert.False(service.IsError);
+    }
+
+    /// <summary>
+    /// Zero non è «nessun limite»: il SafetyChecker confronta con <c>&gt;=</c>, quindi
+    /// MaxDrawdownPercent = 0 fa scattare l'emergency stop al primo ordine (0 &gt;= 0) e la corsia
+    /// diventa inutilizzabile senza che il motivo sia leggibile da nessuna parte.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 5)]
+    [InlineData(20, 0)]
+    public async Task SaveSafetyAsync_ZeroCriticalThresholds_AreRefused(int maxDd, int maxDailyLoss)
+    {
+        var store = new FakeEngineConfigStore();
+        store.Seed("Trading:Safety", new SafetyConfiguration());
+        var (service, _) = Build(engineConfig: store);
+        await service.ReloadSafetyAsync();
+        service.Safety.MaxDrawdownPercent = maxDd;
+        service.Safety.MaxDailyLossPercent = maxDailyLoss;
+
+        await service.SaveSafetyAsync();
+
+        Assert.Empty(store.Saved);
+        Assert.True(service.IsError);
+    }
+
     [Fact]
     public async Task SaveSafetyAsync_ValidValues_PersistsAndReportsSuccess()
     {
@@ -483,7 +716,7 @@ public class TradingPageServiceTests
     }
 
     [Theory]
-    [InlineData("0", null)]      // zero non è un livello valido (azzeramento passa da un percorso esplicito)
+    [InlineData("0", null)]      // zero non è un livello valido
     [InlineData("-5", null)]
     [InlineData("abc", null)]
     [InlineData("", null)]
@@ -492,6 +725,26 @@ public class TradingPageServiceTests
     {
         var result = TradingPageService.ParseLevel(raw);
         Assert.Equal(expected is null ? (decimal?)null : (decimal)expected.Value, result);
+    }
+
+    /// <summary>
+    /// [2026-08-17] La distinzione che <c>ParseLevel</c> da sola non può esprimere: «vuoto» è una
+    /// richiesta legittima di rimuovere la protezione, «abc» e «-5» sono errori di battitura. Prima
+    /// erano lo stesso null, ed è per questo che un refuso poteva disarmare uno stop loss.
+    /// </summary>
+    [Theory]
+    [InlineData("", true, null)]        // campo svuotato: rimozione VOLUTA
+    [InlineData("   ", true, null)]
+    [InlineData("1234.5", true, 1234.5)]
+    [InlineData("0", false, null)]      // non valido: nessuna modifica
+    [InlineData("-5", false, null)]
+    [InlineData("abc", false, null)]
+    public void TryParseLevel_DistinguishesEmptyFromInvalid(string raw, bool expectedOk, double? expectedLevel)
+    {
+        var ok = TradingPageService.TryParseLevel(raw, out var level);
+
+        Assert.Equal(expectedOk, ok);
+        Assert.Equal(expectedLevel is null ? (decimal?)null : (decimal)expectedLevel.Value, level);
     }
 
     [Fact]
@@ -511,6 +764,101 @@ public class TradingPageServiceTests
         // engine, che non applica davvero SetStopLossTakeProfitAsync al proprio stato) invece di
         // continuare a mostrare "59500" come se fosse ancora in sospeso.
         Assert.Equal("58000", service.SlValue(pos));
+    }
+
+    /// <summary>
+    /// [2026-08-17] Il difetto che questo test blocca: <c>ParseLevel</c> collassava in <c>null</c>
+    /// tre significati diversi — campo svuotato di proposito, testo non parsabile, valore ≤ 0 — e
+    /// <c>SetSlEdit</c> scriveva comunque la chiave, quindi quel null vinceva sul valore esistente
+    /// e arrivava al motore, che lo interpreta come AZZERAMENTO. Un «-59800» digitato per errore
+    /// RIMUOVEVA lo stop loss, con un messaggio VERDE «SL/TP/Trailing aggiornati» a confermarlo.
+    /// </summary>
+    [Theory]
+    [InlineData("-59800")]   // segno rimasto dal campo precedente
+    [InlineData("0")]
+    [InlineData("abc")]
+    public async Task SaveSlTpAsync_InvalidStopLoss_DoesNotDisarmTheProtection(string raw)
+    {
+        var (service, engine) = Build();
+        engine.PositionsToReturn = [new OpenPosition { PositionId = "p1", Side = OrderSide.Buy, EntryPrice = 61000m, StopLoss = 59500m }];
+        await service.RefreshAsync(0);
+
+        service.SetSlEdit("p1", raw);
+        await service.SaveSlTpAsync(0, "p1");
+
+        Assert.Null(engine.LastSlTp);          // nessun comando inviato
+        Assert.True(service.IsError);          // e lo si dice, in rosso
+        Assert.Contains("non valido", service.Message);
+    }
+
+    /// <summary>Il complemento: svuotare il campo È una richiesta legittima di RIMUOVERE la protezione.</summary>
+    [Fact]
+    public async Task SaveSlTpAsync_EmptyField_RemovesTheProtection_AndSaysSo()
+    {
+        var (service, engine) = Build();
+        engine.PositionsToReturn = [new OpenPosition { PositionId = "p1", Side = OrderSide.Buy, EntryPrice = 61000m, StopLoss = 59500m }];
+        await service.RefreshAsync(0);
+
+        service.SetSlEdit("p1", "");
+        await service.SaveSlTpAsync(0, "p1");
+
+        Assert.NotNull(engine.LastSlTp);
+        Assert.Null(engine.LastSlTp!.Value.Sl);
+        Assert.Contains("RIMOSSA", service.Message);
+        Assert.True(service.IsError);          // giallo/rosso: la posizione resta esposta
+    }
+
+    /// <summary>Uno stop dalla parte sbagliata del prezzo d'ingresso non è una protezione: è un'uscita immediata.</summary>
+    [Fact]
+    public async Task SaveSlTpAsync_StopOnTheWrongSide_IsRefused()
+    {
+        var (service, engine) = Build();
+        engine.PositionsToReturn = [new OpenPosition { PositionId = "p1", Side = OrderSide.Buy, EntryPrice = 61000m }];
+        await service.RefreshAsync(0);
+
+        service.SetSlEdit("p1", "62000");   // long con stop SOPRA l'ingresso
+        await service.SaveSlTpAsync(0, "p1");
+
+        Assert.Null(engine.LastSlTp);
+        Assert.True(service.IsError);
+    }
+
+    // --- Comandi: un fallimento non deve abbattere il circuito Blazor -------------------------
+
+    /// <summary>
+    /// [2026-08-17] In Blazor Server un'eccezione non gestita in un handler @onclick è fatale per il
+    /// circuito, e nell'app non esiste alcun ErrorBoundary. Con il motore remoto in riavvio —
+    /// evento ATTESO, il Deployment usa strategy Recreate — premere «EMERGENCY STOP» faceva morire
+    /// la pagina, mentre il banner prometteva un fallimento gestito.
+    /// </summary>
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("emergency")]
+    [InlineData("close")]
+    [InlineData("confirm")]
+    [InlineData("reject")]
+    [InlineData("sltp")]
+    public async Task Commands_EngineUnreachable_ReportTheFailure_WithoutThrowing(string verbo)
+    {
+        var (service, engine) = Build();
+        engine.PositionsToReturn = [new OpenPosition { PositionId = "p1", Side = OrderSide.Buy, EntryPrice = 100m }];
+        await service.RefreshAsync(0);
+        engine.ThrowOnCommand = new RpcException(new Status(StatusCode.Unavailable, "motore in riavvio"));
+
+        var azione = verbo switch
+        {
+            "stop" => service.StopAsync(0),
+            "emergency" => service.EmergencyAsync(0),
+            "close" => service.CloseAsync(0, "p1"),
+            "confirm" => service.ConfirmAsync(0, "o1", "u1"),
+            "reject" => service.RejectAsync(0, "o1", "u1"),
+            _ => service.SaveSlTpAsync(0, "p1"),
+        };
+
+        await azione;   // NON deve propagare
+
+        Assert.True(service.IsError);
+        Assert.NotNull(service.Message);
     }
 
     // --- PromoteAsync: refresh mirato -----------------------------------------------------------

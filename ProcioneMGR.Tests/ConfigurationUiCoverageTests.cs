@@ -78,6 +78,9 @@ public sealed class ConfigurationUiCoverageTests
         ["MarketData:UseRemoteIngestion"] = "Components/Pages/Admin/Autonomy.razor",
         ["MarketData:RemoteIngestionUrl"] = "Components/Pages/Admin/Autonomy.razor",
         ["Trading:UseRemoteTrading"] = "Components/Pages/Admin/Autonomy.razor",
+        // [2026-08-17] Le due attese verso il motore remoto, accanto al toggle di topologia.
+        ["Trading:RemoteReadTimeoutSeconds"] = "Components/Pages/Admin/Autonomy.razor",
+        ["Trading:RemoteCommandTimeoutSeconds"] = "Components/Pages/Admin/Autonomy.razor",
         ["Ml:RemoteUrl"] = "Components/Pages/Admin/Autonomy.razor",
         ["Http:DisableHttpsRedirection"] = "Components/Pages/Admin/Autonomy.razor",
         ["FactorCache"] = "Components/Pages/Admin/Autonomy.razor",

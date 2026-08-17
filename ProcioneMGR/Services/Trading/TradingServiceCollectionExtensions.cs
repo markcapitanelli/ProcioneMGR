@@ -33,6 +33,20 @@ namespace ProcioneMGR.Services.Trading;
 public static class TradingServiceCollectionExtensions
 {
     /// <summary>
+    /// [2026-08-17] Le rpc di sola LETTURA del servizio di trading: prendono la deadline stretta
+    /// (vedi <see cref="ProcioneMGR.Contracts.Grpc.DeadlineClientInterceptor"/>). Tutto ciò che non
+    /// è qui dentro è un comando e prende quella generosa — l'elenco è per DIFETTO conservativo:
+    /// una rpc nuova dimenticata qui viene trattata da comando, cioè con più tempo, mai con meno.
+    /// </summary>
+    private static readonly IReadOnlySet<string> RemoteReadMethods = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "GetLaneStatus",
+        "GetOpenPositions",
+        "GetPerformance",
+        "GetEngineConfig",
+    };
+
+    /// <summary>
     /// Registra, per ogni corsia: <see cref="IEnsembleManager"/> (sempre) e
     /// <see cref="ITradingEngine"/> — locale (motore reale + worker) o remoto
     /// (<see cref="RemoteTradingEngineClient"/> verso <c>procionemgr-trading</c>) a seconda di
@@ -108,6 +122,7 @@ public static class TradingServiceCollectionExtensions
 
         var useRemote = !isTradingServiceHost && configuration.GetValue<bool>("Trading:UseRemoteTrading");
 
+
         if (useRemote)
         {
             // Un solo canale gRPC condiviso dalle 3 istanze keyed: le lane si distinguono per il
@@ -140,7 +155,18 @@ public static class TradingServiceCollectionExtensions
                 // TradingEngine.GetPerformanceAsync ora tronca `trades` ai 500 più recenti (il
                 // conteggio vero resta in total_trades), quindi il payload non cresce più con l'età
                 // della lane e il default gRPC basta di nuovo.
-                .AddInterceptor(() => new ProcioneMGR.Contracts.Grpc.SharedSecretClientInterceptor(sharedSecret));
+                .AddInterceptor(() => new ProcioneMGR.Contracts.Grpc.SharedSecretClientInterceptor(sharedSecret))
+                // [2026-08-17] DEADLINE su ogni rpc. Senza, una chiamata poteva restare appesa
+                // all'infinito (la gRPC client factory disabilita apposta il timeout dell'HttpClient,
+                // perché il limite dovrebbe essere la deadline): il polling di /trading si bloccava
+                // per intero e — non essendoci alcuna eccezione — il banner di dati non aggiornati
+                // non compariva mai, lasciando a schermo numeri di ore prima spacciati per attuali.
+                // Amministrabili da UI come ogni altra chiave (mandato 2026-08-09): pannello
+                // "Motore di trading" in /admin/autonomy.
+                .AddInterceptor(() => new ProcioneMGR.Contracts.Grpc.DeadlineClientInterceptor(
+                    TimeSpan.FromSeconds(Math.Max(1, configuration.GetValue<int>("Trading:RemoteReadTimeoutSeconds", 10))),
+                    TimeSpan.FromSeconds(Math.Max(1, configuration.GetValue<int>("Trading:RemoteCommandTimeoutSeconds", 60))),
+                    RemoteReadMethods));
 
             // [2026-07-29] La configurazione ospitata dal motore si chiede AL MOTORE: il suo file
             // non è il nostro. Vedi IEngineConfigStore.

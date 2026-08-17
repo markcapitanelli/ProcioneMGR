@@ -113,8 +113,8 @@ public sealed class TradingEngineReconcileTests : IAsyncDisposable
                 : throw new InvalidOperationException("PlaceFuturesOrderAsync oltre lo script del test."));
         public Task<PlaceOrderResult> PlaceFuturesTriggerOrderAsync(PlaceOrderRequest request, bool isStopLoss, CancellationToken ct = default)
             => Task.FromResult(new PlaceOrderResult { Success = true });
-        public Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
-            => Task.FromResult<FuturesPosition?>(null);
+        public Task<FuturesPositionRead> ReadPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
+            => Task.FromResult(FuturesPositionRead.Flat());
         public Task<CancelOrderResult> CancelFuturesOrderAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)
         {
             CancelledClientIds.Add(clientOrderId);

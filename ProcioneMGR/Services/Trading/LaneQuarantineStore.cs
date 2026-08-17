@@ -60,11 +60,29 @@ public sealed class LaneQuarantineStore(
             await db.SaveChangesAsync(ct);
             return true;
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex)
         {
-            // PK LaneId già presente: quarantena già attiva (tick concorrente o riavvio) — la
-            // prima riga vince e conserva l'evidenza originale, questo esito non è un errore.
-            return false;
+            // [2026-08-17] `DbUpdateException` è la classe che EF usa per OGNI fallimento di
+            // SaveChanges — vincolo violato, ma anche timeout, connessione caduta, deadlock,
+            // tabella non scrivibile. Leggerla in blocco come «era già in quarantena» faceva
+            // tornare `false` al watchdog, che lo tratta come esito benigno: nessuno stop, nessuna
+            // notifica critica, nessun log — cioè il silenzio proprio quando la messa in sicurezza
+            // NON è riuscita. Si distingue rileggendo: se la riga c'è davvero il duplicato è
+            // legittimo, altrimenti è un guasto e va rilanciato.
+            await using var verifica = await dbFactory.CreateDbContextAsync(ct);
+            var giaInQuarantena = await verifica.LaneQuarantines.AsNoTracking()
+                .AnyAsync(q => q.LaneId == laneId, ct);
+            if (giaInQuarantena)
+            {
+                // PK LaneId già presente: quarantena già attiva (tick concorrente o riavvio) — la
+                // prima riga vince e conserva l'evidenza originale, questo esito non è un errore.
+                return false;
+            }
+
+            logger.LogCritical(ex,
+                "Corsia {Lane}: messa in QUARANTENA FALLITA e nessuna riga presente — il trading NON è stato "
+                + "fermato dal database. Motivo che l'avrebbe richiesta: {Reason}.", laneId, reason);
+            throw;
         }
     }
 

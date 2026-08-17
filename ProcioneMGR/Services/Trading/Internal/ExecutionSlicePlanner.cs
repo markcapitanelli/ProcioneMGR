@@ -31,7 +31,8 @@ internal sealed class ExecutionSlicePlanner(
         Func<decimal, TradingEngineStatus> buildSafetyStatus,
         Func<Order, string, decimal, DateTime, CancellationToken, bool, OpenPosition?, Task<bool>> executeOpenAsync,
         Func<string, DateTime, CancellationToken, Task> emergencyInternalAsync,
-        Order order, EnsembleStrategy? strat, string strategyName, decimal price, DateTime ts, CancellationToken ct, bool isExisting)
+        Order order, EnsembleStrategy? strat, string strategyName, decimal price, DateTime ts, CancellationToken ct, bool isExisting,
+        Exchanges.SymbolFilters? filters = null)
     {
         var algoName = strat?.ExecutionAlgorithmName;
         var sliced = state.Mode != TradingMode.Paper
@@ -50,6 +51,12 @@ internal sealed class ExecutionSlicePlanner(
         {
             Quantity = order.Quantity, Price = price, MarketType = state.MarketType,
             Leverage = order.Leverage, Mode = state.Mode, Side = order.Side,
+            // [2026-08-17] La conferma manuale viaggia con l'ordine sintetico: senza, il check #7
+            // del SafetyChecker vedeva sempre un ordine Live NON confermato e bocciava l'intero
+            // piano con «Ordine Live senza conferma manuale dell'operatore» — proprio nell'istante
+            // in cui l'operatore lo aveva appena confermato. L'esecuzione a fette in Live era
+            // impossibile, e la diagnosi scritta a video contraddiceva il gesto compiuto.
+            ManuallyConfirmed = order.ManuallyConfirmed,
         };
         var aggregate = SafetyChecker.Evaluate(fullOrder, buildSafetyStatus(price), safety.CurrentValue, ts);
         if (!aggregate.IsAllowed)
@@ -92,7 +99,20 @@ internal sealed class ExecutionSlicePlanner(
         }
 
         // Fetta #1 SUBITO: crea la posizione (mergeInto=null). Se rifiutata, nessun job.
-        order.Quantity = plan.Slices[0].Quantity;
+        //
+        // [2026-08-17] Arrotondata al LOT_SIZE come TUTTE le altre. SignalOrderBuilder arrotonda la
+        // quantità TOTALE, poi il piano la divide (TWAP: total/k) ottenendo fette che multipli del
+        // passo non sono: le fette 2..K venivano ri-arrotondate al momento dell'esecuzione, la #1
+        // no — partiva verso l'exchange con la quantità grezza e veniva rifiutata (-1111). Se dopo
+        // l'arrotondamento non è negoziabile si ricade sull'apertura immediata con la quantità
+        // piena, che è già passata dal pre-check aggregato.
+        var primaFetta = filters is not null ? filters.RoundQuantity(plan.Slices[0].Quantity) : plan.Slices[0].Quantity;
+        if (primaFetta <= 0m || (filters is not null && !filters.IsTradable(primaFetta, price)))
+        {
+            await executeOpenAsync(order, strategyName, price, ts, ct, isExisting, null);
+            return;
+        }
+        order.Quantity = primaFetta;
         var filled = await executeOpenAsync(order, strategyName, price, ts, ct, isExisting, null);
         if (!filled) return;
 

@@ -652,24 +652,25 @@ public sealed class BitgetClient(
             clientOid,
         });
 
-    public async Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
+    public async Task<FuturesPositionRead> ReadPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
         var productType = ProductType(credentials.IsTestnet);
         var query = $"symbol={market}&productType={productType}&marginCoin=USDT";
-        var (ok, resp, _, _) = await SignedAsync(HttpMethod.Get, "/api/v2/mix/position/single-position", query, string.Empty, credentials, ct);
-        if (!ok) return null;
+        var (ok, resp, uncertain, error) = await SignedAsync(HttpMethod.Get, "/api/v2/mix/position/single-position", query, string.Empty, credentials, ct);
+        // [2026-08-17] Lettura fallita != posizione chiusa: vedi FuturesPositionRead.
+        if (!ok) return FuturesPositionRead.Failed(uncertain, error);
 
         using var doc = JsonDocument.Parse(resp);
         if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0)
         {
-            return null; // nessuna posizione aperta
+            return FuturesPositionRead.Flat(); // nessuna posizione aperta
         }
         var p = data[0];
         var total = p.TryGetProperty("total", out var t) ? ParseDecimal(t) : 0m;
-        if (total == 0m) return null;
+        if (total == 0m) return FuturesPositionRead.Flat();
 
-        return new FuturesPosition
+        return FuturesPositionRead.Open(new FuturesPosition
         {
             Symbol = symbol,
             Quantity = total,
@@ -680,7 +681,7 @@ public sealed class BitgetClient(
             LiquidationPrice = p.TryGetProperty("liquidationPrice", out var lp) ? ParseDecimal(lp) : 0m,
             UnrealizedPnl = p.TryGetProperty("unrealizedPL", out var up) ? ParseDecimal(up) : 0m,
             MarginBalance = p.TryGetProperty("marginSize", out var ms) ? ParseDecimal(ms) : 0m,
-        };
+        });
     }
 
     public async Task<CancelOrderResult> CancelFuturesOrderAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)

@@ -98,8 +98,36 @@ public sealed class PromotionWorker(
         }
         catch (Exception ex)
         {
-            // Es. credenziali Testnet mancanti: errore chiaro, corsia lasciata ferma, si ritenta al prossimo tick.
+            // [2026-08-17] Es. credenziali della modalità di destinazione mancanti. Il commento
+            // che stava qui prometteva «si ritenta al prossimo tick»: FALSO, perché il tick
+            // successivo salta le corsie non in esecuzione (`if (!d.IsRunning) continue`) e
+            // PromoteLaneAsync ha già lasciato il motore fermo. La corsia resta ferma per sempre.
+            // Il fatto grave è che le posizioni REALI sono già state chiuse reduce-only PRIMA dello
+            // StartAsync fallito: sulla retrocessione di sicurezza Live→Testnet la piattaforma ha
+            // appena disfatto un'operatività reale, e senza questa notifica l'unico segnale sarebbe
+            // stato una riga di log fra le altre.
             logger.LogError(ex, "Cambio modalità corsia {Lane} → {Mode} fallito: {Msg}", laneId, newMode, ex.Message);
+
+            if (notifier is not null)
+            {
+                try
+                {
+                    await notifier.NotifyAsync(
+                        severity == Notifications.NotificationSeverity.Info
+                            ? Notifications.NotificationSeverity.Warning
+                            : severity,
+                        $"Corsia {laneId}: passaggio a {newMode} FALLITO",
+                        $"{ex.Message} Le posizioni sono già state chiuse e il motore è FERMO: la corsia resta "
+                        + "ferma finché non la riavvii da /trading — l'automatismo non la ritenta, perché salta "
+                        + "le corsie non in esecuzione.", ct);
+                }
+                catch (Exception notifyEx)
+                {
+                    // Un canale di notifica giù non deve trasformare un fallimento in un'eccezione
+                    // che risale al tick del worker.
+                    logger.LogWarning(notifyEx, "Notifica del cambio modalità fallito non inviata (corsia {Lane}).", laneId);
+                }
+            }
         }
     }
 

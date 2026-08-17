@@ -147,6 +147,12 @@ message GetLaneStatusResponse {
   // passo della barra il ritardo non e' interpretabile.
   string timeframe = 22;
   google.protobuf.Timestamp last_processed_candle_utc = 23;
+  // [2026-08-17] La memoria LUNGA, complementare al battito del campo 23: apertura dell'ultima
+  // candela valutata dalla SESSIONE, persistita e quindi sopravvissuta a un riavvio del processo.
+  // Il campo 23 dopo un riavvio e' assente — ed e' giusto cosi', dice "questo avvio non ha ancora
+  // valutato nulla" — ma chi alimenta il motore ha bisogno di sapere da dove riprendere, altrimenti
+  // ricomincia dal replay contro uno stato che nessuno ha azzerato.
+  google.protobuf.Timestamp last_candle_utc = 24;
 }
 
 // --- Posizioni -------------------------------------------------------------------------------

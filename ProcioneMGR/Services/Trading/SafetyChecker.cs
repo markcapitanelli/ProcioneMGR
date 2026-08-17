@@ -21,7 +21,16 @@ public static class SafetyChecker
     /// Valutazione PURA (senza I/O) di tutti i safety check. Raccoglie TUTTE le violazioni
     /// (non si ferma alla prima) così l'operatore vede l'intero quadro. Testabile direttamente.
     /// </summary>
-    public static SafetyCheckResult Evaluate(Order order, TradingEngineStatus status, SafetyConfiguration cfg, DateTime nowUtc)
+    /// <param name="opensNewPosition">
+    /// [2026-08-17] Falso quando l'ordine si FONDE in una posizione già aperta (le fette 2..K di un
+    /// piano di esecuzione). Il check #5 conta le posizioni aperte, e quel conteggio include già
+    /// quella creata dalla fetta #1: applicandolo anche alle fette successive, una corsia al
+    /// proprio tetto vedeva abortire ogni piano dopo la prima fetta e restava con una posizione
+    /// SOTTODIMENSIONATA rispetto a quella che il pre-check aggregato aveva autorizzato. Il tetto
+    /// riguarda quante posizioni si tengono aperte, non quante volte le si accresce.
+    /// </param>
+    public static SafetyCheckResult Evaluate(Order order, TradingEngineStatus status, SafetyConfiguration cfg, DateTime nowUtc,
+        bool opensNewPosition = true)
     {
         var result = new SafetyCheckResult { IsAllowed = true };
         var capital = status.TotalCapital;
@@ -69,8 +78,8 @@ public static class SafetyChecker
             result.RequiresEmergencyStop = true;
         }
 
-        // 5) Numero massimo di posizioni aperte.
-        if (status.OpenPositionCount >= cfg.MaxOpenPositions)
+        // 5) Numero massimo di posizioni aperte. Solo per le aperture NUOVE: vedi opensNewPosition.
+        if (opensNewPosition && status.OpenPositionCount >= cfg.MaxOpenPositions)
         {
             result.Violations.Add(
                 $"Troppe posizioni aperte: {status.OpenPositionCount} >= limite {cfg.MaxOpenPositions}.");

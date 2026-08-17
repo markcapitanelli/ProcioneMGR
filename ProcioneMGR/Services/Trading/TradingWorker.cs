@@ -24,10 +24,13 @@ public sealed class TradingWorker(
     private const int LeaseCheckEveryTicks = 30;
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan LeaseWarnInterval = TimeSpan.FromMinutes(5);
+    /// <summary>Ogni quanto ripetere l'avviso di configurazione riscritta sotto una sessione viva (a tick di 2s inonderebbe).</summary>
+    private static readonly TimeSpan ConfigDriftWarnInterval = TimeSpan.FromMinutes(15);
 
     private DateTime? _sessionStart;
     private DateTime _cursor = DateTime.MinValue;
     private DateTime _lastLeaseWarnUtc = DateTime.MinValue;
+    private DateTime _lastConfigDriftWarnUtc = DateTime.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -114,36 +117,74 @@ public sealed class TradingWorker(
             return;
         }
 
-        // Nuova sessione di trading.
+        // Nuova sessione di trading — o, indistinguibile da qui, un riavvio del processo a sessione
+        // già in corso: `_sessionStart` è un campo di istanza e dopo un riavvio vale null.
         if (status.StartedAtUtc != _sessionStart)
         {
             _sessionStart = status.StartedAtUtc;
-            // Paper: replay osservabile delle ultime giornate. Testnet/Live: SOLO candele nuove
+            // [2026-08-17] Il segnalibro PERSISTITO della sessione ha la precedenza su tutto: se
+            // c'è, questa non è una sessione nuova ma la stessa che riprende dopo un riavvio, e
+            // il motore ha già restaurato capitale, PnL e posizioni aperte. Ricominciare da
+            // −30 giorni significherebbe valutare stop e segnali di settimane fa contro posizioni
+            // vive: chiusure a prezzi che non esistono più, TradeRecord con durata negativa e
+            // decine di trade duplicati proprio nelle metriche su cui si decide la promozione.
+            // Solo quando il segnalibro è vuoto la sessione è davvero nuova, e allora:
+            // Paper → replay osservabile delle ultime giornate; Testnet/Live → SOLO candele nuove
             // (niente replay, altrimenti si piazzerebbero ordini reali in massa sullo storico).
-            _cursor = status.Mode == TradingMode.Paper ? DateTime.UtcNow.AddDays(-ReplayDays) : DateTime.UtcNow;
-            logger.LogInformation("TradingWorker: nuova sessione {Mode}, cursore da {From:u}.", status.Mode, _cursor);
+            _cursor = status.LastCandleUtc
+                ?? (status.Mode == TradingMode.Paper ? DateTime.UtcNow.AddDays(-ReplayDays) : DateTime.UtcNow);
+            logger.LogInformation(
+                "TradingWorker: sessione {Mode} {Origine}, cursore da {From:u}.",
+                status.Mode, status.LastCandleUtc is null ? "NUOVA" : "ripresa dopo riavvio", _cursor);
         }
 
-        var cfg = await ensemble.GetConfigurationAsync(ct);
+        // La serie da alimentare è quella della SESSIONE, non quella della configurazione viva.
+        //
+        // [2026-08-17] Il motore congela Symbol/Timeframe in StartAsync e non guarda mai
+        // `candle.Symbol`; la configurazione, invece, può essere riscritta mentre la corsia opera
+        // (auto-apply della flotta, o un semplice Salva da /ensemble). Leggendo di qui la config
+        // viva, il feed cominciava a consegnare le candele di un ALTRO strumento a un motore che
+        // teneva posizioni, buffer e strategie del vecchio: uno stop di BTC valutato sui minimi di
+        // ADA chiude la posizione a un prezzo di quattro ordini di grandezza sbagliato. Ora le due
+        // verità non possono più divergere, perché ce n'è una sola.
+        var symbol = status.Symbol;
+        var timeframe = status.Timeframe;
 
         // [2026-08-06] SOLO BARRE CHIUSE. Vedi <see cref="LastClosedBarOpenUtc"/>: la riga della
         // candela in formazione è già a database, e consumarla qui valuta stop e target su un
         // High/Low parziale — poi la versione definitiva viene RIFIUTATA da ProcessCandleAsync
         // perché quel timestamp è già nel buffer.
-        var lastClosed = LastClosedBarOpenUtc(cfg.Timeframe, DateTime.UtcNow);
+        var lastClosed = LastClosedBarOpenUtc(timeframe, DateTime.UtcNow);
         if (lastClosed is not DateTime chiusaFinoA)
         {
             // Timeframe sconosciuto: meglio non alimentare che alimentare barre non chiuse.
             logger.LogWarning("Corsia {LaneId}: timeframe \"{Timeframe}\" non riconosciuto, nessuna candela alimentata.",
-                engine.LaneId, cfg.Timeframe);
+                engine.LaneId, timeframe);
             return;
+        }
+
+        // La configurazione si legge comunque, ma solo per DIRLO: una riscrittura mentre la corsia
+        // gira è inerte fino al prossimo avvio, e senza questo avviso l'operatore crederebbe che
+        // la corsia stia già operando sul nuovo simbolo. Il feed NON si ferma sulla divergenza:
+        // una corsia con posizioni aperte e il feed spento non valuta più né stop né target né
+        // liquidazione, che è un guasto peggiore di quello che si vuole evitare.
+        var cfg = await ensemble.GetConfigurationAsync(ct);
+        if ((cfg.Symbol != symbol || cfg.Timeframe != timeframe)
+            && DateTime.UtcNow - _lastConfigDriftWarnUtc >= ConfigDriftWarnInterval)
+        {
+            _lastConfigDriftWarnUtc = DateTime.UtcNow;
+            logger.LogCritical(
+                "Corsia {LaneId}: la configurazione è stata riscritta a {CfgSymbol} {CfgTimeframe} mentre la sessione "
+                + "gira su {Symbol} {Timeframe}. Il feed continua sulla serie della sessione (le posizioni aperte "
+                + "vanno protette): la nuova configurazione entra in vigore solo al prossimo avvio della corsia.",
+                engine.LaneId, cfg.Symbol, cfg.Timeframe, symbol, timeframe);
         }
 
         List<OhlcvData> batch;
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
             batch = await db.OhlcvData
-                .Where(c => c.Symbol == cfg.Symbol && c.Timeframe == cfg.Timeframe
+                .Where(c => c.Symbol == symbol && c.Timeframe == timeframe
                             && c.TimestampUtc > _cursor && c.TimestampUtc <= chiusaFinoA)
                 .OrderBy(c => c.TimestampUtc)
                 .Take(BatchPerTick)

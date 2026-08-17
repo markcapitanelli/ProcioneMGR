@@ -22,6 +22,86 @@ public class PromotionEvaluatorTests
         ObservationPeriod = TimeSpan.FromDays(28),
     };
 
+    // --- Sharpe non misurabile ≠ Sharpe pessimo ------------------------------------------------
+
+    /// <summary>
+    /// [2026-08-17] I tre numeri della retrocessione non sopravvivono allo stesso modo a un riavvio
+    /// del processo: <c>TradeCount</c> viene dai TradeRecord a database e <c>ObservationPeriod</c>
+    /// da StartedAtUtc persistito, ma lo Sharpe si calcola sulla curva equity di SESSIONE, che vive
+    /// in memoria e riparte vuota. Con meno di 3 punti <c>Statistics.SharpeRatio</c> restituisce 0,
+    /// e quello zero veniva letto come un giudizio pessimo: una corsia Testnet sana da tre settimane
+    /// veniva retrocessa da sola sessanta secondi dopo un riavvio del pod, chiudendo le posizioni e
+    /// azzerando capitale e PnL — cioè l'evidenza dell'esperimento.
+    /// </summary>
+    [Fact]
+    public void TestnetLane_AfterRestart_UnmeasurableSharpe_IsNotDemoted()
+    {
+        var m = Excellent();
+        m.RealizedSharpe = 0m;            // curva vuota dopo il riavvio
+        m.SharpeMeasurable = false;
+        m.ObservationPeriod = TimeSpan.FromDays(21);
+
+        var d = PromotionEvaluator.Decide(m, TradingMode.Testnet, isRunning: true, Opt());
+
+        Assert.False(d.ShouldDemote);
+        Assert.Contains("non misurabile", d.Reason);
+    }
+
+    /// <summary>Il complemento: uno Sharpe MISURATO e basso deve continuare a far retrocedere.</summary>
+    [Fact]
+    public void TestnetLane_MeasuredLowSharpe_IsStillDemoted()
+    {
+        var m = Excellent();
+        m.RealizedSharpe = 0m;
+        m.SharpeMeasurable = true;
+        m.ObservationPeriod = TimeSpan.FromDays(21);
+
+        var d = PromotionEvaluator.Decide(m, TradingMode.Testnet, isRunning: true, Opt());
+
+        Assert.True(d.ShouldDemote);
+        Assert.Equal(TradingMode.Paper, d.SuggestedMode);
+    }
+
+    /// <summary>
+    /// Sul perimetro Live la stessa guardia vale per il solo termine Sharpe: il drawdown è
+    /// persistito, sopravvive al riavvio e deve continuare a poter degradare la corsia da solo.
+    /// </summary>
+    [Fact]
+    public void LiveLane_UnmeasurableSharpe_ButBreachedDrawdown_IsStillDegraded()
+    {
+        var opt = Opt();
+        opt.AutoDemoteLiveToTestnet = true;
+        opt.DemoteLiveDryRun = true;      // resta dry-run: nessuna azione, ma il verdetto si legge
+        var m = Excellent();
+        m.SharpeMeasurable = false;
+        m.RealizedSharpe = 0m;
+        m.MaxDrawdown = opt.DemoteLiveMaxDrawdownPercent + 5m;
+        m.TradeCount = Math.Max(m.TradeCount, opt.DemoteLiveMinTrades);
+        m.ObservationPeriod = TimeSpan.FromDays(7 * opt.DemoteLiveMinWeeks + 1);
+
+        var d = PromotionEvaluator.Decide(m, TradingMode.Live, isRunning: true, opt);
+
+        Assert.True(d.WouldDemoteLive);
+    }
+
+    [Fact]
+    public void LiveLane_UnmeasurableSharpe_AndHealthyDrawdown_IsNotDegraded()
+    {
+        var opt = Opt();
+        opt.AutoDemoteLiveToTestnet = true;
+        opt.DemoteLiveDryRun = true;
+        var m = Excellent();
+        m.SharpeMeasurable = false;
+        m.RealizedSharpe = 0m;
+        m.TradeCount = Math.Max(m.TradeCount, opt.DemoteLiveMinTrades);
+        m.ObservationPeriod = TimeSpan.FromDays(7 * opt.DemoteLiveMinWeeks + 1);
+
+        var d = PromotionEvaluator.Decide(m, TradingMode.Live, isRunning: true, opt);
+
+        Assert.False(d.WouldDemoteLive);
+        Assert.False(d.ShouldDemote);
+    }
+
     [Fact]
     public void ExcellentPaperLane_PromotesToTestnet()
     {

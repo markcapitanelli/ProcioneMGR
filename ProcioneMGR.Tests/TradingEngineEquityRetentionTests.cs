@@ -204,6 +204,60 @@ public sealed class TradingEngineEquityRetentionTests : IAsyncDisposable
         Assert.Equal(0m, perf.MaxDrawdown);
     }
 
+    // --- Segnalibro di sessione: niente replay dopo un riavvio ----------------------------------
+
+    /// <summary>
+    /// [2026-08-17] La guardia anti-replay confrontava la candela SOLO col buffer in memoria, che
+    /// dopo un riavvio del processo è vuoto — mentre lo stato (capitale, PnL, posizioni aperte) è
+    /// stato restaurato da <c>EnsureLoadedAsync</c>. Il feed, che a sua volta perdeva il cursore,
+    /// ripartiva da trenta giorni prima e le candele vecchie passavano tutte: stop valutati su
+    /// prezzi di settimane fa contro posizioni vive, TradeRecord con durata NEGATIVA, e decine di
+    /// operazioni duplicate proprio nelle metriche su cui si decide la promozione a Testnet.
+    /// </summary>
+    [Fact]
+    public async Task AfterRestart_OldCandlesAreRejected_NoReplayOnRestoredState()
+    {
+        var engine = await NewEngineInstanceAsync(i => i == 4 ? Signal.Long : Signal.Hold);
+        await engine.StartAsync(TradingMode.Paper);
+        for (var i = 0; i <= 4; i++) await engine.ProcessCandleAsync(Candle(i, 100m));   // apre @100
+        await engine.ProcessCandleAsync(Candle(5, 100m));
+
+        var prima = await engine.GetStatusAsync();
+        Assert.Equal(Candle(5, 100m).TimestampUtc, prima.LastCandleUtc);   // il segnalibro è persistito
+
+        // "Riavvio": istanza nuova sullo stesso DB. Buffer vuoto, ma lo stato è stato restaurato.
+        var restarted = await NewEngineInstanceAsync(i => i == 4 ? Signal.Long : Signal.Hold);
+        var dopoRiavvio = await restarted.GetStatusAsync();
+        Assert.Equal(prima.LastCandleUtc, dopoRiavvio.LastCandleUtc);
+        Assert.Null(dopoRiavvio.LastProcessedCandleUtc);   // il BATTITO invece riparte da zero: è la verità
+
+        // Si rigioca una candela GIÀ VALUTATA, con un minimo che avrebbe bucato qualunque stop.
+        await restarted.ProcessCandleAsync(new OhlcvData
+        {
+            Symbol = "BTC/USDT", Timeframe = "1h", TimestampUtc = Candle(2, 100m).TimestampUtc,
+            Open = 100m, High = 100m, Low = 1m, Close = 1m, Volume = 100m,
+        });
+
+        var dopo = await restarted.GetStatusAsync();
+        Assert.Equal(prima.LastCandleUtc, dopo.LastCandleUtc);        // il segnalibro non torna indietro
+        Assert.Single(await restarted.GetOpenPositionsAsync());        // la posizione NON è stata chiusa
+        Assert.Equal(prima.AvailableCapital, dopo.AvailableCapital);   // e nessun trade fantasma
+    }
+
+    /// <summary>Una sessione DAVVERO nuova azzera il segnalibro: il replay osservabile resta intatto.</summary>
+    [Fact]
+    public async Task NewSession_ResetsTheBookmark()
+    {
+        var engine = await NewEngineInstanceAsync(_ => Signal.Hold);
+        await engine.StartAsync(TradingMode.Paper);
+        for (var i = 0; i <= 2; i++) await engine.ProcessCandleAsync(Candle(i, 100m));
+        Assert.NotNull((await engine.GetStatusAsync()).LastCandleUtc);
+
+        await engine.StartAsync(TradingMode.Paper);
+
+        Assert.Null((await engine.GetStatusAsync()).LastCandleUtc);
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var p in _providers) await p.DisposeAsync();

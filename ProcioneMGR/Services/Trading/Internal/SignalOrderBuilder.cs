@@ -64,8 +64,27 @@ internal sealed class SignalOrderBuilder(
 
         // Arrotonda al LOT_SIZE reale del simbolo (da exchangeInfo) per Testnet/Live;
         // in Paper usa una precisione fissa ragionevole.
-        if (state.Mode != TradingMode.Paper && filters is not null)
+        if (state.Mode != TradingMode.Paper)
         {
+            // [R15, 2026-08-17] «Filtri presenti» non basta: devono essere VALIDI. Con
+            // StepSize = 0 — quello che GetSymbolFiltersAsync restituisce su qualunque risposta
+            // non 2xx, un oggetto tutto a zero — RoundQuantity è l'identità e IsTradable approva
+            // tutto (MinQty e MinNotional valgono 0): la quantità grezza `notional / price` parte
+            // verso l'exchange con venti cifre decimali e Binance la rifiuta (-1111/-1100), a ogni
+            // candela, in silenzio. Fail-closed, regola 4: senza i filtri veri non si ordina, e lo
+            // si dice — un rifiuto motivato vale più di un ordine che verrà respinto comunque.
+            if (filters is null || filters.StepSize <= 0m)
+            {
+                logger.LogError(
+                    "Corsia {Lane}: filtri del simbolo {Symbol} assenti o degenerati (StepSize {Step}): "
+                    + "nessun ordine {Mode} può essere arrotondato al lotto reale, apertura saltata.",
+                    state.LaneId, state.Symbol, filters?.StepSize, state.Mode);
+                await persistence.AuditAsync("SymbolFiltersMissing",
+                    new { state.Symbol, stepSize = filters?.StepSize, strat.StrategyName, side = side.ToString(), price },
+                    state.Mode, ts, ct);
+                return;
+            }
+
             qty = filters.RoundQuantity(qty);
             if (!filters.IsTradable(qty, price))
             {

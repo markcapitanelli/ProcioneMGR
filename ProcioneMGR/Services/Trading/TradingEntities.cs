@@ -42,6 +42,23 @@ public class TradingEngineState
     public DateTime DailyAnchorUtc { get; set; }
 
     public DateTime? StartedAtUtc { get; set; }
+
+    /// <summary>
+    /// [2026-08-17] Apertura dell'ultima candela VALUTATA in questa sessione, persistita.
+    ///
+    /// Distinta da <c>_lastProcessedCandleUtc</c> del motore, che resta in memoria di proposito
+    /// (dopo un riavvio "nessuna candela valutata da questo avvio" è la verità del battito E6).
+    /// Qui serve la nozione opposta e altrettanto necessaria: fin dove la SESSIONE è arrivata,
+    /// perché la guardia anti-replay sopravviva al riavvio del processo. Senza, dopo un riavvio il
+    /// buffer in memoria è vuoto e il feed può rigiocare candele vecchie su uno stato — capitale,
+    /// PnL, posizioni aperte — che invece è stato restaurato: stop valutati su prezzi di settimane
+    /// prima, TradeRecord con durata negativa, segnali duplicati nelle metriche di promozione.
+    ///
+    /// Azzerata da <c>StartAsync</c> insieme al resto della sessione: una sessione davvero nuova
+    /// riparte dal replay osservabile.
+    /// </summary>
+    public DateTime? LastCandleUtc { get; set; }
+
     public DateTime? LastOrderUtc { get; set; }
     public bool IsEmergencyStopped { get; set; }
     public string? EmergencyStopReason { get; set; }

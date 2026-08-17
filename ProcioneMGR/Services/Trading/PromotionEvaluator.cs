@@ -63,6 +63,19 @@ public sealed class LaneMetrics
     public decimal WinRate { get; set; } // frazione (0-1)
     public TimeSpan ObservationPeriod { get; set; }
 
+    /// <summary>
+    /// [2026-08-17] Falso quando la curva equity della sessione è troppo corta perché uno Sharpe
+    /// significhi qualcosa (meno di 3 punti: <c>Statistics.SharpeRatio</c> restituisce 0).
+    ///
+    /// Serve perché i tre numeri della retrocessione non sopravvivono allo stesso modo a un riavvio
+    /// del processo: <c>TradeCount</c> viene dai TradeRecord a database e <c>ObservationPeriod</c>
+    /// da <c>StartedAtUtc</c> persistito, ma la curva equity vive in memoria e riparte vuota. Senza
+    /// questo flag «Sharpe non misurabile» diventava «Sharpe = 0», cioè un giudizio pessimo, e una
+    /// corsia Testnet sana veniva retrocessa da sola sessanta secondi dopo un riavvio del pod.
+    /// Una finestra troppo corta non è un verdetto negativo: è l'assenza di un verdetto.
+    /// </summary>
+    public bool SharpeMeasurable { get; set; } = true;
+
     public bool MeetsMinSharpe { get; set; }
     public bool MeetsMinTrades { get; set; }
     public bool MeetsMaxDrawdown { get; set; }
@@ -146,6 +159,10 @@ public sealed class PromotionEvaluator(
             TradeCount = perf.TotalTrades,
             WinRate = perf.WinRate / 100m, // GetPerformanceAsync espone la % (0-100); qui la frazione (0-1)
             ObservationPeriod = observation,
+            // Sotto i 3 punti Statistics.SharpeRatio restituisce 0: è «non calcolabile», non «zero».
+            // La curva è di SESSIONE e in memoria, quindi dopo un riavvio è corta anche su una
+            // corsia che opera da settimane — vedi LaneMetrics.SharpeMeasurable.
+            SharpeMeasurable = perf.EquityCurve.Count >= 3,
         };
 
         // CurrentValue a ogni valutazione: le soglie modificate da /admin/autonomy valgono dal tick dopo.
@@ -195,7 +212,11 @@ public sealed class PromotionEvaluator(
             var liveWeeks = TimeSpan.FromDays(7 * Math.Max(1, opt.DemoteLiveMinWeeks));
             var enoughLiveHistory = metrics.TradeCount >= Math.Max(1, opt.DemoteLiveMinTrades)
                                     && metrics.ObservationPeriod >= liveWeeks;
-            var degraded = metrics.RealizedSharpe < opt.DemoteLiveSharpeThreshold
+            // Il termine Sharpe vale solo se lo Sharpe è misurabile (curva di sessione ≥ 3 punti):
+            // dopo un riavvio è vuota, e leggerne lo zero come «degradata» flatterebbe posizioni
+            // REALI per un evento di infrastruttura. Il termine drawdown resta sempre valido:
+            // MaxDrawdownPercent è persistito e sopravvive al riavvio.
+            var degraded = (metrics.SharpeMeasurable && metrics.RealizedSharpe < opt.DemoteLiveSharpeThreshold)
                            || metrics.MaxDrawdown > Math.Max(0m, opt.DemoteLiveMaxDrawdownPercent);
 
             if (!enoughLiveHistory)
@@ -226,11 +247,16 @@ public sealed class PromotionEvaluator(
         {
             var demoteWeeks = TimeSpan.FromDays(7 * Math.Max(1, opt.DemoteMinWeeks));
             var enoughHistory = metrics.TradeCount >= opt.MinTradeCount && metrics.ObservationPeriod >= demoteWeeks;
-            if (opt.AutoDemoteToPaper && enoughHistory && metrics.RealizedSharpe < opt.DemoteSharpeThreshold)
+            if (opt.AutoDemoteToPaper && enoughHistory && metrics.SharpeMeasurable
+                && metrics.RealizedSharpe < opt.DemoteSharpeThreshold)
             {
                 decision.ShouldDemote = true;
                 decision.SuggestedMode = TradingMode.Paper;
                 decision.Reason = $"Retrocessione a Paper: Sharpe realizzato {metrics.RealizedSharpe:F2} < soglia {opt.DemoteSharpeThreshold:F2} da almeno {opt.DemoteMinWeeks} settimane.";
+            }
+            else if (!metrics.SharpeMeasurable)
+            {
+                decision.Reason = $"Testnet: Sharpe non misurabile in questo avvio (curva equity di sessione ancora corta, {metrics.TradeCount} trade chiusi). Nessuna retrocessione automatica finché non c'è un giudizio.";
             }
             else
             {

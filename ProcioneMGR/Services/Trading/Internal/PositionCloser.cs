@@ -299,13 +299,25 @@ internal sealed class PositionCloser(
         var entryFee = qty * entry * feeFrac;
         var exitFee = qty * exitPrice * feeFrac;
 
-        var pnl = pos.Side == OrderSide.Buy
-            ? (exitPrice - entry) * qty - entryFee - exitFee
-            : (entry - exitPrice) * qty - entryFee - exitFee;
+        var grossPnl = pos.Side == OrderSide.Buy
+            ? (exitPrice - entry) * qty
+            : (entry - exitPrice) * qty;
+        var pnl = grossPnl - entryFee - exitFee;
 
         // Margine ISOLATO: si restituisce il margine bloccato + PnL (guadagno o perdita),
         // MAI il nozionale intero (a differenza dello Spot).
-        state.AvailableCapital += pos.MarginBalance + pnl;
+        //
+        // [2026-08-17] Si riaccredita il PnL LORDO meno la sola fee d'USCITA, non `pnl`: la fee
+        // d'INGRESSO è già uscita dalla cassa all'apertura (PositionOpener: `-= margin + fee`).
+        // Sommare qui `pnl`, che la contiene di nuovo, la faceva pagare DUE volte: la cassa
+        // divergeva da RealizedPnl di una fee a ogni chiusura, in modo cumulativo e permanente, e
+        // la curva equity — da cui GetPerformanceAsync ricava Sharpe e MaxDrawdown, cioè i numeri
+        // su cui PromotionEvaluator decide — faceva uno scalino verso il basso a ogni round trip
+        // anche a prezzo invariato. Il ramo Spot faceva già così (flusso di cassa, non PnL), e
+        // BacktestEngine.Close è il riferimento: `Cash += _margin + pnlRaw - exitFee`.
+        // RealizedPnl e TradeRecord.Pnl restano al netto di ENTRAMBE le fee: sono corretti, era la
+        // cassa a essere sbagliata.
+        state.AvailableCapital += pos.MarginBalance + grossPnl - exitFee;
 
         state.RealizedPnl += pnl;
         if ((ts - state.DailyAnchorUtc).TotalHours >= 24) { state.DailyPnl = 0m; state.DailyAnchorUtc = ts; }

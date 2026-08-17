@@ -1487,6 +1487,36 @@
             </div>
         </div>
 
+        @* [2026-08-17] I due tetti di attesa verso il motore remoto. Nascono da un difetto reale:
+           NESSUNA rpc di trading aveva una deadline, e la client factory gRPC disabilita di
+           proposito il timeout dell'HttpClient perché il limite dovrebbe essere proprio quella.
+           Una chiamata appesa (partizione di rete che non chiude il TCP, motore bloccato sul
+           proprio semaforo) congelava il polling di /trading — e senza eccezione non compariva
+           nemmeno il banner «dati non aggiornati»: la pagina mostrava come attuali numeri vecchi. *@
+        <div class="row g-3 align-items-end mb-3">
+            <div class="col-auto">
+                <label class="form-label">Attesa massima LETTURE (s) @Restart()</label>
+                <input class="form-control" type="number" min="1" step="1" @bind="_topoReadTimeout" style="width: 10rem;" />
+                <div class="form-text" style="max-width: 26rem;">
+                    <code>Trading:RemoteReadTimeoutSeconds</code> — stato corsia, posizioni, performance.
+                    Stretto di proposito: il polling è ogni 2s, oltre questo tetto il dato è vecchio
+                    comunque ed è meglio dichiararlo che aspettarlo.
+                </div>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Attesa massima COMANDI (s) @Restart()</label>
+                <input class="form-control" type="number" min="1" step="1" @bind="_topoCommandTimeout" style="width: 10rem;" />
+                <div class="form-text" style="max-width: 26rem;">
+                    <code>Trading:RemoteCommandTimeoutSeconds</code> — avvio, arresto, emergency stop,
+                    chiusure, conferme. <strong>Generoso di proposito</strong>: la deadline cancella la
+                    chiamata anche lato server, e un avvio troncato a metà lascerebbe stato parziale.
+                </div>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-outline-secondary" @onclick="SaveRemoteTimeoutsAsync" disabled="@_busy">Salva attese motore</button>
+            </div>
+        </div>
+
         <div class="row g-3 align-items-end mb-1">
             <div class="col-auto">
                 <label class="form-label">Servizio ML dual-read (Ml:RemoteUrl) @Restart()</label>
@@ -1670,6 +1700,8 @@
 
     // [Fase 3] Topologia e infrastruttura: scalari del file del guscio, tutti ⟳.
     private bool _topoUseRemoteTrading;
+    private int _topoReadTimeout = 10;
+    private int _topoCommandTimeout = 60;
     private string? _topoMlRemoteUrl;
     private bool _topoDisableHttpsRedirect;
     private ProcioneMGR.Data.DatabaseMigrationOptions _database = new();
@@ -1850,6 +1882,8 @@
 
         // [Fase 3] Topologia e infrastruttura.
         _topoUseRemoteTrading = Config.GetValue("Trading:UseRemoteTrading", false);
+        _topoReadTimeout = Config.GetValue("Trading:RemoteReadTimeoutSeconds", 10);
+        _topoCommandTimeout = Config.GetValue("Trading:RemoteCommandTimeoutSeconds", 60);
         _topoMlRemoteUrl = Config["Ml:RemoteUrl"];
         _topoDisableHttpsRedirect = Config.GetValue("Http:DisableHttpsRedirection", false);
         _database = new ProcioneMGR.Data.DatabaseMigrationOptions
@@ -1903,6 +1937,29 @@
     /// [Fase 3] Scrittura chirurgica di un singolo scalare (SaveValueAsync): niente POCO
     /// dell'intera sezione, niente rischio di cancellare chiavi non modellate.
     /// </summary>
+    /// <summary>
+    /// [2026-08-17] Le due attese verso il motore remoto si salvano insieme: sono una coppia, e
+    /// salvarne una sola lascerebbe l'altra al default senza che il pannello lo dica.
+    /// </summary>
+    private async Task SaveRemoteTimeoutsAsync()
+    {
+        if (_topoReadTimeout < 1 || _topoCommandTimeout < 1)
+        {
+            SetStatus("Attese motore: entrambi i valori devono essere almeno 1 secondo.", true);
+            return;
+        }
+        _busy = true; _isError = false; _status = null;
+        try
+        {
+            await ConfigWriter.SaveValueAsync("Trading:RemoteReadTimeoutSeconds", _topoReadTimeout);
+            await ConfigWriter.SaveValueAsync("Trading:RemoteCommandTimeoutSeconds", _topoCommandTimeout);
+            SetStatus($"Attese motore salvate (letture {_topoReadTimeout}s, comandi {_topoCommandTimeout}s): "
+                      + "valgono dal prossimo riavvio del guscio, perché il canale gRPC si compone a startup.", false);
+        }
+        catch (Exception ex) { SetStatus($"Attese motore: salvataggio fallito — {ex.Message}", true); }
+        finally { _busy = false; }
+    }
+
     private async Task SaveScalarAsync<T>(string keyPath, T value, string label) where T : notnull
     {
         _busy = true; _isError = false; _status = null;

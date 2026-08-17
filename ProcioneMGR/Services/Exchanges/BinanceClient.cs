@@ -548,13 +548,16 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
         return string.Join("&", parts);
     }
 
-    public async Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
+    public async Task<FuturesPositionRead> ReadPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
     {
         var market = ToExchangeSymbol(symbol);
         var ts = SignedTimestamp();
         var query = $"symbol={market}&timestamp={ts}";
-        var (ok, body, _, _) = await SignedAsync(HttpMethod.Get, "/fapi/v2/positionRisk", query, credentials, ct, FuturesProdBase, FuturesTestnetBase);
-        if (!ok) return null;
+        var (ok, body, uncertain, error) = await SignedAsync(HttpMethod.Get, "/fapi/v2/positionRisk", query, credentials, ct, FuturesProdBase, FuturesTestnetBase);
+        // [2026-08-17] Un fallimento NON e' un "flat": 4xx, 5xx, rate limit e timeout finivano tutti
+        // in un `return null` indistinguibile dalla posizione chiusa, e chi riconcilia lo leggeva
+        // come "chiusa sull'exchange" abbandonando esposizione reale.
+        if (!ok) return FuturesPositionRead.Failed(uncertain, error);
 
         using var doc = JsonDocument.Parse(body);
         foreach (var p in doc.RootElement.EnumerateArray())
@@ -564,7 +567,7 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
             var amt = ParseDecimal(p.GetProperty("positionAmt"));
             if (amt == 0m) continue;
 
-            return new FuturesPosition
+            return FuturesPositionRead.Open(new FuturesPosition
             {
                 Symbol = symbol,
                 Quantity = Math.Abs(amt),
@@ -575,9 +578,9 @@ public sealed class BinanceClient(HttpClient http, ILogger<BinanceClient> logger
                 LiquidationPrice = p.TryGetProperty("liquidationPrice", out var lp) ? ParseDecimal(lp) : 0m,
                 UnrealizedPnl = p.TryGetProperty("unRealizedProfit", out var up) ? ParseDecimal(up) : 0m,
                 MarginBalance = p.TryGetProperty("isolatedMargin", out var im) ? ParseDecimal(im) : 0m,
-            };
+            });
         }
-        return null;
+        return FuturesPositionRead.Flat();
     }
 
     public async Task<CancelOrderResult> CancelFuturesOrderAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)

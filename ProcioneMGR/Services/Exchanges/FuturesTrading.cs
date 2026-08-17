@@ -35,6 +35,36 @@ public class FuturesPosition
     public decimal MarginBalance { get; set; }
 }
 
+/// <summary>
+/// Esito della lettura di una posizione futures — [2026-08-17].
+///
+/// <para><b>Perché esiste.</b> Prima la lettura restituiva <c>FuturesPosition?</c> e i client
+/// rispondevano <c>null</c> in DUE casi opposti: «l'exchange dice che sei flat» e «non sono
+/// riuscito a chiedere» (4xx, 5xx, rate limit, timeout — le eccezioni di rete non vengono
+/// rilanciate, sono tradotte in risultati). Il riconciliatore leggeva quel null come «posizione
+/// chiusa» e chiudeva d'ufficio la posizione LOCALE senza mandare alcun ordine reduce-only:
+/// un 429 bastava per abbandonare esposizione vera sull'exchange, senza più nessuno a valutarne
+/// stop, target o liquidazione. Fail-open dove serve fail-closed (regola 4).</para>
+///
+/// <para>Il flag <see cref="Uncertain"/> non è inventato qui: entrambe le <c>SignedAsync</c> lo
+/// calcolano già e prima veniva scartato.</para>
+/// </summary>
+/// <param name="ReadOk">L'exchange ha risposto e la risposta è stata interpretata.</param>
+/// <param name="Position">La posizione aperta; null con <paramref name="ReadOk"/> vero = flat GENUINO.</param>
+/// <param name="Uncertain">Guasto di trasporto (timeout/connessione): l'esito reale è ignoto.</param>
+/// <param name="Error">Diagnostica del fallimento, per log e audit.</param>
+public readonly record struct FuturesPositionRead(bool ReadOk, FuturesPosition? Position, bool Uncertain, string? Error)
+{
+    /// <summary>L'exchange ha risposto: nessuna posizione aperta.</summary>
+    public static FuturesPositionRead Flat() => new(true, null, false, null);
+
+    /// <summary>L'exchange ha risposto: posizione aperta.</summary>
+    public static FuturesPositionRead Open(FuturesPosition position) => new(true, position, false, null);
+
+    /// <summary>Non si è potuto leggere: NON equivale a «flat».</summary>
+    public static FuturesPositionRead Failed(bool uncertain, string? error) => new(false, null, uncertain, error);
+}
+
 /// <summary>Saldo del conto futures (margine, non asset spot).</summary>
 public class FuturesBalance
 {
@@ -85,8 +115,17 @@ public interface IFuturesExchangeClient
     /// </summary>
     Task<PlaceOrderResult> PlaceFuturesTriggerOrderAsync(PlaceOrderRequest request, bool isStopLoss, CancellationToken ct = default);
 
-    /// <summary>Posizione aperta corrente per il simbolo (null se flat). Fonte di verità per la liquidazione.</summary>
-    Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default);
+    /// <summary>
+    /// Posizione aperta corrente per il simbolo. Fonte di verità per la liquidazione e per la
+    /// riconciliazione per-candela.
+    ///
+    /// <para>Restituisce un <see cref="FuturesPositionRead"/> e non un <c>FuturesPosition?</c>
+    /// perché «flat» e «non sono riuscito a leggere» sono due fatti diversi e chi riconcilia deve
+    /// poterli distinguere: confonderli significa chiudere in locale una posizione che
+    /// sull'exchange è ancora aperta. Chi implementa questa interfaccia deve rispondere
+    /// <see cref="FuturesPositionRead.Failed"/> su qualunque risposta non interpretabile.</para>
+    /// </summary>
+    Task<FuturesPositionRead> ReadPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default);
 
     Task<CancelOrderResult> CancelFuturesOrderAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default);
 

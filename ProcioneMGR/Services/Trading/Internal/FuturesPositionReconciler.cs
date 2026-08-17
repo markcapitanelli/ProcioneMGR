@@ -33,18 +33,39 @@ internal sealed class FuturesPositionReconciler(
         }
 
         var futuresClient = exchangeFactory.CreateFutures(state.ExchangeName);
-        FuturesPosition? remote;
+        FuturesPositionRead read;
         try
         {
-            remote = await futuresClient.GetPositionAsync(state.Symbol, creds, ct);
+            read = await futuresClient.ReadPositionAsync(state.Symbol, creds, ct);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Riconciliazione futures fallita (rete): salto questo ciclo.");
+            // Rete: i client veri traducono le eccezioni in risultati e non le rilanciano, quindi
+            // qui arrivano solo i casi residui (es. corpo malformato). Resta come cintura.
+            logger.LogWarning(ex, "Riconciliazione futures fallita (eccezione): salto questo ciclo.");
             return untrackedRemoteAlerted;
         }
 
-        if (remote is not null)
+        // [2026-08-17] LETTURA FALLITA ≠ POSIZIONE CHIUSA. Prima i due casi erano lo stesso `null`,
+        // e un 429, un 5xx o un recvWindow scaduto facevano scattare il ramo di chiusura forzata
+        // qui sotto con `alreadyClosedOnExchange: true` — cioè senza inviare NESSUN ordine
+        // reduce-only: la posizione spariva dai libri del motore restando aperta sull'exchange,
+        // con un PnL inventato a database e nessuno più a valutarne stop, target o liquidazione.
+        // Fail-closed: se non si sa, non si tocca nulla e lo si dichiara.
+        if (!read.ReadOk)
+        {
+            logger.LogWarning(
+                "Corsia {Lane}: lettura della posizione {Symbol} sull'exchange NON riuscita ({Error}{Uncertain}): "
+                + "nessuna riconciliazione in questo ciclo (una lettura cieca non è un «flat»).",
+                state.LaneId, state.Symbol, read.Error ?? "motivo non riportato",
+                read.Uncertain ? ", esito incerto" : "");
+            await persistence.AuditAsync("ReconcileReadFailed",
+                new { state.Symbol, read.Error, read.Uncertain, localPositions = positions.Count(p => p.Symbol == state.Symbol) },
+                state.Mode, ts, ct);
+            return untrackedRemoteAlerted;
+        }
+
+        if (read.Position is { } remote)
         {
             // Difesa inversa: posizione APERTA sull'exchange ma sconosciuta al motore (es. esito
             // di un ordine dichiarato incerto, o apertura manuale fuori piattaforma). NESSUNA
