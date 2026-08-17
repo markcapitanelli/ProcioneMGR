@@ -90,15 +90,39 @@ mediana delle posizioni la misurerà il forward test — che è il giudice, come
 - Notebook NotebookLM non aggiornato: l'autenticazione era scaduta e il login è interattivo —
   al prossimo `nlm login` va ricaricato `docs/ROADMAP.md` + questo report.
 
-## Cosa resta a te
+## Punti di chiusura — TUTTI CHIUSI il 2026-08-17
 
 1. ~~Merge PR #87~~ **fatto** (`18efd19`). ~~Giro visivo~~ **fatto** (§3).
-2. **Riavviare il guscio dal repo principale** quando ti fa comodo: ora la 5199 gira dal
-   worktree, e master ha tutto. La configurazione vive a DB, non si perde nulla.
-3. **Decidere la casa della corsia 2**: sta nell'impronta auto-apply (0-2) perché le corsie di
-   flotta 3-7 erano tutte occupate da forward test in corso. Se se ne libera una, spostarla è
-   una riconfigurazione di due minuti.
-4. **NotebookLM**: `nlm login` (interattivo) e poi ricaricare `docs/ROADMAP.md` + questo report.
+2. ~~Riavviare il guscio dal repo principale~~ **fatto**: la 5199 è servita da
+   `ProgettoP\ProcioneMGR\bin\Release` (binario del 17/08 08:12, cioè successivo al merge),
+   `/research` risponde 200. Il worktree non serve più nulla.
+3. ~~NotebookLM~~ **fatto**: `nlm login` + `refresh_auth`, caricati PRD, questo report,
+   REPORT-SYNC-WORKER-STALL e — per la prima volta — `ROADMAP.md`. Verificato con una query
+   che risponde citando le fonti nuove.
+4. **La casa della corsia 2 — misurata invece che spostata.** Nessuna corsia di flotta si è
+   liberata (3-7 tutte in esecuzione; l'unica libera è la 0, che è anch'essa nell'impronta),
+   quindi lo spostamento previsto non era eseguibile. Ma la misura ha mostrato che **non
+   serve**:
+
+   | Fatto | Misura |
+   |---|---|
+   | Chi può sovrascrivere le corsie 0-2 | `PipelineApplier` scrive per indice (gruppo *i* → corsia *i*) senza guardare quarantena né corsie in esecuzione |
+   | Cosa lo trattiene | NON il "gate di atomicità" (è solo un `SemaphoreSlim` anti-concorrenza), ma **`EnsembleComparator` con isteresi + veto del supervisore AI**: sostituisce solo un ensemble battuto |
+   | Quando può scattare | Solo su run con `EnsembleLegs.Count > 0` |
+   | Configurazioni di pipeline | 11 totali, **una sola schedulata** (id 8, «Caccia onesta majors 1h-4h») |
+   | `includeGreyZone` fra quelle config | **nessuna** ce l'ha (tutte al default `false`) |
+
+   **Conclusione: il rischio è oggi ZERO** — la sola pipeline automatica cerca sopravvissuti
+   pieni, che non escono da un mese, quindi l'auto-apply non ha nulla da applicare. Toccare il
+   cluster per aggiungere una corsia (`LaneCount` 8→9 + ConfigMap + rollout del pod trading con
+   7 forward test attivi) sarebbe stato un intervento invasivo contro un pericolo dormiente.
+
+   **La condizione che lo risveglia è una e prevedibile**: accendere `includeGreyZone` sulla
+   config **schedulata** id 8. Da quel momento i run producono gambe e le corsie 0-2 tornano
+   sostituibili — corsia 1 (DOT/USDT 15m) compresa, cosa che era già vera prima di questo
+   lavoro. Per questo l'avviso è stato messo **dentro l'hint del parametro stesso**, dove lo
+   leggi nell'istante in cui accendi il flag, invece che in un documento che potresti non
+   rileggere.
 
 ## Nota di metodo, per il prossimo giro
 
