@@ -71,5 +71,10 @@ images:
     # PREREQUISITO DI QUESTO BUMP, già assolto: la migrazione additiva
     # 20260817100224_AddTradingEngineStateLastCandleUtc dev'essere applicata PRIMA, o il motore
     # nuovo interroga una colonna che non esiste.
-    # Precedente: local-0e97f5ea.
-    newTag: local-dcea49b1
+    # Il primo bump di oggi (local-dcea49b1) ha fatto emergere dal vivo un effetto collaterale
+    # della correzione stessa: senza replay dopo un riavvio, fra il riavvio e la chiusura della
+    # barra successiva nessuna candela risulta valutata, e il LaneInvariantWatchdog gridava
+    # «AFFAMATA» su tutte e sette le corsie. Corretto (battito che ricade sul segnalibro + grazia
+    # post-avvio pari a una barra piena più la tolleranza) e ripromosso.
+    # Precedente: local-0e97f5ea, poi local-dcea49b1.
+    newTag: local-9a3e8dbe
