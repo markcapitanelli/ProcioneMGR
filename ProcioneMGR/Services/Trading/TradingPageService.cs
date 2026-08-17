@@ -31,7 +31,8 @@ public sealed class TradingPageService(
     IEngineConfigStore engineConfig,
     ILaneQuarantineStore quarantineStore,
     IServiceProvider? serviceProvider = null,   // opzionale: ClearLaneAsync + LaneStory (manager keyed); i test storici non cambiano
-    Microsoft.EntityFrameworkCore.IDbContextFactory<Data.ApplicationDbContext>? dbFactory = null)   // opzionale: candele del grafico + provenienza dal journal
+    Microsoft.EntityFrameworkCore.IDbContextFactory<Data.ApplicationDbContext>? dbFactory = null,   // opzionale: candele del grafico + provenienza dal journal
+    ILogger<TradingPageService>? logger = null)   // opzionale: i test storici non lo passano
 {
     public TradingEngineStatus? Status { get; private set; }
 
@@ -75,19 +76,38 @@ public sealed class TradingPageService(
     /// rimetterebbe nel controllo lo stesso difetto che il controllo deve scoprire — e per un
     /// attimo direbbe «target toccato» su un massimo parziale che poi rientra.</para>
     /// </summary>
-    private async Task<IReadOnlyList<ProtectiveExitAnomaly>> LoadExitAnomaliesAsync()
+    /// <summary>
+    /// [2026-08-17] Perché il controllo non è stato eseguito, quando non lo è stato. Un elenco vuoto
+    /// di anomalie è ESATTAMENTE il valore del caso «tutto a posto»: senza questo campo «controllo
+    /// superato» e «controllo fallito» erano indistinguibili a schermo, e l'unica traccia era una
+    /// <c>Debug.WriteLine</c> che il compilatore rimuove in Release, cioè nella configurazione con
+    /// cui l'app gira davvero.
+    /// </summary>
+    public string? ExitAnomaliesError { get; private set; }
+
+    private async Task<IReadOnlyList<ProtectiveExitAnomaly>> LoadExitAnomaliesAsync(
+        IReadOnlyList<OpenPosition> posizioni, string? timeframeCorsia)
     {
-        if (dbFactory is null || Positions.Count == 0) return [];
+        ExitAnomaliesError = null;
+        if (dbFactory is null || posizioni.Count == 0) return [];
         try
         {
-            var simboli = Positions.Select(p => p.Symbol).Distinct().ToList();
-            var timeframe = Status?.Timeframe;
-            if (string.IsNullOrWhiteSpace(timeframe)) return [];
+            var simboli = posizioni.Select(p => p.Symbol).Distinct().ToList();
+            var timeframe = timeframeCorsia;
+            if (string.IsNullOrWhiteSpace(timeframe))
+            {
+                ExitAnomaliesError = "timeframe della corsia sconosciuto";
+                return [];
+            }
 
             var ultimaChiusa = Ingestion.SeriesFreshness.LastClosedBarOpenUtc(timeframe, DateTime.UtcNow);
-            if (ultimaChiusa is not DateTime chiusaFinoA) return [];
+            if (ultimaChiusa is not DateTime chiusaFinoA)
+            {
+                ExitAnomaliesError = $"timeframe \"{timeframe}\" non riconosciuto";
+                return [];
+            }
 
-            var daQuando = Positions.Min(p => p.OpenedAtUtc);
+            var daQuando = posizioni.Min(p => p.OpenedAtUtc);
 
             await using var db = await dbFactory.CreateDbContextAsync();
             var barre = await db.OhlcvData.AsNoTracking()
@@ -95,11 +115,14 @@ public sealed class TradingPageService(
                             && c.TimestampUtc >= daQuando && c.TimestampUtc <= chiusaFinoA)
                 .ToListAsync();
 
-            return ProtectiveExitAudit.Find(Positions, barre);
+            return ProtectiveExitAudit.Find(posizioni, barre);
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Controllo uscite protettive fallito: {ex.Message}");
+            // Il guasto va DETTO: un elenco vuoto qui significa «nessuna anomalia», e restituirlo
+            // dopo un errore trasformerebbe un controllo non eseguito in un controllo superato.
+            ExitAnomaliesError = ex.Message;
+            logger?.LogWarning(ex, "Controllo delle uscite protettive fallito.");
             return [];
         }
     }
@@ -109,7 +132,7 @@ public sealed class TradingPageService(
     /// <c>TradingAuditLogs</c>. Come la carta d'identità della corsia: se questa lettura fallisce
     /// la pagina resta funzionante e la tabella torna piatta, perché è contesto e non controllo.
     /// </summary>
-    private async Task<IReadOnlyList<LaneEpisode>> LoadEpisodesAsync(int laneId)
+    private async Task<IReadOnlyList<LaneEpisode>> LoadEpisodesAsync(int laneId, IReadOnlyList<Order> ordini)
     {
         if (dbFactory is null) return [];
         try
@@ -119,11 +142,11 @@ public sealed class TradingPageService(
                 .Where(a => a.LaneId == laneId && a.Action == "StartEngine")
                 .OrderBy(a => a.TimestampUtc)
                 .ToListAsync();
-            return LaneEpisodeBuilder.Build(avvii, Orders);
+            return LaneEpisodeBuilder.Build(avvii, ordini);
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"LoadEpisodes corsia {laneId} fallito: {ex.Message}");
+            logger?.LogWarning(ex, "Caricamento degli episodi della corsia {Lane} fallito.", laneId);
             return [];
         }
     }
@@ -172,6 +195,19 @@ public sealed class TradingPageService(
         string? Provenance, string? ProvenanceSource, DateTime? ProvenanceAtUtc);
 
     public LaneStoryInfo? Story { get; private set; }
+
+    /// <summary>
+    /// [2026-08-17] Il profilo di rischio CONFIGURATO sulla corsia visualizzata (null = nessuno).
+    ///
+    /// Serve al pannello di sicurezza per non mentire: quel pannello legge e scrive la sezione
+    /// GLOBALE <c>Trading:Safety</c>, ma se la corsia ha un profilo (la Modalità Semplice di /bot
+    /// ne assegna sempre uno) le soglie che il motore applica davvero sono
+    /// <c>profilo.Apply(globale)</c>, e il profilo SOVRASCRIVE otto degli undici campi mostrati.
+    /// Senza dirlo, un Admin che stringe il drawdown dal 20% al 15% crede di aver stretto una
+    /// corsia che sta girando al 10% — o, nel verso pericoloso, crede di aver alzato una leva
+    /// massima che il profilo tiene a 1.
+    /// </summary>
+    public string? LaneRiskProfileName { get; private set; }
 
     /// <summary>Candele per il grafico prezzi+operazioni (ultime ~300 del simbolo/timeframe della corsia).</summary>
     public List<Data.OhlcvData> ChartCandles { get; private set; } = [];
@@ -222,6 +258,9 @@ public sealed class TradingPageService(
                 Story = string.IsNullOrEmpty(cfg.Symbol)
                     ? null
                     : new LaneStoryInfo(cfg.Symbol, cfg.Timeframe, strategies, provenance, provenanceSource, provenanceAt);
+
+                // Il profilo si legge dalla stessa configurazione, senza query aggiuntive.
+                LaneRiskProfileName = Risk.RiskProfiles.Find(cfg.RiskProfileName)?.DisplayName;
             }
 
             // Le candele del grafico: ultime ~300 del simbolo/timeframe correnti.
@@ -246,7 +285,8 @@ public sealed class TradingPageService(
             // La carta d'identità è contesto, non controllo: un guasto qui non deve rompere la pagina.
             Story = null;
             ChartCandles = [];
-            System.Diagnostics.Debug.WriteLine($"LoadLaneStory fallito: {ex.Message}");
+            LaneRiskProfileName = null;
+            logger?.LogWarning(ex, "Caricamento della carta d'identità della corsia {Lane} fallito.", laneId);
         }
     }
 
@@ -304,8 +344,76 @@ public sealed class TradingPageService(
     /// </summary>
     public TradingPerformance? Perf { get; private set; }
 
+    /// <summary>
+    /// [2026-08-17] La corsia a cui appartengono i dati attualmente esposti — un TAG DI PROVENIENZA,
+    /// non un parametro operativo: i metodi continuano a ricevere <c>laneId</c> esplicito.
+    ///
+    /// Serve perché lo stato pubblicato non portava con sé la propria identità: se il refresh
+    /// scatenato da un cambio corsia falliva, KPI, posizioni, ordini ed equity restavano quelli
+    /// della corsia PRECEDENTE mentre l'intestazione, il grafico e la quarantena erano già della
+    /// nuova. La pagina mostrava una corsia sola composta da due, e i pulsanti di riga mandavano
+    /// al motore della corsia B il <c>positionId</c> della corsia A.
+    /// </summary>
+    public int? LoadedLaneId { get; private set; }
+
+    /// <summary>
+    /// Generazione del refresh: il tick da 2s e il click dell'operatore girano sullo stesso
+    /// dispatcher ma si interlacciano a ogni <c>await</c>, quindi una risposta lenta per la corsia
+    /// vecchia può atterrare DOPO quella per la nuova. Il commit finale è guardato da questo
+    /// contatore: una risposta sorpassata viene scartata intera, mai a metà.
+    /// </summary>
+    private int _refreshToken;
+
+    /// <summary>
+    /// Vero quando lo stantio nasce da un guasto di TRASPORTO (il motore remoto non risponde),
+    /// falso quando la lettura è fallita qui (DB, bug locale). Cambia solo cosa dire all'operatore:
+    /// accusare il gRPC quando il gRPC non c'entra è una diagnosi sbagliata, e la topologia
+    /// in-process non produce mai RpcException.
+    /// </summary>
+    public bool StaleIsTransport { get; private set; }
+
+    private void ResetLaneScopedState()
+    {
+        Status = null;
+        Perf = null;
+        Quarantine = null;
+        Positions = [];
+        Orders = [];
+        Pending = [];
+        Equity = [];
+        Episodes = [];
+        ExitAnomalies = [];
+        ExitAnomaliesError = null;
+        StaleSince = null;
+        LastStaleReason = null;
+        StaleIsTransport = false;
+        // NB: Message/IsError NON si azzerano qui. RefreshAsync viene chiamata anche in coda a ogni
+        // comando (Start, Stop, Emergency…), e azzerare cancellerebbe l'esito appena comunicato.
+        // L'esito appartiene comunque alla corsia su cui è nato: è la pagina a chiamare
+        // ClearMessage() quando l'operatore cambia scheda. Vedi Trading.razor/OnLaneSelectedAsync.
+        _slEdits.Clear();
+        _tpEdits.Clear();
+        _tslEdits.Clear();
+        _slInvalid.Clear();
+        _tpInvalid.Clear();
+        _tslInvalid.Clear();
+    }
+
     public async Task RefreshAsync(int laneId)
     {
+        var token = ++_refreshToken;
+
+        // Cambio corsia: quello che c'è in pancia appartiene a un'ALTRA corsia. Se la lettura
+        // fallisce, «nessun dato per questa corsia» è l'unica cosa vera che si possa mostrare —
+        // tenere i numeri della precedente sotto l'etichetta della nuova non è degradare, è
+        // mentire. A corsia INVARIATA invece i dati restano (vedi il catch in fondo): svuotare la
+        // pagina durante un riavvio di pochi secondi sarebbe peggio che dichiararla vecchia.
+        if (LoadedLaneId != laneId)
+        {
+            ResetLaneScopedState();
+            LoadedLaneId = laneId;
+        }
+
         try
         {
             // Lo STATUS per primo (serve StartedAtUtc per la finestra di perf); le altre quattro
@@ -313,12 +421,17 @@ public sealed class TradingPageService(
             // latenze ogni 2 secondi era solo attesa gratuita. Il motore regge le chiamate
             // concorrenti per costruzione (il TradingWorker gli parla in parallelo da sempre).
             // Tutte le letture e i comandi passano da IMediator (Fase 1).
-            Status = await mediator.Send(new GetLaneStatusQuery(laneId));
+            //
+            // [2026-08-17] Si legge in LOCALI e si pubblica in blocco alla fine: prima `Status`
+            // veniva assegnato subito e un fallimento delle altre quattro letture lasciava a
+            // schermo intestazione e battito freschi accanto a posizioni, ordini, PnL ed equity
+            // del giro precedente, senza una parola.
+            var status = await mediator.Send(new GetLaneStatusQuery(laneId));
 
             var positionsTask = mediator.Send(new GetOpenPositionsQuery(laneId)).AsTask();
             // [2026-08-03] UNA finestra per tutta la pagina: dal TEST CORRENTE (StartedAtUtc),
             // stessa base della tabella promozioni. Fallback 90gg per una corsia mai avviata.
-            var perfFrom = Status?.StartedAtUtc ?? DateTime.UtcNow.AddDays(-90);
+            var perfFrom = status?.StartedAtUtc ?? DateTime.UtcNow.AddDays(-90);
 
             // [2026-08-05] Gli ordini seguono la STESSA finestra dei KPI. Prima la query partiva
             // senza `from` — pur essendo il parametro già previsto — e la tabella mostrava tutta
@@ -331,21 +444,21 @@ public sealed class TradingPageService(
             var pendingTask = mediator.Send(new GetPendingOrdersQuery(laneId)).AsTask();
             var perfTask = mediator.Send(new GetPerformanceQuery(laneId, perfFrom)).AsTask();
             await Task.WhenAll(positionsTask, ordersTask, pendingTask, perfTask);
-            Positions = positionsTask.Result;
-            Orders = ordersTask.Result;
-            Pending = pendingTask.Result;
+            var positions = positionsTask.Result;
+            var orders = ordersTask.Result;
+            var pending = pendingTask.Result;
+            var perf = perfTask.Result;
 
             // [2026-08-06] Gli episodi: solo quando si guarda tutta la storia, che è il caso in cui
             // servono. I confini vengono dagli avvii del motore già nel registro di audit — nessuna
             // tabella nuova, nessuna migrazione: l'informazione c'era, mancava chi la leggesse.
-            Episodes = ShowAllOrders ? await LoadEpisodesAsync(laneId) : [];
+            var episodes = ShowAllOrders ? await LoadEpisodesAsync(laneId, orders) : [];
 
             // [2026-08-06] Protezioni toccate ma non eseguite. Va calcolato a OGNI refresh, non
             // dietro un pulsante: è il controllo che il proprietario ha dovuto fare a occhio.
-            ExitAnomalies = await LoadExitAnomaliesAsync();
-            var perf = perfTask.Result;
-            Perf = perf;
-            Equity = perf.EquityCurve.Count > 0
+            var anomalies = await LoadExitAnomaliesAsync(positions, status?.Timeframe);
+
+            var equity = perf.EquityCurve.Count > 0
                 ?
                 [
                     new Indicators.IndicatorSeries
@@ -355,11 +468,27 @@ public sealed class TradingPageService(
                             new DateTimeOffset(DateTime.SpecifyKind(p.Timestamp, DateTimeKind.Utc)).ToUnixTimeSeconds(), (double)p.Capital)).ToList(),
                     },
                 ]
-                : [];
+                : new List<Indicators.IndicatorSeries>();
+
+            // COMMIT ATOMICO. Se nel frattempo è partito un altro refresh (cambio corsia, o
+            // semplicemente il tick successivo) questa risposta è sorpassata: si scarta INTERA,
+            // perché pubblicarne metà rimetterebbe in scena le «tre finestre diverse nella stessa
+            // pagina» già corrette in passato.
+            if (token != _refreshToken) return;
+
+            Status = status;
+            Positions = positions;
+            Orders = orders;
+            Pending = pending;
+            Perf = perf;
+            Episodes = episodes;
+            ExitAnomalies = anomalies;
+            Equity = equity;
 
             // Giro riuscito: quello a schermo è di nuovo lo stato reale.
             StaleSince = null;
             LastStaleReason = null;
+            StaleIsTransport = false;
         }
         catch (RpcException ex)
         {
@@ -369,24 +498,62 @@ public sealed class TradingPageService(
             // restano (svuotare la pagina durante un riavvio di pochi secondi sarebbe peggio) ma
             // vanno dichiarati vecchi. Il primo fallimento fissa l'istante, così il banner mostra da
             // quanto dura.
+            //
+            // [2026-08-17] La guardia qui NON è sul token ma sulla CORSIA, ed è una differenza che
+            // si vede solo dall'app vera: il polling è ogni 2s e la deadline di lettura è 10s,
+            // quindi quando il motore è lento ogni giro viene superato da quelli successivi. Con
+            // `token != _refreshToken` nessun fallimento arrivava mai a schermo — la pagina restava
+            // muta e vuota proprio nel caso che il banner esiste per raccontare. Il token serve a
+            // non far sovrascrivere dati freschi da dati vecchi; un FALLIMENTO invece non è un dato
+            // da pubblicare in ordine, è una notizia sulla corsia, e vale finché la corsia è quella.
+            if (LoadedLaneId != laneId) return;
             StaleSince ??= DateTime.UtcNow;
             LastStaleReason = ex.StatusCode.ToString();
+            StaleIsTransport = true;
         }
-        catch { /* refresh resiliente */ }
+        catch (Exception ex)
+        {
+            // [2026-08-17] Prima qui c'era un `catch { }` nudo, e con esso un buco nella regola 5
+            // («degradare dicendolo»): in topologia in-process NESSUN guasto è una RpcException,
+            // quindi il banner di staleness era irraggiungibile e un Postgres giù lasciava a
+            // schermo equity, PnL e posizioni dell'ultimo giro riuscito spacciandoli per attuali.
+            // I dati restano — svuotare sarebbe peggio — ma ora vengono dichiarati vecchi, e
+            // StaleIsTransport=false evita di accusare il gRPC quando il gRPC non c'entra.
+            // Guardia sulla CORSIA e non sul token: vedi il ramo RpcException qui sopra.
+            if (LoadedLaneId != laneId) return;
+            StaleSince ??= DateTime.UtcNow;
+            LastStaleReason = ex.GetType().Name;
+            StaleIsTransport = false;
+            logger?.LogWarning(ex, "Refresh della corsia {Lane} fallito: i dati a schermo sono dichiarati vecchi.", laneId);
+        }
 
         // Fuori dal blocco gRPC: la quarantena vive nel DB condiviso, si legge anche col servizio
         // di trading giù (anzi, È il momento in cui l'operatore deve poterla vedere).
-        try { Quarantine = await quarantineStore.GetAsync(laneId); }
-        catch { /* refresh resiliente */ }
+        try
+        {
+            var quarantena = await quarantineStore.GetAsync(laneId);
+            if (token == _refreshToken) Quarantine = quarantena;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Lettura della quarantena della corsia {Lane} fallita.", laneId);
+        }
     }
 
     /// <summary>Rimozione della quarantena (solo Admin, dopo verifica): audit con lo userId di chi decide.</summary>
     public async Task ClearQuarantineAsync(int laneId, string? userId)
     {
-        var removed = await quarantineStore.ClearAsync(laneId, userId);
-        SetMsg(removed
-            ? $"Quarantena della corsia {laneId} rimossa. La corsia può essere riavviata."
-            : "Nessuna quarantena attiva da rimuovere.", false);
+        try
+        {
+            var removed = await quarantineStore.ClearAsync(laneId, userId);
+            SetMsg(removed
+                ? $"Quarantena della corsia {laneId} rimossa. La corsia può essere riavviata."
+                : "Nessuna quarantena attiva da rimuovere.", false);
+        }
+        catch (Exception ex)
+        {
+            SetMsg($"Rimozione della quarantena fallita: {ex.Message}. La corsia resta bloccata.", true);
+        }
         await RefreshAsync(laneId);
     }
 
@@ -448,23 +615,56 @@ public sealed class TradingPageService(
         }
     }
 
+    // [2026-08-17] Tutti i verbi che seguono hanno la stessa forma di StartAsync: try/catch su
+    // Exception (non solo RpcException — ClearQuarantine va su Postgres, Confirm/Reject toccano il
+    // DB anche in-process) e messaggio all'operatore. Prima ne erano protetti solo due: in modalità
+    // remota un Unavailable durante il riavvio del motore risaliva fino al gestore @onclick di
+    // Blazor e ABBATTEVA IL CIRCUITO — la pagina moriva proprio mentre si premeva il pulsante
+    // rosso, e il banner giallo intanto prometteva «i comandi falliranno», cioè un fallimento
+    // gestito. Il RefreshAsync finale resta anche sul cammino d'errore: è già resiliente per conto
+    // suo, e all'operatore serve vedere lo stato reale dopo il tentativo, non una pagina congelata.
+
     public async Task StopAsync(int laneId)
     {
-        await mediator.Send(new StopLaneCommand(laneId));
-        SetMsg("Trading fermato (posizioni lasciate aperte).", false);
+        try
+        {
+            await mediator.Send(new StopLaneCommand(laneId));
+            SetMsg("Trading fermato (posizioni lasciate aperte).", false);
+        }
+        catch (Exception ex)
+        {
+            SetMsg($"Arresto NON riuscito: {ex.Message}. La corsia può essere ancora in esecuzione.", true);
+        }
         await RefreshAsync(laneId);
     }
 
     public async Task EmergencyAsync(int laneId)
     {
-        await mediator.Send(new EmergencyStopCommand(laneId, "Stop manuale dall'operatore"));
-        SetMsg("EMERGENCY STOP eseguito: tutte le posizioni chiuse.", false);
+        try
+        {
+            await mediator.Send(new EmergencyStopCommand(laneId, "Stop manuale dall'operatore"));
+            // Non si annuncia «tutte le posizioni chiuse»: la chiusura di massa è best-effort per
+            // contratto (una singola chiusura può non riuscire e la posizione resta), quindi la
+            // frase sarebbe falsa anche quando la chiamata riesce. Si dice cosa guardare.
+            SetMsg($"EMERGENCY STOP inviato alla corsia {laneId}: verifica qui sotto che non restino posizioni aperte.", false);
+        }
+        catch (Exception ex)
+        {
+            SetMsg($"EMERGENCY STOP NON eseguito: {ex.Message}. Le posizioni possono essere ancora aperte — riprova o interviene sull'exchange.", true);
+        }
         await RefreshAsync(laneId);
     }
 
     public async Task CloseAsync(int laneId, string positionId)
     {
-        await mediator.Send(new ClosePositionCommand(laneId, positionId));
+        try
+        {
+            await mediator.Send(new ClosePositionCommand(laneId, positionId));
+        }
+        catch (Exception ex)
+        {
+            SetMsg($"Chiusura della posizione fallita: {ex.Message}. La posizione può essere ancora aperta.", true);
+        }
         await RefreshAsync(laneId);
     }
 
@@ -479,39 +679,164 @@ public sealed class TradingPageService(
     public string? TslValue(OpenPosition p) =>
         (_tslEdits.TryGetValue(p.PositionId, out var v) ? v : p.TrailingStopPercent)?.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-    public void SetSlEdit(string id, string? raw) => _slEdits[id] = ParseLevel(raw);
-    public void SetTpEdit(string id, string? raw) => _tpEdits[id] = ParseLevel(raw);
-    public void SetTslEdit(string id, string? raw) => _tslEdits[id] = ParseLevel(raw);
+    /// <summary>Le voci con un valore NON valido digitato dall'operatore: campo → sì/no.</summary>
+    private readonly HashSet<string> _slInvalid = [];
+    private readonly HashSet<string> _tpInvalid = [];
+    private readonly HashSet<string> _tslInvalid = [];
 
-    public static decimal? ParseLevel(string? raw) =>
-        decimal.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d) && d > 0m
-            ? d : (decimal?)null;
+    public void SetSlEdit(string id, string? raw) => Track(_slEdits, _slInvalid, id, raw);
+    public void SetTpEdit(string id, string? raw) => Track(_tpEdits, _tpInvalid, id, raw);
+    public void SetTslEdit(string id, string? raw) => Track(_tslEdits, _tslInvalid, id, raw);
+
+    private static void Track(Dictionary<string, decimal?> edits, HashSet<string> invalid, string id, string? raw)
+    {
+        if (TryParseLevel(raw, out var level))
+        {
+            edits[id] = level;
+            invalid.Remove(id);
+        }
+        else
+        {
+            // Non si scrive null: null significa «togli la protezione», e un errore di battitura
+            // non è una richiesta di disarmare lo stop. L'edit resta invalido finché non è corretto.
+            invalid.Add(id);
+        }
+    }
+
+    /// <summary>
+    /// [2026-08-17] Distingue i TRE casi che prima collassavano tutti in <c>null</c>: campo svuotato
+    /// di proposito (rimozione voluta), valore valido, e input NON valido (non parsabile o ≤ 0).
+    ///
+    /// Il terzo era il pericoloso: <c>SetSlEdit</c> scriveva comunque la chiave, quindi il null
+    /// vinceva sul valore esistente e <c>SaveSlTpAsync</c> lo mandava al motore, che lo interpreta
+    /// come AZZERAMENTO — un «-59800» digitato per sbaglio RIMUOVEVA lo stop loss dalla posizione,
+    /// con un messaggio verde «SL/TP/Trailing aggiornati» a confermare l'operazione.
+    /// </summary>
+    /// <returns>Falso se l'input non è utilizzabile; vero con <paramref name="level"/> null se il campo è vuoto.</returns>
+    public static bool TryParseLevel(string? raw, out decimal? level)
+    {
+        level = null;
+        if (string.IsNullOrWhiteSpace(raw)) return true;   // campo svuotato = rimuovi la protezione
+        if (decimal.TryParse(raw, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var d) && d > 0m)
+        {
+            level = d;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Compatibilità con i chiamanti storici: <c>null</c> sia per «vuoto» sia per «non valido».</summary>
+    public static decimal? ParseLevel(string? raw) => TryParseLevel(raw, out var level) ? level : null;
 
     public async Task SaveSlTpAsync(int laneId, string positionId)
     {
+        // Fail-closed sull'input: meglio non fare nulla che disarmare una protezione per un refuso.
+        var campiInvalidi = new List<string>();
+        if (_slInvalid.Contains(positionId)) campiInvalidi.Add("stop loss");
+        if (_tpInvalid.Contains(positionId)) campiInvalidi.Add("take profit");
+        if (_tslInvalid.Contains(positionId)) campiInvalidi.Add("trailing");
+        if (campiInvalidi.Count > 0)
+        {
+            SetMsg($"Valore non valido in {string.Join(" e ", campiInvalidi)}: usa un numero positivo, "
+                   + "oppure svuota il campo se vuoi RIMUOVERE la protezione. Nessuna modifica inviata.", true);
+            return;
+        }
+
         var pos = Positions.FirstOrDefault(p => p.PositionId == positionId);
         var sl = _slEdits.TryGetValue(positionId, out var s) ? s : pos?.StopLoss;
         var tp = _tpEdits.TryGetValue(positionId, out var t) ? t : pos?.TakeProfit;
         var tsl = _tslEdits.TryGetValue(positionId, out var tr) ? tr : pos?.TrailingStopPercent;
-        await mediator.Send(new SetStopLossTakeProfitCommand(laneId, positionId, sl, tp, tsl));
+
+        // Coerenza rispetto al lato: uno stop dalla parte sbagliata del prezzo di ingresso non è
+        // una protezione, è un'uscita immediata in perdita. Si avverte e si rifiuta.
+        // Solo con un prezzo d'ingresso noto: senza, «dalla parte sbagliata» non è giudicabile e
+        // il controllo rifiuterebbe livelli perfettamente validi.
+        if (pos is not null && pos.EntryPrice > 0m)
+        {
+            var isLong = pos.Side == OrderSide.Buy;
+            if (sl is decimal slv && ((isLong && slv >= pos.EntryPrice) || (!isLong && slv <= pos.EntryPrice)))
+            {
+                SetMsg($"Stop loss {slv} dalla parte sbagliata per una posizione {(isLong ? "long" : "short")} "
+                       + $"aperta a {pos.EntryPrice}: verrebbe colpito subito. Nessuna modifica inviata.", true);
+                return;
+            }
+            if (tp is decimal tpv && ((isLong && tpv <= pos.EntryPrice) || (!isLong && tpv >= pos.EntryPrice)))
+            {
+                SetMsg($"Take profit {tpv} dalla parte sbagliata per una posizione {(isLong ? "long" : "short")} "
+                       + $"aperta a {pos.EntryPrice}: chiuderebbe subito in perdita. Nessuna modifica inviata.", true);
+                return;
+            }
+        }
+
+        try
+        {
+            await mediator.Send(new SetStopLossTakeProfitCommand(laneId, positionId, sl, tp, tsl));
+        }
+        catch (Exception ex)
+        {
+            SetMsg($"Aggiornamento di SL/TP/Trailing fallito: {ex.Message}. I livelli precedenti restano in vigore.", true);
+            await RefreshAsync(laneId);
+            return;
+        }
+
         _slEdits.Remove(positionId);
         _tpEdits.Remove(positionId);
         _tslEdits.Remove(positionId);
-        SetMsg($"SL/TP/Trailing aggiornati (SL={sl?.ToString("N2") ?? "—"}, TP={tp?.ToString("N2") ?? "—"}, Trailing={tsl?.ToString("F1") ?? "—"}%).", false);
+
+        // Una RIMOZIONE non è un aggiornamento come un altro: la si dichiara, e in giallo.
+        var rimosse = new List<string>();
+        if (sl is null) rimosse.Add("stop loss");
+        if (tp is null) rimosse.Add("take profit");
+        SetMsg(rimosse.Count > 0
+            ? $"Protezione RIMOSSA ({string.Join(" e ", rimosse)}) — la posizione resta esposta. "
+              + $"SL={sl?.ToString("N2") ?? "—"}, TP={tp?.ToString("N2") ?? "—"}, Trailing={tsl?.ToString("F1") ?? "—"}%."
+            : $"SL/TP/Trailing aggiornati (SL={sl?.ToString("N2") ?? "—"}, TP={tp?.ToString("N2") ?? "—"}, Trailing={tsl?.ToString("F1") ?? "—"}%).",
+            rimosse.Count > 0);
         await RefreshAsync(laneId);
     }
 
     public async Task ConfirmAsync(int laneId, string orderId, string? userId)
     {
-        await mediator.Send(new ConfirmOrderCommand(laneId, orderId, userId));
-        SetMsg("Ordine confermato e inviato all'exchange.", false);
+        try
+        {
+            await mediator.Send(new ConfirmOrderCommand(laneId, orderId, userId));
+        }
+        catch (Exception ex)
+        {
+            SetMsg($"Conferma dell'ordine fallita: {ex.Message}. L'ordine NON è stato inviato all'exchange.", true);
+            await RefreshAsync(laneId);
+            return;
+        }
+
         await RefreshAsync(laneId);
+
+        // [2026-08-17] L'esito VERO, non l'eco del gesto. Il comando può riuscire e l'ordine
+        // finire comunque Rejected — per esempio bocciato dal safety check al momento
+        // dell'esecuzione — mentre prima il pannello annunciava sempre «confermato e inviato
+        // all'exchange», contraddicendo la riga che nella tabella accanto diceva il contrario.
+        var esito = Orders.FirstOrDefault(o => o.OrderId == orderId);
+        if (esito is { Status: OrderStatus.Rejected })
+        {
+            SetMsg($"Ordine RIFIUTATO dopo la conferma: {esito.ErrorMessage}", true);
+        }
+        else
+        {
+            SetMsg("Ordine confermato e inviato all'exchange.", false);
+        }
     }
 
     public async Task RejectAsync(int laneId, string orderId, string? userId)
     {
-        await mediator.Send(new RejectOrderCommand(laneId, orderId, userId));
-        SetMsg("Ordine rifiutato.", false);
+        try
+        {
+            await mediator.Send(new RejectOrderCommand(laneId, orderId, userId));
+            SetMsg("Ordine rifiutato.", false);
+        }
+        catch (Exception ex)
+        {
+            SetMsg($"Rifiuto dell'ordine fallito: {ex.Message}. L'ordine può essere ancora in coda.", true);
+        }
         await RefreshAsync(laneId);
     }
 
@@ -524,10 +849,17 @@ public sealed class TradingPageService(
     // passa da IEngineConfigStore: si legge da chi esegue, si scrive su chi esegue, e la risposta è
     // la sezione RILETTA dal motore — non serve fidarsi.
 
+    /// <summary>
+    /// Vero solo dopo una lettura RIUSCITA delle soglie dal motore. Non si riusa
+    /// <see cref="SafetyReachable"/>, che nasce <c>true</c> prima di qualunque lettura.
+    /// </summary>
+    private bool _safetyLoadedFromEngine;
+
     public async Task ReloadSafetyAsync(CancellationToken ct = default)
     {
         var snapshot = await engineConfig.ReadAsync(["Trading:Safety"], ct);
         SafetyReachable = snapshot.Reachable;
+        _safetyLoadedFromEngine = snapshot.Reachable;
         SafetyError = snapshot.Error;
         SafetySource = snapshot.SourceOf("Trading:Safety");
         // Con motore irraggiungibile Bind restituisce i DEFAULT: il form resta usabile ma
@@ -537,12 +869,38 @@ public sealed class TradingPageService(
 
     public async Task SaveSafetyAsync()
     {
+        // [2026-08-17] Guardia OBBLIGATORIA, e sta qui e non sul `disabled` del pulsante perché è
+        // il presidio vero. Con la lettura fallita il form contiene i DEFAULT DEL CODICE (leva 5x,
+        // 5 posizioni, drawdown 20%...), non le soglie in vigore; la scrittura SOSTITUISCE l'intera
+        // sezione Trading:Safety e può benissimo riuscire anche se la lettura era fallita (il
+        // canale gRPC si riapre nel frattempo). Bastava ritoccare la fee per allargare in silenzio
+        // tutti gli altri limiti, con un messaggio verde a rassicurare.
+        if (!_safetyLoadedFromEngine)
+        {
+            SetMsg("Le soglie mostrate sono i default del codice, non quelle in vigore: il motore non ha "
+                   + "risposto all'ultima lettura. Premi «Riprova» e attendi una lettura riuscita prima di "
+                   + "salvare, altrimenti sovrascriveresti l'intera sezione di sicurezza del motore.", true);
+            return;
+        }
+
         if (Safety.MaxPositionSizePercent <= 0 || Safety.MaxTotalExposurePercent <= 0 ||
             Safety.MaxOpenPositions < 1 || Safety.MaxLeverageAllowed < 1 || Safety.FeePercent < 0)
         {
             SetMsg("Valori non validi: size/esposizione devono essere > 0, almeno 1 posizione, leva massima >= 1 e fee >= 0.", true);
             return;
         }
+
+        // Le due soglie CRITICHE non ammettono lo zero: il SafetyChecker le confronta con `>=`,
+        // quindi MaxDrawdownPercent = 0 fa scattare l'emergency stop al primo ordine (0 >= 0) e
+        // MaxDailyLossPercent = 0 alla prima perdita di un centesimo. Non è un limite severo, è una
+        // corsia inutilizzabile — e il motivo sarebbe illeggibile dal messaggio di rifiuto.
+        if (Safety.MaxDrawdownPercent <= 0 || Safety.MaxDailyLossPercent <= 0)
+        {
+            SetMsg("Max drawdown e max perdita giornaliera devono essere > 0: a zero l'emergency stop "
+                   + "scatterebbe immediatamente e la corsia non potrebbe operare.", true);
+            return;
+        }
+
         try
         {
             var result = await engineConfig.WriteAsync("Trading:Safety", Safety);
@@ -556,6 +914,12 @@ public sealed class TradingPageService(
             }
             catch (System.Text.Json.JsonException) { /* si tiene la copia di lavoro */ }
 
+            // La scrittura è riuscita e la sezione è stata riletta: la spia «sono i default» non
+            // deve sopravvivere alla propria causa.
+            SafetyReachable = true;
+            SafetyError = null;
+            _safetyLoadedFromEngine = true;
+
             var dove = engineConfig.IsRemote ? "sul MOTORE (riletta dal processo che la applica)" : "in appsettings.json";
             SetMsg(result.Warning is { } warning
                 ? $"Soglie di sicurezza salvate {dove}, MA — {warning}"
@@ -568,4 +932,16 @@ public sealed class TradingPageService(
     }
 
     private void SetMsg(string text, bool error) { Message = text; IsError = error; }
+
+    /// <summary>
+    /// [2026-08-17] Azzera l'esito dell'ultimo comando. Serve al cambio corsia: quei messaggi non
+    /// nominano quasi mai la corsia, quindi «Corsia svuotata» o «EMERGENCY STOP inviato» restavano
+    /// a schermo mentre sotto era cambiata la corsia a cui si riferivano — lo stesso difetto già
+    /// corretto per PromoMessage, che sopravviveva alla propria causa.
+    /// </summary>
+    public void ClearMessage()
+    {
+        Message = null;
+        IsError = false;
+    }
 }

@@ -484,9 +484,18 @@ public sealed class TradingEngine(
             {
                 return;
             }
-            if (_buffer.Count > 0 && candle.TimestampUtc <= _buffer[^1].TimestampUtc)
+            // Niente replay di candele già viste. La frontiera è il buffer in memoria quando c'è,
+            // ALTRIMENTI il segnalibro persistito della sessione: [2026-08-17] dopo un riavvio del
+            // processo il buffer è vuoto ma lo stato (capitale, PnL, posizioni aperte) è stato
+            // restaurato da EnsureLoadedAsync, e senza questo ripiego un feed che riparte indietro
+            // rigioca settimane di candele contro posizioni vive — stop valutati su prezzi vecchi,
+            // TradeRecord con durata negativa, trade duplicati nelle metriche di promozione.
+            // È il presidio fail-closed del motore: vale per QUALUNQUE sorgente di candele, non
+            // solo per il cursore del TradingWorker (che ha la sua guardia, ma è una comodità).
+            var frontier = _buffer.Count > 0 ? _buffer[^1].TimestampUtc : _state.LastCandleUtc;
+            if (frontier is DateTime seen && candle.TimestampUtc <= seen)
             {
-                return; // niente replay di candele già viste
+                return;
             }
 
             _buffer.Add(candle);
@@ -500,6 +509,13 @@ public sealed class TradingEngine(
             // non ha ancora valutato nulla), e un valore ereditato dal processo precedente
             // rassicurerebbe su un'attività che non c'è.
             _lastProcessedCandleUtc = ts;
+
+            // [2026-08-17] Il segnalibro PERSISTITO della sessione, che è la nozione opposta e
+            // complementare del battito qui sopra: non "questo processo ha valutato" ma "questa
+            // sessione è arrivata fin qui". Serve alla guardia anti-replay per sopravvivere al
+            // riavvio (vedi TradingEngineState.LastCandleUtc). Nessuna scrittura in più: lo
+            // SaveStateAsync in coda al metodo la porta con sé.
+            _state.LastCandleUtc = ts;
 
             // Futures Testnet/Live: rileva liquidazioni forzate dall'exchange (o chiusure
             // manuali fatte fuori dalla piattaforma) PRIMA di valutare qualsiasi altra cosa,
@@ -746,7 +762,18 @@ public sealed class TradingEngine(
             else
             {
                 // Solo se NESSUNA uscita è scattata: il trailing resta causale.
+                var bestPrima = pos.BestPriceSinceEntry;
                 ProtectiveExitEvaluator.UpdateBestSinceEntry(pos, high, low);
+
+                // [2026-08-17] Il cricchetto avanzato va scritto, o un riavvio riporta lo stop
+                // effettivo al livello di apertura e il profitto già bloccato sparisce senza che
+                // nulla lo dica. La guardia "solo se è cambiato" è la parte che conta: senza
+                // trailing UpdateBestSinceEntry è inerte, quindi il valore non cambia e nessuna
+                // UPDATE parte — il costo è una scrittura per NUOVO massimo, non per candela.
+                if (pos.BestPriceSinceEntry != bestPrima)
+                {
+                    await Persistence.UpdatePositionRowAsync(pos, ct);
+                }
             }
         }
     }
@@ -953,7 +980,10 @@ public sealed class TradingEngine(
     private async Task<bool> ExecuteOpenAsync(Order order, string strategyName, decimal currentPrice, DateTime ts, CancellationToken ct, bool isExisting, OpenPosition? mergeInto = null)
     {
         var status = BuildSafetyStatus(currentPrice);
-        var check = SafetyChecker.Evaluate(order, status, safety.CurrentValue, ts);
+        // Il tetto sulle posizioni aperte vale per le aperture NUOVE: una fetta che si fonde in una
+        // posizione esistente non ne aggiunge nessuna, e applicarglielo faceva abortire ogni piano
+        // di esecuzione dopo la prima fetta quando la corsia era al proprio limite.
+        var check = SafetyChecker.Evaluate(order, status, safety.CurrentValue, ts, opensNewPosition: mergeInto is null);
         if (!check.IsAllowed)
         {
             order.Status = OrderStatus.Rejected;
@@ -1073,7 +1103,7 @@ public sealed class TradingEngine(
             BuildSafetyStatus,
             (o, sn, p, t, c, ie, mi) => ExecuteOpenAsync(o, sn, p, t, c, ie, mi),
             EmergencyInternalAsync,
-            order, strat, strategyName, price, ts, ct, isExisting);
+            order, strat, strategyName, price, ts, ct, isExisting, _filters);
 
     /// <summary>
     /// Avanza le fette dovute di ogni piano Running di questa corsia. Chiamato dall'<c>ExecutionWorker</c>.
@@ -1131,6 +1161,12 @@ public sealed class TradingEngine(
                     Side = job.Side, Type = OrderType.Market, Quantity = qty, Price = pos.CurrentPrice,
                     Status = OrderStatus.Pending, CreatedAtUtc = now, Mode = _state.Mode, MarketType = _state.MarketType,
                     Leverage = _state.MarketType == MarketType.Futures ? _state.Leverage : 1,
+                    // [2026-08-17] Le fette successive ereditano l'autorizzazione dell'ordine PADRE,
+                    // non un `true` a codice fisso: in Live il check #7 del SafetyChecker le
+                    // rifiuterebbe tutte (nascono con ManuallyConfirmed=false), ma scriverci `true`
+                    // farebbe proseguire un piano anche dopo che l'operatore ha ACCESO la conferma
+                    // manuale a metà corsa. Vedi TradingPersistence.WasManuallyConfirmedAsync.
+                    ManuallyConfirmed = await Persistence.WasManuallyConfirmedAsync(job.PositionId, ct),
                 };
                 var strat = _active.FirstOrDefault(s => s.StrategyId == job.StrategyId);
                 var filled = await ExecuteOpenAsync(order, strat?.StrategyName ?? job.StrategyId, pos.CurrentPrice, now, ct, isExisting: false, mergeInto: pos);
@@ -1210,8 +1246,22 @@ public sealed class TradingEngine(
 
             order.ManuallyConfirmed = true;
             var ts = DateTime.UtcNow;
+            var proposedPrice = order.Price;
             var price = _buffer.Count > 0 ? _buffer[^1].Close : (order.Price ?? 0m);
-            await AuditAsync("OrderConfirmed", new { order.ClientOrderId, userId }, ts, ct);
+
+            // [2026-08-17] Il prezzo di riferimento della proposta INVECCHIA in coda: un ordine Live
+            // resta Pending finché un operatore non lo conferma, e non ha scadenza. L'esecuzione è
+            // poi al mercato, cioè a `price`, mentre il SafetyChecker pesa `order.Notional =
+            // Quantity × Price`: senza questo riallineamento i due tetti che dipendono dal nozionale
+            // (MaxPositionSizePercent e MaxTotalExposurePercent) venivano verificati sul prezzo di
+            // quando il segnale è nato — e su un rally sarebbero stati superati proprio sull'unico
+            // percorso con soldi veri. Si corregge l'INPUT del controllo, non il controllo: il
+            // SafetyChecker resta statico e puro (regola 1), e il percorso diventa più severo, mai
+            // più permissivo. Il prezzo della proposta resta nell'audit qui sotto.
+            if (price > 0m) order.Price = price;
+
+            await AuditAsync("OrderConfirmed",
+                new { order.ClientOrderId, userId, proposedPrice, executionReferencePrice = price }, ts, ct);
             var confirmStrat = _active.FirstOrDefault(s => s.StrategyId == order.StrategyId);
             await TryBuildAndStartExecutionPlanAsync(order, confirmStrat, order.StrategyId, price, ts, ct, isExisting: true);
             await SaveStateAsync(ct);
@@ -1348,6 +1398,7 @@ public sealed class TradingEngine(
                 EmergencyStopReason = _state.EmergencyStopReason,
                 Timeframe = _state.Timeframe,
                 LastProcessedCandleUtc = _lastProcessedCandleUtc,
+                LastCandleUtc = _state.LastCandleUtc,
             };
         }
         finally { _gate.Release(); }

@@ -95,6 +95,15 @@ public class TradingEngineStatus
     /// stop e trailing valutati da nessuno.
     /// </summary>
     public DateTime? LastProcessedCandleUtc { get; set; }
+
+    /// <summary>
+    /// [2026-08-17] Apertura dell'ultima candela valutata dalla SESSIONE, persistita e quindi
+    /// sopravvissuta a un eventuale riavvio del processo. Da non confondere con
+    /// <see cref="LastProcessedCandleUtc"/>, che è il battito di QUESTO avvio e vale null dopo un
+    /// riavvio: qui serve la memoria lunga, perché chi alimenta il motore sappia da dove riprendere
+    /// invece di ricominciare dal replay contro uno stato che non è stato azzerato.
+    /// </summary>
+    public DateTime? LastCandleUtc { get; set; }
 }
 
 public class OpenPosition

@@ -165,6 +165,76 @@ public class RiskProfileTests
         Assert.Equal(RiskProfiles.Conservative.MaxLeverageAllowed, effective.MaxLeverageAllowed);
     }
 
+    /// <summary>
+    /// [2026-08-17] IL GUARDIANO CHE NON INVECCHIA — ed è la lezione vera del difetto che chiude.
+    ///
+    /// <para><c>Apply</c> enumera a mano: costruisce una <see cref="SafetyConfiguration"/> NUOVA e
+    /// ricopia proprietà per proprietà. Ogni campo che non finisca in uno dei due gruppi torna al
+    /// DEFAULT DELLA CLASSE — non al valore dell'utente — e il fallimento è silenzioso e nella
+    /// direzione sbagliata. È successo con i cinque campi del dosaggio sulla volatilità:
+    /// l'operatore accendeva la manopola da /trading, il pannello rileggeva dal motore e mostrava la
+    /// spunta accesa, e in corsia il moltiplicatore restava 1.</para>
+    ///
+    /// <para>Il test che avrebbe dovuto vederlo era una lista bianca scritta a mano, quindi non
+    /// poteva fallire proprio nel caso per cui esisteva. Questo invece percorre TUTTE le proprietà
+    /// per riflessione: se il profilo non la possiede, il valore globale deve sopravvivere ad
+    /// <c>Apply</c>. Un campo nuovo dimenticato fa fallire qui, per nome.</para>
+    /// </summary>
+    [Fact]
+    public void Apply_EveryPropertyTheProfileDoesNotOwn_SurvivesFromTheGlobal()
+    {
+        // Un globale con valori RICONOSCIBILI su ogni proprietà: se Apply ne dimentica una, il
+        // valore osservato sarà il default della classe e la differenza sarà evidente.
+        var global = new SafetyConfiguration
+        {
+            FeePercent = 0.06m,
+            MaintenanceMarginPercent = 0.7m,
+            MaxFillPriceDeviationPercent = 12m,
+            MaxFillQuantityDeviationPercent = 3m,
+            UseExchangeRestingStops = true,
+            RequireManualConfirmationForLive = true,
+            VolatilityTargetingEnabled = true,
+            TargetAnnualVolatilityPercent = 37m,
+            VolatilityLookbackBars = 41,
+            MinExposureMultiplier = 0.11m,
+            MaxExposureMultiplier = 0.97m,
+            PositionSizePercent = 99m,
+            MaxPositionSizePercent = 98m,
+            MaxTotalExposurePercent = 97m,
+            MaxDailyLossPercent = 96m,
+            MaxDrawdownPercent = 95m,
+            MaxOpenPositions = 94,
+            MinOrderIntervalSeconds = 93,
+            MaxLeverageAllowed = 92,
+        };
+
+        // Le proprietà che il PROFILO possiede per disegno: quelle sì che devono cambiare.
+        var ownedByProfile = new HashSet<string>(StringComparer.Ordinal)
+        {
+            nameof(SafetyConfiguration.PositionSizePercent),
+            nameof(SafetyConfiguration.MaxPositionSizePercent),
+            nameof(SafetyConfiguration.MaxTotalExposurePercent),
+            nameof(SafetyConfiguration.MaxDailyLossPercent),
+            nameof(SafetyConfiguration.MaxDrawdownPercent),
+            nameof(SafetyConfiguration.MaxOpenPositions),
+            nameof(SafetyConfiguration.MinOrderIntervalSeconds),
+            nameof(SafetyConfiguration.MaxLeverageAllowed),
+        };
+
+        var effective = RiskProfiles.Balanced.Apply(global);
+
+        var persi = typeof(SafetyConfiguration).GetProperties()
+            .Where(pr => pr.CanRead && pr.CanWrite && !ownedByProfile.Contains(pr.Name))
+            .Where(pr => !Equals(pr.GetValue(global), pr.GetValue(effective)))
+            .Select(pr => $"{pr.Name}: globale={pr.GetValue(global)} → dopo Apply={pr.GetValue(effective)}")
+            .ToList();
+
+        Assert.True(persi.Count == 0,
+            "RiskProfile.Apply ha perso per strada proprietà che il profilo non possiede — sono tornate "
+            + "al default della classe, scartando in silenzio ciò che l'operatore ha salvato: "
+            + string.Join("; ", persi));
+    }
+
     [Fact]
     public void Apply_GlobalKeepsVenueFactsAndSafetyNets()
     {

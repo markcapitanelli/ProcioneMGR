@@ -71,17 +71,36 @@ internal sealed class BracketOrderManager(
     public async Task TryCancelRestingBracketAsync(OpenPosition pos, TradingCredentials creds, string exchangeName, CancellationToken ct)
     {
         var futuresClient = exchangeFactory.CreateFutures(exchangeName);
-        foreach (var clientId in new[] { pos.StopOrderId, pos.TakeProfitOrderId })
+
+        // [2026-08-17] Si azzera SOLO ciò che è stato davvero cancellato. Prima l'azzeramento
+        // stava fuori dal controllo di esito: una DELETE fallita (5xx, timeout, rate limit)
+        // lasciava il trigger ARMATO sull'exchange e buttava via il suo clientOrderId, cioè
+        // l'unica chiave con cui qualcuno avrebbe potuto cancellarlo dopo. Un ordine di protezione
+        // orfano su una posizione che non esiste più può aprirne una nuova, al contrario.
+        // Tenere l'id è ciò che rende il guasto rimediabile; il LogCritical + audit è ciò che lo
+        // rende visibile, perché qui nessuno ha un secondo tentativo automatico.
+        async Task<bool> CancelAsync(string clientId)
         {
-            if (string.IsNullOrEmpty(clientId)) continue;
             var res = await futuresClient.CancelFuturesOrderAsync(pos.Symbol, clientId, creds, ct);
-            if (!res.Success)
-            {
-                logger.LogWarning("Cancellazione ordine resting {Cid} per {Pid} fallita: {Err}.", clientId, pos.PositionId, res.Error);
-            }
+            if (res.Success) return true;
+
+            logger.LogCritical(
+                "Cancellazione ordine resting {Cid} per {Pid} FALLITA: {Err}. Il trigger può essere ancora "
+                + "armato sull'exchange: l'id viene CONSERVATO per poterlo cancellare a mano.",
+                clientId, pos.PositionId, res.Error);
+            await auditAsync("RestingStopCancelFailed",
+                new { pos.PositionId, pos.Symbol, clientId, error = res.Error }, DateTime.UtcNow, ct);
+            return false;
         }
-        pos.StopOrderId = null;
-        pos.TakeProfitOrderId = null;
+
+        if (!string.IsNullOrEmpty(pos.StopOrderId) && await CancelAsync(pos.StopOrderId))
+        {
+            pos.StopOrderId = null;
+        }
+        if (!string.IsNullOrEmpty(pos.TakeProfitOrderId) && await CancelAsync(pos.TakeProfitOrderId))
+        {
+            pos.TakeProfitOrderId = null;
+        }
         await updatePositionRowAsync(pos, ct);   // [M3] azzeramento persistito come il piazzamento
     }
 }

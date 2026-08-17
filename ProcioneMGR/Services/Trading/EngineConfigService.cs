@@ -64,6 +64,13 @@ public sealed class EngineConfigService(
         ["Trading:RegimeRouting"] = typeof(RegimeRoutingOptions),
         ["Trading:LaneInvariants"] = typeof(LaneInvariantOptions),
         ["Trading:ProtectiveExitShadow"] = typeof(ProtectiveExitShadowOptions),
+        // [2026-08-17] Era in EngineConfigSections.Writable ma non qui, e il buco era invisibile in
+        // entrambi i versi: in LETTURA la sezione cadeva sul ramo scalare, `configuration["Trading:Bitget"]`
+        // su una sezione-oggetto vale null, quindi il pannello mostrava SEMPRE "non verificata" —
+        // anche col motore che sta lasciando passare i market-buy spot. In SCRITTURA il Salva
+        // superava l'allow-list e moriva qui, quindi l'attestazione non è mai stata impostabile
+        // dalla UI. L'attestazione la legge BitgetClient a ogni ordine, nell'host del MOTORE.
+        ["Trading:Bitget"] = typeof(ProcioneMGR.Services.Exchanges.BitgetAttestationOptions),
         ["MarketData:Realtime"] = typeof(RealtimeFeedOptions),
         ["Carry"] = typeof(CarryOptions),
         ["Notifications"] = typeof(ProcioneMGR.Services.Notifications.NotificationOptions),

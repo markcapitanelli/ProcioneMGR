@@ -119,8 +119,8 @@ public sealed class TradingEngineFillSanityTests : IAsyncDisposable
                 : throw new InvalidOperationException("PlaceFuturesOrderAsync oltre lo script del test."));
         public Task<PlaceOrderResult> PlaceFuturesTriggerOrderAsync(PlaceOrderRequest request, bool isStopLoss, CancellationToken ct = default)
             => Task.FromResult(new PlaceOrderResult { Success = true });
-        public Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
-            => Task.FromResult(Position);
+        public Task<FuturesPositionRead> ReadPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
+            => Task.FromResult(Position is null ? FuturesPositionRead.Flat() : FuturesPositionRead.Open(Position));
         public Task<CancelOrderResult> CancelFuturesOrderAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)
         {
             CancelledClientIds.Add(clientOrderId);
@@ -405,9 +405,13 @@ public sealed class TradingEngineFillSanityTests : IAsyncDisposable
         Assert.Equal(100m, trade.ExitPrice);
         Assert.False(trade.WasLiquidated);
 
-        // Cassa: 10'000 − (800 margine + 4 fee) + (800 + PnL −8) = 9'988.
+        // Cassa: 10'000 − (800 margine + 4 fee d'ingresso) + (800 margine + PnL lordo 0 − 4 fee
+        // d'uscita) = 9'992. [2026-08-17] Prima diceva 9'988, fotografando il difetto per cui la
+        // fee d'ingresso veniva sottratta due volte (vedi PositionCloser: si riaccredita il PnL
+        // LORDO meno la sola fee d'uscita). Il PnL del trade resta −8: due fee, ed è giusto.
         var status = await engine.GetStatusAsync();
-        Assert.Equal(9_988m, status.AvailableCapital, 2);
+        Assert.Equal(9_992m, status.AvailableCapital, 2);
+        Assert.Equal(-8m, trade.Pnl);
         Assert.Contains(await AuditAsync(dbFactory), a => a.Action == "FillSanityRejected");
     }
 

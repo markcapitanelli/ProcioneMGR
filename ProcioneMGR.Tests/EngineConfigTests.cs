@@ -123,6 +123,35 @@ public sealed class EngineConfigTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// [2026-08-17] Ogni sezione scrivibile deve avere un TIPO registrato, e il test lo verifica dal
+    /// COMPORTAMENTO invece che dal dizionario privato.
+    ///
+    /// <para>Il difetto che chiude: <c>Trading:Bitget</c> era nell'allow-list di scrittura ma non
+    /// nella mappa dei tipi. In lettura cadeva sul ramo pensato per le sezioni scalari, dove
+    /// <c>configuration["Trading:Bitget"]</c> su una sezione-oggetto vale null: la sezione viaggiava
+    /// come la stringa <c>"null"</c> e il pannello dell'attestazione mostrava SEMPRE «non
+    /// verificata», anche col motore che stava lasciando passare i market-buy spot — un badge che
+    /// sottostima il rischio in corso. In scrittura il Salva superava l'allow-list e moriva sul
+    /// lookup del tipo, quindi l'attestazione non è mai stata impostabile dalla UI.</para>
+    /// </summary>
+    [Fact]
+    public void EveryWritableSection_IsSerializedAsAnObject_NotAsTheScalarFallback()
+    {
+        var service = Build();
+
+        var muti = new List<string>();
+        foreach (var section in EngineConfigSections.Writable)
+        {
+            var json = service.Read([section]).SingleOrDefault()?.Json?.TrimStart();
+            if (json is null || !json.StartsWith('{')) muti.Add($"{section} → {json ?? "(assente)"}");
+        }
+
+        Assert.True(muti.Count == 0,
+            "Sezioni scrivibili lette come scalari invece che come oggetti (manca il tipo in "
+            + "EngineConfigService.SectionTypes): " + string.Join("; ", muti));
+    }
+
     [Fact]
     public async Task Write_OnASectionOutsideTheAllowList_IsRefused()
     {

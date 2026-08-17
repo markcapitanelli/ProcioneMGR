@@ -13,6 +13,13 @@ namespace ProcioneMGR.Tests.Infrastructure;
 public sealed class FakeEngineConfigStore(bool remote = false, bool reachable = true) : IEngineConfigStore
 {
     public bool IsRemote => remote;
+
+    /// <summary>
+    /// [2026-08-17] Modificabile: serve a simulare la sequenza reale «lettura fallita → il canale si
+    /// riapre → scrittura riuscita», che è esattamente il caso in cui il pannello sicurezza poteva
+    /// scrivere i default del codice sopra le soglie in vigore.
+    /// </summary>
+    public bool Reachable { get; set; } = reachable;
     public readonly List<(string Section, object Options)> Saved = [];
     public readonly Dictionary<string, string> Sections = new(StringComparer.OrdinalIgnoreCase);
     public string? WarningToReturn { get; set; }
@@ -25,7 +32,7 @@ public sealed class FakeEngineConfigStore(bool remote = false, bool reachable = 
 
     public Task<EngineConfigSnapshot> ReadAsync(IEnumerable<string>? sections = null, CancellationToken ct = default)
     {
-        if (!reachable)
+        if (!Reachable)
         {
             return Task.FromResult(new EngineConfigSnapshot([], string.Empty, false, false, "motore non raggiungibile"));
         }

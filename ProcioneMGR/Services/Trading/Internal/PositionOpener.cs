@@ -322,8 +322,8 @@ internal sealed class PositionOpener(
             // ancora visibile (race condition tra fill e query) si ricade sulla stima locale.
             try
             {
-                var remotePos = await futuresClient.GetPositionAsync(state.Symbol, creds, ct);
-                liquidationPrice = remotePos?.LiquidationPrice;
+                var remotePos = await futuresClient.ReadPositionAsync(state.Symbol, creds, ct);
+                liquidationPrice = remotePos.Position?.LiquidationPrice;
             }
             catch (Exception ex)
             {

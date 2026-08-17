@@ -33,6 +33,23 @@ internal sealed class TradingPersistence(IDbContextFactory<ApplicationDbContext>
         return await TradingOrderQueries.PendingLive(db.Orders.AsNoTracking(), laneId).ToListAsync(ct);
     }
 
+    /// <summary>
+    /// [2026-08-17] L'ordine PADRE di questa posizione portava la conferma manuale dell'operatore?
+    ///
+    /// Serve alle fette 2..K di un piano di esecuzione: sono ordini nuovi e nascono con
+    /// <c>ManuallyConfirmed = false</c>, quindi in Live il check #7 del <see cref="SafetyChecker"/>
+    /// le rifiuterebbe tutte dopo la prima. Si PROPAGA l'autorizzazione già data invece di
+    /// scriverci <c>true</c> a codice fisso: <c>SafetyConfiguration</c> è hot-reload, e un piano
+    /// nato con la conferma manuale SPENTA continuerebbe altrimenti a piazzare fette reali anche
+    /// dopo che l'operatore l'ha ACCESA.
+    /// </summary>
+    public async Task<bool> WasManuallyConfirmedAsync(string positionId, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        return await db.Orders.AsNoTracking()
+            .AnyAsync(o => o.LaneId == laneId && o.PositionId == positionId && o.ManuallyConfirmed, ct);
+    }
+
     public async Task SaveOrderAsync(Order order, bool isExisting, CancellationToken ct)
     {
         order.LaneId = laneId;
@@ -83,6 +100,12 @@ internal sealed class TradingPersistence(IDbContextFactory<ApplicationDbContext>
         row.EntryPrice = pos.EntryPrice;
         row.MarginBalance = pos.MarginBalance;
         row.CurrentPrice = pos.CurrentPrice;
+        // [2026-08-17] Il cricchetto del trailing deve sopravvivere al riavvio. Prima questa
+        // colonna la scriveva solo la creazione della posizione (col valore = EntryPrice) e la
+        // modifica manuale di SL/TP: dopo un riavvio EnsureLoadedAsync ricaricava il valore di
+        // apertura e lo stop effettivo tornava indietro al livello del primo giorno, buttando via
+        // in silenzio tutto il profitto che il trailing aveva già bloccato.
+        row.BestPriceSinceEntry = pos.BestPriceSinceEntry;
         row.LiquidationPrice = pos.LiquidationPrice;
         row.ExchangeOrderId = pos.ExchangeOrderId;
         row.StopOrderId = pos.StopOrderId;               // [M3] i trigger resting sopravvivono al riavvio

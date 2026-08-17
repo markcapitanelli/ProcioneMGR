@@ -71,9 +71,15 @@ public sealed record RiskProfile(
     /// La divisione delle responsabilità è deliberata: il PROFILO possiede l'appetito al rischio
     /// (dimensioni, esposizione, perdite tollerate, frequenza, leva); la configurazione GLOBALE
     /// possiede i fatti della piazza (commissione reale, margine di mantenimento, bande di
-    /// plausibilità dei fill, stop resting sull'exchange, conferma manuale in Live). Un utente non
-    /// deve poter "scegliere" la commissione del proprio exchange, e un profilo non deve poter
-    /// disattivare la conferma manuale degli ordini Live.
+    /// plausibilità dei fill, stop resting sull'exchange, conferma manuale in Live) <b>e il
+    /// dosaggio sulla volatilità</b>. Un utente non deve poter "scegliere" la commissione del
+    /// proprio exchange, e un profilo non deve poter disattivare la conferma manuale degli ordini
+    /// Live.
+    ///
+    /// <para><b>Il metodo enumera a mano</b>: ogni campo nuovo di <see cref="SafetyConfiguration"/>
+    /// che non venga aggiunto a uno dei due gruppi torna al default della CLASSE, non al valore
+    /// dell'utente — un fallimento silenzioso e nella direzione sbagliata. È già successo una volta
+    /// coi cinque campi del dosaggio (2026-08-17): aggiungendone uno, aggiungerlo anche qui.</para>
     /// </summary>
     public SafetyConfiguration Apply(SafetyConfiguration global)
     {
@@ -97,6 +103,19 @@ public sealed record RiskProfile(
             MaxFillQuantityDeviationPercent = global.MaxFillQuantityDeviationPercent,
             UseExchangeRestingStops = global.UseExchangeRestingStops,
             RequireManualConfirmationForLive = global.RequireManualConfirmationForLive,
+
+            // --- dosaggio sulla volatilità: politica di PIATTAFORMA, non appetito del profilo ---
+            // Il record RiskProfile non ha campi per esprimerlo: ometterlo qui non faceva "vincere
+            // il profilo", faceva vincere il DEFAULT della classe (spento), scartando in silenzio
+            // la manopola che l'operatore aveva salvato dal pannello di /trading. Il pannello
+            // rileggeva dal motore e mostrava la spunta accesa; in corsia il moltiplicatore restava
+            // 1. Resta globale anche perché è speculare a BacktestConfiguration: farlo divergere fra
+            // profilo e globale aprirebbe un divario backtest/live.
+            VolatilityTargetingEnabled = global.VolatilityTargetingEnabled,
+            TargetAnnualVolatilityPercent = global.TargetAnnualVolatilityPercent,
+            VolatilityLookbackBars = global.VolatilityLookbackBars,
+            MinExposureMultiplier = global.MinExposureMultiplier,
+            MaxExposureMultiplier = global.MaxExposureMultiplier,
         };
     }
 }

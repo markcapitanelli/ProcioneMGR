@@ -130,10 +130,21 @@
 @if (Service.StaleSince is DateTime staleSince)
 {
     <div class="alert alert-warning fw-bold">
-        ⚠️ DATI TRADING NON AGGIORNATI da @((int)(DateTime.UtcNow - staleSince).TotalSeconds)s: il servizio di
-        trading non risponde (@Service.LastStaleReason). Quanto vedi qui sotto è l'ultimo stato noto, <u>non</u>
-        quello attuale — posizioni e PnL potrebbero essere cambiati. I comandi falliranno finché il
-        servizio non torna.
+        ⚠️ DATI TRADING NON AGGIORNATI da @((int)(DateTime.UtcNow - staleSince).TotalSeconds)s:
+        @if (Service.StaleIsTransport)
+        {
+            <text>il servizio di trading non risponde (@Service.LastStaleReason).</text>
+        }
+        else
+        {
+            @* Con il motore in-process il guasto non è mai gRPC: è il database, o un errore locale.
+               Dirlo «il servizio non risponde» manderebbe a cercare il problema dalla parte
+               sbagliata. *@
+            <text>l'ultima lettura è fallita (@Service.LastStaleReason).</text>
+        }
+        Quanto vedi qui sotto è l'ultimo stato noto, <u>non</u>
+        quello attuale — posizioni e PnL potrebbero essere cambiati. I comandi possono fallire finché
+        la lettura non torna a riuscire.
     </div>
 }
 @if (Service.Status?.IsEmergencyStopped == true)
@@ -205,7 +216,7 @@
                 }
                 else
                 {
-                    <span class="text-danger fw-bold">Chiuderà TUTTE le posizioni. Sei sicuro?</span>
+                    <span class="text-danger fw-bold">Chiuderà TUTTE le posizioni della corsia @_laneId. Sei sicuro?</span>
                     <button class="btn btn-danger" @onclick="EmergencyAsync">SÌ, FERMA TUTTO</button>
                     <button class="btn btn-outline-secondary" @onclick="() => _confirmEmergency = false">Annulla</button>
                 }
@@ -352,8 +363,12 @@
                anche l'equity delle posizioni APERTE. Adesso ognuno dice di cosa parla, e col
                drawdown che viene da una posizione ancora aperta lo si dichiara. *@
             var soloAperte = perf.TotalTrades == 0 && perf.MaxDrawdown > 0m;
-            <div class="col-auto">@Metric("PnL realizzato (test)", perf.TotalReturn.ToString("N2"), perf.TotalReturn >= 0,
-                "Somma delle operazioni CHIUSE dall'avvio di questo test. Le posizioni ancora aperte non entrano qui: le vedi nell'equity.")</div>
+            @* [2026-08-17] TotalReturn è una PERCENTUALE sul capitale iniziale (realizedPnl/capitale×100),
+               ma stava in fila con Equity/Capitale/Cassa/Impegnato — tutti importi in valuta, stesso
+               formato "N2" e nessun suffisso: su 10.000 di capitale un PnL di 250 € si leggeva «2,50»
+               e sembrava un guadagno di due euro e mezzo. *@
+            <div class="col-auto">@Metric("PnL realizzato % (test)", perf.TotalReturn.ToString("F2") + "%", perf.TotalReturn >= 0,
+                "Percentuale sul capitale iniziale delle sole operazioni CHIUSE dall'avvio di questo test. Le posizioni ancora aperte non entrano qui: le vedi nell'equity.")</div>
             <div class="col-auto">@Metric("Max DD % (test)", perf.MaxDrawdown.ToString("F2"), false,
                 soloAperte
                     ? "Viene da una posizione ANCORA APERTA: nessuna operazione è stata chiusa, quindi non c'è nulla di realizzato da perdere — ancora."
@@ -530,13 +545,33 @@
                         @foreach (var o in Service.Pending)
                         {
                             <tr>
-                                <td class="small">@o.CreatedAtUtc.ToString("MM-dd HH:mm")</td>
+                                <td class="small">@o.CreatedAtUtc.ToLocalTime().ToString("dd/MM HH:mm")</td>
                                 <td><span class="badge @(o.Side == OrderSide.Buy ? "bg-success" : "bg-danger")">@(o.Side == OrderSide.Buy ? "Long" : "Short")</span></td>
                                 <td>@o.Quantity.ToString("N5")</td>
-                                <td>@(o.Price?.ToString("N2") ?? "—")</td>
-                                <td class="text-end">
-                                    <button class="btn btn-sm btn-success" @onclick="() => ConfirmAsync(o.OrderId)">✔ Conferma</button>
-                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => RejectAsync(o.OrderId)">✕ Rifiuta</button>
+                                <td>@(o.Price is decimal rif ? FormatPrice(rif) : "—")</td>
+                                @* [2026-08-17] Conferma a DUE PASSI, legata all'OrderId. Prima un solo
+                                   clic inviava un ordine REALE all'exchange, in una tabella che il
+                                   polling ridisegna ogni 2 secondi e che ordina i più recenti IN CIMA:
+                                   un ordine nuovo proposto dal worker faceva scorrere le righe sotto il
+                                   cursore, e il clic partiva su un ordine che l'operatore non aveva mai
+                                   letto. Era anche l'unica azione distruttiva della pagina a un passo
+                                   solo — emergency stop, svuotamento corsia e chiusura orfane ne hanno
+                                   due. Legare la domanda all'OrderId neutralizza la corsa: il secondo
+                                   clic non dipende più da DOVE si trova la riga. *@
+                                <td class="text-end text-nowrap">
+                                    @if (_confirmingOrderId != o.OrderId)
+                                    {
+                                        <button class="btn btn-sm btn-success" @onclick="() => _confirmingOrderId = o.OrderId" disabled="@_confirmBusy">✔ Conferma</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => RejectAsync(o.OrderId)" disabled="@_confirmBusy">✕ Rifiuta</button>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-danger fw-bold me-2">
+                                            Invio @(o.Side == OrderSide.Buy ? "LONG" : "SHORT") @o.Quantity.ToString("N5") @Service.Status?.Symbol@(o.Price is decimal p2 ? " @ " + FormatPrice(p2) : "") con soldi veri?
+                                        </span>
+                                        <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAsync(o.OrderId)" disabled="@_confirmBusy">SÌ, INVIA</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmingOrderId = null" disabled="@_confirmBusy">Annulla</button>
+                                    }
                                 </td>
                             </tr>
                         }
@@ -551,6 +586,17 @@
        era 6,31 contro un target di 6,3786, scritto a database da ore, e NESSUN pannello lo diceva —
        il battito era verde e il PnL non realizzato positivo. La causa è corretta, ma una causa
        corretta non è un controllo: il prossimo motivo per cui un'uscita non scatta sarà un altro. *@
+    @* [2026-08-17] «Nessuna anomalia» e «controllo non eseguito» erano indistinguibili: il blocco
+       compariva solo con Count > 0, e un errore restituiva una lista vuota, cioè esattamente il
+       valore del caso sano. Un controllo che tace quando si rompe è un controllo che rassicura. *@
+    @if (Service.ExitAnomaliesError is { Length: > 0 } anomalieErr)
+    {
+        <div class="alert alert-warning py-2 small mb-3">
+            ⚠️ <strong>Controllo delle protezioni non eseguito</strong> (@anomalieErr): qui sotto non
+            compare «nessuna anomalia», compare «non lo so». Le uscite protettive restano guidate dal
+            motore; è questa verifica indipendente a non aver potuto girare.
+        </div>
+    }
     @if (Service.ExitAnomalies.Count > 0)
     {
         <div class="alert alert-danger mb-3">
@@ -594,25 +640,35 @@
                             <tr>
                                 <td><code class="small">@p.StrategyId[..6]</code></td>
                                 <td><span class="badge @(p.Side == OrderSide.Buy ? "bg-success" : "bg-danger")">@(p.Side == OrderSide.Buy ? "Long" : "Short")</span></td>
-                                <td class="text-end">@p.EntryPrice.ToString("N2")</td>
-                                <td class="text-end">@p.CurrentPrice.ToString("N2")</td>
+                                <td class="text-end">@FormatPrice(p.EntryPrice)</td>
+                                <td class="text-end">@FormatPrice(p.CurrentPrice)</td>
                                 <td class="text-end">@p.Quantity.ToString("N5")</td>
                                 <td class="text-end @(p.UnrealizedPnl >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnl.ToString("N2")</td>
                                 <td class="text-end @(p.UnrealizedPnlPercent >= 0 ? "text-success" : "text-danger")">@p.UnrealizedPnlPercent.ToString("F2")%</td>
                                 @if (Service.Status?.MarketType == MarketType.Futures)
                                 {
                                     <td>@(p.Leverage)x</td>
-                                    <td class="text-end @LiqPriceClass(p)">@(p.LiquidationPrice?.ToString("N2") ?? "—")</td>
+                                    <td class="text-end @LiqPriceClass(p)">@(p.LiquidationPrice is decimal liq ? FormatPrice(liq) : "—")</td>
                                 }
-                                <td><input type="number" step="any" class="form-control form-control-sm" style="width:7rem"
+                                @* min="0" è cortesia del browser, non il presidio: con type="number" il
+                                   valore fuori range arriva comunque a @onchange. A reggere è il rifiuto
+                                   lato servizio in SaveSlTpAsync (un valore non valido NON disarma più
+                                   la protezione). *@
+                                <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:7rem"
                                            placeholder="—" value="@Service.SlValue(p)" @onchange="e => OnSlChanged(p.PositionId, e.Value?.ToString())" /></td>
-                                <td><input type="number" step="any" class="form-control form-control-sm" style="width:7rem"
+                                <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:7rem"
                                            placeholder="—" value="@Service.TpValue(p)" @onchange="e => OnTpChanged(p.PositionId, e.Value?.ToString())" /></td>
                                 <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:6rem"
                                            placeholder="—" value="@Service.TslValue(p)" @onchange="e => OnTslChanged(p.PositionId, e.Value?.ToString())" /></td>
                                 <td class="text-end text-nowrap">
-                                    <button class="btn btn-sm btn-outline-primary me-1" title="Salva SL/TP/Trailing" @onclick="() => SaveSlTpAsync(p.PositionId)">Set SL/TP</button>
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => CloseAsync(p.PositionId)">Close</button>
+                                    @* Disabilitati finché i dati esposti non sono certamente di QUESTA
+                                       corsia: un positionId della corsia precedente inviato al motore di
+                                       quella selezionata non viene trovato e il motore esce in silenzio,
+                                       lasciando all'operatore un messaggio di conferma per un'operazione
+                                       che non è mai avvenuta. *@
+                                    <button class="btn btn-sm btn-outline-primary me-1" title="@(_laneDataReady ? "Salva SL/TP/Trailing" : "Dati non ancora allineati a questa corsia")"
+                                            @onclick="() => SaveSlTpAsync(p.PositionId)" disabled="@(!_laneDataReady)">Set SL/TP</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => CloseAsync(p.PositionId)" disabled="@(!_laneDataReady)">Close</button>
                                 </td>
                             </tr>
                         }
@@ -817,7 +873,26 @@
                     <div class="alert alert-warning py-2 small mb-3">
                         ⚠️ <strong>Il motore non ha risposto</strong>: i valori qui sotto sono i default del codice,
                         <u>non</u> le soglie che il motore sta applicando. @Service.SafetyError
+                        <strong>Non salvare finché il motore non risponde</strong>: la scrittura sostituisce l'INTERA
+                        sezione, quindi salverebbe questi default sopra le soglie in vigore.
                         <button class="btn btn-sm btn-outline-secondary ms-2" @onclick="ReloadSafetyAsync">Riprova</button>
+                    </div>
+                }
+                @* [2026-08-17] Questo pannello scrive la sezione GLOBALE, ma da R3 le soglie
+                   EFFETTIVE di una corsia con profilo sono profilo.Apply(globale), e il profilo
+                   sovrascrive otto degli undici campi qui sotto. La pagina è per-corsia dappertutto
+                   tranne qui: senza questo avviso, chi stringe una soglia crede di aver stretto la
+                   corsia che sta guardando. *@
+                @if (Service.LaneRiskProfileName is { Length: > 0 } profilo)
+                {
+                    <div class="alert alert-info py-2 small mb-3">
+                        La corsia @_laneId applica il profilo di rischio <strong>@profilo</strong>
+                        (scelto in <a href="bot">Modalità semplice</a>). Da lì vengono <strong>size per apertura,
+                        max size, esposizione totale, perdita giornaliera, drawdown, posizioni aperte, intervallo
+                        minimo fra ordini e leva massima</strong>: su questa corsia i valori qui sotto
+                        <u>non hanno effetto</u> su quegli otto campi. Restano validi commissione, margine di
+                        mantenimento, bande dei fill, conferma manuale in Live e dosaggio sulla volatilità.
+                        Il profilo entra in vigore all'avvio della corsia.
                     </div>
                 }
                 @if (_running)
@@ -936,7 +1011,13 @@
                     </div>
                 </div>
                 <div class="mt-3">
-                    <button class="btn btn-warning btn-sm" @onclick="SaveSafetyAsync">Salva configurazione</button>
+                    @* Il `disabled` è l'eco della guardia, non il presidio: quello vero sta in
+                       TradingPageService.SaveSafetyAsync, che rifiuta la scrittura finché non c'è
+                       stata una lettura riuscita. *@
+                    <button class="btn btn-warning btn-sm" @onclick="SaveSafetyAsync" disabled="@(!Service.SafetyReachable)"
+                            title="@(Service.SafetyReachable ? "Scrive la sezione sul processo che la applica" : "Il motore non ha risposto: ricarica prima di salvare")">
+                        Salva configurazione
+                    </button>
                     <button class="btn btn-outline-secondary btn-sm" @onclick="ReloadSafetyAsync">Annulla modifiche</button>
                 </div>
             </div>
@@ -987,7 +1068,7 @@
                                 <td class="text-end">@p.EntryPrice.ToString("0.####")</td>
                                 <td class="text-end">@(p.StopLoss?.ToString("0.####") ?? "—")</td>
                                 <td class="text-end">@(p.TakeProfit?.ToString("0.####") ?? "—")</td>
-                                <td>@p.OpenedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                                <td>@p.OpenedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
                                 <td class="text-end">
                                     <AuthorizeView Roles="@AppRoles.Admin" Context="orphanAuth">
                                         <button class="btn btn-outline-danger btn-sm"
@@ -1144,7 +1225,7 @@
                         @foreach (var s in _shadows)
                         {
                             <tr>
-                                <td>@s.ActualExitAtUtc.ToString("MM-dd HH:mm")</td>
+                                <td>@s.ActualExitAtUtc.ToLocalTime().ToString("dd/MM HH:mm")</td>
                                 <td>@s.Symbol</td>
                                 <td>@s.ActualReason</td>
                                 <td class="text-end">@((s.LeadSeconds / 60d).ToString("0.#")) min</td>
@@ -1166,10 +1247,6 @@
     </div>
 </div>
 
-<style>
-    @@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
-</style>
-
 @code {
     private string? _userId;
 
@@ -1177,13 +1254,24 @@
     private bool _liveConfirmed;
     private bool _confirmEmergency;
     private bool _confirmClear;
+    /// <summary>Ordine Live per cui è aperta la richiesta di conferma (null = nessuna).</summary>
+    private string? _confirmingOrderId;
+    /// <summary>Comando di conferma/rifiuto in corso: blocca il doppio clic.</summary>
+    private bool _confirmBusy;
     private int _refreshTick;
 
     private PollingTimer? _timer;
     private bool _running => Service.Status?.IsRunning == true;
 
-    /// <summary>Corsie fisse e isolate (vedi docs/REPORT-MULTI-LANE.md): fonte unica TradingLanes.Count.</summary>
-    private static int LaneCount => TradingLanes.Count;
+    /// <summary>
+    /// I dati esposti dal service appartengono alla corsia selezionata? Falso nella finestra fra il
+    /// click su una scheda e la risposta del motore, e dopo un refresh fallito sulla corsia nuova.
+    /// I comandi di riga restano disabilitati finché non è vero: un positionId della corsia A
+    /// inviato al motore della corsia B non viene trovato e il motore esce in SILENZIO, quindi
+    /// l'operatore riceverebbe una conferma per un'operazione mai avvenuta.
+    /// </summary>
+    private bool _laneDataReady => Service.LoadedLaneId == _laneId && Service.Status is not null;
+
     private int _laneId;
 
     protected override async Task OnInitializedAsync()
@@ -1338,6 +1426,20 @@
         _laneId = laneId;
         _lag = null;          // la misura vale per la corsia su cui è stata fatta, non per la prossima
         _lagError = null;
+
+        // [2026-08-17] Nessuna conferma ARMATA attraversa il cambio di corsia. Era la stessa regola
+        // già scritta per _liveConfirmed («la conferma esplicita non sopravvive a un cambio di
+        // contesto»), ma queste due erano rimaste fuori: restando armate, il click successivo
+        // eseguiva su un'ALTRA corsia il comando confermato per questa — EmergencyAsync e
+        // ClearLaneAsync usano _laneId, già aggiornato — e il testo dell'emergenza non nominava
+        // nemmeno la corsia, quindi nulla lo diceva.
+        // Stanno QUI e non in AdoptLaneMode() perché quello ha un return anticipato su Status null,
+        // cioè proprio il caso degradato in cui il reset serve di più.
+        _confirmEmergency = false;
+        _confirmClear = false;
+        _confirmingOrderId = null;
+        // L'esito dell'ultimo comando riguarda la corsia su cui è stato dato, e quasi mai la nomina.
+        Service.ClearMessage();
         await RefreshAsync();
         AdoptLaneMode();
         await LoadExitDiagnosticsAsync();
@@ -1509,14 +1611,50 @@
 
     private async Task ConfirmAsync(string orderId)
     {
-        await Service.ConfirmAsync(_laneId, orderId, _userId);
+        _confirmBusy = true;
         StateHasChanged();
+        try
+        {
+            await Service.ConfirmAsync(_laneId, orderId, _userId);
+        }
+        finally
+        {
+            _confirmBusy = false;
+            _confirmingOrderId = null;
+            StateHasChanged();
+        }
     }
 
     private async Task RejectAsync(string orderId)
     {
-        await Service.RejectAsync(_laneId, orderId, _userId);
+        _confirmBusy = true;
         StateHasChanged();
+        try
+        {
+            await Service.RejectAsync(_laneId, orderId, _userId);
+        }
+        finally
+        {
+            _confirmBusy = false;
+            _confirmingOrderId = null;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// [2026-08-17] Prezzo con precisione ADATTIVA. Le tabelle operative usavano "N2" ovunque, ma le
+    /// corsie in forward test girano su ADA, XLM, STX, UNI — sotto il dollaro, dove due decimali
+    /// riducono un prezzo di 0,4213 a «0,42» e un prezzo di liquidazione a «0,00». Sei decimali con
+    /// gli zeri finali tolti danno lo stesso risultato di prima sui simboli grandi (60.000,00 resta
+    /// «60.000,00») e diventano leggibili sui piccoli.
+    /// </summary>
+    private static string FormatPrice(decimal price)
+    {
+        var s = price.ToString("N6", System.Globalization.CultureInfo.CurrentCulture);
+        if (!s.Contains(',') && !s.Contains('.')) return s;
+        var sep = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
+        s = s.TrimEnd('0');
+        return s.EndsWith(sep, StringComparison.Ordinal) ? s + "00" : s;
     }
 
     private async Task ReloadSafetyAsync()

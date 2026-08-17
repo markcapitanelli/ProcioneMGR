@@ -79,8 +79,8 @@ public sealed class TradingEngineFuturesEquityTests : IAsyncDisposable
         }
         public Task<PlaceOrderResult> PlaceFuturesTriggerOrderAsync(PlaceOrderRequest request, bool isStopLoss, CancellationToken ct = default)
             => Task.FromResult(new PlaceOrderResult { Success = true });
-        public Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
-            => Task.FromResult<FuturesPosition?>(null);
+        public Task<FuturesPositionRead> ReadPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
+            => Task.FromResult(FuturesPositionRead.Flat());
         public Task<CancelOrderResult> CancelFuturesOrderAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)
             => Task.FromResult(new CancelOrderResult { Success = true });
         public Task<List<OpenOrder>> GetOpenFuturesOrdersAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
@@ -218,6 +218,38 @@ public sealed class TradingEngineFuturesEquityTests : IAsyncDisposable
         var pos = Assert.Single(await engine.GetOpenPositionsAsync());
         Assert.Equal(800m, pos.MarginBalance, 3);
         Assert.Equal(40m, pos.Quantity, 5);
+    }
+
+    /// <summary>
+    /// [2026-08-17] Giro completo Futures a prezzo INVARIATO: la cassa deve perdere ESATTAMENTE
+    /// due fee (ingresso + uscita), e l'equity deve tornare a coincidere col PnL realizzato.
+    ///
+    /// Prima della correzione la chiusura riaccreditava `margine + pnl` con `pnl` già al netto
+    /// della fee d'INGRESSO — che però era uscita dalla cassa all'apertura: la stessa fee veniva
+    /// pagata due volte e la cassa scendeva a 9'988 invece di 9'992. L'errore era cumulativo (una
+    /// fee per ogni round trip) e contaminava la curva equity, quindi Sharpe e MaxDrawdown, cioè
+    /// i due numeri su cui il PromotionEvaluator decide. Il ramo Spot era già corretto.
+    /// </summary>
+    [Fact]
+    public async Task FuturesRoundTrip_FlatPrice_CashLosesExactlyTwoFees()
+    {
+        var engine = await BuildFuturesEngineAsync(i => i == 4 ? Signal.Long : (i == 5 ? Signal.Close : Signal.Hold));
+        await engine.StartAsync(TradingMode.Paper);
+        await OpenAtIndex4Async(engine);
+
+        // Guardia sull'apertura: qui la fee è UNA sola, e deve restare tale.
+        Assert.Equal(9_196m, (await engine.GetStatusAsync()).AvailableCapital, 3);
+
+        await engine.ProcessCandleAsync(Candle(5, 100m));   // chiude allo stesso prezzo
+
+        Assert.Empty(await engine.GetOpenPositionsAsync());
+        var status = await engine.GetStatusAsync();
+
+        // 10'000 − (800 margine + 4 fee ingresso) + (800 margine + 0 lordo − 4 fee uscita) = 9'992.
+        Assert.Equal(9_992m, status.AvailableCapital, 3);
+        // Nessuna posizione aperta ⇒ equity = cassa, e il PnL realizzato deve spiegarla per intero.
+        Assert.Equal(-8m, status.TotalPnl, 3);
+        Assert.Equal(status.TotalCapital + status.TotalPnl, status.AvailableCapital, 3);
     }
 
     [Fact]

@@ -80,8 +80,8 @@ public sealed class RestingBracketPersistenceTests : IAsyncDisposable
             TriggerClientIds.Add(request.ClientOrderId);
             return Task.FromResult(new PlaceOrderResult { Success = true, ExchangeOrderId = "plan-" + TriggerClientIds.Count });
         }
-        public Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
-            => Task.FromResult<FuturesPosition?>(null);
+        public Task<FuturesPositionRead> ReadPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
+            => Task.FromResult(FuturesPositionRead.Flat());
         public Task<CancelOrderResult> CancelFuturesOrderAsync(string symbol, string clientOrderId, TradingCredentials credentials, CancellationToken ct = default)
         {
             CancelledClientIds.Add(clientOrderId);

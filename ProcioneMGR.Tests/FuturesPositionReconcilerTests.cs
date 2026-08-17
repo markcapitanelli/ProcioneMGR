@@ -39,20 +39,31 @@ public sealed class FuturesPositionReconcilerTests : IAsyncDisposable
 
     // --- Fakes -------------------------------------------------------------------------------
 
-    /// <summary>Futures client il cui solo <see cref="GetPositionAsync"/> è significativo e controllabile.</summary>
+    /// <summary>Futures client il cui solo <see cref="ReadPositionAsync"/> è significativo e controllabile.</summary>
     private sealed class ConfigurableFuturesClient : IFuturesExchangeClient
     {
         public Func<FuturesPosition?> PositionProvider { get; set; } = static () => null;
         public bool ThrowOnGetPosition { get; set; }
+
+        /// <summary>
+        /// [2026-08-17] Il modo in cui i client VERI falliscono: non sollevano, traducono in
+        /// risultato. Prima il fake simulava il guasto solo con <see cref="ThrowOnGetPosition"/>,
+        /// cioè con l'unico comportamento che né BinanceClient né BitgetClient hanno — ed è per
+        /// questo che il difetto «lettura fallita letta come flat» non era mai emerso dai test.
+        /// </summary>
+        public bool ReadFails { get; set; }
+
         public int GetPositionCalls { get; private set; }
 
         public ExchangeName Exchange => ExchangeName.Binance;
 
-        public Task<FuturesPosition?> GetPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
+        public Task<FuturesPositionRead> ReadPositionAsync(string symbol, TradingCredentials credentials, CancellationToken ct = default)
         {
             GetPositionCalls++;
             if (ThrowOnGetPosition) throw new InvalidOperationException("lettura posizione futures giù (simulato)");
-            return Task.FromResult(PositionProvider());
+            if (ReadFails) return Task.FromResult(FuturesPositionRead.Failed(uncertain: true, "429 Too Many Requests (simulato)"));
+            var p = PositionProvider();
+            return Task.FromResult(p is null ? FuturesPositionRead.Flat() : FuturesPositionRead.Open(p));
         }
 
         public Task<SetLeverageResult> SetLeverageAsync(string symbol, int leverage, TradingCredentials credentials, CancellationToken ct = default) => throw new NotImplementedException();
@@ -175,6 +186,54 @@ public sealed class FuturesPositionReconcilerTests : IAsyncDisposable
 
         var closed = Assert.Single(closes);
         Assert.Equal("btc", closed.Pos.PositionId);
+    }
+
+    // --- Ramo 0: LETTURA FALLITA ≠ flat --------------------------------------------------------
+
+    /// <summary>
+    /// [2026-08-17] Il difetto che i test non potevano vedere: i client veri non sollevano mai —
+    /// traducono 4xx/5xx/timeout in un risultato — e prima quel risultato era lo stesso <c>null</c>
+    /// del «flat». Un 429 di Binance faceva quindi chiudere la posizione LOCALE come
+    /// «Liquidation/ExternalClose» con <c>alreadyClosedOnExchange: true</c>, cioè senza inviare
+    /// alcun ordine reduce-only: esposizione reale abbandonata sull'exchange, con un PnL inventato
+    /// a database.
+    /// </summary>
+    [Fact]
+    public async Task ReadFailure_IsNotAFlat_LeavesPositionsAloneAndAudits()
+    {
+        var persistence = await BuildPersistenceAsync();
+        var futures = new ConfigurableFuturesClient { ReadFails = true };   // 429: NON è «sei flat»
+        var (closes, closeDelegate) = CloseRecorder();
+        var positions = new List<OpenPosition> { Position("p1") };
+
+        var alerted = await BuildReconciler(futures, persistence).ReconcileAsync(
+            FuturesState(), positions, Creds, closeDelegate,
+            untrackedRemoteAlerted: false, LastKnownPrice, DateTime.UtcNow, CancellationToken.None);
+
+        Assert.False(alerted);
+        Assert.Empty(closes);                     // nessuna chiusura d'ufficio su una lettura cieca
+        Assert.Single(positions);                 // la posizione locale resta, e resta protetta
+        Assert.Contains(await AuditsAsync(), a => a.Action == "ReconcileReadFailed");
+    }
+
+    /// <summary>
+    /// Il complemento del test qui sopra: una lettura RIUSCITA che dice «flat» deve continuare a
+    /// far scattare la riconciliazione. Senza questo, la correzione potrebbe spegnere il
+    /// meccanismo invece di renderlo prudente.
+    /// </summary>
+    [Fact]
+    public async Task ReadOk_ButFlat_StillReconciles()
+    {
+        var persistence = await BuildPersistenceAsync();
+        var futures = new ConfigurableFuturesClient { ReadFails = false, PositionProvider = () => null };
+        var (closes, closeDelegate) = CloseRecorder();
+
+        await BuildReconciler(futures, persistence).ReconcileAsync(
+            FuturesState(), [Position("p1")], Creds, closeDelegate,
+            untrackedRemoteAlerted: false, LastKnownPrice, DateTime.UtcNow, CancellationToken.None);
+
+        Assert.Single(closes);
+        Assert.DoesNotContain(await AuditsAsync(), a => a.Action == "ReconcileReadFailed");
     }
 
     // --- Ramo 2: APERTA sull'exchange + SCONOSCIUTA al motore → allerta una sola volta ----------

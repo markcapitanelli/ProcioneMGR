@@ -355,9 +355,81 @@ public class AuditBlazorUiTests : BunitContext
         engines[0].PendingToReturn = [new Order { OrderId = "confirm-me", Side = OrderSide.Buy }];
 
         var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+        // [2026-08-17] La conferma è ora a DUE passi (vedi il test qui sotto): il primo clic apre la
+        // domanda, il secondo invia. Il contratto che questo test difende — l'OrderId giusto arriva
+        // al motore — resta identico.
         cut.FindAll("button").Single(b => b.TextContent.Contains("Conferma")).Click();
+        cut.FindAll("button").Single(b => b.TextContent.Contains("SÌ, INVIA")).Click();
 
         Assert.Equal("confirm-me", engines[0].LastConfirmed?.OrderId);
+    }
+
+    /// <summary>
+    /// [2026-08-17] «✔ Conferma» inviava un ordine REALE all'exchange con UN SOLO clic, in una
+    /// tabella che il polling ridisegna ogni 2 secondi e che mette i più recenti IN CIMA: un ordine
+    /// nuovo proposto dal worker faceva scorrere le righe sotto il cursore, e il clic partiva su un
+    /// ordine che l'operatore non aveva mai letto. Era anche l'unica azione distruttiva della pagina
+    /// a un passo solo — emergency stop, svuotamento corsia e chiusura orfane ne hanno due.
+    /// </summary>
+    [Fact]
+    public void Trading_ConfirmPendingOrder_FirstClickOnlyAsks_AndNamesTheOrder()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        var (_, engines) = RegisterTradingServices();
+        engines[0].PendingToReturn = [new Order { OrderId = "ord-A", Side = OrderSide.Buy, Quantity = 120m, Price = 0.58m }];
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+        cut.FindAll("button").Single(b => b.TextContent.Contains("Conferma")).Click();
+
+        // Nessun ordine è partito, e la domanda dice COSA si sta per inviare.
+        Assert.Null(engines[0].LastConfirmed);
+        Assert.Contains("con soldi veri?", cut.Markup);
+        Assert.Contains("120", cut.Markup);
+    }
+
+    /// <summary>
+    /// [2026-08-17] Le conferme ARMATE non attraversano il cambio di corsia. Era già la regola per
+    /// il checkbox Live («la conferma esplicita non sopravvive a un cambio di contesto»), ma
+    /// _confirmEmergency e _confirmClear erano rimasti fuori: restando armati, un clic su «SÌ, FERMA
+    /// TUTTO» dopo il cambio scheda chiudeva TUTTE le posizioni di un'ALTRA corsia — e il testo di
+    /// conferma non nominava nemmeno la corsia, quindi nulla lo diceva.
+    /// </summary>
+    [Fact]
+    public void Trading_ArmedEmergencyConfirmation_DoesNotSurviveLaneSwitch()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        var (_, engines) = RegisterTradingServices();
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+        cut.FindAll("button").Single(b => b.TextContent.Contains("EMERGENCY STOP")).Click();
+        Assert.Contains("SÌ, FERMA TUTTO", cut.Markup);
+
+        cut.FindAll("button.lane-chip")[2].Click();
+
+        // La conferma è disarmata, e nessuna corsia è stata toccata.
+        Assert.DoesNotContain("SÌ, FERMA TUTTO", cut.Markup);
+        Assert.Null(engines[0].LastEmergencyReason);
+        Assert.Null(engines[2].LastEmergencyReason);
+    }
+
+    /// <summary>Il prompt d'emergenza deve dire su QUALE corsia sta per agire.</summary>
+    [Fact]
+    public void Trading_EmergencyPrompt_NamesTheLane()
+    {
+        var auth = AddAuthorization();
+        auth.SetAuthorized("auditor");
+        auth.SetRoles(AppRoles.Admin);
+        RegisterTradingServices();
+
+        var cut = Render<ProcioneMGR.Components.Pages.Trading>();
+        cut.FindAll("button.lane-chip")[2].Click();
+        cut.FindAll("button").Single(b => b.TextContent.Contains("EMERGENCY STOP")).Click();
+
+        Assert.Contains("della corsia 2", cut.Markup);
     }
 
     [Fact]

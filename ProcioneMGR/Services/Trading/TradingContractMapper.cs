@@ -112,6 +112,7 @@ public static class TradingContractMapper
         // [E6] Il battito: assente sul filo = il motore non ha ancora valutato una candela.
         Timeframe = s.Timeframe,
         LastProcessedCandleUtc = ToProtoNullable(s.LastProcessedCandleUtc),
+        LastCandleUtc = ToProtoNullable(s.LastCandleUtc),
     };
 
     public static TradingEngineStatus FromProto(Proto.GetLaneStatusResponse r) => new()
@@ -138,6 +139,7 @@ public static class TradingContractMapper
         EmergencyStopReason = string.IsNullOrEmpty(r.EmergencyStopReason) ? null : r.EmergencyStopReason,
         Timeframe = r.Timeframe,
         LastProcessedCandleUtc = FromProtoNullable(r.LastProcessedCandleUtc),
+        LastCandleUtc = FromProtoNullable(r.LastCandleUtc),
     };
 
     // ------------------------------------------------------------------------- posizioni
