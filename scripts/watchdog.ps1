@@ -18,6 +18,9 @@
 #                 "motore sano", scoperto il 2026-08-11 (l'anti-spam sulle transizioni aveva
 #                 zittito il falso "giu'" permanente).
 #    3. Postgres: TCP  localhost:5432
+#    4. backup  : eta' del dump piu' recente in %USERPROFILE%\ProcioneMGR-Backup (soglia 48h).
+#                 Non e' un servizio da pingare: e' l'unico controllo che vede il caso in cui il
+#                 task notturno NON PARTE proprio — e quindi non puo' lamentarsi da solo.
 #
 #  Anti-spam: notifica UNA volta per transizione (OK->GUASTO e GUASTO->OK), mai a raffica. Lo
 #  stato fra le esecuzioni vive in %TEMP%\procionemgr-watchdog-state.json (stato di macchina,
@@ -70,10 +73,22 @@ $stateFile = Join-Path $env:TEMP 'procionemgr-watchdog-state.json'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
 function Read-State {
+    $defaults = [ordered]@{ shell = $true; engine = $true; postgres = $true; backup = $true }
     if (Test-Path $stateFile) {
-        try { return Get-Content $stateFile -Raw | ConvertFrom-Json } catch { }
+        try {
+            $s = Get-Content $stateFile -Raw | ConvertFrom-Json
+            # Chiavi nate DOPO il file di stato (es. 'backup', 2026-08-17): senza riempirle, la
+            # prima esecuzione le leggerebbe $null, cioe' "era GUASTO", e sparerebbe una falsa
+            # notifica di ripristino su qualcosa che non era mai stato giu'.
+            foreach ($k in $defaults.Keys) {
+                if ($null -eq $s.PSObject.Properties[$k]) {
+                    $s | Add-Member -NotePropertyName $k -NotePropertyValue $defaults[$k]
+                }
+            }
+            return $s
+        } catch { }
     }
-    return [pscustomobject]@{ shell = $true; engine = $true; postgres = $true }
+    return [pscustomobject]$defaults
 }
 
 function Save-State($state) {
@@ -166,22 +181,48 @@ else {
     $pgFix = 'verifica il servizio PostgreSQL locale (porta 5432).'
 }
 
+# --- 4. Freschezza dei backup ----------------------------------------------------------------
+#  PERCHE' (2026-08-17): il dump notturno ha fallito SEI notti di fila senza che nessuno se ne
+#  accorgesse — il task usciva 1 e quel codice non lo legge nessuno. Da oggi db-backup.ps1 avvisa
+#  quando fallisce, ma non puo' avvisare quando NON PARTE: task disabilitato, azione che punta a
+#  uno script sparito, PC spento all'ora giusta. L'unica prova che regge in tutti i casi e' l'ETA'
+#  del dump piu' recente, e va guardata DA FUORI — cioe' da qui.
+#  Indipendente dall'assetto: i backup sono sempre sul disco dell'host (vedi db-backup.ps1).
+$backupDir = Join-Path $env:USERPROFILE 'ProcioneMGR-Backup'
+$lastBackup = Get-ChildItem -Path $backupDir -Filter 'procionemgr-*.dump' -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+# 48h e non 24h: una notte saltata (PC spento) non e' un guasto, due lo sono. Stessa soglia di
+# db-backup.ps1 -Verify, cosi' i due strumenti non possono dare verdetti diversi.
+$backupOk = ($null -ne $lastBackup) -and (((Get-Date) - $lastBackup.LastWriteTime).TotalHours -le 48)
+$backupFix = 'lancia scripts\db-backup.ps1 a mano e LEGGI l''errore; poi controlla il task "ProcioneMGR Backup DB".'
+# "GIU'" non descrive un backup vecchio: qui l'allarme deve dire DA QUANTO, altrimenti non si
+# capisce se e' una notte saltata o un guasto che dura da una settimana.
+$backupDown = if ($lastBackup) {
+    "backup DB FERMO da $([math]::Round(((Get-Date) - $lastBackup.LastWriteTime).TotalHours, 0)) ore (ultimo: $($lastBackup.Name))"
+} else {
+    "backup DB MAI eseguito (nessun dump in $backupDir)"
+}
+
 # --- Transizioni: una notifica per cambio di stato, in entrambe le direzioni -----------------
 $checks = @(
     @{ Name = 'guscio';  Now = $shellOk;  Was = [bool]$previous.shell;    Fix = $shellFix },
     @{ Name = 'motore';  Now = $engineOk; Was = [bool]$previous.engine;   Fix = $engineFix },
-    @{ Name = 'Postgres'; Now = $pgOk;    Was = [bool]$previous.postgres; Fix = $pgFix }
+    @{ Name = 'Postgres'; Now = $pgOk;    Was = [bool]$previous.postgres; Fix = $pgFix },
+    @{ Name = 'backup';  Now = $backupOk; Was = [bool]$previous.backup;   Fix = $backupFix
+       Down = $backupDown; Up = 'backup DB di nuovo aggiornato' }
 )
 
 foreach ($c in $checks) {
     if ($c.Was -and -not $c.Now) {
-        Send-Telegram "[$now] WATCHDOG: $($c.Name) GIU'. $($c.Fix)"
+        $what = if ($c.Down) { $c.Down } else { "$($c.Name) GIU'" }
+        Send-Telegram "[$now] WATCHDOG: $what. $($c.Fix)"
     } elseif (-not $c.Was -and $c.Now) {
-        Send-Telegram "[$now] Watchdog: $($c.Name) di nuovo raggiungibile."
+        $what = if ($c.Up) { $c.Up } else { "$($c.Name) di nuovo raggiungibile" }
+        Send-Telegram "[$now] Watchdog: $what."
     }
     $label = if ($c.Now) { 'OK' } else { 'GIU''' }
     Write-Host ("Watchdog : {0,-8} {1}" -f $c.Name, $label)
 }
 
-Save-State ([pscustomobject]@{ shell = $shellOk; engine = $engineOk; postgres = $pgOk })
+Save-State ([pscustomobject]@{ shell = $shellOk; engine = $engineOk; postgres = $pgOk; backup = $backupOk })
 exit 0

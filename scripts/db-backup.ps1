@@ -36,12 +36,42 @@ $ErrorActionPreference = 'Continue'
 
 $taskName = 'ProcioneMGR Backup DB'
 
+# ---------------------------------------------------------------------------------------------
+#  Radice del repo PRINCIPALE, anche quando questa copia dello script vive in un worktree.
+#
+#  PERCHE' (incidente del 2026-08-17, sei notti di backup persi): il task notturno era stato
+#  registrato standoci DENTRO un worktree, quindi puntava alla copia dello script che sta li'.
+#  E 'ProcioneMGR/appsettings.json' e' GITIGNORATO: ogni worktree ne ha una copia propria,
+#  fotografata quando il worktree e' nato e mai piu' aggiornata da nessuno. Quando la password di
+#  Postgres e' stata ruotata (2026-08-09) il repo principale l'ha recepita, il worktree no — e da
+#  quella notte pg_dump usciva 1 con "autenticazione fallita", ogni notte, in silenzio.
+#
+#  La regola che ne esce: la connessione si legge SEMPRE dal repo principale, che e' l'unica copia
+#  che qualcuno tiene davvero aggiornata. Un worktree e' uno scratch, non una fonte di verita'.
+function Get-MainRepoRoot([string]$start) {
+    $marker = '\.claude\worktrees\'
+    $i = $start.IndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase)
+    if ($i -ge 0) { return $start.Substring(0, $i) }
+    return $start
+}
+
+$mainRepoRoot = Get-MainRepoRoot (Split-Path -Parent $PSScriptRoot)
+
 if ($Register) {
     # Stesso pattern di watchdog.ps1: il verdetto e' la VERIFICA, non l'assenza di eccezioni.
     # Un "Accesso negato" da Register-ScheduledTask e' NON terminante e scivolerebbe sotto un
     # messaggio di successo — il classico controllo che rassicura.
+    # Si registra SEMPRE la copia del repo principale, mai quella da cui stiamo girando: un task
+    # che punta a un worktree e' esattamente il guasto del 2026-08-17 (vedi Get-MainRepoRoot).
+    $scriptPath = Join-Path $mainRepoRoot 'scripts\db-backup.ps1'
+    if (-not (Test-Path $scriptPath)) {
+        Write-Host "Backup   : lo script del repo principale non esiste ($scriptPath) - non registro un task che non potrebbe funzionare." -ForegroundColor Red
+        exit 1
+    }
+    if ($scriptPath -ne $MyInvocation.MyCommand.Path) {
+        Write-Host "Backup   : registro la copia del repo principale ($scriptPath), non questa in worktree." -ForegroundColor Yellow
+    }
     try {
-        $scriptPath = $MyInvocation.MyCommand.Path
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
             -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Destination `"$Destination`" -KeepDays $KeepDays"
         # 03:30 e non 03:00: il CronJob del cluster, se un giorno verra' acceso, sta alle 03:00.
@@ -89,19 +119,49 @@ if ($Verify) {
     exit 0
 }
 
-# --- Backup ---------------------------------------------------------------------------------
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$appSettings = Join-Path $repoRoot 'ProcioneMGR\appsettings.json'
-if (-not (Test-Path $appSettings)) {
-    Write-Host "Backup   : $appSettings non trovato - impossibile leggere la connessione." -ForegroundColor Red
+# --- Notifica -------------------------------------------------------------------------------
+#  PERCHE' (2026-08-17): il backup ha fallito sei notti di fila senza che nessuno se ne
+#  accorgesse. Il watchdog guarda guscio, motore e Postgres — non i backup — e il codice di uscita
+#  del Task Scheduler non lo legge nessuno. Un backup che fallisce in silenzio e' un backup che
+#  non esiste, e lo scopri il giorno in cui ti serve.
+#
+#  Duplicato (e non condiviso) con watchdog.ps1 di proposito: come quello, questo script deve
+#  poter funzionare da solo, senza dipendere da un altro file del repo che potrebbe mancare.
+#  Stesse variabili d'ambiente del watchdog, quindi zero configurazione nuova.
+function Send-Telegram([string]$text) {
+    $token = $env:TELEGRAM_BOT_TOKEN
+    $chatId = $env:TELEGRAM_CHAT_ID
+    if ([string]::IsNullOrWhiteSpace($token) -or [string]::IsNullOrWhiteSpace($chatId)) {
+        Write-Host "Backup   : TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID mancanti - notifica NON inviata: $text" -ForegroundColor Yellow
+        return
+    }
+    try {
+        # Il token sta nel PATH dell'URL (semantica dell'API Telegram): mai loggarlo per intero.
+        $body = @{ chat_id = $chatId; text = $text }
+        Invoke-RestMethod -Uri "https://api.telegram.org/bot$token/sendMessage" -Method Post -Body $body -TimeoutSec 15 | Out-Null
+    } catch {
+        Write-Host "Backup   : invio Telegram FALLITO: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Ogni uscita per fallimento passa da qui: cosi' non esiste un percorso di errore muto. Una volta
+# per notte, quindi nessun rischio di raffica: non serve l'anti-spam del watchdog.
+function Stop-WithFailure([string]$message) {
+    Write-Host "Backup   : $message" -ForegroundColor Red
+    Send-Telegram "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] BACKUP DB FALLITO: $message"
     exit 1
+}
+
+# --- Backup ---------------------------------------------------------------------------------
+$appSettings = Join-Path $mainRepoRoot 'ProcioneMGR\appsettings.json'
+if (-not (Test-Path $appSettings)) {
+    Stop-WithFailure "$appSettings non trovato - impossibile leggere la connessione."
 }
 
 try {
     $cs = (Get-Content $appSettings -Raw | ConvertFrom-Json).ConnectionStrings.PostgresConnection
 } catch {
-    Write-Host "Backup   : appsettings.json illeggibile: $($_.Exception.Message)" -ForegroundColor Red
-    exit 1
+    Stop-WithFailure "appsettings.json illeggibile: $($_.Exception.Message)"
 }
 
 $cfg = @{}
@@ -109,8 +169,7 @@ foreach ($kv in $cs.Split(';')) { if ($kv -match '=') { $k, $v = $kv.Split('=', 
 
 $pgDump = Join-Path ${env:ProgramFiles} 'PostgreSQL\18\bin\pg_dump.exe'
 if (-not (Test-Path $pgDump)) {
-    Write-Host "Backup   : pg_dump non trovato in $pgDump." -ForegroundColor Red
-    exit 1
+    Stop-WithFailure "pg_dump non trovato in $pgDump."
 }
 
 if (-not (Test-Path $Destination)) { New-Item -ItemType Directory -Path $Destination -Force | Out-Null }
@@ -131,14 +190,40 @@ try {
 # Il codice di uscita NON basta: pg_dump puo' uscire 0 lasciando un file troncato se il disco si
 # riempie. Si guarda il file, che e' il solo esito che conta.
 if ($code -ne 0 -or -not (Test-Path $outFile)) {
-    Write-Host "Backup   : FALLITO (codice $code)." -ForegroundColor Red
     if (Test-Path $outFile) { Remove-Item $outFile -Force -ErrorAction SilentlyContinue }
-    exit 1
+    Stop-WithFailure "pg_dump FALLITO (codice $code) - vedi l'errore qui sopra."
 }
 
 $sizeMb = [math]::Round((Get-Item $outFile).Length / 1MB, 0)
+
+# --- Il dump e' RIPRISTINABILE? --------------------------------------------------------------
+# "Esiste ed e' grosso" non e' integrita': un custom dump puo' essere illeggibile e pesare uguale.
+# pg_restore --list apre il file e ne legge l'indice — se il formato e' corrotto o l'intestazione
+# e' monca, fallisce qui invece che il giorno del disastro. Costa un paio di secondi.
+#
+# ONESTA' SUL LIMITE: --list legge la TOC, non i blocchi di dati. Prova che il formato e' valido e
+# che il contenuto atteso e' censito, NON che ogni byte dei dati sia integro. La prova piena resta
+# il drill di restore su server vergine (l'ultimo il 2026-07-26), che e' un'altra cosa e va rifatta
+# a mano ogni tanto.
+$pgRestore = Join-Path ${env:ProgramFiles} 'PostgreSQL\18\bin\pg_restore.exe'
+if (Test-Path $pgRestore) {
+    $toc = & $pgRestore --list $outFile
+    $tocCode = $LASTEXITCODE
+    # Le righe che iniziano per ';' sono l'intestazione del catalogo: le voci vere sono le altre.
+    $entries = @($toc | Where-Object { $_ -match '\S' -and $_ -notmatch '^\s*;' }).Count
+    if ($tocCode -ne 0 -or $entries -lt 1) {
+        Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+        Stop-WithFailure "dump da $sizeMb MB prodotto ma NON leggibile da pg_restore (codice $tocCode, $entries voci) - rimosso, NON e' un backup."
+    }
+    Write-Host "Backup   : integrita' del formato verificata ($entries voci nell'indice)." -ForegroundColor Green
+} else {
+    Write-Host "Backup   : pg_restore non trovato in $pgRestore - integrita' NON verificata." -ForegroundColor Yellow
+}
+
 if ($sizeMb -lt 1) {
+    # Sotto 1 MB non e' questo database: lo teniamo (non si butta l'unica copia) ma si grida.
     Write-Host "Backup   : file prodotto ma SOSPETTO ($sizeMb MB) - lo tengo, ma va guardato." -ForegroundColor Yellow
+    Send-Telegram "[$(Get-Date -Format 'yyyy-MM-dd HH:mm')] Backup DB SOSPETTO: solo $sizeMb MB (attesi centinaia). Il file e' stato tenuto, ma va guardato."
 } else {
     Write-Host "Backup   : completato, $sizeMb MB." -ForegroundColor Green
 }
