@@ -135,4 +135,64 @@ public sealed class SeriesFreshnessTests
         var last = new DateTime(2025, 9, 15, 2, 0, 0, DateTimeKind.Utc);
         Assert.StartsWith("FERMA", SeriesFreshness.Describe("1h", last, Now, candlesProcessed: 1000));
     }
+
+    // ---------------------------------------------------------------- tolleranza e cadenza di sync
+
+    /// <summary>
+    /// [2026-08-16] Una serie non può essere più fresca di quanto il sync permetta. Misura che lo
+    /// ha imposto: con il ciclo ogni 5 minuti, XRP/USDT 1m oscillava fra 0 e 4 barre di ritardo —
+    /// a cavallo della soglia di 3 — senza alcun guasto, e notificava a ripetizione.
+    /// </summary>
+    [Fact]
+    public void Tolleranza_SuiTimeframePiuFiniDellaCadenza_SaleADueGiriDiSync()
+    {
+        var interval = TimeSpan.FromMinutes(5);
+
+        // 1m: due giri di sync sono 10 barre, e vincono sulle 3 di default.
+        Assert.Equal(10, SeriesFreshness.EffectiveToleranceBars("1m", interval));
+
+        // 5m: due giri sono 2 barre, meno del default — resta 3.
+        Assert.Equal(3, SeriesFreshness.EffectiveToleranceBars("5m", interval));
+    }
+
+    [Fact]
+    public void Tolleranza_SuiTimeframeLunghi_RestaQuellaDichiarata()
+    {
+        // La cura tocca SOLO i timeframe più fini della cadenza: tutto il resto è invariato, e
+        // deve restare misurabile con la stessa soglia di prima (nessuna regressione silenziosa
+        // sulle serie che contano per il trading).
+        var interval = TimeSpan.FromMinutes(5);
+        foreach (var tf in new[] { "15m", "30m", "1h", "4h", "1d" })
+        {
+            Assert.Equal(3, SeriesFreshness.EffectiveToleranceBars(tf, interval));
+        }
+    }
+
+    [Fact]
+    public void Tolleranza_ScalaConLaCadenza_EIgnoraValoriInsensati()
+    {
+        // Se il ciclo rallenta, la tolleranza segue: a 15 minuti la 1m tollera 30 barre.
+        Assert.Equal(30, SeriesFreshness.EffectiveToleranceBars("1m", TimeSpan.FromMinutes(15)));
+        Assert.Equal(6, SeriesFreshness.EffectiveToleranceBars("5m", TimeSpan.FromMinutes(15)));
+
+        // Intervallo assurdo o timeframe ignoto: si torna alla soglia dichiarata, non a zero.
+        Assert.Equal(3, SeriesFreshness.EffectiveToleranceBars("1m", TimeSpan.Zero));
+        Assert.Equal(3, SeriesFreshness.EffectiveToleranceBars("7m", TimeSpan.FromMinutes(5)));
+    }
+
+    [Fact]
+    public void SerieDaUnMinuto_ConIlSyncOgniCinque_NonEFermaPerIlNormaleRitardo()
+    {
+        // Il caso misurato dal vivo: 4 barre indietro su una 1m con ciclo da 5 minuti è la
+        // normalità, non un guasto. Ma un blocco vero (mezz'ora) resta ferma.
+        var interval = TimeSpan.FromMinutes(5);
+        var tolleranza = SeriesFreshness.EffectiveToleranceBars("1m", interval);
+
+        var normale = Now.AddMinutes(-5); // 4 barre indietro
+        Assert.False(SeriesFreshness.IsStale("1m", normale, Now, tolleranza));
+        Assert.True(SeriesFreshness.IsStale("1m", normale, Now)); // con la soglia vecchia gridava
+
+        var bloccata = Now.AddMinutes(-30);
+        Assert.True(SeriesFreshness.IsStale("1m", bloccata, Now, tolleranza));
+    }
 }

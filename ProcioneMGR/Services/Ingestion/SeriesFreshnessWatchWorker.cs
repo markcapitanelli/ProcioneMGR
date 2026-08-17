@@ -81,11 +81,18 @@ public sealed class SeriesFreshnessWatchWorker(
         logger.LogInformation("Freschezza: ultima candela letta per {Count} serie in {Ms}ms.",
             lastBySeries.Count, sw.ElapsedMilliseconds);
 
+        // [2026-08-16] La tolleranza dipende dalla CADENZA di sync: una serie non può essere più
+        // fresca di quanto il sync permetta. Senza, la 1m oscillava a cavallo delle 3 barre e
+        // notificava a ripetizione senza alcun guasto, erodendo il budget degli allarmi veri.
+        var syncInterval = TimeSpan.FromMinutes(Math.Max(1,
+            configuration?.GetValue("MarketData:SyncIntervalMinutes", 5) ?? 5));
+
         var newlyStale = new List<string>();
         foreach (var s in series)
         {
             var last = lastBySeries.GetValueOrDefault((s.Symbol, s.Timeframe));
-            if (!SeriesFreshness.IsStale(s.Timeframe, last, nowUtc))
+            var tolerance = SeriesFreshness.EffectiveToleranceBars(s.Timeframe, syncInterval);
+            if (!SeriesFreshness.IsStale(s.Timeframe, last, nowUtc, tolerance))
             {
                 // Tornata fresca: l'allarme si riarma, e il recupero si dice nel log (non via
                 // notifica: il rientro di un guasto già notificato è informazione, non allarme).
@@ -99,7 +106,7 @@ public sealed class SeriesFreshnessWatchWorker(
 
             if (!_staleAlerted.Add(s.Id)) continue; // ferma e già segnalata: silenzio
 
-            var descr = SeriesFreshness.Describe(s.Timeframe, last, nowUtc, candlesProcessed: 0);
+            var descr = SeriesFreshness.Describe(s.Timeframe, last, nowUtc, candlesProcessed: 0, tolerance);
             newlyStale.Add($"{s.Exchange} {s.Symbol} {s.Timeframe} — {descr}");
         }
 

@@ -39,6 +39,17 @@ public sealed class WatchlistPageService(
         public DateTime? LastCandleUtc { get; set; }
 
         /// <summary>
+        /// Verdetto di freschezza calcolato QUI, non nel markup: la tolleranza dipende dalla
+        /// cadenza di sync (vedi <see cref="SeriesFreshness.EffectiveToleranceBars"/>) e due punti
+        /// che la ricalcolano per conto proprio darebbero due verdetti sulla stessa serie — il
+        /// difetto già corretto in D2 e nel Filone E.
+        /// </summary>
+        public bool IsStale { get; set; }
+
+        /// <summary>Barre di ritardo; <c>null</c> se non misurabile (serie vuota o timeframe ignoto).</summary>
+        public int? BarsBehind { get; set; }
+
+        /// <summary>
         /// Ferma ma in RECUPERO: l'ultima candela è avanzata dall'osservazione precedente e il sync
         /// gira. Dopo un blocco l'arretrato si drena in qualche minuto: dirlo evita di leggere il
         /// drenaggio come guasto in corso (e di disabilitare serie sane, l'errore dell'incidente STX).
@@ -140,7 +151,7 @@ public sealed class WatchlistPageService(
 
             RunningLanes = lanes;
             SyncPulse = pulse;
-            UpdateRecoveryFlags();
+            UpdateVerdicts();
             LoadedAtUtc = DateTime.UtcNow;
         }
         finally
@@ -204,7 +215,7 @@ public sealed class WatchlistPageService(
 
             RunningLanes = lanes;
             SyncPulse = pulse;
-            UpdateRecoveryFlags();
+            UpdateVerdicts();
             LoadedAtUtc = DateTime.UtcNow;
         }
         finally
@@ -304,7 +315,7 @@ public sealed class WatchlistPageService(
             StatusesCheckedAtUtc = okExchanges > 0 ? now : null;
 
             var suspended = (Rows ?? []).Count(r => r.Series.Enabled
-                && SeriesFreshness.IsStale(r.Series.Timeframe, r.LastCandleUtc, now)
+                && r.IsStale
                 && r.ExchangeStatus is not null
                 && !IsTradable(r.Series.Exchange, r.ExchangeStatus));
             return new StatusCheck(suspended, okExchanges, failed);
@@ -435,14 +446,8 @@ public sealed class WatchlistPageService(
 
     // ------------------------------------------------------------------ derivati per il markup
 
-    /// <summary>[E7] Serie ABILITATE la cui ultima candela è più indietro della tolleranza.</summary>
-    public int StaleEnabledCount()
-    {
-        if (Rows is null) return 0;
-        var now = DateTime.UtcNow;
-        return Rows.Count(r => r.Series.Enabled
-            && SeriesFreshness.IsStale(r.Series.Timeframe, r.LastCandleUtc, now));
-    }
+    /// <summary>[E7] Serie ABILITATE il cui verdetto di freschezza è FERMA.</summary>
+    public int StaleEnabledCount() => Rows?.Count(r => r.Series.Enabled && r.IsStale) ?? 0;
 
     /// <summary>
     /// [2026-08-13] Corsie che operano una serie DISABILITATA in watchlist: la combinazione
@@ -524,13 +529,32 @@ public sealed class WatchlistPageService(
             Interval: interval);
     }
 
-    private void UpdateRecoveryFlags()
+    /// <summary>
+    /// Verdetto di freschezza per ogni riga, con la tolleranza che dipende dalla cadenza di sync
+    /// (una serie non può essere più fresca di quanto il sync permetta), e stato di recupero.
+    /// </summary>
+    private void UpdateVerdicts()
     {
         if (Rows is null) return;
         var now = DateTime.UtcNow;
+        var interval = SyncPulse?.Interval ?? ConfiguredInterval;
+
         foreach (var row in Rows)
         {
-            var stale = SeriesFreshness.IsStale(row.Series.Timeframe, row.LastCandleUtc, now);
+            var tolerance = SeriesFreshness.EffectiveToleranceBars(row.Series.Timeframe, interval);
+            row.BarsBehind = SeriesFreshness.BarsBehind(row.Series.Timeframe, row.LastCandleUtc, now);
+            row.IsStale = SeriesFreshness.IsStale(row.Series.Timeframe, row.LastCandleUtc, now, tolerance);
+        }
+
+        UpdateRecoveryFlags();
+    }
+
+    private void UpdateRecoveryFlags()
+    {
+        if (Rows is null) return;
+        foreach (var row in Rows)
+        {
+            var stale = row.IsStale;
             var known = _previousLastCandle.TryGetValue(row.Series.Id, out var prev);
             var advanced = known
                 && row.LastCandleUtc is DateTime current

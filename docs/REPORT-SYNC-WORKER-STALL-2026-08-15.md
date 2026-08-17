@@ -113,6 +113,29 @@ La lezione di metodo: i test e la review avversaria hanno preso dieci difetti di
 costo reale di una query si vede solo sui dati veri. **Il livello 4 dello standard non è una
 formalità.**
 
+## Coda: la soglia insoddisfacibile della 1m (2026-08-16, dopo il merge)
+
+Col codice nuovo in esecuzione, la pagina ha mostrato «1 serie abilitata FERMA» su XRP/USDT **1m**
+— e poi il banner è sparito da solo, senza ricaricare (prova che la fotografia stantia del 13
+agosto è chiusa). Campionando il ritardo ogni 45 secondi: **oscilla fra 0 e 4 barre**, a cavallo
+della tolleranza di 3.
+
+Non è un guasto, è aritmetica: il ciclo parte ogni 5 minuti e ne impiega ~4 per il giro delle 222
+serie, quindi una serie a un minuto **non può** stare entro tre minuti di freschezza. La soglia
+era insoddisfacibile in questo assetto — la classe di difetto «gate senza strumento» del
+2026-07-28 — e produceva allarmi ricorrenti che erodevano il budget di 20 notifiche/ora condiviso
+con quelli veri: lo stesso meccanismo dell'inondazione STX del 13 agosto.
+
+Cura (decisione del proprietario): la tolleranza dipende dalla **cadenza di sync** —
+`EffectiveToleranceBars` = max(3 barre, 2× intervallo in barre). Due giri e non uno, perché uno
+solo verrebbe sfiorato a ogni ciclo un po' più lento. Col default la 1m passa a 10 barre;
+**15m/30m/1h/4h/1d restano a 3, invariate**: la cura tocca solo i timeframe più fini della
+cadenza, che sono gli unici a soffrirne. Un blocco vero sulla 1m si vede comunque in dieci minuti.
+
+Nell'occasione il verdetto per riga è stato spostato dal markup al page service (`Row.IsStale`):
+la pagina e il servizio calcolavano la freschezza per conto proprio, e con una tolleranza che ora
+dipende dalla cadenza sarebbero diventati due verdetti sulla stessa serie.
+
 ## Le lezioni
 
 - **Un catch di `OperationCanceledException` senza filtro sul token è un bug dormiente**: le TCE
@@ -128,6 +151,10 @@ formalità.**
   senza la regola del salto avrebbe spostato il guasto, non tolto.
 - **Un endpoint di salute che risponde a due domande diverse ne risponde male a una**: liveness
   («il lavoro è vivo?») e readiness («posso servire richieste?») hanno rimedi opposti.
+- **Una soglia va confrontata con la cadenza di chi produce il dato**: chiedersi non solo «dove si
+  legge il numero» ma «questo numero può stare sotto la soglia, in questo assetto?». Tre barre su
+  una serie da un minuto, con un ciclo da cinque, è una soglia che nessuno può soddisfare — e un
+  allarme che non può spegnersi insegna a ignorare gli allarmi.
 
 ## Verifica
 

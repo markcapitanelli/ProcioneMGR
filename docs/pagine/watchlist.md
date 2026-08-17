@@ -60,8 +60,18 @@ resta su `/health` (sempre 200): un worker parcheggiato non deve togliere il tra
 
 La freschezza si giudica **contro adesso** con la regola unica di
 [`SeriesFreshness`](../../ProcioneMGR/Services/Ingestion/SeriesFreshness.cs) (B2.a): badge rosso
-`FERMA · N barre indietro` oltre la tolleranza (3 barre), serie vuota = «nessuna candela» rosso se
-abilitata. Novità 2026-08-15: il badge giallo **`in recupero`** quando la serie è oltre tolleranza
+`FERMA · N barre indietro` oltre la tolleranza, serie vuota = «nessuna candela» rosso se
+abilitata. Il verdetto lo calcola il **page service** (`Row.IsStale`/`Row.BarsBehind`), non il
+markup: la tolleranza dipende dalla cadenza di sync e ricalcolarla nella pagina darebbe due
+verdetti sulla stessa serie.
+
+**La tolleranza dipende dalla cadenza** [2026-08-16]: `EffectiveToleranceBars` = max(3 barre,
+2× intervallo di sync espresso in barre). Una serie non può essere più fresca di quanto il sync
+permetta — misurato dal vivo, XRP/USDT **1m** oscillava fra 0 e 4 barre di ritardo col ciclo da 5
+minuti, a cavallo della vecchia soglia di 3, e notificava a ripetizione senza alcun guasto
+(erodendo il budget di 20 allarmi/ora condiviso con quelli veri). Col default la 1m tollera 10
+barre; **15m/30m/1h/4h/1d restano a 3, invariate**. Un blocco vero sulla 1m si vede comunque dopo
+dieci minuti. Novità 2026-08-15: il badge giallo **`in recupero`** quando la serie è oltre tolleranza
 ma l'ultima candela È avanzata dall'osservazione precedente e il sync è vivo — il drenaggio
 post-blocco non è un guasto in corso, e leggerlo come tale ha quasi fatto disabilitare serie sane.
 
