@@ -41,7 +41,12 @@ public sealed class EnsembleAssemblyStage(
         new("includeGreyZone", "Includi fascia grigia", "false",
             "true = i candidati grigi (bocciati per sola finestra corta o DSR in [0,80–0,95), Sharpe holdout positivo) "
             + "riempiono i posti che i sopravvissuti pieni lasciano liberi — mai al loro posto. Le gambe grigie sono "
-            + "etichettate come tali ovunque: è un secondo giro di selezione, non una promozione."),
+            + "etichettate come tali ovunque: è un secondo giro di selezione, non una promozione. "
+            + "ATTENZIONE se questa configurazione è SCHEDULATA e AutoReapply è acceso: da qui in poi i run "
+            + "producono gambe, quindi la ri-applica automatica torna a poter SOSTITUIRE le corsie 0-2 (l'impronta "
+            + "dell'auto-apply), comprese quelle che stanno facendo forward test — e un forward test sovrascritto "
+            + "a metà non produce verdetto. Tieni gli esperimenti che vuoi portare a termine su una corsia 3+, "
+            + "che l'auto-apply non tocca mai."),
         new("redundancyWarnRho", "Soglia avviso ridondanza (|ρ|)", "0.7",
             "Sopra questa correlazione fra i rendimenti di due gambe la proposta dichiara la ridondanza: "
             + "due gambe correlate sono la stessa scommessa raddoppiata, non diversificazione."),
