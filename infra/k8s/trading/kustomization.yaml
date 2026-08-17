@@ -54,5 +54,22 @@ images:
     # azionabili (caso STX/USDT illiquido, che inondava Telegram e saturava il rate-limit
     # condiviso con gli allarmi veri) — persistenza, azionabilità e cooldown sulla notifica,
     # log invariato. Vedi docs/REPORT-FEED-STALENESS-STX-2026-08-13.md.
-    # Precedente: local-cde4dda1.
-    newTag: local-0e97f5ea
+    #
+    # [2026-08-17] Promozione: revisione completa della sezione Trading (PR #93). Nel MOTORE
+    # entrano quattro correzioni che nessun pannello poteva mostrare:
+    #  · la fee d'INGRESSO Futures non viene più sottratta due volte alla chiusura — l'errore era
+    #    cumulativo e contaminava la curva equity, quindi Sharpe e MaxDrawdown, quindi le
+    #    decisioni di promozione;
+    #  · «flat sull'exchange» e «non sono riuscito a leggere» sono ora due fatti distinti
+    #    (FuturesPositionRead): prima un 429 chiudeva la posizione LOCALMENTE senza reduce-only,
+    #    abbandonando esposizione reale;
+    #  · il feed non rigioca più il passato dopo un riavvio (segnalibro di sessione persistito
+    #    LastCandleUtc, campo proto 24 + colonna additiva) e alimenta la serie della SESSIONE, non
+    #    quella della configurazione viva che l'auto-apply può riscrivere sotto una corsia attiva;
+    #  · filtri del simbolo degeneri (StepSize 0) trattati come assenti invece di degradare
+    #    l'arrotondamento a no-op silenzioso (R15).
+    # PREREQUISITO DI QUESTO BUMP, già assolto: la migrazione additiva
+    # 20260817100224_AddTradingEngineStateLastCandleUtc dev'essere applicata PRIMA, o il motore
+    # nuovo interroga una colonna che non esiste.
+    # Precedente: local-0e97f5ea.
+    newTag: local-dcea49b1

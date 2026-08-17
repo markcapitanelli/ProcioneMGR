@@ -140,7 +140,13 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
             provider, dbFactory, store,
             (options ?? new LaneInvariantOptions()).AsMonitor(),
             NullLogger<LaneInvariantWatchdog>.Instance,
-            notifier);
+            notifier)
+        {
+            // Il watchdog nasce ADESSO, ma i test verificano digiuni di ore: senza spostare
+            // indietro l'avvio del processo, la grazia post-riavvio li assolverebbe tutti e questi
+            // test passerebbero senza provare nulla.
+            StartedAtUtc = DateTime.UtcNow.AddDays(-7),
+        };
         return (watchdog, dbFactory, store, engines);
     }
 
@@ -597,5 +603,30 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         var alert = Assert.Single(notifier.Sent);
         Assert.Equal(ProcioneMGR.Services.Notifications.NotificationSeverity.Critical, alert.Severity);
         Assert.Contains("affamata", alert.Title);
+    }
+
+    /// <summary>
+    /// [2026-08-17] Da quando il feed non rigioca più il passato dopo un riavvio, fra il riavvio e
+    /// la chiusura della barra successiva una corsia legittimamente non valuta NULLA — fino a
+    /// quattro ore su una 4h. Senza una grazia, il watchdog gridava «AFFAMATA» su OGNI corsia a
+    /// ogni riavvio: verificato dal vivo, sette allarmi critici in un colpo. Un allarme che urla
+    /// quando non c'è niente che non va logora quelli veri.
+    /// </summary>
+    [Theory]
+    [InlineData("15m", 60)]      // 15m × (1 + 3 di tolleranza) = 60 minuti
+    [InlineData("4h", 960)]      // 4h × 4 = 16 ore
+    [InlineData("1d", 5760)]     // 1d × 4 = 4 giorni
+    public void GraceAfterStart_IsOneFullBarPlusTolerance(string timeframe, int minutiAttesi)
+    {
+        Assert.Equal(TimeSpan.FromMinutes(minutiAttesi), LaneInvariantWatchdog.GraceAfterStart(timeframe));
+    }
+
+    [Fact]
+    public void GraceAfterStart_UnknownTimeframe_IsPrudentNeverZero()
+    {
+        var grazia = LaneInvariantWatchdog.GraceAfterStart("timeframe-inventato");
+
+        Assert.True(grazia > TimeSpan.Zero, "una grazia nulla riaprirebbe l'allarme falso a ogni riavvio");
+        Assert.Equal(TimeSpan.FromHours(1), grazia);
     }
 }
