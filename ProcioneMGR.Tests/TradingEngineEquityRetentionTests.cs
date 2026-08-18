@@ -258,6 +258,45 @@ public sealed class TradingEngineEquityRetentionTests : IAsyncDisposable
         Assert.Null((await engine.GetStatusAsync()).LastCandleUtc);
     }
 
+    /// <summary>
+    /// [2026-08-17] La migrazione: una corsia che girava già PRIMA che il segnalibro esistesse ha
+    /// <c>LastCandleUtc</c> nullo pur non avendo nulla da rigiocare. Senza questa regola il primo
+    /// avvio del motore corretto avrebbe fatto esattamente il danno che la correzione previene —
+    /// trenta giorni di candele rigiocate su sette corsie vive. Decide l'ETÀ della sessione.
+    /// </summary>
+    [Theory]
+    [InlineData(0, true)]      // sessione appena avviata: il replay osservabile ci sta
+    [InlineData(60, false)]    // sessione di un'ora fa senza segnalibro: è una RIPRESA
+    [InlineData(43_200, false)]
+    public void CursorOrigin_WithoutBookmark_DependsOnSessionAge(int minutiFa, bool attesoReplay)
+    {
+        var status = new TradingEngineStatus
+        {
+            Mode = TradingMode.Paper,
+            IsRunning = true,
+            StartedAtUtc = DateTime.UtcNow.AddMinutes(-minutiFa),
+            LastCandleUtc = null,
+        };
+
+        var replay = TradingWorker.WouldReplayHistory(status, DateTime.UtcNow);
+
+        Assert.Equal(attesoReplay, replay);
+    }
+
+    [Fact]
+    public void CursorOrigin_WithBookmark_NeverReplays()
+    {
+        var status = new TradingEngineStatus
+        {
+            Mode = TradingMode.Paper,
+            IsRunning = true,
+            StartedAtUtc = DateTime.UtcNow,               // appena avviata...
+            LastCandleUtc = DateTime.UtcNow.AddHours(-4), // ...ma con un segnalibro: riprende da lì
+        };
+
+        Assert.False(TradingWorker.WouldReplayHistory(status, DateTime.UtcNow));
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var p in _providers) await p.DisposeAsync();

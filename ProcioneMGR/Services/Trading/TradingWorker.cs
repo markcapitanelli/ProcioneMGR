@@ -26,6 +26,13 @@ public sealed class TradingWorker(
     private static readonly TimeSpan LeaseWarnInterval = TimeSpan.FromMinutes(5);
     /// <summary>Ogni quanto ripetere l'avviso di configurazione riscritta sotto una sessione viva (a tick di 2s inonderebbe).</summary>
     private static readonly TimeSpan ConfigDriftWarnInterval = TimeSpan.FromMinutes(15);
+    /// <summary>
+    /// Quanto può essere "vecchio" <c>StartedAtUtc</c> perché la sessione conti ancora come appena
+    /// avviata. Generoso: il worker attende 10s all'avvio dell'host e valuta a tick di 2s, quindi
+    /// un avvio vero viene sempre visto entro pochi secondi; oltre questa soglia, una sessione
+    /// senza segnalibro è una RIPRESA, non un inizio.
+    /// </summary>
+    private static readonly TimeSpan NewSessionGrace = TimeSpan.FromMinutes(10);
 
     private DateTime? _sessionStart;
     private DateTime _cursor = DateTime.MinValue;
@@ -131,11 +138,24 @@ public sealed class TradingWorker(
             // Solo quando il segnalibro è vuoto la sessione è davvero nuova, e allora:
             // Paper → replay osservabile delle ultime giornate; Testnet/Live → SOLO candele nuove
             // (niente replay, altrimenti si piazzerebbero ordini reali in massa sullo storico).
+            // Il replay osservabile spetta SOLO a una sessione appena avviata. Il segnalibro è la
+            // prova migliore, ma può mancare: su una corsia che girava già prima che il segnalibro
+            // esistesse (la colonna è nata il 2026-08-17) sarebbe null pur non essendoci nulla da
+            // rigiocare. In quel caso decide l'ETÀ della sessione — una sessione vecchia con lo
+            // stato restaurato non va MAI riavvolta di trenta giorni: fu esattamente così che il
+            // feed rigiocava candele di settimane fa contro posizioni aperte.
             _cursor = status.LastCandleUtc
-                ?? (status.Mode == TradingMode.Paper ? DateTime.UtcNow.AddDays(-ReplayDays) : DateTime.UtcNow);
+                ?? (WouldReplayHistory(status, DateTime.UtcNow)
+                    ? DateTime.UtcNow.AddDays(-ReplayDays)
+                    : DateTime.UtcNow);
+            var sessioneAppenaAvviata = WouldReplayHistory(status, DateTime.UtcNow);
             logger.LogInformation(
                 "TradingWorker: sessione {Mode} {Origine}, cursore da {From:u}.",
-                status.Mode, status.LastCandleUtc is null ? "NUOVA" : "ripresa dopo riavvio", _cursor);
+                status.Mode,
+                status.LastCandleUtc is not null ? "ripresa dal segnalibro"
+                    : sessioneAppenaAvviata ? "NUOVA (replay osservabile)"
+                    : "ripresa senza segnalibro, nessun replay",
+                _cursor);
         }
 
         // La serie da alimentare è quella della SESSIONE, non quella della configurazione viva.
@@ -225,6 +245,18 @@ public sealed class TradingWorker(
     /// </summary>
     internal static DateTime? LastClosedBarOpenUtc(string timeframe, DateTime nowUtc)
         => Ingestion.SeriesFreshness.LastClosedBarOpenUtc(timeframe, nowUtc);
+
+    /// <summary>
+    /// Questo stato merita il replay osservabile delle ultime giornate? Solo Paper, solo senza
+    /// segnalibro, e solo se la sessione è appena cominciata. Estratto e <c>internal</c> perché è
+    /// la regola che decide se un riavvio rigioca il passato: va provata direttamente, non dedotta.
+    /// </summary>
+    internal static bool WouldReplayHistory(TradingEngineStatus status, DateTime nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        if (status.Mode != TradingMode.Paper || status.LastCandleUtc is not null) return false;
+        return status.StartedAtUtc is not DateTime avvio || nowUtc - avvio <= NewSessionGrace;
+    }
 
     private static async Task<bool> SafeWaitAsync(PeriodicTimer timer, CancellationToken ct)
     {

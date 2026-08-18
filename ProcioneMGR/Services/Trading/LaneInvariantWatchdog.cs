@@ -97,6 +97,25 @@ public sealed class LaneInvariantWatchdog(
     // --- [E6] Inedia di valutazione ------------------------------------------------------------
 
     /// <summary>Ultimo battito visto per corsia al giro precedente: serve a distinguere «ferma» da «in rincorsa».</summary>
+    /// <summary>
+    /// Istante di avvio di QUESTO processo: base della grazia post-riavvio.
+    ///
+    /// Sovrascrivibile SOLO dai test, che costruiscono il watchdog nell'istante stesso in cui
+    /// verificano un digiuno di ore: senza, la grazia li assolverebbe tutti e il guardiano
+    /// sembrerebbe funzionante mentre non verifica più nulla.
+    /// </summary>
+    internal DateTime StartedAtUtc { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Quanto attendere, dopo l'avvio del processo, prima di poter dichiarare affamata una corsia:
+    /// una barra piena del suo timeframe più la stessa tolleranza usata da <c>SeriesFreshness</c>.
+    /// Timeframe non riconosciuto: un'ora, prudente e mai zero.
+    /// </summary>
+    internal static TimeSpan GraceAfterStart(string timeframe)
+        => Exchanges.Timeframes.Supported.TryGetValue(timeframe, out var barra) && barra > TimeSpan.Zero
+            ? barra * (1 + Ingestion.SeriesFreshness.DefaultToleranceBars)
+            : TimeSpan.FromHours(1);
+
     private readonly Dictionary<int, DateTime?> _lastSeenHeartbeat = new();
 
     /// <summary>Corsie già allertate per inedia: una notifica per transizione, non una per tick.</summary>
@@ -120,7 +139,13 @@ public sealed class LaneInvariantWatchdog(
         try
         {
             var status = await serviceProvider.GetRequiredKeyedService<ITradingEngine>(laneId).GetStatusAsync(ct);
-            heartbeat = status.LastProcessedCandleUtc;
+            // [2026-08-17] Il battito di QUESTO avvio, e in sua assenza il segnalibro PERSISTITO
+            // della sessione. Da quando il feed non rigioca più il passato dopo un riavvio, una
+            // corsia legittimamente non valuta NULLA fra il riavvio e la chiusura della barra
+            // successiva — fino a quattro ore su una 4h. Giudicandola col solo battito di processo,
+            // il watchdog gridava «AFFAMATA» su ogni corsia a ogni riavvio: un allarme che urla
+            // quando non c'è niente che non va logora quelli veri.
+            heartbeat = status.LastProcessedCandleUtc ?? status.LastCandleUtc;
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -146,6 +171,12 @@ public sealed class LaneInvariantWatchdog(
             return;
         }
         if (!hadPrevious) return;              // primo sguardo: il verdetto al prossimo giro
+
+        // Grazia dall'avvio del PROCESSO: fra un riavvio e la chiusura della barra successiva non
+        // c'è nulla da valutare, e nemmeno il segnalibro può aiutare su una corsia che non ne ha
+        // ancora uno (sessioni precedenti alla colonna). Prima di una barra piena più la tolleranza
+        // di freschezza, «non ha valutato niente» non è un digiuno: è l'attesa normale.
+        if (DateTime.UtcNow - StartedAtUtc < GraceAfterStart(timeframe)) return;
         if (!_starvationAlerted.Add(laneId)) return;
 
         var ultima = heartbeat is DateTime hb ? $"{hb:yyyy-MM-dd HH:mm} UTC" : "MAI (da questo avvio)";
