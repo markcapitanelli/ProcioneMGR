@@ -146,3 +146,30 @@ una riga che nel frattempo si è spostata.
   `RegistryPageRenderTests` (bUnit su Postgres vero: che i pulsanti ci siano, che il **primo** clic
   non agisca, che il motivo del ritiro sia sotto gli occhi prima del rientro, e che su una riga
   non-`Retired` il motivo sia reso come storia).
+
+## Verifica operativa (livello 4) — 2026-08-19
+
+Giro completo sull'app vera (`localhost:5199`, profilo `procione-reale`, dati reali) sul modello
+**55 «Pipeline f99851dd RandomForest»** (AAVE/USDT 1d, `Staging`, DSR assente, non alimentava
+nessuna corsia). Quello che si è visto, in ordine:
+
+1. Primo clic su **Ritira** → compare la riga di conferma, il pulsante «Ritira» sparisce, e lo
+   stadio a database resta `Staging` con **nessun banner**. Il clic singolo non ritira più.
+2. Motivo scritto a mano nel campo → **Sì, ritira** → banner verde col motivo scritto
+   dall'operatore, stadio `Retired`, e la cella azioni — **prima vuota** — mostra
+   «↩ Riporta in Staging».
+3. Primo clic sul rientro → conferma che cita *«Era stato ritirato il 19/08/2026 08:45 con questo
+   motivo: …»*, l'avviso che il DSR è la misura precedente al ritiro e quello sul possibile
+   ri-ritiro da drift. Stadio ancora `Retired`.
+4. **Sì, riporta in Staging** → banner verde `Riportato in Staging. Motivo del ritiro precedente:
+   … Per tornare Champion deve ri-superare il gate DSR.`, stadio `Staging`, azioni tornate a
+   «→ Challenger / → Champion / Ritira».
+5. Colonna Note dopo il rientro, reso HTML letto dalla pagina:
+   `<span class="text-muted fst-italic" title="Storia, non stato attuale: il modello oggi è
+   Staging.">già ritirato il 19/08/2026 — …</span>`. La cicatrice c'è ed è **qualificata come
+   passato**, che è il punto della regola 5.
+6. Log del guscio, livello Warning: `Modello 55 '…' RIPORTATO IN STAGING (AAVE/USDT 1d). Motivo del
+   ritiro scavalcato: …`. Console del browser pulita, nessun errore server.
+
+Traccia lasciata sui dati reali: il modello 55 conserva `RetiredAtUtc`/`RetiredReason` di questa
+prova. È voluto — è la cicatrice — ed è visibile in pagina come nota storica.
