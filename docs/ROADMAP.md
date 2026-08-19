@@ -1156,7 +1156,7 @@ di dire di no e di dichiarazione di copertura.**
 > chiude una porta e ne lascia aperta un'altra è la stessa forma dei pannelli che scrivevano sul
 > processo sbagliato, e qui la porta aperta **riscrive corsie**. I sopravvissuti non si perdono:
 > restano registrati e notificati per un click umano. Reversibile con `Campaign:RespectAutoReapplyGate`.
-| I8 | **Rendere leggibile il silenzio della flotta**: **(a)** i quattro numeri che lo spiegano (`FleetOrchestrator.Explain`), contati con gli **stessi predicati** della decisione — estratti e condivisi, non ricopiati; **(b)** `Source='default'` disambiguato in tre cause; **(c)** `VotesJson` espandibile nel journal, col JSON illeggibile **dichiarato** invece che nascosto; **(d)** «Prova il comitato» | **(a) (b) (c) fatti (2026-08-19)**, 11 test · **(d) aperto** | ✅ lo **stato reale del 18/08** ricostruito: 0 pass in coda, grigi, 0 corsie libere, 5 sotto governo — e la ragione lo nomina; ✅ il complemento (2 candidati + 1 corsia libera ⇒ il comitato **può** essere interrogato), senza il quale «non può» sarebbe soddisfatto da una diagnosi che dice sempre di no; ✅ le corsie intoccabili non contano come sotto governo; ✅ **le tre cause di «default» restano tutte distinguibili** — se due collassassero il difetto tornerebbe in forma ridotta |
+| I8 | **Rendere leggibile il silenzio della flotta**: **(a)** i quattro numeri che lo spiegano (`FleetOrchestrator.Explain`), contati con gli **stessi predicati** della decisione — estratti e condivisi, non ricopiati; **(b)** `Source='default'` disambiguato in tre cause; **(c)** `VotesJson` espandibile nel journal, col JSON illeggibile **dichiarato** invece che nascosto; **(d)** «Prova il comitato» | **fatto (2026-08-19)**, 11 test · (d) «Prova il comitato» incluso | ✅ lo **stato reale del 18/08** ricostruito: 0 pass in coda, grigi, 0 corsie libere, 5 sotto governo — e la ragione lo nomina; ✅ il complemento (2 candidati + 1 corsia libera ⇒ il comitato **può** essere interrogato), senza il quale «non può» sarebbe soddisfatto da una diagnosi che dice sempre di no; ✅ le corsie intoccabili non contano come sotto governo; ✅ **le tre cause di «default» restano tutte distinguibili** — se due collassassero il difetto tornerebbe in forma ridotta |
 
 > **La causa del silenzio, in una riga**: un menù — e quindi una domanda per il comitato — nasce
 > **solo** con ≥2 candidati «pass» in coda **e** una corsia libera. Con la coda sempre vuota non c'è
@@ -1169,7 +1169,7 @@ di dire di no e di dichiarazione di copertura.**
 > `Decide` e condivisi** con `Explain`, non ricopiati: due definizioni di «coda» darebbero un
 > pannello che spiega un silenzio diverso da quello vero — il difetto di D2 e `SeriesFreshness` nel
 > posto peggiore per ripeterlo.
-| I9 | **Sentiment: lo strumento misura ciò che il modello vede** — (b) il pannello IC smette di contare come `0` le notizie che la via ML **esclude**; (c) pavimento di numerosità (`MinObservations`) nella selezione per IC, con la manopola in `/feature-selection` | **(b) e (c) fatti (2026-08-19)**, 4 test · **(a) copertura per simbolo aperta** | ✅ L2: `MinObservations=0` ⇒ selezione **identica** a prima; ✅ un fattore quasi sempre nullo entra col pavimento spento ed **esce** quando sale — se non cambiasse nulla la manopola sarebbe inerte; ✅ il controllo opposto: un fattore denso **sopravvive** al pavimento (un filtro che scarta tutto è inutile quanto uno che non scarta nulla); ✅ il pavimento **non nasconde** i candidati dalla classifica, altrimenti l'esclusione diventerebbe invisibile |
+| I9 | **Sentiment: lo strumento misura ciò che il modello vede** — (b) il pannello IC smette di contare come `0` le notizie che la via ML **esclude**; (c) pavimento di numerosità (`MinObservations`) nella selezione per IC, con la manopola in `/feature-selection` | **fatto (2026-08-19)**, 4 test · (a) copertura per simbolo inclusa | ✅ L2: `MinObservations=0` ⇒ selezione **identica** a prima; ✅ un fattore quasi sempre nullo entra col pavimento spento ed **esce** quando sale — se non cambiasse nulla la manopola sarebbe inerte; ✅ il controllo opposto: un fattore denso **sopravvive** al pavimento (un filtro che scarta tutto è inutile quanto uno che non scarta nulla); ✅ il pavimento **non nasconde** i candidati dalla classifica, altrimenti l'esclusione diventerebbe invisibile |
 
 > **(b) era una doppia verità della stessa famiglia dei pairs.** Il pannello mappava le notizie con
 > `SentimentScore ?? 0m` — cioè **inventava un punteggio neutro** per qualcosa che nessuno ha
@@ -1185,7 +1185,7 @@ di dire di no e di dichiarazione di copertura.**
 > delle barre — il sentiment su un simbolo fuori dal vocabolario dei ticker, una feature con warm-up
 > lunghissimo — può avere |IC| altissimo su una manciata di punti e **vincere l'ordinamento** contro
 > fattori misurati su migliaia. L'IC non è confrontabile fra numerosità diverse.
-| I10 | **Pairs: una sola verità, e i costi in chiaro** — (a) il motore **espone l'analisi che ha deciso** e la pagina disegna quella (niente più ricalcolo con estimatore fisso); (b) `SlippagePercent` e `StopZScore` esposti, con lo slippage al **default di piattaforma** invece che a zero | **(a) e (b) fatti (2026-08-19)**, 4 test · **(c) `ExperimentRun` aperto** | ✅ L1 contro riferimento indipendente: l'analisi esposta coincide **punto per punto** con l'analizzatore chiamato direttamente; ✅ **la prova che il difetto era visibile**: le due curve sono diverse — se fossero uguali il test non potrebbe fallire, cioè non sarebbe una verifica; ✅ **lo slippage morde** (capitale finale minore), altrimenti esporlo sarebbe una manopola che non muove nulla |
+| I10 | **Pairs: una sola verità, e i costi in chiaro** — (a) il motore **espone l'analisi che ha deciso** e la pagina disegna quella (niente più ricalcolo con estimatore fisso); (b) `SlippagePercent` e `StopZScore` esposti, con lo slippage al **default di piattaforma** invece che a zero | **fatto (2026-08-19)**, 4 test · (c) `ExperimentRun` incluso | ✅ L1 contro riferimento indipendente: l'analisi esposta coincide **punto per punto** con l'analizzatore chiamato direttamente; ✅ **la prova che il difetto era visibile**: le due curve sono diverse — se fossero uguali il test non potrebbe fallire, cioè non sarebbe una verifica; ✅ **lo slippage morde** (capitale finale minore), altrimenti esporlo sarebbe una manopola che non muove nulla |
 
 > **Il difetto (a) era una doppia verità in pagina, entrata col C2** (adozione del Kalman,
 > 2026-07-26) e trovata solo ora: la pagina passava al motore l'estimatore scelto ma disegnava lo
@@ -1258,9 +1258,35 @@ esattamente ciò per cui (e) le ha rese amministrabili. **Tararle è la precondi
 accendere il worker con queste soglie produrrebbe un allarme permanente su quasi tutto, che è un
 altro modo di non dire nulla.
 
+### Chiusura delle Fasi 0-2 (2026-08-19)
+
+**Le tre code chiuse nell'ultimo giro**, tutte della stessa natura — una superficie che non poteva
+dire di no:
+
+- **I8(d) «Prova il comitato»**: una domanda sintetica a menù chiuso, coi voti reali provider per
+  provider e **la causa di ogni astensione**. Serve perché il comitato arbitra i pareggi, e un
+  pareggio potrebbe non arrivare mai: *una verifica che si può fare solo quando serve non è una
+  verifica*. Non tocca la flotta e non entra nel journal; passa dallo stesso guard, dallo stesso
+  budget e dallo stesso contratto dei giri veri — provarne una copia dimostrerebbe altro. Zero voti
+  validi è colorato come **guasto**, non come esito.
+- **I9(a) copertura sentiment per simbolo**: la riga dichiarava una copertura **globale**, e il
+  commento diceva che bastava «perché il filtro per ticker avviene al calcolo». È vero, ed è
+  esattamente il motivo per cui non bastava: su un simbolo fuori dal vocabolario (BTC, ETH, SOL, BNB,
+  XRP, DOGE, ADA) il fattore è nullo su **ogni** barra mentre la pagina prometteva migliaia di
+  notizie. Ora il conteggio è per ticker, col confronto **per elemento** e non per sottostringa —
+  una `LIKE` conterebbe BTC dentro WBTC, cioè gonfierebbe la copertura proprio dove serve la verità.
+- **I10(c) `ExperimentRun` di Kind `Pairs`**: i numeri di `/pairs-trading` morivano col circuito
+  Blazor. Il run si apre **prima** del calcolo, così un'esplosione lascia la traccia del tentativo
+  invece del nulla, e un run che non ha potuto misurare si chiude **dichiarandolo**.
+
 **Ordine**: I1-I2 (dichiarazioni) → I3-I5 (gli strumenti, prima degli interruttori) → I6-I10 (la
 capacità di dire di no: il cuore) → I11 (il denominatore condiviso) → I12-I13 (le azioni, e solo
 dietro il denominatore) → I14-I15 (persistenza, insieme al suo lettore) → I16.
+
+> **Fasi 0, 1 e 2 CHIUSE** (2026-08-19), tranne l'accensione del drift che è operativa e non di
+> codice. Restano le Fasi 3-6: I11 (il denominatore condiviso «trade attesi dall'holdout»),
+> I12-I13 (ritiro per inedia, dedup dei grigi, AF2b, freno per gamba), I14-I15 (`PairCandidate` col
+> suo lettore, corpus notizie esentato dalla purge), I16 ≡ F12 (capacità del carry).
 
 Le Fasi 0-2 sono tutte a rischio nullo o basso e **non cambiano una sola decisione operativa**. La
 Fase 4 è la sola che ne cambia una, ed è dietro I11 di proposito.
