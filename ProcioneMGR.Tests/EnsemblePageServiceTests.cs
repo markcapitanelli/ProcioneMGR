@@ -73,9 +73,9 @@ public sealed class EnsemblePageServiceTests : IAsyncDisposable
         public Task<SavedMlModel?> GetChampionAsync(string symbol, string timeframe, CancellationToken ct = default)
         { LastChampionQuery = (symbol, timeframe); return Task.FromResult(ChampionToReturn); }
         public Task<IReadOnlyList<SavedMlModel>> ListGroupAsync(string symbol, string timeframe, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task PromoteToChallengerAsync(int modelId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<StageChangeOutcome> PromoteToChallengerAsync(int modelId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<PromotionOutcome> TryPromoteToChampionAsync(int modelId, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<StageChangeOutcome> RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<StageChangeOutcome> ReinstateToStagingAsync(int modelId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 

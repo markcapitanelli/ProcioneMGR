@@ -221,7 +221,9 @@
     private async Task ToChallenger(int id)
     {
         _busy = true;
-        try { await Reg.PromoteToChallengerAsync(id); SetMsg("Promosso a Challenger.", true); }
+        // [2026-08-19] Diceva «Promosso a Challenger.» a prescindere, perché il registry no-oppava in
+        // silenzio su ogni stadio diverso da Staging. Ora l'esito viene da sotto, come per le altre tre.
+        try { var outcome = await Reg.PromoteToChallengerAsync(id); SetMsg(outcome.Reason, outcome.Changed); }
         catch (Exception ex) { SetMsg(ex.Message, false); }
         await LoadAsync();
         _busy = false;
@@ -257,7 +259,7 @@
     {
         _busy = true;
         var reason = string.IsNullOrWhiteSpace(_retireReason) ? DefaultRetireReason : _retireReason.Trim();
-        try { await Reg.RetireAsync(id, reason, requestRetrain: false); SetMsg($"Modello ritirato: {reason}", true); }
+        try { var outcome = await Reg.RetireAsync(id, reason, requestRetrain: false); SetMsg(outcome.Reason, outcome.Changed); }
         catch (Exception ex) { SetMsg(ex.Message, false); }
         await LoadAsync();
         _busy = false;

@@ -21,6 +21,13 @@ public sealed record PromotionOutcome(bool Promoted, string Reason, int? Demoted
 /// Esito di una transizione di stadio che può essere rifiutata con motivazione. Separato da
 /// <see cref="PromotionOutcome"/> perché "promosso" non descrive un rientro da Retired: lì non si
 /// sale di stadio, si torna in coda.
+/// <para>
+/// <see cref="Changed"/> significa <b>una scrittura è avvenuta</b>, non "lo stadio desiderato è
+/// raggiunto" — diverso da <see cref="PromotionOutcome.Promoted"/>, che è un'asserzione di stato e
+/// vale <c>true</c> anche per il no-op su un Champion già in carica. La differenza è voluta: qui
+/// serve poter dire «non ho fatto niente, ed ecco perché», che è l'unico modo perché un pulsante
+/// possa dire di no.
+/// </para>
 /// </summary>
 public sealed record StageChangeOutcome(bool Changed, string Reason);
 
@@ -52,8 +59,12 @@ public interface IModelRegistry
     /// <summary>Tutti i modelli di un gruppo (symbol, timeframe), per la UI del registry.</summary>
     Task<IReadOnlyList<SavedMlModel>> ListGroupAsync(string symbol, string timeframe, CancellationToken ct = default);
 
-    /// <summary>Porta un modello Staging → Challenger (in valutazione). No-op se già oltre.</summary>
-    Task PromoteToChallengerAsync(int modelId, CancellationToken ct = default);
+    /// <summary>
+    /// Porta un modello Staging → Challenger (in valutazione). Rifiuta con motivazione se il modello
+    /// non esiste o non è in Staging: prima era un <b>no-op silenzioso</b> su ogni altro stadio, e
+    /// la pagina non poteva far altro che dichiarare successo comunque.
+    /// </summary>
+    Task<StageChangeOutcome> PromoteToChallengerAsync(int modelId, CancellationToken ct = default);
 
     /// <summary>
     /// Prova a promuovere il modello a Champion applicando il gate DSR e l'invariante di unicità.
@@ -62,8 +73,13 @@ public interface IModelRegistry
     /// </summary>
     Task<PromotionOutcome> TryPromoteToChampionAsync(int modelId, CancellationToken ct = default);
 
-    /// <summary>Ritira un modello con un motivo; opzionalmente marca "retrain accodato" (nessun retrain automatico).</summary>
-    Task RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default);
+    /// <summary>
+    /// Ritira un modello con un motivo; opzionalmente marca "retrain accodato" (nessun retrain
+    /// automatico). <b>Rifiuta se il modello è già ritirato</b> invece di sovrascrivere: il motivo
+    /// di un ritiro da drift è una diagnosi, e una conferma rimasta aperta la cancellava
+    /// sostituendola con «Ritirato manualmente dalla UI.».
+    /// </summary>
+    Task<StageChangeOutcome> RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default);
 
     /// <summary>
     /// [2026-08-19] Riporta un modello Retired a <see cref="ModelStage.Staging"/>. Restituisce
@@ -99,18 +115,29 @@ public sealed class ModelRegistry(
             .ToListAsync(ct);
     }
 
-    public async Task PromoteToChallengerAsync(int modelId, CancellationToken ct = default)
+    public async Task<StageChangeOutcome> PromoteToChallengerAsync(int modelId, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var model = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == modelId, ct)
-            ?? throw new InvalidOperationException($"Modello {modelId} inesistente.");
+        var model = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == modelId, ct);
+        if (model is null) return new StageChangeOutcome(false, "Modello inesistente.");
 
-        if (model.Stage is ModelStage.Staging)
+        // [2026-08-19] Qui si usciva in silenzio per ogni stadio diverso da Staging, e il chiamante
+        // non aveva modo di saperlo: /registry dichiarava «Promosso a Challenger» anche quando non
+        // era successo nulla. Ogni ramo ora ha la sua frase.
+        if (model.Stage is not ModelStage.Staging)
         {
-            model.Stage = ModelStage.Challenger;
-            await db.SaveChangesAsync(ct);
-            logger.LogInformation("Modello {Id} '{Name}' → Challenger.", model.Id, model.Name);
+            return model.Stage switch
+            {
+                ModelStage.Challenger => new StageChangeOutcome(false, "Il modello è già Challenger: niente da fare."),
+                ModelStage.Champion => new StageChangeOutcome(false, "Il modello è Champion in carica: non si retrocede a Challenger, semmai lo si ritira."),
+                _ => new StageChangeOutcome(false, "Modello ritirato: riportalo prima in Staging (pulsante «Riporta in Staging»)."),
+            };
         }
+
+        model.Stage = ModelStage.Challenger;
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Modello {Id} '{Name}' → Challenger.", model.Id, model.Name);
+        return new StageChangeOutcome(true, "Promosso a Challenger.");
     }
 
     public async Task<PromotionOutcome> TryPromoteToChampionAsync(int modelId, CancellationToken ct = default)
@@ -176,11 +203,20 @@ public sealed class ModelRegistry(
         return new PromotionOutcome(true, "Promosso a Champion.", demotedId);
     }
 
-    public async Task RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default)
+    public async Task<StageChangeOutcome> RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var model = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == modelId, ct)
-            ?? throw new InvalidOperationException($"Modello {modelId} inesistente.");
+        var model = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == modelId, ct);
+        if (model is null) return new StageChangeOutcome(false, "Modello inesistente.");
+
+        // [2026-08-19] Ritirare un già-ritirato sovrascriveva RetiredAtUtc e RetiredReason senza dire
+        // nulla. Il caso non è teorico: con la conferma a due passi aperta su una riga, il ciclo drift
+        // può ritirare il modello nel frattempo, e il secondo clic avrebbe cancellato la diagnosi
+        // («drift: 3 feature in alert (…)») sostituendola col motivo manuale. Il motivo di un ritiro
+        // è una diagnosi, non un campo di servizio: non si riscrive per sbaglio.
+        if (model.Stage == ModelStage.Retired)
+            return new StageChangeOutcome(false,
+                $"Il modello è già ritirato: il motivo precedente non è stato sovrascritto ({model.RetiredReason ?? "non registrato"}).");
 
         var now = DateTime.UtcNow;
         model.Stage = ModelStage.Retired;
@@ -191,6 +227,7 @@ public sealed class ModelRegistry(
         await db.SaveChangesAsync(ct);
         logger.LogWarning("Modello {Id} '{Name}' RITIRATO ({Reason}). Retrain accodato: {Retrain}.",
             model.Id, model.Name, reason, requestRetrain);
+        return new StageChangeOutcome(true, $"Modello ritirato: {reason}");
     }
 
     public async Task<StageChangeOutcome> ReinstateToStagingAsync(int modelId, CancellationToken ct = default)

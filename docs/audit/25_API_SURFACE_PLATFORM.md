@@ -3135,9 +3135,9 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 |---|---|---|
 | `m` | `Task&lt;SavedMlModel?&gt; GetChampionAsync(string symbol, string timeframe, CancellationToken ct = default)` | Il Champion attivo per (symbol, timeframe), o null se non esiste. |
 | `m` | `Task&lt;IReadOnlyList&lt;SavedMlModel&gt;&gt; ListGroupAsync(string symbol, string timeframe, CancellationToken ct = default)` | Tutti i modelli di un gruppo (symbol, timeframe), per la UI del registry. |
-| `m` | `Task PromoteToChallengerAsync(int modelId, CancellationToken ct = default)` | Porta un modello Staging → Challenger (in valutazione). No-op se già oltre. |
+| `m` | `Task&lt;StageChangeOutcome&gt; PromoteToChallengerAsync(int modelId, CancellationToken ct = default)` | Porta un modello Staging → Challenger (in valutazione). Rifiuta con motivazione se il modello non esiste o non e' in Staging: prima era un no-op SILENZIOSO su ogni altro stadio, e la pagina non poteva far altro che dichiarare successo comunque. |
 | `m` | `Task&lt;PromotionOutcome&gt; TryPromoteToChampionAsync(int modelId, CancellationToken ct = default)` | Prova a promuovere il modello a Champion applicando il gate DSR e l'invariante di unicità. Se supera, l'eventuale Champion in carica viene ritirato. Idempotente: promuovere l'attuale Champion è un successo no-op. |
-| `m` | `Task RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default)` | Ritira un modello con un motivo; opzionalmente marca "retrain accodato" (nessun retrain automatico). |
+| `m` | `Task&lt;StageChangeOutcome&gt; RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default)` | Ritira un modello con un motivo; opzionalmente marca "retrain accodato" (nessun retrain automatico). RIFIUTA se il modello e' gia' ritirato invece di sovrascrivere: il motivo di un ritiro da drift e' una diagnosi, e una conferma rimasta aperta la cancellava. |
 | `m` | `Task&lt;StageChangeOutcome&gt; ReinstateToStagingAsync(int modelId, CancellationToken ct = default)` | [2026-08-19] Riporta un modello Retired a Staging. Restituisce l'ELEGGIBILITA', non lo stadio perduto: da Staging il modello deve ri-percorrere Challenger -> Champion e quindi ri-superare il gate DSR e quello semantico. Rifiuta con motivazione se il modello non esiste o non e' ritirato - mai un no-op silenzioso. |
 
 ### 📦 `ModelRegistry` `(`
@@ -3146,9 +3146,9 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 |---|---|---|
 | `m` | `Task&lt;SavedMlModel?&gt; GetChampionAsync(string symbol, string timeframe, CancellationToken ct = default)` | — |
 | `m` | `Task&lt;IReadOnlyList&lt;SavedMlModel&gt;&gt; ListGroupAsync(string symbol, string timeframe, CancellationToken ct = default)` | — |
-| `m` | `Task PromoteToChallengerAsync(int modelId, CancellationToken ct = default)` | — |
+| `m` | `Task&lt;StageChangeOutcome&gt; PromoteToChallengerAsync(int modelId, CancellationToken ct = default)` | — |
 | `m` | `Task&lt;PromotionOutcome&gt; TryPromoteToChampionAsync(int modelId, CancellationToken ct = default)` | — |
-| `m` | `Task RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default)` | — |
+| `m` | `Task&lt;StageChangeOutcome&gt; RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default)` | — |
 | `m` | `Task&lt;StageChangeOutcome&gt; ReinstateToStagingAsync(int modelId, CancellationToken ct = default)` | — |
 
 # `Services/Experiments/`

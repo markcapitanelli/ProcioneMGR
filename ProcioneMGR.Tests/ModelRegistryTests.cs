@@ -204,6 +204,84 @@ public class ModelRegistryTests : IAsyncDisposable
         Assert.NotNull(m.RetrainRequestedAtUtc);
     }
 
+    // --- Ogni transizione sa dire di no (2026-08-19) ------------------------------------------
+    //
+    // Prima, PromoteToChallengerAsync no-oppava in silenzio e RetireAsync sovrascriveva senza
+    // fiatare: /registry dichiarava successo in entrambi i casi. «Una verifica che non può fallire
+    // non è una verifica» (docs/STANDARD-VERIFICA.md) — questi test sono i suoi "no".
+
+    [Theory]
+    [InlineData(ModelStage.Challenger)]
+    [InlineData(ModelStage.Champion)]
+    [InlineData(ModelStage.Retired)]
+    public async Task PromoteToChallenger_NonStagingModel_IsRefusedWithAReasonOfItsOwn(ModelStage stage)
+    {
+        var f = await BuildFactoryAsync();
+        var user = await SeedUserAsync(f);
+        var id = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.9, stage);
+        var registry = NewRegistry(f);
+
+        var outcome = await registry.PromoteToChallengerAsync(id);
+
+        Assert.False(outcome.Changed);
+        await using var db = await f.CreateDbContextAsync();
+        Assert.Equal(stage, (await db.SavedMlModels.FindAsync(id))!.Stage); // e non ha toccato nulla
+    }
+
+    [Fact]
+    public async Task PromoteToChallenger_StagingModel_ReportsTheChange()
+    {
+        var f = await BuildFactoryAsync();
+        var user = await SeedUserAsync(f);
+        var id = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.9);
+        var registry = NewRegistry(f);
+
+        var outcome = await registry.PromoteToChallengerAsync(id);
+
+        Assert.True(outcome.Changed, outcome.Reason);
+        await using var db = await f.CreateDbContextAsync();
+        Assert.Equal(ModelStage.Challenger, (await db.SavedMlModels.FindAsync(id))!.Stage);
+    }
+
+    [Fact]
+    public async Task PromoteToChallenger_UnknownId_IsRefused_WithoutThrowing()
+    {
+        var f = await BuildFactoryAsync();
+        var outcome = await NewRegistry(f).PromoteToChallengerAsync(987654);
+        Assert.False(outcome.Changed);
+        Assert.Contains("inesistente", outcome.Reason);
+    }
+
+    [Fact]
+    public async Task Retire_AlreadyRetiredModel_IsRefused_AndTheDiagnosisSurvives()
+    {
+        // IL caso che serviva davvero: la conferma di ritiro resta aperta su una riga, il ciclo drift
+        // ritira il Champion nel frattempo, e il secondo clic cancellava «drift: …» sostituendolo con
+        // il motivo manuale — distruggendo la diagnosi e dichiarando successo.
+        var f = await BuildFactoryAsync();
+        var user = await SeedUserAsync(f);
+        var id = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.9, ModelStage.Champion);
+        var registry = NewRegistry(f);
+        await registry.RetireAsync(id, "drift: 3 feature in alert (Mom1, Rsi14, Atr)", requestRetrain: true);
+
+        var outcome = await registry.RetireAsync(id, "Ritirato manualmente dalla UI.", requestRetrain: false);
+
+        Assert.False(outcome.Changed);
+        await using var db = await f.CreateDbContextAsync();
+        var m = await db.SavedMlModels.FindAsync(id);
+        Assert.Equal("drift: 3 feature in alert (Mom1, Rsi14, Atr)", m!.RetiredReason); // intatta
+        Assert.NotNull(m.RetrainRequestedAtUtc);
+    }
+
+    [Fact]
+    public async Task Retire_UnknownId_IsRefused_WithoutThrowing()
+    {
+        var f = await BuildFactoryAsync();
+        var outcome = await NewRegistry(f).RetireAsync(987654, "motivo", requestRetrain: false);
+        Assert.False(outcome.Changed);
+        Assert.Contains("inesistente", outcome.Reason);
+    }
+
     // --- Rientro da Retired (2026-08-19) ------------------------------------------------------
     //
     // Prima di questa transizione Retired era senza uscita: un ritiro accidentale — e "Ritira" era a
@@ -432,6 +510,55 @@ public class ModelRegistryTests : IAsyncDisposable
         Assert.Equal(ModelStage.Retired, m!.Stage);
         Assert.Contains("drift", m.RetiredReason);
         Assert.Null(await registry.GetChampionAsync("BTCUSDT", "1h"));
+    }
+
+    /// <summary>
+    /// Monitor che, mentre valuta, ritira il modello da sotto: riproduce l'operatore che clicca
+    /// «Ritira» su /registry nell'istante fra la lettura dei modelli del worker e la sua scrittura.
+    /// </summary>
+    private sealed class AlertMonitorThatRetiresBehind(IModelRegistry registry) : IFeatureDriftMonitor
+    {
+        public async Task<IReadOnlyList<FactorDriftReport>> EvaluateAsync(
+            SavedMlModel model, IReadOnlyList<OhlcvData> recentCandles, DriftThresholds? thresholds = null, CancellationToken ct = default)
+        {
+            await registry.RetireAsync(model.Id, "ritirato a mano dall'operatore", requestRetrain: false, ct);
+            return new[]
+            {
+                new FactorDriftReport
+                {
+                    FeatureName = "Mom1",
+                    Results = new[] { new DriftResult("Psi", 0.5, null, DriftSeverity.Alert, "shift") },
+                },
+            };
+        }
+    }
+
+    [Fact]
+    public async Task DriftWorker_DoesNotClaimARetirementThatDidNotHappen()
+    {
+        // [L3] Il worker leggeva il modello come Champion e dava per scontato che il ritiro
+        // riuscisse: scriveva ChampionRetired=true nella tabella d'esito e incrementava il contatore
+        // anche quando il ritiro non era avvenuto. Ora legge l'esito. Il motivo dell'operatore resta.
+        var f = await BuildFactoryAsync();
+        var user = await SeedUserAsync(f);
+        var champ = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.9, ModelStage.Champion);
+        var registry = NewRegistry(f);
+
+        var worker = new FeatureDriftWorker(
+            f, new AlertMonitorThatRetiresBehind(registry), registry,
+            new DriftMonitorOptions { Enabled = true, RetireChampionOnAlert = true, MinAlertsToRetire = 1 }.AsMonitor(),
+            NullLogger<FeatureDriftWorker>.Instance);
+
+        await worker.TickAsync(CancellationToken.None);
+
+        await using var db = await f.CreateDbContextAsync();
+        var m = await db.SavedMlModels.FindAsync(champ);
+        Assert.Equal(ModelStage.Retired, m!.Stage);
+        Assert.Equal("ritirato a mano dall'operatore", m.RetiredReason);  // il drift non l'ha sovrascritto
+        Assert.Null(m.RetrainRequestedAtUtc);                             // né accodato un retrain mai deciso
+
+        var row = await db.DriftCheckResults.AsNoTracking().SingleAsync(r => r.ModelId == champ);
+        Assert.False(row.ChampionRetired); // e la tabella d'esito non se ne attribuisce il merito
     }
 
     public async ValueTask DisposeAsync()

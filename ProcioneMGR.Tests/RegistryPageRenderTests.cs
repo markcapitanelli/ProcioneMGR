@@ -160,6 +160,60 @@ public sealed class RegistryPageRenderTests : BunitContext
         Assert.Equal("sospetto look-ahead sulle feature", m.RetiredReason);
     }
 
+    /// <summary>Cambia lo stadio a database sotto la pagina: e' l'altra scheda, o il ciclo drift.</summary>
+    private static async Task MutaStadioDiNascostoAsync(
+        IDbContextFactory<ApplicationDbContext> dbFactory, int id, ModelStage stage, string? reason = null)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var m = await db.SavedMlModels.FirstAsync(x => x.Id == id);
+        m.Stage = stage;
+        if (reason is not null) { m.RetiredReason = reason; m.RetiredAtUtc = DateTime.UtcNow; }
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task RigaStantia_IlBottoneChallengerDiceDiNo_InveceDiMentire()
+    {
+        // La pagina mostra ancora `Staging` (la sua lista e' una fotografia), ma il database e' andato
+        // avanti. Prima il banner era verde a prescindere: «Promosso a Challenger» su un no-op.
+        var db = await RegisterAsync();
+        var id = await SeedModelAsync(db, ModelStage.Staging);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Registry>();
+        cut.WaitForAssertion(() => Assert.True(HasButton(cut, "→ Challenger")), TimeSpan.FromSeconds(10));
+        await MutaStadioDiNascostoAsync(db, id, ModelStage.Retired, "ritirato da un'altra scheda");
+
+        Button(cut, "→ Challenger").Click();
+
+        cut.WaitForAssertion(() => Assert.Contains("alert-warning", cut.Markup), TimeSpan.FromSeconds(10));
+        Assert.Contains("riportalo prima in Staging", cut.Markup);   // e indica la via d'uscita vera
+        Assert.DoesNotContain("alert-success", cut.Markup);
+        Assert.Equal(ModelStage.Retired, await StageOfAsync(db, id));
+    }
+
+    [Fact]
+    public async Task RigaStantia_IlSecondoClicDiRitiro_NonCancellaLaDiagnosiDelDrift()
+    {
+        // Conferma di ritiro aperta su un Champion; nel frattempo il ciclo drift lo ritira. Prima il
+        // secondo clic sovrascriveva «drift: …» col motivo manuale e diceva verde.
+        var db = await RegisterAsync();
+        var id = await SeedModelAsync(db, ModelStage.Champion);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Registry>();
+        cut.WaitForAssertion(() => Assert.True(HasButton(cut, "Ritira")), TimeSpan.FromSeconds(10));
+        Button(cut, "Ritira").Click();                                   // conferma armata
+        await MutaStadioDiNascostoAsync(db, id, ModelStage.Retired, "drift: 3 feature in alert (Mom1, Rsi14, Atr)");
+
+        cut.Find("input.form-control").Input("Ritirato manualmente dalla UI.");
+        Button(cut, "Sì, ritira").Click();
+
+        cut.WaitForAssertion(() => Assert.Contains("alert-warning", cut.Markup), TimeSpan.FromSeconds(10));
+        Assert.Contains("già ritirato", cut.Markup);
+        await using var check = await db.CreateDbContextAsync();
+        var m = await check.SavedMlModels.AsNoTracking().FirstAsync(x => x.Id == id);
+        Assert.Equal("drift: 3 feature in alert (Mom1, Rsi14, Atr)", m.RetiredReason); // la diagnosi resta
+    }
+
     [Fact]
     public async Task ModelloRientrato_MostraIlMotivoComeSTORIA_NonComeStatoAttuale()
     {

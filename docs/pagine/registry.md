@@ -102,6 +102,23 @@ una riga che nel frattempo si è spostata.
   `StageChangeOutcome (Changed, Reason)` e la pagina riporta **quello**, non un verde
   incondizionato — se nel frattempo il modello non è più `Retired`, il banner lo dice.
 
+**Tutte e quattro le transizioni ora sanno dire di no.** `PromoteToChallengerAsync` e `RetireAsync`
+restituivano `Task`: la prima no-oppava in silenzio su ogni stadio diverso da `Staging`, la seconda
+sovrascriveva senza fiatare il motivo di un ritiro già avvenuto. In entrambi i casi la pagina non
+aveva altra scelta che dichiarare successo — *«una verifica che non può fallire non è una verifica»*
+(`docs/STANDARD-VERIFICA.md`). Ora restituiscono `StageChangeOutcome` e la pagina riporta l'esito
+vero. Nota sulla semantica: `Changed` significa **una scrittura è avvenuta**, non «lo stadio
+desiderato è raggiunto» — diverso da `PromotionOutcome.Promoted`, che è un'asserzione di stato e
+vale `true` anche sul no-op di un Champion già in carica.
+
+Il guadagno concreto non è cosmetico: `RetireAsync` ora **rifiuta** su un modello già ritirato
+invece di sovrascrivere `RetiredReason`. Il caso non è teorico — con la conferma aperta su una riga,
+il ciclo drift può ritirare il Champion nel frattempo, e il secondo clic cancellava la diagnosi
+(«drift: 3 feature in alert (…)») sostituendola con «Ritirato manualmente dalla UI.». Per la stessa
+ragione `FeatureDriftWorker` ora **legge** l'esito del ritiro: prima scriveva `ChampionRetired=true`
+nella tabella d'esito e incrementava `procione.models.retired` anche quando il ritiro non era
+avvenuto.
+
 ## Servizi e classi coinvolte
 
 | Dipendenza | Ruolo | File |
@@ -173,3 +190,23 @@ nessuna corsia). Quello che si è visto, in ordine:
 
 Traccia lasciata sui dati reali: il modello 55 conserva `RetiredAtUtc`/`RetiredReason` di questa
 prova. È voluto — è la cicatrice — ed è visibile in pagina come nota storica.
+
+### Secondo giro: i banner che mentivano (stesso giorno)
+
+Con **due schede** aperte su `/registry`, sempre sul modello 55. La scheda B ritira il modello; la
+scheda A non lo sa e continua a mostrare `Staging` col pulsante «→ Challenger».
+
+- Clic su **→ Challenger** dalla scheda stantia → banner **`alert-warning`**:
+  `Modello ritirato: riportalo prima in Staging (pulsante «Riporta in Staging»).` Prima era
+  `alert-success` con «Promosso a Challenger.» su un no-op silenzioso. La pagina si è poi
+  riallineata da sola allo stato vero (`Retired`, con la diagnosi in colonna Note).
+- Rientro e ritiro ripetuti hanno riportato il modello a `Staging`, con la cicatrice aggiornata.
+
+**Quello che NON si è potuto provare dal vivo**, e va detto: il rifiuto del *secondo clic di
+ritiro* su un modello già ritirato. Serviva una seconda scheda che agisse mentre la conferma era
+armata nella prima, e il circuito Blazor della scheda in secondo piano ha smesso di processare i
+clic (WebSocket connesso, eventi non consegnati) — un limite dell'automazione del browser, non del
+codice. Quel percorso è coperto da `Retire_AlreadyRetiredModel_IsRefused_AndTheDiagnosisSurvives`
+(L1) e da `RigaStantia_IlSecondoClicDiRitiro_NonCancellaLaDiagnosiDelDrift` (bUnit su Postgres
+vero), che monta la pagina vera e cambia lo stadio a database alle sue spalle: stessa corsa, stessi
+componenti, senza la rete.

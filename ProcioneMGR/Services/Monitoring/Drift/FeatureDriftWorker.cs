@@ -124,9 +124,21 @@ public sealed class FeatureDriftWorker(
                     && alerts >= Math.Max(1, opt.MinAlertsToRetire))
                 {
                     var reason = $"drift: {alerts} feature in alert ({string.Join(", ", drifting.Where(r => r.Overall == DriftSeverity.Alert).Take(5).Select(r => r.FeatureName))})";
-                    await registry.RetireAsync(model.Id, reason, requestRetrain: true, ct);
-                    metrics?.RecordModelRetired(model.Symbol, model.Timeframe);
-                    championRetired = true;
+                    // [2026-08-19] L'esito del ritiro si legge, non si presume: fra la lettura dei
+                    // modelli in cima al tick e questa riga l'operatore può aver ritirato o
+                    // riportato in Staging il Champion da /registry. Segnare ChampionRetired=true
+                    // su un ritiro che non è avvenuto metterebbe una bugia nella tabella d'esito.
+                    var retired = await registry.RetireAsync(model.Id, reason, requestRetrain: true, ct);
+                    if (retired.Changed)
+                    {
+                        metrics?.RecordModelRetired(model.Symbol, model.Timeframe);
+                        championRetired = true;
+                    }
+                    else
+                    {
+                        logger.LogInformation("Ritiro per drift del modello {Id} '{Name}' non applicato: {Reason}",
+                            model.Id, model.Name, retired.Reason);
+                    }
                 }
             }
 
