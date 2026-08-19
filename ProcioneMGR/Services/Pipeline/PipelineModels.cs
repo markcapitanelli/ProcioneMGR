@@ -59,7 +59,9 @@ public sealed class PipelineDateRanges
     public decimal? HoldoutMonths()
     {
         var days = (HoldoutTo - HoldoutFrom).TotalDays;
-        return days < 7 ? null : (decimal)(days / 30.44);
+        // [I14-rev] La stessa costante che riproporziona l'atteso nel confronto di inedia: era
+        // 30,44 qui e 30,0 di là, ai due lati della stessa disuguaglianza.
+        return days < 7 ? null : (decimal)days / Fleet.TradeFrequency.DaysPerMonth;
     }
 }
 

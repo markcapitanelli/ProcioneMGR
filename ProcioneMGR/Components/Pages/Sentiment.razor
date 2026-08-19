@@ -200,8 +200,11 @@
     </div>
     <div class="card-body py-2">
         <p class="text-muted small mb-2">
-            Le tre serie ESENTI dalla purge (funding storico dal 2019, Fear &amp; Greed, liquidazioni)
-            sono un patrimonio non ricostruibile o costoso da ricostruire — e la storia del funding è
+            Le quattro serie ESENTI dalla purge (funding storico dal 2019, Fear &amp; Greed, liquidazioni,
+            e dal 2026-08-19 le <strong>notizie con punteggio</strong> — che oggi sono il
+            <strong>100%</strong> delle notizie, quindi <code>NewsRetentionDays</code> non limita più
+            questa tabella) sono un patrimonio non
+            ricostruibile o costoso da ricostruire — e la storia del funding è
             già andata persa <strong>due volte in silenzio</strong>, con carry e backtest a leva che
             leggevano una serie corta credendola profonda. Questo guardiano misura profondità e
             conteggio contro le soglie dichiarate (modificabili in
@@ -1086,7 +1089,15 @@
                 candles = await db.OhlcvData
                     .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
                     .OrderBy(c => c.TimestampUtc).ToListAsync();
-                allNews = await db.AltDataPoints.ToListAsync();
+                // [I15, 2026-08-19] Solo la finestra ANALIZZATA, non tutta la tabella: il margine a
+                // sinistra e' il lookback del fattore, perche' una notizia precedente a fromUtc
+                // contribuisce ancora al valore calcolato sulla prima candela. Questo caricamento
+                // era limitato senza saperlo — la purge teneva AltDataPoints a NewsRetentionDays —
+                // e dall'esenzione del corpus la tabella cresce senza tetto.
+                var newsFrom = fromUtc.AddHours(-Math.Max(1, _lookbackHours));
+                allNews = await db.AltDataPoints
+                    .Where(n => n.TimestampUtc >= newsFrom && n.TimestampUtc <= toUtc)
+                    .ToListAsync();
             }
 
             if (candles.Count < 30)
@@ -1167,7 +1178,12 @@
                 candles = await db.OhlcvData
                     .Where(c => c.Symbol == _symbol.Trim() && c.Timeframe == _timeframe && c.TimestampUtc >= fromUtc && c.TimestampUtc <= toUtc)
                     .OrderBy(c => c.TimestampUtc).ToListAsync();
-                allNews = await db.AltDataPoints.ToListAsync();
+                // [I15] Solo la finestra analizzata: l'impatto di una notizia si misura sulle
+                // candele che la seguono, e quelle fuori dal range non ne hanno. Stessa ragione del
+                // gemello qui sopra — il limite implicito della purge non c'e' piu'.
+                allNews = await db.AltDataPoints
+                    .Where(n => n.TimestampUtc >= fromUtc && n.TimestampUtc <= toUtc)
+                    .ToListAsync();
             }
 
             if (candles.Count < 10)

@@ -37,8 +37,8 @@ public static class FleetOrchestrator
         //
         // [I12] DUE criteri, e uno solo per corsia (il primo che morde vince, e non serve dirne
         // due). Il secondo esiste perché il primo pretende RetireMinTrades trade e chi non opera
-        // non ci arriva mai: al 2026-08-19 le corsie 3-7 avevano UN trade ciascuna o zero in 13-15
-        // giorni, quindi nessuna era ritirabile — e una corsia che non si libera mai blocca la
+        // non ci arriva mai: al 2026-08-19 le corsie 3-7 avevano da uno a sei trade ciascuna sul simbolo attuale (5, 1, 5, 6, 3) in 6-16 giorni
+        // (misurato sul database vero), quindi nessuna era ritirabile — e una corsia che non si libera mai blocca la
         // flotta, e a monte il comitato.
         foreach (var lane in fleetLanes.Where(l => l.IsRunning))
         {
@@ -236,10 +236,21 @@ public static class FleetOrchestrator
                 ? $"nessun candidato in banda «pass» in coda ({grey} grigi, che sono solo proposte al click umano): senza candidati non c'è nulla da assegnare"
                 : free.Count == 0
                     ? starving > 0
-                        // [I12] Il caso in cui il silenzio ha una fine DATATA, e dirlo cambia cosa
-                        // fa l'operatore: aspettare, invece di andare a fermare una corsia a mano.
-                        ? $"{queue.Count} candidati in coda e nessuna corsia libera, ma {starving} in INEDIA: "
-                          + "il prossimo tick le ritira e libera il posto"
+                        // [I12] Il caso in cui il silenzio ha una fine, e dirlo cambia cosa fa
+                        // l'operatore: aspettare, invece di andare a fermare una corsia a mano.
+                        //
+                        // [I12-rev] MA la fine arriva solo se qualcuno puo' agire. Il verdetto di
+                        // inedia e' una DECISIONE; eseguirla richiede il braccio, il dry-run spento e
+                        // la corsia autorizzata — tre condizioni che questa funzione pura non conosce
+                        // e non deve indovinare. Promettere «il prossimo tick le ritira» in dry-run
+                        // era un controllo che rassicura a prescindere dalla realta': l'operatore
+                        // avrebbe aspettato un ritiro che non sarebbe mai arrivato.
+                        //
+                        // Si dice quindi cio' che e' vero in ogni assetto — il verdetto c'e' — e si
+                        // rimanda a dove si legge se verra' eseguito.
+                        ? $"{queue.Count} candidati in coda e nessuna corsia libera, ma {starving} sono in INEDIA: "
+                          + "il verdetto di ritiro c'e' gia'; se venga eseguito dipende da Fleet:DryRun "
+                          + "e da Fleet:ExecutionLanes (pannello qui sopra)"
                         : $"{queue.Count} candidati in coda ma nessuna corsia di flotta libera: serve un ritiro"
                     : queue.Count < 2
                         ? "un solo candidato idoneo: l'assegnazione è determinata, non c'è pareggio da arbitrare"

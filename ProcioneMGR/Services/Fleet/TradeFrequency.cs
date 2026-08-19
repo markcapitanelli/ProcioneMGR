@@ -27,6 +27,20 @@ namespace ProcioneMGR.Services.Fleet;
 public static class TradeFrequency
 {
     /// <summary>
+    /// [I14-rev] Giorni in un mese, in UN SOLO posto: 365,25 / 12 = 30,4375.
+    ///
+    /// <para><b>Perché è una costante condivisa e non un 30 scritto dove serve.</b> L'atteso nasce
+    /// dividendo i giorni di holdout per 30,44 (<c>PipelineDateRanges.HoldoutMonths</c>); il tempo
+    /// trascorso con cui quell'atteso viene riproporzionato in <see cref="IsStarving"/> divideva per
+    /// 30,0. Stessa unità, due aritmetiche, ai due lati della <i>stessa</i> disuguaglianza: una
+    /// corsia con esattamente il numero di trade al limite veniva dichiarata affamata, e lo scarto
+    /// cresceva dell'1,5% per ogni mese di osservazione. Questa classe esiste per non avere due
+    /// regole per la stessa domanda: averne due per la stessa <i>unità</i> era lo stesso difetto un
+    /// piano più sotto.</para>
+    /// </summary>
+    public const decimal DaysPerMonth = 30.4375m;
+
+    /// <summary>
     /// Trade al mese attesi, dai trade osservati su una finestra di <paramref name="months"/> mesi.
     /// <c>null</c> se la finestra non è positiva: senza finestra la frequenza è un'illusione, e
     /// restituire zero la farebbe passare per «rarissima» invece che per «non derivabile».
@@ -103,7 +117,7 @@ public static class TradeFrequency
         if (observation < minObservation) return false;                 // troppo presto per un giudizio
         if (minFraction <= 0m) return false;                            // criterio disattivato
 
-        var mesiTrascorsi = (decimal)(observation.TotalDays / 30.0);
+        var mesiTrascorsi = (decimal)observation.TotalDays / DaysPerMonth;
         if (mesiTrascorsi <= 0m) return false;
 
         var attesi = f * mesiTrascorsi;
@@ -114,7 +128,7 @@ public static class TradeFrequency
     public static string DescribeStarvation(decimal? expectedPerMonth, int observed, TimeSpan observation, decimal minFraction)
     {
         if (expectedPerMonth is not decimal f || f <= 0m) return "frequenza attesa non nota: nessun giudizio di inedia";
-        var mesi = (decimal)(observation.TotalDays / 30.0);
+        var mesi = (decimal)observation.TotalDays / DaysPerMonth;
         var attesi = Math.Round(f * mesi, 1);
         return $"{observed} trade in {observation.TotalDays:F0} giorni contro ~{attesi:0.#} attesi "
                + $"(~{f:0.##}/mese): sotto il {minFraction:P0} dell'atteso";

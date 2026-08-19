@@ -875,6 +875,24 @@
                 <label class="form-label">Liquidazioni: punti min @Hot()</label>
                 <input type="number" class="form-control" @bind="_sentiment.HeritageGuard.LiquidationsMinPoints" min="1" style="width: 8rem;" />
             </div>
+            @* [I15] Il corpus di notizie con punteggio: esente dalla purge dal 2026-08-19, e
+               quindi patrimonio come le altre tre. Nasce NON sorvegliato di proposito — vedi il
+               title dell'interruttore: la purge ha girato da sempre e nessuna àncora plausibile
+               sarebbe soddisfatta al primo giro. *@
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="se_hg_news" @bind="_sentiment.HeritageGuard.NewsEnforced" />
+                <label class="form-check-label" for="se_hg_news" title="OFF di nascita, e non per timidezza: la purge delle notizie ha girato a ogni tick da sempre, quindi oggi il corpus non può essere più profondo di NewsRetentionDays — qualunque àncora plausibile scatterebbe al primo giro, e un allarme perpetuo smette di essere letto. Da spenta la riga resta MISURATA e mostrata in /sentiment come NON SORVEGLIATA, mai un OK finto. Accendila DOPO aver letto lì il minimo vero e aver scelto l'àncora da quella misura.">
+                    Sorveglia notizie @Hot()
+                </label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Il corpus di notizie CON PUNTEGGIO deve arrivare almeno a questa data. Le notizie senza punteggio restano potabili: l'esenzione è mirata, non totale.">Notizie: storia da ≤ @Hot()</label>
+                <input type="date" class="form-control" @bind="_sentiment.HeritageGuard.NewsMinStartUtc" style="width: 11rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Serve a distinguere «archivio perso» da «archivio che cresce», non a certificare che sia abbastanza grande per addestrare qualcosa.">Notizie: punti min @Hot()</label>
+                <input type="number" class="form-control" @bind="_sentiment.HeritageGuard.NewsMinPoints" min="1" style="width: 8rem;" />
+            </div>
             <div class="col-auto">
                 <button class="btn btn-primary me-2" @onclick="SaveSentimentAsync" disabled="@_busy">Salva</button>
                 <button class="btn btn-outline-secondary" @onclick="RunSentimentNowAsync" disabled="@_busy">
@@ -2393,11 +2411,6 @@
     };
 
     /// <summary>
-    /// [I6c] Salva la sezione Drift portandoci dentro il CSV degli stage. Passa dalla stessa
-    /// <c>SaveAsync</c> di prima — validazione server-side inclusa — perché il CSV è solo la forma
-    /// con cui l'operatore scrive una lista, non una seconda strada di salvataggio.
-    /// </summary>
-    /// <summary>
     /// [AF2b] Salva la sezione Fleet traducendo prima il CSV delle corsie autorizzate. Passa dalla
     /// <c>SaveAsync</c> comune — stessa validazione, stesso percorso — perche' il CSV e' solo la
     /// forma con cui l'operatore scrive una lista, non una seconda strada di salvataggio.
@@ -2420,6 +2433,11 @@
         await SaveAsync("Fleet", _fleet, "Orchestratore di flotta");
     }
 
+    /// <summary>
+    /// [I6c] Salva la sezione Drift portandoci dentro il CSV degli stage. Passa dalla stessa
+    /// <c>SaveAsync</c> di prima — validazione server-side inclusa — perché il CSV è solo la forma
+    /// con cui l'operatore scrive una lista, non una seconda strada di salvataggio.
+    /// </summary>
     private async Task SaveDriftAsync()
     {
         _drift.MonitorStages = (_driftStagesCsv ?? string.Empty)

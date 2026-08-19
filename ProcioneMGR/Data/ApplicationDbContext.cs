@@ -111,6 +111,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[R2] Indice a righe dei candidati della caccia — derivato dagli artifact "ValidatedCandidates", ricostruibile.</summary>
     public DbSet<ProcioneMGR.Services.Research.ResearchCandidate> ResearchCandidates => Set<ProcioneMGR.Services.Research.ResearchCandidate>();
 
+    /// <summary>[I14] Indice a righe degli artefatti "PairScreen": tabella DERIVATA, ricostruibile.</summary>
+    public DbSet<ProcioneMGR.Services.PairsTrading.PairCandidate> PairCandidates => Set<ProcioneMGR.Services.PairsTrading.PairCandidate>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         // IMPORTANTISSIMO: lasciare che Identity configuri le sue tabelle
@@ -600,6 +603,25 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .HasDatabaseName("IX_ResearchCandidates_Run_Candidato");
             // La lettura tipica della pagina è "questa coppia, i più recenti prima".
             e.HasIndex(x => new { x.Symbol, x.Timeframe, x.RunCompletedUtc });
+        });
+
+        // [I14] L'indice a righe delle coppie esaminate dallo screening: stesso progetto della
+        // tabella qui sopra — derivata, ricostruibile, con l'indice unico che rende idempotente
+        // l'indicizzazione e arbitra la gara fra due processi sullo stesso Postgres.
+        builder.Entity<ProcioneMGR.Services.PairsTrading.PairCandidate>(e =>
+        {
+            e.ToTable("PairCandidates");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.SymbolY).HasMaxLength(32);
+            e.Property(x => x.SymbolX).HasMaxLength(32);
+            e.Property(x => x.Timeframe).HasMaxLength(8);
+            // "SYMY|SYMX TF" normalizzato (PairKey.Build): 96 copre due simboli lunghi col margine.
+            e.Property(x => x.PairKeyValue).HasMaxLength(96);
+            e.HasIndex(x => new { x.RunId, x.PairKeyValue })
+                .IsUnique()
+                .HasDatabaseName("IX_PairCandidates_Run_Coppia");
+            // La lettura tipica del pannello è "questa coppia, i più recenti prima".
+            e.HasIndex(x => new { x.PairKeyValue, x.RunCompletedUtc });
         });
 
         // --- Adattamenti specifici PostgreSQL ---

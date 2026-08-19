@@ -174,19 +174,28 @@ public sealed class FleetStarvationTests
         Assert.Contains("INEDIA", reason, StringComparison.Ordinal);
         Assert.Contains("ADA/USDT 4h", reason, StringComparison.Ordinal);
         Assert.Contains("1 trade in 14 giorni", reason, StringComparison.Ordinal);
-        Assert.Contains("contro ~14 attesi", reason, StringComparison.Ordinal);
+        // [I12-rev] 30/mese x (14 / 30,4375) = 13,8 — con la costante CONDIVISA del mese. Prima
+        // erano 14,0 perche' questa meta' del confronto divideva per 30,0 mentre l'atteso nasceva
+        // da 30,44: due aritmetiche ai due lati della stessa disuguaglianza.
+        Assert.Contains("contro ~13,8 attesi", reason, StringComparison.Ordinal);
     }
 
     // --- La diagnosi del silenzio ---------------------------------------------------------------
 
     /// <summary>
     /// [I8+I12] <b>La spiegazione conta con lo stesso predicato della decisione.</b> Coda piena,
-    /// nessuna corsia libera, ma due affamate: il pannello non deve dire «serve un ritiro» — deve
-    /// dire che il ritiro <b>arriva al prossimo tick</b>. È la differenza fra un operatore che va a
-    /// fermare una corsia a mano e uno che aspetta quindici minuti.
+    /// nessuna corsia libera, ma due affamate: il pannello non deve dire «serve un ritiro» — c'è già
+    /// un verdetto.
+    ///
+    /// <para>[I12-rev] Ma non deve nemmeno promettere che il ritiro <i>avverrà</i>: questa funzione è
+    /// pura e non conosce né <c>DryRun</c> né <c>ExecutionLanes</c>. La prima versione diceva «il
+    /// prossimo tick le ritira e libera il posto» — falso nel default della piattaforma, dove il
+    /// dry-run è acceso e l'operatore avrebbe aspettato un ritiro che non sarebbe mai arrivato.
+    /// Trovato dalla revisione avversaria: era la classe «controllo che rassicura» dentro la
+    /// funzione che serve a NON rassicurare.</para>
     /// </summary>
     [Fact]
-    public void Explain_ConAffamate_DiceCheIlPostoSiLiberaDaSolo()
+    public void Explain_ConAffamate_DichiaraIlVerdettoSenzaPromettereLEsecuzione()
     {
         var state = new FleetState
         {
@@ -204,7 +213,11 @@ public sealed class FleetStarvationTests
         Assert.Equal(2, silence.StarvingLanes);
         Assert.Equal(0, silence.FreeFleetLanes);
         Assert.Contains("INEDIA", silence.Reason, StringComparison.Ordinal);
-        Assert.Contains("prossimo tick", silence.Reason, StringComparison.Ordinal);
+        // C'e' il verdetto, e si dice DOVE si legge se verra' eseguito...
+        Assert.Contains("DryRun", silence.Reason, StringComparison.Ordinal);
+        Assert.Contains("ExecutionLanes", silence.Reason, StringComparison.Ordinal);
+        // ...ma non si promette che avverra'.
+        Assert.DoesNotContain("il prossimo tick le ritira", silence.Reason, StringComparison.Ordinal);
     }
 
     /// <summary>

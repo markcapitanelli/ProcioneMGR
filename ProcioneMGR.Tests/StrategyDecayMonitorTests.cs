@@ -305,7 +305,7 @@ public class StrategyDecayMonitorTests
 
     /// <summary>
     /// <b>Il caso che al 2026-08-19 era vero, e che chiude il punto (c) del filone.</b> Le corsie di
-    /// flotta 3-7 avevano un trade ciascuna o zero in 13-15 giorni: con «≥20 trade sul simbolo
+    /// flotta 3-7 avevano da uno a sei trade sul simbolo attuale: con «≥20 trade sul simbolo
     /// attuale» nessuna gamba è misurabile, quindi il confronto realizzato-vs-atteso non significa
     /// niente e il freno automatico per gamba <b>non si fa</b>.
     ///

@@ -14,7 +14,7 @@ namespace ProcioneMGR.Tests;
 /// stessa ondata.
 ///
 /// <para>La ragione operativa: la regola di ritiro esistente pretende ≥20 trade, e al 2026-08-19 le
-/// corsie di flotta 3-7 avevano chiuso <b>1 trade ciascuna o zero</b> in 13-15 giorni. Non sarebbero
+/// corsie di flotta 3-7 avevano chiuso <b>da uno a sei trade ciascuna sul simbolo attuale (5, 1, 5, 6, 3) in 6-16 giorni</b>. Non sarebbero
 /// state ritirabili mai, e una corsia che non si libera mai blocca la flotta e a monte il comitato.</para>
 /// </summary>
 public class TradeFrequencyTests
@@ -159,7 +159,8 @@ public class TradeFrequencyTests
         var testo = TradeFrequency.DescribeStarvation(30m, observed: 1, observation: TimeSpan.FromDays(14), minFraction: 0.2m);
 
         Assert.Contains("1 trade in 14 giorni", testo, StringComparison.Ordinal);
-        Assert.Contains("contro ~14 attesi", testo, StringComparison.Ordinal); // gli attesi NEL PERIODO, non al mese
+        // gli attesi NEL PERIODO, non al mese: 30 x (14 / 30,4375) = 13,8 con la costante condivisa.
+        Assert.Contains("contro ~13,8 attesi", testo, StringComparison.Ordinal);
     }
 
     // --- La finestra di holdout: UNA aritmetica, tre chiamanti ---------------------------------

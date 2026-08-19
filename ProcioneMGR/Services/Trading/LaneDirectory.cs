@@ -14,7 +14,11 @@ public sealed record LaneSummary(
     // [I12] Ritmo ATTESO della corsia sul simbolo attuale: la somma delle gambe attive, o null se
     // anche una sola non lo dichiara. Vedi LaneDirectory.ExpectedTradesPerMonth per il perche' la
     // somma sia parziale-o-niente e non parziale-e-basta.
-    decimal? ExpectedTradesPerMonth = null)
+    decimal? ExpectedTradesPerMonth = null,
+    // [I12-rev] Gli StrategyId delle gambe ATTIVE IN CONFIGURAZIONE. Servono a confrontarli con
+    // quelle che il motore sta davvero eseguendo: se le due fotografie divergono, il ritmo atteso
+    // qui sopra non descrive cio' che sta operando. Vedi FleetStateReader.
+    IReadOnlyList<string>? ActiveStrategyIds = null)
 {
     public bool IsConfigured => !string.IsNullOrEmpty(Symbol);
 }
@@ -65,6 +69,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
             var symbol = string.Empty;
             var timeframe = string.Empty;
             decimal? expected = null;
+            IReadOnlyList<string>? activeIds = null;
             if (configs.TryGetValue(lane, out var json) && !string.IsNullOrWhiteSpace(json))
             {
                 // Una configurazione illeggibile non deve far sparire la corsia dal selettore: senza
@@ -75,6 +80,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
                     symbol = cfg?.Symbol ?? string.Empty;
                     timeframe = cfg?.Timeframe ?? string.Empty;
                     expected = ExpectedTradesPerMonth(cfg);
+                    activeIds = cfg?.Strategies.Where(x => x.IsActive).Select(x => x.StrategyId).ToList();
                 }
                 catch (JsonException) { /* corsia mostrata come non configurata */ }
             }
@@ -84,7 +90,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
                 lane, symbol, timeframe,
                 state?.Mode.ToString() ?? TradingMode.Paper.ToString(),
                 state?.IsRunning ?? false,
-                expected));
+                expected, activeIds));
         }
         return result;
     }

@@ -151,7 +151,23 @@ public sealed class EnsemblePageService(
         {
             var status = await services.GetRequiredKeyedService<ITradingEngine>(laneId).GetStatusAsync(ct);
             EngineIsRunning = status.IsRunning;
-            EngineRunningStrategyIds = status.RunningStrategyIds;
+
+            // [I13a-rev] UNA CORSIA IN CORSA CHE NON NOMINA NESSUNA GAMBA NON STA DICENDO «NESSUNA»:
+            // sta dicendo «non te lo so dire». In proto3 un campo `repeated` assente si deserializza
+            // VUOTO, mai null — quindi un motore con un'immagine precedente a questo campo (il pod
+            // in cluster si promuove a mano) risponde con una lista vuota mentre esegue.
+            //
+            // Leggerla come fatto produceva la bugia PEGGIORE dei due versi: nessun avviso sulle
+            // gambe spente ma ancora operate, e in piu' l'affermazione falsa che TUTTE le gambe
+            // attive «non sono eseguite». Il ramo «non determinabile» della pagina, scritto apposta,
+            // non poteva scattare mai perche' pretendeva null.
+            //
+            // Nota: un motore in corsa esegue sempre almeno una gamba — altrimenti non sarebbe
+            // partito (StartAsync fotografa le attive). Quindi «in corsa + lista vuota» e'
+            // impossibile se il campo c'e', e diagnostico se non c'e'.
+            EngineRunningStrategyIds = status.IsRunning && status.RunningStrategyIds.Count == 0
+                ? null
+                : status.RunningStrategyIds;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception)

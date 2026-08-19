@@ -56,9 +56,11 @@ public sealed class SentimentHeritageSnapshot
 }
 
 /// <summary>
-/// Guardiano di PROFONDITÀ delle serie-patrimonio di <c>SentimentMetricPoints</c> — le tre esenti
-/// dalla purge di <see cref="SentimentSyncWorker"/>: funding (Source=BinanceFutures,
-/// Metric=FundingRate), Fear &amp; Greed e liquidazioni.
+/// Guardiano di PROFONDITÀ delle serie-patrimonio — le QUATTRO esenti dalla purge di
+/// <see cref="SentimentSyncWorker"/>: funding (Source=BinanceFutures, Metric=FundingRate),
+/// Fear &amp; Greed e liquidazioni in <c>SentimentMetricPoints</c>, e dal 2026-08-19 [I15] le
+/// notizie CON PUNTEGGIO in <c>AltDataPoints</c> — che sono un'altra tabella, un altro criterio
+/// (<see cref="NewsCorpus"/>) e quindi una query dedicata, non un altro giro sullo stesso DbSet.
 ///
 /// <para>Perché esiste: la storia del funding dal 2019 è andata persa DUE volte in silenzio
 /// (2026-07-24 costruendo F4, 2026-08-11 alla rimisura del carry) nonostante l'esenzione dalla
@@ -167,7 +169,29 @@ public sealed class SentimentHeritageGuardWorker(
                 liquidationsOldest, liquidationsCount, opt.LiquidationsMinStartUtc, opt.LiquidationsMinPoints)
             : new HeritageSeriesDepth("Liquidations", "Liquidazioni Binance",
                 liquidationsOldest, liquidationsCount,
-                $"storia da ≤ {opt.LiquidationsMinStartUtc:yyyy-MM-dd}, ≥ {opt.LiquidationsMinPoints:N0} punti",
+                FormatExpected(opt.LiquidationsMinStartUtc, opt.LiquidationsMinPoints),
+                null, Enforced: false));
+
+        // --- [I15] Notizie con punteggio: patrimonio dal 2026-08-19 (decisione del proprietario).
+        //     Altra TABELLA (AltDataPoints, non SentimentMetricPoints) e altro criterio: conta solo
+        //     la notizia già valutata da uno scorer, con lo STESSO predicato che la purge usa per
+        //     risparmiarla — sorvegliare un insieme diverso da quello protetto direbbe «tutto a
+        //     posto» di righe che il worker sta cancellando.
+        //     Come le liquidazioni, si MISURA anche da spenta: alla nascita l'interruttore è OFF
+        //     perché la purge ha girato da sempre, quindi qualunque àncora plausibile scatterebbe
+        //     al primo giro — e un allarme perpetuo smette di essere letto. Prima si misura il min
+        //     vero, poi si sceglie l'àncora, poi si accende (è la storia dell'àncora del funding,
+        //     spostata da gennaio a ottobre 2020 DOPO la misura sul database vero).
+        var newsSet = db.AltDataPoints.AsNoTracking().Where(NewsCorpus.Scored);
+        var newsOldest = await newsSet.MinAsync(a => (DateTime?)a.TimestampUtc, ct);
+        var newsCount = await newsSet.LongCountAsync(ct);
+        const string newsEmpty = "corpus ASSENTE: nessuna notizia con punteggio in AltDataPoints";
+        depths.Add(opt.NewsEnforced
+            ? Evaluate("News", "Notizie con punteggio",
+                newsOldest, newsCount, opt.NewsMinStartUtc, opt.NewsMinPoints, newsEmpty)
+            : new HeritageSeriesDepth("News", "Notizie con punteggio",
+                newsOldest, newsCount,
+                FormatExpected(opt.NewsMinStartUtc, opt.NewsMinPoints),
                 null, Enforced: false));
 
         snapshot.Replace(depths, DateTime.UtcNow);
@@ -222,14 +246,18 @@ public sealed class SentimentHeritageGuardWorker(
     /// violato» (la trappola di B2.a sulla freschezza, stessa classe).
     /// </summary>
     private static HeritageSeriesDepth Evaluate(
-        string key, string displayName, DateTime? oldestUtc, long count, DateTime minStartUtc, int minCount)
+        string key, string displayName, DateTime? oldestUtc, long count, DateTime minStartUtc, int minCount,
+        string emptyProblem = "serie ASSENTE: nessun punto in SentimentMetricPoints")
     {
-        var expected = $"storia da ≤ {minStartUtc:yyyy-MM-dd}, ≥ {minCount:N0} punti";
+        var expected = FormatExpected(minStartUtc, minCount);
 
         string? problem = null;
         if (oldestUtc is null || count == 0)
         {
-            problem = "serie ASSENTE: nessun punto in SentimentMetricPoints";
+            // [I15] Il messaggio nomina la TABELLA, e le righe non stanno tutte nella stessa: il
+            // corpus notizie vive in AltDataPoints. Un «nessun punto in SentimentMetricPoints» su
+            // una serie che quella tabella non la tocca manderebbe a cercare nel posto sbagliato.
+            problem = emptyProblem;
         }
         else
         {
@@ -247,6 +275,17 @@ public sealed class SentimentHeritageGuardWorker(
 
         return new HeritageSeriesDepth(key, displayName, oldestUtc, count, expected, problem);
     }
+
+    /// <summary>
+    /// [I15] La frase «che cosa ci si aspetta da questa serie», in UN SOLO posto.
+    ///
+    /// <para>Era scritta due volte: qui dentro <see cref="Evaluate"/> e a mano nel ramo delle serie
+    /// NON sorvegliate. Con due righe spegnibili invece di una, al primo cambio di formato la
+    /// pagina avrebbe mostrato due «attesi» diversi per due righe equivalenti — e nessun test
+    /// l'avrebbe visto, perché entrambe le stringhe sarebbero state "giuste" ognuna per sé.</para>
+    /// </summary>
+    internal static string FormatExpected(DateTime minStartUtc, int minCount) =>
+        $"storia da ≤ {minStartUtc:yyyy-MM-dd}, ≥ {minCount:N0} punti";
 
     private static async Task<bool> SafeWaitAsync(PeriodicTimer timer, CancellationToken ct)
     {

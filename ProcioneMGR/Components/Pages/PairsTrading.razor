@@ -16,6 +16,7 @@
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IPairsBacktestEngine Engine
+@inject IPairCandidateIndexer PairIndexer
 @* [I10] I risultati di questa pagina morivano col circuito Blazor: ora ogni backtest e' un
    ExperimentRun confrontabile con gli altri. Il tracker e' un osservatore SACRIFICABILE — gli helper
    Safe* non fanno mai cadere il calcolo osservato. *@
@@ -195,6 +196,105 @@
     </div>
 </div>
 
+@* ===================== [I14] Lo storico dello screening, finalmente leggibile ===================== *@
+<div class="card mb-3" id="screening-storico">
+    <div class="card-header d-flex flex-wrap align-items-center gap-2">
+        <span><i class="bi bi-archive me-1"></i>Coppie gia' esaminate dalla pipeline</span>
+        <span class="text-muted small">sola lettura — questo pannello non decide nulla</span>
+        <div class="ms-auto d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" @onclick="IndexPairsAsync" disabled="@_indexBusy">
+                @if (_indexBusy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Indicizza i nuovi run
+            </button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="RebuildPairIndexAsync" disabled="@_indexBusy">
+                Ricostruisci
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        @* Il rischio di questo pannello e' presentare uno screening come una raccomandazione. La
+           classe pairs e' misurata a 0/5 sopravvissuti e l'esecuzione a due gambe e' un
+           non-obiettivo dichiarato (le corsie sono mono-simbolo): senza queste righe, «operabile»
+           si leggerebbe come «pronta a partire» — la classe «controlli che rassicurano a
+           prescindere dalla realta'» che questa ondata esiste per bonificare. *@
+        <p class="text-muted small mb-2">
+            Ogni run della pipeline con lo stage «Screening coppie» testa la cointegrazione di tutte le
+            combinazioni dell'universo e scrive il risultato in un artefatto. Erano <strong>86 artefatti
+            mai riletti</strong>: nessuna query nel codice li apriva. Questa tabella li indicizza a righe —
+            e' <strong>derivata</strong> e ricostruibile in ogni momento, non raccoglie nulla di nuovo.
+        </p>
+        <p class="text-muted small mb-3">
+            <strong>«Operabile» qui vuol dire «ha passato lo screening», non «pronta a partire»</strong>:
+            nessuna coppia e' schierata su alcuna corsia, e le corsie di trading sono mono-simbolo.
+            L'elasticita' β mostrata e' <strong>full-sample</strong>, calcolata sull'intera finestra del run —
+            non e' il β del backtest qui sopra, che e' walk-forward e per default stimato col filtro di Kalman.
+            Sono due numeri diversi per costruzione.
+        </p>
+
+        @if (_pairIndexMessage is not null)
+        {
+            <div class="alert @(_pairIndexError ? "alert-danger" : "alert-info") py-2 small">@_pairIndexMessage</div>
+        }
+
+        @if (_pairRows.Count == 0)
+        {
+            <p class="text-muted small mb-0">
+                Indice vuoto: premi <strong>Indicizza i nuovi run</strong>. Se resta vuoto, nessun run
+                completato ha eseguito lo stage «Screening coppie».
+            </p>
+        }
+        else
+        {
+            <div class="d-flex flex-wrap gap-3 small mb-2">
+                <span><strong>@_pairKeys</strong> coppie distinte indicizzate</span>
+                <span><strong>@_pairTradeable</strong> hanno passato lo screening</span>
+                <span><strong>@_pairRuns</strong> run indicizzati</span>
+                <div class="form-check form-check-inline ms-2 mb-0">
+                    <input type="checkbox" class="form-check-input" id="soloOperabili" @bind="_onlyTradeable" />
+                    <label class="form-check-label" for="soloOperabili">Solo quelle che hanno passato</label>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr>
+                            <th>Coppia</th><th>TF</th><th class="text-end">ADF</th>
+                            <th>Cointegrate</th><th class="text-end">β full-sample</th><th>β plausibile</th>
+                            <th class="text-end">Candele</th><th>Run piu' recente</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in _pairRows.Where(x => !_onlyTradeable || x.IsTradeable).Take(60))
+                        {
+                            <tr>
+                                <td><code class="small">@r.SymbolY / @r.SymbolX</code></td>
+                                <td>@r.Timeframe</td>
+                                <td class="text-end">@r.AdfStatistic.ToString("F3")</td>
+                                <td>@(r.IsCointegrated ? "si'" : "no")</td>
+                                <td class="text-end">@r.HedgeRatio.ToString("F3")</td>
+                                <td>@(r.IsHedgeRatioPlausible ? "si'" : "no")</td>
+                                <td class="text-end">@r.AlignedCandles</td>
+                                <td class="small text-muted">@r.RunCompletedUtc.ToLocalTime().ToString("dd/MM/yyyy")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (_pairRows.Count(x => !_onlyTradeable || x.IsTradeable) > 60)
+            {
+                @* L'elenco e' ordinato per FORZA STATISTICA (operabili prima, poi ADF crescente),
+                   non per data: scrivere «le 60 piu' recenti» diceva una cosa falsa su quali righe
+                   fossero state tagliate. *@
+                <p class="text-muted small mb-0">
+                    Mostrate le 60 con l'ADF piu' negativo (operabili per prime) di
+                    @_pairRows.Count(x => !_onlyTradeable || x.IsTradeable): il resto e' nell'indice,
+                    non e' stato scartato.
+                </p>
+            }
+        }
+    </div>
+</div>
+
 @if (_cointegration is not null)
 {
     <div class="row g-3 mb-3">
@@ -334,6 +434,104 @@
     private List<IndicatorSeries> _equitySeries = new();
     private List<IndicatorSeries> _zScoreSeries = new();
 
+    // --- [I14] Lo storico dello screening -----------------------------------------------------
+    private List<PairCandidate> _pairRows = [];
+    private int _pairRuns;
+    private int _pairKeys;
+    private int _pairTradeable;
+    private bool _indexBusy;
+    private bool _onlyTradeable;
+    private string? _pairIndexMessage;
+    private bool _pairIndexError;
+
+    /// <summary>
+    /// [I14] Le coppie indicizzate, UNA riga per coppia: dei run che l'hanno riesaminata resta il
+    /// piu' recente. Senza questo collasso la tabella mostrerebbe la stessa coppia dieci volte —
+    /// lo screening rigira sullo stesso universo a ogni run — e sarebbe l'elenco di 40 righe che
+    /// sono una cosa sola gia' bonificato sulle proposte grigie.
+    /// </summary>
+    private async Task LoadPairIndexAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var q = db.PairCandidates.AsNoTracking();
+
+        // I conteggi si fanno LATO SERVER sull'intero indice, mai dedotti dalle righe caricate.
+        //
+        // La prima versione leggeva le 4.000 righe piu' recenti e contava su quelle: con 86
+        // artefatti e C(n,2) coppie per timeframe per run, il taglio lasciava passare meno di dieci
+        // run — e il pannello avrebbe dichiarato «21 run indicizzati» due centimetri sotto un alert
+        // che diceva «indicizzati 86 run». Due numeri per la stessa domanda, uno dei quali muto sul
+        // fatto di essere parziale: la classe di difetto che questa ondata esiste per bonificare,
+        // ripetuta nel pannello che la bonifica. Il precedente giusto e' ResearchPageService, che
+        // conta sul database e tronca solo l'elenco mostrato.
+        _pairRuns = await q.Select(p => p.RunId).Distinct().CountAsync();
+        _pairKeys = await q.Select(p => p.PairKeyValue).Distinct().CountAsync();
+        _pairTradeable = await q.GroupBy(p => p.PairKeyValue)
+            .Select(g => g.OrderByDescending(p => p.RunCompletedUtc).ThenByDescending(p => p.Id).First())
+            .CountAsync(p => p.IsTradeable);
+
+        // L'ultima riga per coppia, decisa dal database: nessuna finestra arbitraria puo' far
+        // sparire una coppia dall'elenco senza che nessuno lo dica.
+        var ultime = await q.GroupBy(p => p.PairKeyValue)
+            .Select(g => g.OrderByDescending(p => p.RunCompletedUtc).ThenByDescending(p => p.Id).First())
+            .ToListAsync();
+
+        _pairRows = ultime
+            .OrderByDescending(p => p.IsTradeable)
+            .ThenBy(p => p.AdfStatistic)
+            .ToList();
+    }
+
+    private async Task IndexPairsAsync()
+    {
+        _indexBusy = true;
+        _pairIndexMessage = null;
+        try
+        {
+            var r = await PairIndexer.IndexNewAsync();
+            await LoadPairIndexAsync();
+            // Un run SALTATO non e' un run allineato: dirlo «gia' allineato» quando ogni singolo
+            // artefatto e' stato scartato per payload illeggibile e' un controllo che rassicura a
+            // prescindere dalla realta' — e l'unica traccia del guasto sarebbero i log del server.
+            _pairIndexError = r.RunsSkipped > 0;
+            _pairIndexMessage = r.RunsIndexed == 0
+                ? (r.RunsSkipped > 0
+                    ? $"Nessun run indicizzato: {r.RunsSkipped} SALTATI (payload illeggibile o gara con un altro processo). L'indice NON e' allineato agli artefatti."
+                    : "Nessun run nuovo da indicizzare: l'indice e' gia' allineato agli artefatti."
+                      + (r.RunsEmpty > 0 ? $" ({r.RunsEmpty} run senza coppie: non producono righe, quindi si rileggono a ogni giro.)" : ""))
+                : $"Indicizzati {r.RunsIndexed} run, {r.PairsIndexed} coppie"
+                  + (r.RunsSkipped > 0 ? $"; {r.RunsSkipped} run SALTATI (payload illeggibile o gara con un altro processo)" : "")
+                  + (r.RunsEmpty > 0 ? $"; {r.RunsEmpty} senza coppie" : "") + ".";
+        }
+        catch (Exception ex)
+        {
+            _pairIndexError = true;
+            _pairIndexMessage = $"Indicizzazione fallita: {ex.Message}";
+        }
+        finally { _indexBusy = false; }
+    }
+
+    private async Task RebuildPairIndexAsync()
+    {
+        _indexBusy = true;
+        _pairIndexMessage = null;
+        try
+        {
+            var r = await PairIndexer.RebuildAsync();
+            await LoadPairIndexAsync();
+            _pairIndexError = r.RunsSkipped > 0;
+            _pairIndexMessage = $"Ricostruzione completa: {r.RunsIndexed} run, {r.PairsIndexed} coppie"
+                + (r.RunsSkipped > 0 ? $"; {r.RunsSkipped} run SALTATI (payload illeggibile)" : "")
+                + (r.RunsEmpty > 0 ? $"; {r.RunsEmpty} senza coppie" : "") + ".";
+        }
+        catch (Exception ex)
+        {
+            _pairIndexError = true;
+            _pairIndexMessage = $"Ricostruzione fallita: {ex.Message}";
+        }
+        finally { _indexBusy = false; }
+    }
+
     private bool _busy;
     private bool _isError;
     private string? _status;
@@ -345,6 +543,16 @@
         await using var db = await DbFactory.CreateDbContextAsync();
         // [E-04] Catalogo condiviso con cache al posto della scansione Distinct su OhlcvData
         _knownSymbols = (await SymbolCatalog.GetKnownSymbolsAsync()).ToList();
+
+        // [I14] Lo storico dello screening si LEGGE all'apertura, non si indicizza: l'indicizzazione
+        // e' un'azione esplicita col suo pulsante. Una pagina che indicizzasse da sola scriverebbe
+        // sul Postgres condiviso con motore e ingestion a ogni apertura.
+        try { await LoadPairIndexAsync(); }
+        catch (Exception ex)
+        {
+            _pairIndexError = true;
+            _pairIndexMessage = $"Indice coppie non leggibile: {ex.Message}";
+        }
     }
 
     private string? _userId;

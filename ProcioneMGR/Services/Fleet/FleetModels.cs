@@ -41,8 +41,9 @@ public sealed class FleetOptions
     ///
     /// <para><b>Perché serve un secondo criterio di ritiro.</b> Quello per Sharpe pretende
     /// <see cref="RetireMinTrades"/> trade, e chi non opera non ci arriva mai: al 2026-08-19 le
-    /// corsie di flotta 3-7 avevano chiuso <b>un trade ciascuna o zero</b> in 13-15 giorni, quindi
-    /// non erano ritirabili per nessuna via. Una corsia che non si libera mai blocca la flotta, e a
+    /// corsie di flotta 3-7 avevano chiuso <b>da uno a sei trade ciascuna</b> sul simbolo attuale
+    /// (5, 1, 5, 6, 3 in 6-16 giorni, misurato sul database vero): mai vicino ai venti, quindi non
+    /// erano ritirabili per nessuna via. Una corsia che non si libera mai blocca la flotta, e a
     /// monte il comitato — che riceve una domanda solo quando esiste una corsia libera con due
     /// candidati che se la contendono.</para>
     ///

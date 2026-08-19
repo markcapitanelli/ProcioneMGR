@@ -100,7 +100,24 @@ public sealed class SentimentSyncWorker(
     ///    (bug latente trovato il 2026-07-24 costruendo F4: il tool scriveva la storia,
     ///    il worker dell'app l'avrebbe cancellata);
     ///  - BinanceLiquidations (F4): il dato NON è ricostruibile a posteriori — l'accumulo è
-    ///    l'intero valore della fonte.
+    ///    l'intero valore della fonte;
+    ///  - [I15, 2026-08-19] le NOTIZIE CON PUNTEGGIO (decisione del proprietario): una notizia già
+    ///    valutata da un <c>ISentimentScorer</c> ha un costo di produzione e non si riscarica —
+    ///    l'archivio delle notizie non è ricostruibile a ritroso, e cancellandolo si perde anche il
+    ///    campione su cui si addestra e si confronta lo scorer. La regola sta in
+    ///    <see cref="NewsCorpus"/>, condivisa col guardiano di profondità: due definizioni di
+    ///    «scorata» farebbero sorvegliare un insieme diverso da quello protetto.
+    ///
+    ///    <b>E oggi questa esenzione è, in pratica, TOTALE.</b> Misurato sul database vero il
+    ///    2026-08-19: 22.777 notizie, 22.777 con punteggio, ZERO grezze — lo scorer gira su tutto
+    ///    ciò che entra. Quindi <c>NewsRetentionDays</c> <b>non limita più questa tabella</b>: resta
+    ///    una manopola viva solo per l'ipotesi di notizie non scorabili, e la crescita del corpus è
+    ///    ora sorvegliata dal guardiano di profondità, non da un tetto.
+    ///
+    ///    La prima versione di questo commento diceva «l'esenzione è mirata, le grezze restano
+    ///    potabili»: era vera nel codice e FALSA nei fatti, cioè esattamente la classe di difetto
+    ///    che l'ondata di cui I15 fa parte esiste per bonificare. Trovata dalla revisione
+    ///    avversaria e confermata contando le righe.
     /// </summary>
     private static async Task PurgeAsync(IServiceProvider services, SentimentOptions opt, CancellationToken ct)
     {
@@ -108,7 +125,10 @@ public sealed class SentimentSyncWorker(
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
         var newsCutoff = DateTime.UtcNow.AddDays(-Math.Max(7, opt.NewsRetentionDays));
-        await db.AltDataPoints.Where(a => a.TimestampUtc < newsCutoff).ExecuteDeleteAsync(ct);
+        await db.AltDataPoints
+            .Where(a => a.TimestampUtc < newsCutoff)
+            .Where(NewsCorpus.NotScored)   // [I15] le scorate sono patrimonio: vedi NewsCorpus
+            .ExecuteDeleteAsync(ct);
 
         var metricCutoff = DateTime.UtcNow.AddDays(-Math.Max(30, opt.MetricRetentionDays));
         await db.SentimentMetricPoints

@@ -633,6 +633,10 @@ builder.Services.AddScoped<ProcioneMGR.Services.Pipeline.PipelinePageService>();
 // artifact, ricostruibile — senza stato: singleton) + orchestrazione di Research.razor (Scoped
 // come le altre page service).
 builder.Services.AddSingleton<ProcioneMGR.Services.Research.IResearchCandidateIndexer, ProcioneMGR.Services.Research.ResearchCandidateIndexer>();
+// [I14] L'indice a righe degli artefatti "PairScreen": gli 86 blob dello screening coppie erano in
+// database dal 2026-07 e nessuna query li aveva mai riletti. Singleton come il gemello: porta un
+// semaforo interno, e due indicizzazioni concorrenti nello stesso processo non hanno senso.
+builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.IPairCandidateIndexer, ProcioneMGR.Services.PairsTrading.PairCandidateIndexer>();
 builder.Services.AddScoped<ProcioneMGR.Services.Research.ResearchPageService>();
 
 // [2026-08-15, revisione post-incidente 122 serie ferme] Orchestrazione di Watchlist.razor:
