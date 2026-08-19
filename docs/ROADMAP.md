@@ -1288,6 +1288,46 @@ dietro il denominatore) → I14-I15 (persistenza, insieme al suo lettore) → I1
 > I12-I13 (ritiro per inedia, dedup dei grigi, AF2b, freno per gamba), I14-I15 (`PairCandidate` col
 > suo lettore, corpus notizie esentato dalla purge), I16 ≡ F12 (capacità del carry).
 
+### Le due cose operative, ESEGUITE (2026-08-19) — e una decisione cambiata dai fatti
+
+**⚠️ Questo blocco supera quanto scritto sopra sullo stato del file vivo: la sezione `Drift` ORA
+ESISTE.**
+
+**`Llm:Budget` valorizzato e in vigore**: `DailyCallLimit=150`, `DailyTokenLimit=250.000`,
+`MonthlyTokenLimit=2.000.000`. Sono **tripwire, non budget stretti**: su 18 giorni misurati il giorno
+peggiore ha fatto **11 chiamate e 36.341 token** (media ~5,4 e ~18.000). Devono fermare una fuga —
+un comitato in loop farebbe migliaia di chiamate — e **mai mordere nell'uso normale**, perché il
+layer AI si è già fermato in silenzio una volta per credito esaurito e un tetto stretto ricreerebbe
+quel guasto in un'altra forma. Scritti dal pannello e verificato che il processo li abbia **riletti**:
+il badge «NESSUN TETTO IN VIGORE» è sparito.
+
+**La sezione `Drift` ora esiste nel file vivo, con `RetireChampionOnAlert=false` esplicito.** Questo
+chiude la trappola della sezione assente (il default del POCO è `true`) **indipendentemente da tutto
+il resto**, ed è il guadagno immediato.
+
+**`Drift:Enabled` resta `false`, e la ragione ribalta una conclusione precedente di questo
+documento.** Verificato sul database prima di accendere: **158 modelli, TUTTI in `Staging`**, e
+**nessuna delle 8 corsie ha un riferimento ML**. Quindi i 151 allarmi su 153 erano probabilmente
+**CORRETTI** — modelli vecchi di mesi hanno feature davvero derivate. *Il difetto non era la soglia:
+era il soggetto.* Ricalibrare le soglie su quella popolazione avrebbe adattato il metro a un campione
+irrilevante — ed è quello che stavo per fare.
+
+Rimedio: **`Drift:MonitorStages`** (vuoto = `Champion,Challenger`, col default nel codice per la
+trappola del binder che appende gli array). Un gate senza soggetto diventa **un gate che si accende
+insieme al soggetto**: oggi 0 modelli sorvegliati, tick a costo trascurabile, e al primo modello
+promosso parte da solo su quello. Il pannello dichiara «Modelli sorvegliati: N su M salvati», e la
+sonda dello stato agenti conta i **sorvegliati** — «acceso su 158» mentre ne guarda zero sarebbe la
+solita rassicurazione.
+
+`Enabled` si accende **insieme al filtro**, cioè al merge della PR e a un riavvio del guscio:
+accenderlo sul codice deployato avrebbe fatto proprio ciò che il filtro evita, e infatti **un tick
+non filtrato è partito** nei secondi in cui è stato acceso.
+
+> **Trappola nuova della famiglia «appsettings vivo ≠ example»**: i pannelli avviati col profilo
+> `procione-reale` scrivono l'`appsettings.json` **del worktree**, non quello del repo principale che
+> carica `procione-main`. Le due configurazioni vanno riportate a mano, con un diff chiave-per-chiave
+> prima di copiare (backup in `appsettings.json.bak-preI6c`).
+
 Le Fasi 0-2 sono tutte a rischio nullo o basso e **non cambiano una sola decisione operativa**. La
 Fase 4 è la sola che ne cambia una, ed è dietro I11 di proposito.
 
