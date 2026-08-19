@@ -8,6 +8,7 @@
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Backtesting
 @using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Experiments
 @using ProcioneMGR.Services.Indicators
 @using ProcioneMGR.Services.PairsTrading
 @using ProcioneMGR.Services.TimeSeries
@@ -15,6 +16,10 @@
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IPairsBacktestEngine Engine
+@* [I10] I risultati di questa pagina morivano col circuito Blazor: ora ogni backtest e' un
+   ExperimentRun confrontabile con gli altri. Il tracker e' un osservatore SACRIFICABILE — gli helper
+   Safe* non fanno mai cadere il calcolo osservato. *@
+@inject ProcioneMGR.Services.Experiments.IExperimentTracker Tracker
 @inject AuthenticationStateProvider AuthProvider
 @inject ProcioneMGR.Services.MarketData.ISymbolCatalog SymbolCatalog
 
@@ -456,13 +461,53 @@
                 StopZScore = _stopZScore,
             };
 
+            // [I10] Il run si registra PRIMA di calcolare, come gli altri esperimenti: se il calcolo
+            // esplode resta la traccia del tentativo coi suoi parametri, invece del nulla. Fino ad
+            // ora i numeri di questa pagina morivano col circuito Blazor — e le misure che hanno
+            // prodotto i verdetti C2 ed E1 vivono nello stdout di un tool, non a database.
+            var experimentId = await Tracker.SafeStartRunAsync(
+                kind: "Pairs",
+                name: $"{config.SymbolY} / {config.SymbolX} {_timeframe}",
+                parameters: new
+                {
+                    config.SymbolY, config.SymbolX, Timeframe = _timeframe,
+                    From = _from, To = _to,
+                    Estimator = config.HedgeRatioEstimator.ToString(),
+                    config.LookbackWindow, config.RecalibrationInterval, config.ZScoreLookback,
+                    config.EntryZScore, config.ExitZScore, config.StopZScore,
+                    config.InitialCapital, config.PositionSizePercent,
+                    config.FeePercent, config.SlippagePercent,
+                },
+                symbol: $"{config.SymbolY}|{config.SymbolX}",
+                timeframe: _timeframe);
+
             _result = Engine.RunBacktest(candlesY, candlesX, config);
 
             if (_result.CandlesEvaluated == 0)
             {
+                // Un run che non ha potuto misurare si chiude DICHIARANDOLO, non sparisce: «nessun
+                // dato allineato» e «non è mai stato tentato» sono cose diverse.
+                await Tracker.SafeCompleteAsync(experimentId, "Failed", "Nessuna candela allineata fra i due symbol nel range richiesto.");
                 SetStatus("Nessuna candela allineata fra i due symbol nel range richiesto.", error: true);
                 return;
             }
+
+            await Tracker.SafeLogMetricsAsync(experimentId, new Dictionary<string, decimal>
+            {
+                ["FinalCapital"] = _result.FinalCapital,
+                ["TotalReturnPercent"] = _result.TotalReturnPercent,
+                ["TotalTrades"] = _result.TotalTrades,
+                ["WinRate"] = _result.WinRate,
+                ["MaxDrawdownPercent"] = _result.MaxDrawdownPercent,
+                ["CandlesEvaluated"] = _result.CandlesEvaluated,
+                // Il verdetto di cointegrazione accanto al risultato: separarli è ciò che permette di
+                // leggere un rendimento senza sapere se la coppia era cointegrata.
+                ["IsCointegrated"] = _cointegration?.IsCointegrated == true ? 1m : 0m,
+                ["AdfStatistic"] = _cointegration is null ? 0m : (decimal)_cointegration.AdfStatistic,
+            });
+            await Tracker.SafeLogArtifactAsync(experimentId, "PairsTrades", _result.Trades);
+            await Tracker.SafeLogArtifactAsync(experimentId, "EquityCurve", _result.EquityCurve);
+            await Tracker.SafeCompleteAsync(experimentId, "Completed");
 
             _equitySeries = new()
             {

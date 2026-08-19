@@ -52,6 +52,30 @@
                         Sentiment (notizie scorate): <strong>@s.From.ToString("yyyy-MM-dd")</strong> →
                         <strong>@s.To.ToString("yyyy-MM-dd")</strong> (@s.Count.ToString("N0") notizie)
                     </span>
+                    @* [I9] La copertura GLOBALE è vera e fuorviante: il fattore filtra per ticker,
+                       quindi su un simbolo fuori dal vocabolario è nullo su OGNI barra mentre la riga
+                       qui sopra dichiara migliaia di notizie. Il numero che conta è quante ne
+                       riguardano QUESTO simbolo. *@
+                    @if (_sentimentForSymbol is { } perSimbolo && !string.IsNullOrEmpty(_sentimentBaseTicker))
+                    {
+                        @if (perSimbolo == 0)
+                        {
+                            <span class="text-danger ms-2">
+                                <i class="bi bi-x-octagon me-1"></i>
+                                <strong>Nessuna di queste notizie riguarda @_sentimentBaseTicker</strong>: il fattore
+                                Sentiment sarà <strong>nullo su ogni barra</strong> di questo simbolo. Il vocabolario dei
+                                ticker copre BTC, ETH, SOL, BNB, XRP, DOGE, ADA — fuori da quelli nessun accumulo di
+                                notizie cambierà il risultato.
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="ms-2">
+                                di cui <strong>@perSimbolo.ToString("N0")</strong> su @_sentimentBaseTicker
+                                (@((100.0 * perSimbolo / Math.Max(1, s.Count)).ToString("0.#"))% del totale)
+                            </span>
+                        }
+                    }
                     @if (From != default && From.Date < s.From.Date)
                     {
                         <span class="text-warning ms-2">
@@ -107,6 +131,40 @@
 
     private (DateTime From, DateTime To, int Count)? _range;
     private (DateTime From, DateTime To, int Count)? _sentimentRange;
+
+    /// <summary>[I9] Quante notizie scorate riguardano DAVVERO il simbolo in esame. null = non calcolato.</summary>
+    private int? _sentimentForSymbol;
+
+    /// <summary>[I9] Il ticker base usato per il conteggio, dichiarato in pagina.</summary>
+    private string _sentimentBaseTicker = string.Empty;
+
+    /// <summary>
+    /// [I9] Il JSON dei simboli di una notizia menziona il ticker? Confronto per ELEMENTO e non per
+    /// sottostringa: una LIKE darebbe falsi positivi fra ticker che si contengono (BTC dentro WBTC),
+    /// cioe' una copertura gonfiata proprio dove serve sapere la verita'.
+    /// </summary>
+    private static bool MentionsTicker(string? symbolsJson, string baseTicker)
+    {
+        if (string.IsNullOrWhiteSpace(symbolsJson)) return false;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(symbolsJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array) return false;
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                if (el.ValueKind == System.Text.Json.JsonValueKind.String
+                    && string.Equals(el.GetString(), baseTicker, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Un JSON illeggibile non e' una menzione: contarlo gonfierebbe la copertura.
+        }
+        return false;
+    }
     private bool _checked;
     private string? _loadedKey;
 
@@ -141,8 +199,12 @@
                 .FirstOrDefaultAsync();
             _range = agg is null ? null : (agg.Min, agg.Max, agg.Count);
 
-            // [C-06] La copertura del sentiment è GLOBALE (le notizie sono di mercato, il filtro
-            // per ticker avviene al calcolo): un aggregato basta, e si legge solo dove richiesto.
+            // [I9] La copertura del sentiment era GLOBALE, e il commento diceva che bastava perché
+            // «il filtro per ticker avviene al calcolo». È vero, ed è esattamente il motivo per cui
+            // NON bastava: il fattore filtra per ticker, quindi su un simbolo fuori dal vocabolario
+            // di NewsImpactClassifier (BTC, ETH, SOL, BNB, XRP, DOGE, ADA) è nullo su OGNI barra —
+            // mentre questa riga dichiarava una copertura piena. Una pagina che promette dati che il
+            // fattore non vedrà mai è la classe «controllo che rassicura».
             if (ShowSentimentCoverage)
             {
                 var news = await db.AltDataPoints
@@ -151,6 +213,22 @@
                     .Select(g => new { Min = g.Min(a => a.TimestampUtc), Max = g.Max(a => a.TimestampUtc), Count = g.Count() })
                     .FirstOrDefaultAsync();
                 _sentimentRange = news is null ? null : (news.Min, news.Max, news.Count);
+
+                // Quante di quelle notizie riguardano DAVVERO il simbolo in esame. Il confronto usa
+                // lo stesso ticker base che usa il fattore: due regole darebbero due coperture.
+                var baseTicker = (Symbol ?? string.Empty).Split('/')[0].Trim().ToUpperInvariant();
+                _sentimentBaseTicker = baseTicker;
+                if (!string.IsNullOrEmpty(baseTicker))
+                {
+                    // Il filtro sul JSON dei simboli si fa in memoria sul solo conteggio: la
+                    // colonna è testo e una LIKE darebbe falsi positivi fra ticker che si
+                    // contengono (BTC in WBTC), che è peggio di una query un filo più lenta.
+                    var simboli = await db.AltDataPoints
+                        .Where(a => a.SentimentScore != null)
+                        .Select(a => a.SymbolsJson)
+                        .ToListAsync();
+                    _sentimentForSymbol = simboli.Count(j => MentionsTicker(j, baseTicker));
+                }
             }
         }
         _checked = true;
