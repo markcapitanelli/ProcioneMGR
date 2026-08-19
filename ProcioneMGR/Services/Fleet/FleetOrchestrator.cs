@@ -26,11 +26,12 @@ public static class FleetOrchestrator
         FleetAssignmentMenu? menu = null;
 
         // Le corsie di flotta: oltre l'impronta, e mai intoccabili.
-        var fleetLanes = state.Lanes
-            .Where(l => l.LaneId >= state.FootprintLanes)
-            .Where(l => !l.Quarantined && !l.CampaignOwned && !l.EmergencyStopped)
-            .Where(l => !IsProtectedMode(l.Mode))
-            .ToList();
+        var fleetLanes = FleetLanes(state);
+
+        // I tre predicati qui sotto sono estratti apposta e usati ANCHE da Explain: la diagnosi del
+        // silenzio deve contare esattamente ciò che la decisione guarda. Due definizioni di «coda» o
+        // di «corsia libera» darebbero un pannello che spiega un silenzio diverso da quello vero —
+        // il difetto già pagato in D2 e con SeriesFreshness, nel posto peggiore per ripeterlo.
 
         // --- 1. Ritiri: forward test perdenti con storia sufficiente ---------------------------
         foreach (var lane in fleetLanes.Where(l => l.IsRunning))
@@ -54,18 +55,11 @@ public static class FleetOrchestrator
         }
 
         // --- 3. Assegnazioni automatiche: solo candidati "pass" --------------------------------
-        var queue = state.Candidates
-            .Where(c => !c.AlreadyHandled && c.Band == "pass")
-            .Where(c => c.TradesPerMonth >= opt.MinTradesPerMonth)
-            .OrderBy(c => c.CompletedAtUtc) // il più vecchio per primo: FIFO deterministico
-            .ToList();
+        var queue = AssignmentQueue(state, opt);
 
         if (queue.Count > 0)
         {
-            var freeLanes = fleetLanes
-                .Where(l => !l.IsRunning)
-                .OrderBy(l => l.LaneId) // id più basso per primo: deterministico
-                .ToList();
+            var freeLanes = FreeFleetLanes(fleetLanes);
 
             if (freeLanes.Count == 0)
             {
@@ -112,4 +106,84 @@ public static class FleetOrchestrator
 
     /// <summary>Corsie attive in TUTTA la flotta (impronta compresa: l'esposizione correlata è trasversale).</summary>
     private static int CountActive(FleetState state) => state.Lanes.Count(l => l.IsRunning);
+
+    // --- Predicati CONDIVISI fra la decisione e la sua spiegazione ------------------------------
+
+    /// <summary>Le corsie su cui l'orchestratore ha davvero potere: oltre l'impronta e non intoccabili.</summary>
+    internal static List<FleetLaneState> FleetLanes(FleetState state) => state.Lanes
+        .Where(l => l.LaneId >= state.FootprintLanes)
+        .Where(l => !l.Quarantined && !l.CampaignOwned && !l.EmergencyStopped)
+        .Where(l => !IsProtectedMode(l.Mode))
+        .ToList();
+
+    /// <summary>La coda di assegnazione: candidati «pass» non ancora gestiti e abbastanza frequenti.</summary>
+    internal static List<FleetCandidate> AssignmentQueue(FleetState state, FleetOptions opt) => state.Candidates
+        .Where(c => !c.AlreadyHandled && c.Band == "pass")
+        .Where(c => c.TradesPerMonth >= opt.MinTradesPerMonth)
+        .OrderBy(c => c.CompletedAtUtc) // il più vecchio per primo: FIFO deterministico
+        .ToList();
+
+    /// <summary>Le corsie di flotta ferme, in ordine deterministico.</summary>
+    internal static List<FleetLaneState> FreeFleetLanes(IEnumerable<FleetLaneState> fleetLanes) => fleetLanes
+        .Where(l => !l.IsRunning)
+        .OrderBy(l => l.LaneId)
+        .ToList();
+
+    /// <summary>
+    /// [I8] <b>Perché l'orchestratore non fa nulla.</b>
+    ///
+    /// <para>Il comitato AI è rimasto acceso sedici giorni senza emettere un voto e la flotta ha
+    /// prodotto 83 proposte grigie e zero assegnazioni, senza che nessuna superficie dicesse il
+    /// perché. La causa è a monte e in un punto solo: <see cref="Decide"/> forma un menù — e quindi
+    /// una domanda per il comitato — <b>solo</b> quando ci sono almeno due candidati in banda
+    /// «pass» in coda e una corsia libera. Con la coda sempre vuota non nasce nessun menù, quindi
+    /// nessun pareggio, quindi nessun voto.</para>
+    ///
+    /// <para>I quattro numeri qui sotto sono contati con gli <b>stessi predicati</b> della
+    /// decisione, non con una seconda lettura: un pannello che spiegasse un silenzio diverso da
+    /// quello vero sarebbe peggio del silenzio.</para>
+    /// </summary>
+    public static FleetSilence Explain(FleetState state, FleetOptions opt)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(opt);
+
+        var fleetLanes = FleetLanes(state);
+        var queue = AssignmentQueue(state, opt);
+        var free = FreeFleetLanes(fleetLanes);
+        var grey = state.Candidates.Count(c => !c.AlreadyHandled && c.Band == "grey");
+
+        // La ragione si dà nell'ordine in cui morde: il primo vincolo che chiude la strada è quello
+        // che l'operatore deve conoscere, e dirli tutti insieme non aiuterebbe a decidere.
+        var reason = fleetLanes.Count == 0
+            ? "nessuna corsia oltre l'impronta dell'auto-apply: l'orchestratore non ha corsie da governare"
+            : queue.Count == 0
+                ? $"nessun candidato in banda «pass» in coda ({grey} grigi, che sono solo proposte al click umano): senza candidati non c'è nulla da assegnare"
+                : free.Count == 0
+                    ? $"{queue.Count} candidati in coda ma nessuna corsia di flotta libera: serve un ritiro"
+                    : queue.Count < 2
+                        ? "un solo candidato idoneo: l'assegnazione è determinata, non c'è pareggio da arbitrare"
+                        : "ci sono le condizioni per un'assegnazione e per un pareggio da arbitrare";
+
+        return new FleetSilence(queue.Count, grey, free.Count, fleetLanes.Count, reason);
+    }
+}
+
+/// <summary>
+/// [I8] I quattro numeri che spiegano il silenzio dell'orchestratore, più la ragione in chiaro.
+/// </summary>
+/// <param name="PassCandidatesQueued">Candidati «pass» in coda: sotto 2 non nasce alcun pareggio da arbitrare.</param>
+/// <param name="GreyCandidates">Candidati in fascia grigia non gestiti: proposte al click umano, mai assegnazioni.</param>
+/// <param name="FreeFleetLanes">Corsie di flotta ferme e assegnabili adesso.</param>
+/// <param name="LanesUnderGovernance">Corsie su cui l'orchestratore ha potere (oltre l'impronta, non intoccabili).</param>
+/// <param name="Reason">Il primo vincolo che chiude la strada, in italiano.</param>
+public sealed record FleetSilence(
+    int PassCandidatesQueued,
+    int GreyCandidates,
+    int FreeFleetLanes,
+    int LanesUnderGovernance,
+    string Reason)
+{
+    /// <summary>Vero quando esistono le condizioni perché il comitato riceva una domanda.</summary>
+    public bool CommitteeCouldBeAsked => PassCandidatesQueued >= 2 && FreeFleetLanes > 0;
 }

@@ -30,7 +30,15 @@ public sealed class FeatureDriftWorkerPersistenceTests : IAsyncDisposable
         public string Decrypt(string ciphertext) => ciphertext;
     }
 
-    /// <summary>Monitor scriptato: gravità fissa per ogni modello valutato.</summary>
+    /// <summary>
+    /// Monitor scriptato: gravità fissa per ogni modello valutato.
+    ///
+    /// <para>[I6] I conteggi di osservazioni sono valorizzati come li valorizza SEMPRE il monitor
+    /// vero. Senza, un report <c>None</c> è indistinguibile da un rilevatore che ha risposto «dati
+    /// insufficienti», e il worker lo esclude dal verdetto — correttamente. Un finto che non li
+    /// dichiara farebbe provare la persistenza su un check che nella realtà non produrrebbe un
+    /// giudizio.</para>
+    /// </summary>
     private sealed class ScriptedMonitor(DriftSeverity severity) : IFeatureDriftMonitor
     {
         public Task<IReadOnlyList<FactorDriftReport>> EvaluateAsync(
@@ -41,6 +49,8 @@ public sealed class FeatureDriftWorkerPersistenceTests : IAsyncDisposable
                 new FactorDriftReport
                 {
                     FeatureName = "Mom1",
+                    ReferenceCount = 400,
+                    CurrentCount = 120,
                     Results = severity == DriftSeverity.None
                         ? [new DriftResult("Psi", 0.01, null, DriftSeverity.None, "stabile")]
                         : [new DriftResult("Psi", 0.51, null, severity, "shift")],
@@ -48,6 +58,8 @@ public sealed class FeatureDriftWorkerPersistenceTests : IAsyncDisposable
                 new FactorDriftReport
                 {
                     FeatureName = "Vol5",
+                    ReferenceCount = 400,
+                    CurrentCount = 120,
                     Results = [new DriftResult("Ks", 0.02, 0.9, DriftSeverity.None, "stabile")],
                 },
             ];
@@ -85,14 +97,85 @@ public sealed class FeatureDriftWorkerPersistenceTests : IAsyncDisposable
         };
         db.SavedMlModels.Add(model);
         await db.SaveChangesAsync();
+        // [I6] Senza candele il worker dichiara il check SALTATO invece di produrre un verdetto:
+        // queste prove riguardano la PERSISTENZA dell'esito, quindi devono partire da un check che
+        // può davvero avvenire.
+        await DriftTestData.SeedRecentCandlesAsync(factory, model.Symbol, model.Timeframe);
         return model.Id;
     }
 
     private FeatureDriftWorker Worker(IDbContextFactory<ApplicationDbContext> factory, DriftSeverity severity, DriftMonitorOptions? opt = null)
         => new(factory, new ScriptedMonitor(severity),
             new ModelRegistry(factory, new ModelRegistryOptions(), NullLogger<ModelRegistry>.Instance),
-            (opt ?? new DriftMonitorOptions { RetireChampionOnAlert = true, MinAlertsToRetire = 1 }).AsMonitor(),
+            (opt ?? new DriftMonitorOptions { RetireChampionOnAlert = true, MinAlertsToRetire = 1, RecentCandles = DriftTestData.MinimumCandles }).AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance);
+
+    /// <summary>
+    /// [I6] <b>Il quarto modo di dire verde, provato end-to-end.</b> I rilevatori rispondono
+    /// <c>None</c> anche quando NON hanno potuto misurare — «dati insufficienti» — e prima della
+    /// revisione avversaria del 2026-08-18 il worker persisteva quella risposta come un giudizio
+    /// verde: badge «Pulito» in <c>/admin/autonomy</c> e «nessun allarme, tutti giudicati» in Home,
+    /// su rilevatori che avevano dichiarato di non aver guardato.
+    ///
+    /// <para>Qui si alza <c>MinObservations</c> sopra le osservazioni che il monitor dichiara —
+    /// esattamente la taratura che la card delle soglie invita a fare — e si pretende che la riga
+    /// risulti <b>SALTATA con il motivo</b>, non pulita.</para>
+    /// </summary>
+    [Fact]
+    public async Task Tick_RilevatoriSenzaOsservazioniSufficienti_PersisteUnSaltoNonUnVerdettoVerde()
+    {
+        var factory = await BuildFactoryAsync();
+        await AddModelAsync(factory, ModelStage.Staging);
+
+        // Il monitor finto dichiara CurrentCount = 120; con il pavimento a 300 nessuna feature è
+        // misurabile, ed è la configurazione che un operatore può creare dal pannello.
+        var opt = new DriftMonitorOptions
+        {
+            RecentCandles = DriftTestData.MinimumCandles,
+            Thresholds = new DriftThresholds { MinObservations = 300 },
+        };
+
+        await Worker(factory, DriftSeverity.None, opt).TickAsync(CancellationToken.None);
+
+        await using var db = await factory.CreateDbContextAsync();
+        var row = Assert.Single(await db.DriftCheckResults.ToListAsync());
+
+        Assert.False(row.IsVerdict);
+        Assert.NotNull(row.SkipReason);
+        Assert.Contains("osservazioni valide", row.SkipReason);
+        Assert.Contains("300", row.SkipReason);
+        // Il punto: non deve somigliare a un check pulito.
+        Assert.Equal(0, row.TotalFeatures);
+        Assert.Equal(0, row.AlertFeatures);
+    }
+
+    /// <summary>
+    /// Il complemento, e il controllo nella direzione opposta: con osservazioni sufficienti il
+    /// verdetto si produce eccome. Senza questo, il test sopra sarebbe soddisfatto anche da un
+    /// monitor che si rifiuta sempre — e un monitor che non guarda mai è inutile quanto uno che
+    /// dice sempre verde.
+    /// </summary>
+    [Fact]
+    public async Task Tick_ConOsservazioniSufficienti_ProduceUnVerdettoVero()
+    {
+        var factory = await BuildFactoryAsync();
+        await AddModelAsync(factory, ModelStage.Staging);
+
+        var opt = new DriftMonitorOptions
+        {
+            RecentCandles = DriftTestData.MinimumCandles,
+            Thresholds = new DriftThresholds { MinObservations = 20 },
+        };
+
+        await Worker(factory, DriftSeverity.None, opt).TickAsync(CancellationToken.None);
+
+        await using var db = await factory.CreateDbContextAsync();
+        var row = Assert.Single(await db.DriftCheckResults.ToListAsync());
+
+        Assert.True(row.IsVerdict);
+        Assert.Null(row.SkipReason);
+        Assert.Equal(2, row.TotalFeatures);
+    }
 
     [Fact]
     public async Task Tick_CleanModel_PersistsOneRowWithZeroDrift()

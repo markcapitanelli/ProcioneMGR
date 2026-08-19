@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProcioneMGR.Data;
@@ -11,9 +12,11 @@ using ProcioneMGR.Data;
 namespace ProcioneMGR.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260818182658_AddDriftSkipReason")]
+    partial class AddDriftSkipReason
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1452,9 +1455,6 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
 
                     b.Property<int>("ObservedLanes")
                         .HasColumnType("integer");
-
-                    b.Property<DateTime?>("PausedUntilUtc")
-                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("PendingRunId")
                         .HasColumnType("uuid");

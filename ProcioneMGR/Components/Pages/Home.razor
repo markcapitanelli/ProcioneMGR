@@ -10,6 +10,9 @@
 @inject AuthenticationStateProvider AuthProvider
 @inject IEnsembleManager EnsembleMgr
 @inject FactorDriftSnapshot FactorDrift
+@* [I6] L'omonimo ma diverso: deriva delle FEATURE dei modelli ML (PSI/KS/Page-Hinkley), non
+   dell'IC dei fattori. Letto direttamente perché è un singleton già composto — nessuna query. *@
+@inject ProcioneMGR.Services.Monitoring.Drift.FeatureDriftSnapshot FeatureDrift
 @inject ProcioneMGR.Services.Sentiment.SentimentHeritageSnapshot HeritageSnapshot
 
 <PageTitle>ProcioneMGR</PageTitle>
@@ -130,6 +133,50 @@
                     Deriva dei fattori: nessun allarme. @DriftCoverage()
                 </div>
             }
+
+            @* [I6] Deriva delle FEATURE dei modelli ML — il gemello omonimo di quella sopra, e sono
+               due cose diverse: sopra è l'IC dei FATTORI che smette di informare (filone D2), qui è
+               la distribuzione delle feature di un modello che si sposta rispetto al suo training
+               (PSI/KS/Page-Hinkley). Le etichette sono esplicite apposta: due verdetti
+               indistinguibili sullo stesso schermo sono peggio di un verdetto solo.
+               Blocco INDIPENDENTE, non un ramo else di quello sopra: le due derive possono allarmare
+               insieme, e incatenarle nasconderebbe la seconda ogni volta che scatta la prima. *@
+            @if (FeatureDrift.Alerts.Count > 0)
+            {
+                <div class="alert alert-warning">
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <i class="bi bi-diagram-3 fs-5"></i>
+                        <strong>
+                            @FeatureDrift.Alerts.Count modell@(FeatureDrift.Alerts.Count == 1 ? "o" : "i") ML con feature in deriva
+                        </strong>
+                    </div>
+                    <ul class="mb-2 small">
+                        @foreach (var m in FeatureDrift.Alerts.Take(6))
+                        {
+                            <li>
+                                <strong>@m.ModelName</strong> su @m.Symbol @m.Timeframe —
+                                @m.AlertFeatures feature in alert su @m.TotalFeatures valutate
+                                (@m.DriftingFeatures in deriva)
+                            </li>
+                        }
+                    </ul>
+                    <a href="admin/autonomy#p-drift" class="alert-link">Vedi il dettaglio in Autonomia →</a>
+                    <div class="form-text mt-1">
+                        Segnalazione soltanto: nessun modello viene ritirato in automatico.
+                        @FeatureDriftCoverage()
+                    </div>
+                </div>
+            }
+            else if (FeatureDrift.LastRunUtc is not null)
+            {
+                @* «Nessun allarme» vale solo insieme a quanti modelli sono stati davvero guardati:
+                   senza i saltati, «0 allarmi su 53» si legge come un via libera anche se 50 di
+                   quei 53 non sono stati esaminati affatto. *@
+                <div class="text-body-secondary small mb-3">
+                    <i class="bi bi-diagram-3 me-1"></i>
+                    Deriva delle feature ML: nessun allarme. @FeatureDriftCoverage()
+                </div>
+            }
         }
 
         <h5 class="mb-3">Il percorso della piattaforma</h5>
@@ -183,10 +230,36 @@
     private DateTime? _factorDriftLastRun;
 
     /// <summary>
-    /// COPERTURA dichiarata: su quante serie è basato ciò che si sta leggendo. Il job ne calcola un
-    /// numero limitato per giro (tetto <c>FactorDrift:MaxSeries</c>) ruotando sulle più vecchie:
-    /// senza questa riga, "1 fattore in deriva" — o peggio "nessun allarme" — si legge come un
-    /// verdetto sull'intera watchlist invece che sul campione già visto.
+    /// [I6] La copertura della deriva FEATURE. Dichiara sempre quanti modelli sono stati saltati:
+    /// senza, «0 allarmi su 53 modelli» si legge come un via libera anche quando 50 di quei 53 non
+    /// sono stati guardati affatto. E dichiara quando la fotografia viene dalla storia registrata
+    /// invece che da un tick di questo processo — mostrare un valore vecchio come attuale è la
+    /// regola 5 della piattaforma.
+    /// </summary>
+    private RenderFragment FeatureDriftCoverage() => builder =>
+    {
+        var total = FeatureDrift.All.Count;
+        if (total == 0) return;
+
+        var skipped = FeatureDrift.ModelsSkipped;
+        var testo = skipped > 0
+            ? $"Copertura: {FeatureDrift.ModelsWithVerdict} modelli giudicati su {total} esaminati ({skipped} saltati: candele insufficienti, nessuna feature valutabile o finestra sovrapposta al training)."
+            : $"Copertura: {total} modelli, tutti giudicati.";
+        if (FeatureDrift.LastRunUtc is DateTime at)
+        {
+            testo += FeatureDrift.FromStoredHistory
+                ? $" Fotografia ricostruita dall'ultimo tick registrato ({at:yyyy-MM-dd HH:mm} UTC), non ancora ricalcolata da questo avvio."
+                : $" Ultimo controllo: {at:yyyy-MM-dd HH:mm} UTC.";
+        }
+        builder.AddContent(0, testo);
+    };
+
+    /// <summary>
+    /// COPERTURA dichiarata della deriva dei FATTORI (filone D2 — non quella delle feature ML qui
+    /// sopra): su quante serie è basato ciò che si sta leggendo. Il job ne calcola un numero
+    /// limitato per giro (tetto <c>FactorDrift:MaxSeries</c>) ruotando sulle più vecchie: senza
+    /// questa riga, "1 fattore in deriva" — o peggio "nessun allarme" — si legge come un verdetto
+    /// sull'intera watchlist invece che sul campione già visto.
     /// </summary>
     private RenderFragment DriftCoverage() => builder =>
     {

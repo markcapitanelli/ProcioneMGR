@@ -1096,10 +1096,23 @@
             }
 
             var baseAsset = _symbol.Split('/')[0].Trim().ToUpperInvariant();
+
+            // [I9] Le notizie NON scorate si escludono, come fa la via ML.
+            //
+            // Prima erano mappate con `SentimentScore ?? 0m`, cioè un punteggio NEUTRO inventato per
+            // qualcosa che nessuno ha valutato — mentre `SentimentNewsProvider`, che alimenta il
+            // fattore quando lo usa un modello, filtra `SentimentScore != null`. Le due strade
+            // misuravano fattori diversi sulla stessa serie: questo pannello dice se il sentiment
+            // informa, e lo diceva su un fattore che il modello non vedrà mai.
+            //
+            // È anche la regola già scritta per lo scorer LLM (Fase B): un elemento non scorabile si
+            // SALTA, mai uno zero inventato — uno zero non è «neutro», è «non lo so» travestito.
+            var nonScorate = allNews.Count(n => n.SentimentScore is null);
             var scoredNews = allNews
+                .Where(n => n.SentimentScore is not null)
                 .Select(n => new ScoredNewsItem(
                     DateTime.SpecifyKind(n.TimestampUtc, DateTimeKind.Utc),
-                    n.SentimentScore ?? 0m,
+                    n.SentimentScore!.Value,
                     DeserializeSymbols(n.SymbolsJson)))
                 .ToList();
 
@@ -1109,7 +1122,14 @@
 
             _evalResult = FactorEvaluator.Evaluate(factor, candles, parameters, config);
 
-            SetEvalStatus($"Fattore valutato su {candles.Count} candele ({baseAsset}) e {scoredNews.Count} notizie totali in archivio.", error: false);
+            // La copertura si dichiara: «IC basso» su tre notizie e «IC basso» su tremila sono due
+            // verdetti diversi, e senza il numero si leggono uguale.
+            var escluse = nonScorate > 0
+                ? $" · {nonScorate} notizie NON scorate escluse (come fa la via ML: uno zero inventato non è «neutro», è «non lo so» travestito)"
+                : string.Empty;
+            SetEvalStatus(
+                $"Fattore valutato su {candles.Count} candele ({baseAsset}) e {scoredNews.Count} notizie scorate in archivio{escluse}.",
+                error: false);
         }
         catch (Exception ex)
         {

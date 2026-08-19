@@ -276,9 +276,13 @@
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
             @if (_usage is { TrackingEnabled: true })
             {
-                <span class="badge bg-success">tracking attivo</span>
+                <span class="badge bg-success">conteggio attivo</span>
                 <span class="badge bg-light text-dark">oggi: @_usage.TodayCalls chiamate · @_usage.TodayTokens token</span>
                 <span class="badge bg-light text-dark">mese: @_usage.MonthTokens token</span>
+                @if (NoCeilingInForce)
+                {
+                    <span class="badge bg-warning text-dark">NESSUN TETTO IN VIGORE</span>
+                }
                 @if (_budgetVerdict is { Exhausted: true })
                 {
                     <span class="badge bg-warning text-dark">BUDGET ESAURITO — @_budgetVerdict.Reason</span>
@@ -286,9 +290,32 @@
             }
             else
             {
-                <span class="badge bg-secondary">tracking spento — nessun conteggio, nessun tetto</span>
+                <span class="badge bg-secondary">conteggio spento — nessun conteggio, nessun tetto</span>
             }
         </div>
+
+        @* [I3] «Conteggio attivo» si legge come «la spesa è sorvegliata», e con i tre limiti a zero
+           non lo è: il controllo che ogni chiamata esegue prima di partire risponde SEMPRE sì
+           (LlmUsage.CheckBudget salta ogni limite non positivo). È la classe «controllo che
+           rassicura», e questo blocco è il suo rimedio: dice che non c'è tetto, e dà i numeri per
+           sceglierne uno invece di lasciare l'operatore a indovinare. *@
+        @if (_usage is { TrackingEnabled: true } && NoCeilingInForce)
+        {
+            <div class="alert alert-warning py-2 small">
+                <strong>Il conteggio gira, ma non c'è alcun tetto.</strong> I tre limiti sono a
+                <code>0</code>, e <strong>0 non è «zero»: è «nessun limite»</strong> — il controllo
+                che precede ogni chiamata risponde sempre sì, e il budget non può esaurirsi.
+                Conta perché il layer AI ha già smesso di funzionare una volta per credito esaurito
+                <em>in silenzio</em>, e perché il comitato interroga più provider <em>per ogni</em>
+                domanda: è il primo candidato alla spesa fuori controllo.
+                <br />
+                <strong>Per scegliere un numero</strong>, dai dati veri di questo processo: oggi
+                <strong>@_usage.TodayCalls chiamate</strong> e @_usage.TodayTokens token; nel mese
+                @_usage.MonthTokens token, cioè una media di circa
+                <strong>@MonthlyAveragePerDay.ToString("N0") token al giorno</strong> sui
+                @DaysElapsedThisMonth giorni trascorsi.
+            </div>
+        }
         @if (_usage is { TrackingEnabled: true, Today.Count: > 0 })
         {
             <div class="table-responsive mb-2">
@@ -761,6 +788,27 @@ else
     // ---- [AF1] Consumo e budget ----
     private LlmUsageSnapshot? _usage;
     private LlmBudgetVerdict? _budgetVerdict;
+
+    /// <summary>
+    /// [I3] Nessun tetto EFFETTIVO in vigore. Si legge da <c>BudgetMonitor.CurrentValue</c> e non
+    /// dai campi del form: quelli sono la modifica che l'operatore sta digitando, non ciò che
+    /// governa le chiamate adesso — e mostrare l'una per l'altra è come dichiarare applicata una
+    /// configurazione mai salvata.
+    /// </summary>
+    private bool NoCeilingInForce
+    {
+        get
+        {
+            var b = BudgetMonitor.CurrentValue;
+            return b.DailyCallLimit <= 0 && b.DailyTokenLimit <= 0 && b.MonthlyTokenLimit <= 0;
+        }
+    }
+
+    /// <summary>Giorni trascorsi del mese corrente (almeno 1: il primo del mese non divide per zero).</summary>
+    private static int DaysElapsedThisMonth => Math.Max(1, DateTime.UtcNow.Day);
+
+    /// <summary>Media di token al giorno sul mese in corso — la base onesta per scegliere un tetto.</summary>
+    private double MonthlyAveragePerDay => _usage is null ? 0 : (double)_usage.MonthTokens / DaysElapsedThisMonth;
     private bool _budgetTracking;
     private int _budgetDailyCalls;
     private int _budgetDailyTokens;

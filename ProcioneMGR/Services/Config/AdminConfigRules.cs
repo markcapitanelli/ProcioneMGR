@@ -178,7 +178,24 @@ public static class AdminConfigRules
         DriftMonitorOptions o => Check(
             (o.IntervalHours >= 1, "L'intervallo dev'essere almeno 1 ora."),
             (o.RecentCandles >= 20, "Servono almeno 20 candele recenti perché il confronto di distribuzioni significhi qualcosa."),
-            (o.MinAlertsToRetire >= 1, "Serve almeno 1 feature in alert per ritirare un Champion.")),
+            (o.MinAlertsToRetire >= 1, "Serve almeno 1 feature in alert per ritirare un Champion."),
+            // [I6] Le soglie sono ora amministrabili, quindi vanno anche validate: una soglia di
+            // alert MENO severa di quella di warning renderebbe l'alert irraggiungibile — un livello
+            // di allarme che non può scattare è peggio di un livello assente, perché sembra esserci.
+            (o.Thresholds.PsiBins >= 2, "Il PSI ha bisogno di almeno 2 bin."),
+            (o.Thresholds.PsiWarning > 0, "La soglia PSI di warning dev'essere positiva."),
+            (o.Thresholds.PsiAlert >= o.Thresholds.PsiWarning,
+                "La soglia PSI di alert non può essere più permissiva di quella di warning: l'alert non scatterebbe mai."),
+            (o.Thresholds.KsPValueWarning is > 0 and < 1, "Il p-value KS di warning dev'essere fra 0 e 1."),
+            (o.Thresholds.KsPValueAlert is > 0 and < 1, "Il p-value KS di alert dev'essere fra 0 e 1."),
+            (o.Thresholds.KsPValueAlert <= o.Thresholds.KsPValueWarning,
+                "Il p-value KS di alert dev'essere più stringente (più piccolo) di quello di warning: altrimenti l'alert non scatterebbe mai."),
+            (o.Thresholds.PageHinkleyDelta >= 0, "La tolleranza di Page-Hinkley non può essere negativa."),
+            (o.Thresholds.PageHinkleyWarning > 0, "La soglia Page-Hinkley di warning dev'essere positiva."),
+            (o.Thresholds.PageHinkleyAlert >= o.Thresholds.PageHinkleyWarning,
+                "La soglia Page-Hinkley di alert non può essere più permissiva di quella di warning: l'alert non scatterebbe mai."),
+            (o.Thresholds.MinObservations >= 20,
+                "Servono almeno 20 osservazioni per lato perché un test di distribuzione significhi qualcosa.")),
 
         NotificationOptions o => Check(
             (o.Provider is "Logging" or "Telegram", "Provider ammessi: Logging oppure Telegram."),
@@ -187,7 +204,10 @@ public static class AdminConfigRules
                 "Con provider Telegram serve il ChatId di destinazione (il TOKEN del bot no: solo env TELEGRAM_BOT_TOKEN).")),
 
         CampaignOptions o => Check(
-            (o.TickSeconds >= 10, "Il tick del planner dev'essere almeno 10 secondi.")),
+            (o.TickSeconds >= 10, "Il tick del planner dev'essere almeno 10 secondi."),
+            // [I7] Zero è legittimo (comportamento storico), negativo no: una pausa negativa
+            // scadrebbe nel passato, cioè sarebbe una pausa che non mette in pausa.
+            (o.CancelPauseMinutes >= 0, "La pausa dopo un annullamento non può essere negativa (0 = nessuna pausa).")),
 
         RegimeTriggerOptions o => Check(
             (o.CheckIntervalMinutes >= 1, "L'intervallo di controllo dev'essere almeno 1 minuto."),

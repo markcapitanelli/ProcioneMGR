@@ -212,7 +212,101 @@
     </div>
 </div>
 
+@* [I5] Tutto il resto di ciò che il collettore ha raccolto.
+
+   Le card qui sopra sono scritte a mano, una per misura, e questo va bene per le misure che
+   meritano un grafico. Ma finché ESISTEVANO SOLO QUELLE, uno strumento nuovo non compariva da
+   nessuna parte: il collettore lo scartava (lista di tre nomi cablata) e la pagina non lo avrebbe
+   comunque mostrato. Chi aggiungeva una misura non aveva modo di accorgersi che non arrivava —
+   una pagina che tace su ciò che non conosce.
+
+   Questa card chiude il giro: elenca ogni strumento raccolto che nessuna card dedicata già mostra.
+   Non è bella, è ONESTA — e il gate di I5 («un istogramma nuovo compare in pagina senza modificare
+   alcuna lista») senza di essa era soddisfatto nel collettore e falso nel prodotto. Trovato al
+   livello 4 il 2026-08-19, non dai test. *@
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Altre misure raccolte</span>
+        <span class="small text-muted">@OtherHistograms.Count istogrammi · @OtherCounters.Count contatori</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Ogni strumento del meter di piattaforma che non ha una card sua qui sopra. Compare da
+            solo: nessuna lista da aggiornare quando se ne aggiunge uno.
+        </p>
+        @if (OtherHistograms.Count == 0 && OtherCounters.Count == 0)
+        {
+            <div class="text-muted">Nessuna altra misura registrata in questa sessione.</div>
+        }
+        else
+        {
+            @if (OtherHistograms.Count > 0)
+            {
+                <h6 class="small text-uppercase text-muted">Istogrammi</h6>
+                <div class="table-responsive mb-3">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Strumento</th><th class="text-end">n</th><th class="text-end">media</th><th class="text-end">p50</th><th class="text-end">p95</th><th class="text-end">max</th></tr></thead>
+                        <tbody>
+                            @foreach (var (name, h) in OtherHistograms)
+                            {
+                                <tr>
+                                    <td><code>@name</code></td>
+                                    <td class="text-end">@h.Count</td>
+                                    <td class="text-end">@h.Mean.ToString("F1")</td>
+                                    <td class="text-end">@h.P50.ToString("F1")</td>
+                                    <td class="text-end">@h.P95.ToString("F1")</td>
+                                    <td class="text-end">@h.Max.ToString("F1")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            @if (OtherCounters.Count > 0)
+            {
+                <h6 class="small text-uppercase text-muted">Contatori</h6>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Strumento</th><th class="text-end">totale</th></tr></thead>
+                        <tbody>
+                            @foreach (var (key, value) in OtherCounters)
+                            {
+                                <tr><td><code>@key</code></td><td class="text-end">@value</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </div>
+</div>
+
 @code {
+    /// <summary>Istogrammi che hanno già una card dedicata qui sopra: non si ripetono in fondo.</summary>
+    private static readonly HashSet<string> DedicatedHistograms =
+    [
+        MetricsCollector.TradingSlippageInstrument,
+        MetricsCollector.OrderLatencyInstrument,
+        MetricsCollector.ExecutionSlippageInstrument,
+    ];
+
+    /// <summary>
+    /// [I5] Gli istogrammi raccolti che nessuna card mostra. Si includono anche quelli a zero
+    /// misure: «lo strumento esiste e non ha ancora registrato nulla» e «lo strumento non esiste»
+    /// sono cose diverse, e questa pagina serve proprio a distinguerle.
+    /// </summary>
+    private IReadOnlyList<(string Name, HistogramSummary Summary)> OtherHistograms =>
+        _s.Histograms.Where(kv => !DedicatedHistograms.Contains(kv.Key))
+            .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => (kv.Key, kv.Value))
+            .ToList();
+
+    /// <summary>I contatori raccolti, con i loro tag. Le card in cima ne mostrano solo alcuni aggregati.</summary>
+    private IReadOnlyList<(string Key, long Value)> OtherCounters =>
+        _s.Counters.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => (kv.Key, kv.Value))
+            .ToList();
+
     /// <summary>
     /// [F7] Vero quando il motore di trading vive in un ALTRO processo: allora i contatori di
     /// trade/job/promozioni di questa pagina restano a zero per costruzione, e la pagina lo

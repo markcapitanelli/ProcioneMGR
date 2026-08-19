@@ -34,13 +34,29 @@ public sealed class EnsemblePageService(
     IServiceProvider services,
     IStrategyFactory strategyFactory,
     IFeatureDriftMonitor driftMonitor,
+    // [I6] Le soglie del drift arrivano dalla configurazione, come al worker: da quando sono
+    // amministrabili, usare qui i default di fabbrica farebbe divergere i due verdetti.
+    Microsoft.Extensions.Options.IOptionsMonitor<DriftMonitorOptions> driftOptions,
     IModelRegistry registry,
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IBacktestEngine backtestEngine,
     ProcioneMGR.Services.Analysis.ExcursionAnalyzer excursionAnalyzer)
 {
-    /// <summary>Finestra "recente" per la valutazione drift (candele).</summary>
+    /// <summary>
+    /// Finestra "recente" per la valutazione drift, in candele — <b>ripiego</b> quando la
+    /// configurazione non è disponibile.
+    ///
+    /// <para>[I6] Non è più il valore in vigore: quello è <c>Drift:RecentCandles</c>, lo stesso che
+    /// usa il monitor periodico. Tenere qui una costante propria significava avere <b>due
+    /// definizioni della stessa finestra</b>, e da quando la sezione è amministrabile sarebbero
+    /// potute divergere — con la pagina che pesca 200 candele mentre la regola del salto ne pretende
+    /// 500, cioè un rifiuto permanente inspiegabile. La finestra effettiva si legge da
+    /// <see cref="EffectiveRecentCandles"/>.</para>
+    /// </summary>
     public const int DriftRecentCandles = 200;
+
+    /// <summary>La finestra recente davvero in vigore, dalla configurazione condivisa col worker.</summary>
+    public int EffectiveRecentCandles => Math.Max(20, driftOptions.CurrentValue.RecentCandles);
 
     /// <summary>Finestra (giorni) su cui si misura la ridondanza fra le gambe della corsia.</summary>
     public const int CorrelationWindowDays = 90;
@@ -451,19 +467,45 @@ public sealed class EnsemblePageService(
             recent = await db.OhlcvData.AsNoTracking()
                 .Where(c => c.Symbol == model.Symbol && c.Timeframe == model.Timeframe)
                 .OrderByDescending(c => c.TimestampUtc)
-                .Take(DriftRecentCandles)
+                .Take(EffectiveRecentCandles)
                 .ToListAsync(ct);
         }
         recent.Reverse(); // ordine cronologico
 
-        if (recent.Count < 20)
-            return new DriftEvaluationResult("Candele recenti insufficienti per una valutazione (servono ≥20).", IsError: true);
+        // [I6] Le soglie e la regola del salto sono QUELLE DEL WORKER, non un secondo metro locale.
+        // Finché le soglie vivevano solo nei default del codice le due strade coincidevano per caso;
+        // da quando sono amministrabili (Drift:Thresholds) un pannello che usasse i default di
+        // fabbrica darebbe un verdetto DIVERSO dal monitor periodico sullo stesso modello — due
+        // regole sulla stessa domanda, il difetto già pagato in D2 e con SeriesFreshness.
+        var opt = driftOptions.CurrentValue;
 
-        DriftReports = (await driftMonitor.EvaluateAsync(model, recent, ct: ct)).ToList();
+        // Stessa regola del worker, non una copia: candele insufficienti e finestra sovrapposta al
+        // periodo di training vanno DICHIARATE, non trasformate in un «nessun drift rilevante».
+        var skip = FeatureDriftWorker.DescribeSkip(model, recent, opt);
+        if (skip is not null)
+            return new DriftEvaluationResult($"Valutazione non eseguita — {skip}.", IsError: true);
+
+        DriftReports = (await driftMonitor.EvaluateAsync(model, recent, opt.Thresholds, ct)).ToList();
+
+        // E lo stesso pavimento sulle osservazioni: un rilevatore che ha risposto «dati
+        // insufficienti» non è un fattore senza deriva.
+        var misurati = DriftReports.Count(r => FeatureDriftWorker.IsMeasured(r, opt.Thresholds));
+        if (misurati == 0)
+        {
+            return new DriftEvaluationResult(
+                $"Valutazione non eseguita — nessuno dei {DriftReports.Count} fattori aveva abbastanza osservazioni valide "
+                + $"(servono {opt.Thresholds.MinObservations} per lato): i rilevatori hanno risposto «dati insufficienti», non «nessuna deriva».",
+                IsError: true);
+        }
+
         var drift = DriftReports.Count(r => r.Overall != DriftSeverity.None);
+        var nonMisurati = DriftReports.Count - misurati;
+        var coda = nonMisurati > 0
+            ? $" ({nonMisurati} fattori esclusi dal verdetto: osservazioni insufficienti)"
+            : string.Empty;
         var message = drift == 0
-            ? $"Nessun drift rilevante: {DriftReports.Count} fattori valutati sulle ultime {recent.Count} candele."
-            : $"{drift}/{DriftReports.Count} fattori in drift sulle ultime {recent.Count} candele (input cambiati: controllare il monitor di decadimento per l'effetto sul PnL).";
+            ? $"Nessun drift rilevante: {misurati} fattori valutati sulle ultime {recent.Count} candele{coda}."
+            : $"{drift}/{misurati} fattori in drift sulle ultime {recent.Count} candele{coda} (input cambiati: controllare il monitor di decadimento per l'effetto sul PnL).";
         return new DriftEvaluationResult(message, IsError: false);
     }
 

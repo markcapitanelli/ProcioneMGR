@@ -116,4 +116,23 @@ public class PairsBacktestResult
     public int CandlesEvaluated { get; set; }
     public List<PairsTrade> Trades { get; set; } = new();
     public List<EquityPoint> EquityCurve { get; set; } = new();
+
+    /// <summary>
+    /// [I10] L'analisi dello spread che il motore ha <b>davvero</b> usato per decidere: hedge ratio,
+    /// spread e z-score dell'estimatore scelto in configurazione.
+    ///
+    /// <para>Nasce da un difetto trovato il 2026-08-18 e presente dal 2026-07-26 (adozione del
+    /// Kalman): la pagina <c>/pairs-trading</c> passava al motore l'estimatore selezionato ma
+    /// disegnava il grafico dello z-score con un <c>RollingPairsSpreadAnalyzer</c> <b>fisso</b>.
+    /// Scegliendo Kalman si vedeva la curva dell'OLS — il grafico descriveva un backtest diverso da
+    /// quello eseguito, e la doc di pagina dichiarava proprio che questo non poteva succedere
+    /// («nessuna doppia verità»).</para>
+    ///
+    /// <para>Esporla invece di far ricalcolare la pagina toglie la possibilità stessa della
+    /// divergenza: non c'è un secondo calcolo che possa usare parametri diversi.</para>
+    /// </summary>
+    public RollingPairsAnalysis? Analysis { get; set; }
+
+    /// <summary>L'estimatore usato, per dichiararlo accanto al grafico invece di lasciarlo intuire.</summary>
+    public PairsHedgeRatioEstimator EstimatorUsed { get; set; }
 }

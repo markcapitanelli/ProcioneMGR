@@ -544,6 +544,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.Property(x => x.Timeframe).HasMaxLength(8);
             // Enum come stringa leggibile ("None"/"Warning"/"Alert"), coerente con le altre entità.
             e.Property(x => x.Overall).HasConversion<string>().HasMaxLength(8);
+            // [I6] Motivo del salto: nullable per costruzione — null significa «questo è un verdetto».
+            e.Property(x => x.SkipReason).HasMaxLength(300);
+            e.Ignore(x => x.IsVerdict);
             // La UI legge "gli ultimi N" globali o per modello; il prune cancella per data.
             e.HasIndex(x => x.CheckedAtUtc);
             e.HasIndex(x => new { x.ModelId, x.CheckedAtUtc });

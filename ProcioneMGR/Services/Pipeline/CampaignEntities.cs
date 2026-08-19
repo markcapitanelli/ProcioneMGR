@@ -54,6 +54,22 @@ public class VettingCampaign
     /// </summary>
     public string? PendingWakeReason { get; set; }
 
+    /// <summary>
+    /// [I7] Fino a quando la rotazione è in PAUSA, dopo un annullamento umano di un run.
+    /// <c>null</c> = nessuna pausa.
+    ///
+    /// <para>Nasce da un difetto trovato leggendo il codice il 2026-08-18: un run annullato a mano
+    /// da <c>/pipeline</c> finiva nello stesso ramo di uno <c>Failed</c>, la config veniva marcata
+    /// fallita e la rotazione passava alla successiva — che, essendo mai eseguita in questo ciclo, è
+    /// sempre eleggibile. Entro un tick da 60 secondi partiva un altro run automatico. <b>Chi
+    /// annulla otteneva il contrario di ciò che voleva</b>, e l'unico modo di fermare davvero la
+    /// campagna era disabilitarla.</para>
+    ///
+    /// <para>Un annullamento è un ORDINE, non un esito: qui diventa una pausa dichiarata e con una
+    /// scadenza, invece di un motivo per ripartire subito.</para>
+    /// </summary>
+    public DateTime? PausedUntilUtc { get; set; }
+
     /// <summary>Ultima decisione presa dal planner, leggibile (per UI e notifiche).</summary>
     public string? LastOutcome { get; set; }
 

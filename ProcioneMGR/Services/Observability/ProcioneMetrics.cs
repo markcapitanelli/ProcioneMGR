@@ -18,6 +18,12 @@ public sealed class ProcioneMetrics : IDisposable
     private readonly Meter _meter;
     private readonly Counter<long> _lanePromotions;
     private readonly Counter<long> _driftAlerts;
+
+    // [I6] Costo del monitor di deriva.
+    private readonly Histogram<double> _driftTickMs;
+    private readonly Counter<long> _driftCandlesRead;
+    private readonly Counter<long> _driftFeaturesEvaluated;
+    private readonly Counter<long> _driftModelsEvaluated;
     private readonly Counter<long> _modelsRetired;
     private readonly Counter<long> _pipelineRuns;
     private readonly Counter<long> _tradesExecuted;
@@ -40,6 +46,22 @@ public sealed class ProcioneMetrics : IDisposable
             description: "Promozioni/retrocessioni di corsia (Paper↔Testnet).");
         _driftAlerts = _meter.CreateCounter<long>("procione.drift.alerts", unit: "{alert}",
             description: "Feature in drift Alert rilevate sui modelli.");
+        // [I6] Il COSTO del monitor di deriva, misurato prima di accenderlo: legge candele e blob dei
+        // modelli contro lo stesso database che serve motore e ingestion, e «quanto costa un tick»
+        // senza uno strumento resta un'opinione.
+        _driftTickMs = _meter.CreateHistogram<double>("procione.drift.tick_ms", unit: "ms",
+            description: "Durata di un tick completo del monitor di deriva delle feature.");
+        // ONESTÀ DEL NOME (corretta dopo la revisione avversaria): questo conta SOLO la finestra
+        // recente. Il termine dominante è un altro — il monitor rilegge l'intero periodo di training
+        // di ogni modello a ogni tick, senza tetto né cache — e non passa da qui. Il costo TOTALE lo
+        // misura tick_ms, che comprende entrambe le letture. Un contatore che si chiamasse
+        // «candles_read» e ne contasse metà sarebbe un numero che rassicura.
+        _driftCandlesRead = _meter.CreateCounter<long>("procione.drift.recent_candles_read", unit: "{candle}",
+            description: "Candele della FINESTRA RECENTE lette dal monitor di deriva. NON comprende il periodo di training, che il monitor rilegge per intero a ogni tick: il costo complessivo è in procione.drift.tick_ms.");
+        _driftFeaturesEvaluated = _meter.CreateCounter<long>("procione.drift.features_evaluated", unit: "{feature}",
+            description: "Feature effettivamente valutate dal monitor di deriva.");
+        _driftModelsEvaluated = _meter.CreateCounter<long>("procione.drift.models_evaluated", unit: "{model}",
+            description: "Modelli esaminati in un tick del monitor di deriva.");
         _modelsRetired = _meter.CreateCounter<long>("procione.models.retired", unit: "{model}",
             description: "Modelli ritirati dal registry (superati o degradati per drift).");
         _pipelineRuns = _meter.CreateCounter<long>("procione.pipeline.runs", unit: "{run}",
@@ -75,6 +97,25 @@ public sealed class ProcioneMetrics : IDisposable
 
     public void RecordDriftAlerts(string symbol, string timeframe, int alertCount) =>
         _driftAlerts.Add(Math.Max(1, alertCount), new KeyValuePair<string, object?>("symbol", symbol), new KeyValuePair<string, object?>("timeframe", timeframe));
+
+    /// <summary>
+    /// [I6] Il costo di UN tick del monitor di deriva, che pesa sul database condiviso con motore e
+    /// ingestion — la risorsa che il 2026-08-13 e il 2026-08-15 sono già costati due giorni.
+    ///
+    /// <para><b>Il numero da guardare è <c>tick_ms</c></b>, non il conteggio delle candele:
+    /// <paramref name="recentCandlesRead"/> copre solo la finestra recente, mentre il termine
+    /// dominante è la rilettura integrale del periodo di training di ogni modello, che avviene
+    /// dentro il monitor e non passa di qui. La precisazione è nel nome e nella descrizione dello
+    /// strumento apposta: un contatore chiamato «candele lette» che ne contasse metà sarebbe un
+    /// numero che rassicura.</para>
+    /// </summary>
+    public void RecordDriftTick(double elapsedMs, int models, int recentCandlesRead, int featuresEvaluated)
+    {
+        _driftTickMs.Record(elapsedMs);
+        if (models > 0) _driftModelsEvaluated.Add(models);
+        if (recentCandlesRead > 0) _driftCandlesRead.Add(recentCandlesRead);
+        if (featuresEvaluated > 0) _driftFeaturesEvaluated.Add(featuresEvaluated);
+    }
 
     public void RecordModelRetired(string symbol, string timeframe) =>
         _modelsRetired.Add(1, new KeyValuePair<string, object?>("symbol", symbol), new KeyValuePair<string, object?>("timeframe", timeframe));

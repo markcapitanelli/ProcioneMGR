@@ -51,6 +51,9 @@
    legge e si scrive dove il motore la legge, non nel file di questo processo. Vedi IEngineConfigStore. *@
 @inject IEngineConfigStore EngineConfig
 @inject IOptionsMonitor<LiquidationsOptions> LiquidationsMonitor
+@* [I1] La sonda dello stato degli agenti: stessa istanza del hosted service, così la card mostra
+   ciò che il processo ha davvero rilevato e non una seconda lettura che potrebbe divergere. *@
+@inject ProcioneMGR.Services.Health.AgentStateProbe AgentProbe
 @inject IServiceProvider Services
 
 <PageTitle>Autonomia</PageTitle>
@@ -82,6 +85,7 @@
 @* Indice: dodici pannelli sono troppi per scorrerli a occhio ogni volta. *@
 <nav class="mb-3 small">
     <span class="text-muted me-2">Vai a:</span>
+    <a class="me-2" href="#p-agents">Stato agenti</a>
     <a class="me-2" href="#p-exec">Esecuzione a fette</a>
     <a class="me-2" href="#p-reapply">Ri-applica</a>
     <a class="me-2" href="#p-promo">Promozione corsie</a>
@@ -101,6 +105,81 @@
 {
     <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_status</div>
 }
+
+@* ============================ 0. [I1] Stato degli agenti autonomi ============================ *@
+@* Sta PRIMA di tutto perché risponde alla domanda che viene prima di tutte: che cosa sta girando
+   da solo, adesso, in questo processo. Il 2026-08-18 la risposta non era leggibile da nessuna
+   parte e si è pianificata un'ondata di lavoro credendo spenti tre agenti accesi da settimane. *@
+<div class="card mb-3 border-primary" id="p-agents">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-robot me-1"></i>Stato degli agenti autonomi</span>
+        <span>
+            @if (_agents is null)
+            {
+                <span class="badge bg-secondary">non ancora rilevato</span>
+            }
+            else if (_agents.AnyOperating)
+            {
+                <span class="badge bg-warning text-dark">qualcosa gira da solo</span>
+            }
+            else if (_agents.AnyOn)
+            {
+                <span class="badge bg-info text-dark">acceso ma inerte</span>
+            }
+            else
+            {
+                <span class="badge bg-secondary">tutti spenti</span>
+            }
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            <strong>«Acceso» e «operante» non sono la stessa cosa</strong>, ed è la distinzione che
+            questa card esiste per mostrare: il comitato AI è rimasto acceso sedici giorni senza
+            emettere un voto — e <strong>non per il dry-run</strong>, che sul comitato non ha alcun
+            effetto: viene interrogato prima di quel ramo. Il motivo vero è che arbitra i
+            <em>pareggi</em> dell'orchestratore, e la coda è sempre vuota: senza due candidati
+            idonei e una corsia libera non nasce alcun menù, quindi nessuna domanda. Per questo il
+            verdetto sul comitato si misura sui <strong>voti realmente emessi</strong>, non sui suoi
+            interruttori. Lo stato qui sotto è letto dal <em>file che questo processo ha
+            caricato davvero</em> e dal database — mai da <code>appsettings.json.example</code>,
+            che è un documento e non lo stato.
+        </p>
+        @if (_agents is null)
+        {
+            <p class="text-muted small mb-2"><em>La sonda gira 20 secondi dopo l'avvio. Premi «Ricontrolla» per leggerla adesso.</em></p>
+        }
+        else
+        {
+            <div class="table-responsive mb-2">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Agente</th><th>Stato</th><th>Perché</th></tr></thead>
+                    <tbody>
+                        @foreach (var a in _agents.Agents)
+                        {
+                            var badge = AgentBadge(a.Activation);
+                            <tr>
+                                <td class="text-nowrap">@a.Name</td>
+                                <td class="text-nowrap"><span class="badge @badge.Css">@badge.Text</span></td>
+                                <td class="small">@a.Detail</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-muted small mb-2">
+                Rilevato alle @_agents.CheckedAtUtc.ToString("yyyy-MM-dd HH:mm") UTC.
+                Questa sonda <strong>non notifica</strong>, di proposito: lo stato degli agenti è una
+                <em>condizione</em>, non un evento, e il budget di
+                <code>Notifications:MaxPerHour</code> è condiviso con gli allarmi veri.
+            </p>
+        }
+        <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshAgentStateAsync" disabled="@_busy">
+            @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Ricontrolla
+        </button>
+    </div>
+</div>
 
 @* ============================ 1. Esecuzione live a fette ============================ *@
 <div class="card mb-3" id="p-exec">
@@ -302,6 +381,38 @@
             <span class="badge bg-light text-dark">ultimo tick: @(FleetWorker.LastTickUtc?.ToLocalTime().ToString("dd/MM HH:mm") ?? "mai")</span>
             <span class="badge bg-light text-dark">azioni ultimo piano: @(FleetWorker.LastPlan?.Actions.Count ?? 0)</span>
         </div>
+
+        @* [I8] I quattro numeri che spiegano il silenzio. La flotta ha prodotto 83 proposte grigie e
+           ZERO assegnazioni in quindici giorni, e il comitato non ha mai votato — senza che nessuna
+           superficie dicesse perché. La causa è a monte e in un punto solo: un menù (e quindi una
+           domanda per il comitato) nasce solo con ≥2 candidati «pass» in coda E una corsia libera.
+           I numeri sono contati con gli STESSI predicati della decisione, non con una seconda
+           lettura: un pannello che spiegasse un silenzio diverso da quello vero sarebbe peggio del
+           silenzio. *@
+        @if (FleetWorker.LastSilence is { } silence)
+        {
+            <div class="alert @(silence.CommitteeCouldBeAsked ? "alert-info" : "alert-secondary") py-2 small mb-3">
+                <div class="d-flex flex-wrap gap-3 mb-1">
+                    <span><strong>@silence.PassCandidatesQueued</strong> candidati «pass» in coda</span>
+                    <span><strong>@silence.GreyCandidates</strong> grigi (solo proposte)</span>
+                    <span><strong>@silence.FreeFleetLanes</strong> corsie di flotta libere</span>
+                    <span><strong>@silence.LanesUnderGovernance</strong> corsie sotto governo</span>
+                </div>
+                <div>@silence.Reason.</div>
+                @if (!silence.CommitteeCouldBeAsked)
+                {
+                    <div class="mt-1">
+                        <strong>Il comitato non può ricevere domande in questo stato</strong>: arbitra i
+                        <em>pareggi</em>, e un pareggio richiede almeno due candidati idonei e una corsia libera.
+                        Un comitato acceso che non vota non è guasto — non gli si sta chiedendo nulla.
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="text-muted small mb-3"><em>Nessun tick eseguito da questo avvio: la diagnosi compare col primo giro.</em></div>
+        }
         <div class="row g-3 mb-3">
             <div class="col-auto form-check form-switch ms-2 align-self-end">
                 <input class="form-check-input" type="checkbox" id="fl_en" @bind="_fleet.Enabled" />
@@ -433,7 +544,20 @@
                                 <td><span class="badge @FleetKindBadge(d.Kind)">@d.Kind</span></td>
                                 <td>@(d.LaneId?.ToString() ?? "—")</td>
                                 <td>@(d.RunId?.ToString()[..8] ?? "—")</td>
-                                <td>@d.Source</td>
+                                @* [I8] Il voto del comitato era scritto a journal e non leggibile da
+                                   nessuna parte: un comitato che vota senza che nessuno possa vedere
+                                   il voto è «verde a livello di classe, inesistente a livello di
+                                   prodotto». E «default» collassava tre cause diverse. *@
+                                <td class="small">
+                                    @d.Source
+                                    @if (HasVotes(d.VotesJson))
+                                    {
+                                        <details class="mt-1">
+                                            <summary class="text-primary" style="cursor:pointer">voti</summary>
+                                            <pre class="small mb-0" style="white-space:pre-wrap">@FormatVotes(d.VotesJson)</pre>
+                                        </details>
+                                    }
+                                </td>
                                 <td>
                                     @if (d.DryRun) { <span class="badge bg-info">dry-run</span> }
                                     else if (d.Applied) { <span class="badge bg-success">eseguita</span> }
@@ -719,6 +843,45 @@
             automaticamente dal registry (solo governance dei record: nessun retrain automatico,
             nessun impatto sul trading). Ogni check viene registrato nella tabella qui sotto.
         </p>
+
+        @* [I2] Il ciclo chiuso ritira un Champion, e i Champion si contano. Se sono zero, le due
+           manopole del ritiro governano una funzione che non può scattare: disabilitarle dicendo
+           perché è l'unico modo di non far credere il contrario. Il conteggio è CALCOLATO, quindi
+           il giorno che un Champion esiste il pannello si riabilita da solo, senza toccare codice. *@
+        @if (_championCount is null)
+        {
+            <div class="alert alert-secondary py-2 small">
+                <strong>Champion in carica: non determinabile</strong> — il registry non ha risposto.
+                Le manopole del ritiro restano attive: dichiararle inerti senza aver contato sarebbe
+                un verdetto costruito sull'ignoranza.
+            </div>
+        }
+        else if (_championCount == 0)
+        {
+            <div class="alert alert-warning py-2 small">
+                <strong>Champion in carica: 0</strong> — il ritiro automatico non ha soggetto: il ramo
+                che ritira pretende <code>Stage = Champion</code> e nel registry non ce n'è nessuno
+                (decisione registrata il 2026-07-28: non se ne promuove alcuno per sbloccare una
+                funzione). Le manopole qui sotto restano <strong>modificabili apposta</strong>:
+                adesso è l'unico momento utile per disarmare il ritiro <em>prima</em> che esista un
+                Champion da perdere.
+                @if (_drift.RetireChampionOnAlert)
+                {
+                    <br />
+                    <span>
+                        Attenzione: l'interruttore risulta <strong>ARMATO</strong>. La sezione
+                        <code>Drift</code> può essere assente dal file caricato, e in quel caso vale il
+                        default del codice (<code>true</code>): accendendo il monitor, il ritiro
+                        partirebbe insieme. Oggi è inerte solo perché non esiste alcun Champion.
+                    </span>
+                }
+            </div>
+        }
+        else
+        {
+            <p class="small mb-3"><strong>Champion in carica: @_championCount</strong> — il ritiro automatico ha soggetti.</p>
+        }
+
         <div class="row g-3 align-items-end mb-3">
             <div class="col-auto form-check form-switch ms-2">
                 <input class="form-check-input" type="checkbox" id="dr_en" @bind="_drift.Enabled" />
@@ -732,6 +895,15 @@
                 <label class="form-label">Candele recenti @Hot()</label>
                 <input type="number" class="form-control" @bind="_drift.RecentCandles" min="20" style="width: 8rem;" />
             </div>
+            @* [I2] Queste due manopole restano SEMPRE modificabili, e la prima versione le
+               disabilitava quando i Champion erano zero. Era il ragionamento invertito, trovato
+               dalla revisione avversaria del 2026-08-18: l'unico momento utile per DISARMARE il
+               ritiro in anticipo è proprio quello in cui non c'è ancora un Champion da perdere, e
+               il blocco non impediva comunque nulla — «Salva» resta attivo, `@@bind` conserva il
+               valore del modello e SaveAsync serializza l'intero POCO, quindi si sarebbe potuto
+               persistere `true` ma non più toglierlo. Un controllo che toglie il rimedio e lascia
+               passare il rischio è la classe «controllo che rassicura». Il contributo di I2 è il
+               testo dell'avviso qui sopra, che dice la verità. *@
             <div class="col-auto form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="dr_ret" @bind="_drift.RetireChampionOnAlert" />
                 <label class="form-check-label" for="dr_ret">Ritira Champion in alert @Hot()</label>
@@ -749,7 +921,66 @@
             </div>
         </div>
 
-        <h6>Ultimi esiti (@_driftResults.Count)</h6>
+        @* [I6] Le soglie dei tre rilevatori. Fino al 2026-08-18 vivevano solo nei default del codice
+           e si cambiavano RICOMPILANDO — nessuna chiave, nessun pannello: violazione diretta del
+           mandato «tutto amministrabile da UI». Sono la prassi generica del settore, non una misura
+           fatta su serie finanziarie, e poterle muovere è il presupposto per tararle. *@
+        <details class="mb-3">
+            <summary class="small text-muted">Soglie dei rilevatori (PSI · KS · Page-Hinkley) @Hot()</summary>
+            <p class="text-muted small mt-2 mb-2">
+                Sono i valori di prassi generica, <strong>non</strong> misurati su serie finanziarie:
+                se il monitor allarma troppo o non allarma mai, si tarano da qui. La regola
+                lato server rifiuta una soglia di <em>alert</em> più permissiva di quella di
+                <em>warning</em> — un livello di allarme che non può scattare è peggio di un livello
+                assente, perché sembra esserci.
+            </p>
+            <div class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">PSI bin</label>
+                    <input type="number" class="form-control form-control-sm" style="width:6rem" min="2" @bind="_drift.Thresholds.PsiBins" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">PSI warning</label>
+                    <input type="number" step="0.01" class="form-control form-control-sm" style="width:7rem" @bind="_drift.Thresholds.PsiWarning" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">PSI alert</label>
+                    <input type="number" step="0.01" class="form-control form-control-sm" style="width:7rem" @bind="_drift.Thresholds.PsiAlert" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">KS p warning</label>
+                    <input type="number" step="0.001" class="form-control form-control-sm" style="width:7rem" @bind="_drift.Thresholds.KsPValueWarning" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">KS p alert</label>
+                    <input type="number" step="0.001" class="form-control form-control-sm" style="width:7rem" @bind="_drift.Thresholds.KsPValueAlert" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">PH delta</label>
+                    <input type="number" step="0.1" class="form-control form-control-sm" style="width:6rem" @bind="_drift.Thresholds.PageHinkleyDelta" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">PH warning</label>
+                    <input type="number" step="1" class="form-control form-control-sm" style="width:7rem" @bind="_drift.Thresholds.PageHinkleyWarning" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">PH alert</label>
+                    <input type="number" step="1" class="form-control form-control-sm" style="width:7rem" @bind="_drift.Thresholds.PageHinkleyAlert" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 small">Osservazioni min</label>
+                    <input type="number" class="form-control form-control-sm" style="width:7rem" min="20" @bind="_drift.Thresholds.MinObservations" />
+                </div>
+            </div>
+        </details>
+
+        <h6>
+            Ultimi esiti (@_driftResults.Count)
+            @if (_driftResults.Count(r => !r.IsVerdict) is > 0 and var skipped)
+            {
+                <span class="badge bg-secondary ms-1">@skipped saltati</span>
+            }
+        </h6>
         @if (_driftResults.Count == 0)
         {
             <p class="text-muted small mb-0"><em>Nessun check registrato: abilita il worker o usa "Esegui check ora" (serve almeno un modello ML salvato).</em></p>
@@ -766,17 +997,31 @@
                         </tr>
                     </thead>
                     <tbody>
+                        @* [I6] Una riga SALTATA non può mostrare il badge di gravità: «None» è verde e
+                           si legge come «ho guardato e va tutto bene», che è esattamente ciò che il
+                           check non ha fatto. Il motivo prende il posto del verdetto, non gli sta
+                           accanto — accanto si leggerebbe comunque il verde. *@
                         @foreach (var r in _driftResults)
                         {
-                            <tr>
+                            <tr class="@(r.IsVerdict ? null : "table-light")">
                                 <td>@r.CheckedAtUtc.ToString("MM-dd HH:mm")</td>
                                 <td>@r.ModelName</td>
                                 <td>@r.Symbol @r.Timeframe</td>
-                                <td class="text-end">@r.DriftingFeatures/@r.TotalFeatures</td>
-                                <td class="text-end">@r.AlertFeatures</td>
-                                <td>@SeverityBadge(r.Overall)</td>
-                                <td class="small">@TopFeatures(r.TopFeaturesJson)</td>
-                                <td>@(r.ChampionRetired ? "⚠️ sì" : "—")</td>
+                                @if (r.IsVerdict)
+                                {
+                                    <td class="text-end">@r.DriftingFeatures/@r.TotalFeatures</td>
+                                    <td class="text-end">@r.AlertFeatures</td>
+                                    <td>@SeverityBadge(r.Overall)</td>
+                                    <td class="small">@TopFeatures(r.TopFeaturesJson)</td>
+                                    <td>@(r.ChampionRetired ? "⚠️ sì" : "—")</td>
+                                }
+                                else
+                                {
+                                    <td class="text-end">—</td>
+                                    <td class="text-end">—</td>
+                                    <td><span class="badge bg-secondary">SALTATO</span></td>
+                                    <td class="small text-muted" colspan="2"><em>@r.SkipReason</em></td>
+                                }
                             </tr>
                         }
                     </tbody>
@@ -916,6 +1161,17 @@
             <div class="col-auto">
                 <label class="form-label">Tick planner (s) @Restart()</label>
                 <input type="number" class="form-control" @bind="_campaign.TickSeconds" min="10" style="width: 8rem;" />
+            </div>
+            @* [I7] Un annullamento umano è un ORDINE, non un esito: prima finiva nello stesso ramo di
+               un fallimento e la rotazione ripartiva entro un tick, cioè il contrario di ciò che chi
+               annulla voleva. 0 = comportamento storico. *@
+            <div class="col-auto">
+                <label class="form-label">Pausa dopo annullamento (min) @Hot()</label>
+                <input type="number" class="form-control" @bind="_campaign.CancelPauseMinutes" min="0" style="width: 10rem;" />
+            </div>
+            <div class="col-auto form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="cp_gate" @bind="_campaign.RespectAutoReapplyGate" />
+                <label class="form-check-label" for="cp_gate">Rispetta il gate della ri-applica @Hot()</label>
             </div>
             <div class="col-auto">
                 <button class="btn btn-primary" @onclick='() => SaveAsync("Campaign", _campaign, "Campagne")' disabled="@_busy">Salva</button>
@@ -1307,6 +1563,28 @@
             Spia del canale (da questo avvio del guscio): @DescribeChannel(Notifier.ChannelStatus)
         </div>
 
+        @* [I4] La pressione sul budget CONDIVISO. Il tetto è uno per processo e qui dentro
+           confluiscono otto sorveglianti: il primo che sbaglia soglia zittisce gli altri sette, ed
+           è già successo. Finora la soppressione viveva in un LogWarning e nel conteggio accodato
+           al messaggio dopo: nessuna superficie diceva QUANTO È PIENO IL SECCHIO ADESSO. *@
+        @{ var press = Notifier.RateLimitPressure; }
+        <div class="mt-1 small @(press.IsLosingNow ? "text-danger fw-semibold" : press.SuppressedTotal > 0 ? "text-warning" : "text-muted")">
+            Budget del canale: <strong>@press.SentInWindow / @press.MaxPerHour</strong> messaggi
+            nell'ultima ora (@press.Remaining prima del silenzio).
+            @if (press.IsLosingNow)
+            {
+                <span> — <strong>@press.SuppressedPending in attesa: il canale sta perdendo messaggi ADESSO</strong>, verranno conteggiati in coda al primo che passa.</span>
+            }
+            @if (press.SuppressedTotal > 0)
+            {
+                <span> Soppressi da questo avvio: <strong>@press.SuppressedTotal</strong>@(press.LastSuppressedUtc is { } t ? $" (ultimo: {t:yyyy-MM-dd HH:mm} UTC)" : "").</span>
+            }
+            else
+            {
+                <span> Nessuna soppressione da questo avvio.</span>
+            }
+        </div>
+
         @* ------------------------------------------------------------------ canale del MOTORE *@
         @* Due canali distinti, non uno con due pulsanti: guscio e motore sono processi separati, con
            configurazioni e variabili d'ambiente proprie. Il motore puo' essere muto mentre il guscio
@@ -1391,6 +1669,16 @@
                     {
                         <span class="small @(st.FailuresSinceLastDelivery > 0 ? "text-danger fw-semibold" : "text-muted")">
                             Spia del canale (da questo avvio del motore): @DescribeChannel(st)
+                        </span>
+                        @* [I4] Il buco si dichiara invece di mostrare uno zero che sembrerebbe una
+                           misura: il contratto gRPC porta cinque campi e la pressione del rate-limit
+                           non è fra questi. Mapparla comunque farebbe leggere «0 soppresse» da
+                           qualunque motore, che è la rassicurazione falsa che questa ondata bonifica.
+                           Il campo si aggiunge quando serve: è additivo (come i 22/23 di E6). *@
+                        <span class="small text-muted d-block">
+                            La pressione del rate-limit del motore <strong>non è esposta dal contratto</strong>:
+                            qui non compare per non mostrare uno zero che sembrerebbe una misura. Il tetto del
+                            motore serve i suoi allarmi (quarantena), non gli otto sorveglianti del guscio.
                         </span>
                     }
                 }
@@ -1596,6 +1884,39 @@
     private int _fleetFootprint = 3;
     private List<OrchestratorDecision> _fleetJournal = [];
 
+    /// <summary>[I8] Ci sono voti da mostrare? Stringa vuota e <c>"[]"</c> valgono entrambe «nessuno».</summary>
+    private static bool HasVotes(string? votesJson) =>
+        !string.IsNullOrWhiteSpace(votesJson) && votesJson.Trim() is not ("[]" or "null");
+
+    /// <summary>
+    /// [I8] I voti in chiaro, uno per riga. Un JSON illeggibile si DICHIARA invece di sparire:
+    /// «nessun voto» e «voto non interpretabile» sono cose diverse, e mostrare la seconda come la
+    /// prima è la classe che questa ondata bonifica.
+    /// </summary>
+    private static string FormatVotes(string? votesJson)
+    {
+        if (string.IsNullOrWhiteSpace(votesJson)) return "—";
+        try
+        {
+            using var doc = JsonDocument.Parse(votesJson);
+            var righe = doc.RootElement.EnumerateArray().Select(v =>
+            {
+                var provider = v.TryGetProperty("Provider", out var p) ? p.GetString() : "?";
+                var valido = v.TryGetProperty("Valid", out var ok) && ok.GetBoolean();
+                var scelta = v.TryGetProperty("OptionId", out var o) ? o.GetString() : null;
+                var motivo = v.TryGetProperty("Reason", out var r) ? r.GetString() : null;
+                return valido
+                    ? $"{provider}: {scelta?[..Math.Min(8, scelta.Length)]} — {motivo}"
+                    : $"{provider}: ASTENUTO — {motivo}";
+            }).ToList();
+            return righe.Count == 0 ? "—" : string.Join("\n", righe);
+        }
+        catch (JsonException)
+        {
+            return $"voti non interpretabili (JSON non valido): {votesJson[..Math.Min(120, votesJson.Length)]}";
+        }
+    }
+
     // ---- [F5] Il click umano sui candidati grigi ----
     private List<Guid> _greyRuns = [];
     private Guid? _greyRunId;
@@ -1656,6 +1977,11 @@
     private ObservabilityConfig _observability = new();
 
     private List<DriftCheckResult> _driftResults = new();
+
+    // [I1] Stato degli agenti autonomi. [I2] Champion in carica: il conteggio da cui dipendono
+    // quattro funzioni che i pannelli davano per attive. null = non ancora letto/non determinabile.
+    private ProcioneMGR.Services.Health.AgentStateReport? _agents;
+    private int? _championCount;
 
     private bool _busy;
     private bool _isError;
@@ -1919,10 +2245,58 @@
             OtlpEndpoint = Config.GetValue("Observability:OtlpEndpoint", "http://localhost:4317")!,
         };
         await LoadDriftResultsAsync();
+        await LoadAgentStateAsync();
     }
 
     /// <summary>Copia per-serializzazione: stacca l'istanza della UI da quella viva del monitor.</summary>
     private static T Clone<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
+
+    /// <summary>
+    /// [I1/I2] Stato degli agenti + conteggio dei Champion. In try/catch perché è DIAGNOSTICA: una
+    /// sonda che fa fallire il render della pagina che deve informare è peggio di nessuna sonda
+    /// (fail-open sulla diagnostica, regola 4 — e la lezione dei 10 render test caduti il
+    /// 2026-07-28 aggiungendo un servizio a una pagina).
+    /// </summary>
+    private async Task LoadAgentStateAsync()
+    {
+        try
+        {
+            _agents = await AgentProbe.ProbeAsync(log: false);
+        }
+        catch
+        {
+            _agents = null;
+        }
+
+        // Il conteggio dei Champion si legge a parte: la card del drift lo mostra anche quando la
+        // sonda non ha potuto completare, e un null qui deve restare «non determinabile», mai 0.
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _championCount = await db.SavedMlModels.AsNoTracking()
+                .CountAsync(m => m.Stage == ProcioneMGR.Data.ModelStage.Champion);
+        }
+        catch
+        {
+            _championCount = null;
+        }
+    }
+
+    private async Task RefreshAgentStateAsync()
+    {
+        _busy = true;
+        try { await LoadAgentStateAsync(); }
+        finally { _busy = false; }
+    }
+
+    /// <summary>Badge dei quattro stati. «Non determinabile» ha un colore suo: non è «spento».</summary>
+    private static (string Css, string Text) AgentBadge(ProcioneMGR.Services.Health.AgentActivation a) => a switch
+    {
+        ProcioneMGR.Services.Health.AgentActivation.AccesoOperante => ("bg-warning text-dark", "ACCESO E OPERANTE"),
+        ProcioneMGR.Services.Health.AgentActivation.AccesoInerte => ("bg-info text-dark", "acceso ma inerte"),
+        ProcioneMGR.Services.Health.AgentActivation.NonDeterminabile => ("bg-secondary", "non determinabile"),
+        _ => ("bg-light text-dark border", "spento"),
+    };
 
     private async Task LoadDriftResultsAsync()
     {

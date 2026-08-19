@@ -389,6 +389,12 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.IFeatureDrif
 builder.Services.Configure<ProcioneMGR.Services.Monitoring.Drift.DriftMonitorOptions>(builder.Configuration.GetSection("Drift"));
 builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.FeatureDriftWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Monitoring.Drift.FeatureDriftWorker>());
+// [I6] Fotografia per la Home, sullo stesso impianto della deriva dei FATTORI (D2.a/D2.b): scritta
+// a fine tick e RICOSTRUITA all'avvio dall'ultimo tick registrato. L'idratazione non è una cache: il
+// guscio si riavvia di continuo, e senza di essa l'allarme mancherebbe proprio nei minuti in cui uno
+// guarda la Home, comparendo solo dopo il primo tick — che con cadenza di ore può essere lontano.
+builder.Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.FeatureDriftSnapshot>();
+builder.Services.AddHostedService<ProcioneMGR.Services.Monitoring.Drift.FeatureDriftHydrationWorker>();
 
 // --- Observability (Fase 5): meter unico degli eventi di autonomia; export OTLP opzionale sotto. ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Observability.ProcioneMetrics>();
@@ -573,6 +579,16 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IFleetStateReader, Proc
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IGreyDeployer, ProcioneMGR.Services.Fleet.GreyDeployer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.FleetOrchestratorWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Fleet.FleetOrchestratorWorker>());
+
+// --- [I1] Sonda dello stato degli agenti autonomi ---
+// Registrata QUI perché è il primo punto in cui tutti e quattro i suoi soggetti esistono (planner,
+// flotta, comitato, drift). Dice all'avvio quali agenti sono ACCESI e quali possono davvero agire:
+// sono due cose diverse, e non distinguerle il 2026-08-18 ha prodotto un piano di lavoro costruito
+// sulla premessa sbagliata che tre agenti vivi fossero spenti. Non notifica di proposito — vedi il
+// doc-comment: lo stato è una condizione, non un evento, e il budget notifiche è condiviso.
+// Singleton risolvibile oltre che hosted: la card di /admin/autonomy rilegge la stessa istanza.
+builder.Services.AddSingleton<ProcioneMGR.Services.Health.AgentStateProbe>();
+builder.Services.AddHostedService<ProcioneMGR.Services.Health.AgentStateProbeWorker>();
 
 // --- Autonomia: auto-promozione Paper→Testnet (MAI a Live) ---
 // L'evaluator decide (logica pura, testabile), il promoter agisce (stop→restart della corsia),
