@@ -1203,7 +1203,7 @@ di dire di no e di dichiarazione di copertura.**
 | I11 | **«Trade attesi dall'holdout»: una regola sola, consumata da due** (ritiro per inedia e freno per gamba). Sul **simbolo attuale**, col **tempo-al-verdetto dichiarato**. Due regole per la stessa domanda è il difetto già pagato in D2 e con `SeriesFreshness` | **FATTO** | L1 ricostruisce il trade/mese che il run dichiara; L2 campo assente (corsie 0-2) ⇒ nessuno agisce e **lo si dichiara** |
 | I12 | **Ritiro per inedia + dedup dei grigi per identità**, ancora in DryRun; poi AF2b (`targetLanes`, start/stop reali) **una corsia per volta, solo Paper**. Assorbe AF2c-1 e AF2c-5 | **FATTO**, L4 compreso | **L1 con lo stato reale**: condanna 3, 5, 6, 7 e **non** la 2 (troppo giovane) né l'impronta né le quarantenate; L2 soglia a 0 ⇒ piano bit-identico su 100 tick fuzzati; L4 le 40 riproposte diventano 1 |
 | I13 | **Freno per gamba: prima la misura, poi l'azione** — (a) l'avviso di deriva esteso alle **gambe attive** (oggi una gamba disattivata continua a operare fino al riavvio della corsia e nessuno lo dice); (b) pannello di sola lettura sui trade veri; (c) **condizionato** all'esito di (b), freno dove si applica `mayOpen`, mai un `continue` che lasci posizioni orfane | **(a)+(b) FATTI**, (c) sospeso in attesa della misura | **il gate di (b) può chiudere il filone e va bene così**: a 2-6 trade/mese «≥20 trade sul simbolo attuale» può dare zero gambe misurabili — allora il pannello lo dice e (c) non si fa. L1 il riferimento indipendente **esiste già in repo** |
-| I14 | **(a)+(b) FATTI** — `PairCandidate` + pannello; `PairSpreadWindow` aperto. **`PairCandidate` + `PairSpreadWindow` col loro lettore** — indice derivato dagli 86 artefatti mai letti, sul progetto di `ResearchCandidateIndex`; storia dello spread sul pattern `FactorIcWindows`; pannello in `/pairs-trading`. Sola lettura, nessuna decisione automatica | aperto | **L2 decisivo**: su due random walk indipendenti il monitor non deve **mai** dichiarare cointegrazione; su una relazione piantata deve trovarla. L1 il rebuild combacia con l'aggregato SQL sugli artefatti |
+| I14 | **`PairCandidate` + `PairSpreadWindow` col loro lettore** — indice derivato dagli 86 artefatti mai letti, sul progetto di `ResearchCandidateIndex`; storia dello spread sul pattern `FactorIcWindows`; pannello in `/pairs-trading`. Sola lettura, nessuna decisione automatica | **FATTO** | **L2 decisivo**: su due random walk indipendenti il monitor non deve **mai** dichiarare cointegrazione; su una relazione piantata deve trovarla. L1 il rebuild combacia con l'aggregato SQL sugli artefatti |
 | I15 | **Corpus notizie esentato dalla purge + riga nel guardiano di profondità** (decisione del proprietario); da spenta la riga resta **misurata** e mostrata come «non sorvegliata», mai un OK finto | **FATTO** | L1 profondità e conteggio combaciano col `SELECT` a mano; L2 corpus profondo ⇒ il guardiano tace per tre giri |
 | I16 ≡ F12 | **Capacità e universo del carry**: l'unica classe con edge misurato positivo, l'unica che opera oggi, l'unica che nessuno sta dimensionando — mentre il basis è in compressione | aperto | **report con verdetto scritto anche se è «la soglia attuale è già ottima»**; trade/mese e durata mediana dichiarati |
 
@@ -1376,15 +1376,56 @@ partire» — nessuna coppia è schierata, le corsie sono mono-simbolo, e l'elas
 *full-sample*, non il β walk-forward del backtest qui sopra. Senza quelle righe sarebbe stata la
 classe «controlli che rassicurano a prescindere dalla realtà» che questa ondata esiste per bonificare.
 
-> **Resta `PairSpreadWindow`** (la storia dello spread a finestre mobili col suo worker). È l'unica
-> proposta dell'intera ondata con **carico di scrittura permanente** sul Postgres condiviso con
-> motore e ingestion, e va costruita col suo grafico. Sulle coppie da sorvegliare il testo dell'item
-> è esplicito — «coppie **scelte dall'operatore**» — e l'alternativa (alimentarle da `IsTradeable`) è
-> già segnalata come «fabbrica candidati per costruzione»: sceglierebbe fra centinaia di test ADF per
-> timeframe senza correzione per test multipli, cioè il primo cugino dell'errore già pagato con la
-> randomizzazione su asset correlati.
+> `PairSpreadWindow` è stato poi fatto — vedi il blocco I14(c) qui sotto.
 
 
+
+
+#### I14(c) — `PairSpreadWindow`, e il gate che sarebbe stato insoddisfacibile
+
+Il pezzo con **carico di scrittura permanente**, l'unico dell'ondata. Un worker registra ogni 12 ore
+lo spread delle coppie sorvegliate su finestre **non sovrapposte**; `/pairs-trading` ne legge la
+storia. Sola lettura: non apre, non chiude, non tocca una corsia.
+
+**Le coppie le sceglie una persona**, come dice il testo dell'item. L'alternativa — alimentarle da
+ciò che lo screening marca operabile — sceglierebbe fra centinaia di test ADF per timeframe **senza
+correzione per test multipli**: al 5%, su 190 coppie ne «trova» una decina per puro rumore e le
+sorveglierebbe come relazioni. È il primo cugino dell'errore già pagato randomizzando su asset
+correlati, che fabbricava falsa significatività.
+
+**Il gate L2 era insoddisfacibile alla lettera, e andava visto prima di scrivere.** «Su due random
+walk indipendenti il monitor non deve **mai** dichiarare cointegrazione»: ma un test ADF al 5%
+dichiara stazionario il 5% delle finestre di puro rumore — *per costruzione, non per difetto*. Un
+verdetto per-finestra avrebbe quindi detto «cointegrata» su rumore una volta su venti, e il gate
+sarebbe stato impossibile da soddisfare onestamente. È la classe «gate senza strumento», e ci si
+accorge di averla addosso solo dopo aver scritto tutto.
+
+La risposta: **il verdetto è una proprietà della SERIE, non della finestra.** Si guarda la frazione
+di finestre non sovrapposte stazionarie contro una soglia alta (0,6). Sotto il nullo quella frazione
+vale ~0,05 e perché venti finestre arrivino al 60% servirebbe un evento dell'ordine di 10⁻¹²; su una
+relazione vera vale ~1. La distanza fra le due è ciò che rende il gate **verificabile** invece che
+aspirazionale.
+
+E la **rottura si definisce come perdita di uno stato precedente**: una coppia è rotta se *era*
+persistentemente stazionaria e non lo è più. Sotto il nullo la persistenza non c'è mai stata, quindi
+nessuna rottura è dichiarabile — **per costruzione, non per fortuna**. È la forma che rende vera la
+seconda metà del gate.
+
+Il test del nullo gira su venti semi e non trova mai né relazione né rottura. Accanto c'è la misura
+onesta: il **tasso** di falsi positivi per finestra su 400 finestre di rumore, che deve stare dove ci
+si aspetta. Serve a due cose — se fosse molto più alto il test di cointegrazione sarebbe rotto e la
+frazione poggerebbe sul nulla; se fosse **zero** il test sarebbe cieco, e un test cieco supera il
+gate del nullo senza dimostrare niente.
+
+**Il carico, dichiarato in numeri e nel pannello**: per coppia il primo giro scrive 20 righe, dal
+secondo in poi **una sola** perché l'upsert è idempotente. Con cinque coppie ogni 12 ore fanno ~10
+righe al giorno, ~3.700 in un anno. È poco *perché* le coppie le sceglie una persona. Il worker nasce
+spento e con l'elenco vuoto: due condizioni, entrambe necessarie.
+
+Le finestre sovrapposte si tolgono **in lettura** (stesso `SelectDominantGrid` della storia dell'IC):
+il worker taglia la griglia dalla candela più recente all'indietro e a ogni giro la griglia scivola —
+punti che condividono dati sono correlati per costruzione e gonfierebbero proprio la frazione su cui
+il verdetto si esprime.
 
 ### Revisione avversaria delle Fasi 3-5 (2026-08-19)
 

@@ -39,6 +39,7 @@
 @inject IOptionsMonitor<CampaignOptions> CampaignMonitor
 @inject IOptionsMonitor<RegimeTriggerOptions> RegimeTriggerMonitor
 @inject IOptionsMonitor<ProcioneMGR.Services.Fleet.FleetOptions> FleetMonitor
+@inject IOptionsMonitor<ProcioneMGR.Services.PairsTrading.PairsWatchOptions> PairsWatchMonitor
 @inject ProcioneMGR.Services.Fleet.FleetOrchestratorWorker FleetWorker
 @inject ProcioneMGR.Services.Fleet.IGreyDeployer GreyDeployer
 @inject ILaneDirectory LaneDirectory
@@ -93,6 +94,7 @@
     <a class="me-2" href="#p-veto">Supervisore veto</a>
     <a class="me-2" href="#p-campaign">Campagne</a>
     <a class="me-2" href="#p-sentiment">Sentiment</a>
+    <a class="me-2" href="#p-pairswatch">Spread coppie</a>
     <a class="me-2" href="#p-drift">Drift feature</a>
     <a class="me-2" href="#p-carry">Carry</a>
     <a class="me-2" href="#p-liq">Liquidazioni</a>
@@ -899,6 +901,73 @@
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Esegui ora
                 </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ==================== [I14c] Sorveglianza dello spread delle coppie ==================== *@
+<div class="card mb-3" id="p-pairswatch">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-activity me-1"></i>Sorveglianza spread delle coppie</span>
+        <span>@StateBadge(_pairsWatch.Enabled && _pairsWatch.Pairs.Count > 0)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Registra ogni @_pairsWatch.IntervalHours ore lo spread delle coppie elencate, su finestre non
+            sovrapposte, e ne mostra la storia in <a href="pairs-trading#spread-sorvegliato">/pairs-trading</a>.
+            <strong>Sola lettura</strong>: non apre, non chiude, non tocca corsie.
+        </p>
+        <div class="alert alert-secondary py-2 small">
+            <strong>È l'unico automatismo di questa ondata che scrive in permanenza</strong> sul database
+            condiviso con motore e ingestion, quindi accenderlo è una decisione sul <em>carico</em>, non solo
+            sulla funzione. Il conto: per coppia, il primo giro scrive @(_pairsWatch.MaxCandles / Math.Max(1, _pairsWatch.WindowSize))
+            righe; dal secondo in poi <strong>una sola</strong> — l'upsert è idempotente e aggiorna le altre.
+            Con @(Math.Max(1, _pairsWatch.Pairs.Count)) coppie e un giro ogni @_pairsWatch.IntervalHours ore fanno
+            ~@(Math.Max(1, _pairsWatch.Pairs.Count) * (24 / Math.Max(1, _pairsWatch.IntervalHours))) righe al giorno.
+        </div>
+        <div class="row g-2 align-items-end">
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="pw_en" @bind="_pairsWatch.Enabled" />
+                <label class="form-check-label" for="pw_en">Attiva @Hot()</label>
+            </div>
+            <div class="col-12">
+                <label class="form-label mb-1" for="pw_pairs">
+                    Coppie sorvegliate @Hot()
+                    <span class="text-muted small" title="Una per riga o separate da virgola, nella forma «ETH/USDT|BTC/USDT 1h». Le scegli TU: alimentarle da ciò che lo screening marca operabile sceglierebbe fra centinaia di test ADF senza correzione per test multipli, cioè fabbricherebbe candidati per costruzione. Vuoto = nessuna sorveglianza, anche da acceso.">ⓘ</span>
+                </label>
+                <input class="form-control" id="pw_pairs" @bind="_pairsWatchPairsCsv"
+                       placeholder="es. ETH/USDT|BTC/USDT 1h, SOL/USDT|BTC/USDT 4h  (vuoto = nessuna)" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Cadenza (h) @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.IntervalHours" min="1" max="168" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Sotto, l'ADF perde potenza e il pavimento di rumore sale; sopra, servono anni di storia per avere le cinque finestre non sovrapposte che il giudizio pretende.">Finestra (candele) @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.WindowSize" min="60" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Candele per giro @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.MaxCandles" min="300" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Estimatore @Hot()</label>
+                <select class="form-select" @bind="_pairsWatch.Estimator" style="width: 9rem;">
+                    <option value="Kalman">Kalman</option>
+                    <option value="RollingOls">Rolling OLS</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Frazione di finestre stazionarie sopra cui si parla di relazione persistente. Su rumore puro ci si aspetta ~5%: una soglia alta è ciò che rende il verdetto diverso dal caso.">Soglia persistenza @Hot()</label>
+                <input type="number" step="0.05" class="form-control" @bind="_pairsWatch.PersistenceThreshold" min="0" max="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Quante finestre finali contano come «adesso» nel giudizio di rottura.">Finestre recenti @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.RecentWindows" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SavePairsWatchAsync" disabled="@_busy">Salva</button>
             </div>
         </div>
     </div>
@@ -1980,6 +2049,11 @@
     private LiveExecutionOptions _liveExec = new();
     private AutoReapplyOptions _autoReapply = new();
     private PromotionEvaluatorOptions _promotion = new();
+    private ProcioneMGR.Services.PairsTrading.PairsWatchOptions _pairsWatch = new();
+
+    /// <summary>[I14c] Le coppie sorvegliate come CSV: la forma con cui si scrive una lista, non un secondo stato.</summary>
+    private string _pairsWatchPairsCsv = string.Empty;
+
     private ProcioneMGR.Services.Fleet.FleetOptions _fleet = new();
 
     /// <summary>[AF2b] Le corsie autorizzate come CSV: e' la forma con cui si scrive una lista, non un secondo stato.</summary>
@@ -2265,6 +2339,8 @@
         // [AF2] Config (editabile), stato e journal della flotta.
         _fleet = Clone(FleetMonitor.CurrentValue);
         _fleetExecutionLanesCsv = string.Join(", ", _fleet.ExecutionLanes);
+        _pairsWatch = Clone(PairsWatchMonitor.CurrentValue);
+        _pairsWatchPairsCsv = string.Join(", ", _pairsWatch.Pairs);
         _fleetFootprint = PipelineApplier.LaneCount; // l'impronta storica dell'auto-apply: il confine della flotta
         await using (var db = await DbFactory.CreateDbContextAsync())
         {
@@ -2419,6 +2495,26 @@
     /// refuso non deve poter allargare i permessi, e nel dubbio la lista piu' corta e' quella
     /// sicura. Il campo si riscrive dal salvato, quindi l'operatore vede subito cosa e' passato.</para>
     /// </summary>
+    /// <summary>
+    /// [I14c] Salva la sezione PairsWatch traducendo prima il CSV delle coppie. Le chiavi
+    /// MALFORMATE si scartano in silenzio e il campo si riscrive dal salvato: un refuso non deve
+    /// poter mettere in sorveglianza qualcosa che il worker poi salterebbe a ogni giro con un
+    /// warning che nessuno legge — meglio vederlo sparire subito dal campo.
+    /// </summary>
+    private async Task SavePairsWatchAsync()
+    {
+        _pairsWatch.Pairs = (_pairsWatchPairsCsv ?? string.Empty)
+            .Split([',', '\n', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => ProcioneMGR.Services.PairsTrading.PairSpreadWatchWorker.ParsePair(t))
+            .Where(p => p.Y is not null && p.X is not null && p.Timeframe is not null)
+            .Select(p => ProcioneMGR.Services.PairsTrading.PairKey.Build(p.Y!, p.X!, p.Timeframe!))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+        _pairsWatchPairsCsv = string.Join(", ", _pairsWatch.Pairs);
+        await SaveAsync("PairsWatch", _pairsWatch, "Sorveglianza spread coppie");
+    }
+
     private async Task SaveFleetAsync()
     {
         _fleet.ExecutionLanes = (_fleetExecutionLanesCsv ?? string.Empty)

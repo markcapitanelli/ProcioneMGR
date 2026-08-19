@@ -114,6 +114,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[I14] Indice a righe degli artefatti "PairScreen": tabella DERIVATA, ricostruibile.</summary>
     public DbSet<ProcioneMGR.Services.PairsTrading.PairCandidate> PairCandidates => Set<ProcioneMGR.Services.PairsTrading.PairCandidate>();
 
+    /// <summary>[I14c] La storia dello spread delle coppie sorvegliate, a finestre non sovrapposte.</summary>
+    public DbSet<ProcioneMGR.Services.PairsTrading.PairSpreadWindow> PairSpreadWindows => Set<ProcioneMGR.Services.PairsTrading.PairSpreadWindow>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         // IMPORTANTISSIMO: lasciare che Identity configuri le sue tabelle
@@ -622,6 +625,28 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .HasDatabaseName("IX_PairCandidates_Run_Coppia");
             // La lettura tipica del pannello è "questa coppia, i più recenti prima".
             e.HasIndex(x => new { x.PairKeyValue, x.RunCompletedUtc });
+        });
+
+        // [I14c] La storia dello spread. Stesso progetto di FactorIcWindows: l'indice UNICO e' il
+        // contratto di idempotenza — il worker ricalcola le stesse finestre a ogni giro, e senza
+        // quel vincolo la tabella crescerebbe di un duplicato per giro, per sempre.
+        builder.Entity<ProcioneMGR.Services.PairsTrading.PairSpreadWindow>(e =>
+        {
+            e.ToTable("PairSpreadWindows");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.PairKeyValue).HasMaxLength(96);
+            e.Property(x => x.SymbolY).HasMaxLength(32);
+            e.Property(x => x.SymbolX).HasMaxLength(32);
+            e.Property(x => x.Timeframe).HasMaxLength(8);
+            e.Property(x => x.Estimator).HasMaxLength(16);
+            // L'estimatore e l'ampiezza stanno in CHIAVE: due estimatori danno due spread diversi
+            // per costruzione, e due ampiezze hanno soglie di rumore diverse. Mescolarli nella
+            // stessa serie confronterebbe misure che non sono la stessa misura.
+            e.HasIndex(x => new { x.PairKeyValue, x.Estimator, x.WindowSize, x.WindowEndUtc })
+                .IsUnique()
+                .HasDatabaseName("IX_PairSpreadWindows_Serie_Finestra");
+            // La lettura tipica: "questa coppia con questo estimatore, in ordine di tempo".
+            e.HasIndex(x => new { x.PairKeyValue, x.Estimator, x.WindowEndUtc });
         });
 
         // --- Adattamenti specifici PostgreSQL ---

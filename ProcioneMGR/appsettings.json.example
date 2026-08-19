@@ -152,6 +152,17 @@
       "NewsMinPoints": 1000
     }
   },
+  "PairsWatch": {
+    "_comment": "[I14c] Sorveglianza dello SPREAD delle coppie scelte a mano: ogni IntervalHours registra finestre NON SOVRAPPOSTE (ADF, hedge ratio, z-score) e la pagina /pairs-trading ne mostra la storia. SOLA LETTURA: non apre, non chiude, non tocca corsie. DEFAULT SPENTO e non e' la solita prudenza — e' l'unico worker dell'ondata di integrazione che SCRIVE IN PERMANENZA sul Postgres condiviso con motore e ingestion, quindi accenderlo e' una decisione sul carico. Il conto: per coppia il primo giro scrive MaxCandles/WindowSize righe (20 coi default), dal secondo in poi UNA sola perche' l'upsert e' idempotente; con 5 coppie ogni 12h fanno ~10 righe/giorno. Pairs vuota = nessuna sorveglianza anche da acceso. Le coppie si scelgono A MANO nella forma 'ETH/USDT|BTC/USDT 1h': alimentarle da cio' che lo screening marca operabile sceglierebbe fra centinaia di test ADF senza correzione per test multipli, cioe' fabbricherebbe candidati per costruzione. Il VERDETTO guarda la frazione di finestre stazionarie sulla SERIE, mai la singola finestra: al 5% il 5% delle finestre di puro rumore risulta stazionario per costruzione.",
+    "Enabled": false,
+    "Pairs": [],
+    "IntervalHours": 12,
+    "WindowSize": 250,
+    "MaxCandles": 5000,
+    "Estimator": "Kalman",
+    "PersistenceThreshold": 0.6,
+    "RecentWindows": 3
+  },
   "Campaign": {
     "_comment": "Campaign Planner (Fase 1, PRD Autonomia): rotazione automatica delle configurazioni di caccia. DEFAULT OFF: e' IL cambio di natura da strumento ad agente, l'attivazione e' una decisione esplicita. Con Enabled=false le campagne in /campaign si preparano ma nessun run parte. L'applica passa dalla stessa catena della ri-applica (supervisore con veto + isteresi); corsie avviate al massimo in Paper, config Live sempre saltate.",
     "Enabled": false,

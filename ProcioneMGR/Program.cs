@@ -637,6 +637,14 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Research.IResearchCandidateIn
 // database dal 2026-07 e nessuna query li aveva mai riletti. Singleton come il gemello: porta un
 // semaforo interno, e due indicizzazioni concorrenti nello stesso processo non hanno senso.
 builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.IPairCandidateIndexer, ProcioneMGR.Services.PairsTrading.PairCandidateIndexer>();
+// [I14c] La storia dello spread delle coppie sorvegliate. Lo STORE e' sempre registrato — la pagina
+// deve poter leggere una storia gia' scritta anche col worker spento, che e' lo stato di fabbrica.
+builder.Services.Configure<ProcioneMGR.Services.PairsTrading.PairsWatchOptions>(builder.Configuration.GetSection("PairsWatch"));
+builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.IPairSpreadHistoryStore, ProcioneMGR.Services.PairsTrading.PairSpreadHistoryStore>();
+// Il WORKER e' l'unico dell'ondata che scrive in permanenza sul Postgres condiviso: si registra
+// sempre ma nasce inerte (PairsWatch:Enabled=false e nessuna coppia elencata).
+builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.PairSpreadWatchWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.PairsTrading.PairSpreadWatchWorker>());
 builder.Services.AddScoped<ProcioneMGR.Services.Research.ResearchPageService>();
 
 // [2026-08-15, revisione post-incidente 122 serie ferme] Orchestrazione di Watchlist.razor:

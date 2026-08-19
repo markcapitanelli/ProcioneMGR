@@ -17,6 +17,9 @@
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IPairsBacktestEngine Engine
 @inject IPairCandidateIndexer PairIndexer
+@inject IPairSpreadHistoryStore SpreadHistory
+@inject ILogger<PairsTrading> Logger
+@inject Microsoft.Extensions.Options.IOptionsMonitor<PairsWatchOptions> PairsWatch
 @* [I10] I risultati di questa pagina morivano col circuito Blazor: ora ogni backtest e' un
    ExperimentRun confrontabile con gli altri. Il tracker e' un osservatore SACRIFICABILE — gli helper
    Safe* non fanno mai cadere il calcolo osservato. *@
@@ -192,6 +195,88 @@
         @if (!string.IsNullOrEmpty(_status))
         {
             <div class="alert @(_isError ? "alert-danger" : "alert-success") mt-3 mb-0">@_status</div>
+        }
+    </div>
+</div>
+
+@* ===================== [I14c] La storia dello spread delle coppie SORVEGLIATE ===================== *@
+<div class="card mb-3" id="spread-sorvegliato">
+    <div class="card-header d-flex flex-wrap align-items-center gap-2">
+        <span><i class="bi bi-activity me-1"></i>Coppie sorvegliate nel tempo</span>
+        <span class="text-muted small">sola lettura — questo pannello non decide nulla</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-2">
+            Per le coppie elencate in <code>PairsWatch:Pairs</code> un worker registra ogni 12 ore lo spread
+            su <strong>finestre non sovrapposte</strong>, e qui se ne legge la storia. Le coppie le
+            <strong>scegli tu</strong>: alimentarle da ciò che lo screening marca operabile sceglierebbe fra
+            centinaia di test ADF senza correzione per test multipli, cioè fabbricherebbe candidati per
+            costruzione.
+        </p>
+        <p class="text-muted small mb-3">
+            <strong>Il verdetto guarda la SERIE, non la singola finestra</strong>, e non è un dettaglio: un
+            test al 5% dichiara stazionario il 5% delle finestre di puro rumore — per costruzione. Quello che
+            conta è su quale <em>frazione</em> di finestre la relazione tiene, e se una che teneva ha smesso.
+        </p>
+
+        @if (_spreadSeries.Count == 0)
+        {
+            <p class="text-muted small mb-0">
+                @if (!PairsWatch.CurrentValue.Enabled)
+                {
+                    <span>
+                        Sorveglianza <strong>SPENTA</strong> (<code>PairsWatch:Enabled</code> = false, lo stato di
+                        fabbrica). È l'unico worker di questa ondata che <strong>scrive in permanenza</strong> sul
+                        database condiviso col motore: accenderlo è una decisione sul carico. Si governa da
+                        <a href="admin/autonomy#p-pairswatch">/admin/autonomy</a>.
+                    </span>
+                }
+                else if (PairsWatch.CurrentValue.Pairs.Count == 0)
+                {
+                    <span>Sorveglianza accesa ma <strong>nessuna coppia elencata</strong>: aggiungile da <a href="admin/autonomy#p-pairswatch">/admin/autonomy</a>.</span>
+                }
+                else
+                {
+                    <span>
+                        @PairsWatch.CurrentValue.Pairs.Count coppie sorvegliate, ma nessuna storia registrata ancora:
+                        il primo giro parte entro @PairsWatch.CurrentValue.IntervalHours ore dall'avvio del guscio.
+                    </span>
+                }
+            </p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr>
+                            <th>Coppia</th><th class="text-end">Finestre</th><th class="text-end">Stazionarie</th>
+                            <th>Verdetto</th><th class="text-end">z ultimo</th><th>Ultimo calcolo</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var (chiave, punti) in _spreadSeries)
+                        {
+                            var v = PairSpreadJudge.Judge(punti, PairsWatch.CurrentValue.PersistenceThreshold, PairsWatch.CurrentValue.RecentWindows);
+                            <tr class="@(v.IsBroken ? "table-warning" : "")">
+                                <td><code class="small">@chiave</code></td>
+                                <td class="text-end">@v.Windows</td>
+                                <td class="text-end">@v.StationaryWindows (@v.StationaryFraction.ToString("P0"))</td>
+                                <td class="small">@v.Text</td>
+                                <td class="text-end">@(punti.Count > 0 ? punti[^1].LastZScore.ToString("F2") : "—")</td>
+                                <td class="small text-muted">
+                                    @(_spreadLastComputed.TryGetValue(chiave, out var q) ? q.ToLocalTime().ToString("dd/MM HH:mm") : "—")
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-muted small mb-0">
+                Le finestre <strong>sovrapposte sono state tolte in lettura</strong>: il worker taglia la griglia
+                dalla candela più recente all'indietro, e a ogni giro la griglia scivola — punti che condividono
+                dati sono correlati per costruzione e farebbero sembrare la relazione più stabile di quanto è.
+            </p>
         }
     </div>
 </div>
@@ -435,6 +520,32 @@
     private List<IndicatorSeries> _zScoreSeries = new();
 
     // --- [I14] Lo storico dello screening -----------------------------------------------------
+    // [I14c] La storia dello spread delle coppie sorvegliate, gia' deduplicata dallo store.
+    private List<(string Chiave, IReadOnlyList<PairSpreadPoint> Punti)> _spreadSeries = [];
+    private Dictionary<string, DateTime> _spreadLastComputed = [];
+
+    /// <summary>
+    /// [I14c] Carica la storia delle coppie ELENCATE in configurazione. Se una coppia e' stata tolta
+    /// dall'elenco la sua storia resta in tabella ma non si mostra: il pannello racconta cio' che si
+    /// sta sorvegliando adesso, non l'archivio.
+    /// </summary>
+    private async Task LoadSpreadHistoryAsync()
+    {
+        var opt = PairsWatch.CurrentValue;
+        _spreadLastComputed = new Dictionary<string, DateTime>(await SpreadHistory.LoadLastComputedAsync(), StringComparer.Ordinal);
+
+        var serie = new List<(string, IReadOnlyList<PairSpreadPoint>)>();
+        foreach (var chiave in opt.Pairs.Distinct(StringComparer.Ordinal))
+        {
+            var (y, x, tf) = PairSpreadWatchWorker.ParsePair(chiave);
+            if (y is null || x is null || tf is null) continue;
+            var normalizzata = PairKey.Build(y, x, tf);
+            var punti = await SpreadHistory.LoadSeriesAsync(normalizzata, opt.Estimator);
+            if (punti.Count > 0) serie.Add((normalizzata, punti));
+        }
+        _spreadSeries = serie;
+    }
+
     private List<PairCandidate> _pairRows = [];
     private int _pairRuns;
     private int _pairKeys;
@@ -553,6 +664,11 @@
             _pairIndexError = true;
             _pairIndexMessage = $"Indice coppie non leggibile: {ex.Message}";
         }
+
+        // [I14c] La storia dello spread e' indipendente dall'indice: un guasto sull'una non deve
+        // svuotare l'altra.
+        try { await LoadSpreadHistoryAsync(); }
+        catch (Exception ex) { Logger.LogWarning(ex, "Storia dello spread non leggibile."); }
     }
 
     private string? _userId;

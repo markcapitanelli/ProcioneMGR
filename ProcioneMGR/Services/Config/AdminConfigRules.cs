@@ -120,6 +120,22 @@ public static class AdminConfigRules
             (o.ExecutionLanes.All(l => l >= 0),
                 "Le corsie autorizzate all'esecuzione sono numeri di corsia: nessuno puo' essere negativo.")),
 
+        // [I14c] La sorveglianza dello spread. La soglia di persistenza e' quella che puo' fare
+        // danno restando "valida" per il binder: a 0 ogni coppia risulta persistente (anche il puro
+        // rumore), sopra 1 nessuna lo e' mai — in entrambi i casi il verdetto smette di dire
+        // qualcosa. La finestra sotto le 60 candele toglie potenza all'ADF fino a renderlo un
+        // generatore di rumore.
+        ProcioneMGR.Services.PairsTrading.PairsWatchOptions o => Check(
+            (o.IntervalHours is >= 1 and <= 168, "La cadenza sta fra 1 ora e 7 giorni."),
+            (o.WindowSize >= 60, "La finestra dev'essere almeno 60 candele: sotto, l'ADF non ha potenza e il verdetto e' rumore."),
+            (o.MaxCandles >= o.WindowSize * ProcioneMGR.Services.PairsTrading.PairSpreadJudge.MinWindows,
+                $"Servono almeno {ProcioneMGR.Services.PairsTrading.PairSpreadJudge.MinWindows} finestre non sovrapposte per un giudizio: "
+                + "le candele per giro devono bastare a coprirle."),
+            (o.PersistenceThreshold is > 0 and <= 1,
+                "La soglia di persistenza sta fra 0 (escluso) e 1: a 0 anche il puro rumore risulterebbe una relazione persistente."),
+            (o.RecentWindows >= 1, "Serve almeno 1 finestra recente per poter giudicare una rottura."),
+            (o.Estimator is "Kalman" or "RollingOls", "L'estimatore e' \"Kalman\" o \"RollingOls\".")),
+
         AutoReapplyOptions o => Check(
             (o.LookbackDays >= 1, "Il lookback dev'essere almeno 1 giorno."),
             (o.MaxPerTick >= 1, "Serve almeno un run per tick.")),
