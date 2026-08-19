@@ -95,11 +95,15 @@ public class ObservabilityTests
             await db.SaveChangesAsync();
         }
 
+        // [I6] Senza candele recenti il worker dichiara il check SALTATO: questa prova riguarda le
+        // METRICHE emesse da un check vero, quindi deve partire da un check che può avvenire.
+        await DriftTestData.SeedRecentCandlesAsync(factory, "BTCUSDT");
+
         using var metrics = new ProcioneMetrics();
         var registry = new ModelRegistry(factory, new ModelRegistryOptions(), NullLogger<ModelRegistry>.Instance);
         var worker = new FeatureDriftWorker(
             factory, new AlertMonitor(), registry,
-            new DriftMonitorOptions { RetireChampionOnAlert = true, MinAlertsToRetire = 1 }.AsMonitor(),
+            new DriftMonitorOptions { RetireChampionOnAlert = true, MinAlertsToRetire = 1, RecentCandles = DriftTestData.MinimumCandles }.AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance, metrics);
 
         var (listener, longs, _) = Listen();

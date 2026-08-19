@@ -155,6 +155,21 @@ public static class DatabaseMigrator
             return new MigrationOutcome(false, [], [], "assembly delle migrazioni non disponibile");
         }
 
+        // Il confronto modello↔snapshot è diagnostica: se il provider non lo sa fare non deve
+        // impedire l'avvio, e nel dubbio si tace invece di bloccare (fail-open sulla diagnostica).
+        static bool HasPendingModelChanges(ApplicationDbContext db, ILogger logger)
+        {
+            try
+            {
+                return db.Database.HasPendingModelChanges();
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Confronto modello/snapshot non disponibile: lo schema non viene verificato per questa via.");
+                return false;
+            }
+        }
+
         if (pending.Count == 0)
         {
             // [Fase 5, 2026-08-11] «Zero pendenti» ha DUE cause possibili, e confonderle è già
@@ -174,6 +189,37 @@ public static class DatabaseMigrator
                     "migrazioni alla versione EF dell'app e ricostruire.",
                     MigrationsAssemblyName);
                 return new MigrationOutcome(false, [], [], "assembly caricato ma senza migrazioni (versioni EF disallineate?)");
+            }
+
+            // [I6, 2026-08-19] La TERZA causa di «zero pendenti», trovata dal livello 4 e non
+            // dall'analisi: l'assembly si carica, espone migrazioni (quindi il guardiano sopra tace)
+            // ma è VECCHIO. `GetPendingMigrations` sottrae le applicate da quelle NOTE ALL'ASSEMBLY:
+            // se l'assembly non conosce le ultime, la differenza è vuota e lo schema risulta
+            // «allineato» mentre al database mancano colonne che il modello usa.
+            //
+            // Non è teorico: è successo esattamente qui. `dotnet build` dell'app NON ricostruisce il
+            // progetto delle migrazioni (disegno anti-ciclo), e in Release la DLL era ferma a due
+            // settimane prima — con la colonna nuova assente dal database e questa riga che
+            // dichiarava tutto a posto. Un guardiano che rassicura è peggio di nessun guardiano.
+            //
+            // La discriminante giusta non è un conteggio ma il MODELLO: se differisce dallo snapshot
+            // dell'ultima migrazione nota, o manca una migrazione o l'assembly è indietro. In
+            // entrambi i casi lo schema NON è verificato e non va dichiarato allineato.
+            // `known > 0` è essenziale: senza un assembly di migrazioni risolvibile il confronto
+            // modello↔snapshot è vero per costruzione (il modello «differisce» da nulla), e la
+            // guardia griderebbe su ogni host satellite — dove l'assenza è normale e già dichiarata
+            // sopra. Un allarme costruito sull'ignoranza è la classe che questa ondata bonifica.
+            if (known > 0 && HasPendingModelChanges(db, logger))
+            {
+                logger.LogError(
+                    "Nessuna migrazione pendente ({Known} note), ma il MODELLO differisce dallo snapshot dell'ultima " +
+                    "migrazione conosciuta: lo schema NON è allineato e non lo dichiaro tale. Due cause: manca una " +
+                    "migrazione per una modifica del modello, oppure l'assembly '{Assembly}' accanto all'eseguibile è " +
+                    "VECCHIO — `dotnet build` dell'app non lo ricostruisce. Rimedio: " +
+                    "`dotnet build ProcioneMGR.Migrations.Postgres -c <configurazione>` e riavviare; se il modello è " +
+                    "davvero cambiato, `dotnet ef migrations add` prima.",
+                    known, MigrationsAssemblyName);
+                return new MigrationOutcome(false, [], [], "modello e snapshot divergono: assembly delle migrazioni vecchio, o migrazione mancante");
             }
 
             logger.LogInformation("Schema del database già allineato: nessuna migrazione pendente ({Known} note).", known);

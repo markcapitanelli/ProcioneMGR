@@ -23,6 +23,22 @@ public sealed class IcFeatureSelectionConfig
     /// maggioranza delle finestre (IcConsistency ≥ 0.5): evita i fattori "a caso" col segno instabile.
     /// </summary>
     public bool RequireConsistentSign { get; set; }
+
+    /// <summary>
+    /// [I9] Osservazioni valide minime perché una feature possa essere selezionata.
+    /// <c>0</c> = nessun pavimento (comportamento storico).
+    ///
+    /// <para>Il caso che copre: un fattore <b>null sulla stragrande maggioranza delle barre</b> — per
+    /// esempio il sentiment su un simbolo fuori dal vocabolario dei ticker, o una feature con un
+    /// warm-up lunghissimo — può avere un |IC| altissimo calcolato su una manciata di punti, e
+    /// vincere l'ordinamento contro fattori misurati su migliaia. L'IC non è confrontabile fra
+    /// numerosità diverse, e ordinare per |IC| senza guardare <c>Observations</c> premia il rumore
+    /// proprio dove è più facile scambiarlo per segnale.</para>
+    ///
+    /// <para>Default 0 apposta: acceso di suo cambierebbe classifiche esistenti senza che nessuno
+    /// l'abbia chiesto. La manopola sta in <c>/feature-selection</c>.</para>
+    /// </summary>
+    public int MinObservations { get; set; }
 }
 
 /// <summary>Un fattore candidato con la sua valutazione IC — l'unità ordinabile della selezione.</summary>
@@ -83,6 +99,11 @@ public sealed class IcFeatureSelector : IIcFeatureSelector
     {
         config ??= new IcFeatureSelectionConfig();
         return Rank(candidates, candles, config)
+            // [I9] Il pavimento di numerosità viene PRIMA degli altri filtri, ed è deliberato: un
+            // |IC| calcolato su troppi pochi punti non è un IC piccolo, è un IC che non significa
+            // nulla — e confrontarlo con gli altri è la forma di rumore più facile da scambiare per
+            // segnale. `Observations` era già sul risultato e non lo guardava nessuno.
+            .Where(s => s.Evaluation.Observations >= Math.Max(0, config.MinObservations))
             .Where(s => s.AbsIc >= config.MinAbsIc
                         && Math.Abs(s.Evaluation.InformationRatio) >= config.MinInformationRatio
                         && (!config.RequireConsistentSign || s.Evaluation.IcConsistency >= 0.5))

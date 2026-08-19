@@ -132,6 +132,17 @@
                     <label class="form-label">IR minimo</label>
                     <input type="number" step="any" class="form-control" style="width:7rem" @bind="_minIr" disabled="@_busy" />
                 </div>
+                @* [I9] Pavimento di numerosità. Un fattore null sulla stragrande maggioranza delle
+                   barre — il sentiment su un simbolo fuori dal vocabolario dei ticker, una feature
+                   con warm-up lunghissimo — può avere |IC| altissimo su una manciata di punti e
+                   vincere l'ordinamento contro fattori misurati su migliaia. L'IC non è confrontabile
+                   fra numerosità diverse. Default 0 = comportamento storico. *@
+                <div class="col-auto">
+                    <label class="form-label" title="Osservazioni valide minime perché una feature possa essere selezionata. 0 = nessun pavimento. Serve contro i fattori quasi sempre nulli, il cui |IC| è calcolato su pochi punti e non è confrontabile con gli altri.">
+                        Osservazioni minime
+                    </label>
+                    <input type="number" class="form-control" style="width:8rem" min="0" @bind="_minObservations" disabled="@_busy" />
+                </div>
                 <div class="col-auto">
                     <div class="form-check">
                         <input type="checkbox" class="form-check-input" id="fs_sign" @bind="_requireConsistentSign" disabled="@_busy" />
@@ -465,6 +476,12 @@
     private int _topN = 20;
     private double _minAbsIc = 0.02;
     private double _minIr;
+
+    /// <summary>
+    /// [I9] Pavimento di numerosità per la selezione. 0 = comportamento storico, ed è il default
+    /// apposta: acceso di suo cambierebbe classifiche esistenti senza che nessuno l'abbia chiesto.
+    /// </summary>
+    private int _minObservations;
     private bool _requireConsistentSign;
 
     // Aggiornato dal componente DataAvailability (gating della valutazione).
@@ -641,6 +658,7 @@
                 TopN = _topN,
                 MinAbsIc = _minAbsIc,
                 MinInformationRatio = _minIr,
+                MinObservations = _minObservations,
                 RequireConsistentSign = _requireConsistentSign,
             };
             var candidates = Candidates();

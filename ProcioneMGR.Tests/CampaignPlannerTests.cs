@@ -114,7 +114,8 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
 
     private async Task<(CampaignPlanner Planner, ScriptedPipelineEngine Engine, ScriptedApplyEvaluator Evaluator,
         IDbContextFactory<ApplicationDbContext> DbFactory, RecordingLaneEngine[] Lanes)> BuildAsync(
-        bool enabled = true, ProcioneMGR.Services.Notifications.INotifier? notifier = null)
+        bool enabled = true, ProcioneMGR.Services.Notifications.INotifier? notifier = null,
+        CampaignOptions? campaignOptions = null, AutoReapplyOptions? autoReapplyOptions = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
@@ -138,7 +139,10 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
         var evaluator = new ScriptedApplyEvaluator();
         var planner = new CampaignPlanner(
             dbFactory, engine, evaluator, provider,
-            new CampaignOptions { Enabled = enabled }.AsMonitor(),
+            (campaignOptions ?? new CampaignOptions { Enabled = enabled }).AsMonitor(),
+            // [I7] Il percorso campagna rispetta il gate della ri-applica: nei test resta ACCESO per
+            // default, così le prove esistenti esercitano il percorso di schieramento di sempre.
+            (autoReapplyOptions ?? new AutoReapplyOptions { Enabled = true }).AsMonitor(),
             NullLogger<CampaignPlanner>.Instance,
             notifier);
         return (planner, engine, evaluator, dbFactory, lanes);
@@ -386,6 +390,125 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
         engine.NextRunId = Guid.NewGuid();
         await planner.TickAsync();
         Assert.Equal(config2, engine.Started[1].ConfigId);
+    }
+
+    // --- [I7] Annullamento umano: un ORDINE, non un esito --------------------------------------
+
+    /// <summary>
+    /// Il difetto che copre, trovato leggendo il codice il 2026-08-18: un run annullato a mano da
+    /// <c>/pipeline</c> finiva nello stesso ramo di uno <c>Failed</c>, la config veniva marcata
+    /// fallita e la rotazione passava alla successiva — che, mai eseguita in questo ciclo, è
+    /// <b>sempre eleggibile</b>. Entro un tick da 60 secondi partiva un altro run automatico:
+    /// <b>chi annullava otteneva il contrario di ciò che voleva</b>, e l'unico modo di fermare la
+    /// campagna era disabilitarla.
+    /// </summary>
+    [Fact]
+    public async Task RunAnnullato_MetteLaCampagnaInPausa_ENonFaRipartireLaRotazione()
+    {
+        var (planner, engine, _, dbFactory, _) = await BuildAsync();
+        var (campaignId, config1, _) = await SeedCampaignAsync(dbFactory);
+
+        await planner.TickAsync();
+        await CompletePendingRunAsync(dbFactory, campaignId, survivors: 0, status: "Cancelled");
+        await planner.TickAsync();
+
+        var campaign = await LoadAsync(dbFactory, campaignId);
+        Assert.Null(campaign.PendingRunId);
+        Assert.NotNull(campaign.PausedUntilUtc);
+        Assert.True(campaign.PausedUntilUtc > DateTime.UtcNow.AddMinutes(50));
+        // L'annullamento NON è un fallimento della config: distinguerli è il punto.
+        Assert.Equal("Cancelled", CampaignPlanner.ParseConfigStates(campaign.ConfigStatesJson)
+            .Single(s => s.ConfigurationId == config1).LastOutcome);
+
+        // E soprattutto: il tick successivo NON avvia niente.
+        var avviatiPrima = engine.Started.Count;
+        engine.NextRunId = Guid.NewGuid();
+        await planner.TickAsync();
+        Assert.Equal(avviatiPrima, engine.Started.Count);
+    }
+
+    /// <summary>
+    /// <b>Il controllo sul rumore</b>: con la pausa a zero il comportamento è quello storico. Senza
+    /// questo test, «la pausa funziona» sarebbe soddisfatto anche da un planner che non riparte mai.
+    /// </summary>
+    [Fact]
+    public async Task PausaAZero_ComportamentoStorico_LaRotazioneProsegue()
+    {
+        var (planner, engine, _, dbFactory, _) = await BuildAsync(
+            campaignOptions: new CampaignOptions { Enabled = true, CancelPauseMinutes = 0 });
+        var (campaignId, _, config2) = await SeedCampaignAsync(dbFactory);
+
+        await planner.TickAsync();
+        await CompletePendingRunAsync(dbFactory, campaignId, survivors: 0, status: "Cancelled");
+        await planner.TickAsync();
+
+        Assert.Null((await LoadAsync(dbFactory, campaignId)).PausedUntilUtc);
+
+        engine.NextRunId = Guid.NewGuid();
+        await planner.TickAsync();
+        Assert.Equal(config2, engine.Started[1].ConfigId);
+    }
+
+    /// <summary>Un run FALLITO resta un esito, non un ordine: nessuna pausa, comportamento invariato.</summary>
+    [Fact]
+    public async Task RunFallito_NonMetteInPausa()
+    {
+        var (planner, _, _, dbFactory, _) = await BuildAsync();
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+
+        await planner.TickAsync();
+        await CompletePendingRunAsync(dbFactory, campaignId, survivors: 0, status: "Failed");
+        await planner.TickAsync();
+
+        Assert.Null((await LoadAsync(dbFactory, campaignId)).PausedUntilUtc);
+    }
+
+    // --- [I7] Il gate della ri-applica vale anche per la campagna -------------------------------
+
+    /// <summary>
+    /// Il difetto: <c>AutoReapply:Enabled</c> è letto solo dallo scheduler, quindi con la ri-applica
+    /// SPENTA la campagna schierava lo stesso. Un interruttore che chiude una porta e ne lascia
+    /// aperta un'altra è la stessa forma dei pannelli che scrivevano sul processo sbagliato — e qui
+    /// la porta aperta <b>riscrive corsie</b>.
+    /// </summary>
+    [Fact]
+    public async Task RiApplicaSpenta_ISopravvissutiNonVengonoSchierati_MaRestanoRegistrati()
+    {
+        var (planner, _, evaluator, dbFactory, _) = await BuildAsync(
+            autoReapplyOptions: new AutoReapplyOptions { Enabled = false });
+        var (campaignId, config1, _) = await SeedCampaignAsync(dbFactory);
+
+        await planner.TickAsync();
+        await CompletePendingRunAsync(dbFactory, campaignId, survivors: 2, status: "Completed");
+        await planner.TickAsync();
+
+        // L'applier non viene MAI invocato: è la prova che il gate morde.
+        Assert.Empty(evaluator.Evaluated);
+
+        var campaign = await LoadAsync(dbFactory, campaignId);
+        Assert.Equal("NotApplied", CampaignPlanner.ParseConfigStates(campaign.ConfigStatesJson)
+            .Single(s => s.ConfigurationId == config1).LastOutcome);
+        Assert.Contains("ri-applica automatica", campaign.LastOutcome);
+        // La campagna resta in rotazione: i sopravvissuti non si perdono, aspettano un click umano.
+        Assert.Equal(CampaignStatus.Rotating, campaign.Status);
+    }
+
+    /// <summary>
+    /// Il complemento: con la ri-applica ACCESA il percorso è quello di sempre. Senza, il test sopra
+    /// sarebbe soddisfatto anche da una campagna che non schiera mai.
+    /// </summary>
+    [Fact]
+    public async Task RiApplicaAccesa_ISopravvissutiPassanoDallApplier()
+    {
+        var (planner, _, evaluator, dbFactory, _) = await BuildAsync(
+            autoReapplyOptions: new AutoReapplyOptions { Enabled = true });
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+
+        await planner.TickAsync();
+        await CompletePendingRunAsync(dbFactory, campaignId, survivors: 2, status: "Completed");
+        await planner.TickAsync();
+
+        Assert.NotEmpty(evaluator.Evaluated);
     }
 
     // --- Wake (trigger contestuale / operatore) ------------------------------------------------

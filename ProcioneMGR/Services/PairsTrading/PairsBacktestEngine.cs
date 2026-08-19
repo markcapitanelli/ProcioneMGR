@@ -135,7 +135,7 @@ public sealed class PairsBacktestEngine : IPairsBacktestEngine
             equity[^1] = new EquityPoint { Timestamp = lastTs, Capital = book.Cash };
         }
 
-        return BuildResult(config, book, equity, trades, n);
+        return BuildResult(config, book, equity, trades, n, analysis);
     }
 
     /// <summary>
@@ -182,7 +182,11 @@ public sealed class PairsBacktestEngine : IPairsBacktestEngine
         trades.Add(trade);
     }
 
-    private static PairsBacktestResult BuildResult(PairsBacktestConfiguration config, PairsPortfolio book, List<EquityPoint> equity, List<PairsTrade> trades, int candlesEvaluated)
+    /// <param name="analysis">
+    /// [I10] L'analisi dello spread che ha DECISO, propagata nel risultato perche' la pagina disegni
+    /// quella invece di ricalcolarne una con un estimatore fisso (era la doppia verita' sullo z-score).
+    /// </param>
+    private static PairsBacktestResult BuildResult(PairsBacktestConfiguration config, PairsPortfolio book, List<EquityPoint> equity, List<PairsTrade> trades, int candlesEvaluated, RollingPairsAnalysis analysis)
     {
         var winning = trades.Count(t => t.Pnl > 0m);
         var losing = trades.Count(t => t.Pnl < 0m);
@@ -200,6 +204,10 @@ public sealed class PairsBacktestEngine : IPairsBacktestEngine
             CandlesEvaluated = candlesEvaluated,
             Trades = trades,
             EquityCurve = equity,
+            // [I10] L'analisi che ha DAVVERO deciso, esposta perché la pagina disegni quella invece
+            // di ricalcolarne una con un estimatore fisso (era la doppia verità sullo z-score).
+            Analysis = analysis,
+            EstimatorUsed = config.HedgeRatioEstimator,
         };
     }
 
