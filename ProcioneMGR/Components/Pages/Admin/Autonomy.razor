@@ -39,6 +39,7 @@
 @inject IOptionsMonitor<CampaignOptions> CampaignMonitor
 @inject IOptionsMonitor<RegimeTriggerOptions> RegimeTriggerMonitor
 @inject IOptionsMonitor<ProcioneMGR.Services.Fleet.FleetOptions> FleetMonitor
+@inject IOptionsMonitor<ProcioneMGR.Services.PairsTrading.PairsWatchOptions> PairsWatchMonitor
 @inject ProcioneMGR.Services.Fleet.FleetOrchestratorWorker FleetWorker
 @inject ProcioneMGR.Services.Fleet.IGreyDeployer GreyDeployer
 @inject ILaneDirectory LaneDirectory
@@ -93,6 +94,7 @@
     <a class="me-2" href="#p-veto">Supervisore veto</a>
     <a class="me-2" href="#p-campaign">Campagne</a>
     <a class="me-2" href="#p-sentiment">Sentiment</a>
+    <a class="me-2" href="#p-pairswatch">Spread coppie</a>
     <a class="me-2" href="#p-drift">Drift feature</a>
     <a class="me-2" href="#p-carry">Carry</a>
     <a class="me-2" href="#p-liq">Liquidazioni</a>
@@ -394,9 +396,16 @@
             <div class="alert @(silence.CommitteeCouldBeAsked ? "alert-info" : "alert-secondary") py-2 small mb-3">
                 <div class="d-flex flex-wrap gap-3 mb-1">
                     <span><strong>@silence.PassCandidatesQueued</strong> candidati «pass» in coda</span>
-                    <span><strong>@silence.GreyCandidates</strong> grigi (solo proposte)</span>
+                    <span title="Proposte DISTINTE per identità (strategia + coppia + timeframe + parametri), non numero di run: la caccia ritrova spesso gli stessi parametri, e quaranta righe che sono una cosa sola non sono un elenco.">
+                        <strong>@silence.GreyCandidates</strong> grigi distinti (solo proposte)
+                    </span>
                     <span><strong>@silence.FreeFleetLanes</strong> corsie di flotta libere</span>
                     <span><strong>@silence.LanesUnderGovernance</strong> corsie sotto governo</span>
+                    @* [I12] Il numero che dice se il blocco si scioglierà da solo. *@
+                    <span class="@(silence.StarvingLanes > 0 ? "text-warning-emphasis fw-semibold" : "")"
+                          title="Corsie in corsa che stanno producendo meno della frazione dichiarata dei trade attesi: il prossimo tick le ritira e libera il posto. Zero non vuol dire «tutte in salute», vuol dire «nessuna condannabile» — e comprende quelle di cui il ritmo atteso non è noto.">
+                        <strong>@silence.StarvingLanes</strong> in inedia
+                    </span>
                 </div>
                 <div>@silence.Reason.</div>
                 @if (!silence.CommitteeCouldBeAsked)
@@ -446,6 +455,22 @@
                 <label class="form-label">Conferme (tick) @Hot()</label>
                 <input type="number" class="form-control" @bind="_fleet.RetireConfirmTicks" min="1" style="width: 7rem;" />
             </div>
+            @* [I12] Il SECONDO criterio di ritiro. Sta accanto al primo perché è la stessa
+               decisione presa per un'altra ragione, e separarli farebbe cercare in due posti. *@
+            <div class="col-auto">
+                <label class="form-label" for="fl_starv">
+                    Inedia: frazione @Hot()
+                    <span class="text-muted small" title="Frazione del ritmo ATTESO sotto cui la corsia è dichiarata in inedia e ritirata. 0,2 = ha prodotto meno del 20% dei trade che l'holdout prometteva nel tempo trascorso. 0 = criterio spento.">ⓘ</span>
+                </label>
+                <input type="number" step="0.05" id="fl_starv" class="form-control" @bind="_fleet.StarvationFraction" min="0" max="1" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" for="fl_starvd">
+                    Inedia: giorni min @Hot()
+                    <span class="text-muted small" title="Osservazione minima prima che l'inedia sia un giudizio: sotto questa soglia si tace anche a zero trade, altrimenti una corsia appena avviata verrebbe ritirata prima di aver avuto occasione di operare.">ⓘ</span>
+                </label>
+                <input type="number" id="fl_starvd" class="form-control" @bind="_fleet.StarvationMinDays" min="1" style="width: 7rem;" />
+            </div>
             <div class="col-auto">
                 <label class="form-label">Asseg./tick @Hot()</label>
                 <input type="number" class="form-control" @bind="_fleet.MaxAssignmentsPerTick" min="1" style="width: 7rem;" />
@@ -466,8 +491,41 @@
                 <label class="form-label">Silenzio carry (h) @Hot()</label>
                 <input type="number" class="form-control" @bind="_fleet.CarrySilenceAlertHours" min="1" style="width: 8rem;" />
             </div>
+            @* [AF2b] Il braccio esecutivo. Sta in fondo e con la sua cornice perche' e' l'UNICA
+               manopola di questo pannello che fa succedere qualcosa nel mondo invece di scriverne. *@
+            <div class="col-12 mt-2">
+                <div class="border rounded p-2 @(_fleet is { DryRun: false, ExecutionLanes.Count: > 0 } ? "border-warning" : "")">
+                    <div class="d-flex flex-wrap gap-3 align-items-end">
+                        <div>
+                            <label class="form-label mb-1" for="fl_exlanes">Corsie autorizzate all'ESECUZIONE @Hot()</label>
+                            <input class="form-control" id="fl_exlanes" @bind="_fleetExecutionLanesCsv"
+                                   placeholder="es. 5  (vuoto = nessuna)" style="width: 14rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_exmax">Azioni max/tick @Hot()</label>
+                            <input type="number" class="form-control" id="fl_exmax" @bind="_fleet.MaxExecutionsPerTick" min="1" style="width: 7rem;" />
+                        </div>
+                        <div class="small text-muted flex-fill" style="min-width: 22rem;">
+                            Elenco di numeri di corsia separati da virgola. <strong>Vuoto = nessuna esecuzione</strong>,
+                            anche con il dry-run spento: il permesso è per corsia, non globale.
+                            <br />
+                            Su una corsia autorizzata l'orchestratore può <strong>FERMARLA</strong> da solo quando la
+                            condanna (forward test perdente o inedia), dopo la conferma dell'isteresi e solo se la
+                            rilegge in <strong>Paper</strong> in quel momento. La corsia resta configurata e si riavvia
+                            con un click. <strong>Avviare</strong> una corsia resta di solo journal: fermare si disfa,
+                            avviare ha già operato.
+                            @if (_fleet is { DryRun: false, ExecutionLanes.Count: > 0 })
+                            {
+                                <span class="d-block text-warning-emphasis fw-semibold mt-1">
+                                    In vigore ora: @_fleet.ExecutionLanes.Count corsie possono essere fermate automaticamente.
+                                </span>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class="col-auto align-self-end">
-                <button class="btn btn-primary" @onclick='() => SaveAsync("Fleet", _fleet, "Orchestratore di flotta")' disabled="@_busy">Salva</button>
+                <button class="btn btn-primary" @onclick="SaveFleetAsync" disabled="@_busy">Salva</button>
             </div>
         </div>
         @* [F5] IL CLICK UMANO: schiera un candidato grigio proposto su una corsia di flotta libera. *@
@@ -819,12 +877,97 @@
                 <label class="form-label">Liquidazioni: punti min @Hot()</label>
                 <input type="number" class="form-control" @bind="_sentiment.HeritageGuard.LiquidationsMinPoints" min="1" style="width: 8rem;" />
             </div>
+            @* [I15] Il corpus di notizie con punteggio: esente dalla purge dal 2026-08-19, e
+               quindi patrimonio come le altre tre. Nasce NON sorvegliato di proposito — vedi il
+               title dell'interruttore: la purge ha girato da sempre e nessuna àncora plausibile
+               sarebbe soddisfatta al primo giro. *@
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="se_hg_news" @bind="_sentiment.HeritageGuard.NewsEnforced" />
+                <label class="form-check-label" for="se_hg_news" title="OFF di nascita, e non per timidezza: la purge delle notizie ha girato a ogni tick da sempre, quindi oggi il corpus non può essere più profondo di NewsRetentionDays — qualunque àncora plausibile scatterebbe al primo giro, e un allarme perpetuo smette di essere letto. Da spenta la riga resta MISURATA e mostrata in /sentiment come NON SORVEGLIATA, mai un OK finto. Accendila DOPO aver letto lì il minimo vero e aver scelto l'àncora da quella misura.">
+                    Sorveglia notizie @Hot()
+                </label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Il corpus di notizie CON PUNTEGGIO deve arrivare almeno a questa data. Le notizie senza punteggio restano potabili: l'esenzione è mirata, non totale.">Notizie: storia da ≤ @Hot()</label>
+                <input type="date" class="form-control" @bind="_sentiment.HeritageGuard.NewsMinStartUtc" style="width: 11rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Serve a distinguere «archivio perso» da «archivio che cresce», non a certificare che sia abbastanza grande per addestrare qualcosa.">Notizie: punti min @Hot()</label>
+                <input type="number" class="form-control" @bind="_sentiment.HeritageGuard.NewsMinPoints" min="1" style="width: 8rem;" />
+            </div>
             <div class="col-auto">
                 <button class="btn btn-primary me-2" @onclick="SaveSentimentAsync" disabled="@_busy">Salva</button>
                 <button class="btn btn-outline-secondary" @onclick="RunSentimentNowAsync" disabled="@_busy">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Esegui ora
                 </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ==================== [I14c] Sorveglianza dello spread delle coppie ==================== *@
+<div class="card mb-3" id="p-pairswatch">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-activity me-1"></i>Sorveglianza spread delle coppie</span>
+        <span>@StateBadge(_pairsWatch.Enabled && _pairsWatch.Pairs.Count > 0)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Registra ogni @_pairsWatch.IntervalHours ore lo spread delle coppie elencate, su finestre non
+            sovrapposte, e ne mostra la storia in <a href="pairs-trading#spread-sorvegliato">/pairs-trading</a>.
+            <strong>Sola lettura</strong>: non apre, non chiude, non tocca corsie.
+        </p>
+        <div class="alert alert-secondary py-2 small">
+            <strong>È l'unico automatismo di questa ondata che scrive in permanenza</strong> sul database
+            condiviso con motore e ingestion, quindi accenderlo è una decisione sul <em>carico</em>, non solo
+            sulla funzione. Il conto: per coppia, il primo giro scrive @(_pairsWatch.MaxCandles / Math.Max(1, _pairsWatch.WindowSize))
+            righe; dal secondo in poi <strong>una sola</strong> — l'upsert è idempotente e aggiorna le altre.
+            Con @(Math.Max(1, _pairsWatch.Pairs.Count)) coppie e un giro ogni @_pairsWatch.IntervalHours ore fanno
+            ~@(Math.Max(1, _pairsWatch.Pairs.Count) * (24 / Math.Max(1, _pairsWatch.IntervalHours))) righe al giorno.
+        </div>
+        <div class="row g-2 align-items-end">
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="pw_en" @bind="_pairsWatch.Enabled" />
+                <label class="form-check-label" for="pw_en">Attiva @Hot()</label>
+            </div>
+            <div class="col-12">
+                <label class="form-label mb-1" for="pw_pairs">
+                    Coppie sorvegliate @Hot()
+                    <span class="text-muted small" title="Una per riga o separate da virgola, nella forma «ETH/USDT|BTC/USDT 1h». Le scegli TU: alimentarle da ciò che lo screening marca operabile sceglierebbe fra centinaia di test ADF senza correzione per test multipli, cioè fabbricherebbe candidati per costruzione. Vuoto = nessuna sorveglianza, anche da acceso.">ⓘ</span>
+                </label>
+                <input class="form-control" id="pw_pairs" @bind="_pairsWatchPairsCsv"
+                       placeholder="es. ETH/USDT|BTC/USDT 1h, SOL/USDT|BTC/USDT 4h  (vuoto = nessuna)" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Cadenza (h) @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.IntervalHours" min="1" max="168" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Sotto, l'ADF perde potenza e il pavimento di rumore sale; sopra, servono anni di storia per avere le cinque finestre non sovrapposte che il giudizio pretende.">Finestra (candele) @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.WindowSize" min="60" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Candele per giro @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.MaxCandles" min="300" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Estimatore @Hot()</label>
+                <select class="form-select" @bind="_pairsWatch.Estimator" style="width: 9rem;">
+                    <option value="Kalman">Kalman</option>
+                    <option value="RollingOls">Rolling OLS</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Frazione di finestre stazionarie sopra cui si parla di relazione persistente. Su rumore puro ci si aspetta ~5%: una soglia alta è ciò che rende il verdetto diverso dal caso.">Soglia persistenza @Hot()</label>
+                <input type="number" step="0.05" class="form-control" @bind="_pairsWatch.PersistenceThreshold" min="0" max="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Quante finestre finali contano come «adesso» nel giudizio di rottura.">Finestre recenti @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.RecentWindows" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SavePairsWatchAsync" disabled="@_busy">Salva</button>
             </div>
         </div>
     </div>
@@ -882,6 +1025,21 @@
             <p class="small mb-3"><strong>Champion in carica: @_championCount</strong> — il ritiro automatico ha soggetti.</p>
         }
 
+        @if (_driftModelCounts is { } dm)
+        {
+            <p class="small mb-2">
+                Modelli sorvegliati: <strong>@dm.Sorvegliati</strong> su @dm.Salvati salvati
+                (stage: @string.Join(", ", _drift.EffectiveStages())).
+                @if (dm.Sorvegliati == 0)
+                {
+                    <span class="text-body-secondary">
+                        Nessun modello negli stage sorvegliati: il tick costa quasi nulla e non produce
+                        verdetti. Non e' un guasto — e' l'esito normale finche' nessun modello e'
+                        schierato. Il giorno che ne promuovi uno, il monitor parte da solo su quello.
+                    </span>
+                }
+            </p>
+        }
         <div class="row g-3 align-items-end mb-3">
             <div class="col-auto form-check form-switch ms-2">
                 <input class="form-check-input" type="checkbox" id="dr_en" @bind="_drift.Enabled" />
@@ -894,6 +1052,17 @@
             <div class="col-auto">
                 <label class="form-label">Candele recenti @Hot()</label>
                 <input type="number" class="form-control" @bind="_drift.RecentCandles" min="20" style="width: 8rem;" />
+            </div>
+            @* [I6c] QUALI modelli si sorvegliano. Senza questo filtro il monitor leggeva i blob di
+               tutti i 158 modelli salvati — tutti in Staging, nessuno usato da una corsia — a 39
+               secondi di database condiviso ogni sei ore, per produrre 151 allarmi su 153 corretti
+               ma irrilevanti. Il filtro trasforma un gate senza soggetto in un gate che si accende
+               INSIEME al soggetto. *@
+            <div class="col-auto">
+                <label class="form-label" title="Stage del registry da sorvegliare, separati da virgola. Vuoto = Champion,Challenger — cioè i soli modelli che possono alimentare o contendere una corsia. Metti Staging per sorvegliare anche i modelli mai schierati (costoso e, se non alimentano nulla, senza soggetto).">
+                    Stage sorvegliati @Hot()
+                </label>
+                <input class="form-control" @bind="_driftStagesCsv" placeholder="@string.Join(",", DriftMonitorOptions.DefaultStages)" style="width: 14rem;" />
             </div>
             @* [I2] Queste due manopole restano SEMPRE modificabili, e la prima versione le
                disabilitava quando i Champion erano zero. Era il ragionamento invertito, trovato
@@ -913,7 +1082,7 @@
                 <input type="number" class="form-control" @bind="_drift.MinAlertsToRetire" min="1" style="width: 8rem;" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Drift", _drift, "Drift monitor")' disabled="@_busy">Salva</button>
+                <button class="btn btn-primary me-2" @onclick='() => SaveDriftAsync()' disabled="@_busy">Salva</button>
                 <button class="btn btn-outline-secondary" @onclick="RunDriftNowAsync" disabled="@_busy">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Esegui check ora
@@ -1880,7 +2049,15 @@
     private LiveExecutionOptions _liveExec = new();
     private AutoReapplyOptions _autoReapply = new();
     private PromotionEvaluatorOptions _promotion = new();
+    private ProcioneMGR.Services.PairsTrading.PairsWatchOptions _pairsWatch = new();
+
+    /// <summary>[I14c] Le coppie sorvegliate come CSV: la forma con cui si scrive una lista, non un secondo stato.</summary>
+    private string _pairsWatchPairsCsv = string.Empty;
+
     private ProcioneMGR.Services.Fleet.FleetOptions _fleet = new();
+
+    /// <summary>[AF2b] Le corsie autorizzate come CSV: e' la forma con cui si scrive una lista, non un secondo stato.</summary>
+    private string _fleetExecutionLanesCsv = string.Empty;
     private int _fleetFootprint = 3;
     private List<OrchestratorDecision> _fleetJournal = [];
 
@@ -1982,6 +2159,12 @@
     // quattro funzioni che i pannelli davano per attive. null = non ancora letto/non determinabile.
     private ProcioneMGR.Services.Health.AgentStateReport? _agents;
     private int? _championCount;
+
+    /// <summary>[I6c] Stage sorvegliati, come CSV editabile. Vuoto = i default del codice.</summary>
+    private string _driftStagesCsv = string.Empty;
+
+    /// <summary>[I6c] Quanti modelli ricadono davvero negli stage sorvegliati, e quanti ne esistono.</summary>
+    private (int Sorvegliati, int Salvati)? _driftModelCounts;
 
     private bool _busy;
     private bool _isError;
@@ -2155,6 +2338,9 @@
 
         // [AF2] Config (editabile), stato e journal della flotta.
         _fleet = Clone(FleetMonitor.CurrentValue);
+        _fleetExecutionLanesCsv = string.Join(", ", _fleet.ExecutionLanes);
+        _pairsWatch = Clone(PairsWatchMonitor.CurrentValue);
+        _pairsWatchPairsCsv = string.Join(", ", _pairsWatch.Pairs);
         _fleetFootprint = PipelineApplier.LaneCount; // l'impronta storica dell'auto-apply: il confine della flotta
         await using (var db = await DbFactory.CreateDbContextAsync())
         {
@@ -2185,6 +2371,7 @@
         // "nessun simbolo sorvegliato" mentre il guardiano ne sorveglia sei.
         _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols);
         _drift = Clone(DriftMonitor.CurrentValue);
+        _driftStagesCsv = SymbolsToCsv(_drift.MonitorStages);
         _marketData = new MarketDataConfig
         {
             Enabled = Config.GetValue("MarketData:Enabled", true),
@@ -2245,6 +2432,7 @@
             OtlpEndpoint = Config.GetValue("Observability:OtlpEndpoint", "http://localhost:4317")!,
         };
         await LoadDriftResultsAsync();
+        await LoadDriftModelCountsAsync();
         await LoadAgentStateAsync();
     }
 
@@ -2297,6 +2485,82 @@
         ProcioneMGR.Services.Health.AgentActivation.NonDeterminabile => ("bg-secondary", "non determinabile"),
         _ => ("bg-light text-dark border", "spento"),
     };
+
+    /// <summary>
+    /// [AF2b] Salva la sezione Fleet traducendo prima il CSV delle corsie autorizzate. Passa dalla
+    /// <c>SaveAsync</c> comune — stessa validazione, stesso percorso — perche' il CSV e' solo la
+    /// forma con cui l'operatore scrive una lista, non una seconda strada di salvataggio.
+    ///
+    /// <para>I valori non numerici vengono SCARTATI in silenzio invece di azzerare la lista: un
+    /// refuso non deve poter allargare i permessi, e nel dubbio la lista piu' corta e' quella
+    /// sicura. Il campo si riscrive dal salvato, quindi l'operatore vede subito cosa e' passato.</para>
+    /// </summary>
+    /// <summary>
+    /// [I14c] Salva la sezione PairsWatch traducendo prima il CSV delle coppie. Le chiavi
+    /// MALFORMATE si scartano in silenzio e il campo si riscrive dal salvato: un refuso non deve
+    /// poter mettere in sorveglianza qualcosa che il worker poi salterebbe a ogni giro con un
+    /// warning che nessuno legge — meglio vederlo sparire subito dal campo.
+    /// </summary>
+    private async Task SavePairsWatchAsync()
+    {
+        _pairsWatch.Pairs = (_pairsWatchPairsCsv ?? string.Empty)
+            .Split([',', '\n', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => ProcioneMGR.Services.PairsTrading.PairSpreadWatchWorker.ParsePair(t))
+            .Where(p => p.Y is not null && p.X is not null && p.Timeframe is not null)
+            .Select(p => ProcioneMGR.Services.PairsTrading.PairKey.Build(p.Y!, p.X!, p.Timeframe!))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+        _pairsWatchPairsCsv = string.Join(", ", _pairsWatch.Pairs);
+        await SaveAsync("PairsWatch", _pairsWatch, "Sorveglianza spread coppie");
+    }
+
+    private async Task SaveFleetAsync()
+    {
+        _fleet.ExecutionLanes = (_fleetExecutionLanesCsv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => int.TryParse(t, out var n) ? n : (int?)null)
+            .Where(n => n is >= 0)
+            .Select(n => n!.Value)
+            .Distinct()
+            .OrderBy(n => n)
+            .ToList();
+        _fleetExecutionLanesCsv = string.Join(", ", _fleet.ExecutionLanes);
+        await SaveAsync("Fleet", _fleet, "Orchestratore di flotta");
+    }
+
+    /// <summary>
+    /// [I6c] Salva la sezione Drift portandoci dentro il CSV degli stage. Passa dalla stessa
+    /// <c>SaveAsync</c> di prima — validazione server-side inclusa — perché il CSV è solo la forma
+    /// con cui l'operatore scrive una lista, non una seconda strada di salvataggio.
+    /// </summary>
+    private async Task SaveDriftAsync()
+    {
+        _drift.MonitorStages = (_driftStagesCsv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        await SaveAsync("Drift", _drift, "Drift monitor");
+        await LoadDriftModelCountsAsync();
+    }
+
+    /// <summary>
+    /// [I6c] Quanti modelli ricadono negli stage sorvegliati, contro quanti ne esistono. È il numero
+    /// che rende onesto «acceso»: sorvegliare 0 modelli su 158 e sorvegliarne 158 sono due mestieri
+    /// diversi, e il badge da solo non li distingue.
+    /// </summary>
+    private async Task LoadDriftModelCountsAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var stages = await db.SavedMlModels.AsNoTracking().Select(m => m.Stage).ToListAsync();
+            _driftModelCounts = (stages.Count(_drift.Monitors), stages.Count);
+        }
+        catch
+        {
+            _driftModelCounts = null;
+        }
+    }
 
     private async Task LoadDriftResultsAsync()
     {

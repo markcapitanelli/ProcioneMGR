@@ -106,4 +106,61 @@ public class DriftThresholdsConfigTests
                 PageHinkleyWarning = 30, PageHinkleyAlert = 30,
             },
         }));
+
+    // --- [I6c] Quali modelli si sorvegliano ----------------------------------------------------
+
+    /// <summary>
+    /// <b>Il difetto che il filtro chiude.</b> Al 2026-08-19 il registry conteneva 158 modelli TUTTI
+    /// in <c>Staging</c> e nessuna corsia aveva un riferimento ML: accendere il monitor senza filtro
+    /// avrebbe letto 31.000 candele e 158 blob ogni sei ore — 39 secondi misurati sul database
+    /// condiviso — per sorvegliare cose che nessuno usa, con 151 allarmi su 153.
+    ///
+    /// <para>Quei 151 allarmi erano probabilmente CORRETTI (modelli vecchi di mesi hanno feature
+    /// derivate davvero): il difetto non era la soglia, era il SOGGETTO. Ricalibrare le soglie su
+    /// quella popolazione avrebbe adattato il metro a un campione irrilevante.</para>
+    /// </summary>
+    [Fact]
+    public void PerDefault_SiSorveglianoSoloChampionEChallenger()
+    {
+        var o = new DriftMonitorOptions();
+
+        Assert.True(o.Monitors(ProcioneMGR.Data.ModelStage.Champion));
+        Assert.True(o.Monitors(ProcioneMGR.Data.ModelStage.Challenger));
+        Assert.False(o.Monitors(ProcioneMGR.Data.ModelStage.Staging));
+        Assert.False(o.Monitors(ProcioneMGR.Data.ModelStage.Retired));
+    }
+
+    /// <summary>
+    /// Il default della LISTA e' vuoto, non popolato: il binder di configurazione APPENDE gli
+    /// elementi di un array a quella gia' inizializzata, e un default popolato raddoppierebbe a ogni
+    /// salvataggio dal pannello. E' la stessa trappola gia' pagata con Committee:Providers.
+    /// </summary>
+    [Fact]
+    public void LaListaNasceVuota_ELEffettivaArrivaDalCodice()
+    {
+        var o = new DriftMonitorOptions();
+
+        Assert.Empty(o.MonitorStages);
+        Assert.Equal(DriftMonitorOptions.DefaultStages, o.EffectiveStages());
+    }
+
+    /// <summary>Chi vuole sorvegliare tutto puo' dirlo, e la regola lo segue.</summary>
+    [Fact]
+    public void StageDichiaratiEsplicitamente_VinconoSulDefault()
+    {
+        var o = new DriftMonitorOptions { MonitorStages = ["Staging"] };
+
+        Assert.True(o.Monitors(ProcioneMGR.Data.ModelStage.Staging));
+        Assert.False(o.Monitors(ProcioneMGR.Data.ModelStage.Champion));
+    }
+
+    /// <summary>Maiuscole, spazi e duplicati non cambiano il verdetto: la config la scrive un umano.</summary>
+    [Fact]
+    public void ConfrontoTolleranteSuMaiuscoleSpaziEDuplicati()
+    {
+        var o = new DriftMonitorOptions { MonitorStages = [" champion ", "CHAMPION", "champion"] };
+
+        Assert.Single(o.EffectiveStages());
+        Assert.True(o.Monitors(ProcioneMGR.Data.ModelStage.Champion));
+    }
 }

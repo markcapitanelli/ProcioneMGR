@@ -26,7 +26,7 @@ public class AgentStateProbeTests
     private static AgentStateFacts AllOff() => new(
         CampaignEnabled: false, CampaignsEnabled: 0, CampaignsRotating: 0, CampaignsWaitingForTrigger: 0,
         RegimeTriggerEnabled: true,
-        FleetEnabled: false, FleetDryRun: true, FleetExecutionImplemented: false,
+        FleetEnabled: false, FleetDryRun: true, FleetExecutionImplemented: false, FleetAuthorizedLanes: 0,
         FleetUseCommittee: false, FleetGovernedLanes: 5,
         CommitteeEnabled: false, CommitteeProviders: 3, CommitteeProvidersWithKey: 3,
         CommitteeMinValidVotes: 2, CommitteeVotesInWindow: 0, CommitteeWindowDays: 14,
@@ -91,7 +91,7 @@ public class AgentStateProbeTests
         var facts = new AgentStateFacts(
             CampaignEnabled: true, CampaignsEnabled: 1, CampaignsRotating: 0, CampaignsWaitingForTrigger: 1,
             RegimeTriggerEnabled: true,
-            FleetEnabled: true, FleetDryRun: true, FleetExecutionImplemented: false,
+            FleetEnabled: true, FleetDryRun: true, FleetExecutionImplemented: false, FleetAuthorizedLanes: 0,
             FleetUseCommittee: true, FleetGovernedLanes: 5,
             CommitteeEnabled: true, CommitteeProviders: 3, CommitteeProvidersWithKey: 3,
             CommitteeMinValidVotes: 2, CommitteeVotesInWindow: 0, CommitteeWindowDays: 14,
@@ -255,30 +255,58 @@ public class AgentStateProbeTests
     }
 
     /// <summary>
-    /// Il complemento: il giorno che AF2b esiste, la sonda deve dirlo — e basta cambiare la costante
-    /// dichiarata accanto al ramo che lo implementa, senza toccare la sonda.
+    /// [AF2b, 2026-08-19] Braccio presente, dry-run spento <b>e corsie autorizzate</b>: solo allora
+    /// la sonda dichiara l'esecuzione attiva — e dice anche quale metà del braccio esiste, perché
+    /// «può fermare» e «può avviare» non sono la stessa autonomia.
     /// </summary>
     [Fact]
-    public void Fleet_DryRunSpentoEBraccioEsecutivoPresente_DichiaraEsecuzioneAttiva()
+    public void Fleet_DryRunSpentoBraccioECorsieAutorizzate_DichiaraEsecuzioneAttiva()
     {
         var r = AgentStateProbe.Describe(
             AllOff() with
             {
                 FleetEnabled = true, FleetDryRun = false,
-                FleetExecutionImplemented = true, FleetGovernedLanes = 5,
+                FleetExecutionImplemented = true, FleetAuthorizedLanes = 2, FleetGovernedLanes = 5,
             }, Now);
 
         var a = Agent(r, "Orchestratore di flotta");
         Assert.Contains("ESECUZIONE ATTIVA", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("2 corsie autorizzate", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("l'avvio automatico non è implementato", a.Detail, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Il fatto viene dalla costante dichiarata nel worker, non da un numero riscritto a mano qui:
-    /// se qualcuno implementa AF2b senza aggiornarla, questo test lo dice.
+    /// [AF2b] <b>La stessa bugia, spostata di un flag.</b> Braccio implementato e dry-run spento, ma
+    /// <c>Fleet:ExecutionLanes</c> VUOTA: la macchina non può toccare nulla. Dichiarare «esecuzione
+    /// attiva» qui sarebbe la ripetizione esatta del difetto trovato il 2026-08-18 — un controllo
+    /// che rassicura (o allarma) a prescindere dalla realtà, con un flag in più a coprirlo.
     /// </summary>
     [Fact]
-    public void Fleet_LaCapacitaEsecutivaEDichiarataDalWorker()
-        => Assert.False(ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.ExecutionArmImplemented);
+    public void Fleet_BraccioPresenteMaNessunaCorsiaAutorizzata_NonEEsecuzioneAttiva()
+    {
+        var r = AgentStateProbe.Describe(
+            AllOff() with
+            {
+                FleetEnabled = true, FleetDryRun = false,
+                FleetExecutionImplemented = true, FleetAuthorizedLanes = 0, FleetGovernedLanes = 5,
+            }, Now);
+
+        var a = Agent(r, "Orchestratore di flotta");
+        Assert.DoesNotContain("ESECUZIONE ATTIVA", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("VUOTA", a.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// I fatti vengono dalle costanti dichiarate nel worker, non da numeri riscritti a mano qui.
+    /// Le DUE metà del braccio sono separate perché lo sono davvero: dal 2026-08-19 l'orchestratore
+    /// sa fermare una corsia, e continua a NON saperla avviare — l'ordine deciso dal proprietario.
+    /// </summary>
+    [Fact]
+    public void Fleet_LeDueMetaDelBraccioSonoDichiarateDalWorker()
+    {
+        Assert.True(ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.RetirementArmImplemented);
+        Assert.False(ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.AssignmentArmImplemented);
+    }
 
     // ---------------------------------------------------------- Comitato AI
 

@@ -106,7 +106,35 @@ public static class AdminConfigRules
             (o.MinTradesPerMonth >= 0m, "La frequenza minima non può essere negativa."),
             (o.CandidateMaxAgeDays >= 1, "L'età massima dei candidati dev'essere almeno 1 giorno."),
             (o.MaxLanesWithoutExposureGuard >= 1, "Il tetto senza guardia di esposizione dev'essere almeno 1."),
-            (o.CarrySilenceAlertHours >= 1, "La soglia di silenzio del carry dev'essere almeno 1 ora.")),
+            (o.CarrySilenceAlertHours >= 1, "La soglia di silenzio del carry dev'essere almeno 1 ora."),
+            // [I12-rev] Le manopole del ritiro per inedia e del braccio esecutivo. La frazione e'
+            // l'unica di tutta la sezione che puo' fare danno restando "valida" per il binder: a 1
+            // condanna ogni corsia che non superi l'atteso, sopra 1 le condanna TUTTE — e col
+            // braccio armato le ferma sul serio, una per tick. Zero resta ammesso ed e' il modo
+            // dichiarato di spegnere il criterio.
+            (o.StarvationFraction is >= 0m and <= 1m,
+                "La frazione di inedia sta fra 0 e 1 (0 = criterio spento). Sopra 1 condannerebbe ogni corsia, "
+                + "compresa quella che opera esattamente quanto promesso."),
+            (o.StarvationMinDays >= 1, "L'osservazione minima per l'inedia dev'essere almeno 1 giorno: a 0 si giudicherebbe una corsia appena avviata."),
+            (o.MaxExecutionsPerTick >= 1, "Serve almeno 1 azione possibile per tick."),
+            (o.ExecutionLanes.All(l => l >= 0),
+                "Le corsie autorizzate all'esecuzione sono numeri di corsia: nessuno puo' essere negativo.")),
+
+        // [I14c] La sorveglianza dello spread. La soglia di persistenza e' quella che puo' fare
+        // danno restando "valida" per il binder: a 0 ogni coppia risulta persistente (anche il puro
+        // rumore), sopra 1 nessuna lo e' mai — in entrambi i casi il verdetto smette di dire
+        // qualcosa. La finestra sotto le 60 candele toglie potenza all'ADF fino a renderlo un
+        // generatore di rumore.
+        ProcioneMGR.Services.PairsTrading.PairsWatchOptions o => Check(
+            (o.IntervalHours is >= 1 and <= 168, "La cadenza sta fra 1 ora e 7 giorni."),
+            (o.WindowSize >= 60, "La finestra dev'essere almeno 60 candele: sotto, l'ADF non ha potenza e il verdetto e' rumore."),
+            (o.MaxCandles >= o.WindowSize * ProcioneMGR.Services.PairsTrading.PairSpreadJudge.MinWindows,
+                $"Servono almeno {ProcioneMGR.Services.PairsTrading.PairSpreadJudge.MinWindows} finestre non sovrapposte per un giudizio: "
+                + "le candele per giro devono bastare a coprirle."),
+            (o.PersistenceThreshold is > 0 and <= 1,
+                "La soglia di persistenza sta fra 0 (escluso) e 1: a 0 anche il puro rumore risulterebbe una relazione persistente."),
+            (o.RecentWindows >= 1, "Serve almeno 1 finestra recente per poter giudicare una rottura."),
+            (o.Estimator is "Kalman" or "RollingOls", "L'estimatore e' \"Kalman\" o \"RollingOls\".")),
 
         AutoReapplyOptions o => Check(
             (o.LookbackDays >= 1, "Il lookback dev'essere almeno 1 giorno."),
@@ -166,13 +194,19 @@ public static class AdminConfigRules
             // (funzione morta in silenzio), una soglia a 0 punti rende il controllo un via libera
             // vuoto, una data-àncora nel futuro è una violazione perpetua per costruzione.
             (o.HeritageGuard.CheckIntervalHours >= 1, "Il controllo di profondità dev'essere almeno ogni 1 ora."),
+            // [I15] Le soglie si nominano UNA PER UNA e vanno estese con ogni riga nuova: una
+            // chiave dimenticata qui passa a 0 (via libera vuoto) o con l'àncora nel futuro
+            // (violazione perpetua) senza che nulla protesti. Vale anche per le righe che nascono
+            // NON sorvegliate: l'interruttore si accende, la soglia sbagliata resta.
             (o.HeritageGuard.FundingMinEventsPerSymbol >= 1
                 && o.HeritageGuard.FearGreedMinPoints >= 1
-                && o.HeritageGuard.LiquidationsMinPoints >= 1,
+                && o.HeritageGuard.LiquidationsMinPoints >= 1
+                && o.HeritageGuard.NewsMinPoints >= 1,
                 "Le soglie di punti del guardiano devono essere almeno 1: a 0 il controllo è un via libera vuoto."),
             (o.HeritageGuard.FundingMinStartUtc < DateTime.UtcNow
                 && o.HeritageGuard.FearGreedMinStartUtc < DateTime.UtcNow
-                && o.HeritageGuard.LiquidationsMinStartUtc < DateTime.UtcNow,
+                && o.HeritageGuard.LiquidationsMinStartUtc < DateTime.UtcNow
+                && o.HeritageGuard.NewsMinStartUtc < DateTime.UtcNow,
                 "Le date-àncora del guardiano devono stare nel passato: nel futuro sono una violazione perpetua.")),
 
         DriftMonitorOptions o => Check(

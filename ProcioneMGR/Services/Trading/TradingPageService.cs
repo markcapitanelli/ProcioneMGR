@@ -32,8 +32,14 @@ public sealed class TradingPageService(
     ILaneQuarantineStore quarantineStore,
     IServiceProvider? serviceProvider = null,   // opzionale: ClearLaneAsync + LaneStory (manager keyed); i test storici non cambiano
     Microsoft.EntityFrameworkCore.IDbContextFactory<Data.ApplicationDbContext>? dbFactory = null,   // opzionale: candele del grafico + provenienza dal journal
-    ILogger<TradingPageService>? logger = null)   // opzionale: i test storici non lo passano
+    ILogger<TradingPageService>? logger = null,   // opzionale: i test storici non lo passano
+    // [I11] Opzionale: serve SOLO a leggere la soglia di trade che la regola di ritiro pretende, per
+    // poter dire il tempo-al-verdetto col numero VERO invece che con un 20 ricopiato a mano accanto
+    // alla manopola che lo definisce. Assente ⇒ si usa il predefinito del POCO, che è lo stesso.
+    Microsoft.Extensions.Options.IOptionsMonitor<Fleet.FleetOptions>? fleetOptions = null)
 {
+    private int RetireMinTrades => Math.Max(1, fleetOptions?.CurrentValue.RetireMinTrades ?? new Fleet.FleetOptions().RetireMinTrades);
+
     public TradingEngineStatus? Status { get; private set; }
 
     /// <summary>Quarantena attiva della corsia visualizzata (Fase 0-A3), null se la corsia è pulita.</summary>
@@ -187,7 +193,15 @@ public sealed class TradingPageService(
     /// <summary>La "carta d'identità" della corsia: cosa gira, con che aspettative, da dove viene.</summary>
     public sealed record LaneStoryStrategy(
         string DisplayName, decimal? ExpectedSharpe, decimal? ExpectedProfitFactor, decimal? ExpectedMaxDrawdown,
-        decimal? StopLossPercent, decimal? TakeProfitPercent, decimal? TrailingStopPercent);
+        decimal? StopLossPercent, decimal? TakeProfitPercent, decimal? TrailingStopPercent,
+        // [I11] La frequenza attesa, la sua provenienza, e la frase gia' composta col tempo-al-verdetto.
+        //
+        // Il TESTO viaggia gia' pronto invece del solo numero perche' comporlo richiede la soglia di
+        // ritiro (FleetOptions.RetireMinTrades), che e' configurabile: se lo componesse il markup
+        // dovrebbe conoscere quella manopola, e prima o poi ne ricopierebbe il valore — due regole
+        // per la stessa domanda, il difetto che questo item esiste per NON ripetere.
+        decimal? ExpectedTradesPerMonth = null, string? ExpectedTradesSource = null,
+        string? TradeFrequencyText = null);
 
     public sealed record LaneStoryInfo(
         string Symbol, string Timeframe,
@@ -235,7 +249,9 @@ public sealed class TradingPageService(
                     .Select(s => new LaneStoryStrategy(
                         string.IsNullOrWhiteSpace(s.DisplayName) ? s.StrategyName : s.DisplayName,
                         s.ExpectedSharpe, s.ExpectedProfitFactor, s.ExpectedMaxDrawdown,
-                        s.StopLossPercent, s.TakeProfitPercent, s.TrailingStopPercent))
+                        s.StopLossPercent, s.TakeProfitPercent, s.TrailingStopPercent,
+                        s.ExpectedTradesPerMonth, s.ExpectedTradesSource,
+                        Fleet.TradeFrequency.Describe(s.ExpectedTradesPerMonth, RetireMinTrades)))
                     .ToList();
 
                 string? provenance = null;

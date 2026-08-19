@@ -474,9 +474,16 @@ public class ModelRegistryTests : IAsyncDisposable
         var user = await SeedUserAsync(f);
         var staging = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.9, ModelStage.Staging);
         var registry = NewRegistry(f);
+        // [I6c] Candele + stage dichiarato: il check deve AVVENIRE davvero, altrimenti «lo Staging
+        // non viene ritirato» sarebbe vero perche' nessuno lo ha guardato.
+        await DriftTestData.SeedRecentCandlesAsync(f, "BTCUSDT");
 
         var worker = new FeatureDriftWorker(
-            f, new AlertMonitor(), registry, new DriftMonitorOptions { RetireChampionOnAlert = true }.AsMonitor(),
+            f, new AlertMonitor(), registry,
+            // [I6c] Lo stage va dichiarato: senza, un modello Staging non verrebbe nemmeno esaminato
+            // e questo test — che verifica che uno Staging in alert NON venga ritirato — passerebbe
+            // per il motivo sbagliato, cioe' perche' nessuno lo ha guardato.
+            new DriftMonitorOptions { RetireChampionOnAlert = true, MonitorStages = ["Staging"], RecentCandles = DriftTestData.MinimumCandles }.AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance);
         await worker.TickAsync(CancellationToken.None);
 

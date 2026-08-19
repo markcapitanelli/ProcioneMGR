@@ -63,6 +63,7 @@ public sealed class FleetStateReader(
             var sharpe = 0m;
             var trades = 0;
             var observation = TimeSpan.Zero;
+            var expected = s.ExpectedTradesPerMonth;
 
             // Lo stato vivo serve solo alle corsie di flotta potenzialmente toccabili; per le
             // altre bastano directory e vincoli (meno chiamate, meno superfici di guasto).
@@ -82,6 +83,27 @@ public sealed class FleetStateReader(
                         sharpe = perf.SharpeRatio;
                         trades = perf.TotalTrades;
                     }
+
+                    // [I12-rev] IL NUMERATORE E IL DENOMINATORE DEVONO VENIRE DALLA STESSA
+                    // FOTOGRAFIA. I trade li conta il MOTORE; il ritmo atteso lo somma la
+                    // CONFIGURAZIONE — e I13(a), scritto nello stesso giorno, stabilisce che le due
+                    // possono divergere: il motore fotografa le gambe attive all'AVVIO, quindi una
+                    // gamba aggiunta e salvata senza riavviare la corsia gonfia l'atteso senza
+                    // produrre un solo trade.
+                    //
+                    // Senza questo controllo bastava aggiungere una gamba da 30 trade/mese a una
+                    // corsia sana per farle emettere «Corsia in INEDIA» al tick successivo — e col
+                    // braccio armato, per fermarla davvero. Un verdetto costruito su due verita'
+                    // diverse dello stesso oggetto e' peggio di nessun verdetto.
+                    //
+                    // Quando divergono non si ricalcola: si RINUNCIA. L'ignoranza non condanna.
+                    if (running && expected is not null && Diverge(s.ActiveStrategyIds, status.RunningStrategyIds))
+                    {
+                        expected = null;
+                        logger.LogInformation(
+                            "Corsia {Lane}: configurazione e motore non concordano sulle gambe attive (riavvio in sospeso) — "
+                            + "il ritmo atteso non e' confrontabile e il ritiro per inedia non si esprime.", s.Id);
+                    }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
@@ -94,7 +116,11 @@ public sealed class FleetStateReader(
 
             lanes.Add(new FleetLaneState(
                 s.Id, running, mode, s.IsConfigured, quarantinedLane, campaignOwned, emergency,
-                sharpe, trades, observation, s.Symbol, s.Timeframe));
+                sharpe, trades, observation, s.Symbol, s.Timeframe,
+                // [I12] Il ritmo atteso arriva dalla directory, che gia' deserializza la config
+                // della corsia: una seconda lettura qui sarebbe una seconda regola su cosa conta
+                // come "gamba attiva". [I12-rev] ...e vale null se il motore sta eseguendo altro.
+                expected));
         }
 
         // --- Candidati --------------------------------------------------------------------------
@@ -173,7 +199,8 @@ public sealed class FleetStateReader(
 
                 list.Add(new FleetCandidate(
                     run.Id, run.CompletedAt ?? now, v.Band, v.TradesPerMonth, v.Timeframe, v.Summary,
-                    AlreadyHandled: handledByReapply.Contains(run.Id) || handledByFleet.Contains(run.Id)));
+                    AlreadyHandled: handledByReapply.Contains(run.Id) || handledByFleet.Contains(run.Id),
+                    Identity: v.Identity));
             }
             catch (Exception ex)
             {
@@ -183,7 +210,8 @@ public sealed class FleetStateReader(
         return list;
     }
 
-    internal readonly record struct CandidateVerdict(string Band, decimal TradesPerMonth, string Timeframe, string Summary);
+    internal readonly record struct CandidateVerdict(
+        string Band, decimal TradesPerMonth, string Timeframe, string Summary, string? Identity = null);
 
     /// <summary>
     /// Il verdetto di un run come candidato di flotta.
@@ -206,8 +234,11 @@ public sealed class FleetStateReader(
         if (survivors > 0 && recommendation.EnsembleLegs.Count > 0)
         {
             var minTrades = recommendation.EnsembleLegs.Min(l => l.HoldoutTrades);
+            // [I11] La frequenza attesa passa dal denominatore CONDIVISO: lo stesso numero che
+            // leggeranno il ritiro per inedia e il freno per gamba. Calcolarlo qui a mano darebbe
+            // due regole per la stessa domanda.
             return new CandidateVerdict("pass",
-                Math.Round(minTrades / months, 2),
+                TradeFrequency.PerMonth(minTrades, months) ?? 0m,
                 recommendation.EnsembleLegs[0].Timeframe,
                 $"{recommendation.BestCandidate} ({survivors} sopravvissuti su {recommendation.CandidatesEvaluated})");
         }
@@ -220,10 +251,13 @@ public sealed class FleetStateReader(
 
         var best = grey[0];
         return new CandidateVerdict("grey",
-            Math.Round(best.HoldoutTrades / months, 2),
+            TradeFrequency.PerMonth(best.HoldoutTrades, months) ?? 0m,
             best.Timeframe,
             $"{best.StrategyName} {best.Symbol} {best.Timeframe}: Sharpe holdout {best.HoldoutSharpe:F2} su {best.HoldoutTrades} trade"
-            + (grey.Count > 1 ? $" (+{grey.Count - 1} altri in fascia grigia)" : ""));
+            + (grey.Count > 1 ? $" (+{grey.Count - 1} altri in fascia grigia)" : ""),
+            // [I12] L'identità del grigio PROPOSTO (non del run): due run che ritrovano gli stessi
+            // parametri sulla stessa serie sono una proposta sola, e vanno mostrati come tale.
+            Identity: best.Key);
     }
 
     /// <summary>
@@ -239,15 +273,35 @@ public sealed class FleetStateReader(
     /// candidato: senza finestra la frequenza è un'illusione). La durata mediana delle posizioni
     /// invece NON esiste a livello di run (trade list non persistita): la misura il forward test.
     /// </summary>
-    private static decimal? HoldoutMonths(string? dateRangesJson)
+    /// <summary>
+    /// [I12-rev] Le gambe che la configurazione dichiara attive sono le stesse che il motore sta
+    /// eseguendo?
+    ///
+    /// <para>Vero (divergono) solo quando entrambe le liste sono NOTE e diverse. Un motore che non
+    /// risponde, o precedente al campo del contratto che porta le gambe in esecuzione, restituisce
+    /// una lista VUOTA: non si sa nulla, e non sapere non e' un motivo per rinunciare al criterio —
+    /// e' lo stato in cui il criterio si comportava gia' come prima. Rinunciare anche li' avrebbe
+    /// spento il ritiro per inedia su ogni motore non aggiornato, silenziosamente.</para>
+    /// </summary>
+    internal static bool Diverge(IReadOnlyList<string>? configurate, IReadOnlyList<string>? inEsecuzione)
+    {
+        if (configurate is null || inEsecuzione is null) return false;
+        if (configurate.Count == 0 || inEsecuzione.Count == 0) return false;
+        return !configurate.ToHashSet(StringComparer.Ordinal)
+            .SetEquals(inEsecuzione);
+    }
+
+    /// <summary>
+    /// [I11] Solo la LETTURA del JSON: il calcolo vive su <see cref="PipelineDateRanges.HoldoutMonths"/>,
+    /// perché lo condividono in tre (questo lettore, lo schieramento manuale della fascia grigia e
+    /// lo stage che compone la raccomandazione). Internal e non più private per la stessa ragione.
+    /// </summary>
+    internal static decimal? HoldoutMonths(string? dateRangesJson)
     {
         if (string.IsNullOrWhiteSpace(dateRangesJson)) return null;
         try
         {
-            var ranges = JsonSerializer.Deserialize<PipelineDateRanges>(dateRangesJson);
-            if (ranges is null) return null;
-            var days = (ranges.HoldoutTo - ranges.HoldoutFrom).TotalDays;
-            return days < 7 ? null : (decimal)(days / 30.44);
+            return JsonSerializer.Deserialize<PipelineDateRanges>(dateRangesJson)?.HoldoutMonths();
         }
         catch (JsonException)
         {

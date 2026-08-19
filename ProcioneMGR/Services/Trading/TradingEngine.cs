@@ -1399,6 +1399,11 @@ public sealed class TradingEngine(
                 Timeframe = _state.Timeframe,
                 LastProcessedCandleUtc = _lastProcessedCandleUtc,
                 LastCandleUtc = _state.LastCandleUtc,
+                // [I13a] Le gambe che questo motore sta DAVVERO eseguendo: `_active` è la
+                // fotografia presa all'avvio, e a corsia ferma è vuota. È il fatto contro cui
+                // confrontare la configurazione — che può essere cambiata nel frattempo senza che
+                // il motore se ne sia accorto.
+                RunningStrategyIds = _state.IsRunning ? _active.Select(s => s.StrategyId).ToList() : [],
             };
         }
         finally { _gate.Release(); }

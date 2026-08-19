@@ -146,4 +146,36 @@ public sealed class SentimentHeritageGuardOptions
 
     /// <summary>Punti minimi complessivi della fonte liquidazioni (4 metriche/ora/simbolo).</summary>
     public int LiquidationsMinPoints { get; set; } = 100;
+
+    /// <summary>
+    /// [I15] Se sorvegliare la profondità del corpus di notizie CON PUNTEGGIO (esente dalla purge
+    /// dal 2026-08-19). <b>Default OFF, e non è timidezza: è aritmetica.</b>
+    ///
+    /// <para>La purge delle notizie ha girato a ogni tick da sempre, quindi <b>oggi il corpus non
+    /// può essere più profondo di <c>NewsRetentionDays</c></b> (180 giorni). Qualunque àncora
+    /// sensata scatterebbe al primo giro, e un allarme perpetuo smette di essere letto — è
+    /// letteralmente la ragione per cui esiste <see cref="LiquidationsEnforced"/>.</para>
+    ///
+    /// <para>Da spenta la riga resta <b>MISURATA</b> e mostrata in <c>/sentiment</c> come «non
+    /// sorvegliata», mai un OK finto. La sequenza giusta è: si lascia accumulare, si legge il
+    /// minimo VERO, si sceglie <see cref="NewsMinStartUtc"/> da quella misura, poi si accende. È
+    /// la stessa storia dell'àncora del funding, spostata da gennaio a ottobre 2020 solo dopo la
+    /// misura sul database reale.</para>
+    /// </summary>
+    public bool NewsEnforced { get; set; }
+
+    /// <summary>
+    /// [I15] Il corpus di notizie con punteggio deve arrivare almeno a questa data. Il valore di
+    /// nascita è la data dell'esenzione stessa: prima di allora la purge cancellava, quindi
+    /// chiedere una storia più antica pretenderebbe qualcosa che non può esistere. Va rialzato —
+    /// cioè spostato indietro — solo dopo aver MISURATO quanto è profondo il corpus davvero.
+    /// </summary>
+    public DateTime NewsMinStartUtc { get; set; } = new(2026, 8, 19, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// [I15] Notizie con punteggio minime nel corpus. 1.000 è deliberatamente basso: la soglia
+    /// serve a distinguere «archivio perso» da «archivio che cresce», non a certificare che sia
+    /// abbastanza grande per addestrare qualcosa.
+    /// </summary>
+    public int NewsMinPoints { get; set; } = 1000;
 }

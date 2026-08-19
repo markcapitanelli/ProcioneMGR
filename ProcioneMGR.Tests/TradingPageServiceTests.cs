@@ -908,4 +908,121 @@ public class TradingPageServiceTests
         public Task PromoteLaneAsync(int laneId, TradingMode newMode, string reason, CancellationToken ct = default)
             => throw new InvalidOperationException("rifiutato dal dominio");
     }
+
+    // --- [I11] Il ritmo atteso della gamba, dalla configurazione fino alla pagina ---------------
+
+    private sealed class StoryEnsembleManager(ProcioneMGR.Services.Ensemble.EnsembleConfiguration config)
+        : ProcioneMGR.Services.Ensemble.IEnsembleManager
+    {
+        public int LaneId => 0;
+        public Task<ProcioneMGR.Services.Ensemble.EnsembleConfiguration> GetConfigurationAsync(CancellationToken ct = default) => Task.FromResult(config);
+        public Task UpdateConfigurationAsync(ProcioneMGR.Services.Ensemble.EnsembleConfiguration c, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<ProcioneMGR.Services.Ensemble.EnsembleStatus> GetStatusAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task StartAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task StopAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<ProcioneMGR.Services.Ensemble.EnsemblePerformance> GetPerformanceAsync(DateTime? from = null, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task RebalanceAsync(string reason = "Manual", CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<ProcioneMGR.Services.Monitoring.DecayReport>> GetDecayReportsAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    }
+
+    private sealed class StaticFleetOptions(ProcioneMGR.Services.Fleet.FleetOptions value)
+        : Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Fleet.FleetOptions>
+    {
+        public ProcioneMGR.Services.Fleet.FleetOptions CurrentValue => value;
+        public ProcioneMGR.Services.Fleet.FleetOptions Get(string? name) => value;
+        public IDisposable? OnChange(Action<ProcioneMGR.Services.Fleet.FleetOptions, string?> listener) => null;
+    }
+
+    private static async Task<TradingPageService.LaneStoryStrategy> LoadStoryLegAsync(
+        ProcioneMGR.Services.Ensemble.EnsembleStrategy leg, int? retireMinTrades = null)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddKeyedSingleton<ITradingEngine>(0, new FakeTradingEngine(0));
+        services.AddKeyedSingleton<ProcioneMGR.Services.Ensemble.IEnsembleManager>(0, new StoryEnsembleManager(
+            new ProcioneMGR.Services.Ensemble.EnsembleConfiguration { Symbol = "ADA/USDT", Timeframe = "4h", Strategies = [leg] }));
+        services.AddMediator();
+        var provider = services.BuildServiceProvider();
+
+        var store = new FakeEngineConfigStore();
+        store.Seed("Trading:Safety", new SafetyConfiguration());
+
+        var service = new TradingPageService(
+            provider.GetRequiredService<IMediator>(),
+            new FakePromotionEvaluator([]), new RecordingPromoter(), store, new FakeLaneQuarantineStore(),
+            provider, dbFactory: null, logger: null,
+            fleetOptions: retireMinTrades is int n
+                ? new StaticFleetOptions(new ProcioneMGR.Services.Fleet.FleetOptions { RetireMinTrades = n })
+                : null);
+
+        await service.LoadLaneStoryAsync(0);
+        return Assert.Single(service.Story!.Strategies);
+    }
+
+    /// <summary>
+    /// [I11] <b>Il numero della frase segue la MANOPOLA, non una costante ricopiata.</b> Stessa gamba
+    /// (4 trade/mese), due soglie di ritiro: 20 trade ⇒ ~5 mesi, 40 ⇒ ~10.
+    ///
+    /// <para>È il test che impedisce il difetto per cui questo item stesso esiste. La frase «servono
+    /// N mesi per i 20 trade che la regola pretende» contiene un numero che è anche una manopola
+    /// (<c>Fleet:RetireMinTrades</c>): ricopiarlo nel markup — la cosa più naturale del mondo —
+    /// creerebbe due regole per la stessa domanda, e il giorno in cui qualcuno la stringe la pagina
+    /// continuerebbe a rassicurare col vecchio numero. Classe di difetto già pagata in D2 e con
+    /// <c>SeriesFreshness</c>, e trovata quattro volte nella Fase 2 di questa stessa ondata.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(20, "5")]
+    [InlineData(40, "10")]
+    public async Task LaneStory_TempoAlVerdetto_SegueLaSogliaConfigurata(int retireMinTrades, string mesiAttesi)
+    {
+        var s = await LoadStoryLegAsync(
+            new ProcioneMGR.Services.Ensemble.EnsembleStrategy { StrategyName = "Carry", IsActive = true, ExpectedTradesPerMonth = 4m },
+            retireMinTrades);
+
+        Assert.Contains("4 trade/mese", s.TradeFrequencyText!, StringComparison.Ordinal);
+        Assert.Contains($"~{mesiAttesi} mesi", s.TradeFrequencyText!, StringComparison.Ordinal);
+        Assert.Contains($"{retireMinTrades} trade", s.TradeFrequencyText!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// [I11] Senza la manopola (il costruttore la accetta opzionale, e i test storici non la passano)
+    /// vale il predefinito del POCO — lo stesso della configurazione reale. Serve perché «opzionale»
+    /// non diventi silenziosamente «zero», cioè un tempo-al-verdetto sempre nullo.
+    /// </summary>
+    [Fact]
+    public async Task LaneStory_SenzaLaManopola_ValeIlPredefinitoDelPoco()
+    {
+        var s = await LoadStoryLegAsync(
+            new ProcioneMGR.Services.Ensemble.EnsembleStrategy { StrategyName = "Carry", IsActive = true, ExpectedTradesPerMonth = 4m });
+
+        Assert.Contains($"{new ProcioneMGR.Services.Fleet.FleetOptions().RetireMinTrades} trade", s.TradeFrequencyText!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// [I11] <b>Le corsie 0-2 dell'impronta storica</b>: configurate a mano, nessun holdout, nessuna
+    /// frequenza attesa. La pagina non deve inventare zero né tacere — deve DIRE che il numero non è
+    /// derivabile, altrimenti un'assenza si legge come «rarissimo» e domani come «da ritirare».
+    /// </summary>
+    [Fact]
+    public async Task LaneStory_GambaConfigurataAMano_DichiaraCheNonEDerivabile()
+    {
+        var s = await LoadStoryLegAsync(
+            new ProcioneMGR.Services.Ensemble.EnsembleStrategy { StrategyName = "MeanReversion", IsActive = true });
+
+        Assert.Null(s.ExpectedTradesPerMonth);
+        Assert.Contains("non derivabile", s.TradeFrequencyText!, StringComparison.Ordinal);
+    }
+
+    /// <summary>[I11] La provenienza viaggia col numero: una derivazione dichiarata non si confonde con una misura.</summary>
+    [Fact]
+    public async Task LaneStory_LaProvenienzaArrivaFinoAllaPagina()
+    {
+        var s = await LoadStoryLegAsync(new ProcioneMGR.Services.Ensemble.EnsembleStrategy
+        {
+            StrategyName = "Carry", IsActive = true,
+            ExpectedTradesPerMonth = 4m, ExpectedTradesSource = "holdout del run 3f2a1c9d: 9 trade su 2,25 mesi",
+        });
+
+        Assert.Contains("holdout del run 3f2a1c9d", s.ExpectedTradesSource!, StringComparison.Ordinal);
+    }
 }

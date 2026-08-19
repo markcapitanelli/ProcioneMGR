@@ -44,6 +44,25 @@ public sealed class PipelineDateRanges
             ? $"L'holdout deve iniziare DOPO la fine della selezione (mai sovrapposti): l'holdout inizia il " +
               $"{HoldoutFrom:yyyy-MM-dd} ma la selezione finisce il {SelectionTo:yyyy-MM-dd}."
         : null;
+
+    /// <summary>
+    /// [I11] Ampiezza dell'holdout in MESI — il denominatore dei «trade/mese attesi» di una gamba.
+    /// <c>null</c> sotto la settimana: una finestra più corta non dà una frequenza, dà un aneddoto,
+    /// e per lo stesso motivo per cui la frequenza non nota non condanna, meglio nessun numero che
+    /// un numero costruito su sei giorni.
+    ///
+    /// <para>Vive QUI, sul tipo che porta le date, e non nei tre posti che la consumano — il lettore
+    /// della flotta (dal JSON della configurazione), lo schieramento manuale della fascia grigia e
+    /// lo stage che compone la raccomandazione. Tre copie darebbero tre attese diverse per lo stesso
+    /// candidato, ed è la classe di difetto già pagata con <c>NullTwinJudge</c> e <c>SeriesFreshness</c>.</para>
+    /// </summary>
+    public decimal? HoldoutMonths()
+    {
+        var days = (HoldoutTo - HoldoutFrom).TotalDays;
+        // [I14-rev] La stessa costante che riproporziona l'atteso nel confronto di inedia: era
+        // 30,44 qui e 30,0 di là, ai due lati della stessa disuguaglianza.
+        return days < 7 ? null : (decimal)days / Fleet.TradeFrequency.DaysPerMonth;
+    }
 }
 
 /// <summary>Per-stage configuration inside a pipeline configuration (JSON column).</summary>
@@ -627,6 +646,22 @@ public sealed class PipelineRecommendation
     public RecommendationRiskLimits RiskLimits { get; set; } = new();
     public List<string> Alerts { get; set; } = new();
     public List<string> SuggestedActions { get; set; } = new();
+
+    /// <summary>
+    /// [I11] Ampiezza in mesi dell'holdout su cui i <c>HoldoutTrades</c> delle gambe sono stati
+    /// contati: il DENOMINATORE dei «trade/mese attesi» che finisce sulla gamba schierata.
+    ///
+    /// <para>Sta sulla raccomandazione e non lo si va a ripescare al momento dello schieramento
+    /// perche' l'applicatore ha DUE porte — <c>ApplyRunAsync</c>, che conosce il run, e
+    /// <c>ApplyRecommendationAsync</c>, che riceve solo la raccomandazione (e' la porta che usa la
+    /// ri-applica automatica). Mettendolo qui entrambe lo portano; ripescandolo dal run, la seconda
+    /// resterebbe muta e le corsie 0-2 non avrebbero mai un ritmo atteso.</para>
+    ///
+    /// <para><c>null</c> nei JSON storici: nessuna migrazione, e il significato e' esatto — quelle
+    /// raccomandazioni non portano la finestra, quindi la frequenza NON e' derivabile. Che e' la
+    /// verita', non un ripiego.</para>
+    /// </summary>
+    public decimal? HoldoutMonths { get; set; }
 
     /// <summary>The rendered template (the "Conclusion" persisted on the run).</summary>
     public string FullText { get; set; } = string.Empty;

@@ -169,14 +169,28 @@ public sealed class EnsembleManager(
         var reports = new List<DecayReport>(cfg.Strategies.Count);
         foreach (var s in cfg.Strategies)
         {
-            var recentTrades = await db.TradeRecords.AsNoTracking()
-                .Where(t => t.LaneId == laneId && t.StrategyId == s.StrategyId)
+            // [I13b] Il filtro sul SIMBOLO ATTUALE, che mancava. Le corsie hanno vite precedenti:
+            // una riassegnazione, o una coppia cambiata a mano senza riscrivere le gambe, faceva
+            // nascere lo Sharpe "realizzato" di una gamba da trade fatti su DUE mercati diversi —
+            // e nessuna riga lo diceva. Il criterio e' il simbolo attuale (AF2c-2).
+            var legTrades = db.TradeRecords.AsNoTracking()
+                .Where(t => t.LaneId == laneId && t.StrategyId == s.StrategyId);
+
+            var recentTrades = await legTrades
+                .Where(t => t.Symbol == cfg.Symbol)
                 .OrderByDescending(t => t.ClosedAtUtc)
                 .Take(options.WindowTradeCount)
                 .ToListAsync(ct);
+
+            // Quanti ne sono stati scartati: un conteggio piu' basso senza spiegazione si legge
+            // come un guasto, e la spiegazione qui e' "quella corsia faceva un altro mestiere".
+            var excluded = await legTrades.CountAsync(t => t.Symbol != cfg.Symbol, ct);
+
             // [M5] Il timeframe della corsia porta il realizzato sulla stessa base per-candela
             // dell'atteso (vedi StrategyDecayMonitor.BuildPeriodReturns).
             var report = decayMonitor.Analyze(s, recentTrades, cfg.Timeframe, options);
+            report.Symbol = cfg.Symbol;
+            report.TradesExcludedOtherSymbol = excluded;
             reports.Add(report);
 
             if (report.IsAlert)

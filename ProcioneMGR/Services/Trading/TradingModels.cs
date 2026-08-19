@@ -104,6 +104,22 @@ public class TradingEngineStatus
     /// invece di ricominciare dal replay contro uno stato che non è stato azzerato.
     /// </summary>
     public DateTime? LastCandleUtc { get; set; }
+
+    /// <summary>
+    /// [I13a] Gli <c>StrategyId</c> delle gambe che il motore sta DAVVERO eseguendo.
+    ///
+    /// <para>Il motore fotografa <c>IsActive</c> all'<b>avvio</b> (<c>TradingEngine._active</c>):
+    /// disattivare una gamba da <c>/ensemble</c> mentre la corsia gira non ha alcun effetto fino al
+    /// riavvio — e fino al 2026-08-19 nessuna superficie lo diceva. La configurazione mostrava la
+    /// gamba spenta, il motore continuava a operarla, e le due cose non si incontravano da nessuna
+    /// parte.</para>
+    ///
+    /// <para>Questo è il FATTO contro cui confrontare la configurazione, non un'altra opinione su
+    /// di essa. Vuoto = corsia ferma (nessuna gamba in esecuzione) oppure motore remoto precedente
+    /// a questo campo: in entrambi i casi il confronto non si fa e <b>lo si dichiara</b>, invece di
+    /// leggere il vuoto come «nessuna divergenza».</para>
+    /// </summary>
+    public List<string> RunningStrategyIds { get; set; } = [];
 }
 
 public class OpenPosition

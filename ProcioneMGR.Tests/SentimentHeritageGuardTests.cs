@@ -97,6 +97,11 @@ public sealed class SentimentHeritageGuardWorkerTests : IAsyncDisposable
         FearGreedMinPoints = 30,
         LiquidationsMinStartUtc = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
         LiquidationsMinPoints = 20,
+        // [I15] Nei test la riga notizie è SORVEGLIATA: il default di produzione è spento, ma un
+        // default spento nei test renderebbe verdi anche le asserzioni su una riga che non giudica.
+        NewsEnforced = true,
+        NewsMinStartUtc = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+        NewsMinPoints = 10,
     };
 
     private async Task<(SentimentHeritageGuardWorker Worker, SentimentHeritageSnapshot Snapshot,
@@ -152,6 +157,33 @@ public sealed class SentimentHeritageGuardWorkerTests : IAsyncDisposable
         await SeedPointsAsync(dbFactory, SentimentMetricSources.FearGreed, SentimentMetrics.FearGreedIndex, "", DeepStart, 40, TimeSpan.FromDays(1));
         await SeedPointsAsync(dbFactory, SentimentMetricSources.BinanceLiquidations, SentimentMetrics.LongLiquidationNotional, "BTC",
             new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc), 30, TimeSpan.FromHours(1));
+        await SeedScoredNewsAsync(dbFactory, new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc), 15);
+    }
+
+    /// <summary>
+    /// [I15] Semina notizie CON PUNTEGGIO — l'unica cosa che il guardiano conta. Ne semina anche
+    /// una senza, e recentissima: se il predicato fosse sbagliato quella entrerebbe nel conteggio e
+    /// una riga sotto soglia sembrerebbe sana.
+    /// </summary>
+    private static async Task SeedScoredNewsAsync(
+        IDbContextFactory<ApplicationDbContext> dbFactory, DateTime start, int count)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        for (var i = 0; i < count; i++)
+        {
+            db.AltDataPoints.Add(new AltDataPoint
+            {
+                TimestampUtc = start.AddHours(i), Source = "TestFeed",
+                Title = $"scorata-{i}", DedupeKey = $"TestFeed:scorata-{i}",
+                SentimentScore = i % 3 == 0 ? 0m : 0.5m,   // lo zero deve contare
+            });
+        }
+        db.AltDataPoints.Add(new AltDataPoint
+        {
+            TimestampUtc = start.AddYears(-2), Source = "TestFeed",
+            Title = "grezza-antichissima", DedupeKey = "TestFeed:grezza-antichissima",
+        });
+        await db.SaveChangesAsync();
     }
 
     [Fact]
@@ -167,7 +199,7 @@ public sealed class SentimentHeritageGuardWorkerTests : IAsyncDisposable
         }
 
         Assert.Empty(notifier.Sent);
-        Assert.Equal(4, snapshot.All.Count); // BTC + ETH funding, F&G, liquidazioni
+        Assert.Equal(5, snapshot.All.Count); // BTC + ETH funding, F&G, liquidazioni, notizie scorate
         Assert.Empty(snapshot.Violations);
         Assert.NotNull(snapshot.LastRunUtc); // il verdetto dichiara quando è stato calcolato
     }
@@ -324,12 +356,13 @@ public sealed class SentimentHeritageGuardWorkerTests : IAsyncDisposable
 
         var newly = await worker.RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(4, newly.Count); // BTC, ETH, F&G, liquidazioni: tutte assenti
+        Assert.Equal(5, newly.Count); // BTC, ETH, F&G, liquidazioni, notizie: tutte assenti
         var alert = Assert.Single(notifier.Sent);
-        Assert.Contains("4 serie-patrimonio", alert.Title);
+        Assert.Contains("5 serie-patrimonio", alert.Title);
         Assert.Contains("Funding BTC", alert.Body);
         Assert.Contains("Fear & Greed", alert.Body);
         Assert.Contains("Liquidazioni", alert.Body);
+        Assert.Contains("Notizie con punteggio", alert.Body);
     }
 
     [Fact]
@@ -365,4 +398,175 @@ public sealed class SentimentHeritageGuardWorkerTests : IAsyncDisposable
     public void LaSorveglianzaDelleLiquidazioni_EAccesaDiDefault()
         // Lo spegnimento e' una scelta consapevole per postazioni bloccate, non il default.
         => Assert.True(new SentimentHeritageGuardOptions().LiquidationsEnforced);
+
+    // --- [I15] Il corpus di notizie: la quarta serie-patrimonio -------------------------------
+
+    /// <summary>
+    /// <b>L1 - il riferimento indipendente.</b> Profondita' e conteggio della riga «notizie» devono
+    /// coincidere con <c>SELECT min(TimestampUtc), count(*) WHERE SentimentScore IS NOT NULL</c>
+    /// calcolato qui, sullo stesso database ma per un'altra strada. Due vie per lo stesso numero: se
+    /// il guardiano contasse anche le notizie grezze - o le escludesse tutte - questo test lo dice.
+    /// </summary>
+    [Fact]
+    public async Task L1_ProfonditaEConteggioCoincidonoColRiferimentoIndipendente()
+    {
+        var (worker, snapshot, dbFactory, _) = await BuildAsync();
+        await SeedAllHealthyAsync(dbFactory);
+
+        await worker.RunOnceAsync(CancellationToken.None);
+        var riga = snapshot.All.Single(d => d.Key == "News");
+
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var attesoMin = await db.AltDataPoints.Where(a => a.SentimentScore != null).MinAsync(a => (DateTime?)a.TimestampUtc);
+        var attesoCount = await db.AltDataPoints.CountAsync(a => a.SentimentScore != null);
+
+        Assert.Equal(attesoMin, riga.OldestUtc);
+        Assert.Equal(attesoCount, riga.Count);
+    }
+
+    /// <summary>
+    /// <b>Il predicato e' quello giusto, e conta lo ZERO.</b> Il seme contiene una notizia grezza
+    /// antichissima (due anni prima di tutte le altre): se il guardiano contasse anche quella, la
+    /// profondita' sembrerebbe enormemente maggiore di quella reale - e una riga sotto soglia
+    /// passerebbe per sana. E' il caso in cui un predicato sbagliato non fa fallire nulla, MIGLIORA
+    /// il numero: la peggiore specie di difetto.
+    /// </summary>
+    [Fact]
+    public async Task LeNotizieGrezzeNonContano_MaLoZeroSi()
+    {
+        var (worker, snapshot, dbFactory, _) = await BuildAsync();
+        await SeedAllHealthyAsync(dbFactory);
+
+        await worker.RunOnceAsync(CancellationToken.None);
+        var riga = snapshot.All.Single(d => d.Key == "News");
+
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var grezza = await db.AltDataPoints.SingleAsync(a => a.Title == "grezza-antichissima");
+        Assert.True(riga.OldestUtc > grezza.TimestampUtc, "la grezza NON deve entrare nella profondita'");
+
+        var conZero = await db.AltDataPoints.CountAsync(a => a.SentimentScore == 0m);
+        Assert.True(conZero > 0, "il seme deve contenere punteggi a zero, altrimenti il test non prova nulla");
+        Assert.Equal(await db.AltDataPoints.CountAsync(a => a.SentimentScore != null), riga.Count);
+    }
+
+    /// <summary>
+    /// <b>L2 - il corpus profondo fa tacere il guardiano per tre giri.</b> Stessa forma del test
+    /// gemello sulle altre serie: la normalita' non deve accendere niente, neanche ripetendo.
+    /// </summary>
+    [Fact]
+    public async Task L2_CorpusProfondo_IlGuardianoTacePerTreGiri()
+    {
+        var (worker, snapshot, dbFactory, notifier) = await BuildAsync();
+        await SeedAllHealthyAsync(dbFactory);
+
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Empty(await worker.RunOnceAsync(CancellationToken.None));
+        }
+
+        Assert.Empty(notifier.Sent);
+        Assert.False(snapshot.All.Single(d => d.Key == "News").Violated);
+    }
+
+    /// <summary>
+    /// <b>Corpus assente ⇒ violazione, e il messaggio nomina la tabella GIUSTA.</b> Le altre righe
+    /// vivono in <c>SentimentMetricPoints</c>; questa in <c>AltDataPoints</c>. Un «nessun punto in
+    /// SentimentMetricPoints» manderebbe a cercare la perdita nel posto sbagliato - ed e' cio' che
+    /// il messaggio diceva prima di I15, perche' era una costante.
+    /// </summary>
+    [Fact]
+    public async Task CorpusAssente_ViolazioneCheNominaLaTabellaGiusta()
+    {
+        var (worker, snapshot, _, _) = await BuildAsync();   // database vuoto
+
+        await worker.RunOnceAsync(CancellationToken.None);
+        var riga = snapshot.All.Single(d => d.Key == "News");
+
+        Assert.True(riga.Violated);
+        Assert.Contains("AltDataPoints", riga.Problem!, StringComparison.Ordinal);
+        Assert.DoesNotContain("SentimentMetricPoints", riga.Problem!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>Il default di produzione: MISURATA ma NON SORVEGLIATA.</b> E' testualmente cio' che il
+    /// gate chiede - mai un OK finto. Con l'interruttore spento la riga esiste, porta i suoi numeri
+    /// e la sua attesa, ma non e' violata e non notifica: la differenza fra «va tutto bene» e «non
+    /// sto guardando».
+    /// </summary>
+    [Fact]
+    public async Task NonSorvegliata_RestaMisurataEDichiarata_MaiUnOkFinto()
+    {
+        var soglie = TestThresholds();
+        soglie.NewsEnforced = false;
+        var (worker, snapshot, dbFactory, notifier) = await BuildAsync(soglie);
+        await SeedAllHealthyAsync(dbFactory);
+
+        await worker.RunOnceAsync(CancellationToken.None);
+        var riga = snapshot.All.Single(d => d.Key == "News");
+
+        Assert.False(riga.Enforced);             // non sorvegliata: il badge in /sentiment nasce da qui
+        Assert.False(riga.Violated);             // e quindi mai violata, qualunque sia la misura
+        Assert.Null(riga.Problem);
+        Assert.True(riga.Count > 0);             // ...ma MISURATA: i numeri ci sono
+        Assert.NotNull(riga.OldestUtc);
+        Assert.False(string.IsNullOrEmpty(riga.Expected));  // e l'attesa e' dichiarata, non nascosta
+        Assert.Empty(notifier.Sent);
+    }
+
+    /// <summary>
+    /// <b>Da spenta non mente nemmeno quando il corpus e' DAVVERO corto.</b> E' il caso che
+    /// distingue «non sorvegliata» da «sana»: corpus vuoto, interruttore off ⇒ nessuna violazione,
+    /// nessuna notifica, ma i numeri (zero) restano in chiaro perche' qualcuno li legga.
+    /// </summary>
+    [Fact]
+    public async Task NonSorvegliata_CorpusVuoto_NessunAllarmeMaINumeriRestano()
+    {
+        var soglie = TestThresholds();
+        soglie.NewsEnforced = false;
+        var (worker, snapshot, _, notifier) = await BuildAsync(soglie);
+
+        var newly = await worker.RunOnceAsync(CancellationToken.None);
+        var riga = snapshot.All.Single(d => d.Key == "News");
+
+        Assert.DoesNotContain(newly, d => d.Key == "News");
+        Assert.False(riga.Violated);
+        Assert.Equal(0, riga.Count);
+        Assert.Null(riga.OldestUtc);
+        Assert.DoesNotContain(notifier.Sent, n => n.Body.Contains("Notizie", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// [I15] <b>L'attesa e' scritta in UN SOLO posto.</b> La riga sorvegliata e quella non
+    /// sorvegliata devono mostrare la STESSA frase a parita' di soglie: erano due stringhe costruite
+    /// a mano in due punti, e al primo cambio di formato la pagina avrebbe mostrato due «attesi»
+    /// diversi per due righe equivalenti - senza che nessun test se ne accorgesse, perche' entrambe
+    /// sarebbero state giuste ognuna per se'.
+    /// </summary>
+    [Fact]
+    public async Task LAttesaEIdentica_SorvegliataONo()
+    {
+        // UN SOLO mondo seminato, letto da DUE guardiani con lo stesso database: l'unica differenza
+        // e' l'interruttore. Seminare due volte violerebbe il vincolo unico sulle metriche - e
+        // soprattutto confronterebbe due misure diverse, non due formattazioni della stessa.
+        var (sorvegliato, s1, dbFactory, _) = await BuildAsync(TestThresholds());
+        await SeedAllHealthyAsync(dbFactory);
+        await sorvegliato.RunOnceAsync(CancellationToken.None);
+
+        var spente = TestThresholds();
+        spente.NewsEnforced = false;
+        var s2 = new SentimentHeritageSnapshot();
+        var nonSorvegliato = new SentimentHeritageGuardWorker(
+            dbFactory, new SentimentOptions { HeritageGuard = spente }.AsMonitor(), s2,
+            NullLogger<SentimentHeritageGuardWorker>.Instance, new RecordingNotifier());
+        await nonSorvegliato.RunOnceAsync(CancellationToken.None);
+
+        var a = s1.All.Single(d => d.Key == "News");
+        var b = s2.All.Single(d => d.Key == "News");
+
+        Assert.True(a.Enforced);
+        Assert.False(b.Enforced);
+        Assert.Equal(a.Expected, b.Expected);   // la frase e' UNA, l'interruttore non la riscrive
+        Assert.Equal(a.Count, b.Count);         // e la MISURA e' la stessa: spegnere non acceca
+        Assert.Equal(a.OldestUtc, b.OldestUtc);
+    }
 }

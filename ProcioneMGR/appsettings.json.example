@@ -136,7 +136,7 @@
     "WeightTaker": 0.15,
     "EnableMlFeature": false,
     "HeritageGuard": {
-      "_comment": "Guardiano di PROFONDITA' delle serie-patrimonio (le tre esenti dalla purge: FundingRate, FearGreed, BinanceLiquidations). Il backfill del funding dal 2019 e' andato perso DUE volte in silenzio (2026-07-24 e 2026-08-11): questo controllo misura min(TimestampUtc) e conteggio contro le soglie dichiarate qui, e su violazione logga Error + notifica (una per transizione) + badge in /sentiment e alert in Home. Ripristino: dotnet run --project tools/PlatformExpand -- fundingbackfill. FundingMinStartUtc a 2020-10-01 e non prima: una serie non puo' precedere il LISTING del suo mercato (SOL e' il piu' tardo, 2020-09-13). LiquidationsEnforced=false SOLO da postazioni EEA dove lo stream futures e' muto (MiCA): la riga resta misurata come 'non sorvegliata'. CheckIntervalHours richiede riavvio; il resto e' hot-reload.",
+      "_comment": "Guardiano di PROFONDITA' delle serie-patrimonio (le QUATTRO esenti dalla purge: FundingRate, FearGreed, BinanceLiquidations in SentimentMetricPoints, e dal 2026-08-19 le notizie CON PUNTEGGIO in AltDataPoints). Il backfill del funding dal 2019 e' andato perso DUE volte in silenzio (2026-07-24 e 2026-08-11): questo controllo misura min(TimestampUtc) e conteggio contro le soglie dichiarate qui, e su violazione logga Error + notifica (una per transizione) + badge in /sentiment e alert in Home. Ripristino: dotnet run --project tools/PlatformExpand -- fundingbackfill. FundingMinStartUtc a 2020-10-01 e non prima: una serie non puo' precedere il LISTING del suo mercato (SOL e' il piu' tardo, 2020-09-13). LiquidationsEnforced=false SOLO da postazioni EEA dove lo stream futures e' muto (MiCA): la riga resta misurata come 'non sorvegliata'. NewsEnforced nasce FALSE e non e' timidezza: la purge delle notizie ha girato a ogni tick da sempre, quindi il corpus non puo' essere piu' profondo di NewsRetentionDays e qualunque ancora plausibile scatterebbe al primo giro — un allarme perpetuo smette di essere letto. Da spenta la riga resta MISURATA e mostrata 'non sorvegliata'; si accende DOPO aver letto il minimo vero in /sentiment e scelto NewsMinStartUtc da quella misura (e' la storia dell'ancora del funding, spostata da gennaio a ottobre 2020 solo dopo la misura sul DB reale). L'esenzione e' MIRATA: le notizie SENZA punteggio restano potabili. CheckIntervalHours richiede riavvio; il resto e' hot-reload.",
       "Enabled": true,
       "CheckIntervalHours": 6,
       "FundingSymbols": [ "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE" ],
@@ -146,8 +146,22 @@
       "FearGreedMinPoints": 2000,
       "LiquidationsEnforced": true,
       "LiquidationsMinStartUtc": "2026-08-01",
-      "LiquidationsMinPoints": 100
+      "LiquidationsMinPoints": 100,
+      "NewsEnforced": false,
+      "NewsMinStartUtc": "2026-08-19",
+      "NewsMinPoints": 1000
     }
+  },
+  "PairsWatch": {
+    "_comment": "[I14c] Sorveglianza dello SPREAD delle coppie scelte a mano: ogni IntervalHours registra finestre NON SOVRAPPOSTE (ADF, hedge ratio, z-score) e la pagina /pairs-trading ne mostra la storia. SOLA LETTURA: non apre, non chiude, non tocca corsie. DEFAULT SPENTO e non e' la solita prudenza — e' l'unico worker dell'ondata di integrazione che SCRIVE IN PERMANENZA sul Postgres condiviso con motore e ingestion, quindi accenderlo e' una decisione sul carico. Il conto: per coppia il primo giro scrive MaxCandles/WindowSize righe (20 coi default), dal secondo in poi UNA sola perche' l'upsert e' idempotente; con 5 coppie ogni 12h fanno ~10 righe/giorno. Pairs vuota = nessuna sorveglianza anche da acceso. Le coppie si scelgono A MANO nella forma 'ETH/USDT|BTC/USDT 1h': alimentarle da cio' che lo screening marca operabile sceglierebbe fra centinaia di test ADF senza correzione per test multipli, cioe' fabbricherebbe candidati per costruzione. Il VERDETTO guarda la frazione di finestre stazionarie sulla SERIE, mai la singola finestra: al 5% il 5% delle finestre di puro rumore risulta stazionario per costruzione.",
+    "Enabled": false,
+    "Pairs": [],
+    "IntervalHours": 12,
+    "WindowSize": 250,
+    "MaxCandles": 5000,
+    "Estimator": "Kalman",
+    "PersistenceThreshold": 0.6,
+    "RecentWindows": 3
   },
   "Campaign": {
     "_comment": "Campaign Planner (Fase 1, PRD Autonomia): rotazione automatica delle configurazioni di caccia. DEFAULT OFF: e' IL cambio di natura da strumento ad agente, l'attivazione e' una decisione esplicita. Con Enabled=false le campagne in /campaign si preparano ma nessun run parte. L'applica passa dalla stessa catena della ri-applica (supervisore con veto + isteresi); corsie avviate al massimo in Paper, config Live sempre saltate.",
@@ -190,6 +204,8 @@
     "RecentCandles": 200,
     "RetireChampionOnAlert": true,
     "MinAlertsToRetire": 1,
+    "_comment_MonitorStages": "[I6c] Stage del registry sorvegliati. VUOTO = Champion,Challenger (il default sta nel codice: il binder APPENDE gli array, un default popolato qui raddoppierebbe a ogni salvataggio). Il filtro esiste perche' il 2026-08-19 il registry aveva 158 modelli TUTTI in Staging e nessuna corsia con riferimenti ML: senza filtro il monitor leggeva 31.000 candele e 158 blob ogni 6h (39s misurati sul DB condiviso) per sorvegliare cose che nessuno usa. Metti Staging solo se vuoi sorvegliare anche i modelli mai schierati.",
+    "MonitorStages": [],
     "Thresholds": {
       "_comment": "[I6] Soglie dei tre rilevatori, amministrabili dal 2026-08-18 (prima si cambiavano solo ricompilando). Sono la prassi GENERICA del settore, non una misura fatta su serie finanziarie: se il monitor allarma troppo o non allarma mai, si tarano da qui. Regola lato server: l'alert non puo' essere piu' permissivo del warning (per KS 'piu' severo' significa p-value piu' PICCOLO, al contrario delle altre due famiglie). Pannello: /admin/autonomy, card Drift.",
       "PsiBins": 10,

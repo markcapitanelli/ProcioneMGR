@@ -125,7 +125,7 @@ public sealed class PipelineApplier(
                 var alloc = totalWeight > 0m
                     ? Math.Round(l.WeightPercent / totalWeight * 100m, 1)
                     : Math.Round(100m / group.Count, 1);
-                return BuildLegStrategy(l, autoSl, autoTp, alloc);
+                return BuildLegStrategy(l, autoSl, autoTp, alloc, recommendation.HoldoutMonths);
             }).ToList();
             await mgr.UpdateConfigurationAsync(cfg, ct);
 
@@ -235,10 +235,17 @@ public sealed class PipelineApplier(
     /// confirmed stop/target (<c>BestStopVariant</c>) wins; absent that, the data-driven excursion
     /// bracket (<paramref name="autoSl"/>/<paramref name="autoTp"/>) is used.
     /// </summary>
-    private static EnsembleStrategy BuildLegStrategy(ProposedLeg l, decimal autoSl, decimal autoTp, decimal allocationPercent)
+    private static EnsembleStrategy BuildLegStrategy(
+        ProposedLeg l, decimal autoSl, decimal autoTp, decimal allocationPercent, decimal? holdoutMonths)
     {
         var probe = new BacktestConfiguration();
         RobustnessProbeStage.ApplyVariant(probe, l.BestStopVariant);
+
+        // [I11] Il ritmo atteso della gamba, dallo STESSO holdout da cui vengono Sharpe/PF/DD qui
+        // sotto. null quando la raccomandazione non porta la finestra (JSON storici) o la gamba non
+        // ha trade: in entrambi i casi il numero non è derivabile, e chi lo consuma non agisce.
+        var perMonth = holdoutMonths is decimal m ? Fleet.TradeFrequency.PerMonth(l.HoldoutTrades, m) : null;
+
         return new EnsembleStrategy
         {
             StrategyName = l.StrategyName,
@@ -255,6 +262,9 @@ public sealed class PipelineApplier(
             // [T1] La provenienza del verdetto viaggia con la gamba fino alla corsia: il badge
             // "Grigia" in /ensemble e /trading nasce da qui, non dal DisplayName.
             SourceVerdict = l.SourceVerdict,
+            ExpectedTradesPerMonth = perMonth,
+            ExpectedTradesSource = perMonth is null ? null
+                : $"holdout della raccomandazione: {l.HoldoutTrades} trade su {holdoutMonths:0.##} mesi",
         };
     }
 

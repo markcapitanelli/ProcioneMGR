@@ -990,7 +990,7 @@ in `appsettings.json.example`; il file che l'app carica davvero (repo principale
 Misurato sul database vero: il comitato è armato da sedici giorni e **non ha mai votato** — zero righe
 con `Path='committee'`, tutte e 89 le decisioni della flotta con `VotesJson` vuoto. Non è un guasto:
 arbitra i pareggi di `Decide`, e la flotta non produce assegnazioni perché la coda è sempre vuota. A
-monte c'è l'inedia — le corsie di flotta 3-7 hanno chiuso **1 trade ciascuna o zero** in 13-15 giorni,
+monte c'è l'inedia — le corsie di flotta 3-7 hanno chiuso **da uno a sei trade ciascuna sul simbolo attuale (5, 1, 5, 6, 3) in 6-16 giorni**,
 contro `RetireMinTrades=20`: non saranno mai ritirabili, quindi non si libera mai una corsia.
 
 E c'è una **trappola armata**: la sezione `Drift` è *assente* dal file vivo, quindi accendendo la
@@ -1200,12 +1200,343 @@ di dire di no e di dichiarazione di copertura.**
 > **due gambe** il costo si paga due volte per trade: lo sconto era il più grande possibile
 > esattamente dove fa più danno, e i numeri di questa pagina non erano confrontabili con quelli di
 > nessun'altra superficie della piattaforma.
-| I11 | **«Trade attesi dall'holdout»: una regola sola, consumata da due** (ritiro per inedia e freno per gamba). Sul **simbolo attuale**, col **tempo-al-verdetto dichiarato**. Due regole per la stessa domanda è il difetto già pagato in D2 e con `SeriesFreshness` | aperto | L1 ricostruisce il trade/mese che il run dichiara; L2 campo assente (corsie 0-2) ⇒ nessuno agisce e **lo si dichiara** |
-| I12 | **Ritiro per inedia + dedup dei grigi per identità**, ancora in DryRun; poi AF2b (`targetLanes`, start/stop reali) **una corsia per volta, solo Paper**. Assorbe AF2c-1 e AF2c-5 | aperto | **L1 con lo stato reale**: condanna 3, 5, 6, 7 e **non** la 2 (troppo giovane) né l'impronta né le quarantenate; L2 soglia a 0 ⇒ piano bit-identico su 100 tick fuzzati; L4 le 40 riproposte diventano 1 |
-| I13 | **Freno per gamba: prima la misura, poi l'azione** — (a) l'avviso di deriva esteso alle **gambe attive** (oggi una gamba disattivata continua a operare fino al riavvio della corsia e nessuno lo dice); (b) pannello di sola lettura sui trade veri; (c) **condizionato** all'esito di (b), freno dove si applica `mayOpen`, mai un `continue` che lasci posizioni orfane | aperto | **il gate di (b) può chiudere il filone e va bene così**: a 2-6 trade/mese «≥20 trade sul simbolo attuale» può dare zero gambe misurabili — allora il pannello lo dice e (c) non si fa. L1 il riferimento indipendente **esiste già in repo** |
-| I14 | **`PairCandidate` + `PairSpreadWindow` col loro lettore** — indice derivato dagli 86 artefatti mai letti, sul progetto di `ResearchCandidateIndex`; storia dello spread sul pattern `FactorIcWindows`; pannello in `/pairs-trading`. Sola lettura, nessuna decisione automatica | aperto | **L2 decisivo**: su due random walk indipendenti il monitor non deve **mai** dichiarare cointegrazione; su una relazione piantata deve trovarla. L1 il rebuild combacia con l'aggregato SQL sugli artefatti |
-| I15 | **Corpus notizie esentato dalla purge + riga nel guardiano di profondità** (decisione del proprietario); da spenta la riga resta **misurata** e mostrata come «non sorvegliata», mai un OK finto | aperto | L1 profondità e conteggio combaciano col `SELECT` a mano; L2 corpus profondo ⇒ il guardiano tace per tre giri |
+| I11 | **«Trade attesi dall'holdout»: una regola sola, consumata da due** (ritiro per inedia e freno per gamba). Sul **simbolo attuale**, col **tempo-al-verdetto dichiarato**. Due regole per la stessa domanda è il difetto già pagato in D2 e con `SeriesFreshness` | **FATTO** | L1 ricostruisce il trade/mese che il run dichiara; L2 campo assente (corsie 0-2) ⇒ nessuno agisce e **lo si dichiara** |
+| I12 | **Ritiro per inedia + dedup dei grigi per identità**, ancora in DryRun; poi AF2b (`targetLanes`, start/stop reali) **una corsia per volta, solo Paper**. Assorbe AF2c-1 e AF2c-5 | **FATTO**, L4 compreso | **L1 con lo stato reale**: condanna 3, 5, 6, 7 e **non** la 2 (troppo giovane) né l'impronta né le quarantenate; L2 soglia a 0 ⇒ piano bit-identico su 100 tick fuzzati; L4 le 40 riproposte diventano 1 |
+| I13 | **Freno per gamba: prima la misura, poi l'azione** — (a) l'avviso di deriva esteso alle **gambe attive** (oggi una gamba disattivata continua a operare fino al riavvio della corsia e nessuno lo dice); (b) pannello di sola lettura sui trade veri; (c) **condizionato** all'esito di (b), freno dove si applica `mayOpen`, mai un `continue` che lasci posizioni orfane | **(a)+(b) FATTI**, (c) sospeso in attesa della misura | **il gate di (b) può chiudere il filone e va bene così**: a 2-6 trade/mese «≥20 trade sul simbolo attuale» può dare zero gambe misurabili — allora il pannello lo dice e (c) non si fa. L1 il riferimento indipendente **esiste già in repo** |
+| I14 | **`PairCandidate` + `PairSpreadWindow` col loro lettore** — indice derivato dagli 86 artefatti mai letti, sul progetto di `ResearchCandidateIndex`; storia dello spread sul pattern `FactorIcWindows`; pannello in `/pairs-trading`. Sola lettura, nessuna decisione automatica | **FATTO** | **L2 decisivo**: su due random walk indipendenti il monitor non deve **mai** dichiarare cointegrazione; su una relazione piantata deve trovarla. L1 il rebuild combacia con l'aggregato SQL sugli artefatti |
+| I15 | **Corpus notizie esentato dalla purge + riga nel guardiano di profondità** (decisione del proprietario); da spenta la riga resta **misurata** e mostrata come «non sorvegliata», mai un OK finto | **FATTO** | L1 profondità e conteggio combaciano col `SELECT` a mano; L2 corpus profondo ⇒ il guardiano tace per tre giri |
 | I16 ≡ F12 | **Capacità e universo del carry**: l'unica classe con edge misurato positivo, l'unica che opera oggi, l'unica che nessuno sta dimensionando — mentre il basis è in compressione | aperto | **report con verdetto scritto anche se è «la soglia attuale è già ottima»**; trade/mese e durata mediana dichiarati |
+
+
+### Fase 3 e Fase 4 eseguite (2026-08-19) — I11 e I12
+
+**I11, il denominatore condiviso.** Il numero «quanti trade ci si aspetta da questa gamba» nasceva
+nel lettore della flotta al momento della candidatura e **moriva lì**: una volta schierata, nessuno
+sapeva più quanti trade quella gamba dovesse fare. Ora vive sulla gamba
+(`EnsembleStrategy.ExpectedTradesPerMonth` + `ExpectedTradesSource`), scritto da **tutti e tre** i
+percorsi di schieramento — l'applicatore della pipeline, il click della fascia grigia in `/fleet`,
+l'aggiunta di una gamba grigia in `/ensemble` — e mostrato in `/trading` col **tempo-al-verdetto**:
+*«~2 trade/mese attesi: servono ~10 mesi per i 20 trade che la regola di ritiro pretende»*.
+
+Il rischio dell'item era ripetere il difetto che l'item stesso combatte, e si è materializzato tre
+volte durante la scrittura: la finestra di holdout si calcolava in due posti (accorpata su
+`PipelineDateRanges.HoldoutMonths()`), la query «holdout di questo run» stava per essere scritta due
+volte (`HoldoutWindow`), e la soglia dei 20 trade stava per essere **ricopiata nel markup** accanto
+alla manopola che la definisce — `Fleet:RetireMinTrades`. L'ultimo è quello che un test verde non
+avrebbe mai rivelato: `LaneStory_TempoAlVerdetto_SegueLaSogliaConfigurata` prova la stessa gamba con
+due soglie diverse, e sarebbe verde su una e rosso sull'altra.
+
+**I12, la capacità di liberare una corsia.** Il ritiro per Sharpe pretende `RetireMinTrades` trade e
+**chi non opera non ci arriva mai**: al 2026-08-19 le corsie di flotta 3-7 avevano chiuso *da uno a sei
+trade ciascuna sul simbolo attuale* in 6-16 giorni (misurato: 5, 1, 5, 6, 3), quindi non erano ritirabili per nessuna via. Una corsia che non si
+libera mai blocca la flotta, e a monte il comitato — che riceve una domanda solo quando esiste una
+corsia libera con due candidati che se la contendono. **I sedici giorni senza un voto avevano lì la
+loro causa**, non nel comitato.
+
+Il criterio confronta col ritmo **atteso nel periodo osservato**, non con un conteggio assoluto: 30
+trade/mese fermi da due settimane sono un guasto, 2 trade/mese con un trade in due settimane sono la
+norma. E dove il ritmo atteso non è noto — corsie 0-2, gambe configurate a mano — **non si condanna**:
+l'ignoranza non condanna, e una conoscenza *parziale* (una gamba su tre che dichiara) è ignoranza
+travestita, quindi la somma è parziale-o-niente.
+
+**Il dedup dei grigi**: le proposte nascevano per run, e la caccia rigira gli stessi parametri sugli
+stessi mercati — 83 proposte in journal, ognuna una notifica. Ora una per **identità canonica**
+(`PipelineCandidateKey`), col numero dei run che l'hanno ritrovata in coda al messaggio. Sopravvive
+il run **più recente**, non il più vecchio: un grigio è una proposta di forward test, e il forward
+test si fa sull'ipotesi vista sui dati più freschi — l'opposto della coda «pass», che è FIFO perché
+lì il criterio è non far invecchiare nessuno.
+
+**AF2b, il braccio esecutivo — metà.** L'orchestratore sa **fermare** una corsia; continua a non
+saperla **avviare**. È l'ordine deciso dal proprietario: fermare libera una corsia, non impegna
+capitale e si disfa con un click; avviare mette in corsa una strategia scelta da una macchina, e
+quando te ne accorgi ha già operato. Quattro condizioni tutte necessarie perché un'azione avvenga —
+braccio presente, dry-run spento, corsia **elencata** in `Fleet:ExecutionLanes` (vuota di default),
+budget del tick non esaurito — e la modalità **riletta dal motore nell'istante dell'azione**: il
+piano è deciso su una fotografia che può avere minuti, e se nel frattempo la corsia è passata a
+Testnet non si tocca. Fail-closed: modalità non leggibile ⇒ non si tocca.
+
+`Fleet:ExecutionLanes` è una **lista e non un interruttore** di proposito: un booleano aprirebbe di
+colpo tutte le corsie di flotta, e il primo tick dopo l'accensione potrebbe fermarne quattro insieme.
+La lista rende l'ampiezza esplicita, reversibile togliendo un numero, e permette il collaudo che il
+PRD chiede — *una corsia per volta, solo Paper*.
+
+La sonda degli agenti è stata corretta di conseguenza, ed è la stessa correzione della revisione
+avversaria del 2026-08-18 **spostata di un flag**: con il braccio implementato e il dry-run spento,
+`Fleet:ExecutionLanes` vuota significa che la macchina non può toccare nulla — dichiarare
+«esecuzione attiva» sarebbe stata di nuovo la classe «controllo che rassicura».
+
+> **Resta da fare su I12**: il livello 4 sull'app vera (le 40 riproposte che diventano 1 nel journal
+> reale, e un ritiro per inedia osservato su una corsia autorizzata in Paper). Il codice è pronto e
+> **inerte**: `ExecutionLanes` è vuota, quindi in produzione oggi non cambia nulla.
+
+
+#### I13(a) — la spunta «Attiva» non era un interruttore
+
+Il motore fotografa `IsActive` all'**avvio** della corsia (`TradingEngine._active`, riga 272):
+togliere la spunta a una gamba mentre la corsia gira **non ferma nulla** fino al riavvio. La tabella
+di `/ensemble` mostrava la gamba spenta, il motore continuava ad aprirci posizioni, e le due verità
+non si incontravano da nessuna parte — l'operatore credeva di aver fermato qualcosa che stava ancora
+operando.
+
+Non si è cambiato il comportamento del motore, si è reso **visibile**: applicare la disattivazione a
+caldo lascerebbe posizioni orfane, che è precisamente il pericolo che il punto (c) di questo stesso
+item mette in guardia. La regola qui è la quinta della piattaforma — *degradare dicendolo*.
+
+Lo stato del motore porta ora `RunningStrategyIds` (campo 25 del contratto gRPC, additivo): gli
+`StrategyId` delle gambe che sta **davvero** eseguendo. `/ensemble` confronta la configurazione con
+quel fatto e dichiara entrambi i versi — spenta-ma-in-corsa (giallo, con l'istruzione di riavviare)
+e accesa-ma-non-ancora-in-corsa (grigio). E quando il motore non risponde **non accusa nessuno**:
+dice che il confronto non è stato possibile, invece di leggere il silenzio come «tutto allineato»,
+che sarebbe la classe «controllo che rassicura» nel caso in cui più si vorrebbe sapere.
+
+
+#### I13(b) — il pannello che può chiudere il filone, e un difetto trovato scrivendolo
+
+Il monitor di decadimento misurava il realizzato per `StrategyId` **senza filtrare il simbolo**. Le
+corsie hanno vite precedenti: una riassegnazione, o una coppia cambiata a mano in `/ensemble` senza
+riscrivere le gambe, faceva nascere lo Sharpe «realizzato» di una gamba da trade fatti su **due
+mercati diversi** — e nessuna riga lo diceva. Ora il filtro c'è (`t.Symbol == cfg.Symbol`, la regola
+AF2c-2: il criterio è il simbolo *attuale*) e i trade scartati vengono **contati e dichiarati**: un
+conteggio più basso senza spiegazione si legge come un guasto.
+
+Sopra le schede c'è ora il **verdetto di misurabilità**: *«N gambe su M misurabili»*, e per quelle
+che non lo sono **quanto manca** al ritmo che dichiarano — «alle altre servono fino a ~3,2 mesi»,
+oppure «il ritmo atteso non è dichiarato: quando lo saranno non è derivabile». Un «non misurabile»
+senza una data è un'informazione a metà.
+
+> **Questo verdetto è il gate del punto (c), e ci si aspetta che lo chiuda.** Al 2026-08-19 le corsie
+> di flotta 3-7 avevano da uno a sei trade sul simbolo attuale: con «≥20 trade» la risposta
+> quasi certa è **zero gambe misurabili**, e allora il freno automatico per gamba **non si fa**.
+> Misurare prima di agire vuol dire anche accettare che la misura dica di non agire. Il numero vero
+> si legge in `/ensemble` sull'app reale — è un livello 4, non una deduzione.
+>
+> Senza il gate esplicito, il pannello avrebbe mostrato «Sharpe realizzato 0,00 vs atteso 1,20 ⇒
+> ALERT» su gambe con un solo trade: la classe «controllo che rassicura» al contrario — allarmare su
+> un numero che non esiste.
+
+
+### Fase 5 (2026-08-19) — I15 fatto, I14 a metà
+
+**L'ordine è invertito rispetto alla numerazione, e il motivo è misurabile**: la purge delle notizie
+gira a ogni tick del worker del sentiment (default 30 minuti, worker acceso di fabbrica). Il corpus
+si stava accorciando *mentre leggevo il codice*, e le notizie cancellate non tornano. I14 non perde
+nulla ad aspettare: gli 86 artefatti dello screening sono in database dal 2026-07 e nessuna
+retention li tocca.
+
+#### I15 — l'esenzione è MIRATA, e non basta da sola
+
+Esente dalla purge è la notizia **con punteggio**: quella che uno scorer ha già valutato, e che ha
+quindi un costo di produzione. Le notizie grezze restano potabili — esentare tutta la tabella la
+farebbe crescere senza limite per conservare righe che nessun consumatore guarda. Il predicato vive
+in `NewsCorpus` e lo **condividono** purge e guardiano: se fossero due, il guardiano misurerebbe la
+profondità di un insieme diverso da quello protetto, e direbbe «tutto a posto» di righe che il worker
+sta cancellando.
+
+E l'esenzione da sola non chiude l'item: **la storia del funding è andata persa due volte con
+l'esenzione al suo posto** (drop, restore parziale, re-backfill). L'esenzione protegge dal worker,
+non da tutto il resto — perciò esce nello stesso cambiamento della riga nel guardiano.
+
+`NewsEnforced` nasce **false**, e non è timidezza: la purge ha girato da sempre, quindi oggi il
+corpus non *può* essere più profondo di `NewsRetentionDays`, e qualunque àncora plausibile
+scatterebbe al primo giro. Un allarme perpetuo smette di essere letto. Da spenta la riga resta
+**misurata** e mostrata «non sorvegliata» — che è testualmente ciò che il gate chiede. Si accende
+dopo aver letto il minimo vero: è la storia dell'àncora del funding, spostata da gennaio a ottobre
+2020 solo *dopo* la misura sul database reale.
+
+**Due difetti preesistenti trovati scrivendolo**, entrambi della classe «due regole per la stessa
+domanda»: la frase «che cosa ci si aspetta da questa serie» era costruita a mano in *due* punti — la
+riga sorvegliata e quella non sorvegliata — e al primo cambio di formato la pagina avrebbe mostrato
+due attesi diversi per due righe equivalenti, senza che nessun test se ne accorgesse perché entrambe
+sarebbero state giuste ognuna per sé. E il messaggio «serie ASSENTE» nominava
+`SentimentMetricPoints` come costante: sulla riga delle notizie — che vive in `AltDataPoints` —
+avrebbe mandato a cercare la perdita nel posto sbagliato.
+
+#### I14(a)+(b) — 86 artefatti che nessuno aveva mai riletto
+
+Non esisteva **una sola query** nel repo che filtrasse `Kind == "PairScreen"`. Ogni run testava la
+cointegrazione di tutte le combinazioni dell'universo e scriveva il risultato in un blob che nessuna
+superficie apriva. Ora `PairCandidate` li indicizza a righe — tabella **derivata** e ricostruibile,
+sul progetto di `ResearchCandidateIndex` — e `/pairs-trading` ha il suo pannello di sola lettura.
+
+**La trappola che avrebbe reso il pannello muto**: nel payload `IsTradeable` è una property
+*get-only*, quindi System.Text.Json la **scrive** ma la **ignora** in deserializzazione. Un
+indicizzatore che la mappasse dal blob scriverebbe `false` su ogni riga, e il filtro «solo quelle che
+hanno passato» sarebbe sempre vuoto — con l'aria di funzionare. Si ricalcola, e un test serializza un
+payload con `IsTradeable: true` per dimostrare che rileggerlo non lo restituisce.
+
+**Un difetto trovato dal mio stesso test**: avevo scritto che uno screening senza coppie «si conta
+come indicizzato, altrimenti l'incrementale lo ripescherebbe per sempre». Il test è diventato rosso:
+un run senza righe non lascia traccia nella tabella, quindi **viene riletto comunque**. La promessa
+non era mantenuta. Ora i run vuoti si contano a parte e il fatto è dichiarato — il danno vero sarebbe
+stato far dire al pulsante «indicizzato 1 run» per sempre su un archivio dove non c'è più niente da
+fare.
+
+Il pannello dichiara ciò che NON è: «operabile» vuol dire «ha passato lo screening», non «pronta a
+partire» — nessuna coppia è schierata, le corsie sono mono-simbolo, e l'elasticità β mostrata è
+*full-sample*, non il β walk-forward del backtest qui sopra. Senza quelle righe sarebbe stata la
+classe «controlli che rassicurano a prescindere dalla realtà» che questa ondata esiste per bonificare.
+
+> `PairSpreadWindow` è stato poi fatto — vedi il blocco I14(c) qui sotto.
+
+
+
+
+#### I14(c) — `PairSpreadWindow`, e il gate che sarebbe stato insoddisfacibile
+
+Il pezzo con **carico di scrittura permanente**, l'unico dell'ondata. Un worker registra ogni 12 ore
+lo spread delle coppie sorvegliate su finestre **non sovrapposte**; `/pairs-trading` ne legge la
+storia. Sola lettura: non apre, non chiude, non tocca una corsia.
+
+**Le coppie le sceglie una persona**, come dice il testo dell'item. L'alternativa — alimentarle da
+ciò che lo screening marca operabile — sceglierebbe fra centinaia di test ADF per timeframe **senza
+correzione per test multipli**: al 5%, su 190 coppie ne «trova» una decina per puro rumore e le
+sorveglierebbe come relazioni. È il primo cugino dell'errore già pagato randomizzando su asset
+correlati, che fabbricava falsa significatività.
+
+**Il gate L2 era insoddisfacibile alla lettera, e andava visto prima di scrivere.** «Su due random
+walk indipendenti il monitor non deve **mai** dichiarare cointegrazione»: ma un test ADF al 5%
+dichiara stazionario il 5% delle finestre di puro rumore — *per costruzione, non per difetto*. Un
+verdetto per-finestra avrebbe quindi detto «cointegrata» su rumore una volta su venti, e il gate
+sarebbe stato impossibile da soddisfare onestamente. È la classe «gate senza strumento», e ci si
+accorge di averla addosso solo dopo aver scritto tutto.
+
+La risposta: **il verdetto è una proprietà della SERIE, non della finestra.** Si guarda la frazione
+di finestre non sovrapposte stazionarie contro una soglia alta (0,6). Sotto il nullo quella frazione
+vale ~0,05 e perché venti finestre arrivino al 60% servirebbe un evento dell'ordine di 10⁻¹²; su una
+relazione vera vale ~1. La distanza fra le due è ciò che rende il gate **verificabile** invece che
+aspirazionale.
+
+E la **rottura si definisce come perdita di uno stato precedente**: una coppia è rotta se *era*
+persistentemente stazionaria e non lo è più. Sotto il nullo la persistenza non c'è mai stata, quindi
+nessuna rottura è dichiarabile — **per costruzione, non per fortuna**. È la forma che rende vera la
+seconda metà del gate.
+
+Il test del nullo gira su venti semi e non trova mai né relazione né rottura. Accanto c'è la misura
+onesta: il **tasso** di falsi positivi per finestra su 400 finestre di rumore, che deve stare dove ci
+si aspetta. Serve a due cose — se fosse molto più alto il test di cointegrazione sarebbe rotto e la
+frazione poggerebbe sul nulla; se fosse **zero** il test sarebbe cieco, e un test cieco supera il
+gate del nullo senza dimostrare niente.
+
+**Il carico, dichiarato in numeri e nel pannello**: per coppia il primo giro scrive 20 righe, dal
+secondo in poi **una sola** perché l'upsert è idempotente. Con cinque coppie ogni 12 ore fanno ~10
+righe al giorno, ~3.700 in un anno. È poco *perché* le coppie le sceglie una persona. Il worker nasce
+spento e con l'elenco vuoto: due condizioni, entrambe necessarie.
+
+Le finestre sovrapposte si tolgono **in lettura** (stesso `SelectDominantGrid` della storia dell'IC):
+il worker taglia la griglia dalla candela più recente all'indietro e a ogni giro la griglia scivola —
+punti che condividono dati sono correlati per costruzione e gonfierebbero proprio la frazione su cui
+il verdetto si esprime.
+
+### Revisione avversaria delle Fasi 3-5 (2026-08-19)
+
+Cinque lenti indipendenti sul codice appena scritto, e per ogni ritrovamento **tre scettici
+incaricati di demolirlo**: 29 candidati, **17 sopravvissuti** alla confutazione (alcuni sono lo
+stesso difetto trovato da lenti diverse), 12 respinti. Tre dei difetti confermati li avevo introdotti
+io **negli item che esistono proprio per eliminarli**.
+
+**1. L'esenzione «mirata» delle notizie è totale — misurato, non dedotto.** Avevo scritto nel codice
+che l'esenzione riguarda le sole notizie con punteggio e che «le grezze restano potabili». Sul
+database vero: **22.777 notizie, 22.777 con punteggio, ZERO grezze**. Vero nel codice, falso nei
+fatti — la definizione esatta della classe che l'ondata bonifica, scritta da me dentro I15.
+Conseguenza reale: `NewsRetentionDays` non limita più quella tabella, e **tre lettori che caricavano
+l'intero archivio erano sicuri solo perché la purge lo teneva a 180 giorni**. Il peggiore girava a
+ogni tick del sync, per sempre. Corretto: la verità è dichiarata, e i tre caricamenti hanno la loro
+finestra esplicita (l'indice unico su `DedupeKey` resta la garanzia vera contro i duplicati).
+
+**2. Il ritiro per inedia costruiva il verdetto su due fotografie diverse.** I trade li conta il
+motore; il ritmo atteso lo somma la configurazione — e I13(a), scritto lo stesso giorno, stabilisce
+che le due divergono finché la corsia non riparte. Bastava **aggiungere una gamba** da 30 trade/mese
+a una corsia sana e salvare per farle emettere «Corsia in INEDIA» al tick dopo; col braccio armato,
+per fermarla davvero. Ora quando le due fotografie non concordano il ritmo atteso vale `null` e il
+criterio **rinuncia**: l'ignoranza non condanna, applicata con coerenza.
+
+**3. «Non te lo so dire» letto come «non sto eseguendo nulla».** In proto3 un `repeated` assente si
+deserializza **vuoto, mai null**: un motore con un'immagine precedente al campo delle gambe in
+esecuzione risponde con una lista vuota *mentre esegue*. Il ramo «non determinabile» che avevo
+scritto pretendeva `null` e non poteva scattare mai — e il difetto produceva la bugia peggiore dei
+due versi: nessun avviso sulle gambe spente ma ancora operate, **più** l'affermazione falsa che tutte
+le attive «non sono eseguite».
+
+**4. «Il prossimo tick le ritira e libera il posto»** — promessa fatta da una funzione pura che non
+conosce né `DryRun` né `ExecutionLanes`. Nel default della piattaforma il ritiro non arriva, e
+l'operatore avrebbe aspettato. Ora la frase dice ciò che è vero in ogni assetto (il verdetto c'è) e
+rimanda a dove si legge se verrà eseguito.
+
+**5. Il pannello delle coppie contava su una finestra troncata** e presentava i numeri come totali:
+con 86 artefatti e C(n,2) coppie per run, il taglio a 4.000 righe lasciava passare meno di dieci run
+— e la pagina avrebbe dichiarato «21 run indicizzati» due centimetri sotto un alert che diceva
+«indicizzati 86 run». Ora i conteggi si fanno sul database. E «l'indice è già allineato agli
+artefatti» veniva detto **anche quando ogni run era stato scartato** per payload illeggibile: un
+alert azzurro rassicurante su un guasto totale, con l'unica traccia nei log del server.
+
+**6. Due aritmetiche del mese ai due lati della stessa disuguaglianza**: l'atteso nasceva da 30,44
+giorni/mese, il tempo trascorso con cui veniva riproporzionato da 30,0. Lo scarto cresceva dell'1,5%
+per ogni mese di osservazione, sempre **contro** la corsia. Ora `TradeFrequency.DaysPerMonth` è una
+costante sola — la classe esiste per non avere due regole per la stessa domanda, e ne aveva due per
+la stessa *unità*.
+
+**7. Le quattro manopole nuove non passavano dalla validazione lato server.** `StarvationFraction`
+è l'unica della sezione che può fare danno restando «valida» per il binder: sopra 1 condanna *ogni*
+corsia, compresa quella che opera esattamente quanto promesso.
+
+> Dodici ritrovamenti sono stati **respinti** dagli scettici e non toccati — fra questi «il taglio a
+> 4000 cade dentro un run», «il badge OK verde mentre una serie non è sorvegliata» e «il verdetto di
+> misurabilità conta le gambe disattivate»: tutti smontati aprendo il codice o trovando il test che
+> già copriva il caso.
+
+### Livello 4 della Fase 4 (2026-08-19, app vera, database e motore reali)
+
+**Il dedup dei grigi, misurato sul journal vero.** 91 righe `ProposeGrey`, 91 run distinti — e
+**sei** cose distinte. Due ne spiegano 87:
+
+| proposte | candidato |
+|---|---|
+| **44** | `Composite DOT/USDT 1h` — Sharpe holdout 1,93 su 7 trade |
+| **43** | `GridMeanReversion XRP/USDT 4h` — Sharpe holdout 2,10 su 15 trade |
+| 1 | `Composite LTC/USDT 15m` · `Composite LTC/USDT 30m` · `RegimeConditional AAVE/USDT 1d` · `Supertrend ADA/USDT 4h` |
+
+Il gate diceva «le 40 riproposte diventano 1»: la realtà era **44 → 1** e **43 → 1**. Il pannello ora
+dichiara «1 grigi **distinti**», non il conteggio dei run.
+
+**Correzione a un numero che avevo scritto.** Nel commit precedente ho affermato che le corsie di
+flotta 3-7 avevano «un trade ciascuna o zero in 13-15 giorni». Sul database vero i trade **sul
+simbolo attuale** sono: corsia 3 → 5 (13,8 gg), 4 → **1** (16,0 gg), 5 → 5 (5,9 gg), 6 → 6 (16,0 gg),
+7 → 3 (13,8 gg). Non «uno o zero»: da uno a sei. **La conclusione non cambia** — nessuna arriva
+neanche vicino ai 20 trade che il ritiro per Sharpe pretende, quindi nessuna era ritirabile — ma il
+numero illustrativo era sbagliato e va corretto dove l'ho scritto.
+
+**Il difetto di I13(b), visto dal vivo e più grave di come l'avevo descritto.** La corsia 3 ha **24
+trade totali ma solo 5 sul simbolo attuale**: diciannove appartengono a vite precedenti della corsia.
+La corsia 0 ne ha **159 in totale e ZERO su AAVE/USDT**, che è la sua coppia attuale. Prima di I13(b)
+il monitor di decadimento avrebbe calcolato uno «Sharpe realizzato per AAVE/USDT» da 159 trade fatti
+su altri mercati. Non era un'ipotesi: era lo stato in produzione.
+
+**I13(a), un'istanza viva sulla prima corsia guardata.** La corsia 3 porta una gamba
+`RsiOversold (fascia grigia, run 1d5cd47e)` **attiva in configurazione e non eseguita dal motore** —
+aggiunta dopo l'avvio. Prima di oggi nessuna superficie lo diceva: la pagina la mostrava attiva e
+l'operatore l'avrebbe creduta in funzione.
+
+**Il verdetto di misurabilità, e la sua conseguenza.** `/ensemble` sulla corsia 3 dice
+*«0 / 1 misurabili — NESSUNA misura è interpretabile in questo momento»*, con 5 trade su 20 richiesti
+e il ritmo atteso non dichiarabile. **Questo chiude I13(c)**: il freno automatico per gamba non si
+costruisce su una misura che non esiste. Misurare prima di agire vuol dire anche accettare che la
+misura dica di non agire.
+
+**I11 sull'app vera**: la gamba della corsia 3 dichiara *«frequenza attesa non derivabile (finestra
+di holdout assente)»* — schierata prima che il campo esistesse. È esattamente il gate L2: campo
+assente ⇒ nessuno agisce, **e lo si dichiara**.
+
+**AF2b, le tre condizioni provate insieme.** Scritto `7, 5, 5, pippo, -3` nel campo delle corsie
+autorizzate e salvato: sul disco è finito `[5, 7]` — duplicato rimosso, testo scartato, negativo
+scartato, ordinato. Un refuso non può allargare i permessi. E con due corsie autorizzate ma il
+dry-run acceso la sonda continua a dire **DRY-RUN**, non «esecuzione attiva»: le tre condizioni sono
+davvero congiunte, e la bugia del 2026-08-18 non si è ripresentata spostata di un flag. Il campo è
+stato rimesso a vuoto a fine collaudo.
+
+**E un risultato che vale il livello 4 di I6**: con `Drift:Enabled=true` e il filtro per stage, la
+sonda dichiara *«acceso ma NESSUN modello negli stage sorvegliati (Champion/Challenger)»* — zero
+allarmi invece dei 151 su 153 di prima. Il gate senza soggetto ora si accende **insieme** al suo
+soggetto.
 
 ### Livello 4 eseguito (2026-08-19, sull'app vera col database e il motore reali)
 
@@ -1287,6 +1618,46 @@ dietro il denominatore) → I14-I15 (persistenza, insieme al suo lettore) → I1
 > codice. Restano le Fasi 3-6: I11 (il denominatore condiviso «trade attesi dall'holdout»),
 > I12-I13 (ritiro per inedia, dedup dei grigi, AF2b, freno per gamba), I14-I15 (`PairCandidate` col
 > suo lettore, corpus notizie esentato dalla purge), I16 ≡ F12 (capacità del carry).
+
+### Le due cose operative, ESEGUITE (2026-08-19) — e una decisione cambiata dai fatti
+
+**⚠️ Questo blocco supera quanto scritto sopra sullo stato del file vivo: la sezione `Drift` ORA
+ESISTE.**
+
+**`Llm:Budget` valorizzato e in vigore**: `DailyCallLimit=150`, `DailyTokenLimit=250.000`,
+`MonthlyTokenLimit=2.000.000`. Sono **tripwire, non budget stretti**: su 18 giorni misurati il giorno
+peggiore ha fatto **11 chiamate e 36.341 token** (media ~5,4 e ~18.000). Devono fermare una fuga —
+un comitato in loop farebbe migliaia di chiamate — e **mai mordere nell'uso normale**, perché il
+layer AI si è già fermato in silenzio una volta per credito esaurito e un tetto stretto ricreerebbe
+quel guasto in un'altra forma. Scritti dal pannello e verificato che il processo li abbia **riletti**:
+il badge «NESSUN TETTO IN VIGORE» è sparito.
+
+**La sezione `Drift` ora esiste nel file vivo, con `RetireChampionOnAlert=false` esplicito.** Questo
+chiude la trappola della sezione assente (il default del POCO è `true`) **indipendentemente da tutto
+il resto**, ed è il guadagno immediato.
+
+**`Drift:Enabled` resta `false`, e la ragione ribalta una conclusione precedente di questo
+documento.** Verificato sul database prima di accendere: **158 modelli, TUTTI in `Staging`**, e
+**nessuna delle 8 corsie ha un riferimento ML**. Quindi i 151 allarmi su 153 erano probabilmente
+**CORRETTI** — modelli vecchi di mesi hanno feature davvero derivate. *Il difetto non era la soglia:
+era il soggetto.* Ricalibrare le soglie su quella popolazione avrebbe adattato il metro a un campione
+irrilevante — ed è quello che stavo per fare.
+
+Rimedio: **`Drift:MonitorStages`** (vuoto = `Champion,Challenger`, col default nel codice per la
+trappola del binder che appende gli array). Un gate senza soggetto diventa **un gate che si accende
+insieme al soggetto**: oggi 0 modelli sorvegliati, tick a costo trascurabile, e al primo modello
+promosso parte da solo su quello. Il pannello dichiara «Modelli sorvegliati: N su M salvati», e la
+sonda dello stato agenti conta i **sorvegliati** — «acceso su 158» mentre ne guarda zero sarebbe la
+solita rassicurazione.
+
+`Enabled` si accende **insieme al filtro**, cioè al merge della PR e a un riavvio del guscio:
+accenderlo sul codice deployato avrebbe fatto proprio ciò che il filtro evita, e infatti **un tick
+non filtrato è partito** nei secondi in cui è stato acceso.
+
+> **Trappola nuova della famiglia «appsettings vivo ≠ example»**: i pannelli avviati col profilo
+> `procione-reale` scrivono l'`appsettings.json` **del worktree**, non quello del repo principale che
+> carica `procione-main`. Le due configurazioni vanno riportate a mano, con un diff chiave-per-chiave
+> prima di copiare (backup in `appsettings.json.bak-preI6c`).
 
 Le Fasi 0-2 sono tutte a rischio nullo o basso e **non cambiano una sola decisione operativa**. La
 Fase 4 è la sola che ne cambia una, ed è dietro I11 di proposito.

@@ -304,6 +304,23 @@
                         <span class="text-muted small ms-2">
                             &nbsp;·&nbsp; protezioni: SL @FormatProtection(s.StopLossPercent) / TP @FormatProtection(s.TakeProfitPercent)@(s.TrailingStopPercent is > 0m ? $" / TSL {s.TrailingStopPercent:F2}%" : "")
                         </span>
+                        @* [I11] Il RITMO atteso, che fino al 2026-08-19 non compariva da nessuna parte.
+                           Serve accanto ai numeri di cui sopra perché risponde a una domanda diversa:
+                           non «quanto rende» ma «fra quanto potrò dirlo». Una gamba da due trade al
+                           mese impiega dieci mesi ad accumulare i trade che la regola di ritiro
+                           pretende, quindi resta in corsa mesi occupando un posto senza che nessuno
+                           possa giudicarla — a meno che non lo si scriva qui.
+                           Assente = gamba configurata a mano (corsie 0-2): si dichiara, non si tace. *@
+                        @if (!string.IsNullOrEmpty(s.TradeFrequencyText))
+                        {
+                            <div class="small ms-3 @(s.ExpectedTradesPerMonth is null or <= 0m ? "text-warning-emphasis" : "text-muted")">
+                                ritmo: @s.TradeFrequencyText
+                                @if (!string.IsNullOrEmpty(s.ExpectedTradesSource))
+                                {
+                                    <span class="ms-1 opacity-75" title="Da dove viene il numero. È una DERIVAZIONE dall'holdout del run, non una misura del forward test: i trade davvero chiusi sono quelli nella tabella qui sotto.">(@s.ExpectedTradesSource)</span>
+                                }
+                            </div>
+                        }
                     </div>
                 }
                 @if (!string.IsNullOrEmpty(story.Provenance))

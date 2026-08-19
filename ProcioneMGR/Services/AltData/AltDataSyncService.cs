@@ -25,10 +25,33 @@ public sealed class AltDataSyncService(
     SentimentSourceHealthRegistry? health = null,
     ISentimentNewsProvider? newsProvider = null) : IAltDataSyncService
 {
+    /// <summary>
+    /// [I15] Giorni di storia da cui leggere le chiavi di deduplicazione. Non e' una retention: e'
+    /// l'ampiezza entro cui un feed puo' plausibilmente ripubblicare la stessa notizia. Oltre,
+    /// l'indice unico del database resta l'unica (e sufficiente) garanzia.
+    /// </summary>
+    private const int DedupeWindowDays = 90;
+
     public async Task<int> SyncAllAsync(CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var existingKeys = (await db.AltDataPoints.Select(a => a.DedupeKey).ToListAsync(ct)).ToHashSet();
+
+        // [I15, 2026-08-19] Le chiavi si leggono su una FINESTRA, non su tutta la tabella.
+        //
+        // Questo caricamento era limitato senza saperlo: la purge teneva AltDataPoints a
+        // NewsRetentionDays, e qui si leggeva quel tanto. Dall'esenzione del corpus la tabella
+        // cresce senza tetto — e questo giro parte ogni tick del worker, per sempre. Rileggere
+        // l'intero archivio a ogni sincronizzazione sarebbe un costo che aumenta da solo.
+        //
+        // Restringere e' sicuro perche' la HashSet e' solo un'OTTIMIZZAZIONE: la garanzia contro i
+        // duplicati e' l'indice UNICO su DedupeKey (ApplicationDbContext), che resta. Un feed non
+        // ripubblica notizie di mesi fa; se lo facesse, l'inserimento verrebbe rifiutato dal
+        // database invece che scartato qui — piu' lento, mai sbagliato.
+        var dedupeWindow = DateTime.UtcNow.AddDays(-Math.Max(30, DedupeWindowDays));
+        var existingKeys = (await db.AltDataPoints
+            .Where(a => a.TimestampUtc >= dedupeWindow)
+            .Select(a => a.DedupeKey)
+            .ToListAsync(ct)).ToHashSet();
 
         // Le fetch HTTP sono indipendenti fra loro (I/O-bound): eseguirle in parallelo evita che
         // una fonte lenta/irraggiungibile ritardi in sequenza tutte le altre.

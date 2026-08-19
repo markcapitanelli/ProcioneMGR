@@ -32,18 +32,58 @@ public sealed class FleetOrchestratorWorker(
     private DateTime? _lastCarryAlertUtc;
 
     /// <summary>
-    /// [AF2b] <b>Il braccio esecutivo esiste?</b> Oggi <b>no</b>: con <c>Fleet:DryRun=false</c>
-    /// questo worker emette un warning e journalizza comunque <c>DryRun=true, Applied=false</c> —
-    /// nessun ramo avvia o ferma una corsia.
+    /// [AF2b, I12] <b>Il braccio che FERMA una corsia esiste</b> — dal 2026-08-19.
     ///
-    /// È dichiarato QUI, accanto al ramo che lo implementerà, e non dedotto altrove da
-    /// <c>Fleet:DryRun</c>, perché quel flag dice che cosa è stato <i>chiesto</i>, non che cosa il
-    /// codice sa <i>fare</i>. Una sonda che leggesse il flag direbbe «esecuzione attiva» di un
-    /// braccio inesistente: è il difetto della classe «controllo che rassicura», e la revisione
-    /// avversaria del 2026-08-18 lo ha trovato proprio così in <c>AgentStateProbe</c>.
-    /// Chi implementa AF2b cambia questa costante e la sonda dice la verità senza altre modifiche.
+    /// <para>Agisce solo sulle corsie elencate in <see cref="FleetOptions.ExecutionLanes"/> (vuota
+    /// di default), solo su corsie in Paper verificato al momento dell'azione, al più
+    /// <see cref="FleetOptions.MaxExecutionsPerTick"/> per giro, e solo su verdetti già confermati
+    /// dall'isteresi. Fermare è l'azione REVERSIBILE della coppia: la corsia resta configurata e si
+    /// riavvia con un click.</para>
     /// </summary>
-    public const bool ExecutionArmImplemented = false;
+    public const bool RetirementArmImplemented = true;
+
+    /// <summary>
+    /// [AF2b] <b>Il braccio che AVVIA una corsia non esiste ancora.</b> Le assegnazioni restano di
+    /// solo journal anche con <c>Fleet:DryRun=false</c> e la corsia in lista.
+    ///
+    /// <para>È l'ordine deciso dal proprietario il 2026-08-19: prima il ritiro, poi l'avvio.
+    /// Fermare libera una corsia e non impegna capitale; avviare mette in corsa una strategia
+    /// scelta da una macchina. Il primo si disfa con un click, il secondo ha già operato.</para>
+    ///
+    /// <para>Entrambe le costanti sono dichiarate QUI, accanto ai rami che le implementano, e non
+    /// dedotte altrove da <c>Fleet:DryRun</c>: quel flag dice che cosa è stato <i>chiesto</i>, non
+    /// che cosa il codice sa <i>fare</i>. Una sonda che leggesse il flag direbbe «esecuzione attiva»
+    /// di un braccio inesistente — il difetto della classe «controllo che rassicura», trovato
+    /// proprio così in <c>AgentStateProbe</c> dalla revisione avversaria del 2026-08-18.</para>
+    /// </summary>
+    public const bool AssignmentArmImplemented = false;
+
+    /// <summary>
+    /// [AF2b] <b>Questo ritiro si esegue davvero, e se no perché.</b> Puro e statico: la decisione e
+    /// la sua spiegazione escono dalla STESSA valutazione.
+    ///
+    /// <para>Tenerle separate — la condizione nell'<c>if</c>, il motivo ricalcolato nel ramo
+    /// <c>else</c> — è la classe di difetto già pagata quattro volte in questa ondata: due regole
+    /// per la stessa domanda divergono, e a divergere sarebbe un journal che dà una spiegazione
+    /// diversa da quella vera, nel posto dove qualcuno andrà a cercare cosa è successo.</para>
+    ///
+    /// <para>Le condizioni sono quattro e tutte necessarie: il braccio deve esistere, il dry-run
+    /// essere spento, la corsia essere <b>elencata</b> in <see cref="FleetOptions.ExecutionLanes"/>,
+    /// e il budget del tick non essere esaurito. La terza è quella che rende l'accensione graduale
+    /// invece che totale.</para>
+    /// </summary>
+    /// <returns><c>null</c> = si esegue; altrimenti il motivo del rifiuto, in italiano.</returns>
+    internal static string? WhyNotExecuted(FleetOptions opt, int laneId, int budgetLeft) =>
+        !RetirementArmImplemented ? "braccio esecutivo assente"
+        : opt.DryRun ? "dry-run"
+        : opt.ExecutionLanes.Count == 0 ? "nessuna corsia autorizzata"
+        : !opt.ExecutionLanes.Contains(laneId) ? $"corsia {laneId} non autorizzata"
+        : budgetLeft <= 0 ? "budget di esecuzione del tick esaurito"
+        : null;
+
+    /// <summary>Vero se in questo assetto l'orchestratore può eseguire qualcosa su qualche corsia.</summary>
+    internal static bool CanExecute(FleetOptions opt) =>
+        RetirementArmImplemented && !opt.DryRun && opt.ExecutionLanes.Count > 0;
 
     /// <summary>Ultimo piano deciso, per il pannello (/admin/autonomy).</summary>
     public FleetPlan? LastPlan { get; private set; }
@@ -178,14 +218,18 @@ public sealed class FleetOrchestratorWorker(
         LastPlan = plan;
         LastTickUtc = DateTime.UtcNow;
 
-        if (!opt.DryRun && !ExecutionArmImplemented)
+        if (!opt.DryRun && opt.ExecutionLanes.Count == 0)
         {
-            // AF2a: il braccio esecutivo non esiste ancora. Dirlo a voce alta batte eseguire
-            // qualcosa di non collaudato — e batte anche il silenzio.
-            logger.LogWarning("Fleet:DryRun=false ma l'esecuzione delle azioni arriva con AF2b: questo tick resta di solo journal.");
+            // Dirlo a voce alta batte il silenzio: chi ha spento il dry-run si aspetta che qualcosa
+            // succeda, e senza corsie autorizzate non succede — per progetto, non per guasto.
+            logger.LogWarning("Fleet:DryRun=false ma Fleet:ExecutionLanes è VUOTA: nessuna corsia autorizzata, il tick resta di solo journal.");
         }
 
         var confirmedRetires = ApplyRetireHysteresis(plan, Math.Max(1, opt.RetireConfirmTicks));
+
+        // [AF2b] Il budget di esecuzione del giro: una corsia per volta, per poter distinguere una
+        // decisione giusta da un guasto del lettore di stato.
+        var executionBudget = Math.Max(1, opt.MaxExecutionsPerTick);
 
         foreach (var action in plan.Actions)
         {
@@ -203,12 +247,20 @@ public sealed class FleetOrchestratorWorker(
                     break;
 
                 case StopAndFreeLane retire when confirmedRetires.Contains(retire.LaneId):
-                    await JournalAsync(new OrchestratorDecision
+                    if (WhyNotExecuted(opt, retire.LaneId, executionBudget) is { } perche)
                     {
-                        AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = retire.LaneId,
-                        Reason = retire.Reason, DryRun = true, Applied = false,
-                    }, ct);
-                    logger.LogWarning("[DRY-RUN] Ritirerei la corsia {Lane}: {Reason}", retire.LaneId, retire.Reason);
+                        await JournalAsync(new OrchestratorDecision
+                        {
+                            AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = retire.LaneId,
+                            Reason = $"[{perche}] {retire.Reason}", DryRun = true, Applied = false,
+                        }, ct);
+                        logger.LogWarning("[{Perche}] Ritirerei la corsia {Lane}: {Reason}", perche, retire.LaneId, retire.Reason);
+                    }
+                    else
+                    {
+                        executionBudget--;
+                        await ExecuteRetireAsync(retire, ct);
+                    }
                     break;
 
                 case StopAndFreeLane pending:
@@ -253,6 +305,70 @@ public sealed class FleetOrchestratorWorker(
         }
 
         await WatchCarryAsync(ct);
+    }
+
+    /// <summary>
+    /// [AF2b] <b>Ferma davvero una corsia.</b> L'unica azione che questo worker esegue.
+    ///
+    /// <para><b>La modalità si rilegge ADESSO, dal motore.</b> Il piano è stato deciso su una
+    /// fotografia che può avere minuti: se nel frattempo la corsia è passata a Testnet o Live —
+    /// per una promozione, o per una mano umana — fermarla sarebbe l'orchestratore che tocca una
+    /// corsia che non gli appartiene. Fail-closed: modalità non leggibile ⇒ non si tocca. È la
+    /// stessa disciplina del lettore di stato, che marca intoccabile ciò che non riesce a leggere,
+    /// applicata nel punto dove le conseguenze sono reali.</para>
+    ///
+    /// <para>Il journal riceve l'esito VERO: <c>Applied=true</c> solo se lo stop è andato a buon
+    /// fine, altrimenti la riga porta l'errore. Un journal che dichiara applicato ciò che è fallito
+    /// è la classe di difetto «controllo che rassicura» nel posto peggiore — quello dove qualcuno
+    /// andrà a cercare cosa è successo.</para>
+    /// </summary>
+    private async Task ExecuteRetireAsync(StopAndFreeLane retire, CancellationToken ct)
+    {
+        string? error = null;
+        try
+        {
+            var engine = serviceProvider.GetRequiredKeyedService<Trading.ITradingEngine>(retire.LaneId);
+            var status = await engine.GetStatusAsync(ct);
+
+            if (status.Mode != Trading.TradingMode.Paper)
+            {
+                error = $"corsia in {status.Mode}, non Paper: l'orchestratore non ferma corsie che non governa";
+            }
+            else if (!status.IsRunning)
+            {
+                error = "corsia già ferma: niente da fare";
+            }
+            else
+            {
+                await engine.StopAsync(ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+
+        await JournalAsync(new OrchestratorDecision
+        {
+            AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = retire.LaneId,
+            Reason = retire.Reason, DryRun = false, Applied = error is null, Error = error,
+        }, ct);
+
+        if (error is null)
+        {
+            logger.LogWarning("Corsia {Lane} FERMATA dall'orchestratore: {Reason}", retire.LaneId, retire.Reason);
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(NotificationSeverity.Warning,
+                    $"Corsia {retire.LaneId} ritirata dall'orchestratore",
+                    $"{retire.Reason} La corsia resta CONFIGURATA: si riavvia con un click da /trading.", ct);
+            }
+        }
+        else
+        {
+            logger.LogWarning("Ritiro della corsia {Lane} NON eseguito ({Error}): {Reason}", retire.LaneId, error, retire.Reason);
+        }
     }
 
     /// <summary>

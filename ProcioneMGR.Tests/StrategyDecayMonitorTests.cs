@@ -297,4 +297,125 @@ public class StrategyDecayMonitorTests
 
         Assert.Equal(20, report.TradeCount); // le 30 di "other-strat" non devono contaminare il conteggio
     }
+
+    // --- [I13b] Il verdetto di misurabilità: il gate che può chiudere il filone ------------------
+
+    private static DecayReport Rep(string id, int trades, bool measurable) =>
+        new() { StrategyId = id, DisplayName = id, TradeCount = trades, IsMeasurable = measurable };
+
+    /// <summary>
+    /// <b>Il caso che al 2026-08-19 era vero, e che chiude il punto (c) del filone.</b> Le corsie di
+    /// flotta 3-7 avevano da uno a sei trade sul simbolo attuale: con «≥20 trade sul simbolo
+    /// attuale» nessuna gamba è misurabile, quindi il confronto realizzato-vs-atteso non significa
+    /// niente e il freno automatico per gamba <b>non si fa</b>.
+    ///
+    /// <para>Misurare prima di agire vuol dire anche accettare che la misura dica di non agire: un
+    /// pannello che mostrasse comunque «Sharpe realizzato 0,00 vs atteso 1,20 ⇒ ALERT» sarebbe la
+    /// classe «controllo che rassicura» al contrario — allarma su un numero che non esiste.</para>
+    /// </summary>
+    [Fact]
+    public void NessunaGambaMisurabile_IlVerdettoLoDiceEIlFreneNonSiFa()
+    {
+        var r = DecayMeasurability.Evaluate(
+            [Rep("a", 1, false), Rep("b", 0, false)],
+            new Dictionary<string, decimal?> { ["a"] = 6m, ["b"] = 6m },
+            requiredTrades: 20);
+
+        Assert.True(r.NothingMeasurable);
+        Assert.Equal(0, r.Measurable);
+        Assert.Contains("NESSUNA misura è interpretabile", r.Verdict, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>«Non misurabile» senza una data è un'informazione a metà.</b> A 6 trade/mese e 1 già
+    /// fatto, i 19 mancanti arrivano in ~3,2 mesi: è il numero che trasforma «non ancora» in una
+    /// scadenza, e che a volte rivela che quella scadenza non arriverà mai.
+    /// </summary>
+    [Fact]
+    public void IlVerdettoDiceQuantoManca_NonSoloCheManca()
+    {
+        var r = DecayMeasurability.Evaluate(
+            [Rep("a", 1, false)],
+            new Dictionary<string, decimal?> { ["a"] = 6m },
+            requiredTrades: 20);
+
+        // [CI 2026-08-19] Il numero si formatta con la CULTURA DELL'HOST, e l'app non ne fissa
+        // nessuna: sulla macchina di sviluppo (it-IT) esce «13,8», sui runner e nei pod Linux
+        // «13.8». Inchiodare la forma italiana faceva passare il test qui e fallire in CI —
+        // e il test non stava provando la lingua, stava provando il NUMERO.
+        // Si costruisce quindi l'atteso con lo STESSO formato del codice sotto test.
+        // 19 trade mancanti a 6/mese = 3,2 mesi (MonthsToVerdict arrotonda a un decimale).
+        var mesiMancanti = ProcioneMGR.Services.Fleet.TradeFrequency.MonthsToVerdict(6m, 19)!.Value;
+        Assert.Contains($"~{mesiMancanti:0.#} mesi", r.Verdict, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Senza ritmo dichiarato (gambe configurate a mano, corsie 0-2) il tempo-al-verdetto non è
+    /// derivabile, e il verdetto lo <b>dice</b> invece di inventare uno zero o tacere.
+    /// </summary>
+    [Fact]
+    public void SenzaRitmoDichiarato_IlVerdettoDichiaraLIndeterminatezza()
+    {
+        var r = DecayMeasurability.Evaluate(
+            [Rep("a", 3, false)],
+            new Dictionary<string, decimal?> { ["a"] = null },
+            requiredTrades: 20);
+
+        Assert.Contains("non è derivabile", r.Verdict, StringComparison.Ordinal);
+    }
+
+    /// <summary>Il verso positivo: tutte misurabili ⇒ il confronto è interpretabile e lo si dice.</summary>
+    [Fact]
+    public void TutteMisurabili_IlConfrontoEInterpretabile()
+    {
+        var r = DecayMeasurability.Evaluate(
+            [Rep("a", 25, true), Rep("b", 40, true)],
+            new Dictionary<string, decimal?> { ["a"] = 30m, ["b"] = 30m },
+            requiredTrades: 20);
+
+        Assert.False(r.NothingMeasurable);
+        Assert.Equal(2, r.Measurable);
+        Assert.Contains("interpretabile", r.Verdict, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Nessuna gamba: <c>NothingMeasurable</c> resta FALSO. «Non c'è niente da misurare» e «niente
+    /// è misurabile» sono due stati diversi, e confonderli farebbe apparire un allarme su una
+    /// corsia vuota.
+    /// </summary>
+    [Fact]
+    public void NessunaGamba_NonEUnFallimentoDiMisura()
+    {
+        var r = DecayMeasurability.Evaluate([], new Dictionary<string, decimal?>(), 20);
+
+        Assert.False(r.NothingMeasurable);
+        Assert.Equal(0, r.Total);
+    }
+
+    /// <summary>
+    /// [I13b] Il report dichiara la propria misurabilità, e la dichiara <b>coerente</b> con la
+    /// finestra: sotto soglia = non misurabile, e lo <c>StatusMessage</c> lo dice a parole. Due
+    /// risposte alla stessa domanda — un flag e un messaggio — che divergessero sarebbero il
+    /// difetto già pagato quattro volte in questa ondata.
+    /// </summary>
+    [Theory]
+    [InlineData(19, false)]
+    [InlineData(20, true)]
+    public void IlReportDichiaraLaPropriaMisurabilita(int trades, bool measurable)
+    {
+        var strategy = new EnsembleStrategy { StrategyId = "s", ExpectedSharpe = 1m };
+        var closed = Enumerable.Range(0, trades)
+            .Select(i => new TradeRecord
+            {
+                StrategyId = "s", Symbol = "ADA/USDT",
+                ClosedAtUtc = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc).AddHours(i * 4),
+                Pnl = 1m, EntryPrice = 100m, Quantity = 1m,
+            })
+            .ToList();
+
+        var report = new StrategyDecayMonitor().Analyze(strategy, closed, "4h");
+
+        Assert.Equal(measurable, report.IsMeasurable);
+        Assert.Equal(measurable, !report.StatusMessage.Contains("insufficienti", StringComparison.Ordinal));
+    }
 }

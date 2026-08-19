@@ -99,6 +99,12 @@ public sealed class GreyDeployer(
             return new(false, $"Bracket SL/TP non derivabile per {symbol} {timeframe} (dati insufficienti): un forward test senza protezioni non si schiera da un click.");
         }
 
+        // [I11] La frequenza ATTESA, derivata dalla stessa finestra di holdout che il lettore della
+        // flotta usa per candidare, e scritta SULLA GAMBA: fino a oggi questo numero moriva al
+        // momento dello schieramento, e da lì in poi nessuno sapeva più quanti trade quella gamba
+        // dovesse fare. È il denominatore che il ritiro per inedia leggerà.
+        var (attesiAlMese, fonteAttesi) = await HoldoutWindow.ForCandidateAsync(dbFactory, runId, candidate.HoldoutTrades, ct);
+
         // --- Scrittura della configurazione (solo configurazione: l'avvio è il passo dopo).
         var manager = serviceProvider.GetRequiredKeyedService<IEnsembleManager>(laneId);
         var cfg = await manager.GetConfigurationAsync(ct);
@@ -119,6 +125,10 @@ public sealed class GreyDeployer(
                 ExpectedProfitFactor = candidate.HoldoutProfitFactor != 0m ? candidate.HoldoutProfitFactor : null,
                 ExpectedMaxDrawdown = candidate.HoldoutMaxDrawdown != 0m ? candidate.HoldoutMaxDrawdown : null,
                 SourceVerdict = "Grey", // [T1] stessa etichetta della pipeline: il badge non dipende dal percorso di schieramento
+                // [I11] Il denominatore, e la sua provenienza in chiaro: una derivazione dichiarata,
+                // non una misura. null = non derivabile, e in quel caso nessun consumatore agisce.
+                ExpectedTradesPerMonth = attesiAlMese,
+                ExpectedTradesSource = fonteAttesi,
             },
         ];
         await manager.UpdateConfigurationAsync(cfg, ct);

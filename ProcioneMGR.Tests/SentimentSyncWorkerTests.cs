@@ -123,11 +123,22 @@ public class SentimentSyncWorkerTests : IAsyncDisposable
         // il backtest — il vecchio test sanciva la sua CANCELLAZIONE: era il bug, non il contratto)
         // e BinanceLiquidations (F4: non ricostruibile a posteriori). Le metriche-cache (OI ecc.)
         // continuano a essere potate.
+        //
+        // [I15, 2026-08-19] STESSO ROVESCIAMENTO sulle notizie, e per la stessa ragione: una notizia
+        // già valutata da uno scorer ha un costo di produzione e non si riscarica. Anche qui il
+        // vecchio assert sanciva la cancellazione — «vecchia» moriva e basta — ed era il bug.
+        // L'esenzione è MIRATA: le notizie SENZA punteggio restano potabili, e il test lo verifica
+        // in ENTRAMBI i versi, perché un'esenzione totale farebbe crescere la tabella senza limite
+        // per conservare righe che nessun consumatore guarda.
         var (worker, _, dbFactory, _) = await BuildAsync(new SentimentOptions { NewsRetentionDays = 30, MetricRetentionDays = 60 });
 
         await using (var db = await dbFactory.CreateDbContextAsync())
         {
-            db.AltDataPoints.Add(new AltDataPoint { TimestampUtc = DateTime.UtcNow.AddDays(-40), Source = "X", Title = "vecchia", DedupeKey = "X:vecchia" });
+            db.AltDataPoints.Add(new AltDataPoint { TimestampUtc = DateTime.UtcNow.AddDays(-40), Source = "X", Title = "vecchia-grezza", DedupeKey = "X:vecchia-grezza" });
+            db.AltDataPoints.Add(new AltDataPoint { TimestampUtc = DateTime.UtcNow.AddDays(-40), Source = "X", Title = "vecchia-scorata", DedupeKey = "X:vecchia-scorata", SentimentScore = 0.42m });
+            // Il caso insidioso: punteggio ZERO non è punteggio ASSENTE. Una lettura sbagliata del
+            // predicato (falsy invece di null) cancellerebbe proprio le notizie neutre.
+            db.AltDataPoints.Add(new AltDataPoint { TimestampUtc = DateTime.UtcNow.AddDays(-40), Source = "X", Title = "vecchia-neutra", DedupeKey = "X:vecchia-neutra", SentimentScore = 0m });
             db.AltDataPoints.Add(new AltDataPoint { TimestampUtc = DateTime.UtcNow.AddDays(-5), Source = "X", Title = "recente", DedupeKey = "X:recente" });
             db.SentimentMetricPoints.Add(new SentimentMetricPoint { TimestampUtc = DateTime.UtcNow.AddDays(-90), Source = SentimentMetricSources.BinanceFutures, Metric = SentimentMetrics.OpenInterest, Symbol = "BTC", Value = 1m });
             db.SentimentMetricPoints.Add(new SentimentMetricPoint { TimestampUtc = DateTime.UtcNow.AddDays(-90), Source = SentimentMetricSources.BinanceFutures, Metric = SentimentMetrics.FundingRate, Symbol = "BTC", Value = 0.01m });
@@ -139,7 +150,12 @@ public class SentimentSyncWorkerTests : IAsyncDisposable
         await worker.TickAsync(CancellationToken.None);
 
         await using var check = await dbFactory.CreateDbContextAsync();
-        Assert.False(await check.AltDataPoints.AnyAsync(a => a.Title == "vecchia"));   // oltre retention
+        // [I15] La notizia vecchia SENZA punteggio muore: l'esenzione è mirata, non totale.
+        Assert.False(await check.AltDataPoints.AnyAsync(a => a.Title == "vecchia-grezza"));
+        // ...quella SCORATA sopravvive, per quanto vecchia: è patrimonio.
+        Assert.True(await check.AltDataPoints.AnyAsync(a => a.Title == "vecchia-scorata"));
+        // ...e il punteggio 0 conta come punteggio.
+        Assert.True(await check.AltDataPoints.AnyAsync(a => a.Title == "vecchia-neutra"));
         Assert.True(await check.AltDataPoints.AnyAsync(a => a.Title == "recente"));
         // La metrica-cache (OI) muore oltre la retention...
         Assert.False(await check.SentimentMetricPoints.AnyAsync(p => p.Metric == SentimentMetrics.OpenInterest && p.TimestampUtc < DateTime.UtcNow.AddDays(-80)));

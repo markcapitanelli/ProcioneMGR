@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProcioneMGR.Data;
@@ -11,9 +12,11 @@ using ProcioneMGR.Data;
 namespace ProcioneMGR.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260819160643_AddPairCandidates")]
+    partial class AddPairCandidates
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1310,83 +1313,6 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                         .HasDatabaseName("IX_PairCandidates_Run_Coppia");
 
                     b.ToTable("PairCandidates", (string)null);
-                });
-
-            modelBuilder.Entity("ProcioneMGR.Services.PairsTrading.PairSpreadWindow", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<double>("AdfStatistic")
-                        .HasColumnType("double precision");
-
-                    b.Property<DateTime>("ComputedAtUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<double>("CriticalValue")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("Estimator")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
-                    b.Property<double>("HedgeRatio")
-                        .HasColumnType("double precision");
-
-                    b.Property<bool>("IsStationaryWindow")
-                        .HasColumnType("boolean");
-
-                    b.Property<double>("LastZScore")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("PairKeyValue")
-                        .IsRequired()
-                        .HasMaxLength(96)
-                        .HasColumnType("character varying(96)");
-
-                    b.Property<double>("SpreadMean")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("SpreadStdDev")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("SymbolX")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("SymbolY")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("Timeframe")
-                        .IsRequired()
-                        .HasMaxLength(8)
-                        .HasColumnType("character varying(8)");
-
-                    b.Property<DateTime>("WindowEndUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<int>("WindowSize")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("WindowStartUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PairKeyValue", "Estimator", "WindowEndUtc");
-
-                    b.HasIndex("PairKeyValue", "Estimator", "WindowSize", "WindowEndUtc")
-                        .IsUnique()
-                        .HasDatabaseName("IX_PairSpreadWindows_Serie_Finestra");
-
-                    b.ToTable("PairSpreadWindows", (string)null);
                 });
 
             modelBuilder.Entity("ProcioneMGR.Services.Pipeline.PipelineArtifact", b =>
