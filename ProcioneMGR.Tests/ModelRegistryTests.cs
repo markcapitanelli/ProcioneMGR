@@ -447,10 +447,13 @@ public class ModelRegistryTests : IAsyncDisposable
         var user = await SeedUserAsync(f);
         var champ = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.9, ModelStage.Champion);
         var registry = NewRegistry(f);
+        // [I6] Senza candele recenti il check è dichiarato SALTATO e il ciclo chiuso non scatta:
+        // questa prova riguarda il RITIRO, quindi parte da un check che può davvero avvenire.
+        await DriftTestData.SeedRecentCandlesAsync(f, "BTCUSDT");
 
         var worker = new FeatureDriftWorker(
             f, new AlertMonitor(), registry,
-            new DriftMonitorOptions { Enabled = true, RetireChampionOnAlert = true, MinAlertsToRetire = 1 }.AsMonitor(),
+            new DriftMonitorOptions { Enabled = true, RetireChampionOnAlert = true, MinAlertsToRetire = 1, RecentCandles = DriftTestData.MinimumCandles }.AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance);
 
         await worker.TickAsync(CancellationToken.None);

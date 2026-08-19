@@ -974,3 +974,339 @@ rossa alla prossima occorrenza.
 > L'allarme resta acceso di default (è la verità); per le postazioni bloccate esiste ora
 > l'interruttore «Sorveglia liquidazioni» che declassa la riga a «NON SORVEGLIATA» dichiarata —
 > mai un OK finto. Home verificata con l'alert rosso in entrambe le configurazioni.
+
+---
+
+## Filone I — Integrazione onesta dei sottosistemi accesi (2026-08-18, sedicesima ondata)
+
+Nasce dalla richiesta del proprietario di validare e integrare **sei componenti sviluppate e tenute
+scollegate o spente per configurazione**. Dettaglio, verifiche riga per riga e accettazione nel
+[PRD-INTEGRAZIONE-SOTTOSISTEMI-2026-08](PRD-INTEGRAZIONE-SOTTOSISTEMI-2026-08.md).
+
+**La validazione ha ribaltato la premessa su tre punti su sei, ed è il fatto da cui discende tutto il
+resto: quei tre non sono spenti, sono accesi e non producono nulla.** Il `false` che si ricorda vive
+in `appsettings.json.example`; il file che l'app carica davvero (repo principale, non tracciato) dice
+`Campaign:Enabled=true`, `Fleet:Enabled=true` (DryRun) con `UseCommittee=true`, `Committee:Enabled=true`.
+Misurato sul database vero: il comitato è armato da sedici giorni e **non ha mai votato** — zero righe
+con `Path='committee'`, tutte e 89 le decisioni della flotta con `VotesJson` vuoto. Non è un guasto:
+arbitra i pareggi di `Decide`, e la flotta non produce assegnazioni perché la coda è sempre vuota. A
+monte c'è l'inedia — le corsie di flotta 3-7 hanno chiuso **1 trade ciascuna o zero** in 13-15 giorni,
+contro `RetireMinTrades=20`: non saranno mai ritirabili, quindi non si libera mai una corsia.
+
+E c'è una **trappola armata**: la sezione `Drift` è *assente* dal file vivo, quindi accendendo la
+spunta dal pannello entrerebbe in vigore il default del POCO `RetireChampionOnAlert=true`. Il ciclo
+chiuso partirebbe insieme al monitor. Oggi è inerte solo perché non esiste alcun Champion: è una
+salvezza per coincidenza, non per progetto.
+
+**Quindi il debito di questi sei non è di collegamento** — la classe di difetto «regola 6» qui non
+c'è: sono tutti e sei del guscio, e in tutti e sei manopola e consumatore coincidono. **È di capacità
+di dire di no e di dichiarazione di copertura.**
+
+### Le sei descrizioni contro le sei verifiche
+
+| Punto | Come era descritto | Che cosa dice il codice del 2026-08-18 |
+|---|---|---|
+| 1 Concept drift | «scritto ma non gira; attivarlo mostra l'allarme in Home» | il worker **gira** (hosted service incondizionato, ciclo a vuoto a interruttore spento) e ha già pannello, persistenza, metrica e «Esegui ora». In Home **non c'è nulla**: `Home.razor` legge il monitor **omonimo ma diverso** (deriva dell'IC dei fattori, filone D2). Il ciclo chiuso non è «robusto ma inattivo»: è **senza soggetto** (zero Champion) |
+| 2 Controlli a caldo | «PerformanceControl e LeverageAdvisor solo in `/backtest`» | esatto — ma delle due modalità **quella nominata** (`ApplyEquityMovingAverageControl`) non ha **alcun** chiamante fuori dai test; il gemello a caldo `StrategyDecayMonitor` è **già nel motore** e misura, si ferma a un `LogWarning`. E «prima del rebalance» presuppone che il rebalance raggiunga la corsia viva: **non la raggiunge**, il motore legge la configurazione una volta sola in `StartAsync` |
+| 3 Sentiment ML | «fattore macro/sentiment reale; il rischio era look-ahead» | è **news-only** (funding e F&G non lo alimentano); il look-ahead è **risolto e testato dal 2026-07**. Il rischio vero è un altro: `AltDataPoints` è l'unica serie sentiment con una **cancellazione attiva** (180 giorni) e **senza guardiano** — la classe che il funding ha già pagato due volte. E il vocabolario copre 7 ticker: fuori da quelli il fattore è `null` su ogni barra |
+| 4 Campaign Planner | «spento» | **acceso.** Trattenuto solo dallo stato `WaitingForTrigger` della campagna. Difetto trovato leggendo: **un annullamento umano fa ripartire la rotazione entro 60s** |
+| 5 Pairs | «ottimi risultati, manca la persistenza» | la persistenza manca davvero (`PairCandidate` esiste solo come proposta in `docs/audit/`), e gli 86 artefatti `PairScreen` sono scritti dal 2026-07-02 e **mai letti**. Ma i «risultati» girano a **slippage 0** e il grafico z-score usa un estimatore **diverso** da quello dell'engine: due verità sulla stessa pagina. Verdetto misurato invariato: **0/5 sopravvissuti** |
+| 6 Comitato AI | «pronto ad assistere l'orchestratore» | **acceso e mai votato** (§sopra). Le sue proprietà di sicurezza sono vere e pinnate dai test; il problema è che **nessuno può leggere un voto** — il journal mostra `Source` e non espande `VotesJson` |
+
+### Le quattro decisioni del proprietario (2026-08-18)
+
+1. **Bersaglio**: rendere misurabile e sicuro ciò che c'è. Unica eccezione a caccia di valore: **F12**.
+2. **Flotta**: si sblocca l'esecuzione **partendo dal ritiro per inedia**, ancora in DryRun; start/stop
+   reali solo dopo che il journal mostra corsie liberate.
+3. **Champion**: confermato che non se ne promuove nessuno; le quattro funzioni inerti lo **dichiarano**
+   con un conteggio calcolato e si riabilitano da sole il giorno che cambia.
+4. **Corpus notizie**: esentato dalla purge, con la sua riga nel guardiano di profondità.
+
+### Gli item
+
+| # | Cosa | Stato | Gate / verifica |
+|---|---|---|---|
+| I1 | **Sonda di stato degli agenti** (`AgentStateProbe`): quattro stati per ognuno dei quattro agenti del guscio — `Spento`, `AccesoInerte`, `AccesoOperante`, `NonDeterminabile` — e card in cima a `/admin/autonomy`. **Due deviazioni dichiarate** (motivo nel PRD): non notifica (lo stato è una condizione, non un evento, e il budget notifiche è condiviso), e «acceso a zero soggetti» **non** è silenzio ma lo stato più insidioso dei quattro | **fatto (2026-08-18)**, 26 test · L4 da fare | ✅ **L2, il livello che conta**: soggetti in abbondanza coi gate spenti ⇒ nessun agente acceso (se fallisse, la sonda leggerebbe i dati come attività); ✅ caso-trappola: fonte muta ⇒ `NonDeterminabile`, mai `Spento` (vale per keyring e journal); ✅ lo stato reale del 18/08 ricostruito dai numeri veri, come test di regressione della premessa sbagliata; ✅ tre test di regressione sulle bugie trovate dalla revisione (sotto) |
+| I2 | **«Champion in carica: 0», calcolato**: nella card del drift, con l'avviso che l'interruttore del ritiro risulta ARMATO per il default del POCO. `null` ⇒ «non determinabile», mai `0`. Le manopole restano **modificabili apposta** (vedi sotto) | **fatto (2026-08-18)** per la card del drift; restano gli altri tre punti (union dei fattori §2.9, dual-read B4, corsie `MlChampion`) | il numero coincide con la `count(*)` sul registry — due strade, stesso numero; il giorno che passa a 1 la riga cambia **senza toccare codice** |
+
+> **La revisione avversaria della Fase 0 ha trovato tre bugie nella sonda, e un difetto mio della
+> classe che questa ondata esiste per bonificare** (2026-08-18; tabella completa nel PRD). Tre lenti
+> indipendenti coi rispettivi confutatori: 17 finding proposti, **8 sopravvissuti**, metà delle
+> gravità declassate dai confutatori. La sonda nata per dire con precisione che cosa agisce da solo
+> mentiva in tre punti, **sempre nella stessa direzione — sistema più autonomo del vero**:
+> `Fleet:DryRun=false` era letto come «esecuzione attiva» mentre AF2b non esiste (ora la capacità è
+> una costante dichiarata **accanto al ramo che la implementerà**, `ExecutionArmImplemented`); il
+> comitato coi flag a posto era «operante» proprio nello stato in cui non vota da sedici giorni (ora
+> il verdetto si misura sui **voti nel journal**, finestra dichiarata di 14 giorni); e la campagna
+> non in rotazione prometteva un wake che per le campagne in `Observing` non avviene mai.
+>
+> Il difetto mio: con zero Champion **disabilitavo** le due manopole del ritiro automatico, nella
+> stessa card in cui l'avviso dichiara che l'interruttore è ARMATO. Ragionamento invertito due volte
+> — l'unico momento utile per disarmarlo è proprio quello, e il blocco **non impediva nulla** («Salva»
+> resta attivo e `SaveAsync` serializza l'intero POCO: si sarebbe potuto persistere `true` ma non più
+> toglierlo). Un controllo che toglie il rimedio e lascia passare il rischio. Corretto: manopole
+> sempre modificabili, tutto il contributo di I2 nel testo dell'avviso.
+>
+> *Difetto pre-esistente segnalato a parte*: un modello `Retired` non è ripromuovibile dalla UI, quindi
+> un ritiro accidentale sarebbe irreversibile senza toccare il database.
+| I3 | **Il tetto di spesa AI che esiste davvero**: `TrackingEnabled` è già `true`, ma i tre limiti sono a **0** e un limite a 0 non si applica — il badge «tracking attivo» si legge come «la spesa è sorvegliata» mentre `CheckBudget` **risponde sempre sì**. Ora il pannello lo dichiara e dà i numeri per scegliere un tetto (chiamate e token di oggi, media al giorno del mese) | **fatto (2026-08-18)** | la condizione si legge da `BudgetMonitor.CurrentValue` e **non dai campi del form**: quelli sono la modifica che si sta digitando, e mostrarli come stato in vigore è la forma dei pannelli che dichiaravano applicata una config mai salvata |
+| I4 | **Il budget delle notifiche non è infinito**: `MaxPerHour=20` è **condiviso** fra otto sorveglianti, e le 79 riproposte grigie di 15 giorni ci sono già dentro — il primo che sbaglia soglia zittisce gli altri. `NotificationRateLimitPressure`: quanti nell'ultima ora, quanti ne restano prima del silenzio, quanti soppressi **in attesa** e quanti **da questo avvio** | **fatto (2026-08-18)**, 7 test · deviazione dichiarata (sotto) | ✅ leggere la spia **non consuma slot**; ✅ la finestra scorre anche senza nuovi invii (altrimenti mostrerebbe come occupati slot liberi da un'ora); ✅ il totale **non si azzera mai** — senza, un'occhiata un minuto dopo la tempesta direbbe che non è successo niente |
+| I5 | **F7 ridotto all'osso**: `MetricsCollector` aveva una lista **hardcoded** di tre istogrammi ⇒ un istogramma nuovo veniva scartato in silenzio e ogni gate nella forma «il numero compare in `/metrics`» era insoddisfacibile per costruzione. Scoperta dinamica; i tre attesi restano pre-registrati anche a zero misure | **fatto (2026-08-18)**, 4 test | ✅ **la verifica che contava**: i due test che asseriscono il comportamento nuovo sono stati eseguiti contro il codice precedente e **falliscono**, gli altri due passano in entrambi — una verifica che non può fallire non è una verifica. F7 per intero resta il suo item |
+
+> **Deviazione dichiarata su I4**: la pressione del rate-limit resta **sul guscio** e non passa dal
+> canale gRPC. Il contratto porta cinque campi e non questo: mapparlo comunque farebbe leggere
+> **«0 soppresse» da qualunque motore**, cioè la rassicurazione falsa che l'ondata bonifica. Il
+> pannello **dichiara il buco** al posto dello zero — ed è giusto anche nel merito, perché tutti e
+> otto i sorveglianti che si contendono il tetto vivono nel guscio.
+| I6 | **Drift acceso in sola segnalazione, capace di fallire, visibile in Home**: (a) strumento del costo *prima* dell'interruttore; (b) `SkipReason` — finestra sovrapposta al training, candele insufficienti e modello senza feature producevano tutti `Overall=None`, cioè il verdetto rassicurante a prescindere; (c) `Enabled=true` **e `RetireChampionOnAlert=false` scritti esplicitamente** (chiude la trappola); (d) `FeatureDriftSnapshot` sul pattern D2, ricostruito all'avvio, con l'etichetta che distingue le due derive; (e) le soglie PSI/KS/Page-Hinkley in configurazione e in pannello — oggi si cambiano **solo ricompilando** | **(a), (b), (d) ed (e) fatti (2026-08-18)**, 27 test + migrazione additiva `AddDriftSkipReason` · **resta solo (c), che è operativo** | ✅ i tre rami del salto, ciascuno col suo caso; ✅ **il controllo nella direzione opposta**: un modello senza data di training NON fa saltare il check — un rifiuto costruito sull'ignoranza è un guasto quanto un verde falso, e un monitor che si rifiuta di guardare è inutile quanto uno che dice sempre bene; ✅ la UI **legge** la colonna: una riga saltata perde il badge di gravità invece di mostrarlo accanto al motivo (accanto si leggerebbe comunque il verde) |
+
+> **(d) l'allarme che ti viene incontro, sul pattern D2 invece che reinventato.**
+> `FeatureDriftSnapshot` è il gemello deliberato di `FactorDriftSnapshot`: scritto a fine tick,
+> **ricostruito all'avvio** dall'ultimo tick registrato — e l'idratazione non è una cache, è la stessa
+> ragione che vinse in D2.b: il guscio si riavvia di continuo, e senza di essa l'allarme mancherebbe
+> proprio nei minuti in cui uno guarda la Home. Si prende **un solo tick**, il più recente, e non «le
+> ultime N righe»: righe di tick diversi mescolate darebbero una fotografia che non è mai esistita,
+> con lo stesso modello contato due volte a stati diversi (è la lezione delle finestre sovrapposte).
+> In Home è un blocco **indipendente**, non un ramo `else` di quello dei fattori: le due derive
+> possono allarmare insieme, e incatenarle nasconderebbe la seconda ogni volta che scatta la prima —
+> difetto che ho introdotto scrivendolo e corretto rileggendolo. Le etichette sono esplicite perché
+> i due monitor sono **omonimi e diversi**, e due verdetti indistinguibili sullo stesso schermo sono
+> peggio di un verdetto solo. ✅ Il caso-trappola: un modello saltato ha `Overall=None` per
+> costruzione, quindi il filtro degli allarmi guarda `IsVerdict` e non solo la gravità; ✅ la
+> copertura dichiara **quanti sono stati saltati**, perché «0 allarmi su 53» si legge come via libera
+> anche quando 50 non sono stati guardati.
+>
+> **(e) chiudeva una violazione del mandato, non un miglioramento.** Le soglie dei tre rilevatori
+> (PSI 0,2/0,25 · KS p<0,05/0,01 · Page-Hinkley 25/50) vivevano **solo** nei default del codice: si
+> cambiavano **ricompilando**, senza chiave e senza pannello. Ora sono in `Drift:Thresholds` con la
+> loro card, e con la regola server-side che conta: **l'alert non può essere più permissivo del
+> warning** — un livello di allarme che non può scattare è peggio di un livello assente, perché
+> *sembra* esserci (è la classe dell'avviso EEA/MiCA con la condizione «non connesso», che lo
+> escludeva dall'unico caso per cui era stato scritto). Per KS «più severo» significa p-value più
+> **piccolo**, al contrario delle altre due famiglie: è l'inversione che si sbaglia più facilmente, e
+> ha il suo test. ✅ L2: senza configurazione le soglie sono **esattamente** quelle di prima, campo
+> per campo — «configurabile» non doveva significare «cambiate».
+>
+> **Perché (c) non è stato fatto insieme al resto.** Accendere `Drift:Enabled` è un'azione
+> **operativa** sul processo che gira, non una riga di codice: va fatta guardando il costo che (a)
+> ora misura, e insieme alla scrittura esplicita di `RetireChampionOnAlert=false` nel file vivo —
+> che è l'unico modo di chiudere la trappola della sezione assente. Va nella sessione di livello 4,
+> non in un commit.
+>
+> **La seconda revisione avversaria ha trovato IL QUARTO MODO DI DIRE VERDE — dentro la correzione
+> che ne eliminava tre** (2026-08-18, tre lenti + confutazione: 7 finding sopravvissuti su 17).
+> I tre rilevatori restituiscono `None` **anche quando non hanno potuto misurare**: se le osservazioni
+> valide — dopo il warm-up del fattore e dopo lo scarto dei null — sono sotto `MinObservations`,
+> rispondono «dati insufficienti». Il worker vedeva `reports.Count > 0` e persisteva un **giudizio
+> verde costruito su rilevatori che avevano dichiarato di non aver guardato**. Il dato per
+> distinguerli era già lì e inutilizzato: `ReferenceCount` e `CurrentCount` sul report.
+>
+> È **dormiente con la configurazione di fabbrica** e si apre alla prima taratura delle soglie che
+> (e) ha appena reso amministrabili: basta alzare «Osservazioni min» sopra le osservazioni
+> disponibili perché ogni riga diventi un falso «pulito». Il confutatore ha smontato tre dei quattro
+> scenari proposti e ne ha trovato uno raggiungibile davvero — attraverso le manopole nuove.
+> Corretto con `IsMeasured`, e il **denominatore del verdetto** sono ora le feature davvero misurate:
+> «0 su 12» quando 9 non erano misurabili è un rapporto che rassicura contando ciò che nessuno ha
+> guardato. Una regola resa più corretta strada facendo: **un allarme è una misura per definizione**,
+> perché i rilevatori rispondono `None` quando non guardano — quindi un Warning o un Alert può venire
+> solo da un confronto eseguito.
+>
+> **E `/ensemble` giudicava con un metro diverso.** `EvaluateDriftAsync` chiamava il monitor senza
+> soglie (quindi coi default di fabbrica) mentre il worker usa quelle configurate, e non applicava
+> affatto la regola del salto: due superfici, due verdetti sullo stesso modello. Peggio, teneva una
+> **propria costante** per la finestra recente (200) accanto a `Drift:RecentCandles` — due definizioni
+> della stessa finestra, che da amministrabili potevano divergere fino a un rifiuto permanente
+> inspiegabile. Ora la pagina passa da `opt.Thresholds`, riusa `DescribeSkip` e `IsMeasured`, e legge
+> la finestra dalla configurazione. *Trovato dal test che si è rotto, non dall'analisi.*
+>
+> Altri tre finding minori corretti: il doc-comment di `DriftCoverage` finito sul metodo sbagliato
+> (e proprio sulla coppia che la modifica dichiara di voler tenere distinguibile); il contatore
+> `candles_read` che ne contava metà — rinominato `recent_candles_read`, perché il termine dominante
+> è la rilettura del periodo di training e il costo totale sta in `tick_ms`; e un test il cui
+> commento dichiarava di verificare la lettura a caldo del tetto senza mai cambiarlo, cioè una falsa
+> assicurazione scritta nel codice.
+>
+> **I quattro test che si sono rotti erano un'informazione, non un fastidio.** La guardia nuova ha
+> fatto cadere quattro prove d'integrazione del worker, e la ragione è che montavano un monitor finto
+> e **zero candele**: stavano esercitando il percorso di persistenza su un check che nella realtà non
+> sarebbe mai avvenuto. La correzione giusta era rendere le fixture realistiche (semina di candele
+> recenti, `DriftTestData`), non indebolire la guardia — se avessi allentato la soglia per far
+> passare i test avrei riportato dentro esattamente il verde falso che l'item rimuove.
+>
+> **E hanno fatto emergere un difetto di disegno mio**: controllavo `FactorsJson` nel worker per
+> decidere «il modello ha feature valutabili?», mentre a quella domanda risponde già il monitor.
+> Erano **due regole sulla stessa domanda**, che possono divergere sullo stesso modello — il difetto
+> già pagato in D2 e con `SeriesFreshness`. Ora il caso si dichiara **dopo** la valutazione, da un
+> report vuoto: una regola sola, e sta dove vive la conoscenza.
+>
+> **Trappola trovata costruendo (b), e vale per chiunque tocchi lo schema da un worktree**:
+> `dotnet ef migrations add` ha generato una migrazione che oltre alla colonna voluta conteneva
+> `CREATE TABLE ResearchCandidates` e `AddColumn LastCandleUtc` — **due migrazioni già esistenti e
+> già applicate al database vero**: applicarla sarebbe fallita su «relation already exists». La causa
+> non è EF: `dotnet build` dell'app **non ricostruisce** il progetto delle migrazioni (è il disegno
+> anti-ciclo del migrate-on-startup), quindi in un worktree la sua DLL resta ferma alla data di
+> creazione del worktree — qui il 5 agosto, contro migrazioni del 14 e del 17 — ed EF diffa contro
+> *quello* snapshot. Controprova rapida: se `git diff` sullo snapshot mostra solo la tua modifica
+> mentre il `Up()` ne contiene altre, la migrazione è stata generata contro un assembly vecchio.
+> Rimedio: costruire esplicitamente `ProcioneMGR.Migrations.Postgres` e rigenerare con `--no-build`.
+| I7 | **Un annullamento umano è un ordine**: `Cancelled` distinto da `Failed`, campagna **in pausa** (`PausedUntilUtc`, migrazione additiva) invece della rotazione che riparte entro 60s. E il percorso campagna **rispetta** `AutoReapply:Enabled`, che prima scavalcava | **fatto (2026-08-19)**, 5 test | ✅ annullato ⇒ pausa e **nessun run** al tick dopo, config marcata `Cancelled` e non `Failed`; ✅ **controllo sul rumore**: pausa a 0 ⇒ sequenza storica identica, e `Failed` non mette in pausa (senza, «la pausa funziona» sarebbe soddisfatto da un planner che non riparte mai); ✅ ri-applica spenta ⇒ l'applier **non viene mai invocato** e i sopravvissuti restano registrati, ri-applica accesa ⇒ percorso di sempre |
+
+> **La decisione presa sulla domanda §7.1 del PRD**: il percorso campagna **rispetta**
+> `AutoReapply:Enabled`. Era l'ipotesi dichiarata, ed è quella implementata — un interruttore che
+> chiude una porta e ne lascia aperta un'altra è la stessa forma dei pannelli che scrivevano sul
+> processo sbagliato, e qui la porta aperta **riscrive corsie**. I sopravvissuti non si perdono:
+> restano registrati e notificati per un click umano. Reversibile con `Campaign:RespectAutoReapplyGate`.
+| I8 | **Rendere leggibile il silenzio della flotta**: **(a)** i quattro numeri che lo spiegano (`FleetOrchestrator.Explain`), contati con gli **stessi predicati** della decisione — estratti e condivisi, non ricopiati; **(b)** `Source='default'` disambiguato in tre cause; **(c)** `VotesJson` espandibile nel journal, col JSON illeggibile **dichiarato** invece che nascosto; **(d)** «Prova il comitato» | **fatto (2026-08-19)**, 11 test · (d) «Prova il comitato» incluso | ✅ lo **stato reale del 18/08** ricostruito: 0 pass in coda, grigi, 0 corsie libere, 5 sotto governo — e la ragione lo nomina; ✅ il complemento (2 candidati + 1 corsia libera ⇒ il comitato **può** essere interrogato), senza il quale «non può» sarebbe soddisfatto da una diagnosi che dice sempre di no; ✅ le corsie intoccabili non contano come sotto governo; ✅ **le tre cause di «default» restano tutte distinguibili** — se due collassassero il difetto tornerebbe in forma ridotta |
+
+> **La causa del silenzio, in una riga**: un menù — e quindi una domanda per il comitato — nasce
+> **solo** con ≥2 candidati «pass» in coda **e** una corsia libera. Con la coda sempre vuota non c'è
+> pareggio, quindi nessuna domanda. **Un comitato acceso che non vota non è guasto: non gli si sta
+> chiedendo nulla** — ed è la frase che sedici giorni di righe identiche non dicevano. Sul `default`
+> la distinzione che conta è fra «ha deliberato e la maggioranza non si è formata» e «non ha
+> funzionato»: nel primo caso il default è la risposta, nel secondo è un ripiego su un guasto.
+>
+> I tre predicati (corsie di flotta, coda di assegnazione, corsie libere) sono stati **estratti da
+> `Decide` e condivisi** con `Explain`, non ricopiati: due definizioni di «coda» darebbero un
+> pannello che spiega un silenzio diverso da quello vero — il difetto di D2 e `SeriesFreshness` nel
+> posto peggiore per ripeterlo.
+| I9 | **Sentiment: lo strumento misura ciò che il modello vede** — (b) il pannello IC smette di contare come `0` le notizie che la via ML **esclude**; (c) pavimento di numerosità (`MinObservations`) nella selezione per IC, con la manopola in `/feature-selection` | **fatto (2026-08-19)**, 4 test · (a) copertura per simbolo inclusa | ✅ L2: `MinObservations=0` ⇒ selezione **identica** a prima; ✅ un fattore quasi sempre nullo entra col pavimento spento ed **esce** quando sale — se non cambiasse nulla la manopola sarebbe inerte; ✅ il controllo opposto: un fattore denso **sopravvive** al pavimento (un filtro che scarta tutto è inutile quanto uno che non scarta nulla); ✅ il pavimento **non nasconde** i candidati dalla classifica, altrimenti l'esclusione diventerebbe invisibile |
+
+> **(b) era una doppia verità della stessa famiglia dei pairs.** Il pannello mappava le notizie con
+> `SentimentScore ?? 0m` — cioè **inventava un punteggio neutro** per qualcosa che nessuno ha
+> valutato — mentre `SentimentNewsProvider`, che alimenta il fattore quando lo usa un modello,
+> filtra `SentimentScore != null`. Le due strade misuravano **fattori diversi sulla stessa serie**:
+> il pannello dice se il sentiment informa, e lo diceva su un fattore che il modello non vedrà mai.
+> È anche la regola già scritta per lo scorer LLM nella Fase B — *un elemento non scorabile si
+> SALTA, mai uno zero inventato*: uno zero non è «neutro», è «non lo so» travestito. Ora le escluse
+> si contano e si dichiarano.
+>
+> **(c) chiude un modo di premiare il rumore.** `Observations` era già sul risultato della
+> valutazione, popolato, e non lo guardava nessuno: un fattore null sulla stragrande maggioranza
+> delle barre — il sentiment su un simbolo fuori dal vocabolario dei ticker, una feature con warm-up
+> lunghissimo — può avere |IC| altissimo su una manciata di punti e **vincere l'ordinamento** contro
+> fattori misurati su migliaia. L'IC non è confrontabile fra numerosità diverse.
+| I10 | **Pairs: una sola verità, e i costi in chiaro** — (a) il motore **espone l'analisi che ha deciso** e la pagina disegna quella (niente più ricalcolo con estimatore fisso); (b) `SlippagePercent` e `StopZScore` esposti, con lo slippage al **default di piattaforma** invece che a zero | **fatto (2026-08-19)**, 4 test · (c) `ExperimentRun` incluso | ✅ L1 contro riferimento indipendente: l'analisi esposta coincide **punto per punto** con l'analizzatore chiamato direttamente; ✅ **la prova che il difetto era visibile**: le due curve sono diverse — se fossero uguali il test non potrebbe fallire, cioè non sarebbe una verifica; ✅ **lo slippage morde** (capitale finale minore), altrimenti esporlo sarebbe una manopola che non muove nulla |
+
+> **Il difetto (a) era una doppia verità in pagina, entrata col C2** (adozione del Kalman,
+> 2026-07-26) e trovata solo ora: la pagina passava al motore l'estimatore scelto ma disegnava lo
+> z-score con un `RollingPairsSpreadAnalyzer` **fisso**. Scegliendo Kalman si vedeva la curva
+> dell'OLS — **il grafico descriveva un backtest diverso da quello eseguito**, e `docs/pagine/pairs-trading.md`
+> dichiarava esattamente che non poteva succedere («nessuna doppia verità»). Il rimedio non è
+> ricalcolare meglio: è **non ricalcolare**. Un motore che non espone l'analisi ora fa sparire il
+> grafico dichiarandolo, invece di disegnarne uno sbagliato.
+>
+> **E (b) ridimensiona gli «ottimi risultati»**: la pagina costruiva la configurazione senza
+> `SlippagePercent`, quindi girava a **zero** mentre `/backtest` parte da 0,05%. Su una strategia a
+> **due gambe** il costo si paga due volte per trade: lo sconto era il più grande possibile
+> esattamente dove fa più danno, e i numeri di questa pagina non erano confrontabili con quelli di
+> nessun'altra superficie della piattaforma.
+| I11 | **«Trade attesi dall'holdout»: una regola sola, consumata da due** (ritiro per inedia e freno per gamba). Sul **simbolo attuale**, col **tempo-al-verdetto dichiarato**. Due regole per la stessa domanda è il difetto già pagato in D2 e con `SeriesFreshness` | aperto | L1 ricostruisce il trade/mese che il run dichiara; L2 campo assente (corsie 0-2) ⇒ nessuno agisce e **lo si dichiara** |
+| I12 | **Ritiro per inedia + dedup dei grigi per identità**, ancora in DryRun; poi AF2b (`targetLanes`, start/stop reali) **una corsia per volta, solo Paper**. Assorbe AF2c-1 e AF2c-5 | aperto | **L1 con lo stato reale**: condanna 3, 5, 6, 7 e **non** la 2 (troppo giovane) né l'impronta né le quarantenate; L2 soglia a 0 ⇒ piano bit-identico su 100 tick fuzzati; L4 le 40 riproposte diventano 1 |
+| I13 | **Freno per gamba: prima la misura, poi l'azione** — (a) l'avviso di deriva esteso alle **gambe attive** (oggi una gamba disattivata continua a operare fino al riavvio della corsia e nessuno lo dice); (b) pannello di sola lettura sui trade veri; (c) **condizionato** all'esito di (b), freno dove si applica `mayOpen`, mai un `continue` che lasci posizioni orfane | aperto | **il gate di (b) può chiudere il filone e va bene così**: a 2-6 trade/mese «≥20 trade sul simbolo attuale» può dare zero gambe misurabili — allora il pannello lo dice e (c) non si fa. L1 il riferimento indipendente **esiste già in repo** |
+| I14 | **`PairCandidate` + `PairSpreadWindow` col loro lettore** — indice derivato dagli 86 artefatti mai letti, sul progetto di `ResearchCandidateIndex`; storia dello spread sul pattern `FactorIcWindows`; pannello in `/pairs-trading`. Sola lettura, nessuna decisione automatica | aperto | **L2 decisivo**: su due random walk indipendenti il monitor non deve **mai** dichiarare cointegrazione; su una relazione piantata deve trovarla. L1 il rebuild combacia con l'aggregato SQL sugli artefatti |
+| I15 | **Corpus notizie esentato dalla purge + riga nel guardiano di profondità** (decisione del proprietario); da spenta la riga resta **misurata** e mostrata come «non sorvegliata», mai un OK finto | aperto | L1 profondità e conteggio combaciano col `SELECT` a mano; L2 corpus profondo ⇒ il guardiano tace per tre giri |
+| I16 ≡ F12 | **Capacità e universo del carry**: l'unica classe con edge misurato positivo, l'unica che opera oggi, l'unica che nessuno sta dimensionando — mentre il basis è in compressione | aperto | **report con verdetto scritto anche se è «la soglia attuale è già ottima»**; trade/mese e durata mediana dichiarati |
+
+### Livello 4 eseguito (2026-08-19, sull'app vera col database e il motore reali)
+
+`procione-main` fermato, worktree avviato col profilo `procione-reale`, tutto ripristinato a fine
+sessione. **La riga che vale l'intera Fase 0**, dal log d'avvio sui dati veri:
+
+> `AGENTI AUTONOMI ATTIVI in questo processo — Campaign Planner: ACCESO E OPERANTE — 1 campagne
+> abilitate, 1 in attesa di trigger · Orchestratore di flotta: ACCESO E OPERANTE — 5 corsie sotto
+> governo, in DRY-RUN · Comitato AI: ACCESO MA INERTE — 3/3 provider con chiave, ma ZERO voti negli
+> ultimi 14 giorni · Drift feature ML: SPENTO — ritiro automatico del Champion ARMATO ma SENZA
+> SOGGETTO (Champion in carica: 0)`
+
+Ogni numero coincide con quanto l'analisi aveva dedotto dal database. **E poi una conferma che non
+avevo cercato**: pochi minuti dopo, la card diceva «1 in rotazione» invece di «1 in attesa di
+trigger» — la campagna si era **svegliata da sola** fra le due letture. È esattamente il
+comportamento che la sonda esiste per rendere visibile, dimostrato dal vivo.
+
+| Item | Esito al livello 4 |
+|---|---|
+| I1 · I2 | ✅ card viva, quattro stati corretti, «Champion in carica: 0» col conteggio vero, manopole del ritiro **modificabili** (la correzione della revisione) |
+| I3 | ✅ «NESSUN TETTO IN VIGORE» coi numeri reali: 310.805 token nel mese, **≈17.267 al giorno** — la base per scegliere un tetto, che prima non esisteva |
+| I4 | ✅ «Budget del canale: 2/20 nell'ultima ora (18 prima del silenzio)» — e quei 2 erano le notifiche del watchdog per il mio stop/start: il contatore segue la realtà |
+| I6 (a) | ✅ **un tick costa ~39 secondi** su 155 modelli, 31.000 candele recenti, 620 feature. Ogni 6 ore, sul database condiviso con motore e ingestion |
+| I6 (b) | ⚠️ **il ramo di salto non si è attivato**: sui dati veri nessun modello va saltato. È l'esito desiderato (la guardia non spara a vuoto) ma significa che la capacità di fallire resta provata dai test, non dal campo |
+| I6 (d) | ✅ blocco in Home con «151 modelli ML con feature in deriva», **accanto** a quello dei fattori — la prova che i due sono indipendenti e non incatenati |
+| I6 (e) | ✅ card delle soglie viva |
+
+**Due difetti trovati SOLO qui, e nessuno dei due dai test.**
+
+1. **Il migrate-on-startup dichiarava lo schema allineato mentre mancava una colonna.** L'app gira in
+   **Release**, e in `bin/Release` la DLL delle migrazioni era ferma al 5 agosto: `GetPendingMigrations`
+   sottrae le applicate da quelle **note all'assembly**, quindi la differenza era vuota e il migratore
+   ha scritto «Schema del database già allineato». Il guardiano esistente copriva «assembly che espone
+   ZERO migrazioni» (versioni EF disallineate) ma non «assembly che ne espone un insieme VECCHIO».
+   Aggiunta la terza discriminante, che non è un conteggio ma il **modello**:
+   `HasPendingModelChanges()` — se il modello differisce dallo snapshot dell'ultima migrazione nota, o
+   manca una migrazione o l'assembly è indietro, e in entrambi i casi lo schema **non** si dichiara
+   allineato. È la terza volta che la stessa causa morde in un punto nuovo (dopo `migrations add` e
+   `--no-build`), ed è la prima volta che avrebbe potuto rompere la produzione.
+2. **Il gate di I5 era vero nel collettore e falso nel prodotto.** «Un istogramma nuovo compare in
+   pagina senza modificare alcuna lista»: il collettore lo raccoglieva, ma `/metrics` rendeva solo
+   card scritte a mano, quindi `procione.drift.tick_ms` non compariva da nessuna parte. Aggiunta la
+   card **«Altre misure raccolte»**, che elenca ogni strumento senza card dedicata — e ora
+   `tick_ms` compare da solo. Verificato: 1 istogramma e 15 contatori, nessuna lista da aggiornare.
+
+**Il fatto operativo che il livello 4 ha prodotto, e che va deciso:** eseguito «Esegui check ora» sui
+dati veri, **151 modelli su 153 risultano in Alert**. È la prima misura che questo monitor abbia mai
+prodotto, e dice che le soglie di prassi generica sono troppo sensibili per queste serie — cioè
+esattamente ciò per cui (e) le ha rese amministrabili. **Tararle è la precondizione di (c)**:
+accendere il worker con queste soglie produrrebbe un allarme permanente su quasi tutto, che è un
+altro modo di non dire nulla.
+
+### Chiusura delle Fasi 0-2 (2026-08-19)
+
+**Le tre code chiuse nell'ultimo giro**, tutte della stessa natura — una superficie che non poteva
+dire di no:
+
+- **I8(d) «Prova il comitato»**: una domanda sintetica a menù chiuso, coi voti reali provider per
+  provider e **la causa di ogni astensione**. Serve perché il comitato arbitra i pareggi, e un
+  pareggio potrebbe non arrivare mai: *una verifica che si può fare solo quando serve non è una
+  verifica*. Non tocca la flotta e non entra nel journal; passa dallo stesso guard, dallo stesso
+  budget e dallo stesso contratto dei giri veri — provarne una copia dimostrerebbe altro. Zero voti
+  validi è colorato come **guasto**, non come esito.
+- **I9(a) copertura sentiment per simbolo**: la riga dichiarava una copertura **globale**, e il
+  commento diceva che bastava «perché il filtro per ticker avviene al calcolo». È vero, ed è
+  esattamente il motivo per cui non bastava: su un simbolo fuori dal vocabolario (BTC, ETH, SOL, BNB,
+  XRP, DOGE, ADA) il fattore è nullo su **ogni** barra mentre la pagina prometteva migliaia di
+  notizie. Ora il conteggio è per ticker, col confronto **per elemento** e non per sottostringa —
+  una `LIKE` conterebbe BTC dentro WBTC, cioè gonfierebbe la copertura proprio dove serve la verità.
+- **I10(c) `ExperimentRun` di Kind `Pairs`**: i numeri di `/pairs-trading` morivano col circuito
+  Blazor. Il run si apre **prima** del calcolo, così un'esplosione lascia la traccia del tentativo
+  invece del nulla, e un run che non ha potuto misurare si chiude **dichiarandolo**.
+
+**Ordine**: I1-I2 (dichiarazioni) → I3-I5 (gli strumenti, prima degli interruttori) → I6-I10 (la
+capacità di dire di no: il cuore) → I11 (il denominatore condiviso) → I12-I13 (le azioni, e solo
+dietro il denominatore) → I14-I15 (persistenza, insieme al suo lettore) → I16.
+
+> **Fasi 0, 1 e 2 CHIUSE** (2026-08-19), tranne l'accensione del drift che è operativa e non di
+> codice. Restano le Fasi 3-6: I11 (il denominatore condiviso «trade attesi dall'holdout»),
+> I12-I13 (ritiro per inedia, dedup dei grigi, AF2b, freno per gamba), I14-I15 (`PairCandidate` col
+> suo lettore, corpus notizie esentato dalla purge), I16 ≡ F12 (capacità del carry).
+
+Le Fasi 0-2 sono tutte a rischio nullo o basso e **non cambiano una sola decisione operativa**. La
+Fase 4 è la sola che ne cambia una, ed è dietro I11 di proposito.
+
+**Non-obiettivi** (motivazione per ciascuno nel PRD): promuovere un Champion per dare un soggetto al
+ciclo chiuso (ragionare al contrario, già respinto il 2026-07-28) · `LeverageAdvisor` a caldo (gate
+senza soggetto; riapre con ≥1 corsia Futures a ≥20 trade) · esecuzione pairs a due gambe (corsie
+mono-simbolo; riapre con F13 superato) · consumo del meta-labeling (misurato: conserva il 2% dei
+segnali e **peggiora** il rendimento — amplifica, non crea) · cablaggio dell'OFI (6-34× sotto i
+costi) · **G7, parere del comitato accanto al click Live** (il comitato non ha ancora votato una
+volta e il click Live non è mai stato esercitato: fuori per intero) · R4 dentro questa ondata (la
+finestra si fissa **prima**, o è fabbrica di significatività) · API di configurazione remota per
+questi sei (non serve: sono tutti del guscio) · F7 per intero.
+
+**La somma dei carichi**, che nessuna analisi per sottosistema può vedere: Postgres condiviso (I14 è
+l'unica proposta con **scrittura permanente**), un solo thread pool per tutti e sei i worker, e le due
+risorse che nessuno aveva contato — il budget delle notifiche (I4) e il budget AI (I3), entrambi
+condivisi e oggi **entrambi senza tetto vero**. È il motivo per cui stanno in Fase 1.
+
+*Nota di copertura da dichiarare, non da subire*: il guscio in cluster è a **zero repliche**; i worker
+periodici vivono nel processo locale avviato al logon. La copertura è **uptime dell'host**, non
+«sessioni di lavoro» — ma la gamba di riparazione del watchdog passa da `run-postgres.ps1`, che muore
+col cluster giù, cioè proprio quando il watchdog scatta.

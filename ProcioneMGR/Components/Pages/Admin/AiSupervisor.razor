@@ -21,6 +21,9 @@
 @inject ILlmUsageSink UsageSink
 @inject IOptionsMonitor<LlmBudgetOptions> BudgetMonitor
 @inject IOptionsMonitor<ProcioneMGR.Services.Llm.Committee.CommitteeOptions> CommitteeMonitor
+@* [I8] Il comitato vero, per il pulsante «Prova»: stesso guard, stesso budget, stesso contratto dei
+   giri reali — provarne una copia dimostrerebbe qualcosa di diverso da cio' che succede in produzione. *@
+@inject ProcioneMGR.Services.Llm.Committee.IAiCommittee Committee
 @inject ProcioneMGR.Services.Llm.Narration.IRejectionExplainService RejectionExplain
 @inject ProcioneMGR.Services.Llm.Narration.IPostMortemService PostMortems
 @inject IOptionsMonitor<ProcioneMGR.Services.Llm.Narration.PostMortemOptions> PostMortemMonitor
@@ -276,9 +279,13 @@
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
             @if (_usage is { TrackingEnabled: true })
             {
-                <span class="badge bg-success">tracking attivo</span>
+                <span class="badge bg-success">conteggio attivo</span>
                 <span class="badge bg-light text-dark">oggi: @_usage.TodayCalls chiamate · @_usage.TodayTokens token</span>
                 <span class="badge bg-light text-dark">mese: @_usage.MonthTokens token</span>
+                @if (NoCeilingInForce)
+                {
+                    <span class="badge bg-warning text-dark">NESSUN TETTO IN VIGORE</span>
+                }
                 @if (_budgetVerdict is { Exhausted: true })
                 {
                     <span class="badge bg-warning text-dark">BUDGET ESAURITO — @_budgetVerdict.Reason</span>
@@ -286,9 +293,32 @@
             }
             else
             {
-                <span class="badge bg-secondary">tracking spento — nessun conteggio, nessun tetto</span>
+                <span class="badge bg-secondary">conteggio spento — nessun conteggio, nessun tetto</span>
             }
         </div>
+
+        @* [I3] «Conteggio attivo» si legge come «la spesa è sorvegliata», e con i tre limiti a zero
+           non lo è: il controllo che ogni chiamata esegue prima di partire risponde SEMPRE sì
+           (LlmUsage.CheckBudget salta ogni limite non positivo). È la classe «controllo che
+           rassicura», e questo blocco è il suo rimedio: dice che non c'è tetto, e dà i numeri per
+           sceglierne uno invece di lasciare l'operatore a indovinare. *@
+        @if (_usage is { TrackingEnabled: true } && NoCeilingInForce)
+        {
+            <div class="alert alert-warning py-2 small">
+                <strong>Il conteggio gira, ma non c'è alcun tetto.</strong> I tre limiti sono a
+                <code>0</code>, e <strong>0 non è «zero»: è «nessun limite»</strong> — il controllo
+                che precede ogni chiamata risponde sempre sì, e il budget non può esaurirsi.
+                Conta perché il layer AI ha già smesso di funzionare una volta per credito esaurito
+                <em>in silenzio</em>, e perché il comitato interroga più provider <em>per ogni</em>
+                domanda: è il primo candidato alla spesa fuori controllo.
+                <br />
+                <strong>Per scegliere un numero</strong>, dai dati veri di questo processo: oggi
+                <strong>@_usage.TodayCalls chiamate</strong> e @_usage.TodayTokens token; nel mese
+                @_usage.MonthTokens token, cioè una media di circa
+                <strong>@MonthlyAveragePerDay.ToString("N0") token al giorno</strong> sui
+                @DaysElapsedThisMonth giorni trascorsi.
+            </div>
+        }
         @if (_usage is { TrackingEnabled: true, Today.Count: > 0 })
         {
             <div class="table-responsive mb-2">
@@ -373,12 +403,70 @@
                 <input type="number" class="form-control form-control-sm" style="width:6rem" min="5" @bind="_committee.TimeoutSeconds" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-sm btn-primary" @onclick="SaveCommitteeAsync" disabled="@_busy">Salva comitato</button>
+                <button class="btn btn-sm btn-primary me-2" @onclick="SaveCommitteeAsync" disabled="@_busy">Salva comitato</button>
+                @* [I8] L'unico modo di sapere che il comitato funziona PRIMA che serva. Acceso da
+                   sedici giorni, non ha mai votato — non per guasto, ma perché arbitra i pareggi e
+                   la coda dell'orchestratore è sempre vuota. Senza questo pulsante, «funziona?» non
+                   aveva risposta se non aspettando un pareggio che potrebbe non arrivare mai. *@
+                <button class="btn btn-sm btn-outline-secondary" @onclick="ProbeCommitteeAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    Prova il comitato
+                </button>
             </div>
         </div>
         @if (!string.IsNullOrEmpty(_committeeStatus))
         {
             <div class="alert @(_committeeIsError ? "alert-danger" : "alert-success") py-2 mt-2 mb-0">@_committeeStatus</div>
+        }
+        @* [I8] I voti REALI, provider per provider, con la causa di ogni astensione. Un comitato che
+           vota senza che nessuno possa leggere il voto è «verde a livello di classe, inesistente a
+           livello di prodotto». *@
+        @if (_committeeProbe is { } probe)
+        {
+            <div class="mt-2">
+                <div class="small mb-1">
+                    Verdetto: <code>@probe.ChosenOptionId</code>
+                    @if (probe.ByQuorum)
+                    {
+                        <span class="badge bg-success ms-1">per QUORUM</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-secondary ms-1">default deterministico</span>
+                        <span class="text-muted"> — la maggioranza non si è formata: è il comportamento previsto, non un guasto.</span>
+                    }
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Provider</th><th>Voto</th><th>Confidenza</th><th>Motivo / causa dell'astensione</th></tr></thead>
+                        <tbody>
+                            @foreach (var v in probe.Votes)
+                            {
+                                <tr>
+                                    <td>@v.Provider</td>
+                                    <td>
+                                        @if (v.Valid)
+                                        {
+                                            <span class="badge bg-primary">@v.OptionId</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-warning text-dark">ASTENUTO</span>
+                                        }
+                                    </td>
+                                    <td class="text-end">@(v.Confidence?.ToString("0.00") ?? "—")</td>
+                                    <td class="small">@v.Reason</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <p class="text-muted small mt-1 mb-0">
+                    Domanda sintetica a menù chiuso: <strong>non tocca la flotta</strong>, non produce
+                    assegnazioni e non entra nel journal delle decisioni. Consuma token veri sui
+                    provider votanti, e passa dallo stesso budget del resto del layer AI.
+                </p>
+            </div>
         }
     </div>
 </div>
@@ -761,6 +849,27 @@ else
     // ---- [AF1] Consumo e budget ----
     private LlmUsageSnapshot? _usage;
     private LlmBudgetVerdict? _budgetVerdict;
+
+    /// <summary>
+    /// [I3] Nessun tetto EFFETTIVO in vigore. Si legge da <c>BudgetMonitor.CurrentValue</c> e non
+    /// dai campi del form: quelli sono la modifica che l'operatore sta digitando, non ciò che
+    /// governa le chiamate adesso — e mostrare l'una per l'altra è come dichiarare applicata una
+    /// configurazione mai salvata.
+    /// </summary>
+    private bool NoCeilingInForce
+    {
+        get
+        {
+            var b = BudgetMonitor.CurrentValue;
+            return b.DailyCallLimit <= 0 && b.DailyTokenLimit <= 0 && b.MonthlyTokenLimit <= 0;
+        }
+    }
+
+    /// <summary>Giorni trascorsi del mese corrente (almeno 1: il primo del mese non divide per zero).</summary>
+    private static int DaysElapsedThisMonth => Math.Max(1, DateTime.UtcNow.Day);
+
+    /// <summary>Media di token al giorno sul mese in corso — la base onesta per scegliere un tetto.</summary>
+    private double MonthlyAveragePerDay => _usage is null ? 0 : (double)_usage.MonthTokens / DaysElapsedThisMonth;
     private bool _budgetTracking;
     private int _budgetDailyCalls;
     private int _budgetDailyTokens;
@@ -770,6 +879,9 @@ else
 
     // ---- [AF3] Comitato ----
     private ProcioneMGR.Services.Llm.Committee.CommitteeOptions _committee = new();
+
+    /// <summary>[I8] Esito dell'ultima prova del comitato: voti reali, provider per provider.</summary>
+    private ProcioneMGR.Services.Llm.Committee.CommitteeVerdict? _committeeProbe;
     private string _committeeProvidersCsv = "";
     private string? _committeeStatus;
     private bool _committeeIsError;
@@ -1102,6 +1214,65 @@ else
     }
 
     /// <summary>[AF3] Salva la sezione Committee (validata dalle stesse regole del canale admin).</summary>
+    /// <summary>
+    /// [I8] La domanda sintetica a menù chiuso che il comitato non riceverà mai dalla flotta.
+    ///
+    /// <para>Il comitato è rimasto acceso sedici giorni senza emettere un voto: arbitra i
+    /// <em>pareggi</em> di <c>Decide</c>, e la coda dell'orchestratore è sempre vuota. Senza questo
+    /// pulsante «funziona?» non aveva risposta se non aspettando un pareggio che potrebbe non
+    /// arrivare mai — e una verifica che si può fare solo quando serve non è una verifica.</para>
+    ///
+    /// <para><b>Non tocca la flotta</b>: nessuna assegnazione, nessuna riga di journal. Passa dallo
+    /// stesso guard, dallo stesso budget e dallo stesso contratto dei giri veri, altrimenti
+    /// dimostrerebbe qualcosa di diverso da ciò che succede in produzione.</para>
+    /// </summary>
+    private async Task ProbeCommitteeAsync()
+    {
+        _busy = true;
+        _committeeProbe = null;
+        try
+        {
+            // Si legge lo stato IN VIGORE, non i campi del form: il pulsante deve provare il
+            // comitato che gira adesso, non quello che si sta per salvare.
+            if (!CommitteeMonitor.CurrentValue.Enabled)
+            {
+                _committeeStatus = "Comitato SPENTO (Committee:Enabled = false): nessuna chiamata effettuata.";
+                _committeeIsError = true;
+                return;
+            }
+
+            var domanda = new ProcioneMGR.Services.Llm.Committee.CommitteeQuestion(
+                "probe",
+                "Verifica di funzionamento del comitato. Nessuna corsia è coinvolta e nessuna decisione "
+                + "operativa dipende da questa risposta: serve solo a sapere se i provider rispondono "
+                + "dentro il menù. Scegli l'opzione B.",
+                [
+                    new ProcioneMGR.Services.Llm.Committee.CommitteeOption("A", "Opzione A (di prova)"),
+                    new ProcioneMGR.Services.Llm.Committee.CommitteeOption("B", "Opzione B (di prova)"),
+                ],
+                "A"); // default deterministico: se nessuno risponde validamente, esce A
+
+            var verdetto = await Committee.AskAsync(domanda);
+            _committeeProbe = verdetto;
+
+            var validi = verdetto.Votes.Count(v => v.Valid);
+            _committeeStatus = verdetto.Votes.Count == 0
+                ? "Nessun provider interrogato: budget esaurito o nessun provider votante con chiave. Il comitato NON è verificato."
+                : $"{validi} voti validi su {verdetto.Votes.Count} provider interrogati.";
+            // Zero voti validi è un guasto del canale, non un esito: va colorato come tale.
+            _committeeIsError = verdetto.Votes.Count == 0 || validi == 0;
+        }
+        catch (Exception ex)
+        {
+            _committeeStatus = $"Prova fallita: {ex.Message}";
+            _committeeIsError = true;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
     private async Task SaveCommitteeAsync()
     {
         try

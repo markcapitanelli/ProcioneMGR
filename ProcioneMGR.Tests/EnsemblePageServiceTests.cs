@@ -98,7 +98,8 @@ public sealed class EnsemblePageServiceTests : IAsyncDisposable
     private FakeRegistry _registry = null!;
     private FakeDriftMonitor _drift = null!;
 
-    private async Task<(EnsemblePageService Svc, IDbContextFactory<ApplicationDbContext> Db)> BuildAsync(bool ensureSchema = true)
+    private async Task<(EnsemblePageService Svc, IDbContextFactory<ApplicationDbContext> Db)> BuildAsync(
+        bool ensureSchema = true, DriftMonitorOptions? driftOptions = null)
     {
         _lane0 = new FakeEnsembleManager(0);
         _lane1 = new FakeEnsembleManager(1);
@@ -119,7 +120,13 @@ public sealed class EnsemblePageServiceTests : IAsyncDisposable
             await db.Database.EnsureCreatedAsync();
         }
 
-        var svc = new EnsemblePageService(_provider, new StrategyFactory(), _drift, _registry, dbFactory,
+        // [I6] Soglie e finestra del drift arrivano dalla configurazione anche qui: dal 2026-08-18 la
+        // pagina usa le STESSE del worker periodico, e tenerne di proprie farebbe divergere i due
+        // verdetti sullo stesso modello. Nei test la finestra è ridotta a 50 per non dover seminare
+        // 200 candele in ogni prova; il comportamento esercitato è identico.
+        var svc = new EnsemblePageService(_provider, new StrategyFactory(), _drift,
+            (driftOptions ?? new DriftMonitorOptions { RecentCandles = 50 }).AsMonitor(),
+            _registry, dbFactory,
             new UnusedBacktestEngine(), new ProcioneMGR.Services.Analysis.ExcursionAnalyzer());
         return (svc, dbFactory);
     }
@@ -349,10 +356,13 @@ public sealed class EnsemblePageServiceTests : IAsyncDisposable
             }
             await ctx.SaveChangesAsync();
         }
+        // [I6] I conteggi di osservazioni sono valorizzati come li valorizza SEMPRE il monitor vero:
+        // senza, un report `None` non si distingue da un rilevatore che ha risposto «dati
+        // insufficienti», e la pagina lo escluderebbe dal verdetto — correttamente.
         _drift.ReportsToReturn =
         [
-            new FactorDriftReport { FeatureName = "Momentum", Results = [new DriftResult("Psi", 0.5, null, DriftSeverity.Alert, "test")] },
-            new FactorDriftReport { FeatureName = "Rsi", Results = [new DriftResult("Psi", 0.01, null, DriftSeverity.None, "test")] },
+            new FactorDriftReport { FeatureName = "Momentum", ReferenceCount = 400, CurrentCount = 50, Results = [new DriftResult("Psi", 0.5, null, DriftSeverity.Alert, "test")] },
+            new FactorDriftReport { FeatureName = "Rsi", ReferenceCount = 400, CurrentCount = 50, Results = [new DriftResult("Psi", 0.01, null, DriftSeverity.None, "test")] },
         ];
 
         var ok = await svc.EvaluateDriftAsync(modelId);

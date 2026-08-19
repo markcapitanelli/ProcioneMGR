@@ -152,7 +152,10 @@
   "Campaign": {
     "_comment": "Campaign Planner (Fase 1, PRD Autonomia): rotazione automatica delle configurazioni di caccia. DEFAULT OFF: e' IL cambio di natura da strumento ad agente, l'attivazione e' una decisione esplicita. Con Enabled=false le campagne in /campaign si preparano ma nessun run parte. L'applica passa dalla stessa catena della ri-applica (supervisore con veto + isteresi); corsie avviate al massimo in Paper, config Live sempre saltate.",
     "Enabled": false,
-    "TickSeconds": 60
+    "TickSeconds": 60,
+    "_comment_I7": "[I7] CancelPauseMinutes: un run annullato A MANO mette la campagna in pausa invece di far ripartire la rotazione entro un tick (prima l'annullamento finiva nello stesso ramo di un fallimento: chi annullava otteneva il contrario di cio' che voleva). 0 = comportamento storico. RespectAutoReapplyGate: con AutoReapply:Enabled=false la campagna NON schiera piu' da sola — i sopravvissuti restano registrati e notificati per un click umano.",
+    "CancelPauseMinutes": 60,
+    "RespectAutoReapplyGate": true
   },
   "RegimeTrigger": {
     "_comment": "Trigger contestuale (Fase 2, PRD Autonomia): sveglia il Campaign Planner quando il cluster K-means corrente cambia rispetto all'ultimo run della campagna o la vol realizzata esce dalla banda [forecast/k, forecast*k] del forecast GARCH di quel run. NON lancia mai run direttamente (parla solo col planner, run marcati Event). Inerte senza Campaign:Enabled. Cooldown di default 6h.",
@@ -186,7 +189,19 @@
     "IntervalHours": 6,
     "RecentCandles": 200,
     "RetireChampionOnAlert": true,
-    "MinAlertsToRetire": 1
+    "MinAlertsToRetire": 1,
+    "Thresholds": {
+      "_comment": "[I6] Soglie dei tre rilevatori, amministrabili dal 2026-08-18 (prima si cambiavano solo ricompilando). Sono la prassi GENERICA del settore, non una misura fatta su serie finanziarie: se il monitor allarma troppo o non allarma mai, si tarano da qui. Regola lato server: l'alert non puo' essere piu' permissivo del warning (per KS 'piu' severo' significa p-value piu' PICCOLO, al contrario delle altre due famiglie). Pannello: /admin/autonomy, card Drift.",
+      "PsiBins": 10,
+      "PsiWarning": 0.2,
+      "PsiAlert": 0.25,
+      "KsPValueWarning": 0.05,
+      "KsPValueAlert": 0.01,
+      "PageHinkleyDelta": 1.0,
+      "PageHinkleyWarning": 25.0,
+      "PageHinkleyAlert": 50.0,
+      "MinObservations": 20
+    }
   },
   "Execution": {
     "_comment": "Modello di costo dell'esecuzione a fette (TWAP/VWAP/Iceberg/Adaptive), usato dal simulatore di /execution. ImpactModel 'SquareRoot' e' la legge empirica di Almgren (raddoppiare la quantita' NON raddoppia l'impatto); 'Linear' e' l'alternativa. Valori indicativi da calibrare in Paper: il confronto RELATIVO fra algoritmi e' il punto, non il valore assoluto. Pannello 'Modello di costo' in /execution.",

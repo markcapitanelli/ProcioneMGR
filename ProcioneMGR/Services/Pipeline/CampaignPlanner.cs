@@ -50,6 +50,9 @@ public sealed class CampaignPlanner(
     IRunApplyEvaluator applyEvaluator,
     IServiceProvider serviceProvider,
     IOptionsMonitor<CampaignOptions> options,
+    // [I7] Il gate della ri-applica automatica: il percorso campagna lo rispetta invece di
+    // scavalcarlo (vedi RespectAutoReapplyGate).
+    IOptionsMonitor<AutoReapplyOptions> autoReapply,
     ILogger<CampaignPlanner> logger,
     ProcioneMGR.Services.Notifications.INotifier? notifier = null) : ICampaignPlanner
 {
@@ -102,8 +105,25 @@ public sealed class CampaignPlanner(
             return;
         }
 
+        // [I7] La pausa dopo un annullamento umano vale solo sulla ROTAZIONE: la valutazione di un
+        // run già in corso (sopra) resta, altrimenti annullare un run ne lascerebbe un altro appeso.
+        if (campaign.PausedUntilUtc is DateTime until && until > DateTime.UtcNow)
+        {
+            logger.LogDebug("Campagna {Id}: in pausa fino alle {Until:yyyy-MM-dd HH:mm} UTC dopo un annullamento.", campaign.Id, until);
+            return;
+        }
+
         if (campaign.Status == CampaignStatus.Rotating)
         {
+            // La pausa è scaduta: si azzera dichiarandolo, così il pannello non mostra per sempre
+            // una pausa finita come se fosse ancora in corso (regola 5: mai un valore vecchio
+            // spacciato per attuale).
+            if (campaign.PausedUntilUtc is not null)
+            {
+                campaign.PausedUntilUtc = null;
+                SetOutcome(campaign, "Pausa dopo annullamento scaduta: rotazione ripresa.");
+                await db.SaveChangesAsync(ct);
+            }
             await TryStartNextConfigAsync(db, campaign, ct);
         }
         else if (campaign.Status == CampaignStatus.Observing)
@@ -185,8 +205,35 @@ public sealed class CampaignPlanner(
             case "Paused": // la ripresa automatica dei Paused è la Fase 3-C1: qui si aspetta e basta
                 return;
 
-            case "Failed":
+            // [I7] Un annullamento UMANO non è un fallimento: è un ordine. Prima finiva in questo
+            // stesso ramo, la config veniva marcata "Failed" e la rotazione passava alla successiva —
+            // che, mai eseguita in questo ciclo, è sempre eleggibile: entro un tick da 60 secondi
+            // partiva un altro run automatico. Chi annullava otteneva il contrario di ciò che voleva.
             case "Cancelled":
+            {
+                var pauseMinutes = Math.Max(0, options.CurrentValue.CancelPauseMinutes);
+                MarkConfigOutcome(campaign, runId, "Cancelled");
+                campaign.PendingRunId = null;
+                if (pauseMinutes > 0)
+                {
+                    campaign.PausedUntilUtc = DateTime.UtcNow.AddMinutes(pauseMinutes);
+                    SetOutcome(campaign,
+                        $"Run annullato a mano (config {run.ConfigurationId}): rotazione IN PAUSA fino alle " +
+                        $"{campaign.PausedUntilUtc:yyyy-MM-dd HH:mm} UTC. Un annullamento è un ordine, non un esito.");
+                }
+                else
+                {
+                    SetOutcome(campaign,
+                        $"Run annullato a mano (config {run.ConfigurationId}): pausa disattivata " +
+                        "(Campaign:CancelPauseMinutes = 0), si passa alla prossima config.");
+                }
+                await db.SaveChangesAsync(ct);
+                await NotifyAsync(Notifications.NotificationSeverity.Warning,
+                    $"Campagna '{campaign.Name}': run annullato", campaign.LastOutcome!, ct);
+                return;
+            }
+
+            case "Failed":
                 MarkConfigOutcome(campaign, runId, "Failed");
                 campaign.PendingRunId = null;
                 SetOutcome(campaign, $"Run {run.Status} (config {run.ConfigurationId}): si passa alla prossima config della rotazione.");
@@ -215,6 +262,28 @@ public sealed class CampaignPlanner(
                 $"(questa non si ripete prima di {campaign.BackoffHours}h).");
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Campagna {Id}: {Outcome}", campaign.Id, campaign.LastOutcome);
+            return;
+        }
+
+        // [I7] Il gate della ri-applica automatica vale ANCHE per il percorso campagna.
+        //
+        // Prima il planner chiamava l'applier senza consultarlo: `AutoReapply:Enabled` è letto solo
+        // dallo scheduler, quindi con la ri-applica SPENTA la campagna schierava lo stesso. Un
+        // interruttore che chiude una porta e ne lascia aperta un'altra è la stessa forma dei
+        // pannelli che scrivevano sul processo sbagliato — e qui la porta aperta riscrive corsie.
+        // I sopravvissuti non si perdono: restano registrati e notificati, pronti per un click umano.
+        if (options.CurrentValue.RespectAutoReapplyGate && !autoReapply.CurrentValue.Enabled)
+        {
+            MarkConfigOutcome(campaign, run.Id, "NotApplied");
+            campaign.PendingRunId = null;
+            SetOutcome(campaign,
+                $"{survivors} sopravvissuti (config {run.ConfigurationId}) NON schierati: la ri-applica automatica " +
+                "è spenta (AutoReapply:Enabled = false) e il percorso campagna la rispetta. " +
+                "Il run resta disponibile per un'applica manuale da /pipeline.");
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation("Campagna {Id}: {Outcome}", campaign.Id, campaign.LastOutcome);
+            await NotifyAsync(Notifications.NotificationSeverity.Info,
+                $"Campagna '{campaign.Name}': {survivors} sopravvissuti da applicare a mano", campaign.LastOutcome!, ct);
             return;
         }
 

@@ -24,7 +24,13 @@ public sealed class MetricsCollector : IHostedService, IDisposable
     /// <summary>[Fase 1] Latenza invio→risposta dell'ordine.</summary>
     public const string OrderLatencyInstrument = "procione.trading.order_latency_ms";
 
-    private static readonly string[] TrackedHistograms =
+    /// <summary>
+    /// [I5] Gli istogrammi che la pagina mostra <b>anche prima</b> che qualcuno registri una misura.
+    /// Non è più un filtro — la raccolta è dinamica (vedi <see cref="OnDouble"/>) — ma un elenco di
+    /// righe attese: senza, un istogramma che non ha ancora ricevuto nulla sarebbe indistinguibile
+    /// da uno che non esiste, e «nessuna riga» si legge come «nessun problema».
+    /// </summary>
+    private static readonly string[] ExpectedHistograms =
         [ExecutionSlippageInstrument, TradingSlippageInstrument, OrderLatencyInstrument];
 
     private readonly object _gate = new();
@@ -34,7 +40,7 @@ public sealed class MetricsCollector : IHostedService, IDisposable
     private readonly Dictionary<string, long> _counters = new();
 
     private readonly Dictionary<string, HistogramAccumulator> _histograms =
-        TrackedHistograms.ToDictionary(name => name, _ => new HistogramAccumulator());
+        ExpectedHistograms.ToDictionary(name => name, _ => new HistogramAccumulator());
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -67,11 +73,35 @@ public sealed class MetricsCollector : IHostedService, IDisposable
         }
     }
 
+    /// <summary>
+    /// [I5] <b>Scoperta dinamica.</b> Prima la raccolta era filtrata da una lista di tre nomi
+    /// scritti a mano: un istogramma NUOVO veniva scartato in silenzio e la sua riga non compariva
+    /// mai in <c>/metrics</c> — una pagina che tace su ciò che non conosce, e chi aggiunge una
+    /// misura non ha modo di accorgersene. Ora si raccoglie qualunque istogramma del meter di
+    /// piattaforma (il filtro per meter resta, in <c>InstrumentPublished</c>).
+    ///
+    /// <para>Gli strumenti double che NON sono istogrammi finiscono fra i contatori, sommati come i
+    /// long: oggi il caso è vuoto (tutti i contatori sono <c>long</c>), ma scartarli sarebbe la
+    /// stessa perdita silenziosa in un altro punto.</para>
+    /// </summary>
     private void OnDouble(Instrument instrument, double measurement, ReadOnlySpan<KeyValuePair<string, object?>> tags, object? state)
     {
         lock (_gate)
         {
-            if (_histograms.TryGetValue(instrument.Name, out var acc)) acc.Add(measurement);
+            if (instrument is Histogram<double>)
+            {
+                if (!_histograms.TryGetValue(instrument.Name, out var acc))
+                {
+                    acc = new HistogramAccumulator();
+                    _histograms[instrument.Name] = acc;
+                }
+                acc.Add(measurement);
+                return;
+            }
+
+            var key = instrument.Name + "|" + Signature(tags);
+            _counters.TryGetValue(key, out var current);
+            _counters[key] = current + (long)measurement;
         }
     }
 

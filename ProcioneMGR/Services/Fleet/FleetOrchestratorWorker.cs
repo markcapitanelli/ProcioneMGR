@@ -31,10 +31,30 @@ public sealed class FleetOrchestratorWorker(
     private string? _lastBlockedReason;
     private DateTime? _lastCarryAlertUtc;
 
+    /// <summary>
+    /// [AF2b] <b>Il braccio esecutivo esiste?</b> Oggi <b>no</b>: con <c>Fleet:DryRun=false</c>
+    /// questo worker emette un warning e journalizza comunque <c>DryRun=true, Applied=false</c> —
+    /// nessun ramo avvia o ferma una corsia.
+    ///
+    /// È dichiarato QUI, accanto al ramo che lo implementerà, e non dedotto altrove da
+    /// <c>Fleet:DryRun</c>, perché quel flag dice che cosa è stato <i>chiesto</i>, non che cosa il
+    /// codice sa <i>fare</i>. Una sonda che leggesse il flag direbbe «esecuzione attiva» di un
+    /// braccio inesistente: è il difetto della classe «controllo che rassicura», e la revisione
+    /// avversaria del 2026-08-18 lo ha trovato proprio così in <c>AgentStateProbe</c>.
+    /// Chi implementa AF2b cambia questa costante e la sonda dice la verità senza altre modifiche.
+    /// </summary>
+    public const bool ExecutionArmImplemented = false;
+
     /// <summary>Ultimo piano deciso, per il pannello (/admin/autonomy).</summary>
     public FleetPlan? LastPlan { get; private set; }
 
     public DateTime? LastTickUtc { get; private set; }
+
+    /// <summary>
+    /// [I8] Perché l'ultimo tick non ha fatto nulla, coi quattro numeri contati dagli stessi
+    /// predicati della decisione. <c>null</c> = nessun tick ancora eseguito da questo processo.
+    /// </summary>
+    public FleetSilence? LastSilence { get; private set; }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -57,12 +77,36 @@ public sealed class FleetOrchestratorWorker(
         }
     }
 
+    /// <summary>
+    /// [I8] Da che cosa è venuta la scelta, distinguendo le tre cause che prima finivano tutte
+    /// sotto la parola «default».
+    ///
+    /// <para>La differenza che conta per chi legge il journal è fra «il comitato ha deliberato e la
+    /// maggioranza non si è formata» e «il comitato non ha funzionato»: nel primo caso il default è
+    /// la risposta, nel secondo è un ripiego su un guasto. Con una parola sola per entrambi, sedici
+    /// giorni di righe identiche non dicevano quale dei due fosse.</para>
+    /// </summary>
+    internal static string DescribeAssignSource(Llm.Committee.CommitteeVerdict verdict)
+    {
+        ArgumentNullException.ThrowIfNull(verdict);
+        if (verdict.ByQuorum) return "committee";
+
+        var validi = verdict.Votes.Count(v => v.Valid);
+        if (verdict.Votes.Count == 0) return "default:non-interrogato";   // budget esaurito, zero provider con chiave
+        if (validi == 0) return "default:tutti-astenuti";                 // interrogati, nessuna risposta valida
+        return "default:quorum-mancato";                                  // hanno risposto, la maggioranza non si è formata
+    }
+
     /// <summary>Un tick completo. Pubblico per i test di integrazione e per un futuro "Esegui ora".</summary>
     public async Task TickAsync(CancellationToken ct)
     {
         var opt = options.CurrentValue;
         var state = await reader.ReadAsync(ct);
         var plan = FleetOrchestrator.Decide(state, opt);
+        // [I8] La diagnosi si calcola SEMPRE, anche quando il piano contiene azioni: «perché non fa
+        // nulla» va risposto anche quando qualcosa fa, altrimenti il pannello sarebbe vuoto proprio
+        // nei giri interessanti.
+        LastSilence = FleetOrchestrator.Explain(state, opt);
 
         // [AF3] Sui PAREGGI (più candidati idonei della stessa assegnazione) il comitato può
         // scegliere DENTRO il menù che il core ha già validato. Fonte a journal: "committee" se
@@ -98,7 +142,13 @@ public sealed class FleetOrchestratorWorker(
 
                 var verdict = await committee.AskAsync(question, ct);
                 votesJson = System.Text.Json.JsonSerializer.Serialize(verdict.Votes);
-                assignSource = verdict.ByQuorum ? "committee" : "default";
+                // [I8] «default» collassava tre cause diverse in una parola: nessun provider ha
+                // risposto validamente, il quorum non è stato raggiunto, oppure il comitato non è
+                // partito affatto (budget esaurito, nessun provider con chiave). Chi legge il
+                // journal vedeva sempre lo stesso «default» e non poteva sapere se il comitato
+                // avesse deliberato o non fosse mai stato interrogato — che è la differenza fra
+                // «ha scelto la regola» e «non ha funzionato».
+                assignSource = DescribeAssignSource(verdict);
 
                 if (verdict.ByQuorum && Guid.TryParseExact(verdict.ChosenOptionId, "N", out var chosen)
                     && chosen != menu.DefaultRunId
@@ -128,7 +178,7 @@ public sealed class FleetOrchestratorWorker(
         LastPlan = plan;
         LastTickUtc = DateTime.UtcNow;
 
-        if (!opt.DryRun)
+        if (!opt.DryRun && !ExecutionArmImplemented)
         {
             // AF2a: il braccio esecutivo non esiste ancora. Dirlo a voce alta batte eseguire
             // qualcosa di non collaudato — e batte anche il silenzio.

@@ -46,6 +46,47 @@ public sealed record NotificationChannelStatus(
     int FailuresSinceLastDelivery);
 
 /// <summary>
+/// [I4] Pressione sul budget CONDIVISO delle notifiche.
+///
+/// <para><c>Notifications:MaxPerHour</c> è uno solo per processo, e nel guscio ci confluiscono
+/// <b>otto sorveglianti</b>: deriva delle feature e dei fattori, orchestratore di flotta, campagne,
+/// comitato, freschezza delle serie, guardiano del patrimonio, digest. Venti messaggi/ora divisi
+/// fra otto significa che <b>il primo che sbaglia soglia zittisce gli altri sette</b> — è già
+/// successo, con la staleness su una serie illiquida che ha inondato il canale e saturato il
+/// budget degli allarmi veri.</para>
+///
+/// <para>Finora la soppressione viveva in un <c>LogWarning</c> e nel conteggio accodato al
+/// messaggio successivo: nessuna superficie diceva <i>quanto è pieno il secchio adesso</i>, cioè
+/// quanto manca al silenzio. Questa è quella superficie.</para>
+/// </summary>
+/// <param name="SentInWindow">Messaggi recapitati nell'ultima ora scorrevole.</param>
+/// <param name="MaxPerHour">Il tetto in vigore adesso (hot-reload).</param>
+/// <param name="SuppressedPending">
+/// Soppressi non ancora dichiarati: verranno conteggiati in coda al primo messaggio che passa, e
+/// questo contatore torna a zero. Un valore &gt; 0 significa che il canale <b>sta perdendo</b>
+/// messaggi in questo momento.
+/// </param>
+/// <param name="SuppressedTotal">
+/// Soppressi da questo avvio, e <b>non si azzera mai</b>: è la differenza fra «adesso va bene» e
+/// «oggi è andata male sette volte». Senza, un'occhiata al pannello un minuto dopo la tempesta
+/// direbbe che non è successo niente.
+/// </param>
+/// <param name="LastSuppressedUtc">Quando è stato soppresso l'ultimo messaggio (null = mai).</param>
+public sealed record NotificationRateLimitPressure(
+    int SentInWindow,
+    int MaxPerHour,
+    int SuppressedPending,
+    long SuppressedTotal,
+    DateTime? LastSuppressedUtc)
+{
+    /// <summary>Il canale sta perdendo messaggi adesso.</summary>
+    public bool IsLosingNow => SuppressedPending > 0;
+
+    /// <summary>Quanti messaggi restano prima del silenzio. Mai negativo.</summary>
+    public int Remaining => Math.Max(0, MaxPerHour - SentInWindow);
+}
+
+/// <summary>
 /// L'<see cref="INotifier"/> registrato in DI: gate (<c>Notifications:Enabled</c>, default OFF,
 /// hot-reload), rate-limit a finestra scorrevole con coalescing (i messaggi soppressi vengono
 /// conteggiati e riportati nel primo messaggio successivo, mai persi in silenzio) e selezione
@@ -70,6 +111,12 @@ public sealed class NotificationDispatcher(
     private readonly Queue<DateTimeOffset> _sentInWindow = new();
     private int _suppressed;
 
+    // [I4] Il totale NON si azzera col messaggio successivo, a differenza di _suppressed: quello
+    // dice «sto perdendo messaggi adesso», questo dice «oggi è già successo». Guardando il pannello
+    // un minuto dopo la tempesta, senza il totale sembrerebbe che non sia successo niente.
+    private long _suppressedTotal;
+    private DateTime? _lastSuppressedUtc;
+
     // [E5] Spia di guasto del canale (vedi NotificationChannelStatus). Aggiornata sotto _gate.
     private DateTime? _lastDeliveredUtc;
     private DateTime? _lastFailureUtc;
@@ -86,6 +133,37 @@ public sealed class NotificationDispatcher(
                 return new NotificationChannelStatus(
                     _lastDeliveredUtc, _lastFailureUtc, _lastFailureDetail, _failuresSinceLastDelivery);
             }
+        }
+    }
+
+    /// <summary>
+    /// [I4] Pressione sul budget condiviso, letta senza inviare nulla e <b>senza effetti</b>: la
+    /// finestra viene ripulita qui come nell'invio, altrimenti il pannello mostrerebbe messaggi
+    /// vecchi di ore come se occupassero ancora uno slot.
+    /// </summary>
+    public NotificationRateLimitPressure RateLimitPressure
+    {
+        get
+        {
+            lock (_gate)
+            {
+                TrimWindow(_time.GetUtcNow());
+                return new NotificationRateLimitPressure(
+                    _sentInWindow.Count,
+                    Math.Max(1, options.CurrentValue.MaxPerHour),
+                    _suppressed,
+                    _suppressedTotal,
+                    _lastSuppressedUtc);
+            }
+        }
+    }
+
+    /// <summary>Scarta dalla finestra scorrevole i recapiti più vecchi di un'ora. Va chiamato sotto <c>_gate</c>.</summary>
+    private void TrimWindow(DateTimeOffset now)
+    {
+        while (_sentInWindow.Count > 0 && now - _sentInWindow.Peek() > TimeSpan.FromHours(1))
+        {
+            _sentInWindow.Dequeue();
         }
     }
 
@@ -139,13 +217,12 @@ public sealed class NotificationDispatcher(
         lock (_gate)
         {
             var now = _time.GetUtcNow();
-            while (_sentInWindow.Count > 0 && now - _sentInWindow.Peek() > TimeSpan.FromHours(1))
-            {
-                _sentInWindow.Dequeue();
-            }
+            TrimWindow(now);
             if (_sentInWindow.Count >= Math.Max(1, opt.MaxPerHour))
             {
                 _suppressed++;
+                _suppressedTotal++;
+                _lastSuppressedUtc = now.UtcDateTime;
                 logger.LogWarning("Notifica SOPPRESSA dal rate-limit ({Max}/h): [{Severity}] {Title}", opt.MaxPerHour, severity, title);
                 return new NotificationResult(NotificationOutcome.RateLimited,
                     $"Raggiunto il tetto di {opt.MaxPerHour} messaggi/ora: questa verrà conteggiata nel primo messaggio successivo.");

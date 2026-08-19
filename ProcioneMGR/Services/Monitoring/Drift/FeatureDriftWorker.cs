@@ -25,6 +25,18 @@ public sealed class DriftMonitorOptions
 
     /// <summary>Numero minimo di feature in <c>Alert</c> per far scattare il ritiro del Champion.</summary>
     public int MinAlertsToRetire { get; set; } = 1;
+
+    /// <summary>
+    /// [I6] Soglie dei tre rilevatori (PSI, KS, Page-Hinkley). Fino al 2026-08-18 vivevano SOLO nei
+    /// default di <see cref="DriftThresholds"/> e si cambiavano <b>ricompilando</b>: nessuna chiave,
+    /// nessun pannello, in violazione diretta del mandato «tutto amministrabile da UI» del
+    /// 2026-08-09. Sono la prassi generica del settore, non una misura fatta su serie finanziarie:
+    /// poterle muovere è il presupposto per tararle.
+    ///
+    /// <para>I default restano quelli di prima, quindi una configurazione che non nomina questa
+    /// sottosezione si comporta esattamente come prima — verificato al livello 2, non promesso.</para>
+    /// </summary>
+    public DriftThresholds Thresholds { get; set; } = new();
 }
 
 /// <summary>
@@ -39,7 +51,8 @@ public sealed class FeatureDriftWorker(
     ProcioneMGR.Services.Registry.IModelRegistry registry,
     Microsoft.Extensions.Options.IOptionsMonitor<DriftMonitorOptions> options,
     ILogger<FeatureDriftWorker> logger,
-    ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null) : BackgroundService
+    ProcioneMGR.Services.Observability.ProcioneMetrics? metrics = null,
+    FeatureDriftSnapshot? snapshot = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -79,6 +92,12 @@ public sealed class FeatureDriftWorker(
     {
         var opt = options.CurrentValue; // snapshot coerente per l'intero tick
         var checkedAt = DateTime.UtcNow;
+        // [I6] Lo strumento del costo viene PRIMA dell'accensione: senza, «quanto costa un tick»
+        // resta un'opinione, e questo worker legge candele e blob di modelli contro lo stesso
+        // database che serve il motore e l'ingestion.
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var recentCandlesRead = 0;
+        var featuresEvaluated = 0;
         List<SavedMlModel> models;
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
@@ -103,8 +122,80 @@ public sealed class FeatureDriftWorker(
                     .ToListAsync(ct);
             }
             recent.Reverse(); // rimetti in ordine cronologico
+            recentCandlesRead += recent.Count;
 
-            var reports = await monitor.EvaluateAsync(model, recent, ct: ct);
+            // [I6] Prima di valutare: questo check PUÒ produrre un verdetto? I tre casi qui sotto
+            // producevano tutti Overall=None, cioè il verde — indistinguibile da «ho guardato e va
+            // tutto bene». Dichiararli SALTATI è ciò che rende il monitor capace di dire di no.
+            var skip = DescribeSkip(model, recent, opt);
+            if (skip is not null)
+            {
+                logger.LogInformation(
+                    "Drift SALTATO sul modello '{Model}' ({Symbol} {Tf}): {Reason}",
+                    model.Name, model.Symbol, model.Timeframe, skip);
+                rows.Add(new DriftCheckResult
+                {
+                    CheckedAtUtc = checkedAt,
+                    ModelId = model.Id,
+                    ModelName = model.Name,
+                    Symbol = model.Symbol,
+                    Timeframe = model.Timeframe,
+                    Overall = DriftSeverity.None,
+                    SkipReason = skip,
+                });
+                continue;
+            }
+
+            // [I6] Le soglie arrivano dalla configurazione, non dai default incorporati: sono lo
+            // snapshot preso a inizio tick, così un salvataggio a metà giro non produce due modelli
+            // giudicati con due metri diversi nella stessa fotografia.
+            var reports = await monitor.EvaluateAsync(model, recent, opt.Thresholds, ct);
+            featuresEvaluated += reports.Count;
+
+            // [I6] Il monitor non ha trovato NULLA DA MISURARE. Due casi, e il secondo è il quarto
+            // modo di dire verde a prescindere — trovato dalla revisione avversaria DENTRO la
+            // correzione che ne eliminava tre.
+            //
+            // Il primo è ovvio: zero report (nessuna feature costruibile).
+            // Il secondo no: i tre detector restituiscono `None` con «Dati insufficienti» anche
+            // quando NON hanno potuto guardare, perché le osservazioni valide (dopo il warm-up del
+            // fattore e dopo lo scarto dei null) sono sotto MinObservations. In quel caso
+            // reports.Count > 0 e drifting.Count == 0, quindi la riga finiva persistita come
+            // GIUDIZIO verde: «pulito» costruito su rilevatori che avevano dichiarato di non aver
+            // potuto misurare. Il dato per distinguerlo c'era già ed era inutilizzato —
+            // ReferenceCount e CurrentCount sul report.
+            var misurabili = reports.Count(r => IsMeasured(r, opt.Thresholds));
+            if (misurabili == 0)
+            {
+                var reason = reports.Count == 0
+                    ? "il monitor non ha prodotto alcuna feature valutabile per questo modello"
+                    : $"nessuna delle {reports.Count} feature aveva abbastanza osservazioni valide "
+                      + $"(servono {opt.Thresholds.MinObservations} per lato): i rilevatori hanno risposto «dati insufficienti», non «nessuna deriva»";
+                logger.LogInformation(
+                    "Drift SALTATO sul modello '{Model}' ({Symbol} {Tf}): {Reason}",
+                    model.Name, model.Symbol, model.Timeframe, reason);
+                rows.Add(new DriftCheckResult
+                {
+                    CheckedAtUtc = checkedAt,
+                    ModelId = model.Id,
+                    ModelName = model.Name,
+                    Symbol = model.Symbol,
+                    Timeframe = model.Timeframe,
+                    Overall = DriftSeverity.None,
+                    SkipReason = reason,
+                });
+                continue;
+            }
+            // [I6] Il denominatore del verdetto sono le feature DAVVERO misurate, non quante ne
+            // esistono: «0 su 12» quando 9 non avevano osservazioni sufficienti è un rapporto che
+            // rassicura contando anche ciò che nessuno ha guardato.
+            if (misurabili < reports.Count)
+            {
+                logger.LogInformation(
+                    "Drift sul modello '{Model}' ({Symbol} {Tf}): {NonMisurate} feature su {Totali} senza osservazioni sufficienti, escluse dal verdetto.",
+                    model.Name, model.Symbol, model.Timeframe, reports.Count - misurabili, reports.Count);
+            }
+
             var drifting = reports.Where(r => r.Overall != DriftSeverity.None).ToList();
             var alerts = drifting.Count(r => r.Overall == DriftSeverity.Alert);
             var championRetired = false;
@@ -149,7 +240,7 @@ public sealed class FeatureDriftWorker(
                 ModelName = model.Name,
                 Symbol = model.Symbol,
                 Timeframe = model.Timeframe,
-                TotalFeatures = reports.Count,
+                TotalFeatures = misurabili, // le feature DAVVERO misurate: vedi la nota sul denominatore
                 DriftingFeatures = drifting.Count,
                 AlertFeatures = alerts,
                 Overall = drifting.Count == 0 ? DriftSeverity.None : drifting.Max(r => r.Overall),
@@ -168,6 +259,92 @@ public sealed class FeatureDriftWorker(
             var cutoff = checkedAt.AddDays(-ResultRetentionDays);
             await db.DriftCheckResults.Where(r => r.CheckedAtUtc < cutoff).ExecuteDeleteAsync(ct);
         }
+
+        // [I6] La fotografia per la Home si aggiorna SEMPRE a fine tick, anche quando non c'è nessun
+        // allarme: «zero allarmi su 53 modelli di cui 50 saltati» è un'informazione, e senza la
+        // fotografia la Home non potrebbe distinguerla da «non ho ancora guardato».
+        snapshot?.Replace(rows.Select(FeatureDriftSnapshot.FromRow), checkedAt);
+
+        // [I6] Il costo del tick, misurato e dichiarato. La riga di riepilogo esiste perché il
+        // numero deve poter essere letto anche da chi guarda i log e non la pagina — e perché i
+        // contatori del processo si azzerano a ogni riavvio del guscio, che è frequente.
+        var elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+        var skipped = rows.Count(r => !r.IsVerdict);
+        metrics?.RecordDriftTick(elapsedMs, models.Count, recentCandlesRead, featuresEvaluated);
+        logger.LogInformation(
+            "Tick drift: {Models} modelli ({Verdicts} con verdetto, {Skipped} saltati), {Candles} candele recenti lette, {Features} feature valutate in {Elapsed:F0} ms.",
+            models.Count, rows.Count - skipped, skipped, recentCandlesRead, featuresEvaluated, elapsedMs);
+    }
+
+    /// <summary>
+    /// [I6] Questa feature è stata <b>davvero misurata</b>, o i rilevatori hanno risposto «dati
+    /// insufficienti»?
+    ///
+    /// <para>È la distinzione che mancava e che la revisione avversaria del 2026-08-18 ha trovato:
+    /// i tre detector restituiscono <see cref="DriftSeverity.None"/> <i>anche</i> quando non hanno
+    /// potuto guardare, perché le osservazioni valide — dopo il warm-up del fattore e dopo lo scarto
+    /// dei null — sono sotto <see cref="DriftThresholds.MinObservations"/>. Contare quel «None» come
+    /// «nessuna deriva» è il quarto modo di dire verde a prescindere, ed è dormiente solo finché
+    /// nessuno tara le soglie: bastano <c>MinObservations</c> alzato sopra le osservazioni
+    /// disponibili, o <c>RecentCandles</c> al minimo con un fattore a warm-up lungo, perché ogni
+    /// riga diventi un falso «pulito».</para>
+    ///
+    /// <para>La soglia è la stessa che usano i detector, presa dalle stesse opzioni: due pavimenti
+    /// per la stessa domanda darebbero due verdetti sulla stessa feature.</para>
+    /// </summary>
+    internal static bool IsMeasured(FactorDriftReport report, DriftThresholds thresholds)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentNullException.ThrowIfNull(thresholds);
+        // Un report senza alcun risultato non è una misura: è il caso «fattore non più costruibile»,
+        // che il monitor impacchetta comunque in un report per non perdere la traccia del fattore.
+        if (report.Results.Count == 0) return false;
+
+        // Un verdetto DIVERSO da None è una misura per definizione: i rilevatori rispondono None
+        // quando non hanno potuto guardare, quindi un Warning o un Alert può venire solo da un
+        // confronto realmente eseguito. Chiederlo qui rende la regola robusta anche se i conteggi
+        // non fossero valorizzati, e non allarga mai il silenzio — aggiunge solo casi misurati.
+        if (report.Overall != DriftSeverity.None) return true;
+
+        // Resta il caso ambiguo, ed è quello che conta: `None` può significare «nessuna deriva»
+        // oppure «dati insufficienti». Li distinguono solo i conteggi.
+        var floor = Math.Max(1, thresholds.MinObservations);
+        return report.ReferenceCount >= floor && report.CurrentCount >= floor;
+    }
+
+    /// <summary>
+    /// [I6] Il check può produrre un verdetto? <c>null</c> = sì. Ogni ramo qui dentro produceva
+    /// prima <c>Overall=None</c>, cioè il colore verde: sono i tre modi in cui questo monitor
+    /// diceva la cosa rassicurante indipendentemente dalla realtà.
+    /// Puro e statico apposta: si prova senza database, senza orologio e senza worker.
+    /// </summary>
+    internal static string? DescribeSkip(SavedMlModel model, IReadOnlyList<OhlcvData> recent, DriftMonitorOptions opt)
+    {
+        var required = Math.Max(20, opt.RecentCandles);
+        if (recent.Count < required)
+        {
+            return $"candele recenti insufficienti: {recent.Count} su {required} richieste";
+        }
+
+        // NOTA DI DISEGNO: «il modello ha feature valutabili?» NON si decide qui. La risposta la dà
+        // il monitor, che è l'unico a sapere quali specifiche sa costruire, e leggere FactorsJson
+        // per conto suo sarebbe una SECONDA regola sulla stessa domanda — due regole che possono
+        // divergere sullo stesso modello, il difetto già pagato in D2 e con SeriesFreshness. Il caso
+        // si dichiara DOPO la valutazione, da un report vuoto (vedi TickAsync).
+
+        // Il caso insidioso: la finestra corrente è dentro il periodo di training. Confrontarla con
+        // la distribuzione di training significa confrontare un campione con la popolazione che lo
+        // contiene — non può quasi mai allarmare, e quel silenzio si legge come stabilità.
+        var windowStart = recent[0].TimestampUtc;
+        if (model.TrainingDataTo > DateTime.MinValue && windowStart < model.TrainingDataTo)
+        {
+            var overlap = recent.Count(c => c.TimestampUtc <= model.TrainingDataTo);
+            var pct = 100.0 * overlap / recent.Count;
+            return $"la finestra corrente si sovrappone al periodo di training per il {pct:F0}% delle candele "
+                   + $"(training fino al {model.TrainingDataTo:yyyy-MM-dd}): il confronto sarebbe con la popolazione che contiene il campione";
+        }
+
+        return null;
     }
 
     /// <summary>Top-5 feature in drift come JSON compatto per la UI: [{"name","severity","detector","score"}].</summary>

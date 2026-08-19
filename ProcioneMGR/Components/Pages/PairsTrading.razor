@@ -8,6 +8,7 @@
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Backtesting
 @using ProcioneMGR.Services.Exchanges
+@using ProcioneMGR.Services.Experiments
 @using ProcioneMGR.Services.Indicators
 @using ProcioneMGR.Services.PairsTrading
 @using ProcioneMGR.Services.TimeSeries
@@ -15,6 +16,10 @@
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IPairsBacktestEngine Engine
+@* [I10] I risultati di questa pagina morivano col circuito Blazor: ora ogni backtest e' un
+   ExperimentRun confrontabile con gli altri. Il tracker e' un osservatore SACRIFICABILE — gli helper
+   Safe* non fanno mai cadere il calcolo osservato. *@
+@inject ProcioneMGR.Services.Experiments.IExperimentTracker Tracker
 @inject AuthenticationStateProvider AuthProvider
 @inject ProcioneMGR.Services.MarketData.ISymbolCatalog SymbolCatalog
 
@@ -152,7 +157,27 @@
                     <label class="form-label">Fee %</label>
                     <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_feePercent" disabled="@_busy" />
                 </div>
+                @* [I10] Due manopole VIVE nel motore e finora invisibili qui. Lo slippage in
+                   particolare restava a 0 mentre /backtest parte da 0,05%: su una strategia a due
+                   gambe il costo si paga DUE VOLTE per trade, quindi lo sconto era il più grande
+                   possibile esattamente dove fa più danno — e i numeri di questa pagina non erano
+                   confrontabili con quelli di nessun'altra superficie. *@
+                <div class="col-auto">
+                    <label class="form-label">Slippage % (per gamba)</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_slippagePercent" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Stop z-score (divergenza)</label>
+                    <input type="number" step="any" class="form-control" style="width: 9rem;" @bind="_stopZScore" disabled="@_busy" />
+                </div>
             </div>
+            <p class="text-muted small mt-2 mb-0">
+                Il costo si paga <strong>su due gambe per trade</strong>: con fee e slippage per gamba,
+                un giro completo costa il quadruplo di quanto suggerisca il singolo numero. Il default
+                dello slippage è quello della piattaforma (@ProcioneMGR.Services.Pipeline.PipelineCosts.DefaultSlippagePercent.ToString("0.###")%),
+                lo stesso di <a href="backtest">Backtest</a>: prima questa pagina girava a <strong>zero</strong>,
+                e i suoi risultati non erano confrontabili con quelli delle altre superfici.
+            </p>
         </AdvancedPanel>
 
         <div class="mt-3">
@@ -274,6 +299,21 @@
     private decimal _initialCapital = 10_000m;
     private decimal _positionSizePercent = 10m;
     private decimal _feePercent = 0.1m;
+
+    /// <summary>
+    /// [I10] Slippage per gamba. <b>Default allineato alla piattaforma</b>
+    /// (<c>PipelineCosts.DefaultSlippagePercent</c>), non più zero.
+    ///
+    /// <para>Fino al 2026-08-18 questa pagina costruiva la configurazione <b>senza</b> impostarlo,
+    /// quindi girava a slippage 0 mentre <c>/backtest</c> e il tool di ricerca partivano da 0,05%.
+    /// Su una strategia a DUE gambe il costo si paga due volte per trade: lo sconto era il più
+    /// grande possibile esattamente dove fa più danno, e i «risultati» di questa pagina non erano
+    /// confrontabili con quelli di nessun'altra superficie della piattaforma.</para>
+    /// </summary>
+    private decimal _slippagePercent = ProcioneMGR.Services.Pipeline.PipelineCosts.DefaultSlippagePercent;
+
+    /// <summary>[I10] Stop di divergenza dello spread: esiste nel motore dal 2026-07 ma era invisibile.</summary>
+    private decimal _stopZScore = 3.5m;
 
     // Aggiornati dai due componenti DataAvailability (una verifica per gamba).
     private bool _hasDataY = true;
@@ -414,15 +454,60 @@
                 EntryZScore = _entryZScore,
                 ExitZScore = _exitZScore,
                 HedgeRatioEstimator = _estimator,
+                // [I10] Prima non venivano impostati: lo slippage restava a 0 (mentre /backtest parte
+                // da 0,05%) e lo stop di divergenza non era né visibile né modificabile, pur
+                // esistendo nel motore dal 2026-07.
+                SlippagePercent = _slippagePercent,
+                StopZScore = _stopZScore,
             };
+
+            // [I10] Il run si registra PRIMA di calcolare, come gli altri esperimenti: se il calcolo
+            // esplode resta la traccia del tentativo coi suoi parametri, invece del nulla. Fino ad
+            // ora i numeri di questa pagina morivano col circuito Blazor — e le misure che hanno
+            // prodotto i verdetti C2 ed E1 vivono nello stdout di un tool, non a database.
+            var experimentId = await Tracker.SafeStartRunAsync(
+                kind: "Pairs",
+                name: $"{config.SymbolY} / {config.SymbolX} {_timeframe}",
+                parameters: new
+                {
+                    config.SymbolY, config.SymbolX, Timeframe = _timeframe,
+                    From = _from, To = _to,
+                    Estimator = config.HedgeRatioEstimator.ToString(),
+                    config.LookbackWindow, config.RecalibrationInterval, config.ZScoreLookback,
+                    config.EntryZScore, config.ExitZScore, config.StopZScore,
+                    config.InitialCapital, config.PositionSizePercent,
+                    config.FeePercent, config.SlippagePercent,
+                },
+                symbol: $"{config.SymbolY}|{config.SymbolX}",
+                timeframe: _timeframe);
 
             _result = Engine.RunBacktest(candlesY, candlesX, config);
 
             if (_result.CandlesEvaluated == 0)
             {
+                // Un run che non ha potuto misurare si chiude DICHIARANDOLO, non sparisce: «nessun
+                // dato allineato» e «non è mai stato tentato» sono cose diverse.
+                await Tracker.SafeCompleteAsync(experimentId, "Failed", "Nessuna candela allineata fra i due symbol nel range richiesto.");
                 SetStatus("Nessuna candela allineata fra i due symbol nel range richiesto.", error: true);
                 return;
             }
+
+            await Tracker.SafeLogMetricsAsync(experimentId, new Dictionary<string, decimal>
+            {
+                ["FinalCapital"] = _result.FinalCapital,
+                ["TotalReturnPercent"] = _result.TotalReturnPercent,
+                ["TotalTrades"] = _result.TotalTrades,
+                ["WinRate"] = _result.WinRate,
+                ["MaxDrawdownPercent"] = _result.MaxDrawdownPercent,
+                ["CandlesEvaluated"] = _result.CandlesEvaluated,
+                // Il verdetto di cointegrazione accanto al risultato: separarli è ciò che permette di
+                // leggere un rendimento senza sapere se la coppia era cointegrata.
+                ["IsCointegrated"] = _cointegration?.IsCointegrated == true ? 1m : 0m,
+                ["AdfStatistic"] = _cointegration is null ? 0m : (decimal)_cointegration.AdfStatistic,
+            });
+            await Tracker.SafeLogArtifactAsync(experimentId, "PairsTrades", _result.Trades);
+            await Tracker.SafeLogArtifactAsync(experimentId, "EquityCurve", _result.EquityCurve);
+            await Tracker.SafeCompleteAsync(experimentId, "Completed");
 
             _equitySeries = new()
             {
@@ -437,27 +522,38 @@
                 },
             };
 
-            // Ricalcola lo z-score (stesso calcolo dell'engine) solo per la visualizzazione.
-            var analysis = new RollingPairsSpreadAnalyzer().Analyze(
-                alignedY.Select(c => c.Close).ToList(), alignedX.Select(c => c.Close).ToList(),
-                _lookbackWindow, _recalibrationInterval, _zScoreLookback);
+            // [I10] Lo z-score disegnato è QUELLO CHE HA DECISO, preso dal risultato del motore.
+            //
+            // Prima questa riga ricalcolava con un `RollingPairsSpreadAnalyzer` FISSO: scegliendo
+            // Kalman si vedeva la curva dell'OLS, cioè un grafico che descriveva un backtest diverso
+            // da quello eseguito. Il difetto è entrato col C2 (adozione del Kalman, 2026-07-26) e la
+            // doc di pagina dichiarava esattamente che non poteva succedere («nessuna doppia
+            // verità»). Non si ricalcola più nulla: non c'è un secondo calcolo che possa divergere.
+            var analysis = _result.Analysis;
             var times = alignedY.Select(c => new DateTimeOffset(DateTime.SpecifyKind(c.TimestampUtc, DateTimeKind.Utc)).ToUnixTimeSeconds()).ToList();
-            _zScoreSeries = new()
-            {
-                new IndicatorSeries
+            // Un motore che non espone l'analisi non fa disegnare una curva sbagliata: fa sparire il
+            // grafico, dichiarandolo. Meglio nessuna curva che una che descrive un altro backtest.
+            _zScoreSeries = analysis is null
+                ? new()
+                : new()
                 {
-                    Title = "Z-score",
-                    Color = "#8E24AA",
-                    Type = IndicatorSeriesType.Line,
-                    Scale = "osc",
-                    Points = times.Zip(analysis.ZScore, (t, z) => (t, z))
-                        .Where(p => p.z.HasValue)
-                        .Select(p => new IndicatorPoint(p.t, p.z!.Value))
-                        .ToList(),
-                },
-            };
+                    new IndicatorSeries
+                    {
+                        Title = $"Z-score ({(_result.EstimatorUsed == PairsHedgeRatioEstimator.Kalman ? "Kalman" : "Rolling OLS")})",
+                        Color = "#8E24AA",
+                        Type = IndicatorSeriesType.Line,
+                        Scale = "osc",
+                        Points = times.Zip(analysis.ZScore, (t, z) => (t, z))
+                            .Where(p => p.z.HasValue)
+                            .Select(p => new IndicatorPoint(p.t, p.z!.Value))
+                            .ToList(),
+                    },
+                };
 
-            SetStatus($"Backtest completato su {_result.CandlesEvaluated} candele allineate.", error: false);
+            var costo = _slippagePercent > 0m
+                ? $" · costi: fee {_feePercent:0.###}% + slippage {_slippagePercent:0.###}% PER GAMBA (una coppia li paga due volte per trade)"
+                : " · ⚠ slippage a ZERO: i risultati sono ottimistici (una coppia paga il costo su DUE gambe per trade)";
+            SetStatus($"Backtest completato su {_result.CandlesEvaluated} candele allineate{costo}.", error: false);
         }
         catch (Exception ex)
         {

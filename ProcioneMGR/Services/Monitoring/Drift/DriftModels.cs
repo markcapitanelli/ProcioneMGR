@@ -105,4 +105,27 @@ public class DriftCheckResult
 
     /// <summary>True se QUESTO check ha fatto ritirare un Champion (ciclo chiuso del registry).</summary>
     public bool ChampionRetired { get; set; }
+
+    /// <summary>
+    /// [I6] <b>Perché il check non ha prodotto un verdetto</b>, quando non l'ha prodotto.
+    /// <c>null</c> = il check è stato eseguito davvero e <see cref="Overall"/> è un giudizio.
+    ///
+    /// <para>È la colonna che trasforma questa tabella da «rassicurante a prescindere» a
+    /// falsificabile. Prima, candele insufficienti, modello senza feature dichiarate o finestra
+    /// corrente sovrapposta al periodo di training producevano tutti <c>Overall = None</c> — cioè
+    /// il colore verde, indistinguibile da «ho guardato e va tutto bene». Il commento su
+    /// <see cref="TotalFeatures"/> diceva «0 = check saltato», ma nessuna superficie lo leggeva
+    /// così e nessun verdetto lo dichiarava: la distinzione esisteva nella testa di chi aveva
+    /// scritto il campo, non nel prodotto.</para>
+    ///
+    /// <para>Il caso della <b>sovrapposizione col training</b> è il più insidioso dei tre, perché è
+    /// l'unico che non sembra un guasto: confrontare la finestra recente con la distribuzione di
+    /// training quando la prima è contenuta nella seconda significa confrontare un campione con la
+    /// popolazione che lo contiene — non può quasi mai allarmare, e quel silenzio si legge come
+    /// stabilità.</para>
+    /// </summary>
+    public string? SkipReason { get; set; }
+
+    /// <summary>Il check ha prodotto un giudizio, non un rinvio.</summary>
+    public bool IsVerdict => string.IsNullOrEmpty(SkipReason);
 }
