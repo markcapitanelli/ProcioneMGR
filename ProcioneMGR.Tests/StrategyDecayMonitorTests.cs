@@ -339,7 +339,14 @@ public class StrategyDecayMonitorTests
             new Dictionary<string, decimal?> { ["a"] = 6m },
             requiredTrades: 20);
 
-        Assert.Contains("~3,2 mesi", r.Verdict, StringComparison.Ordinal);
+        // [CI 2026-08-19] Il numero si formatta con la CULTURA DELL'HOST, e l'app non ne fissa
+        // nessuna: sulla macchina di sviluppo (it-IT) esce «13,8», sui runner e nei pod Linux
+        // «13.8». Inchiodare la forma italiana faceva passare il test qui e fallire in CI —
+        // e il test non stava provando la lingua, stava provando il NUMERO.
+        // Si costruisce quindi l'atteso con lo STESSO formato del codice sotto test.
+        // 19 trade mancanti a 6/mese = 3,2 mesi (MonthsToVerdict arrotonda a un decimale).
+        var mesiMancanti = ProcioneMGR.Services.Fleet.TradeFrequency.MonthsToVerdict(6m, 19)!.Value;
+        Assert.Contains($"~{mesiMancanti:0.#} mesi", r.Verdict, StringComparison.Ordinal);
     }
 
     /// <summary>

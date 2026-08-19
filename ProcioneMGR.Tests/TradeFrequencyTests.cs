@@ -159,8 +159,15 @@ public class TradeFrequencyTests
         var testo = TradeFrequency.DescribeStarvation(30m, observed: 1, observation: TimeSpan.FromDays(14), minFraction: 0.2m);
 
         Assert.Contains("1 trade in 14 giorni", testo, StringComparison.Ordinal);
-        // gli attesi NEL PERIODO, non al mese: 30 x (14 / 30,4375) = 13,8 con la costante condivisa.
-        Assert.Contains("contro ~13,8 attesi", testo, StringComparison.Ordinal);
+
+        // [CI 2026-08-19] Il numero si formatta con la CULTURA DELL'HOST, e l'app non ne fissa
+        // nessuna: sulla macchina di sviluppo (it-IT) esce «13,8», sui runner e nei pod Linux
+        // «13.8». Inchiodare la forma italiana faceva passare il test qui e fallire in CI —
+        // e il test non stava provando la lingua, stava provando il NUMERO.
+        // Si costruisce quindi l'atteso con lo STESSO formato del codice sotto test.
+        // Gli attesi NEL PERIODO, non al mese: 30 x (14 / 30,4375) = 13,8 con la costante condivisa.
+        var attesiNelPeriodo = Math.Round(30m * (14m / TradeFrequency.DaysPerMonth), 1);
+        Assert.Contains($"contro ~{attesiNelPeriodo:0.#} attesi", testo, StringComparison.Ordinal);
     }
 
     // --- La finestra di holdout: UNA aritmetica, tre chiamanti ---------------------------------

@@ -174,10 +174,17 @@ public sealed class FleetStarvationTests
         Assert.Contains("INEDIA", reason, StringComparison.Ordinal);
         Assert.Contains("ADA/USDT 4h", reason, StringComparison.Ordinal);
         Assert.Contains("1 trade in 14 giorni", reason, StringComparison.Ordinal);
+
         // [I12-rev] 30/mese x (14 / 30,4375) = 13,8 — con la costante CONDIVISA del mese. Prima
         // erano 14,0 perche' questa meta' del confronto divideva per 30,0 mentre l'atteso nasceva
         // da 30,44: due aritmetiche ai due lati della stessa disuguaglianza.
-        Assert.Contains("contro ~13,8 attesi", reason, StringComparison.Ordinal);
+        // [CI 2026-08-19] Il numero si formatta con la CULTURA DELL'HOST, e l'app non ne fissa
+        // nessuna: sulla macchina di sviluppo (it-IT) esce «13,8», sui runner e nei pod Linux
+        // «13.8». Inchiodare la forma italiana faceva passare il test qui e fallire in CI —
+        // e il test non stava provando la lingua, stava provando il NUMERO.
+        // Si costruisce quindi l'atteso con lo STESSO formato del codice sotto test.
+        var attesiNelPeriodo = Math.Round(30m * (14m / TradeFrequency.DaysPerMonth), 1);
+        Assert.Contains($"contro ~{attesiNelPeriodo:0.#} attesi", reason, StringComparison.Ordinal);
     }
 
     // --- La diagnosi del silenzio ---------------------------------------------------------------
