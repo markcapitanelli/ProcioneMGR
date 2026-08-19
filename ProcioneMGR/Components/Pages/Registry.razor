@@ -18,10 +18,19 @@
         Ogni modello vive uno <strong>stadio</strong>: <em>Staging → Challenger → Champion</em>, con
         uscita a <em>Retired</em>. C'è <strong>un solo Champion per (coppia, timeframe)</strong>.
     </p>
-    <p class="mb-0">
+    <p>
         La promozione a Champion passa dal <strong>gate del Deflated Sharpe</strong> (Fase 1): un
         modello con DSR inferiore non sostituisce mai quello in carica. Il monitor di drift, se un
         Champion degrada, lo <strong>ritira e accoda un retrain</strong> — mai un'azione sul trading Live.
+    </p>
+    <p class="mb-0">
+        <strong>Il ritiro si può annullare, ma non si annulla da solo.</strong> Un modello ritirato —
+        a mano o dal monitor di drift — si riporta in <em>Staging</em> dal pulsante sulla sua riga:
+        torna <em>eleggibile</em>, non torna Champion. Per riprendersi il posto deve ripassare da
+        Challenger e ri-superare il gate DSR. Attenzione: il DSR di un modello ritirato è quello
+        misurato <strong>prima</strong> del ritiro, e se il ritiro è venuto dal drift è esattamente la
+        misura che il sistema ha dichiarato invecchiata — il motivo del ritiro resta scritto sulla riga
+        apposta, per essere letto prima di rimetterlo in gioco.
         Torna a <a href="experiments">Esperimenti</a>.
     </p>
 </GuidaPanel>
@@ -66,10 +75,30 @@
                             <td class="text-end">@Fmt(m.DeflatedSharpe)</td>
                             <td class="text-end">@m.Version</td>
                             <td class="small">
-                                @if (m.RetiredReason is not null) { <span>@m.RetiredReason</span> }
-                                @if (m.RetrainRequestedAtUtc is not null) { <span class="badge bg-warning text-dark ms-1">retrain accodato</span> }
+                                @* I tre campi del ritiro descrivono l'ULTIMO ritiro, lo stadio dice se è in corso:
+                                   su una riga non-Retired vanno quindi dati come storia, non come stato attuale
+                                   (regola 5, «mai mostrare un valore vecchio come se fosse attuale»). Prima qui si
+                                   rendeva per sola nullità del campo, e un modello riportato in Staging avrebbe
+                                   esibito «drift: 3 feature in alert» accanto a un badge vivo. *@
+                                @if (m.RetiredReason is not null)
+                                {
+                                    @if (m.Stage == ModelStage.Retired)
+                                    {
+                                        <span>@m.RetiredReason</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted fst-italic" title="Storia, non stato attuale: il modello oggi è @m.Stage.">
+                                            già ritirato@(m.RetiredAtUtc is { } ra ? $" il {ra.ToLocalTime():dd/MM/yyyy}" : "") — @m.RetiredReason
+                                        </span>
+                                    }
+                                }
+                                @if (m.RetrainRequestedAtUtc is not null)
+                                {
+                                    <span class="badge bg-warning text-dark ms-1" title="Riaddestramento chiesto il @m.RetrainRequestedAtUtc.Value.ToLocalTime().ToString("dd/MM/yyyy HH:mm") e mai eseguito: la piattaforma non riaddestra da sola.">retrain accodato</span>
+                                }
                             </td>
-                            <td class="text-end">
+                            <td class="text-end text-nowrap">
                                 @if (m.Stage == ModelStage.Staging)
                                 {
                                     <button class="btn btn-sm btn-outline-primary" @onclick="() => ToChallenger(m.Id)" disabled="@_busy">→ Challenger</button>
@@ -78,12 +107,71 @@
                                 {
                                     <button class="btn btn-sm btn-outline-success" @onclick="() => ToChampion(m.Id)" disabled="@_busy">→ Champion</button>
                                 }
-                                @if (m.Stage != ModelStage.Retired)
+                                @* [2026-08-19] Conferma a DUE PASSI legata all'Id, come Trading.razor e Backup.razor.
+                                   «Ritira» era l'unica azione distruttiva della pagina a un passo solo, e la tabella si
+                                   riordina sotto il cursore (LoadAsync rimette i Retired in fondo): legare la domanda
+                                   all'Id, e non alla posizione, è ciò che neutralizza la corsa. *@
+                                @if (m.Stage != ModelStage.Retired && _confirmRetire != m.Id)
                                 {
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => Retire(m.Id)" disabled="@_busy">Ritira</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => ArmRetire(m)" disabled="@_busy">Ritira</button>
+                                }
+                                @if (m.Stage == ModelStage.Retired && _confirmReinstate != m.Id)
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ArmReinstate(m.Id)" disabled="@_busy">↩ Riporta in Staging</button>
                                 }
                             </td>
                         </tr>
+
+                        @if (_confirmRetire == m.Id)
+                        {
+                            <tr class="table-warning">
+                                <td colspan="7">
+                                    <div class="small mb-2">
+                                        <strong>Ritirare «@m.Name»?</strong>
+                                        @if (m.Stage == ModelStage.Champion)
+                                        {
+                                            <span> È il <strong>Champion</strong> di @m.Symbol @m.Timeframe: le corsie che lo montano come sentinella Champion restano <strong>senza modello</strong> finché non ne promuovi un altro.</span>
+                                        }
+                                        <span>
+                                            Il ritiro <strong>non è definitivo ma non si annulla da solo</strong>: il modello si può riportare
+                                            in Staging da qui, e per riprendersi il posto deve <strong>ri-superare il gate DSR</strong> contro
+                                            il Champion che nel frattempo sarà in carica. Il motivo che scrivi qui è quello che leggerai
+                                            se un giorno lo riporterai in gioco: scrivine uno utile.
+                                        </span>
+                                    </div>
+                                    <div class="d-flex gap-2 align-items-center flex-wrap">
+                                        <input class="form-control form-control-sm" style="max-width: 34rem;" maxlength="256"
+                                               placeholder="Motivo del ritiro" @bind="_retireReason" @bind:event="oninput" disabled="@_busy" />
+                                        <button class="btn btn-sm btn-danger" @onclick="() => Retire(m.Id)" disabled="@(_busy || string.IsNullOrWhiteSpace(_retireReason))">Sì, ritira</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmRetire = null" disabled="@_busy">Annulla</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+
+                        @if (_confirmReinstate == m.Id)
+                        {
+                            <tr class="table-info">
+                                <td colspan="7">
+                                    <div class="small mb-2">
+                                        <strong>Riportare «@m.Name» in Staging?</strong>
+                                        <span>
+                                            Era stato ritirato@(m.RetiredAtUtc is { } ra2 ? $" il {ra2.ToLocalTime():dd/MM/yyyy HH:mm}" : "") con questo motivo:
+                                        </span>
+                                        <div class="fst-italic my-1">«@(m.RetiredReason ?? "motivo non registrato")»</div>
+                                        <span>
+                                            Torna <strong>solo eleggibile</strong>, non Champion: dovrà ripassare da Challenger e ri-superare il
+                                            gate DSR. Attenzione a due cose. Il DSR mostrato (@Fmt(m.DeflatedSharpe)) è quello misurato
+                                            <strong>prima</strong> del ritiro — nessuno l'ha ricalcolato, e se il ritiro è venuto dal drift è
+                                            proprio la misura che il sistema ha già dichiarato invecchiata. E se l'alert di drift persiste, il
+                                            prossimo check può <strong>ri-ritirarlo</strong> appena torna Champion.
+                                        </span>
+                                    </div>
+                                    <button class="btn btn-sm btn-primary" @onclick="() => Reinstate(m.Id)" disabled="@_busy">Sì, riporta in Staging</button>
+                                    <button class="btn btn-sm btn-outline-secondary ms-1" @onclick="() => _confirmReinstate = null" disabled="@_busy">Annulla</button>
+                                </td>
+                            </tr>
+                        }
                     }
                 </tbody>
             </table>
@@ -97,10 +185,22 @@
     private string? _message;
     private bool _messageOk;
 
+    // Le conferme sono legate all'Id del modello, non a un booleano di pagina: due righe non possono
+    // avere la domanda aperta insieme, e il riordino della tabella non sposta la domanda su un'altra riga.
+    private int? _confirmRetire;
+    private int? _confirmReinstate;
+    private string _retireReason = DefaultRetireReason;
+
+    private const string DefaultRetireReason = "Ritirato manualmente dalla UI.";
+
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     private async Task LoadAsync()
     {
+        // Ogni ricarica chiude le conferme aperte: la tabella si riordina (i Retired vanno in fondo),
+        // e una domanda armata su dati vecchi punterebbe l'operatore su una riga che si è spostata.
+        _confirmRetire = null;
+        _confirmReinstate = null;
         _groups.Clear();
         await using var db = await DbFactory.CreateDbContextAsync();
         var models = await db.SavedMlModels.AsNoTracking()
@@ -140,10 +240,39 @@
         _busy = false;
     }
 
+    private void ArmRetire(SavedMlModel m)
+    {
+        _confirmReinstate = null;
+        _retireReason = DefaultRetireReason;
+        _confirmRetire = m.Id;
+    }
+
+    private void ArmReinstate(int id)
+    {
+        _confirmRetire = null;
+        _confirmReinstate = id;
+    }
+
     private async Task Retire(int id)
     {
         _busy = true;
-        try { await Reg.RetireAsync(id, "Ritirato manualmente dalla UI.", requestRetrain: false); SetMsg("Modello ritirato.", true); }
+        var reason = string.IsNullOrWhiteSpace(_retireReason) ? DefaultRetireReason : _retireReason.Trim();
+        try { await Reg.RetireAsync(id, reason, requestRetrain: false); SetMsg($"Modello ritirato: {reason}", true); }
+        catch (Exception ex) { SetMsg(ex.Message, false); }
+        await LoadAsync();
+        _busy = false;
+    }
+
+    private async Task Reinstate(int id)
+    {
+        _busy = true;
+        try
+        {
+            // L'esito viene dal registry, non dal fatto che la chiamata sia tornata: il modello può
+            // non essere più Retired (ciclo drift, altra scheda) e in quel caso il banner deve dire di no.
+            var outcome = await Reg.ReinstateToStagingAsync(id);
+            SetMsg(outcome.Reason, outcome.Changed);
+        }
         catch (Exception ex) { SetMsg(ex.Message, false); }
         await LoadAsync();
         _busy = false;

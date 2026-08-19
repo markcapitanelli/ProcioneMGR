@@ -63,7 +63,7 @@ all'analisi · 🔵 pagina di configurazione/monitoraggio (nessuna catena quant)
 | `/ml` | `MlLab.razor` (1.021) | `MlLabService`, `IAlphaFactorFactory` | 6 predittori, purged CV, SHAP, registry, tracker | **addestra, salva, promuovi** | 🟢 |
 | `/ensemble` | `Ensemble.razor` (761) | `EnsemblePageService`, `ILaneDirectory`, `IStrategyFactory` | `EnsembleManager` keyed, comparator, decay | **ribilancia, applica** | 🟢 |
 | `/portfolio` | `PortfolioOptimization.razor` (432) | `MeanVarianceOptimizer`, `RiskParityOptimizer`, `HierarchicalRiskParityOptimizer`, `IRiskFactorPca` | 3 optimizer + PCA | confronta allocazioni | 🟡 **C-05: nessun "applica"** |
-| `/registry` | `Registry.razor` (163) | `IModelRegistry` | registry, gate DSR | **promuovi/ritira modello** | 🟢 |
+| `/registry` | `Registry.razor` (292) | `IModelRegistry` | registry, gate DSR | **promuovi/ritira/riporta in Staging** | 🟢 |
 | `/experiments` | `Experiments.razor` (333) | DbFactory | `ExperimentRun`/`Artifact` | consulta, confronta | 🔵 |
 | `/bot` | `Bot.razor` (297) | `BotPageService` | profili di rischio → `LaneSafetyMonitor` → motore | **avvia/ferma in modalità semplice** | 🟢 |
 | `/trading` | `Trading.razor` (1.574) | `TradingPageService`, `IMasterKeyProbe`, `ILaneDirectory`, `ProtectiveExitDiagnosticsService` | **`ITradingEngine` via 12 messaggi CQRS** | **start/stop, emergency stop, chiudi posizione, SL/TP, conferma/rifiuta ordine** | 🟢 |

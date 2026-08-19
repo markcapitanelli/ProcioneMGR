@@ -76,6 +76,7 @@ public sealed class EnsemblePageServiceTests : IAsyncDisposable
         public Task PromoteToChallengerAsync(int modelId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<PromotionOutcome> TryPromoteToChampionAsync(int modelId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<StageChangeOutcome> ReinstateToStagingAsync(int modelId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private sealed class FakeDriftMonitor : IFeatureDriftMonitor

@@ -3123,9 +3123,13 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 
 > Esito di un tentativo di promozione a Champion.
 
+### 🧾 `StageChangeOutcome` `(bool Changed, string Reason)`
+
+> Esito di una transizione di stadio che puo' essere rifiutata con motivazione. Separato da PromotionOutcome perche' "promosso" non descrive un rientro da Retired: li' non si sale di stadio, si torna in coda.
+
 ### 🔌 `IModelRegistry`
 
-> Governo del ciclo di vita dei modelli ML (Fase 2, rif. docs/REPORT-ANALISI-RICOSTRUZIONE). Fa rispettare due invarianti: (1) un solo Champion per (Symbol, Timeframe) ; (2) un Challenger può diventare Champion solo se il suo Deflated Sharpe (Fase 1) è ≥ di quello del Champion in carica — un modello meno difendibile non sostituisce mai uno più difendibile. NON tocca mai il trading Live: sposta solo di stadio i record. Additivo: lavora sui campi di ciclo di vita di , senza tabelle nuove.
+> Governo del ciclo di vita dei modelli ML (Fase 2, rif. docs/REPORT-ANALISI-RICOSTRUZIONE). Fa rispettare due invarianti: (1) un solo Champion per (Symbol, Timeframe) ; (2) un Challenger può diventare Champion solo se il suo Deflated Sharpe (Fase 1) è ≥ di quello del Champion in carica — un modello meno difendibile non sostituisce mai uno più difendibile. NON tocca mai il trading Live: sposta solo di stadio i record. Additivo: lavora sui campi di ciclo di vita di , senza tabelle nuove. [2026-08-19] **Retired non e' terminale**, ed e' una precisazione non un allentamento: lo era diventato per omissione (nessuna transizione in uscita era mai stata scritta), non per una decisione. Il ritiro non e' d'altronde una quarantena - MlModelLoader non guarda lo stadio - e l'unica cosa che toglie davvero e' la sentinella Champion, che si riguadagna solo ri-passando dal gate DSR. Questo tipo resta l'UNICO scrittore di SavedMlModel.Stage in tutta la codebase: l'invariante di unicita' del Champion non ha appoggio nel database (indice non unico) e regge solo per questo.
 
 | | Firma | Descrizione |
 |---|---|---|
@@ -3134,6 +3138,7 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 | `m` | `Task PromoteToChallengerAsync(int modelId, CancellationToken ct = default)` | Porta un modello Staging → Challenger (in valutazione). No-op se già oltre. |
 | `m` | `Task&lt;PromotionOutcome&gt; TryPromoteToChampionAsync(int modelId, CancellationToken ct = default)` | Prova a promuovere il modello a Champion applicando il gate DSR e l'invariante di unicità. Se supera, l'eventuale Champion in carica viene ritirato. Idempotente: promuovere l'attuale Champion è un successo no-op. |
 | `m` | `Task RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default)` | Ritira un modello con un motivo; opzionalmente marca "retrain accodato" (nessun retrain automatico). |
+| `m` | `Task&lt;StageChangeOutcome&gt; ReinstateToStagingAsync(int modelId, CancellationToken ct = default)` | [2026-08-19] Riporta un modello Retired a Staging. Restituisce l'ELEGGIBILITA', non lo stadio perduto: da Staging il modello deve ri-percorrere Challenger -> Champion e quindi ri-superare il gate DSR e quello semantico. Rifiuta con motivazione se il modello non esiste o non e' ritirato - mai un no-op silenzioso. |
 
 ### 📦 `ModelRegistry` `(`
 
@@ -3144,6 +3149,7 @@ Pipeline autonoma, layer AI, sentiment, dati, monitoraggio, notifiche, osservabi
 | `m` | `Task PromoteToChallengerAsync(int modelId, CancellationToken ct = default)` | — |
 | `m` | `Task&lt;PromotionOutcome&gt; TryPromoteToChampionAsync(int modelId, CancellationToken ct = default)` | — |
 | `m` | `Task RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default)` | — |
+| `m` | `Task&lt;StageChangeOutcome&gt; ReinstateToStagingAsync(int modelId, CancellationToken ct = default)` | — |
 
 # `Services/Experiments/`
 

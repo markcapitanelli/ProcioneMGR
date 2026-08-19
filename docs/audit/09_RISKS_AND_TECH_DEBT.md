@@ -229,6 +229,51 @@ Development, o una ricerca dei `FirstOrDefault` senza `OrderBy` su tabelle multi
 
 ---
 
+### R20 — `Retired` non era ripromuovibile da nessuna superficie (corretto 2026-08-19) {#r20}
+
+**Il difetto.** Un modello ML in stadio `Retired` non aveva alcuna transizione in uscita:
+`PromoteToChallengerAsync` accettava solo `Staging`, `TryPromoteToChampionAsync` respingeva i
+`Retired`, e la cella delle azioni di una riga ritirata in `/registry` era vuota. Un ritiro
+accidentale — e «Ritira» era l'**unica azione distruttiva della pagina a un clic solo**, senza
+conferma — si annullava soltanto scrivendo a mano sul database.
+
+**Perché contava più di quanto sembri.** Il ritiro non è solo manuale:
+`Drift:RetireChampionOnAlert` ha default `true` nel POCO e la sezione `Drift` è **assente**
+dall'`appsettings.json`, quindi vale quel default; e il pulsante «Esegui check ora» in
+`/admin/autonomy` invoca `FeatureDriftWorker.TickAsync` **scavalcando** `Drift:Enabled`. Cioè
+un'automazione accesa per default poteva produrre uno stato che nessuna superficie sapeva disfare.
+
+**Non era una decisione.** Nessun documento, commento o test ha mai dichiarato l'irreversibilità
+come scelta: era un percorso mai costruito. L'unica traccia scritta d'intento diceva il contrario —
+il messaggio di rifiuto del registry indicava da sempre un rientro («va prima ri-portato a
+Challenger») che non esisteva, e la pulizia dei campi di ritiro in `TryPromoteToChampionAsync` era
+codice raggiungibile **solo** da un rientro che non c'era.
+
+**Due fatti utili emersi cercando, indipendenti dalla correzione:**
+
+1. **`Retired` non è una quarantena.** `MlModelLoader` — punto unico di materializzazione dei
+   modelli — non guarda lo stadio: il suo solo gate è `IsDirectional`. Backtest, gambe d'ensemble
+   pinnate per Id e l'inferenza gRPC per id esplicito caricano oggi un modello ritirato senza
+   accorgersene. L'unica cosa che il ritiro toglie davvero è la **sentinella Champion**. Chiunque
+   scriva «irreversibile = protetto» accanto a quel pulsante direbbe una cosa falsa — è la classe
+   di difetto del Filone E: il controllo che rassicura a prescindere dalla realtà.
+2. **L'invariante «un solo Champion» non ha appoggio nel database.** L'indice su
+   `(Symbol, Timeframe, Stage)` non è unico: l'invariante regge **solo** perché `ModelRegistry` è
+   l'unico scrittore di `SavedMlModel.Stage` in tutta la codebase. Va tenuto così.
+
+**Cosa è stato fatto.** `ReinstateToStagingAsync` (rientro su `Staging` e solo lì: restituisce
+l'eleggibilità, non il regno, e il gate DSR resta in mezzo), conferma a due passi legata all'`Id`
+su **entrambe** le azioni, motivo del ritiro scrivibile e poi mostrato nella conferma del rientro,
+colonna Note consapevole dello stadio. Dettaglio in [`docs/pagine/registry.md`](../pagine/registry.md).
+
+**Cosa resta aperto, deliberatamente.** Un modello ritirato conserva il `DeflatedSharpe` misurato
+*prima* del ritiro, e il gate di promozione non conosce altro argomento: riabilitare un modello
+ritirato per drift significa ripresentare quella misura invecchiata al criterio d'ammissione. Non è
+stato risolto in codice ma **dichiarato a schermo** nella conferma. Se un giorno si volesse chiudere
+davvero, la strada è invalidare il DSR al ritiro per drift — decisione separata, con la sua misura.
+
+---
+
 ## 🟢 Priorità BASSA
 
 ### R10 — Pagine Identity non tradotte
@@ -326,4 +371,5 @@ dotnet list package --vulnerable --include-transitive
 | R7 | `AnthropicLlmClient.cs` mal chiamato | 🟡 MEDIA |
 | R8 | Tre CLI fuori dalla soluzione | 🟡 MEDIA |
 | R9 | Query EF senza `OrderBy` | 🟡 MEDIA |
+| R20 | `Retired` senza uscita: un ritiro (anche automatico) non si annullava da nessuna UI | ✅ **CORRETTO 2026-08-19** |
 | R10–R14 | UX, i18n, linting | 🟢 BASSA |
