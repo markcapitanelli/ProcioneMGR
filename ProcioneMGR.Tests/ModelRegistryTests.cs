@@ -496,10 +496,13 @@ public class ModelRegistryTests : IAsyncDisposable
         var f = await BuildFactoryAsync();
         var user = await SeedUserAsync(f);
         var champ = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.9, ModelStage.Champion);
+        // [I6] Senza candele il worker dichiara SALTATO e non arriva mai al ritiro: il check dev'essere
+        // realistico, non la guardia indebolita.
+        await DriftTestData.SeedRecentCandlesAsync(f, "BTCUSDT");
         var registry = NewRegistry(f);
         var worker = new FeatureDriftWorker(
             f, new AlertMonitor(), registry,
-            new DriftMonitorOptions { Enabled = true, RetireChampionOnAlert = true, MinAlertsToRetire = 1 }.AsMonitor(),
+            new DriftMonitorOptions { Enabled = true, RetireChampionOnAlert = true, MinAlertsToRetire = 1, RecentCandles = DriftTestData.MinimumCandles }.AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance);
 
         await worker.TickAsync(CancellationToken.None);                    // 1° ritiro, dal drift
@@ -545,11 +548,12 @@ public class ModelRegistryTests : IAsyncDisposable
         var f = await BuildFactoryAsync();
         var user = await SeedUserAsync(f);
         var champ = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.9, ModelStage.Champion);
+        await DriftTestData.SeedRecentCandlesAsync(f, "BTCUSDT"); // [I6] altrimenti il check è SALTATO
         var registry = NewRegistry(f);
 
         var worker = new FeatureDriftWorker(
             f, new AlertMonitorThatRetiresBehind(registry), registry,
-            new DriftMonitorOptions { Enabled = true, RetireChampionOnAlert = true, MinAlertsToRetire = 1 }.AsMonitor(),
+            new DriftMonitorOptions { Enabled = true, RetireChampionOnAlert = true, MinAlertsToRetire = 1, RecentCandles = DriftTestData.MinimumCandles }.AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance);
 
         await worker.TickAsync(CancellationToken.None);
