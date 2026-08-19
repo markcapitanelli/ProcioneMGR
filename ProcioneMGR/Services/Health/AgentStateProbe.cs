@@ -79,9 +79,15 @@ public sealed record AgentStateReport(IReadOnlyList<AgentState> Agents, DateTime
 /// resta ferma per sempre. Il gate va guardato, non presunto acceso.
 /// </param>
 /// <param name="FleetExecutionImplemented">
-/// Da <see cref="Fleet.FleetOrchestratorWorker.ExecutionArmImplemented"/>. <c>Fleet:DryRun</c> dice
+/// Da <see cref="Fleet.FleetOrchestratorWorker.RetirementArmImplemented"/>. <c>Fleet:DryRun</c> dice
 /// che cosa è stato CHIESTO; questo dice che cosa il codice sa FARE. Dedurre il secondo dal primo
 /// è come la sonda mentiva prima della revisione del 2026-08-18.
+/// </param>
+/// <param name="FleetAuthorizedLanes">
+/// [AF2b] Quante corsie sono in <c>Fleet:ExecutionLanes</c>. Il braccio esiste ma è un permesso per
+/// corsia: <b>zero corsie autorizzate = nessuna esecuzione</b>, anche col dry-run spento. Senza
+/// questo numero la sonda direbbe «esecuzione attiva» di una macchina che non può toccare nulla —
+/// la stessa bugia di prima, spostata di un flag.
 /// </param>
 /// <param name="CommitteeVotesInWindow">
 /// Voti realmente emessi dal comitato nella finestra dichiarata, letti dal journal della flotta.
@@ -98,6 +104,7 @@ public sealed record AgentStateFacts(
     bool FleetEnabled,
     bool FleetDryRun,
     bool FleetExecutionImplemented,
+    int FleetAuthorizedLanes,
     bool FleetUseCommittee,
     int FleetGovernedLanes,
     bool CommitteeEnabled,
@@ -268,11 +275,15 @@ public sealed class AgentStateProbe(
         // accende alcuna esecuzione — il worker emette un warning e journalizza comunque
         // Applied=false. Leggere il flag e dichiarare «esecuzione attiva» era la bugia che la
         // revisione avversaria del 2026-08-18 ha trovato in questa riga.
-        var detail = (f.FleetDryRun, f.FleetExecutionImplemented) switch
+        // [AF2b] Tre condizioni, non una: il braccio deve esistere, il dry-run essere spento E
+        // almeno una corsia essere autorizzata. Guardarne meno di tre dichiarerebbe attiva
+        // un'esecuzione che non può toccare nulla — la bugia del 2026-08-18 spostata di un flag.
+        var detail = (f.FleetDryRun, f.FleetExecutionImplemented, f.FleetAuthorizedLanes > 0) switch
         {
-            (true, _) => $"{f.FleetGovernedLanes} corsie sotto governo, in DRY-RUN: decide, journalizza e propone, non esegue",
-            (false, false) => $"{f.FleetGovernedLanes} corsie sotto governo, DryRun spento ma il braccio esecutivo (AF2b) NON è implementato: il tick resta di solo journal, con un warning a ogni giro",
-            (false, true) => $"{f.FleetGovernedLanes} corsie sotto governo, ESECUZIONE ATTIVA: può avviare e fermare corsie da solo",
+            (true, _, _) => $"{f.FleetGovernedLanes} corsie sotto governo, in DRY-RUN: decide, journalizza e propone, non esegue",
+            (false, false, _) => $"{f.FleetGovernedLanes} corsie sotto governo, DryRun spento ma il braccio esecutivo (AF2b) NON è implementato: il tick resta di solo journal, con un warning a ogni giro",
+            (false, true, false) => $"{f.FleetGovernedLanes} corsie sotto governo, DryRun spento ma Fleet:ExecutionLanes è VUOTA: nessuna corsia autorizzata, resta di solo journal",
+            (false, true, true) => $"{f.FleetGovernedLanes} corsie sotto governo, ESECUZIONE ATTIVA su {f.FleetAuthorizedLanes} corsie autorizzate: può FERMARLE da solo (l'avvio automatico non è implementato)",
         };
         return new AgentState(name, AgentActivation.AccesoOperante, detail);
     }
@@ -429,7 +440,8 @@ public sealed class AgentStateProbe(
             RegimeTriggerEnabled: regimeTrigger.CurrentValue.Enabled,
             FleetEnabled: fleetOpt.Enabled,
             FleetDryRun: fleetOpt.DryRun,
-            FleetExecutionImplemented: Fleet.FleetOrchestratorWorker.ExecutionArmImplemented,
+            FleetExecutionImplemented: Fleet.FleetOrchestratorWorker.RetirementArmImplemented,
+            FleetAuthorizedLanes: fleet.CurrentValue.ExecutionLanes.Count,
             FleetUseCommittee: fleetOpt.UseCommittee,
             FleetGovernedLanes: governed,
             CommitteeEnabled: committeeOpt.Enabled,

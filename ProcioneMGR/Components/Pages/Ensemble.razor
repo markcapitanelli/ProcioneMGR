@@ -199,6 +199,42 @@ else
                 automatico (invariato rispetto a prima). Sharpe/PF/MaxDD attesi alimentano il
                 <a href="#decay-monitor">monitor di decadimento</a> qui sotto.
             </p>
+            @* [I13a, 2026-08-19] La spunta «Attiva» e' una CONFIGURAZIONE, non un interruttore:
+               il motore fotografa le gambe attive all'AVVIO della corsia, quindi togliere la spunta
+               a corsia in corsa non ferma nulla fino al riavvio. Fino a oggi la tabella mostrava la
+               gamba spenta mentre il motore continuava ad aprirci posizioni, e le due verita' non
+               si incontravano da nessuna parte. Qui si confronta la configurazione col FATTO, e
+               quando il fatto non e' leggibile si dice quello invece di tacere. *@
+            @{
+                var ancoraInCorsa = EnsemblePageService.LegsStillRunningWhileDisabled(_config, Svc.EngineRunningStrategyIds, Svc.EngineIsRunning);
+                var nonAncoraInCorsa = EnsemblePageService.LegsEnabledButNotRunning(_config, Svc.EngineRunningStrategyIds, Svc.EngineIsRunning);
+            }
+            @if (ancoraInCorsa.Count > 0)
+            {
+                <div class="alert alert-warning py-2 small">
+                    <strong>@ancoraInCorsa.Count gambe sono spente qui ma il motore le sta ancora eseguendo:</strong>
+                    @string.Join(", ", ancoraInCorsa.Select(l => string.IsNullOrWhiteSpace(l.DisplayName) ? l.StrategyName : l.DisplayName)).
+                    Il motore legge le gambe attive all'<em>avvio</em> della corsia: la spunta tolta vale
+                    dal prossimo riavvio. Finché la corsia gira, queste gambe possono aprire posizioni.
+                    <strong>Ferma e riavvia la corsia da <a href="trading">/trading</a></strong> perché la modifica abbia effetto.
+                </div>
+            }
+            @if (nonAncoraInCorsa.Count > 0)
+            {
+                <div class="alert alert-info py-2 small">
+                    <strong>@nonAncoraInCorsa.Count gambe sono attive qui ma il motore non le sta eseguendo:</strong>
+                    @string.Join(", ", nonAncoraInCorsa.Select(l => string.IsNullOrWhiteSpace(l.DisplayName) ? l.StrategyName : l.DisplayName)).
+                    Aggiunte dopo l'avvio della corsia: entrano in gioco al prossimo riavvio.
+                </div>
+            }
+            @if (Svc.EngineIsRunning is true && Svc.EngineRunningStrategyIds is null)
+            {
+                <div class="alert alert-secondary py-2 small">
+                    La corsia gira ma <strong>quali gambe stia davvero eseguendo non è determinabile</strong>
+                    (motore non leggibile, o motore remoto precedente a questo confronto): la colonna
+                    «Attiva» qui sotto dice cosa è <em>configurato</em>, non cosa il motore <em>sta facendo</em>.
+                </div>
+            }
             <div class="table-responsive">
                 <table class="table table-sm align-middle">
                     <thead><tr><th>Strategia</th><th>Parametri</th><th>Attiva</th><th>Alloc %</th><th>SL %</th><th>TP %</th><th>Trailing %</th><th>Sharpe atteso</th><th>PF atteso</th><th>MaxDD atteso %</th><th>Esecuzione</th><th></th></tr></thead>
@@ -224,7 +260,21 @@ else
                                     }
                                 </td>
                                 <td><code class="small">@FormatParams(s.Parameters)</code></td>
-                                <td><input type="checkbox" class="form-check-input" @bind="s.IsActive" /></td>
+                                <td>
+                                    <input type="checkbox" class="form-check-input" @bind="s.IsActive" />
+                                    @* [I13a] Il badge accanto alla spunta: la divergenza si vede sulla RIGA
+                                       che la causa, non solo nel riquadro in cima. *@
+                                    @if (!s.IsActive && ancoraInCorsa.Any(l => l.StrategyId == s.StrategyId))
+                                    {
+                                        <span class="badge bg-warning text-dark ms-1"
+                                              title="Spenta in configurazione ma il motore la sta ancora eseguendo: vale dal riavvio della corsia.">in corsa</span>
+                                    }
+                                    else if (s.IsActive && nonAncoraInCorsa.Any(l => l.StrategyId == s.StrategyId))
+                                    {
+                                        <span class="badge bg-secondary ms-1"
+                                              title="Attiva in configurazione ma il motore non la sta eseguendo: entra in gioco al riavvio della corsia.">al riavvio</span>
+                                    }
+                                </td>
                                 <td>@s.CurrentAllocation.ToString("F1")%</td>
                                 <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:5.5rem" @bind="s.StopLossPercent" /></td>
                                 <td><input type="number" step="any" min="0" class="form-control form-control-sm" style="width:5.5rem" @bind="s.TakeProfitPercent" /></td>
@@ -477,6 +527,24 @@ else
             </button>
         </div>
         <div class="card-body">
+            @* [I13b] IL VERDETTO DI MISURABILITA', prima dei numeri. E' il gate del filone «freno
+               per gamba»: se nessuna gamba e' misurabile, il confronto realizzato-vs-atteso qui
+               sotto non significa niente, e il freno automatico (I13c) NON si fa. Misurare prima di
+               agire vuol dire anche accettare che la misura dica di non agire. *@
+            @if (_decayReports.Count > 0)
+            {
+                var mis = DecayMeasurability.Evaluate(_decayReports, ExpectedTradesByLeg(), new DecayMonitorOptions().WindowTradeCount);
+                <div class="alert @(mis.NothingMeasurable ? "alert-warning" : mis.Measurable < mis.Total ? "alert-secondary" : "alert-success") py-2 small">
+                    <strong>@mis.Measurable / @mis.Total misurabili.</strong> @mis.Verdict
+                    @if (_decayReports.Sum(r => r.TradesExcludedOtherSymbol) is var esclusi && esclusi > 0)
+                    {
+                        <span class="d-block mt-1">
+                            @esclusi trade esclusi perché su un simbolo diverso da @(_config?.Symbol): questa corsia ha
+                            avuto vite precedenti, e mescolarne i mercati renderebbe il realizzato non interpretabile.
+                        </span>
+                    }
+                </div>
+            }
             @if (_decayReports.Count == 0)
             {
                 <p class="text-muted small mb-0">Nessuna gamba con trade chiusi da analizzare ancora.</p>
@@ -514,7 +582,24 @@ else
                                         <dt class="col-6">% dell'atteso</dt>
                                         <dd class="col-6">@(r.SharpeRatio?.ToString("P0") ?? "—")</dd>
                                         <dt class="col-6">Trade analizzati</dt>
-                                        <dd class="col-6">@r.TradeCount</dd>
+                                        <dd class="col-6">
+                                            @r.TradeCount
+                                            @if (!r.IsMeasurable)
+                                            {
+                                                <span class="badge bg-secondary ms-1" title="Sotto la finestra minima: i numeri qui sopra non sono ancora interpretabili.">non misurabile</span>
+                                            }
+                                        </dd>
+                                        @if (!string.IsNullOrEmpty(r.Symbol))
+                                        {
+                                            <dt class="col-6">Misurato su</dt>
+                                            <dd class="col-6">
+                                                @r.Symbol
+                                                @if (r.TradesExcludedOtherSymbol > 0)
+                                                {
+                                                    <span class="text-muted" title="Trade di questa gamba su altri simboli, esclusi dal confronto: il criterio è il simbolo ATTUALE della corsia.">(@r.TradesExcludedOtherSymbol esclusi)</span>
+                                                }
+                                            </dd>
+                                        }
                                     </dl>
                                     <p class="small mb-0 @(r.IsAlert ? "text-danger" : "text-muted")">@r.StatusMessage</p>
                                     <a href="trading" class="small">Vedi i trade in Trading →</a>
@@ -667,6 +752,14 @@ else
     // il markup invariato — @bind su membri di _config resta valido (assegna alla proprietà
     // dell'oggetto restituito, non all'alias).
     private EnsembleConfiguration? _config => Svc.Config;
+
+    /// <summary>
+    /// [I13b] Il ritmo atteso di ogni gamba, per <c>StrategyId</c>: serve al verdetto di
+    /// misurabilita' per dire <b>quanto manca</b> alle gambe non ancora giudicabili, non solo che
+    /// non lo sono. Un «non misurabile» senza una data e' un'informazione a meta'.
+    /// </summary>
+    private Dictionary<string, decimal?> ExpectedTradesByLeg() =>
+        _config?.Strategies.ToDictionary(x => x.StrategyId, x => x.ExpectedTradesPerMonth) ?? [];
     private EnsembleStatus? _status => Svc.Status;
     private EnsemblePerformance? _performance => Svc.Performance;
     private List<IndicatorSeries> _perfSeries => Svc.PerfSeries;

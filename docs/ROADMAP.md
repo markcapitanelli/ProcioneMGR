@@ -1200,12 +1200,119 @@ di dire di no e di dichiarazione di copertura.**
 > **due gambe** il costo si paga due volte per trade: lo sconto era il più grande possibile
 > esattamente dove fa più danno, e i numeri di questa pagina non erano confrontabili con quelli di
 > nessun'altra superficie della piattaforma.
-| I11 | **«Trade attesi dall'holdout»: una regola sola, consumata da due** (ritiro per inedia e freno per gamba). Sul **simbolo attuale**, col **tempo-al-verdetto dichiarato**. Due regole per la stessa domanda è il difetto già pagato in D2 e con `SeriesFreshness` | aperto | L1 ricostruisce il trade/mese che il run dichiara; L2 campo assente (corsie 0-2) ⇒ nessuno agisce e **lo si dichiara** |
-| I12 | **Ritiro per inedia + dedup dei grigi per identità**, ancora in DryRun; poi AF2b (`targetLanes`, start/stop reali) **una corsia per volta, solo Paper**. Assorbe AF2c-1 e AF2c-5 | aperto | **L1 con lo stato reale**: condanna 3, 5, 6, 7 e **non** la 2 (troppo giovane) né l'impronta né le quarantenate; L2 soglia a 0 ⇒ piano bit-identico su 100 tick fuzzati; L4 le 40 riproposte diventano 1 |
-| I13 | **Freno per gamba: prima la misura, poi l'azione** — (a) l'avviso di deriva esteso alle **gambe attive** (oggi una gamba disattivata continua a operare fino al riavvio della corsia e nessuno lo dice); (b) pannello di sola lettura sui trade veri; (c) **condizionato** all'esito di (b), freno dove si applica `mayOpen`, mai un `continue` che lasci posizioni orfane | aperto | **il gate di (b) può chiudere il filone e va bene così**: a 2-6 trade/mese «≥20 trade sul simbolo attuale» può dare zero gambe misurabili — allora il pannello lo dice e (c) non si fa. L1 il riferimento indipendente **esiste già in repo** |
+| I11 | **«Trade attesi dall'holdout»: una regola sola, consumata da due** (ritiro per inedia e freno per gamba). Sul **simbolo attuale**, col **tempo-al-verdetto dichiarato**. Due regole per la stessa domanda è il difetto già pagato in D2 e con `SeriesFreshness` | **FATTO** | L1 ricostruisce il trade/mese che il run dichiara; L2 campo assente (corsie 0-2) ⇒ nessuno agisce e **lo si dichiara** |
+| I12 | **Ritiro per inedia + dedup dei grigi per identità**, ancora in DryRun; poi AF2b (`targetLanes`, start/stop reali) **una corsia per volta, solo Paper**. Assorbe AF2c-1 e AF2c-5 | **FATTO** (L1-L3; L4 da fare) | **L1 con lo stato reale**: condanna 3, 5, 6, 7 e **non** la 2 (troppo giovane) né l'impronta né le quarantenate; L2 soglia a 0 ⇒ piano bit-identico su 100 tick fuzzati; L4 le 40 riproposte diventano 1 |
+| I13 | **Freno per gamba: prima la misura, poi l'azione** — (a) l'avviso di deriva esteso alle **gambe attive** (oggi una gamba disattivata continua a operare fino al riavvio della corsia e nessuno lo dice); (b) pannello di sola lettura sui trade veri; (c) **condizionato** all'esito di (b), freno dove si applica `mayOpen`, mai un `continue` che lasci posizioni orfane | **(a)+(b) FATTI**, (c) sospeso in attesa della misura | **il gate di (b) può chiudere il filone e va bene così**: a 2-6 trade/mese «≥20 trade sul simbolo attuale» può dare zero gambe misurabili — allora il pannello lo dice e (c) non si fa. L1 il riferimento indipendente **esiste già in repo** |
 | I14 | **`PairCandidate` + `PairSpreadWindow` col loro lettore** — indice derivato dagli 86 artefatti mai letti, sul progetto di `ResearchCandidateIndex`; storia dello spread sul pattern `FactorIcWindows`; pannello in `/pairs-trading`. Sola lettura, nessuna decisione automatica | aperto | **L2 decisivo**: su due random walk indipendenti il monitor non deve **mai** dichiarare cointegrazione; su una relazione piantata deve trovarla. L1 il rebuild combacia con l'aggregato SQL sugli artefatti |
 | I15 | **Corpus notizie esentato dalla purge + riga nel guardiano di profondità** (decisione del proprietario); da spenta la riga resta **misurata** e mostrata come «non sorvegliata», mai un OK finto | aperto | L1 profondità e conteggio combaciano col `SELECT` a mano; L2 corpus profondo ⇒ il guardiano tace per tre giri |
 | I16 ≡ F12 | **Capacità e universo del carry**: l'unica classe con edge misurato positivo, l'unica che opera oggi, l'unica che nessuno sta dimensionando — mentre il basis è in compressione | aperto | **report con verdetto scritto anche se è «la soglia attuale è già ottima»**; trade/mese e durata mediana dichiarati |
+
+
+### Fase 3 e Fase 4 eseguite (2026-08-19) — I11 e I12
+
+**I11, il denominatore condiviso.** Il numero «quanti trade ci si aspetta da questa gamba» nasceva
+nel lettore della flotta al momento della candidatura e **moriva lì**: una volta schierata, nessuno
+sapeva più quanti trade quella gamba dovesse fare. Ora vive sulla gamba
+(`EnsembleStrategy.ExpectedTradesPerMonth` + `ExpectedTradesSource`), scritto da **tutti e tre** i
+percorsi di schieramento — l'applicatore della pipeline, il click della fascia grigia in `/fleet`,
+l'aggiunta di una gamba grigia in `/ensemble` — e mostrato in `/trading` col **tempo-al-verdetto**:
+*«~2 trade/mese attesi: servono ~10 mesi per i 20 trade che la regola di ritiro pretende»*.
+
+Il rischio dell'item era ripetere il difetto che l'item stesso combatte, e si è materializzato tre
+volte durante la scrittura: la finestra di holdout si calcolava in due posti (accorpata su
+`PipelineDateRanges.HoldoutMonths()`), la query «holdout di questo run» stava per essere scritta due
+volte (`HoldoutWindow`), e la soglia dei 20 trade stava per essere **ricopiata nel markup** accanto
+alla manopola che la definisce — `Fleet:RetireMinTrades`. L'ultimo è quello che un test verde non
+avrebbe mai rivelato: `LaneStory_TempoAlVerdetto_SegueLaSogliaConfigurata` prova la stessa gamba con
+due soglie diverse, e sarebbe verde su una e rosso sull'altra.
+
+**I12, la capacità di liberare una corsia.** Il ritiro per Sharpe pretende `RetireMinTrades` trade e
+**chi non opera non ci arriva mai**: al 2026-08-19 le corsie di flotta 3-7 avevano chiuso *un trade
+ciascuna o zero* in 13-15 giorni, quindi non erano ritirabili per nessuna via. Una corsia che non si
+libera mai blocca la flotta, e a monte il comitato — che riceve una domanda solo quando esiste una
+corsia libera con due candidati che se la contendono. **I sedici giorni senza un voto avevano lì la
+loro causa**, non nel comitato.
+
+Il criterio confronta col ritmo **atteso nel periodo osservato**, non con un conteggio assoluto: 30
+trade/mese fermi da due settimane sono un guasto, 2 trade/mese con un trade in due settimane sono la
+norma. E dove il ritmo atteso non è noto — corsie 0-2, gambe configurate a mano — **non si condanna**:
+l'ignoranza non condanna, e una conoscenza *parziale* (una gamba su tre che dichiara) è ignoranza
+travestita, quindi la somma è parziale-o-niente.
+
+**Il dedup dei grigi**: le proposte nascevano per run, e la caccia rigira gli stessi parametri sugli
+stessi mercati — 83 proposte in journal, ognuna una notifica. Ora una per **identità canonica**
+(`PipelineCandidateKey`), col numero dei run che l'hanno ritrovata in coda al messaggio. Sopravvive
+il run **più recente**, non il più vecchio: un grigio è una proposta di forward test, e il forward
+test si fa sull'ipotesi vista sui dati più freschi — l'opposto della coda «pass», che è FIFO perché
+lì il criterio è non far invecchiare nessuno.
+
+**AF2b, il braccio esecutivo — metà.** L'orchestratore sa **fermare** una corsia; continua a non
+saperla **avviare**. È l'ordine deciso dal proprietario: fermare libera una corsia, non impegna
+capitale e si disfa con un click; avviare mette in corsa una strategia scelta da una macchina, e
+quando te ne accorgi ha già operato. Quattro condizioni tutte necessarie perché un'azione avvenga —
+braccio presente, dry-run spento, corsia **elencata** in `Fleet:ExecutionLanes` (vuota di default),
+budget del tick non esaurito — e la modalità **riletta dal motore nell'istante dell'azione**: il
+piano è deciso su una fotografia che può avere minuti, e se nel frattempo la corsia è passata a
+Testnet non si tocca. Fail-closed: modalità non leggibile ⇒ non si tocca.
+
+`Fleet:ExecutionLanes` è una **lista e non un interruttore** di proposito: un booleano aprirebbe di
+colpo tutte le corsie di flotta, e il primo tick dopo l'accensione potrebbe fermarne quattro insieme.
+La lista rende l'ampiezza esplicita, reversibile togliendo un numero, e permette il collaudo che il
+PRD chiede — *una corsia per volta, solo Paper*.
+
+La sonda degli agenti è stata corretta di conseguenza, ed è la stessa correzione della revisione
+avversaria del 2026-08-18 **spostata di un flag**: con il braccio implementato e il dry-run spento,
+`Fleet:ExecutionLanes` vuota significa che la macchina non può toccare nulla — dichiarare
+«esecuzione attiva» sarebbe stata di nuovo la classe «controllo che rassicura».
+
+> **Resta da fare su I12**: il livello 4 sull'app vera (le 40 riproposte che diventano 1 nel journal
+> reale, e un ritiro per inedia osservato su una corsia autorizzata in Paper). Il codice è pronto e
+> **inerte**: `ExecutionLanes` è vuota, quindi in produzione oggi non cambia nulla.
+
+
+#### I13(a) — la spunta «Attiva» non era un interruttore
+
+Il motore fotografa `IsActive` all'**avvio** della corsia (`TradingEngine._active`, riga 272):
+togliere la spunta a una gamba mentre la corsia gira **non ferma nulla** fino al riavvio. La tabella
+di `/ensemble` mostrava la gamba spenta, il motore continuava ad aprirci posizioni, e le due verità
+non si incontravano da nessuna parte — l'operatore credeva di aver fermato qualcosa che stava ancora
+operando.
+
+Non si è cambiato il comportamento del motore, si è reso **visibile**: applicare la disattivazione a
+caldo lascerebbe posizioni orfane, che è precisamente il pericolo che il punto (c) di questo stesso
+item mette in guardia. La regola qui è la quinta della piattaforma — *degradare dicendolo*.
+
+Lo stato del motore porta ora `RunningStrategyIds` (campo 25 del contratto gRPC, additivo): gli
+`StrategyId` delle gambe che sta **davvero** eseguendo. `/ensemble` confronta la configurazione con
+quel fatto e dichiara entrambi i versi — spenta-ma-in-corsa (giallo, con l'istruzione di riavviare)
+e accesa-ma-non-ancora-in-corsa (grigio). E quando il motore non risponde **non accusa nessuno**:
+dice che il confronto non è stato possibile, invece di leggere il silenzio come «tutto allineato»,
+che sarebbe la classe «controllo che rassicura» nel caso in cui più si vorrebbe sapere.
+
+
+#### I13(b) — il pannello che può chiudere il filone, e un difetto trovato scrivendolo
+
+Il monitor di decadimento misurava il realizzato per `StrategyId` **senza filtrare il simbolo**. Le
+corsie hanno vite precedenti: una riassegnazione, o una coppia cambiata a mano in `/ensemble` senza
+riscrivere le gambe, faceva nascere lo Sharpe «realizzato» di una gamba da trade fatti su **due
+mercati diversi** — e nessuna riga lo diceva. Ora il filtro c'è (`t.Symbol == cfg.Symbol`, la regola
+AF2c-2: il criterio è il simbolo *attuale*) e i trade scartati vengono **contati e dichiarati**: un
+conteggio più basso senza spiegazione si legge come un guasto.
+
+Sopra le schede c'è ora il **verdetto di misurabilità**: *«N gambe su M misurabili»*, e per quelle
+che non lo sono **quanto manca** al ritmo che dichiarano — «alle altre servono fino a ~3,2 mesi»,
+oppure «il ritmo atteso non è dichiarato: quando lo saranno non è derivabile». Un «non misurabile»
+senza una data è un'informazione a metà.
+
+> **Questo verdetto è il gate del punto (c), e ci si aspetta che lo chiuda.** Al 2026-08-19 le corsie
+> di flotta 3-7 avevano un trade ciascuna o zero: con «≥20 trade sul simbolo attuale» la risposta
+> quasi certa è **zero gambe misurabili**, e allora il freno automatico per gamba **non si fa**.
+> Misurare prima di agire vuol dire anche accettare che la misura dica di non agire. Il numero vero
+> si legge in `/ensemble` sull'app reale — è un livello 4, non una deduzione.
+>
+> Senza il gate esplicito, il pannello avrebbe mostrato «Sharpe realizzato 0,00 vs atteso 1,20 ⇒
+> ALERT» su gambe con un solo trade: la classe «controllo che rassicura» al contrario — allarmare su
+> un numero che non esiste.
 
 ### Livello 4 eseguito (2026-08-19, sull'app vera col database e il motore reali)
 

@@ -400,4 +400,83 @@ public sealed class EnsemblePageServiceTests : IAsyncDisposable
     {
         if (_provider is not null) await _provider.DisposeAsync();
     }
+
+    // --- [I13a] Configurazione contro FATTO: le gambe che il motore sta davvero eseguendo -------
+
+    private static EnsembleConfiguration Cfg(params (string Id, bool Active)[] legs) => new()
+    {
+        Symbol = "ADA/USDT", Timeframe = "4h",
+        Strategies = [.. legs.Select(l => new EnsembleStrategy { StrategyId = l.Id, StrategyName = l.Id, IsActive = l.Active })],
+    };
+
+    /// <summary>
+    /// <b>Il difetto che questo confronto esiste per rendere visibile.</b> Il motore fotografa
+    /// <c>IsActive</c> all'AVVIO della corsia: togliere la spunta a una gamba mentre la corsia gira
+    /// non ferma nulla fino al riavvio. Fino al 2026-08-19 la configurazione mostrava la gamba
+    /// spenta, il motore continuava ad aprirci posizioni, e le due verità non si incontravano da
+    /// nessuna parte — l'operatore credeva di aver fermato qualcosa che stava ancora operando.
+    /// </summary>
+    [Fact]
+    public void GambaSpentaInConfigurazione_MaAncoraInEsecuzione_SiVede()
+    {
+        var divergenti = EnsemblePageService.LegsStillRunningWhileDisabled(
+            Cfg(("a", true), ("b", false), ("c", false)),
+            engineRunningIds: ["a", "b"],   // il motore ha fotografato a+b all'avvio
+            engineIsRunning: true);
+
+        Assert.Equal("b", Assert.Single(divergenti).StrategyId);
+    }
+
+    /// <summary>Il verso opposto: gambe accese dopo l'avvio, che entreranno in gioco solo al riavvio.</summary>
+    [Fact]
+    public void GambaAccesaDopoLAvvio_NonEAncoraInEsecuzione()
+    {
+        var divergenti = EnsemblePageService.LegsEnabledButNotRunning(
+            Cfg(("a", true), ("b", true)),
+            engineRunningIds: ["a"],
+            engineIsRunning: true);
+
+        Assert.Equal("b", Assert.Single(divergenti).StrategyId);
+    }
+
+    /// <summary>
+    /// <b>Il silenzio non accusa.</b> Motore non leggibile (<c>null</c>): nessuna divergenza
+    /// dichiarata, perché non se ne sa nulla. Leggere l'assenza come «tutto allineato» sarebbe la
+    /// classe «controllo che rassicura» nella sua forma più insidiosa — un motore muto è proprio il
+    /// caso in cui si vorrebbe sapere. La pagina dichiara che il confronto non è stato possibile.
+    /// </summary>
+    [Fact]
+    public void MotoreNonLeggibile_NessunaAccusa()
+    {
+        var cfg = Cfg(("a", false));
+
+        Assert.Empty(EnsemblePageService.LegsStillRunningWhileDisabled(cfg, engineRunningIds: null, engineIsRunning: true));
+        Assert.Empty(EnsemblePageService.LegsEnabledButNotRunning(cfg, engineRunningIds: null, engineIsRunning: true));
+    }
+
+    /// <summary>
+    /// Corsia FERMA: nessuna divergenza possibile, per quante gambe siano spente. Segnalare
+    /// «ancora in esecuzione» su una corsia ferma sarebbe un falso allarme permanente, e gli allarmi
+    /// falsi consumano il budget di quelli veri — lezione già pagata con la staleness a 60s su STX.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]
+    public void CorsiaFermaONonDeterminabile_NessunaDivergenza(bool? running)
+    {
+        var cfg = Cfg(("a", false), ("b", true));
+
+        Assert.Empty(EnsemblePageService.LegsStillRunningWhileDisabled(cfg, ["a"], running));
+        Assert.Empty(EnsemblePageService.LegsEnabledButNotRunning(cfg, ["a"], running));
+    }
+
+    /// <summary>Configurazione e motore allineati: nessuna divergenza in nessuno dei due versi.</summary>
+    [Fact]
+    public void ConfigurazioneEMotoreAllineati_NessunaDivergenza()
+    {
+        var cfg = Cfg(("a", true), ("b", false));
+
+        Assert.Empty(EnsemblePageService.LegsStillRunningWhileDisabled(cfg, ["a"], true));
+        Assert.Empty(EnsemblePageService.LegsEnabledButNotRunning(cfg, ["a"], true));
+    }
 }

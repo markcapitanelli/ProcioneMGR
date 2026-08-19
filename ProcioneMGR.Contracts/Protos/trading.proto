@@ -153,6 +153,12 @@ message GetLaneStatusResponse {
   // valutato nulla" — ma chi alimenta il motore ha bisogno di sapere da dove riprendere, altrimenti
   // ricomincia dal replay contro uno stato che nessuno ha azzerato.
   google.protobuf.Timestamp last_candle_utc = 24;
+  // [I13a, 2026-08-19] Gli StrategyId delle gambe che il motore sta DAVVERO eseguendo. Il motore
+  // fotografa `IsActive` all'avvio: disattivare una gamba da /ensemble mentre la corsia gira non ha
+  // alcun effetto fino al riavvio, e fino a oggi nessuna superficie lo diceva — la configurazione
+  // mostrava la gamba spenta mentre il motore continuava a operarla. Questo campo e' il FATTO
+  // contro cui confrontare la configurazione; vuoto = corsia ferma, o motore precedente a I13a.
+  repeated string running_strategy_ids = 25;
 }
 
 // --- Posizioni -------------------------------------------------------------------------------

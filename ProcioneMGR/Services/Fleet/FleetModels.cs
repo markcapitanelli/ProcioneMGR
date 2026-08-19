@@ -32,6 +32,66 @@ public sealed class FleetOptions
     /// </summary>
     public int RetireConfirmTicks { get; set; } = 2;
 
+    // --- [I12] Ritiro per INEDIA: la corsia che non opera ---
+
+    /// <summary>
+    /// [I12] Frazione del ritmo ATTESO sotto cui una corsia è dichiarata in inedia e ritirata
+    /// (0,2 = ha prodotto meno del 20% dei trade che l'holdout prometteva nel tempo trascorso).
+    /// <b>0 = criterio spento</b>, comportamento identico a prima di I12.
+    ///
+    /// <para><b>Perché serve un secondo criterio di ritiro.</b> Quello per Sharpe pretende
+    /// <see cref="RetireMinTrades"/> trade, e chi non opera non ci arriva mai: al 2026-08-19 le
+    /// corsie di flotta 3-7 avevano chiuso <b>un trade ciascuna o zero</b> in 13-15 giorni, quindi
+    /// non erano ritirabili per nessuna via. Una corsia che non si libera mai blocca la flotta, e a
+    /// monte il comitato — che riceve una domanda solo quando esiste una corsia libera con due
+    /// candidati che se la contendono.</para>
+    ///
+    /// <para>Il confronto è col ritmo atteso della corsia, non con un conteggio assoluto: 30
+    /// trade/mese fermi da due settimane sono un guasto, 2 trade/mese con un trade in due settimane
+    /// sono la norma. E se il ritmo atteso non è noto — gambe configurate a mano, ensemble creati
+    /// prima di I11 — <b>non si condanna</b>. Vedi <see cref="TradeFrequency.IsStarving"/>.</para>
+    ///
+    /// <para>Il default 0,2 è deliberatamente prudente: a un quinto dell'atteso non c'è più margine
+    /// di lettura alternativa, mentre soglie vicine a 1 ritirerebbero corsie semplicemente lente.</para>
+    /// </summary>
+    public decimal StarvationFraction { get; set; } = 0.2m;
+
+    /// <summary>
+    /// [I12] Giorni minimi di osservazione prima che l'inedia sia un giudizio. Più corto delle tre
+    /// settimane del ritiro per Sharpe di proposito: qui non si stima una performance, si constata
+    /// un'assenza di operazioni, e constatarla richiede meno storia. Sotto questa soglia si tace,
+    /// anche a zero trade, altrimenti una corsia appena avviata verrebbe ritirata prima di aver
+    /// avuto occasione di operare.
+    /// </summary>
+    public int StarvationMinDays { get; set; } = 10;
+
+    // --- [AF2b] Il braccio esecutivo: SOLO il ritiro, e solo dove è scritto ---
+
+    /// <summary>
+    /// [AF2b] Le corsie su cui l'orchestratore può <b>agire davvero</b> (fermarle), non solo
+    /// scriverne nel journal. <b>Vuota di default = nessuna esecuzione, mai</b>, qualunque sia
+    /// <see cref="DryRun"/>.
+    ///
+    /// <para><b>Perché una lista e non un interruttore.</b> Un booleano «esegui» apre di colpo
+    /// tutte le corsie di flotta: il primo tick dopo l'accensione potrebbe fermarne quattro insieme,
+    /// e non ci sarebbe modo di provare il braccio su una sola. La lista rende l'ampiezza una
+    /// decisione esplicita e reversibile togliendo un numero — e permette il collaudo che il PRD
+    /// chiede: <i>una corsia per volta, solo Paper</i>.</para>
+    ///
+    /// <para>È un <b>permesso</b>, non un bersaglio: essere in lista non fa succedere nulla, toglie
+    /// solo il divieto. Le corsie dell'impronta, quarantenate, di campagna, in Live o Testnet
+    /// restano intoccabili anche se elencate qui — questo elenco si somma ai confini
+    /// dell'orchestratore, non li sostituisce.</para>
+    /// </summary>
+    public List<int> ExecutionLanes { get; set; } = [];
+
+    /// <summary>
+    /// [AF2b] Azioni eseguite al massimo per tick. Uno: il tick dopo si rilegge lo stato e si
+    /// rivaluta. Fermare quattro corsie nello stesso giro renderebbe indistinguibile una decisione
+    /// giusta da un guasto del lettore di stato.
+    /// </summary>
+    public int MaxExecutionsPerTick { get; set; } = 1;
+
     // --- Assegnazione dei candidati ---
 
     /// <summary>Assegnazioni massime per tick (prudenza: una alla volta, il tick dopo si rivaluta).</summary>
@@ -80,7 +140,13 @@ public sealed record FleetLaneState(
     int TradeCount,
     TimeSpan Observation,
     string Symbol,
-    string Timeframe);
+    string Timeframe,
+    /// <summary>
+    /// [I12] Ritmo ATTESO della corsia sul simbolo attuale (somma delle gambe attive), dalla
+    /// configurazione dell'ensemble. <c>null</c> = non dichiarato da almeno una gamba, e in quel
+    /// caso il ritiro per inedia NON si esprime: l'ignoranza non condanna.
+    /// </summary>
+    decimal? ExpectedTradesPerMonth = null);
 
 /// <summary>
 /// Un run candidato al forward test. <paramref name="Band"/>: "pass" = sopravvissuti alla
@@ -97,7 +163,21 @@ public sealed record FleetCandidate(
     decimal TradesPerMonth,
     string Timeframe,
     string Summary,
-    bool AlreadyHandled);
+    bool AlreadyHandled,
+    /// <summary>
+    /// [I12] Identità canonica del candidato (<c>PipelineCandidateKey</c>: strategia + coppia +
+    /// timeframe + impronta dei parametri), per NON riproporre quaranta volte la stessa cosa.
+    ///
+    /// <para>Le proposte grigie nascono per RUN, e la caccia rigira gli stessi parametri sugli
+    /// stessi mercati: al 2026-08-18 il journal ne contava 83, tutte in attesa dello stesso click,
+    /// e ognuna era una notifica. Un elenco di quaranta righe che sono una cosa sola non è un
+    /// elenco, è rumore — e il rumore consuma il budget degli allarmi veri (lezione già pagata con
+    /// la staleness a 60s su STX).</para>
+    ///
+    /// <para><c>null</c> = identità non derivabile (verdetti illeggibili): in quel caso il candidato
+    /// NON si deduplica, perché accorpare per ignoranza nasconderebbe proposte diverse.</para>
+    /// </summary>
+    string? Identity = null);
 
 /// <summary>Lo stato complessivo su cui <see cref="FleetOrchestrator.Decide"/> ragiona. Solo dati, nessun servizio.</summary>
 public sealed class FleetState

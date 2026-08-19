@@ -506,6 +506,9 @@ public sealed class RecommendationStage(IPipelineRulesProvider rulesProvider) : 
             CandidatesEvaluated = ctx.Validated.Count > 0 ? ctx.Validated.Count : ctx.Candidates.Count,
             Survivors = ctx.Validated.Count(v => v.Survived),
             EnsembleLegs = ctx.Ensemble?.Legs ?? new List<ProposedLeg>(),
+            // [I11] La finestra su cui i trade delle gambe sono stati contati, portata avanti col
+            // resto: senza, una volta schierata la gamba nessuno sa piu' quanti trade doveva fare.
+            HoldoutMonths = ctx.Ranges.HoldoutMonths(),
         };
 
         // Sentiment 2.0: quando lo snapshot composite c'è, la label deriva dal composite (stesse

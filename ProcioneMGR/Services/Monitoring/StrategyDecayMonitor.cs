@@ -69,6 +69,35 @@ public sealed class DecayReport
     public int TradeCount { get; set; }
     public bool IsAlert { get; set; }
 
+    /// <summary>
+    /// [I13b] Il simbolo su cui il realizzato è stato misurato — cioè quello ATTUALE della corsia.
+    /// Vuoto nei report costruiti da chiamanti che non lo dichiarano.
+    /// </summary>
+    public string Symbol { get; set; } = string.Empty;
+
+    /// <summary>
+    /// [I13b] Trade di questa gamba <b>scartati</b> perché su un simbolo diverso da quello attuale
+    /// della corsia (la corsia è stata riassegnata, o la coppia è stata cambiata a mano senza
+    /// riscrivere le gambe).
+    ///
+    /// <para>Prima li si contava insieme agli altri: lo Sharpe «realizzato» di una gamba poteva
+    /// nascere da trade fatti su DUE mercati diversi, e nessuna riga lo diceva. Il criterio è il
+    /// <b>simbolo attuale</b> (AF2c-2), e lo scarto va dichiarato: un conteggio più basso senza
+    /// spiegazione si legge come un guasto.</para>
+    /// </summary>
+    public int TradesExcludedOtherSymbol { get; set; }
+
+    /// <summary>
+    /// [I13b] <b>Questa gamba è misurabile?</b> Vero quando i trade sul simbolo attuale bastano
+    /// perché il confronto realizzato-vs-atteso significhi qualcosa.
+    ///
+    /// <para>È il gate del punto (b) dell'item, e <b>può chiudere il filone</b>: a 2-6 trade/mese,
+    /// «≥20 trade sul simbolo attuale» può dare zero gambe misurabili su tutta la flotta. In quel
+    /// caso il pannello lo dice e il freno per gamba (c) non si fa — misurare prima di agire vuol
+    /// dire anche accettare che la misura dica di non agire.</para>
+    /// </summary>
+    public bool IsMeasurable { get; set; }
+
     /// <summary>Messaggio sempre valorizzato: spiega l'esito anche quando non scatta un alert (es. "trade insufficienti").</summary>
     public string StatusMessage { get; set; } = string.Empty;
 
@@ -102,8 +131,9 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
             .OrderBy(t => t.ClosedAtUtc)
             .ToList();
         report.TradeCount = window.Count;
+        report.IsMeasurable = window.Count >= options.WindowTradeCount;
 
-        if (window.Count < options.WindowTradeCount)
+        if (!report.IsMeasurable)
         {
             report.StatusMessage = $"Trade insufficienti per una valutazione affidabile ({window.Count}/{options.WindowTradeCount}).";
             return report;
@@ -242,5 +272,81 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
         var spanDays = (decimal)(chronological[^1].ClosedAtUtc - chronological[0].ClosedAtUtc).TotalDays;
         var effectiveDays = Math.Max(spanDays, 1m);
         return n / effectiveDays * 365m;
+    }
+}
+
+
+/// <summary>
+/// [I13b] <b>Il verdetto di misurabilità della corsia</b>: quante gambe hanno abbastanza trade sul
+/// simbolo attuale perché il confronto realizzato-vs-atteso significhi qualcosa, e in quanto tempo
+/// le altre ci arriverebbero al ritmo che dichiarano.
+///
+/// <para>È il gate del punto (b) del filone «freno per gamba», e <b>può chiuderlo</b>: a 2-6
+/// trade/mese, «≥20 trade sul simbolo attuale» può dare <b>zero</b> gambe misurabili su tutta la
+/// flotta — al 2026-08-19 le corsie 3-7 avevano un trade ciascuna o zero in 13-15 giorni. In quel
+/// caso il pannello lo dice e il freno per gamba (c) <b>non si fa</b>: misurare prima di agire vuol
+/// dire anche accettare che la misura dica di non agire.</para>
+///
+/// <para>Puro e statico: prende i report già calcolati e le attese delle gambe, e non tocca né
+/// database né orologio.</para>
+/// </summary>
+public static class DecayMeasurability
+{
+    /// <param name="Measurable">Gambe con abbastanza trade sul simbolo attuale.</param>
+    /// <param name="Total">Gambe considerate (le attive della corsia).</param>
+    /// <param name="Verdict">La frase da mostrare, che dichiara anche il tempo-al-verdetto delle non misurabili.</param>
+    public sealed record Result(int Measurable, int Total, string Verdict)
+    {
+        /// <summary>Vero quando NESSUNA gamba è misurabile: il caso in cui il filone si chiude.</summary>
+        public bool NothingMeasurable => Total > 0 && Measurable == 0;
+    }
+
+    public static Result Evaluate(
+        IReadOnlyList<DecayReport> reports,
+        IReadOnlyDictionary<string, decimal?> expectedTradesPerMonthByStrategyId,
+        int requiredTrades)
+    {
+        ArgumentNullException.ThrowIfNull(reports);
+        ArgumentNullException.ThrowIfNull(expectedTradesPerMonthByStrategyId);
+
+        if (reports.Count == 0) return new Result(0, 0, "Nessuna gamba da misurare su questa corsia.");
+
+        var measurable = reports.Count(r => r.IsMeasurable);
+        if (measurable == reports.Count)
+        {
+            return new Result(measurable, reports.Count,
+                $"Tutte le {reports.Count} gambe hanno almeno {requiredTrades} trade sul simbolo attuale: il confronto realizzato-vs-atteso è interpretabile.");
+        }
+
+        // Il tempo che manca alle non misurabili, alla frequenza che DICHIARANO. È il numero che
+        // trasforma «non ancora» in una data, e a volte rivela che quella data non arriverà mai.
+        var attese = reports
+            .Where(r => !r.IsMeasurable)
+            .Select(r =>
+            {
+                var perMese = expectedTradesPerMonthByStrategyId.GetValueOrDefault(r.StrategyId);
+                var mancanti = Math.Max(0, requiredTrades - r.TradeCount);
+                var mesi = Fleet.TradeFrequency.MonthsToVerdict(perMese, mancanti);
+                return (r, perMese, mancanti, mesi);
+            })
+            .ToList();
+
+        var maiGiudicabili = attese.Count(a => a.perMese is null or <= 0m);
+        var piuLontana = attese.Select(a => a.mesi).Where(m => m is not null).DefaultIfEmpty(null).Max();
+
+        var testo = $"{measurable} gambe su {reports.Count} sono misurabili ({requiredTrades} trade sul simbolo attuale). ";
+        if (measurable == 0) testo += "NESSUNA misura è interpretabile in questo momento. ";
+
+        if (maiGiudicabili == attese.Count)
+        {
+            testo += "Per le altre il ritmo atteso non è dichiarato (o è zero): quando lo saranno non è derivabile.";
+        }
+        else if (piuLontana is decimal m)
+        {
+            testo += $"Alle altre servono fino a ~{m:0.#} mesi al ritmo che dichiarano";
+            testo += maiGiudicabili > 0 ? $", e {maiGiudicabili} non hanno un ritmo dichiarato." : ".";
+        }
+
+        return new Result(measurable, reports.Count, testo);
     }
 }

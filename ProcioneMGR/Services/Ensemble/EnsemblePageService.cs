@@ -128,6 +128,66 @@ public sealed class EnsemblePageService(
     {
         Config = await Manager(laneId).GetConfigurationAsync(ct);
         Champion = await registry.GetChampionAsync(Config.Symbol, Config.Timeframe, ct);
+        await LoadEngineLegsAsync(laneId, ct);
+    }
+
+    /// <summary>
+    /// [I13a] Le gambe che il MOTORE sta davvero eseguendo, dal suo stato vivo. <c>null</c> = non
+    /// determinabile (motore illeggibile): in quel caso il confronto non si fa e lo si dichiara,
+    /// invece di leggere l'assenza come «nessuna divergenza» — sarebbe la classe «controllo che
+    /// rassicura», qui nella sua forma piu' insidiosa perche' un motore muto e' proprio il caso in
+    /// cui si vorrebbe sapere.
+    /// </summary>
+    public IReadOnlyList<string>? EngineRunningStrategyIds { get; private set; }
+
+    /// <summary>Vero se il motore della corsia caricata sta girando (se determinabile).</summary>
+    public bool? EngineIsRunning { get; private set; }
+
+    private async Task LoadEngineLegsAsync(int laneId, CancellationToken ct)
+    {
+        EngineRunningStrategyIds = null;
+        EngineIsRunning = null;
+        try
+        {
+            var status = await services.GetRequiredKeyedService<ITradingEngine>(laneId).GetStatusAsync(ct);
+            EngineIsRunning = status.IsRunning;
+            EngineRunningStrategyIds = status.RunningStrategyIds;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            // Motore non leggibile: resta null, e la pagina lo dice.
+        }
+    }
+
+    /// <summary>
+    /// [I13a] <b>Le gambe spente in configurazione che il motore sta ancora operando.</b>
+    ///
+    /// <para>Il motore fotografa <c>IsActive</c> all'AVVIO: togliere la spunta a una gamba mentre la
+    /// corsia gira non ferma nulla fino al riavvio. Fino al 2026-08-19 la configurazione mostrava la
+    /// gamba spenta, il motore continuava a operarla, e le due cose non si incontravano da nessuna
+    /// parte — l'operatore credeva di aver fermato qualcosa che stava ancora aprendo posizioni.</para>
+    ///
+    /// <para>Puro e statico: il confronto e' fra due liste di identita', e provarlo non richiede
+    /// ne' motore ne' database. Se il motore non ha risposto (<c>running = null</c>) il risultato e'
+    /// vuoto — <b>non si accusa nessuno sulla base di un silenzio</b>, e la pagina dichiara che il
+    /// confronto non e' stato possibile.</para>
+    /// </summary>
+    public static List<EnsembleStrategy> LegsStillRunningWhileDisabled(
+        EnsembleConfiguration? config, IReadOnlyList<string>? engineRunningIds, bool? engineIsRunning)
+    {
+        if (config is null || engineRunningIds is null || engineIsRunning is not true) return [];
+        var running = engineRunningIds.ToHashSet(StringComparer.Ordinal);
+        return config.Strategies.Where(s => !s.IsActive && running.Contains(s.StrategyId)).ToList();
+    }
+
+    /// <summary>[I13a] Le gambe accese in configurazione che il motore NON sta eseguendo (aggiunte dopo l'avvio).</summary>
+    public static List<EnsembleStrategy> LegsEnabledButNotRunning(
+        EnsembleConfiguration? config, IReadOnlyList<string>? engineRunningIds, bool? engineIsRunning)
+    {
+        if (config is null || engineRunningIds is null || engineIsRunning is not true) return [];
+        var running = engineRunningIds.ToHashSet(StringComparer.Ordinal);
+        return config.Strategies.Where(s => s.IsActive && !running.Contains(s.StrategyId)).ToList();
     }
 
     public async Task RefreshAsync(int laneId, CancellationToken ct = default)
@@ -292,6 +352,9 @@ public sealed class EnsemblePageService(
         if (AlreadyPresent()) return new("Questa gamba grigia è già nella corsia.", IsError: true);
 
         var (sl, tp) = await Pipeline.AutoBracket.ComputeAsync(dbFactory, excursionAnalyzer, c.Symbol, c.Timeframe, ct);
+        // [I11] Il ritmo atteso, dallo stesso holdout delle attese qui sotto: senza, questa terza
+        // porta di schieramento produrrebbe gambe non giudicabili mentre le altre due no.
+        var (attesiAlMese, fonteAttesi) = await Fleet.HoldoutWindow.ForCandidateAsync(dbFactory, c.RunId, c.HoldoutTrades, ct);
         // Ricontrollo DOPO l'await: un doppio click fa partire due handler e il secondo passa il
         // primo controllo mentre il primo è ancora dentro AutoBracket (review 2026-08-14).
         if (AlreadyPresent()) return new("Questa gamba grigia è già nella corsia.", IsError: true);
@@ -306,6 +369,8 @@ public sealed class EnsemblePageService(
             ExpectedProfitFactor = c.HoldoutProfitFactor != 0m ? c.HoldoutProfitFactor : null,
             ExpectedMaxDrawdown = c.HoldoutMaxDrawdown != 0m ? c.HoldoutMaxDrawdown : null,
             SourceVerdict = "Grey",
+            ExpectedTradesPerMonth = attesiAlMese,
+            ExpectedTradesSource = fonteAttesi,
         });
         return sl > 0m || tp > 0m
             ? new($"Gamba grigia aggiunta con bracket dalle escursioni (SL {sl:F2}% / TP {tp:F2}%). Ricorda: Save per persistere.", IsError: false)

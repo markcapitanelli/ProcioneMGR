@@ -113,6 +113,8 @@ public static class TradingContractMapper
         Timeframe = s.Timeframe,
         LastProcessedCandleUtc = ToProtoNullable(s.LastProcessedCandleUtc),
         LastCandleUtc = ToProtoNullable(s.LastCandleUtc),
+        // [I13a] Le gambe che il motore sta davvero eseguendo: il fatto, non la configurazione.
+        RunningStrategyIds = { s.RunningStrategyIds },
     };
 
     public static TradingEngineStatus FromProto(Proto.GetLaneStatusResponse r) => new()
@@ -140,6 +142,7 @@ public static class TradingContractMapper
         Timeframe = r.Timeframe,
         LastProcessedCandleUtc = FromProtoNullable(r.LastProcessedCandleUtc),
         LastCandleUtc = FromProtoNullable(r.LastCandleUtc),
+        RunningStrategyIds = [.. r.RunningStrategyIds],
     };
 
     // ------------------------------------------------------------------------- posizioni

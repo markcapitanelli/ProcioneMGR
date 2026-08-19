@@ -394,9 +394,16 @@
             <div class="alert @(silence.CommitteeCouldBeAsked ? "alert-info" : "alert-secondary") py-2 small mb-3">
                 <div class="d-flex flex-wrap gap-3 mb-1">
                     <span><strong>@silence.PassCandidatesQueued</strong> candidati «pass» in coda</span>
-                    <span><strong>@silence.GreyCandidates</strong> grigi (solo proposte)</span>
+                    <span title="Proposte DISTINTE per identità (strategia + coppia + timeframe + parametri), non numero di run: la caccia ritrova spesso gli stessi parametri, e quaranta righe che sono una cosa sola non sono un elenco.">
+                        <strong>@silence.GreyCandidates</strong> grigi distinti (solo proposte)
+                    </span>
                     <span><strong>@silence.FreeFleetLanes</strong> corsie di flotta libere</span>
                     <span><strong>@silence.LanesUnderGovernance</strong> corsie sotto governo</span>
+                    @* [I12] Il numero che dice se il blocco si scioglierà da solo. *@
+                    <span class="@(silence.StarvingLanes > 0 ? "text-warning-emphasis fw-semibold" : "")"
+                          title="Corsie in corsa che stanno producendo meno della frazione dichiarata dei trade attesi: il prossimo tick le ritira e libera il posto. Zero non vuol dire «tutte in salute», vuol dire «nessuna condannabile» — e comprende quelle di cui il ritmo atteso non è noto.">
+                        <strong>@silence.StarvingLanes</strong> in inedia
+                    </span>
                 </div>
                 <div>@silence.Reason.</div>
                 @if (!silence.CommitteeCouldBeAsked)
@@ -446,6 +453,22 @@
                 <label class="form-label">Conferme (tick) @Hot()</label>
                 <input type="number" class="form-control" @bind="_fleet.RetireConfirmTicks" min="1" style="width: 7rem;" />
             </div>
+            @* [I12] Il SECONDO criterio di ritiro. Sta accanto al primo perché è la stessa
+               decisione presa per un'altra ragione, e separarli farebbe cercare in due posti. *@
+            <div class="col-auto">
+                <label class="form-label" for="fl_starv">
+                    Inedia: frazione @Hot()
+                    <span class="text-muted small" title="Frazione del ritmo ATTESO sotto cui la corsia è dichiarata in inedia e ritirata. 0,2 = ha prodotto meno del 20% dei trade che l'holdout prometteva nel tempo trascorso. 0 = criterio spento.">ⓘ</span>
+                </label>
+                <input type="number" step="0.05" id="fl_starv" class="form-control" @bind="_fleet.StarvationFraction" min="0" max="1" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" for="fl_starvd">
+                    Inedia: giorni min @Hot()
+                    <span class="text-muted small" title="Osservazione minima prima che l'inedia sia un giudizio: sotto questa soglia si tace anche a zero trade, altrimenti una corsia appena avviata verrebbe ritirata prima di aver avuto occasione di operare.">ⓘ</span>
+                </label>
+                <input type="number" id="fl_starvd" class="form-control" @bind="_fleet.StarvationMinDays" min="1" style="width: 7rem;" />
+            </div>
             <div class="col-auto">
                 <label class="form-label">Asseg./tick @Hot()</label>
                 <input type="number" class="form-control" @bind="_fleet.MaxAssignmentsPerTick" min="1" style="width: 7rem;" />
@@ -466,8 +489,41 @@
                 <label class="form-label">Silenzio carry (h) @Hot()</label>
                 <input type="number" class="form-control" @bind="_fleet.CarrySilenceAlertHours" min="1" style="width: 8rem;" />
             </div>
+            @* [AF2b] Il braccio esecutivo. Sta in fondo e con la sua cornice perche' e' l'UNICA
+               manopola di questo pannello che fa succedere qualcosa nel mondo invece di scriverne. *@
+            <div class="col-12 mt-2">
+                <div class="border rounded p-2 @(_fleet is { DryRun: false, ExecutionLanes.Count: > 0 } ? "border-warning" : "")">
+                    <div class="d-flex flex-wrap gap-3 align-items-end">
+                        <div>
+                            <label class="form-label mb-1" for="fl_exlanes">Corsie autorizzate all'ESECUZIONE @Hot()</label>
+                            <input class="form-control" id="fl_exlanes" @bind="_fleetExecutionLanesCsv"
+                                   placeholder="es. 5  (vuoto = nessuna)" style="width: 14rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_exmax">Azioni max/tick @Hot()</label>
+                            <input type="number" class="form-control" id="fl_exmax" @bind="_fleet.MaxExecutionsPerTick" min="1" style="width: 7rem;" />
+                        </div>
+                        <div class="small text-muted flex-fill" style="min-width: 22rem;">
+                            Elenco di numeri di corsia separati da virgola. <strong>Vuoto = nessuna esecuzione</strong>,
+                            anche con il dry-run spento: il permesso è per corsia, non globale.
+                            <br />
+                            Su una corsia autorizzata l'orchestratore può <strong>FERMARLA</strong> da solo quando la
+                            condanna (forward test perdente o inedia), dopo la conferma dell'isteresi e solo se la
+                            rilegge in <strong>Paper</strong> in quel momento. La corsia resta configurata e si riavvia
+                            con un click. <strong>Avviare</strong> una corsia resta di solo journal: fermare si disfa,
+                            avviare ha già operato.
+                            @if (_fleet is { DryRun: false, ExecutionLanes.Count: > 0 })
+                            {
+                                <span class="d-block text-warning-emphasis fw-semibold mt-1">
+                                    In vigore ora: @_fleet.ExecutionLanes.Count corsie possono essere fermate automaticamente.
+                                </span>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class="col-auto align-self-end">
-                <button class="btn btn-primary" @onclick='() => SaveAsync("Fleet", _fleet, "Orchestratore di flotta")' disabled="@_busy">Salva</button>
+                <button class="btn btn-primary" @onclick="SaveFleetAsync" disabled="@_busy">Salva</button>
             </div>
         </div>
         @* [F5] IL CLICK UMANO: schiera un candidato grigio proposto su una corsia di flotta libera. *@
@@ -1907,6 +1963,9 @@
     private AutoReapplyOptions _autoReapply = new();
     private PromotionEvaluatorOptions _promotion = new();
     private ProcioneMGR.Services.Fleet.FleetOptions _fleet = new();
+
+    /// <summary>[AF2b] Le corsie autorizzate come CSV: e' la forma con cui si scrive una lista, non un secondo stato.</summary>
+    private string _fleetExecutionLanesCsv = string.Empty;
     private int _fleetFootprint = 3;
     private List<OrchestratorDecision> _fleetJournal = [];
 
@@ -2187,6 +2246,7 @@
 
         // [AF2] Config (editabile), stato e journal della flotta.
         _fleet = Clone(FleetMonitor.CurrentValue);
+        _fleetExecutionLanesCsv = string.Join(", ", _fleet.ExecutionLanes);
         _fleetFootprint = PipelineApplier.LaneCount; // l'impronta storica dell'auto-apply: il confine della flotta
         await using (var db = await DbFactory.CreateDbContextAsync())
         {
@@ -2337,6 +2397,29 @@
     /// <c>SaveAsync</c> di prima — validazione server-side inclusa — perché il CSV è solo la forma
     /// con cui l'operatore scrive una lista, non una seconda strada di salvataggio.
     /// </summary>
+    /// <summary>
+    /// [AF2b] Salva la sezione Fleet traducendo prima il CSV delle corsie autorizzate. Passa dalla
+    /// <c>SaveAsync</c> comune — stessa validazione, stesso percorso — perche' il CSV e' solo la
+    /// forma con cui l'operatore scrive una lista, non una seconda strada di salvataggio.
+    ///
+    /// <para>I valori non numerici vengono SCARTATI in silenzio invece di azzerare la lista: un
+    /// refuso non deve poter allargare i permessi, e nel dubbio la lista piu' corta e' quella
+    /// sicura. Il campo si riscrive dal salvato, quindi l'operatore vede subito cosa e' passato.</para>
+    /// </summary>
+    private async Task SaveFleetAsync()
+    {
+        _fleet.ExecutionLanes = (_fleetExecutionLanesCsv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => int.TryParse(t, out var n) ? n : (int?)null)
+            .Where(n => n is >= 0)
+            .Select(n => n!.Value)
+            .Distinct()
+            .OrderBy(n => n)
+            .ToList();
+        _fleetExecutionLanesCsv = string.Join(", ", _fleet.ExecutionLanes);
+        await SaveAsync("Fleet", _fleet, "Orchestratore di flotta");
+    }
+
     private async Task SaveDriftAsync()
     {
         _drift.MonitorStages = (_driftStagesCsv ?? string.Empty)

@@ -9,7 +9,12 @@ namespace ProcioneMGR.Services.Trading;
 /// Riassunto di una corsia: quel tanto che basta per sceglierla senza doverla aprire.
 /// </summary>
 /// <param name="Symbol">Vuoto se la corsia non è mai stata configurata.</param>
-public sealed record LaneSummary(int Id, string Symbol, string Timeframe, string Mode, bool IsRunning)
+public sealed record LaneSummary(
+    int Id, string Symbol, string Timeframe, string Mode, bool IsRunning,
+    // [I12] Ritmo ATTESO della corsia sul simbolo attuale: la somma delle gambe attive, o null se
+    // anche una sola non lo dichiara. Vedi LaneDirectory.ExpectedTradesPerMonth per il perche' la
+    // somma sia parziale-o-niente e non parziale-e-basta.
+    decimal? ExpectedTradesPerMonth = null)
 {
     public bool IsConfigured => !string.IsNullOrEmpty(Symbol);
 }
@@ -59,6 +64,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
         {
             var symbol = string.Empty;
             var timeframe = string.Empty;
+            decimal? expected = null;
             if (configs.TryGetValue(lane, out var json) && !string.IsNullOrWhiteSpace(json))
             {
                 // Una configurazione illeggibile non deve far sparire la corsia dal selettore: senza
@@ -68,6 +74,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
                     var cfg = JsonSerializer.Deserialize<EnsembleConfiguration>(json, Json);
                     symbol = cfg?.Symbol ?? string.Empty;
                     timeframe = cfg?.Timeframe ?? string.Empty;
+                    expected = ExpectedTradesPerMonth(cfg);
                 }
                 catch (JsonException) { /* corsia mostrata come non configurata */ }
             }
@@ -76,8 +83,31 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
             result.Add(new LaneSummary(
                 lane, symbol, timeframe,
                 state?.Mode.ToString() ?? TradingMode.Paper.ToString(),
-                state?.IsRunning ?? false));
+                state?.IsRunning ?? false,
+                expected));
         }
         return result;
+    }
+
+    /// <summary>
+    /// [I12] Il ritmo atteso della CORSIA: la somma di quello delle gambe attive, perché le gambe
+    /// operano in parallelo sullo stesso simbolo e i loro trade si sommano.
+    ///
+    /// <para><b>Parziale-o-niente, mai parziale-e-basta.</b> Se anche una sola gamba attiva non
+    /// dichiara la propria frequenza, il risultato è <c>null</c>. Sommare solo quelle note darebbe un
+    /// atteso SOTTOSTIMATO e quindi un confronto che assolve troppo — ma soprattutto, nel verso che
+    /// conta, produrrebbe un atteso positivo su una corsia di cui in realtà non si sa nulla, cioè
+    /// esattamente il caso in cui il ritiro per inedia non deve poter mordere. L'ignoranza non
+    /// condanna, e una conoscenza parziale è ignoranza travestita.</para>
+    ///
+    /// <para>Le gambe DISATTIVATE non contano: non devono produrre trade, e includerle gonfierebbe
+    /// l'atteso facendo sembrare affamata una corsia che sta rispettando la sua configurazione.</para>
+    /// </summary>
+    internal static decimal? ExpectedTradesPerMonth(EnsembleConfiguration? cfg)
+    {
+        var active = cfg?.Strategies.Where(s => s.IsActive).ToList();
+        if (active is null or { Count: 0 }) return null;
+        if (active.Any(s => s.ExpectedTradesPerMonth is null)) return null;
+        return active.Sum(s => s.ExpectedTradesPerMonth!.Value);
     }
 }

@@ -97,6 +97,32 @@ public class EnsembleStrategy
     public decimal? TrailingStopPercent { get; set; }
 
     /// <summary>
+    /// [I11] Trade al mese ATTESI per questa gamba, derivati dall'holdout del run che l'ha prodotta
+    /// e riferiti al <b>simbolo su cui è stata schierata</b>. <c>null</c> = non derivabile o gamba
+    /// configurata a mano (le corsie 0-2 dell'impronta storica): in quel caso nessun consumatore
+    /// agisce, e lo dichiara invece di assumere zero.
+    ///
+    /// <para><b>Perché deve stare qui e non ricalcolarsi.</b> Il numero nasce nel lettore della
+    /// flotta al momento della candidatura, e fino al 2026-08-19 <b>moriva lì</b>: una volta in
+    /// corsa, nessuno sapeva più quanti trade quella gamba dovesse fare. Senza, la regola di ritiro
+    /// può solo contare i trade in assoluto — e chiedendone 20 non ritira mai una corsia che ne fa
+    /// due al mese, che è esattamente lo stato in cui erano le corsie di flotta 3-7 (1 trade o zero
+    /// in 13-15 giorni). Ricalcolarlo a posteriori dal run è impossibile per le corsie riassegnate:
+    /// le corsie hanno vite precedenti, e il criterio è il <b>simbolo attuale</b> (AF2c-2).</para>
+    ///
+    /// <para>Nullable per retrocompatibilità, come i tre campi di stop qui sopra: gli ensemble
+    /// creati prima di questo campo restano validi e semplicemente non sono giudicabili per inedia.</para>
+    /// </summary>
+    public decimal? ExpectedTradesPerMonth { get; set; }
+
+    /// <summary>
+    /// [I11] Da dove viene <see cref="ExpectedTradesPerMonth"/>, in chiaro (es. «holdout del run
+    /// 3f2a… su 2,1 mesi»). Serve a non far leggere come misura ciò che è una derivazione, e a
+    /// capire perché due gambe sullo stesso simbolo possono avere attese diverse.
+    /// </summary>
+    public string? ExpectedTradesSource { get; set; }
+
+    /// <summary>
     /// Metriche di holdout dal backtest che ha validato questa gamba (es. dal pipeline run o da
     /// una strategia ottimizzata/salvata), usate da <see cref="ProcioneMGR.Services.Monitoring.IStrategyDecayMonitor"/>
     /// come termine di paragone per la performance realizzata dal vivo. Null = nessun confronto
