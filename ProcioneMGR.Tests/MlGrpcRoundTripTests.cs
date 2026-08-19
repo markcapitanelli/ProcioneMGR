@@ -103,8 +103,9 @@ public class MlGrpcRoundTripTests
             => Task.FromResult<SavedMlModel?>(model);
         public Task<IReadOnlyList<SavedMlModel>> ListGroupAsync(string symbol, string timeframe, CancellationToken ct = default)
             => throw new NotSupportedException();
-        public Task PromoteToChallengerAsync(int modelId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<StageChangeOutcome> PromoteToChallengerAsync(int modelId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<PromotionOutcome> TryPromoteToChampionAsync(int modelId, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<StageChangeOutcome> RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<StageChangeOutcome> ReinstateToStagingAsync(int modelId, CancellationToken ct = default) => throw new NotSupportedException();
     }
 }
