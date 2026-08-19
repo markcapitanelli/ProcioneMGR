@@ -107,7 +107,15 @@ public sealed class FeatureDriftWorkerPersistenceTests : IAsyncDisposable
     private FeatureDriftWorker Worker(IDbContextFactory<ApplicationDbContext> factory, DriftSeverity severity, DriftMonitorOptions? opt = null)
         => new(factory, new ScriptedMonitor(severity),
             new ModelRegistry(factory, new ModelRegistryOptions(), NullLogger<ModelRegistry>.Instance),
-            (opt ?? new DriftMonitorOptions { RetireChampionOnAlert = true, MinAlertsToRetire = 1, RecentCandles = DriftTestData.MinimumCandles }).AsMonitor(),
+            (opt ?? new DriftMonitorOptions
+            {
+                RetireChampionOnAlert = true, MinAlertsToRetire = 1,
+                RecentCandles = DriftTestData.MinimumCandles,
+                // [I6c] Queste prove riguardano la PERSISTENZA dell'esito, non il filtro per stage:
+                // dichiarano tutti gli stage cosi' il modello seminato viene davvero esaminato.
+                // Senza, passerebbero senza che il worker guardi nulla — verdi per il motivo sbagliato.
+                MonitorStages = ["Staging", "Champion", "Challenger"],
+            }).AsMonitor(),
             NullLogger<FeatureDriftWorker>.Instance);
 
     /// <summary>
@@ -132,6 +140,7 @@ public sealed class FeatureDriftWorkerPersistenceTests : IAsyncDisposable
         var opt = new DriftMonitorOptions
         {
             RecentCandles = DriftTestData.MinimumCandles,
+            MonitorStages = ["Staging", "Champion", "Challenger"],
             Thresholds = new DriftThresholds { MinObservations = 300 },
         };
 
@@ -164,6 +173,7 @@ public sealed class FeatureDriftWorkerPersistenceTests : IAsyncDisposable
         var opt = new DriftMonitorOptions
         {
             RecentCandles = DriftTestData.MinimumCandles,
+            MonitorStages = ["Staging", "Champion", "Challenger"],
             Thresholds = new DriftThresholds { MinObservations = 20 },
         };
 

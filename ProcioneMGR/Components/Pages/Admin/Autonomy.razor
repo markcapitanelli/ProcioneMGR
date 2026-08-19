@@ -882,6 +882,21 @@
             <p class="small mb-3"><strong>Champion in carica: @_championCount</strong> — il ritiro automatico ha soggetti.</p>
         }
 
+        @if (_driftModelCounts is { } dm)
+        {
+            <p class="small mb-2">
+                Modelli sorvegliati: <strong>@dm.Sorvegliati</strong> su @dm.Salvati salvati
+                (stage: @string.Join(", ", _drift.EffectiveStages())).
+                @if (dm.Sorvegliati == 0)
+                {
+                    <span class="text-body-secondary">
+                        Nessun modello negli stage sorvegliati: il tick costa quasi nulla e non produce
+                        verdetti. Non e' un guasto — e' l'esito normale finche' nessun modello e'
+                        schierato. Il giorno che ne promuovi uno, il monitor parte da solo su quello.
+                    </span>
+                }
+            </p>
+        }
         <div class="row g-3 align-items-end mb-3">
             <div class="col-auto form-check form-switch ms-2">
                 <input class="form-check-input" type="checkbox" id="dr_en" @bind="_drift.Enabled" />
@@ -894,6 +909,17 @@
             <div class="col-auto">
                 <label class="form-label">Candele recenti @Hot()</label>
                 <input type="number" class="form-control" @bind="_drift.RecentCandles" min="20" style="width: 8rem;" />
+            </div>
+            @* [I6c] QUALI modelli si sorvegliano. Senza questo filtro il monitor leggeva i blob di
+               tutti i 158 modelli salvati — tutti in Staging, nessuno usato da una corsia — a 39
+               secondi di database condiviso ogni sei ore, per produrre 151 allarmi su 153 corretti
+               ma irrilevanti. Il filtro trasforma un gate senza soggetto in un gate che si accende
+               INSIEME al soggetto. *@
+            <div class="col-auto">
+                <label class="form-label" title="Stage del registry da sorvegliare, separati da virgola. Vuoto = Champion,Challenger — cioè i soli modelli che possono alimentare o contendere una corsia. Metti Staging per sorvegliare anche i modelli mai schierati (costoso e, se non alimentano nulla, senza soggetto).">
+                    Stage sorvegliati @Hot()
+                </label>
+                <input class="form-control" @bind="_driftStagesCsv" placeholder="@string.Join(",", DriftMonitorOptions.DefaultStages)" style="width: 14rem;" />
             </div>
             @* [I2] Queste due manopole restano SEMPRE modificabili, e la prima versione le
                disabilitava quando i Champion erano zero. Era il ragionamento invertito, trovato
@@ -913,7 +939,7 @@
                 <input type="number" class="form-control" @bind="_drift.MinAlertsToRetire" min="1" style="width: 8rem;" />
             </div>
             <div class="col-auto">
-                <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Drift", _drift, "Drift monitor")' disabled="@_busy">Salva</button>
+                <button class="btn btn-primary me-2" @onclick='() => SaveDriftAsync()' disabled="@_busy">Salva</button>
                 <button class="btn btn-outline-secondary" @onclick="RunDriftNowAsync" disabled="@_busy">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Esegui check ora
@@ -1983,6 +2009,12 @@
     private ProcioneMGR.Services.Health.AgentStateReport? _agents;
     private int? _championCount;
 
+    /// <summary>[I6c] Stage sorvegliati, come CSV editabile. Vuoto = i default del codice.</summary>
+    private string _driftStagesCsv = string.Empty;
+
+    /// <summary>[I6c] Quanti modelli ricadono davvero negli stage sorvegliati, e quanti ne esistono.</summary>
+    private (int Sorvegliati, int Salvati)? _driftModelCounts;
+
     private bool _busy;
     private bool _isError;
     private string? _status;
@@ -2185,6 +2217,7 @@
         // "nessun simbolo sorvegliato" mentre il guardiano ne sorveglia sei.
         _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols);
         _drift = Clone(DriftMonitor.CurrentValue);
+        _driftStagesCsv = SymbolsToCsv(_drift.MonitorStages);
         _marketData = new MarketDataConfig
         {
             Enabled = Config.GetValue("MarketData:Enabled", true),
@@ -2245,6 +2278,7 @@
             OtlpEndpoint = Config.GetValue("Observability:OtlpEndpoint", "http://localhost:4317")!,
         };
         await LoadDriftResultsAsync();
+        await LoadDriftModelCountsAsync();
         await LoadAgentStateAsync();
     }
 
@@ -2297,6 +2331,39 @@
         ProcioneMGR.Services.Health.AgentActivation.NonDeterminabile => ("bg-secondary", "non determinabile"),
         _ => ("bg-light text-dark border", "spento"),
     };
+
+    /// <summary>
+    /// [I6c] Salva la sezione Drift portandoci dentro il CSV degli stage. Passa dalla stessa
+    /// <c>SaveAsync</c> di prima — validazione server-side inclusa — perché il CSV è solo la forma
+    /// con cui l'operatore scrive una lista, non una seconda strada di salvataggio.
+    /// </summary>
+    private async Task SaveDriftAsync()
+    {
+        _drift.MonitorStages = (_driftStagesCsv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        await SaveAsync("Drift", _drift, "Drift monitor");
+        await LoadDriftModelCountsAsync();
+    }
+
+    /// <summary>
+    /// [I6c] Quanti modelli ricadono negli stage sorvegliati, contro quanti ne esistono. È il numero
+    /// che rende onesto «acceso»: sorvegliare 0 modelli su 158 e sorvegliarne 158 sono due mestieri
+    /// diversi, e il badge da solo non li distingue.
+    /// </summary>
+    private async Task LoadDriftModelCountsAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var stages = await db.SavedMlModels.AsNoTracking().Select(m => m.Stage).ToListAsync();
+            _driftModelCounts = (stages.Count(_drift.Monitors), stages.Count);
+        }
+        catch
+        {
+            _driftModelCounts = null;
+        }
+    }
 
     private async Task LoadDriftResultsAsync()
     {

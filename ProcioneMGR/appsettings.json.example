@@ -190,6 +190,8 @@
     "RecentCandles": 200,
     "RetireChampionOnAlert": true,
     "MinAlertsToRetire": 1,
+    "_comment_MonitorStages": "[I6c] Stage del registry sorvegliati. VUOTO = Champion,Challenger (il default sta nel codice: il binder APPENDE gli array, un default popolato qui raddoppierebbe a ogni salvataggio). Il filtro esiste perche' il 2026-08-19 il registry aveva 158 modelli TUTTI in Staging e nessuna corsia con riferimenti ML: senza filtro il monitor leggeva 31.000 candele e 158 blob ogni 6h (39s misurati sul DB condiviso) per sorvegliare cose che nessuno usa. Metti Staging solo se vuoi sorvegliare anche i modelli mai schierati.",
+    "MonitorStages": [],
     "Thresholds": {
       "_comment": "[I6] Soglie dei tre rilevatori, amministrabili dal 2026-08-18 (prima si cambiavano solo ricompilando). Sono la prassi GENERICA del settore, non una misura fatta su serie finanziarie: se il monitor allarma troppo o non allarma mai, si tarano da qui. Regola lato server: l'alert non puo' essere piu' permissivo del warning (per KS 'piu' severo' significa p-value piu' PICCOLO, al contrario delle altre due famiglie). Pannello: /admin/autonomy, card Drift.",
       "PsiBins": 10,

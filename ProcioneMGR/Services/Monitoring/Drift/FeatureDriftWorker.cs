@@ -37,6 +37,44 @@ public sealed class DriftMonitorOptions
     /// sottosezione si comporta esattamente come prima — verificato al livello 2, non promesso.</para>
     /// </summary>
     public DriftThresholds Thresholds { get; set; } = new();
+
+    /// <summary>
+    /// [I6c] Quali <b>stage</b> del registry sorvegliare. Lista vuota = <see cref="DefaultStages"/>
+    /// (Champion e Challenger), cioè i soli modelli che possono alimentare o contendere una corsia.
+    ///
+    /// <para><b>Perché esiste, e perché è il modo giusto di accendere questo monitor.</b> Al
+    /// 2026-08-19 il registry conteneva <b>158 modelli, tutti in Staging</b>, e nessuna delle otto
+    /// corsie aveva un riferimento ML: accendere il worker così avrebbe significato leggere 31.000
+    /// candele e i blob di 158 modelli ogni sei ore — 39 secondi misurati sul database condiviso con
+    /// motore e ingestion — per sorvegliare cose che nessuno usa, producendo 151 allarmi su 153.</para>
+    ///
+    /// <para>Quei 151 allarmi erano probabilmente <i>corretti</i>: modelli vecchi di mesi hanno
+    /// feature davvero derivate. Il difetto non era la soglia, era il <b>soggetto</b>: ricalibrare le
+    /// soglie su quella popolazione avrebbe adattato il metro a un campione irrilevante. Filtrare per
+    /// stage trasforma un «gate senza soggetto» in un gate che <b>si accende insieme al soggetto</b>:
+    /// oggi zero modelli sorvegliati e tick a costo trascurabile, e il giorno che un modello viene
+    /// promosso parte da solo su quello.</para>
+    ///
+    /// <para>Default VUOTO per la stessa lezione di <c>Committee.Providers</c>: il binder di
+    /// configurazione APPENDE gli elementi di un array alla lista già inizializzata, quindi un
+    /// default popolato qui raddoppierebbe a ogni salvataggio dal pannello.</para>
+    /// </summary>
+    public List<string> MonitorStages { get; set; } = [];
+
+    /// <summary>Gli stage sorvegliati quando <see cref="MonitorStages"/> è vuoto.</summary>
+    public static readonly IReadOnlyList<string> DefaultStages = ["Champion", "Challenger"];
+
+    /// <summary>Gli stage effettivamente sorvegliati, deduplicati e senza distinzione di maiuscole.</summary>
+    public IReadOnlyList<string> EffectiveStages()
+    {
+        var source = MonitorStages.Count > 0 ? (IReadOnlyList<string>)MonitorStages : DefaultStages;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return source.Where(s => !string.IsNullOrWhiteSpace(s) && seen.Add(s.Trim())).Select(s => s.Trim()).ToList();
+    }
+
+    /// <summary>Questo modello va sorvegliato? Regola UNA, condivisa da worker, sonda e pannello.</summary>
+    public bool Monitors(ModelStage stage) =>
+        EffectiveStages().Any(s => string.Equals(s, stage.ToString(), StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -99,9 +137,28 @@ public sealed class FeatureDriftWorker(
         var recentCandlesRead = 0;
         var featuresEvaluated = 0;
         List<SavedMlModel> models;
+        int salvati;
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
-            models = await db.SavedMlModels.AsNoTracking().ToListAsync(ct);
+            salvati = await db.SavedMlModels.AsNoTracking().CountAsync(ct);
+            // [I6c] Si sorvegliano solo gli stage dichiarati: leggere i blob di tutti i modelli
+            // salvati per giudicare cose che nessuna corsia usa è costo senza soggetto.
+            var stages = opt.EffectiveStages();
+            models = await db.SavedMlModels.AsNoTracking()
+                .Where(m => stages.Contains(m.Stage.ToString()))
+                .ToListAsync(ct);
+        }
+
+        if (models.Count == 0)
+        {
+            // Non è un guasto ed è l'esito normale finché nessun modello è schierato: si dichiara,
+            // invece di lasciare una tabella vuota che si legge come «non ha girato».
+            logger.LogInformation(
+                "Tick drift: nessun modello negli stage sorvegliati ({Stages}) su {Salvati} salvati — niente da confrontare.",
+                string.Join(", ", opt.EffectiveStages()), salvati);
+            snapshot?.Replace([], checkedAt);
+            metrics?.RecordDriftTick(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, 0, 0, 0);
+            return;
         }
 
         // [U4] Ogni check produce UNA riga per modello — anche quando è tutto pulito: così

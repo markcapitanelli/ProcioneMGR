@@ -341,10 +341,10 @@ public sealed class AgentStateProbe(
         if (f.SavedModelCount == 0)
         {
             return new AgentState(name, AgentActivation.AccesoInerte,
-                "acceso ma nessun modello ML salvato da confrontare" + loop);
+                "acceso ma NESSUN modello negli stage sorvegliati (Champion/Challenger): niente da confrontare finché non se ne schiera uno" + loop);
         }
         return new AgentState(name, AgentActivation.AccesoOperante,
-            $"acceso su {f.SavedModelCount} modelli salvati" + loop);
+            $"acceso su {f.SavedModelCount} modelli sorvegliati" + loop);
     }
 
     /// <summary>
@@ -357,8 +357,8 @@ public sealed class AgentStateProbe(
         var campaignOpt = campaign.CurrentValue;
         var fleetOpt = fleet.CurrentValue;
         var committeeOpt = committee.CurrentValue;
-        var driftOpt = drift.CurrentValue;
 
+        var driftOpt = drift.CurrentValue;
         var campaignsEnabled = 0;
         var campaignsRotating = 0;
         var campaignsWaiting = 0;
@@ -374,7 +374,13 @@ public sealed class AgentStateProbe(
                 .CountAsync(c => c.Enabled && c.Status == CampaignStatus.Rotating, ct);
             campaignsWaiting = await db.VettingCampaigns.AsNoTracking()
                 .CountAsync(c => c.Enabled && c.Status == CampaignStatus.WaitingForTrigger, ct);
-            savedModels = await db.SavedMlModels.AsNoTracking().CountAsync(ct);
+            // [I6c] Il conteggio che conta è quello dei modelli SORVEGLIATI, non di tutti i salvati:
+            // «acceso su 158 modelli» mentre il worker ne guarda zero sarebbe la solita
+            // rassicurazione. La regola è quella del worker, non una copia.
+            var tuttiGliStage = await db.SavedMlModels.AsNoTracking()
+                .Select(m => m.Stage)
+                .ToListAsync(ct);
+            savedModels = tuttiGliStage.Count(driftOpt.Monitors);
             champions = await db.SavedMlModels.AsNoTracking().CountAsync(m => m.Stage == ModelStage.Champion, ct);
             // Il voto lascia una traccia nel journal della flotta: è il fatto contro cui misurare
             // «il comitato funziona», invece dei suoi flag. Stringa vuota e "[]" valgono entrambe
