@@ -39,16 +39,32 @@ public sealed class GreyZoneTests
     [Fact]
     public void DsrInBand_IsGrey()
     {
-        Assert.True(GreyZone.IsGrey(Candidate(dsr: 0.80)));   // pavimento incluso
+        Assert.True(GreyZone.IsGrey(Candidate(dsr: 0.70)));   // pavimento incluso [F5b: era 0,80]
+        Assert.True(GreyZone.IsGrey(Candidate(dsr: 0.773)));  // il MASSIMO davvero osservato in 30 giorni
         Assert.True(GreyZone.IsGrey(Candidate(dsr: 0.9499))); // sotto il tetto
     }
 
     [Fact]
     public void DsrOutsideBand_IsNotGrey()
     {
-        Assert.False(GreyZone.IsGrey(Candidate(dsr: 0.7999))); // sotto il pavimento
+        Assert.False(GreyZone.IsGrey(Candidate(dsr: 0.6999))); // sotto il pavimento
         Assert.False(GreyZone.IsGrey(Candidate(dsr: 0.95)));   // il tetto e' la soglia di sopravvivenza
         Assert.False(GreyZone.IsGrey(Candidate(dsr: null)));   // DSR non calcolabile e nessun ContoTrade
+    }
+
+    /// <summary>
+    /// [F5b, 2026-08-20] Il caso che rende il pavimento una scelta e non un numero: col vecchio 0,80
+    /// la porta DSR era MURATA, perché il massimo che il sistema produce è 0,773. Questo test
+    /// diventerebbe rosso se qualcuno riportasse il pavimento sopra il tetto reale della macchina,
+    /// che è esattamente il modo in cui la banda era morta senza che nessuno se ne accorgesse.
+    /// </summary>
+    [Fact]
+    public void IlPavimento_RestaSottoIlMassimoCheLaMacchinaProduce()
+    {
+        const double dsrMassimoOsservato = 0.773;   // 30 giorni, 402 candidati arrivati al gate
+        Assert.True(GreyZone.DsrFloor <= dsrMassimoOsservato,
+            $"pavimento {GreyZone.DsrFloor:F2} sopra il massimo osservato {dsrMassimoOsservato:F3}: la banda DSR sarebbe irraggiungibile");
+        Assert.True(GreyZone.DsrFloor < GreyZone.DsrCeiling, "pavimento e tetto invertiti: la banda sarebbe vuota per costruzione");
     }
 
     [Fact]
@@ -82,10 +98,11 @@ public sealed class GreyZoneTests
         var matrix = new[]
         {
             Candidate(reject: "Solo 8 trade in holdout (< 10)"),
-            Candidate(dsr: 0.80),
+            Candidate(dsr: 0.70),
+            Candidate(dsr: 0.773),
             Candidate(dsr: 0.9499),
             Candidate(dsr: 0.95),
-            Candidate(dsr: 0.7999),
+            Candidate(dsr: 0.6999),
             Candidate(holdoutSharpe: -0.5m, reject: "Solo 8 trade in holdout (< 10)"),
             Candidate(trades: 0, reject: "Solo 0 trade in holdout (< 10)"),
             Candidate(survived: true, dsr: 0.90),
