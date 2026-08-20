@@ -169,6 +169,12 @@ public sealed class PairSpreadWatchWorker(
 
         // Le finestre NON SOVRAPPOSTE, tagliate dalla più recente all'indietro: il presente è la
         // parte che interessa, e il giudizio di rottura guarda le ultime.
+        // L'estimatore dichiarato in configurazione: normalizzato una volta, non per finestra.
+        // Sconosciuto ⇒ rolling OLS, che è il ripiego più prudente (nessuna adattività), e la riga
+        // porterà comunque l'etichetta di ciò che è stato DAVVERO usato.
+        var usaKalman = string.Equals(opt.Estimator, "Kalman", StringComparison.OrdinalIgnoreCase);
+        var estimatoreUsato = usaKalman ? "Kalman" : "RollingOls";
+
         var righe = new List<PairSpreadWindow>();
         var ora = DateTime.UtcNow;
         var chiaveNormalizzata = PairKey.Build(simboloA, simboloB, timeframe);
@@ -183,11 +189,25 @@ public sealed class PairSpreadWatchWorker(
 
             // Lo z-score passa dall'UNICA implementazione in repo: istanziarne una propria qui
             // sarebbe il difetto già chiuso da I10 (due verità sullo stesso numero).
-            var analisi = new RollingPairsSpreadAnalyzer().Analyze(
-                fettaY, fettaX,
-                lookbackWindow: Math.Max(10, finestra / 4),
-                recalibrationInterval: Math.Max(1, finestra / 10),
-                zScoreLookback: Math.Max(3, finestra / 5));
+            //
+            // [revisione algoritmi 2026-08-20] E l'ESTIMATORE ora decide davvero il calcolo. Nella
+            // prima versione chiamavo sempre la rolling OLS e poi etichettavo la riga con
+            // `opt.Estimator`: scegliere «Kalman» dal pannello dava OLS con scritto Kalman sopra.
+            // Un'etichetta che non descrive il numero che accompagna è la classe «controllo che
+            // rassicura a prescindere dalla realtà» — scritta da me, nello stesso giorno in cui
+            // l'ondata la bonificava altrove. La differenza non è cosmetica: i due estimatori danno
+            // due spread diversi per costruzione (l'uno adatta β a ogni barra, l'altro a intervalli),
+            // ed è la ragione per cui l'estimatore sta nella CHIAVE della tabella.
+            var lookback = Math.Max(10, finestra / 4);
+            var zLookback = Math.Max(3, finestra / 5);
+            var analisi = usaKalman
+                ? // δ: la costante dichiarata dall'analizzatore stesso, la stessa che usa il backtest —
+                  // un valore diverso qui darebbe due spread per la stessa coppia.
+                  new KalmanPairsSpreadAnalyzer().Analyze(fettaY, fettaX, lookback, KalmanPairsSpreadAnalyzer.DefaultDelta, zLookback)
+                : new RollingPairsSpreadAnalyzer().Analyze(
+                    fettaY, fettaX, lookback,
+                    recalibrationInterval: Math.Max(1, finestra / 10),
+                    zScoreLookback: zLookback);
 
             var spread = analisi.Spread.Where(v => v is not null).Select(v => v!.Value).ToList();
             var ultimoZ = analisi.ZScore.LastOrDefault(v => v is not null) ?? 0d;
@@ -197,7 +217,7 @@ public sealed class PairSpreadWatchWorker(
             {
                 PairKeyValue = chiaveNormalizzata,
                 SymbolY = simboloA, SymbolX = simboloB, Timeframe = timeframe,
-                Estimator = opt.Estimator,
+                Estimator = estimatoreUsato,   // ciò che è stato usato, non ciò che è scritto in config
                 WindowSize = finestra,
                 WindowStartUtc = allineateY[inizio].TimestampUtc,
                 WindowEndUtc = allineateY[fine - 1].TimestampUtc,

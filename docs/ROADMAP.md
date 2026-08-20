@@ -1205,7 +1205,7 @@ di dire di no e di dichiarazione di copertura.**
 | I13 | **Freno per gamba: prima la misura, poi l'azione** — (a) l'avviso di deriva esteso alle **gambe attive** (oggi una gamba disattivata continua a operare fino al riavvio della corsia e nessuno lo dice); (b) pannello di sola lettura sui trade veri; (c) **condizionato** all'esito di (b), freno dove si applica `mayOpen`, mai un `continue` che lasci posizioni orfane | **(a)+(b) FATTI**, (c) sospeso in attesa della misura | **il gate di (b) può chiudere il filone e va bene così**: a 2-6 trade/mese «≥20 trade sul simbolo attuale» può dare zero gambe misurabili — allora il pannello lo dice e (c) non si fa. L1 il riferimento indipendente **esiste già in repo** |
 | I14 | **`PairCandidate` + `PairSpreadWindow` col loro lettore** — indice derivato dagli 86 artefatti mai letti, sul progetto di `ResearchCandidateIndex`; storia dello spread sul pattern `FactorIcWindows`; pannello in `/pairs-trading`. Sola lettura, nessuna decisione automatica | **FATTO** | **L2 decisivo**: su due random walk indipendenti il monitor non deve **mai** dichiarare cointegrazione; su una relazione piantata deve trovarla. L1 il rebuild combacia con l'aggregato SQL sugli artefatti |
 | I15 | **Corpus notizie esentato dalla purge + riga nel guardiano di profondità** (decisione del proprietario); da spenta la riga resta **misurata** e mostrata come «non sorvegliata», mai un OK finto | **FATTO** | L1 profondità e conteggio combaciano col `SELECT` a mano; L2 corpus profondo ⇒ il guardiano tace per tre giri |
-| I16 ≡ F12 | **Capacità e universo del carry**: l'unica classe con edge misurato positivo, l'unica che opera oggi, l'unica che nessuno sta dimensionando — mentre il basis è in compressione | aperto | **report con verdetto scritto anche se è «la soglia attuale è già ottima»**; trade/mese e durata mediana dichiarati |
+| I16 ≡ F12 | **Capacità e universo del carry**: l'unica classe con edge misurato positivo, l'unica che opera oggi, l'unica che nessuno sta dimensionando — mentre il basis è in compressione | **FATTO** (verdetto NEGATIVO, vedi `docs/audit/30_CARRY_CAPACITA_2026-08.md`) | **report con verdetto scritto anche se è «la soglia attuale è già ottima»**; trade/mese e durata mediana dichiarati |
 
 
 ### Fase 3 e Fase 4 eseguite (2026-08-19) — I11 e I12
@@ -1314,6 +1314,43 @@ senza una data è un'informazione a metà.
 > ALERT» su gambe con un solo trade: la classe «controllo che rassicura» al contrario — allarmare su
 > un numero che non esiste.
 
+
+
+### Fase 6 (2026-08-20) — I16 ≡ F12: il carry misurato, e il verdetto è negativo
+
+Report completo: **`docs/audit/30_CARRY_CAPACITA_2026-08.md`**.
+Riproducibile: `dotnet run --project tools/PlatformExpand -- carrycapacity all`.
+
+**Negli ultimi 365 giorni il carry non è profittevole su nessuno dei sei mercati, a nessuna soglia
+che apra e a nessuna taglia.** Non è una questione di parametri: il premio non c'è più.
+
+La compressione, misurata sui nostri 42.644 eventi di funding reale: la frazione di tempo in cui il
+funding paga abbastanza per aprire è passata dall'**82,6% del 2021** al **19,9% del 2026** — e nel
+2026 si è **negativo il 35,9% del tempo**. Il benchmark esterno della roadmap (basis 25% → <5% in due
+anni) è confermato e superato.
+
+**Il numero che spiega tutto è il pareggio.** Un round trip costa 0,420% del nozionale (quattro fill,
+due gambe). A 5% annualizzato si incassano 0,0137% al giorno: servono **30,7 giorni in posizione solo
+per non perdere**. La durata mediana degli episodi misurata è di 3-14 giorni su quattro mercati su
+sei — si paga il round trip più volte di quante lo si ripaghi.
+
+Ne segue che **la soglia a 5% era sbagliata anche negli anni buoni**: sulla storia intera l'ottimo è
+12-20% su tutti e sei, e a 5% si lasciano da 1,5 a 14 punti di netto annualizzato. E la **capacità**,
+quando l'edge c'era, era di **1-5 milioni per gamba** su BTC/ETH, un milione su SOL/XRP, centomila su
+DOGE — un vincolo da conoscere prima di dimensionare.
+
+**Due difetti trovati dalla misura stessa, entrambi della classe già bonificata in questa ondata.**
+Il primo: il verdetto presentava come «soglia migliore» una soglia che *non apre mai*, perché su un
+periodo in perdita lo zero batte tutto — cioè incoronava l'astenersi. Il secondo: quando la migliore
+soglia perde, la frase «non c'è niente da cambiare» contraddiceva quella immediatamente precedente.
+Entrambi corretti, entrambi con il loro test.
+
+**Non si propone nulla di automatico.** Il carry Paper resta acceso: produce osservazioni a costo
+zero ed è la sorgente che dirà se e quando il premio torna.
+
+> **Un limite dichiarato**: solo Binance. Bitget — l'unico exchange a leva utilizzabile da IT/UE dopo
+> la restrizione MiCA — non ha storia di funding in questo database. Il premio potrebbe esservi
+> diverso, e non lo sappiamo.
 
 ### Fase 5 (2026-08-19) — I15 fatto, I14 a metà
 

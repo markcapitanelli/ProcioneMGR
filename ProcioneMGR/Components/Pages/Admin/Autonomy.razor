@@ -312,6 +312,19 @@
                 <label class="form-label">Sharpe retrocessione @Hot()</label>
                 <input type="number" step="0.1" class="form-control" @bind="_promotion.DemoteSharpeThreshold" style="width: 8rem;" />
             </div>
+            @* [revisione 2026-08-20] Due manopole della retrocessione non avevano pannello: la
+               finestra minima e l'audit. Senza la prima, «Sharpe retrocessione» qui accanto e' meta'
+               della regola — l'altra meta' decide dopo QUANTO si giudica. *@
+            <div class="col-auto">
+                <label class="form-label" title="Settimane minime di osservazione prima che una retrocessione sia un giudizio e non rumore. E' la meta' mancante della soglia qui accanto: senza, uno Sharpe basso per tre giorni basterebbe.">Settimane min retroc. @Hot()</label>
+                <input type="number" class="form-control" @bind="_promotion.DemoteMinWeeks" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="pr_notify" @bind="_promotion.NotifyOnPromotion" />
+                <label class="form-check-label" for="pr_notify" title="Scrive una voce di audit visibile a ogni promozione e retrocessione. Spegnerlo rende i cambi di modalita' silenziosi: restano nei log, ma non piu' sotto gli occhi.">
+                    Audit su promozioni @Hot()
+                </label>
+            </div>
             <div class="col-auto">
                 <label class="form-label">Intervallo (ore) @Restart()</label>
                 <input type="number" class="form-control" @bind="_promotion.EvaluationIntervalHours" min="1" style="width: 8rem;" />
@@ -725,8 +738,52 @@
                 <input class="form-check-input" type="checkbox" id="llm_nd" @bind="_llm.NotifyDecisions" />
                 <label class="form-check-label" for="llm_nd">Notifica decisioni @Hot()</label>
             </div>
+            @* [revisione 2026-08-20] La CATENA DI FAILOVER e il timeout per provider non avevano
+               pannello, ed e' la parte che decide cosa succede quando un provider non risponde —
+               il layer AI si e' gia' fermato in silenzio una volta, per credito esaurito. Gli
+               endpoint restano modificabili perche' il mandato e' «tutto da UI», col rischio
+               scritto accanto: puntarli altrove manda le richieste a un servizio diverso. *@
+            <div class="col-12">
+                <div class="border rounded p-2">
+                    <div class="small text-muted mb-2">
+                        <strong>Failover fra provider</strong> — l'ordine in cui si prova un altro fornitore quando
+                        il primo non risponde. Il budget è <em>per provider</em>: un timeout non consuma il tempo
+                        degli altri. Con la catena vuota non c'è failover: un provider giù ferma la supervisione.
+                    </div>
+                    <div class="d-flex flex-wrap gap-3">
+                        <div class="flex-fill" style="min-width: 20rem;">
+                            <label class="form-label mb-1" for="llm_fo">Catena di failover @Hot()</label>
+                            <input class="form-control" id="llm_fo" @bind="_llmFailoverCsv"
+                                   placeholder="es. Nvidia, Groq, Gemini  (vuoto = nessun failover)" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Timeout per provider (s) @Hot()</label>
+                            <input type="number" class="form-control" @bind="_llm.PerProviderTimeoutSeconds" min="1" style="width: 9rem;" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12">
+                <details>
+                    <summary class="small text-muted">Endpoint dei provider (cambiali solo se sai perché)</summary>
+                    <div class="d-flex flex-wrap gap-3 mt-2">
+                        <div><label class="form-label mb-1 small">NVIDIA @Hot()</label>
+                            <input class="form-control form-control-sm" @bind="_llm.NvidiaBaseUrl" style="width: 20rem;" /></div>
+                        <div><label class="form-label mb-1 small">Gemini @Hot()</label>
+                            <input class="form-control form-control-sm" @bind="_llm.GeminiBaseUrl" style="width: 20rem;" /></div>
+                        <div><label class="form-label mb-1 small">Groq @Hot()</label>
+                            <input class="form-control form-control-sm" @bind="_llm.GroqBaseUrl" style="width: 20rem;" /></div>
+                        <div><label class="form-label mb-1 small">Hugging Face @Hot()</label>
+                            <input class="form-control form-control-sm" @bind="_llm.HuggingFaceBaseUrl" style="width: 20rem;" /></div>
+                    </div>
+                    <div class="form-text">
+                        Puntarli altrove manda le richieste (e i prompt) a un servizio diverso. Sono qui perché il
+                        mandato è che ogni configurazione si governi dall'interfaccia, non perché vadano toccati.
+                    </div>
+                </details>
+            </div>
             <div class="col-auto">
-                <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Llm", _llm, "Supervisione AI")' disabled="@_busy">Salva</button>
+                <button class="btn btn-primary me-2" @onclick="SaveLlmAsync" disabled="@_busy">Salva</button>
                 <button class="btn btn-outline-secondary" @onclick="RunLlmNowAsync" disabled="@_busy">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Esegui supervisione ora
@@ -877,6 +934,53 @@
                 <label class="form-label">Liquidazioni: punti min @Hot()</label>
                 <input type="number" class="form-control" @bind="_sentiment.HeritageGuard.LiquidationsMinPoints" min="1" style="width: 8rem;" />
             </div>
+            @* [revisione 2026-08-20] I PESI DEL COMPOSITE non avevano pannello, e sono ciò che
+               decide quanto ogni fonte conta nel segnale: cambiarli cambia il numero che finisce
+               nelle raccomandazioni. Si potevano toccare solo editando il file a mano.
+               Sono rinormalizzati sui componenti DISPONIBILI, quindi non devono sommare a 1: se una
+               fonte manca, il suo peso si redistribuisce sulle altre. *@
+            <div class="col-12">
+                <div class="border rounded p-2">
+                    <div class="small text-muted mb-2">
+                        <strong>Pesi del composite di mercato</strong> — quanto ogni fonte pesa nel punteggio
+                        aggregato. Non devono sommare a 1: vengono <em>rinormalizzati sui componenti
+                        effettivamente disponibili</em>, quindi se una fonte è muta il suo peso si
+                        redistribuisce sulle altre invece di far crollare il punteggio.
+                        Somma attuale dichiarata: <strong>@((_sentiment.WeightNews + _sentiment.WeightFearGreed + _sentiment.WeightFunding + _sentiment.WeightLongShort + _sentiment.WeightTaker).ToString("0.##"))</strong>.
+                    </div>
+                    <div class="d-flex flex-wrap gap-3">
+                        <div>
+                            <label class="form-label mb-1">Notizie @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightNews" min="0" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Fear &amp; Greed @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightFearGreed" min="0" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Funding @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightFunding" min="0" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Long/Short @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightLongShort" min="0" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Taker @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightTaker" min="0" style="width: 7rem;" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Giorni di storia su cui si calcola la baseline (media e deviazione) contro cui si misurano gli z-score delle metriche. Piu' lunga = piu' stabile ma piu' lenta a riconoscere un regime nuovo.">Baseline (giorni) @Hot()</label>
+                <input type="number" class="form-control" @bind="_sentiment.BaselineDays" min="7" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Retention delle metriche di sentiment. NON tocca le serie-patrimonio (funding, Fear & Greed, liquidazioni), che sono esenti dalla purge: quelle si governano dal guardiano di profondita' qui sotto.">Retention metriche (gg) @Hot()</label>
+                <input type="number" class="form-control" @bind="_sentiment.MetricRetentionDays" min="30" style="width: 9rem;" />
+            </div>
+
             @* [I15] Il corpus di notizie con punteggio: esente dalla purge dal 2026-08-19, e
                quindi patrimonio come le altre tre. Nasce NON sorvegliato di proposito — vedi il
                title dell'interruttore: la purge ha girato da sempre e nessuna àncora plausibile
@@ -2049,6 +2153,9 @@
     private LiveExecutionOptions _liveExec = new();
     private AutoReapplyOptions _autoReapply = new();
     private PromotionEvaluatorOptions _promotion = new();
+    /// <summary>[revisione 2026-08-20] La catena di failover come CSV: forma di scrittura, non secondo stato.</summary>
+    private string _llmFailoverCsv = string.Empty;
+
     private ProcioneMGR.Services.PairsTrading.PairsWatchOptions _pairsWatch = new();
 
     /// <summary>[I14c] Le coppie sorvegliate come CSV: la forma con cui si scrive una lista, non un secondo stato.</summary>
@@ -2339,6 +2446,7 @@
         // [AF2] Config (editabile), stato e journal della flotta.
         _fleet = Clone(FleetMonitor.CurrentValue);
         _fleetExecutionLanesCsv = string.Join(", ", _fleet.ExecutionLanes);
+        _llmFailoverCsv = string.Join(", ", _llm.FailoverProviders);
         _pairsWatch = Clone(PairsWatchMonitor.CurrentValue);
         _pairsWatchPairsCsv = string.Join(", ", _pairsWatch.Pairs);
         _fleetFootprint = PipelineApplier.LaneCount; // l'impronta storica dell'auto-apply: il confine della flotta
@@ -2501,6 +2609,20 @@
     /// poter mettere in sorveglianza qualcosa che il worker poi salterebbe a ogni giro con un
     /// warning che nessuno legge — meglio vederlo sparire subito dal campo.
     /// </summary>
+    /// <summary>
+    /// [revisione 2026-08-20] Salva la sezione Llm traducendo prima il CSV della catena di failover.
+    /// Passa dalla <c>SaveAsync</c> comune — stessa validazione, stesso percorso.
+    /// </summary>
+    private async Task SaveLlmAsync()
+    {
+        _llm.FailoverProviders = (_llmFailoverCsv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _llmFailoverCsv = string.Join(", ", _llm.FailoverProviders);
+        await SaveAsync("Llm", _llm, "Supervisione AI");
+    }
+
     private async Task SavePairsWatchAsync()
     {
         _pairsWatch.Pairs = (_pairsWatchPairsCsv ?? string.Empty)

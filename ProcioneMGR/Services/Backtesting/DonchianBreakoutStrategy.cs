@@ -15,7 +15,7 @@ namespace ProcioneMGR.Services.Backtesting;
 /// definizione, non puo' mai superare l'HHV calcolato sulla barra in corso (retroazione).
 /// Direction: 0 = solo long, 1 = solo short, 2 = entrambi.
 /// </summary>
-public sealed class DonchianBreakoutStrategy : IStrategy
+public sealed class DonchianBreakoutStrategy : IStrategy, IPositionMirroringStrategy
 {
     public string Name => "DonchianBreakout";
     public string DisplayName => "Donchian Breakout";
@@ -65,6 +65,19 @@ public sealed class DonchianBreakoutStrategy : IStrategy
         _exitLower = [.. exitLower];
         _side = 0;
     }
+    /// <summary>
+    /// [revisione 2026-08-20] Rimette in pari lo specchio della posizione: dal vivo il motore crea
+    /// un'istanza nuova a ogni candela, quindi senza questo <c>_side</c> restava 0 e le uscite dal
+    /// canale non scattavano mai.
+    /// </summary>
+    public void RestorePosition(ProcioneMGR.Services.Trading.OrderSide? side, decimal entryPrice, DateTime openedAtUtc)
+        => _side = side switch
+        {
+            ProcioneMGR.Services.Trading.OrderSide.Buy => 1,
+            ProcioneMGR.Services.Trading.OrderSide.Sell => -1,
+            _ => 0,
+        };
+
 
     public Signal EvaluateSignal(int index, decimal currentPrice, DateTime timestamp)
     {

@@ -207,6 +207,37 @@ public sealed class FleetStateReader(
                 logger.LogWarning(ex, "Run {Run} escluso dalla coda candidati (dati illeggibili).", run.Id);
             }
         }
+
+        // [revisione algoritmi 2026-08-20] IL DEDUP DEI GRIGI VALE ANCHE FRA UN TICK E L'ALTRO.
+        //
+        // La prima versione (I12) accorpava le proposte con la stessa identita' DENTRO un tick, e
+        // bastava a non mandare quaranta notifiche insieme. Ma «gia' gestito» era per RUN, non per
+        // identita': la caccia rigira gli stessi parametri sugli stessi mercati, quindi il giorno
+        // dopo un run NUOVO con la STESSA coppia strategia/serie/parametri tornava a proporsi come
+        // se fosse la prima volta. E' precisamente il meccanismo che aveva prodotto le 91 proposte
+        // per sei cose distinte misurate il 2026-08-19: il dedup dentro il tick non lo tocca.
+        //
+        // Qui l'identita' eredita lo stato: se ANCHE UNO dei run che la portano e' gia' stato
+        // gestito, lo sono tutti. La finestra e' quella dei candidati (CandidateMaxAgeDays), quindi
+        // oltre quella un'identita' puo' ripresentarsi — ed e' giusto: dopo un mese e' una proposta
+        // nuova, non la stessa che ritorna.
+        var identitaGiaGestite = list
+            .Where(c => c.AlreadyHandled && !string.IsNullOrEmpty(c.Identity))
+            .Select(c => c.Identity!)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (identitaGiaGestite.Count > 0)
+        {
+            for (var i = 0; i < list.Count; i++)
+            {
+                var c = list[i];
+                if (!c.AlreadyHandled && !string.IsNullOrEmpty(c.Identity) && identitaGiaGestite.Contains(c.Identity))
+                {
+                    list[i] = c with { AlreadyHandled = true };
+                }
+            }
+        }
+
         return list;
     }
 
