@@ -319,3 +319,251 @@ passa. Che non passi per compiacenza è stato verificato inserendo una propriet�
 > su») e `/trading` (l'avviso sulla spunta degli stop resting). La **migrazione**
 > `AddDeflatedSharpeProvenance` aggiunge due colonne nullable a `SavedMlModels` e si applica
 > all'avvio.
+
+---
+
+## 6. Livello 4 eseguito sull'app vera (2026-08-20, dopo il merge)
+
+Mergiata la PR #99, il repo principale riportato su `master` e riavviato `procione-main`. Le
+superfici sono state guardate una per una sul database e sul motore reali. **Il collaudo ha trovato
+più di quanto cercava.**
+
+### Tre migrazioni erano ferme dal 19 agosto, e nessuno poteva saperlo
+
+Al primo riavvio il migratore ha rifiutato di dichiarare lo schema allineato:
+
+> «Nessuna migrazione pendente (**20 note**), ma il MODELLO differisce dallo snapshot dell'ultima
+> migrazione conosciuta … l'assembly `ProcioneMGR.Migrations.Postgres` accanto all'eseguibile è
+> VECCHIO — `dotnet build` dell'app non lo ricostruisce.»
+
+È la trappola nota della DLL delle migrazioni, ma vista dal lato che non era mai stato pagato: non
+sbaglia la *generazione*, impedisce l'**applicazione**. Ricostruito il progetto nella stessa
+configurazione con cui gira l'app (`-c Release`), le migrazioni note sono passate da 20 a 24 e ne
+sono state applicate **quattro**:
+
+| migrazione | quando | cosa mancava a database |
+|---|---|---|
+| `AddCampaignPausedUntil` | 19/08 | colonna della pausa campagne |
+| `AddPairCandidates` | 19/08 | **tabella `PairCandidates`** |
+| `AddPairSpreadWindows` | 19/08 | **tabella `PairSpreadWindows`** |
+| `AddDeflatedSharpeProvenance` | 20/08 | le due colonne di M2 |
+
+Le due tabelle del Filone I **non esistevano**: i sottosistemi mergiati il giorno prima giravano
+contro tabelle assenti, per un giorno intero. Il migratore ha fatto il suo mestiere — fail-closed sul
+*verdetto*, non sull'avvio — ma l'unica traccia era un `fail:` in un log che nessuno guarda.
+**Regola nuova: dopo ogni merge che contenga una migrazione, `dotnet build
+ProcioneMGR.Migrations.Postgres -c Release`, e leggere la riga `DatabaseMigrator`.** La spia è il
+numero fra parentesi: se «N note» è più basso del numero di file in `Migrations/`, la DLL è vecchia.
+
+### Le sei superfici, con i numeri veri
+
+| dove | esito |
+|---|---|
+| `/admin/autonomy#p-factordrift` | card presente e **ATTIVO**, quattro manopole editabili coi vincoli giusti (serie 1..30, candele 1.000..200.000). La riga di copertura dice, sui dati veri: *«con 5 serie ogni 12 ore, un giro completo su **222 serie** richiede circa **22,5 giorni** (45 giri)»*. È esattamente il numero che nessuno poteva conoscere prima |
+| `/admin/autonomy#p-thresholds` | **z di significatività = 0,35** letta dalla configurazione viva: il default nuovo è in vigore. La nota con la tabella ΔSharpe per l'holdout a 4 mesi è al suo posto |
+| `/registry` | la colonna «Misurato su» rende. **164 modelli, ZERO con un DSR**: tutte le righe mostrano «—», non «metro ignoto». Vedi sotto |
+| `/ensemble` | il riquadro su «Alloc %» e la voce di glossario ci sono; il tooltip sull'intestazione dice *«NON dimensiona gli ordini»*. La corsia 4 (XRP/USDT) ha una gamba sola al 100%, di fascia grigia |
+| `/trading` | l'avviso sulla spunta degli stop resting rende per intero, **inclusa la qualificazione sullo Spot** aggiunta dopo la rilettura del diff. La spunta è spenta. La configurazione di sicurezza è letta dal MOTORE via gRPC: il port-forward regge |
+| `/campaign` | gli esiti reali dicono **«nessuna gamba»** invece di «0 sopravvissuti», su entrambe le configurazioni |
+
+Zero errori in console dopo il riavvio, zero errori server.
+
+### Il difetto di M2 è inerte per una ragione in più di quella prevista
+
+Si sapeva che il gate «batti l'incumbent» non poteva scattare perché **non esiste alcun Champion**.
+Il collaudo ne aggiunge una seconda, più profonda: su **164 modelli salvati, nessuno ha un Deflated
+Sharpe**. La colonna è vuota ovunque, quindi non c'è nemmeno il numero da confrontare — e
+`PersistMlDeflatedSharpeAsync`, lo scrittore della pipeline, a quanto pare non ha mai scritto nulla,
+pur essendoci 164 modelli quasi tutti chiamati `Pipeline <hash>`. **È un'osservazione, non una
+diagnosi**: va misurata a parte, ed è della stessa famiglia dei gate senza soggetto. Conseguenza per
+il collaudo: i tre badge di provenienza non sono osservabili sull'app vera, e restano coperti dai soli
+test di rendering.
+
+### Il codice nuovo ha già girato da solo
+
+Dopo il riavvio, senza che nessuno lo chiedesse:
+
+- il **worker della deriva** è partito leggendo il POCO nuovo — `FactorDriftWorker avviato (ogni 12h,
+  Enabled=True, 5 serie/giro)` — e ha registrato finestre nuove per DOT/USDT;
+- un **run di pipeline** ha attraversato `HoldoutValidation` **senza essere saltato**: il divieto di
+  A2 sui timeframe misti non ha rotto le configurazioni reali, che sono a timeframe singolo. Il gate
+  ha girato con N = 6.120 tentativi effettivi (64 candidati, 8.160 combinazioni, collasso 0,75), e la
+  riga nuova sul troncamento del PBO **non è comparsa** — perché su quel pannello le serie avevano
+  tutte la stessa lunghezza. La dichiarazione parla solo quando c'è qualcosa da dichiarare;
+- il **planner** ha scritto la motivazione nella forma nuova, con la provenienza: *«Campagna 2:
+  Nessuna gamba schierabile (config 18 — **0 sopravvissuti pieni su 64 candidati**): prossima config
+  della rotazione»*. Prima avrebbe detto «0 sopravvissuti all'holdout», che è un altro numero.
+
+La campagna 2 è in **`WaitingForTrigger`** — «rotazione esaurita senza ensemble schierato, in attesa
+di un trigger contestuale». È precisamente lo stato che il braccio volatilità difettoso svegliava a
+vuoto fino a quattro volte al giorno, bypassando il backoff di 12h: da adesso quella sveglia arriva
+solo se la volatilità esce davvero dalla banda.
+
+---
+
+## 7. Le due anomalie del collaudo, analizzate e risolte (2026-08-20)
+
+Il collaudo aveva lasciato due cose «che non tornano». Misurate sul database vero, sono risultate una
+cosa sola travestita da due: **nessuna delle due era un guasto della catena, ed entrambe erano
+superfici che dicevano una cosa mentre ne era vera un'altra.**
+
+### 7.1 «164 modelli, nessun DSR» — la catena funziona, il racconto no
+
+Interrogato il database di produzione:
+
+| domanda | risposta |
+|---|---|
+| modelli salvati | **164**, tutti `Staging`, tutti direzionali, tutti chiamati `Pipeline <hash>` |
+| con un Deflated Sharpe | **0** |
+| run completati che portano un candidato `Ml` con `SavedModelId` | **50** |
+| di quei 50 candidati, quanti sono **sopravvissuti** all'holdout | **0** — Sharpe da **−1,06 a −61,89** |
+
+Quindi la catena non è rotta: i modelli diventano candidati (50 su 164 superano il gate di
+correlazione `minTestCorrelation`), arrivano alla validazione, e vengono **bocciati nel merito**. Il
+DSR non è mai stato scritto perché **non è mai stato calcolato**: `OverfittingGate.Apply` lo calcola
+solo per chi supera il primo esame (`if (!v.Survived) continue;`), che è giusto — la deflazione
+giudica chi è arrivato in fondo, e il permutation test costa.
+
+**Il difetto vero era una frase.** Il commento di `PersistMlDeflatedSharpeAsync` dichiarava: *«Il DSR
+viene persistito anche per i candidati scartati dal gate»*. Non accadeva, e non poteva accadere. La
+conseguenza sulla superficie: 164 righe con un trattino, che si legge «non ancora valutato», quando la
+verità era «valutato, e bocciato prima di arrivare al gate» — con due pulsanti di promozione accanto,
+come se fossero materiale in attesa di una decisione.
+
+**Correzione.** La provenienza si scrive **anche senza numero**: un modello validato e scartato porta
+`DeflatedSharpeSource = "pipeline:scartato"`, e /registry mostra il badge
+«scartato prima del gate» con il motivo nel tooltip. Il DSR resta `null` di proposito — e questa non è
+pigrizia:
+
+> **Perché NON si calcola il DSR anche per gli scartati**, che era la correzione ovvia.
+> `GreyZone.IsGrey` guarda proprio `DeflatedSharpe`: scrivere un DSR su candidati che oggi non ne
+> hanno uno **allargherebbe l'insieme che alimenta la fascia grigia**, cioè ciò che può finire su una
+> corsia. Con questi modelli non succederebbe (`IsGrey` pretende `HoldoutSharpe > 0` e i loro sono
+> tutti negativi), ma la regola generale sì: un candidato bocciato per Sharpe basso *ma positivo*
+> potrebbe entrare in banda [0,80–0,95) e diventare schierabile. Una correzione che sistema una
+> colonna e apre una porta sul trading non è una correzione.
+
+Il trattino, dove resta, ora significa una cosa sola: **nessun esito registrato** (run precedenti al
+2026-08-20). Le 164 righe storiche restano tali finché non le si ripassa.
+
+### 7.2 «Campagna 2 in WaitingForTrigger» — lo stato è corretto, la promessa no
+
+Lo stato è l'esito onesto di una rotazione esaurita senza nulla da schierare. La domanda vera era
+un'altra, e nasce proprio dalla correzione [A5]: **tolta la sveglia spuria, quella campagna può ancora
+ripartire?**
+
+Verificato sul database: sì. Lo snapshot di baseline porta `CurrentRegimeId = 3` ed **esiste un
+modello di regime attivo** per AAVE/USDT 1h (addestrato il 2026-07-27), quindi il braccio K-means è
+armato; e il forecast di volatilità c'è. Nessun orfano.
+
+**Ma nessuno lo stava guardando.** `AgentStateProbe` decideva sul solo flag `RegimeTrigger:Enabled` e
+concludeva *«un wake del trigger contestuale le rimette in rotazione da solo»* — una promessa che
+regge solo se almeno un braccio sa esprimersi. Il braccio K-means pretende **due** cose (un regime
+nello snapshot **e** un modello attivo), il braccio volatilità ne pretende una (un forecast positivo).
+Se cadono entrambi, la campagna resta ferma **per sempre** e la sonda continua a dire «operante».
+
+Il rischio è diventato concreto proprio oggi: **fino a stamattina il braccio volatilità scattava per
+un errore di unità**, quindi le campagne si svegliavano comunque e la cecità dell'altro braccio non si
+sarebbe mai vista. Correggere [A5] ha tolto la rete.
+
+**Correzione.** `IRegimeChangeDetector.DescribeHealthAsync` dice quali bracci sono armati e **perché**
+no; la sonda lo usa e declassa a `AccesoInerte` con la ragione quando nessuno può esprimersi. Quando
+uno solo è armato resta «operante», ma dichiara quale manca — altrimenti la prima cecità si
+scoprirebbe solo il giorno in cui cade anche il secondo. `null` significa «non l'ho chiesto», e si
+dichiara: dedurne un armamento sarebbe la stessa bugia di prima spostata di un campo.
+
+**Verificato che può fallire**: neutralizzato il ramo nuovo, il caso «entrambi ciechi» diventa rosso;
+ripristinato, torna verde.
+
+### Quanto costava il difetto [A5], misurato
+
+Nei dieci giorni precedenti la piattaforma ha completato circa **6 run al giorno**, contro i **4** che
+il solo backoff di 12h su due configurazioni consentirebbe. L'eccedenza è compatibile con le sveglie
+spurie che bypassavano il backoff — **è un indizio, non una prova** (un run manuale conta uguale). Da
+oggi il braccio volatilità scatta solo su un'uscita vera dalla banda: se il ritmo scende verso 4/giorno
+nei prossimi giorni, l'indizio diventa misura.
+
+---
+
+## 8. «Finestra corta»: che cos'è, e perché è l'UNICA porta della fascia grigia (2026-08-20)
+
+Domanda del proprietario: *tutti i candidati che finiscono in fascia grigia sono bocciati solo per
+«finestra corta» — che significa, e si può migliorare?* Misurato sui **30 giorni** al 2026-08-20,
+**11.496 candidati validati**, campagne 17 e 18.
+
+### Che cosa significa
+
+«Finestra corta» è la bocciatura per **numero di trade insufficiente nell'holdout**, non per
+prestazione: `RejectReason = "Solo N trade in holdout (< M)"`, con **M = 20** nelle due configurazioni
+attive (non il default 10) e un holdout di **~5 mesi** (2026-03-01 → 2026-07-27). È la ragione per cui
+questi candidati sono *grigi* e non bocciati: `GreyZone.IsGrey` li ammette solo se hanno **Sharpe
+holdout positivo e almeno un trade** — un grigio che perde non è grigio, è bocciato nel merito.
+Tradotto: **«non ho abbastanza prove per giudicarti», non «sei scarso»**.
+
+I numeri: i 1.127 bocciati per finestra corta hanno da **2 a 19 trade** (massimo osservato 19, contro
+la soglia 20) e Sharpe medio fra 0,77 e 1,90. Sono strategie che in cinque mesi hanno operato meno di
+quattro volte al mese.
+
+### Perché sono gli UNICI grigi: la banda DSR è irraggiungibile
+
+La fascia grigia ha due porte: la finestra corta, oppure un **DSR dentro [0,80; 0,95)**. Sui 30 giorni:
+
+| esito | candidati | di cui con Sharpe > 0 |
+|---|---|---|
+| bocciati: Sharpe holdout sotto soglia | 9.967 | 866 |
+| bocciati: **finestra corta** | 1.127 | 1.127 |
+| bocciati: **gate DSR** | 402 | 402 |
+| **sopravvissuti** | **0** | — |
+
+I 402 che arrivano al gate DSR un numero ce l'hanno. Ecco come si distribuisce:
+
+| fascia | candidati | DSR min | DSR max |
+|---|---|---|---|
+| DSR < 0,50 | 194 | 0,140 | 0,487 |
+| DSR 0,50–0,80 | 208 | 0,529 | **0,773** |
+| **DSR 0,80–0,95 ← fascia grigia** | **0** | — | — |
+| DSR ≥ 0,95 (passa) | 0 | — | — |
+
+**Il DSR massimo prodotto dal sistema in 30 giorni è 0,773, e il pavimento della fascia grigia è
+0,80.** La banda non è «rara»: è **sopra il tetto** di ciò che questo assetto può produrre. È un gate
+senza strumento — la stessa famiglia della lezione del 2026-07-28 («dove si legge il numero, e può
+esistere in questo assetto?»), e finora nessuna superficie lo diceva.
+
+**Correzione fatta**: quando un run misura dei DSR e nessuno raggiunge il pavimento, lo dichiara nel
+log — *«Banda grigia IRRAGGIUNGIBILE in questo run: DSR massimo 0,773 su 402 candidati misurati, sotto
+il pavimento 0,80»*. Nessuna soglia è stata toccata: **quella è una decisione del proprietario**, e
+qui sotto ci sono i numeri per prenderla.
+
+### Le tre leve, misurate
+
+**1. Abbassare il pavimento della fascia grigia** (oggi 0,80). Quanti candidati entrerebbero, sugli
+stessi 30 giorni:
+
+| pavimento | entrerebbero | Sharpe medio | trade medi |
+|---|---|---|---|
+| 0,80 (oggi) | **0** | — | — |
+| 0,75 | 3 | 1,45 | 20 |
+| 0,70 | 49 | 1,07 | 25 |
+| 0,65 | 95 | 1,10 | 32 |
+| 0,60 | 158 | 1,16 | 29 |
+| 0,50 | 208 | 1,09 | 31 |
+
+A 0,75 la banda si riapre con tre candidati al mese — pochi, e i migliori. Sotto 0,70 si ammette roba
+che il DSR dice essere *più probabilmente rumore che edge*, ed è un allentamento del criterio di
+sicurezza, non una taratura.
+
+**2. Cercare di meno.** Il DSR è deflazionato su **8.160 combinazioni esplorate** per run (N effettivo
+≈ 6.120 dopo il collasso dei correlati), e SR\* cresce con la dimensione della ricerca: è il
+denominatore che schiaccia ogni DSR sotto 0,80. Ridurre la griglia dei parametri alzerebbe **tutti** i
+DSR senza toccare alcuna soglia. È la leva più onesta e la meno esplorata.
+
+**3. Allungare l'holdout.** Con M = 20 trade in cinque mesi si chiede ~4 trade/mese: chi opera meno
+viene scartato per mancanza di prove, non di merito. Un holdout più lungo produce più trade per
+candidato — ma toglie storia alla selezione, e il fatto già misurato resta
+(*«il DSR su 4 mesi è insuperabile per aritmetica: Sharpe 1,0 ⇒ 6,2 anni»*).
+
+> **Il consiglio, se serve.** La leva 2 è quella che migliora i numeri senza spostare un criterio di
+> sicurezza: ogni altra scelta compra candidati abbassando l'asticella. La 1 a **0,75** è difendibile
+> come misura-ponte e riapre la banda con i soli tre migliori del mese; sotto 0,70 non la
+> consiglierei. **Nessuna delle tre è stata applicata**: cambiano numeri che decidono cosa arriva su
+> una corsia.

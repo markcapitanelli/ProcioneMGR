@@ -23,6 +23,16 @@
         modello con DSR inferiore non sostituisce mai quello in carica. Il monitor di drift, se un
         Champion degrada, lo <strong>ritira e accoda un retrain</strong> — mai un'azione sul trading Live.
     </p>
+    <p class="mb-2">
+        <strong>Una colonna DSR vuota non vuol dire «non ancora valutato».</strong> Al 2026-08-20, su
+        <strong>164 modelli salvati nessuno aveva un Deflated Sharpe</strong> — e non per un guasto: 50
+        di loro erano stati regolarmente validati dalla pipeline e <em>tutti</em> bocciati sull'holdout,
+        con Sharpe fra −1 e −62. Il DSR si calcola solo per chi supera quel primo esame, quindi per loro
+        non è mai esistito un numero. Da qui il badge <span class="badge bg-danger">scartato prima del
+        gate</span>, che dice il fatto invece di lasciare un trattino ambiguo. Il trattino, dove resta,
+        significa <em>«nessun esito registrato»</em>: i run precedenti al 2026-08-20 non scrivevano la
+        provenienza.
+    </p>
     <p>
         <strong>Due DSR non sono automaticamente confrontabili</strong>, ed è per questo che accanto al
         numero c'è la colonna «Misurato su». Un DSR prodotto dalla pagina <a href="ml">/ml</a> nasce da
@@ -95,7 +105,7 @@
                                 }
                                 else
                                 {
-                                    <span class="text-muted">—</span>
+                                    <span class="text-muted" title="Nessun esito di validazione registrato su questo modello. I run precedenti al 2026-08-20 non scrivevano la provenienza: il trattino qui significa «non so», non «non valutato».">—</span>
                                 }
                             </td>
                             <td class="text-end">@m.Version</td>
@@ -317,6 +327,25 @@
     /// </summary>
     private static (string Label, string Hint, string Css)? DsrProvenance(SavedMlModel m)
     {
+        // [M2b] «Nessun numero» e «numero mai misurato» sono due fatti diversi. Un modello che la
+        // pipeline ha validato e scartato prima del gate DSR lo dichiara: il trattino da solo si
+        // leggeva come «non ancora valutato», e su 164 modelli su 164 era il contrario.
+        if (m.DeflatedSharpeSource == SavedMlModel.DsrSourceNeverValidated)
+        {
+            return ("mai proposto",
+                "Il modello è stato addestrato e salvato, ma la correlazione di test non ha superato la soglia "
+                + "(minTestCorrelation): non è mai diventato un candidato, quindi non è mai entrato nella validazione "
+                + "holdout e nessun giudizio esiste su di lui. Non è «in attesa di valutazione»: è «messo da parte prima di provarlo».",
+                "bg-secondary");
+        }
+        if (m.DeflatedSharpeSource == SavedMlModel.DsrSourceRejectedBeforeGate)
+        {
+            return ("scartato prima del gate",
+                "La pipeline ha validato questo modello sull'holdout e lo ha fermato PRIMA del gate DSR "
+                + "(Sharpe holdout sotto soglia, o troppo pochi trade): un Deflated Sharpe non è mai stato "
+                + "calcolato, e il campo resta vuoto di proposito. Non è «non ancora valutato»: è «valutato e bocciato».",
+                "bg-danger");
+        }
         if (m.DeflatedSharpe is null) return null;
         if (m.DeflatedSharpeTrials is not int n)
         {

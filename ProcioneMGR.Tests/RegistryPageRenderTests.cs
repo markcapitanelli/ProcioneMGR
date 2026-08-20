@@ -64,7 +64,10 @@ public sealed class RegistryPageRenderTests : BunitContext
             Symbol = "BTCUSDT", Timeframe = "1h", FactorsJson = "[]", ModelBytes = [1],
             DeflatedSharpe = dsr, Stage = stage,
             DeflatedSharpeTrials = dsr is null ? null : dsrTrials,
-            DeflatedSharpeSource = dsr is null ? null : dsrSource,
+            // [M2b] La provenienza è INDIPENDENTE dal numero: «validato e scartato» e «mai proposto»
+            // sono fatti che esistono proprio quando un DSR non c'è. Legarla al DSR, come faceva la
+            // prima versione di questo helper, rendeva impossibile provare i due casi nuovi.
+            DeflatedSharpeSource = dsrSource,
             RetiredReason = retiredReason,
             RetiredAtUtc = retiredReason is null ? null : DateTime.UtcNow.AddHours(-3),
         };
@@ -293,5 +296,62 @@ public sealed class RegistryPageRenderTests : BunitContext
         cut.WaitForAssertion(() => Assert.Contains("metro ignoto", cut.Markup), TimeSpan.FromSeconds(10));
 
         Assert.DoesNotContain("N=", cut.Markup);
+    }
+
+    // ------------------- [M2b/M2c] senza DSR ci sono TRE fatti diversi, non un trattino
+
+    /// <summary>
+    /// Validato e bocciato prima del gate DSR: è il caso dei 50 modelli che la pipeline aveva
+    /// giudicato e scartato, con Sharpe holdout fra −1 e −62. Un trattino li faceva sembrare
+    /// «in attesa di valutazione».
+    /// </summary>
+    [Fact]
+    public async Task ModelloValidatoEScartato_DichiaraCheIlGiudizioCE()
+    {
+        var db = await RegisterAsync();
+        await SeedModelAsync(db, ModelStage.Staging, dsr: null,
+            dsrSource: SavedMlModel.DsrSourceRejectedBeforeGate);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Registry>();
+        cut.WaitForAssertion(() => Assert.Contains("scartato prima del gate", cut.Markup), TimeSpan.FromSeconds(10));
+
+        Assert.Contains("valutato e bocciato", cut.Markup);   // il tooltip toglie l'ambiguità
+        Assert.DoesNotContain("mai proposto", cut.Markup);
+    }
+
+    /// <summary>
+    /// Mai diventato candidato: il caso dei 114 modelli su 164, quelli che il gate di correlazione
+    /// ha messo da parte prima ancora di provarli.
+    /// </summary>
+    [Fact]
+    public async Task ModelloMaiProposto_EDistintoDaQuelloBocciato()
+    {
+        var db = await RegisterAsync();
+        await SeedModelAsync(db, ModelStage.Staging, dsr: null,
+            dsrSource: SavedMlModel.DsrSourceNeverValidated);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Registry>();
+        cut.WaitForAssertion(() => Assert.Contains("mai proposto", cut.Markup), TimeSpan.FromSeconds(10));
+
+        Assert.Contains("minTestCorrelation", cut.Markup);
+        Assert.DoesNotContain("scartato prima del gate", cut.Markup);
+    }
+
+    /// <summary>
+    /// Il trattino sopravvive per un solo caso: nessun esito registrato. Senza questo test, i due
+    /// badge nuovi potrebbero finire per coprire anche l'ignoranza — che è il difetto che chiudono.
+    /// </summary>
+    [Fact]
+    public async Task SenzaDsrESenzaProvenienza_RestaIlTrattino()
+    {
+        var db = await RegisterAsync();
+        await SeedModelAsync(db, ModelStage.Staging, dsr: null, dsrSource: null);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Registry>();
+        cut.WaitForAssertion(() => Assert.Contains("Misurato su", cut.Markup), TimeSpan.FromSeconds(10));
+
+        Assert.DoesNotContain("mai proposto", cut.Markup);
+        Assert.DoesNotContain("scartato prima del gate", cut.Markup);
+        Assert.Contains("Nessun esito di validazione registrato", cut.Markup);   // il tooltip del trattino dice «non so»
     }
 }

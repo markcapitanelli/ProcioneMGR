@@ -113,6 +113,10 @@ public class RegimeChangeTriggerTests
             Calls++;
             return Task.FromResult(Next);
         }
+
+        /// <summary>[A5b] Il worker non lo usa: l'armamento serve alla sonda di stato, non al tick.</summary>
+        public Task<RegimeTriggerHealth> DescribeHealthAsync(CancellationToken ct = default)
+            => Task.FromResult(new RegimeTriggerHealth(true, true, []));
     }
 
     private sealed class RecordingPlanner : ICampaignPlanner

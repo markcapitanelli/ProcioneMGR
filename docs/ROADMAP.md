@@ -1781,3 +1781,76 @@ un'altra base di costo: **due generazioni di numeri non confrontabili fra loro.*
   Oggi `EnsembleManager.BuildBtConfig` gira ogni gamba a `PositionSizePercent = 100` e non conosce
   pesi per gamba: collegarli senza allineare il backtest rifarebbe la stessa classe di difetto
   corretta poche ore prima sullo specchio della posizione.
+
+### Collaudo in browser (2026-08-20, app vera dopo il merge) — e tre migrazioni ferme da un giorno
+
+Mergiata la PR #99 e riavviato `procione-main`, il collaudo delle sei superfici ha trovato **più di
+quanto cercava**: al primo riavvio il migratore ha rifiutato di dichiarare lo schema allineato perché
+la DLL delle migrazioni accanto all'eseguibile era **vecchia** (`dotnet build` dell'app non la
+ricostruisce). Ricostruito il progetto in `-c Release`, le migrazioni note sono passate da 20 a 24 e
+ne sono state applicate **quattro**: la nuova di M2 più **tre ferme dal 19 agosto**
+(`AddCampaignPausedUntil`, `AddPairCandidates`, `AddPairSpreadWindows`). Le tabelle
+`PairSpreadWindows` e `PairCandidates` **non esistevano nel database vero**: i sottosistemi del Filone
+I giravano contro tabelle assenti, per un giorno intero, e l'unica traccia era un `fail:` in un log.
+
+> **Regola operativa nuova**: dopo *ogni* merge che contenga una migrazione,
+> `dotnet build ProcioneMGR.Migrations.Postgres -c Release`, poi riavviare, poi **leggere la riga
+> `DatabaseMigrator`**. La spia è il numero fra parentesi: se «N note» è più basso del numero di file
+> in `Migrations/`, la DLL è vecchia e le migrazioni nuove non verranno applicate.
+
+Le sei superfici sono tutte a posto, coi numeri veri: la copertura del monitor di deriva dichiara
+**22,5 giorni su 222 serie**, la z del comparatore è **0,35** letta dalla configurazione viva, gli
+esiti delle campagne dicono «nessuna gamba» e la motivazione porta la provenienza («0 sopravvissuti
+pieni su 64 candidati»). Zero errori in console, zero errori server.
+
+**Un'osservazione da misurare a parte**: su **164 modelli salvati, nessuno ha un Deflated Sharpe**.
+Il gate di M2 è quindi inerte per due ragioni, non una (niente Champion *e* niente DSR), e lo
+scrittore della pipeline `PersistMlDeflatedSharpeAsync` sembra non aver mai scritto nulla pur essendo
+i modelli quasi tutti chiamati `Pipeline <hash>`. È della famiglia dei gate senza soggetto: va
+misurato, non dedotto.
+
+#### Le due anomalie del collaudo, risolte in giornata
+
+**«164 modelli, nessun DSR» non era un guasto.** 50 candidati `Ml` sono stati regolarmente validati e
+**tutti bocciati** sull'holdout (Sharpe da −1,06 a −61,89); il DSR si calcola solo per chi supera quel
+primo esame, quindi non è mai esistito un numero da scrivere. Il difetto era **una frase**: il commento
+del metodo dichiarava di persistere il DSR «anche per i candidati scartati». Ora la **provenienza** si
+scrive anche senza numero e /registry mostra «scartato prima del gate» invece di un trattino ambiguo.
+**Il DSR resta null di proposito**: calcolarlo anche per gli scartati allargherebbe l'insieme che
+alimenta `GreyZone.IsGrey`, cioè ciò che può finire su una corsia — una correzione che sistema una
+colonna e apre una porta sul trading non è una correzione.
+
+**«Campagna 2 in WaitingForTrigger» era lo stato giusto, con una promessa sbagliata accanto.** I due
+bracci del trigger sono armati (regime nello snapshot + modello attivo su AAVE/USDT 1h; forecast
+presente), quindi la campagna può ripartire. Ma `AgentStateProbe` lo deduceva dal solo flag
+`RegimeTrigger:Enabled`: con entrambi i bracci ciechi avrebbe continuato a dire «un wake la rimette in
+rotazione da solo» di una campagna ferma per sempre. **Il rischio è nato oggi**: fino a stamattina il
+braccio volatilità scattava per l'errore di unità di [A5], quindi le sveglie arrivavano comunque e una
+cecità non si sarebbe vista. Ora il rilevatore dichiara l'armamento dei bracci e la sonda declassa a
+inerte, con la ragione.
+
+*Misura da rifare fra qualche giorno*: nei dieci giorni precedenti il ritmo era di ~6 run/giorno contro
+i 4 consentiti dal solo backoff. Se scende verso 4, l'eccedenza era davvero delle sveglie spurie.
+
+#### Backfill del registry e la fascia grigia misurata (2026-08-20, sera)
+
+**Backfill eseguito** sulle 164 righe storiche di `SavedMlModels`, ricostruendo l'esito dagli snapshot
+dei run: **50 «validato e scartato prima del gate»**, **114 «mai proposto»** (la correlazione di test
+non ha superato `minTestCorrelation`, quindi non sono mai diventati candidati). Additivo e idempotente:
+scritto solo dove `DeflatedSharpeSource` era null, nessun DSR toccato. Da qui in avanti la provenienza
+la scrive il codice — anche per i modelli che non diventano candidati, che sono la maggioranza.
+
+**«Finestra corta» misurata**: è la bocciatura per **meno di 20 trade nell'holdout di ~5 mesi**, cioè
+per mancanza di prove, non di merito — ed è la ragione per cui quei candidati sono *grigi* (`IsGrey`
+pretende Sharpe positivo: un grigio che perde è bocciato nel merito). Sui 30 giorni: 1.127 bocciati
+così, con 2-19 trade.
+
+**Sono gli unici grigi perché la banda DSR è IRRAGGIUNGIBILE.** 402 candidati sono arrivati al gate
+DSR e il **massimo prodotto è 0,773**, contro un pavimento di **0,80**: la seconda porta della fascia
+grigia è sopra il tetto di ciò che questo assetto genera. Gate senza strumento, e nessuna superficie lo
+diceva. Ora ogni run che misura dei DSR senza raggiungere il pavimento **lo dichiara nel log**.
+
+*Tre leve, misurate e NON applicate* (cambiano cosa arriva su una corsia): abbassare il pavimento
+(a 0,75 entrerebbero 3 candidati/mese, a 0,70 quarantanove, sotto è allentare la sicurezza);
+**ridurre la griglia di ricerca** — 8.160 combinazioni per run schiacciano ogni DSR via SR\*, ed è
+l'unica leva che alza i numeri senza spostare un criterio; allungare l'holdout.

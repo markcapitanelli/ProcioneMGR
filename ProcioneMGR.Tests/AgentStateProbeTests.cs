@@ -1,4 +1,5 @@
 using ProcioneMGR.Services.Health;
+using ProcioneMGR.Services.Pipeline;
 
 namespace ProcioneMGR.Tests;
 
@@ -22,10 +23,13 @@ public class AgentStateProbeTests
 {
     private static readonly DateTime Now = new(2026, 8, 18, 12, 0, 0, DateTimeKind.Utc);
 
+    /// <summary>[A5b] Il caso benevolo: entrambi i bracci del trigger sanno esprimersi.</summary>
+    private static readonly RegimeTriggerHealth EntrambiArmati = new(true, true, []);
+
     /// <summary>Tutto spento, ma con soggetti in abbondanza: il caso di riferimento.</summary>
     private static AgentStateFacts AllOff() => new(
         CampaignEnabled: false, CampaignsEnabled: 0, CampaignsRotating: 0, CampaignsWaitingForTrigger: 0,
-        RegimeTriggerEnabled: true,
+        RegimeTriggerEnabled: true, RegimeTriggerArms: EntrambiArmati,
         FleetEnabled: false, FleetDryRun: true, FleetExecutionImplemented: false, FleetAuthorizedLanes: 0,
         FleetUseCommittee: false, FleetGovernedLanes: 5,
         CommitteeEnabled: false, CommitteeProviders: 3, CommitteeProvidersWithKey: 3,
@@ -90,7 +94,7 @@ public class AgentStateProbeTests
     {
         var facts = new AgentStateFacts(
             CampaignEnabled: true, CampaignsEnabled: 1, CampaignsRotating: 0, CampaignsWaitingForTrigger: 1,
-            RegimeTriggerEnabled: true,
+            RegimeTriggerEnabled: true, RegimeTriggerArms: EntrambiArmati,
             FleetEnabled: true, FleetDryRun: true, FleetExecutionImplemented: false, FleetAuthorizedLanes: 0,
             FleetUseCommittee: true, FleetGovernedLanes: 5,
             CommitteeEnabled: true, CommitteeProviders: 3, CommitteeProvidersWithKey: 3,

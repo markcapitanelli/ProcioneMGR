@@ -120,6 +120,32 @@ public class SavedMlModel
     public const string DsrSourcePipeline = "pipeline";
 
     /// <summary>
+    /// [M2b, 2026-08-20] Il modello è passato per la validazione della pipeline ed è stato
+    /// <b>scartato prima</b> di arrivare al gate DSR (tipicamente Sharpe holdout sotto soglia o
+    /// troppo pochi trade), quindi un Deflated Sharpe non è mai stato calcolato:
+    /// <see cref="DeflatedSharpe"/> resta null <i>di proposito</i>.
+    ///
+    /// <para>Esiste perché «nessun numero» e «numero mai misurato» sono due fatti diversi che la
+    /// colonna vuota confondeva. Al 2026-08-20 tutti i 164 modelli salvati erano nel primo caso e
+    /// /registry li mostrava come il secondo.</para>
+    /// </summary>
+    public const string DsrSourceRejectedBeforeGate = "pipeline:scartato";
+
+    /// <summary>
+    /// [M2c, 2026-08-20] Il modello è stato addestrato e salvato, ma <b>non è mai diventato un
+    /// candidato</b>: la correlazione di test sul set di verifica non ha superato
+    /// <c>minTestCorrelation</c>, quindi non è mai entrato nella validazione holdout e nessun
+    /// giudizio esiste su di lui.
+    ///
+    /// <para>È il caso di gran lunga più numeroso — al 2026-08-20, <b>114 modelli su 164</b> — e il
+    /// più frainteso: la riga esiste nel registry con i suoi pulsanti di promozione, come se fosse
+    /// materiale in attesa di una decisione, mentre il sistema lo ha già messo da parte prima ancora
+    /// di provarlo. Tre fatti diversi («mai proposto», «proposto e bocciato», «giudicato con un
+    /// numero») meritano tre parole diverse.</para>
+    /// </summary>
+    public const string DsrSourceNeverValidated = "pipeline:non-candidato";
+
+    /// <summary>
     /// [M2] Due DSR sono confrontabili solo se entrambi dichiarano il proprio N e i due N non
     /// differiscono di oltre un ordine di grandezza. Un DSR su 1 tentativo e uno su 800 non
     /// misurano la stessa cosa: il primo non è deflazionato affatto, e metterli in una

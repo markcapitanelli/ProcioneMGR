@@ -116,10 +116,11 @@ public sealed class MlModelTrainingStage(
         var minCorr = (double)config.GetDecimal("minTestCorrelation", 0.02m);
         if (config.GetBool("saveModel", true) && !string.IsNullOrEmpty(ctx.UserId))
         {
-            output.SavedMlModelId = await PersistModelAsync(ctx, mlContext, predictor, factors, dataset.RowCount, testCorrelation, modelType, horizon, ct);
+            var diventaCandidato = testCorrelation >= minCorr;
+            output.SavedMlModelId = await PersistModelAsync(ctx, mlContext, predictor, factors, dataset.RowCount, testCorrelation, modelType, horizon, diventaCandidato, ct);
             ctx.LogLine($"[{Name}] Modello salvato (Id {output.SavedMlModelId}), correlazione test {testCorrelation:F4}.");
 
-            if (testCorrelation >= minCorr)
+            if (diventaCandidato)
             {
                 // Register as an "Ml" strategy candidate: the holdout stage validates it with
                 // the SAME discipline as every rule-based candidate — the model proposes, the
@@ -150,9 +151,15 @@ public sealed class MlModelTrainingStage(
         ctx.MlTraining = output;
     }
 
+    /// <param name="diventaCandidato">
+    /// [M2c] Se il modello supererà il gate di correlazione e quindi entrerà nella validazione. Serve
+    /// a scrivere subito la provenienza giusta: un modello che NON diventa candidato non verrà mai
+    /// giudicato, e senza questa riga resterebbe per sempre un trattino in /registry — indistinguibile
+    /// da uno mai valutato per altre ragioni. Al 2026-08-20 era il caso di 114 modelli su 164.
+    /// </param>
     private async Task<int> PersistModelAsync(
         PipelineContext ctx, MLContext mlContext, IReturnPredictor predictor, List<FactorSpec> factors,
-        int rowCount, double testCorrelation, string modelType, int horizon, CancellationToken ct)
+        int rowCount, double testCorrelation, string modelType, int horizon, bool diventaCandidato, CancellationToken ct)
     {
         var tempPath = Path.Combine(Path.GetTempPath(), $"mlmodel_pipeline_{Guid.NewGuid():N}.zip");
         byte[] bytes;
@@ -185,6 +192,10 @@ public sealed class MlModelTrainingStage(
             ModelBytes = bytes,
             TrainRowCount = rowCount,
             TrainCorrelation = testCorrelation,
+            // [M2c] La provenienza nasce col modello. Se non diventa candidato, questo è tutto ciò
+            // che si saprà mai di lui, e va detto subito invece di lasciare un campo vuoto che
+            // significa «non so».
+            DeflatedSharpeSource = diventaCandidato ? null : SavedMlModel.DsrSourceNeverValidated,
         };
         db.SavedMlModels.Add(saved);
         await db.SaveChangesAsync(ct);
@@ -434,19 +445,33 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     }
 
     /// <summary>
-    /// Scrive il Deflated Sharpe calcolato dal gate sui <c>SavedMlModel</c> dei candidati "Ml" (quelli
-    /// con un <c>SavedModelId</c>), così anche i modelli addestrati DALLA PIPELINE hanno il DSR che il
+    /// Scrive l'esito della validazione sui <c>SavedMlModel</c> dei candidati "Ml" (quelli con un
+    /// <c>SavedModelId</c>), così anche i modelli addestrati DALLA PIPELINE hanno il DSR che il
     /// <c>ModelRegistry</c> richiede per la promozione a Champion — completa P0-6 sul percorso pipeline.
-    /// Il DSR viene persistito anche per i candidati scartati dal gate: è una proprietà del modello, e
-    /// se è sotto soglia il registry non lo promuoverà comunque.
+    ///
+    /// <para><b>[M2b, 2026-08-20] Il commento precedente diceva «il DSR viene persistito anche per i
+    /// candidati scartati dal gate», e non era vero.</b> Il DSR non veniva nemmeno CALCOLATO per loro:
+    /// <c>OverfittingGate.Apply</c> salta i non sopravvissuti (<c>if (!v.Survived) continue;</c>), che è
+    /// giusto — la deflazione serve a giudicare chi è arrivato in fondo, e il permutation test costa.
+    /// La conseguenza però era invisibile e ha morso: al 2026-08-20, su <b>164 modelli salvati, zero
+    /// avevano un DSR</b>. Non per un guasto della catena — 50 candidati "Ml" erano stati regolarmente
+    /// validati — ma perché <b>nessuno è mai sopravvissuto</b>: Sharpe holdout da −1,06 a −61,89. La
+    /// colonna vuota in /registry si leggeva come «non misurato», mentre la verità era «misurato, e
+    /// bocciato prima di arrivare al gate».</para>
+    ///
+    /// <para>Ora si scrive comunque la PROVENIENZA, anche senza numero: il modello porta con sé il
+    /// fatto di essere stato validato e scartato. Il DSR resta null — non si inventa un numero che il
+    /// gate non ha prodotto, e soprattutto non si allarga l'insieme che alimenta la fascia grigia
+    /// (<see cref="GreyZone.IsGrey"/> guarda proprio <c>DeflatedSharpe</c>).</para>
     /// </summary>
     private async Task PersistMlDeflatedSharpeAsync(PipelineContext ctx, CancellationToken ct)
     {
-        var byModelId = new Dictionary<int, double>();
+        // Esito per modello: il DSR se il gate l'ha prodotto, altrimenti null = validato e scartato prima.
+        var byModelId = new Dictionary<int, double?>();
         foreach (var v in ctx.Validated)
         {
-            if (v.StrategyName != "Ml" || v.DeflatedSharpe is not double dsr) continue;
-            if (v.Parameters.TryGetValue("SavedModelId", out var idDec)) byModelId[(int)idDec] = dsr;
+            if (v.StrategyName != "Ml") continue;
+            if (v.Parameters.TryGetValue("SavedModelId", out var idDec)) byModelId[(int)idDec] = v.DeflatedSharpe;
         }
         if (byModelId.Count == 0) return;
 
@@ -458,15 +483,34 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         var trials = ctx.DsrEffectiveTrials > 0 ? ctx.DsrEffectiveTrials : (int?)null;
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var scartati = 0;
         foreach (var (id, dsr) in byModelId)
         {
             var model = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == id, ct);
             if (model is null) continue;
-            model.DeflatedSharpe = dsr;
-            model.DeflatedSharpeTrials = trials;
-            model.DeflatedSharpeSource = SavedMlModel.DsrSourcePipeline;
+
+            if (dsr is double misurato)
+            {
+                model.DeflatedSharpe = misurato;
+                model.DeflatedSharpeTrials = trials;
+                model.DeflatedSharpeSource = SavedMlModel.DsrSourcePipeline;
+            }
+            else
+            {
+                // Nessun numero, ma un fatto: questo modello è passato per la validazione ed è stato
+                // fermato prima del gate DSR. Il DSR resta null di proposito.
+                model.DeflatedSharpeTrials = null;
+                model.DeflatedSharpeSource = SavedMlModel.DsrSourceRejectedBeforeGate;
+                scartati++;
+            }
         }
         await db.SaveChangesAsync(ct);
+
+        if (scartati > 0)
+        {
+            ctx.LogLine($"[{Name}] {scartati} modelli ML validati e scartati PRIMA del gate DSR: "
+                      + "nessun Deflated Sharpe da scrivere, e il registry lo dichiara invece di mostrare un trattino.");
+        }
     }
 
     /// <summary>
@@ -881,6 +925,32 @@ public static class OverfittingGate
                 v.Survived = false;
                 v.RejectReason = $"permutation p {pperm:F3} ≥ {maxPermutationPValue:F2} (Sharpe holdout compatibile col rumore)";
                 log?.Invoke($"{v.Key}: scartato dal gate — {v.RejectReason}.");
+            }
+        }
+
+        // [F5b, 2026-08-20] LA BANDA GRIGIA PUÒ ESSERE IRRAGGIUNGIBILE, e nessuno lo diceva.
+        //
+        // La fascia grigia ammette due strade: bocciatura per finestra corta, oppure DSR dentro
+        // [0,80; 0,95). Misurato sui 30 giorni al 2026-08-20: 402 candidati sono arrivati al gate
+        // DSR e il **massimo osservato è 0,773** — sotto il pavimento. La banda non è «rara»: è
+        // sopra il tetto di ciò che questo assetto produce, perché il DSR è deflazionato su
+        // migliaia di tentativi e SR* cresce con la dimensione della ricerca. Risultato: OGNI
+        // grigio arriva dalla finestra corta, e la seconda strada è un ramo morto che nessuna
+        // superficie dichiarava. È la famiglia «gate senza strumento» già pagata il 2026-07-28:
+        // chiedersi «dove si legge il numero, e può esistere in questo assetto?».
+        //
+        // Qui non si cambia nessuna soglia — è una decisione del proprietario. Si dice il fatto,
+        // con il numero accanto, in modo che la scelta sia informata invece che rimandata.
+        var dsrMisurati = validated.Where(v => v.DeflatedSharpe is not null).Select(v => v.DeflatedSharpe!.Value).ToList();
+        if (dsrMisurati.Count > 0)
+        {
+            var dsrMax = dsrMisurati.Max();
+            if (dsrMax < GreyZone.DsrFloor)
+            {
+                log?.Invoke(
+                    $"Banda grigia IRRAGGIUNGIBILE in questo run: DSR massimo {dsrMax:F3} su {dsrMisurati.Count} candidati misurati, "
+                  + $"sotto il pavimento {GreyZone.DsrFloor:F2}. Nessun candidato può entrare in fascia grigia per DSR: "
+                  + "gli unici grigi possibili sono quelli bocciati per finestra corta.");
             }
         }
 

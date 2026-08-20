@@ -62,6 +62,41 @@ public interface IRegimeChangeDetector
 {
     /// <summary>Null quando manca la base di confronto (nessun run di campagna completato, niente dati/modello).</summary>
     Task<RegimeTriggerCheck?> CheckAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// [A5b, 2026-08-20] I due bracci del trigger sanno produrre un verdetto, oggi? Serve a chi deve
+    /// dire se una campagna in <c>WaitingForTrigger</c> può davvero ripartire. Vedi
+    /// <see cref="RegimeTriggerHealth"/> per il motivo per cui «acceso» non basta.
+    /// </summary>
+    Task<RegimeTriggerHealth> DescribeHealthAsync(CancellationToken ct = default);
+}
+
+/// <summary>
+/// [A5b] Armamento dei due bracci del trigger contestuale, con le ragioni di chi è cieco.
+///
+/// <para><b>Perché esiste.</b> Una campagna che ha esaurito la rotazione entra in
+/// <c>WaitingForTrigger</c> e da lì riparte SOLO con un wake del trigger. Fino al 2026-08-20 la sonda
+/// di stato guardava il solo flag <c>RegimeTrigger:Enabled</c> e concludeva «un wake la rimette in
+/// rotazione da solo»: una promessa che regge unicamente se almeno un braccio è in grado di
+/// esprimersi. Il braccio K-means pretende che lo snapshot del run di baseline porti un
+/// <c>CurrentRegimeId</c> <b>e</b> che esista un modello di regime ATTIVO per quella serie; il braccio
+/// volatilità pretende un forecast positivo nello snapshot. Se cadono entrambi, la campagna resta
+/// ferma per sempre e nessuna superficie lo dice — la classe di difetto «controllo che rassicura a
+/// prescindere dalla realtà», già pagata col Filone E.</para>
+///
+/// <para>Il rischio è diventato concreto proprio il 2026-08-20: fino a quel giorno il braccio
+/// volatilità scattava per un errore di unità (vedi [A5] sopra), quindi le campagne si svegliavano
+/// comunque — e la cecità di un braccio sarebbe passata inosservata. Tolta la sveglia spuria, la
+/// domanda «può ancora ripartire?» va posta e mostrata.</para>
+/// </summary>
+public sealed record RegimeTriggerHealth(bool RegimeArmArmed, bool VolatilityArmArmed, IReadOnlyList<string> Reasons)
+{
+    /// <summary>Vero se almeno un braccio può esprimersi: sotto questa condizione un wake è possibile.</summary>
+    public bool AnyArmArmed => RegimeArmArmed || VolatilityArmArmed;
+
+    /// <summary>Nessuna base di confronto: nemmeno un run di campagna completato da cui partire.</summary>
+    public static RegimeTriggerHealth NoBaseline { get; } =
+        new(false, false, ["nessun run di campagna completato: manca la base di confronto"]);
 }
 
 /// <inheritdoc cref="IRegimeChangeDetector"/>
@@ -81,9 +116,13 @@ public sealed class RegimeChangeDetector(
     /// </summary>
     private const int RealizedVolWindow = 24;
 
-    public async Task<RegimeTriggerCheck?> CheckAsync(CancellationToken ct = default)
+    /// <summary>
+    /// [A5b] L'ultimo run COMPLETATO fra quelli lanciati dalle campagne abilitate, deserializzato.
+    /// Estratto perché <see cref="CheckAsync"/> e <see cref="DescribeHealthAsync"/> devono guardare
+    /// ESATTAMENTE la stessa baseline: due query diverse darebbero due verdetti sulla stessa domanda.
+    /// </summary>
+    private async Task<(PipelineRun Run, PipelineContext Context)?> LoadBaselineAsync(CancellationToken ct)
     {
-        // 1. Baseline: l'ultimo run COMPLETATO tra quelli lanciati dalle campagne abilitate.
         PipelineRun? baselineRun;
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
@@ -104,7 +143,64 @@ public sealed class RegimeChangeDetector(
         if (baselineRun is null) return null;
 
         var baseline = DeserializeContext(baselineRun.ContextSnapshotJson);
-        if (baseline is null || baseline.Universe.Count == 0) return null;
+        return baseline is null || baseline.Universe.Count == 0 ? null : (baselineRun, baseline);
+    }
+
+    /// <inheritdoc />
+    public async Task<RegimeTriggerHealth> DescribeHealthAsync(CancellationToken ct = default)
+    {
+        var loaded = await LoadBaselineAsync(ct);
+        if (loaded is null)
+        {
+            return RegimeTriggerHealth.NoBaseline;
+        }
+        var (_, baseline) = loaded.Value;
+
+        var primary = baseline.PrimarySeries;
+        var reasons = new List<string>();
+
+        // Braccio K-means: servono ENTRAMBE le cose, e sono due guasti diversi.
+        var hasBaselineRegime = baseline.Regimes is { CurrentRegimeId: >= 0 };
+        var hasActiveModel = false;
+        if (hasBaselineRegime)
+        {
+            try
+            {
+                hasActiveModel = await regimeDetector.LoadActiveModelAsync(primary.Symbol, primary.Timeframe, ct) is not null;
+                if (!hasActiveModel)
+                {
+                    reasons.Add($"braccio K-means cieco: nessun modello di regime ATTIVO per {primary.Symbol} {primary.Timeframe}");
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                reasons.Add($"braccio K-means cieco: il modello di regime per {primary.Symbol} {primary.Timeframe} non è caricabile ({ex.GetType().Name})");
+            }
+        }
+        else
+        {
+            reasons.Add("braccio K-means cieco: lo snapshot del run di baseline non porta un regime corrente");
+        }
+
+        // Braccio volatilità: basta il forecast, la realizzata si calcola sempre dalle candele.
+        var volArmed = baseline.Volatility is { ForecastVolatility24: > 0 };
+        if (!volArmed)
+        {
+            reasons.Add("braccio volatilità cieco: il run di baseline non porta un forecast di volatilità (stage disabilitato o fallito)");
+        }
+
+        return new RegimeTriggerHealth(hasBaselineRegime && hasActiveModel, volArmed, reasons);
+    }
+
+    public async Task<RegimeTriggerCheck?> CheckAsync(CancellationToken ct = default)
+    {
+        // 1. Baseline: l'ultimo run COMPLETATO tra quelli lanciati dalle campagne abilitate.
+        var loaded = await LoadBaselineAsync(ct);
+        if (loaded is null)
+        {
+            return null;
+        }
+        var (baselineRun, baseline) = loaded.Value;
         var primary = baseline.PrimarySeries;
 
         // 2. Stato CORRENTE della serie primaria del run (stesso percorso dell'EnsembleManager).
