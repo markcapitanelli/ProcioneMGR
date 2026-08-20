@@ -205,8 +205,7 @@ public sealed class PipelineApplier(
             .ToList();
 
         var totalWeight = legs.Sum(l => l.WeightPercent);
-        // Effective sample size behind the weighted Sharpe = the weakest leg's holdout trade count
-        // (conservative: the swap must be significant even for the thinnest-sampled leg).
+        // Trade dell'holdout della gamba più magra: serve al racconto, non al test.
         var observations = recommendation.EnsembleLegs.Count > 0
             ? recommendation.EnsembleLegs.Min(l => l.HoldoutTrades)
             : 0;
@@ -219,6 +218,11 @@ public sealed class PipelineApplier(
             SurvivingLegs = legs.Count,
             DistinctSymbols = legs.Select(l => l.Symbol).Distinct().Count(),
             Observations = observations,
+            // [A4] Il campione nell'unità dello Sharpe annualizzato è la DURATA dell'holdout, non il
+            // conteggio trade. Il dato viaggiava già sulla raccomandazione dai tempi di I11 (lo legge
+            // BuildLegStrategy due metodi più sotto per il ritmo atteso) ed era l'unico ignorato qui.
+            // null sulle raccomandazioni storiche: il gate si salta e decide la sola isteresi.
+            HoldoutMonths = recommendation.HoldoutMonths is > 0m ? recommendation.HoldoutMonths : null,
             Legs = legs,
         };
     }

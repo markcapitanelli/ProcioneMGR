@@ -47,7 +47,16 @@ public sealed class RegimeTriggerCheck
 /// Riusa SOLO calcoli esistenti: cluster K-means corrente (IMarketFeatureExtractor +
 /// IRegimeDetector, stesso percorso dell'EnsembleManager) contro il CurrentRegimeId persistito
 /// nel checkpoint del run; volatilità realizzata (stddev dei log-rendimenti recenti, per-periodo)
-/// contro il forecast GARCH a 24 passi dello stesso run.
+/// contro il forecast a 24 passi dello stesso run.
+///
+/// [A5, 2026-08-20] Il confronto di volatilità regge solo se le due misure hanno la stessa base
+/// temporale. Dal 2026-07-26 al 2026-08-20 non l'hanno avuta: il ramo log-HAR scriveva un sigma
+/// GIORNALIERO in <c>ForecastVolatility24</c> mentre qui la realizzata è per candela, quindi su ogni
+/// timeframe intraday il ramo «compressione» era vero per aritmetica (r/f = 0,20 su 1h) e il ramo
+/// «espansione» — il caso per cui questa classe è nata — chiedeva un'esplosione di 7,3× invece di
+/// 1,5×. La correzione sta a monte (AnalysisStages riporta il log-HAR a scala di candela): qui non
+/// c'è conversione, e non deve essercene — se un domani il forecast tornasse su un'altra scala, il
+/// posto giusto per accorgersene resta il contratto di <c>VolatilityOutput</c>.
 /// </summary>
 public interface IRegimeChangeDetector
 {
@@ -66,7 +75,10 @@ public sealed class RegimeChangeDetector(
     /// <summary>Finestra di estrazione feature: abbastanza da coprire warmup (50) + smoothing anche su 4h/1d.</summary>
     private const int FeatureLookbackDays = 30;
 
-    /// <summary>Rendimenti usati per la realized vol: stessa scala del forecast GARCH a 24 passi.</summary>
+    /// <summary>
+    /// Rendimenti usati per la realized vol: stessa scala per-candela del forecast a 24 passi
+    /// (vale per entrambe le sorgenti, <c>garch</c> e <c>har-log-rv</c>, dopo [A1]).
+    /// </summary>
     private const int RealizedVolWindow = 24;
 
     public async Task<RegimeTriggerCheck?> CheckAsync(CancellationToken ct = default)
@@ -121,13 +133,19 @@ public sealed class RegimeChangeDetector(
         double? forecast = baseline.Volatility is { ForecastVolatility24: > 0 } ? baseline.Volatility.ForecastVolatility24 : null;
 
         return Evaluate(baselineRegime, currentRegime, forecast, realized,
-            Math.Max(1.01, options.CurrentValue.VolBandMultiple), baselineRun.Id);
+            Math.Max(1.01, options.CurrentValue.VolBandMultiple), baselineRun.Id,
+            baseline.Volatility?.ForecastSource ?? "garch");
     }
 
-    /// <summary>Decisione PURA (testabile senza DB/modelli): cluster cambiato o vol fuori banda.</summary>
+    /// <summary>
+    /// Decisione PURA (testabile senza DB/modelli): cluster cambiato o vol fuori banda.
+    /// <paramref name="forecastSource"/> serve solo al racconto: la motivazione diceva «forecast
+    /// GARCH» anche quando il previsore era il log-HAR, e chi leggeva la notifica non aveva modo
+    /// di sapere quale dei due aveva prodotto il numero.
+    /// </summary>
     public static RegimeTriggerCheck Evaluate(
         int? baselineRegime, int? currentRegime, double? forecastVol, double? realizedVol,
-        double volBandMultiple, Guid baselineRunId)
+        double volBandMultiple, Guid baselineRunId, string forecastSource = "garch")
     {
         var reasons = new List<string>();
 
@@ -141,12 +159,12 @@ public sealed class RegimeChangeDetector(
             if (r > f * volBandMultiple)
             {
                 reasons.Add(FormattableString.Invariant(
-                    $"vol realizzata {r:0.####} oltre {volBandMultiple:0.##}× il forecast GARCH {f:0.####} (espansione)"));
+                    $"vol realizzata {r:0.####} oltre {volBandMultiple:0.##}× il forecast [{forecastSource}] {f:0.####} (espansione)"));
             }
             else if (r < f / volBandMultiple)
             {
                 reasons.Add(FormattableString.Invariant(
-                    $"vol realizzata {r:0.####} sotto il forecast GARCH {f:0.####}/{volBandMultiple:0.##} (compressione)"));
+                    $"vol realizzata {r:0.####} sotto il forecast [{forecastSource}] {f:0.####}/{volBandMultiple:0.##} (compressione)"));
             }
         }
 

@@ -996,6 +996,16 @@
                                 Quelli sull'exchange restano — ma la loro semantica varia da venue a venue e va
                                 verificata su Demo/Testnet. Se il piazzamento fallisce l'apertura NON viene bloccata:
                                 restano gli stop software, con un warning nei log.
+                                <br />
+                                <strong class="text-warning">Sulle corsie Futures, accendendola l'esecuzione a
+                                fette si spegne.</strong>
+                                Il trigger sull'exchange si piazza una volta sola, alla nascita della posizione:
+                                con un piano a fette coprirebbe solo la prima (un dodicesimo, col TWAP ai valori
+                                correnti) e non verrebbe mai ri-armato, nemmeno a piano finito. Fra una protezione
+                                che sopravvive al processo e la riduzione d'impatto dello slicing vince la
+                                protezione: le gambe con algoritmo Twap/Vwap/Iceberg aprono a quantità piena, e
+                                ogni volta lo si scrive nei log e in audit. Sullo Spot non cambia nulla, perché
+                                lì il bracket sull'exchange non viene piazzato affatto.
                             </div>
                         </div>
                     </div>

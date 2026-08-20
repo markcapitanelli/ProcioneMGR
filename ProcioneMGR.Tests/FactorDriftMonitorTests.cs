@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Alpha;
 using ProcioneMGR.Services.Exchanges;
@@ -125,10 +126,6 @@ public sealed class FactorDriftWorkerTests : IAsyncDisposable
             await db.Database.EnsureCreatedAsync();
         }
 
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(settings ?? new Dictionary<string, string?>())
-            .Build();
-
         var snapshot = new FactorDriftSnapshot();
         var history = new FactorIcHistoryStore(dbFactory);
         var worker = new FactorDriftWorker(
@@ -137,7 +134,7 @@ public sealed class FactorDriftWorkerTests : IAsyncDisposable
             new AlphaFactorFactory(),
             history,
             snapshot,
-            config,
+            BindFactorDriftOptions(settings),
             _provider.GetRequiredService<ILogger<FactorDriftWorker>>());
 
         return (worker, snapshot, dbFactory, history);
@@ -158,9 +155,24 @@ public sealed class FactorDriftWorkerTests : IAsyncDisposable
             new AlphaFactorFactory(),
             new FactorIcHistoryStore(dbFactory),
             snapshot,
-            new ConfigurationBuilder().Build(),
+            BindFactorDriftOptions(null),
             provider.GetRequiredService<ILogger<FactorDriftWorker>>());
         return (worker, snapshot);
+    }
+
+    /// <summary>
+    /// [M1] I test continuano a dichiarare le impostazioni con le chiavi vere
+    /// (<c>FactorDrift:MaxSeries</c>), che è ciò che si vuole provare: il binding dalla sezione al
+    /// POCO fa parte del percorso, e passare direttamente un oggetto lo salterebbe.
+    /// </summary>
+    private static IOptionsMonitor<FactorDriftOptions> BindFactorDriftOptions(Dictionary<string, string?>? settings)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(settings ?? new Dictionary<string, string?>())
+            .Build();
+        var options = new FactorDriftOptions();
+        config.GetSection("FactorDrift").Bind(options);
+        return new StaticOptionsMonitor<FactorDriftOptions>(options);
     }
 
     /// <summary>Serie con una relazione fattore→rendimento che si spegne a metà: alert atteso.</summary>

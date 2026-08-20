@@ -34,10 +34,21 @@ public sealed class EnsembleComparatorOptions
     /// oltre alla soglia percentuale di isteresi. Un miglioramento percentuale grande su un campione piccolo
     /// è rumore: pretendere che sia anche significativo evita di scambiare l'ensemble su differenze non
     /// distinguibili dal caso. z = (SR_cand − SR_incumbent) / SE(SR_cand), con SE di Lo (2002).
-    /// Si attiva solo quando il candidato riporta <see cref="EnsembleSummary.Observations"/> &gt; 0
-    /// (altrimenti si ricade sulla sola isteresi percentuale). Default 1.0 (≈1σ, modesto ma non nullo).
+    /// Si attiva solo quando il candidato riporta <see cref="EnsembleSummary.HoldoutMonths"/> &gt; 0
+    /// (altrimenti si ricade sulla sola isteresi percentuale).
+    ///
+    /// [A4, 2026-08-20] Default portato da 1,0 a <b>0,35</b> INSIEME alla correzione del denominatore,
+    /// e i due numeri vanno letti insieme. Prima il denominatore era il conteggio TRADE mentre lo
+    /// Sharpe è annualizzato: SE risultava 4,5-20× troppo piccolo, quindi «z ≥ 1,0» era una soglia
+    /// molto più permissiva di quanto la parola z lasciasse credere (punto operativo effettivo
+    /// ΔSharpe ≈ 0,19, sotto il quale comandava comunque l'isteresi del 10%). Col denominatore giusto
+    /// e un holdout di 4 mesi: z 1,0 ⇒ ΔSharpe ≥ 1,73 (la via-Sharpe si chiuderebbe di fatto);
+    /// z 0,50 ⇒ ≥ 0,87; <b>z 0,35 ⇒ ≥ 0,61</b>; z 0,25 ⇒ ≥ 0,43. Scelto 0,35 dal proprietario: un
+    /// freno che un ensemble davvero migliore può ancora superare, circa 3× più stretto del punto
+    /// operativo di prima — senza cadere né nel churn né nel gate che non passa mai. Da rialzare
+    /// quando l'holdout si allunga: la soglia e la finestra si scelgono insieme.
     /// </summary>
-    public decimal MinSharpeSignificanceZ { get; set; } = 1.0m;
+    public decimal MinSharpeSignificanceZ { get; set; } = 0.35m;
 }
 
 /// <summary>Compact, comparable snapshot of an ensemble (deployed or proposed). All metrics are weighted by allocation.</summary>
@@ -56,11 +67,20 @@ public sealed class EnsembleSummary
     public int DistinctSymbols { get; set; }
 
     /// <summary>
-    /// Effective sample size behind <see cref="WeightedAverageSharpe"/> (e.g. the weakest leg's holdout
-    /// trade count) used to test the statistical significance of a swap. 0 = unknown → the significance
-    /// gate is skipped and only the percentage hysteresis applies.
+    /// Conteggio trade dell'holdout dietro <see cref="WeightedAverageSharpe"/> (il minimo fra le gambe).
+    /// [A4, 2026-08-20] Serve SOLO al racconto: dire all'operatore quanto è spesso il campione. Non è
+    /// più il denominatore del test di significatività, perché non è nell'unità dello Sharpe —
+    /// per quello c'è <see cref="HoldoutMonths"/>.
     /// </summary>
     public int Observations { get; set; }
+
+    /// <summary>
+    /// [A4] Ampiezza della finestra di holdout in MESI dietro <see cref="WeightedAverageSharpe"/>.
+    /// È il campione nell'unità giusta per l'errore standard di uno Sharpe ANNUALIZZATO: null =
+    /// finestra ignota (raccomandazioni JSON storiche prive del campo) → il gate di significatività
+    /// è saltato e decide la sola isteresi percentuale, come prima.
+    /// </summary>
+    public decimal? HoldoutMonths { get; set; }
 
     /// <summary>Per-leg breakdown (for logging/UI/debug).</summary>
     public IReadOnlyList<LegSummary> Legs { get; set; } = new List<LegSummary>();
@@ -175,11 +195,11 @@ public sealed class EnsembleComparator(EnsembleComparatorOptions options) : IEns
         }
 
         // Significatività statistica del vantaggio di Sharpe (test a un campione: l'incumbent è il
-        // benchmark nullo). Attiva solo se il candidato riporta una dimensione campionaria; altrimenti
+        // benchmark nullo). Attiva solo se il candidato riporta la FINESTRA dell'holdout; altrimenti
         // z=0 e il gate è neutro (si ricade sulla sola isteresi percentuale).
-        var significanceZ = SharpeAdvantageZ(candidate.WeightedAverageSharpe, current.WeightedAverageSharpe, candidate.Observations);
+        var significanceZ = SharpeAdvantageZ(candidate.WeightedAverageSharpe, current.WeightedAverageSharpe, candidate.HoldoutMonths);
         result.SignificanceZ = Math.Round(significanceZ, 2);
-        var significanceKnown = candidate.Observations > 0 && options.MinSharpeSignificanceZ > 0m;
+        var significanceKnown = candidate.HoldoutMonths is > 0m && options.MinSharpeSignificanceZ > 0m;
         var significant = !significanceKnown || significanceZ >= options.MinSharpeSignificanceZ;
 
         // 4. Primary path: a meaningful Sharpe improvement above the hysteresis band AND, when the
@@ -189,7 +209,7 @@ public sealed class EnsembleComparator(EnsembleComparatorOptions options) : IEns
             if (!significant)
             {
                 result.ShouldReplace = false;
-                result.Reason = $"Ensemble corrente mantenuto: +{result.SharpeImprovementPercent:F1}% di Sharpe ma non significativo (z {result.SignificanceZ:F2} < {options.MinSharpeSignificanceZ:F2}, {candidate.Observations} osservazioni).";
+                result.Reason = $"Ensemble corrente mantenuto: +{result.SharpeImprovementPercent:F1}% di Sharpe ma non significativo (z {result.SignificanceZ:F2} < {options.MinSharpeSignificanceZ:F2} su {candidate.HoldoutMonths:0.##} mesi di holdout, {candidate.Observations} trade sulla gamba più magra).";
                 return result;
             }
             result.ShouldReplace = true;
@@ -220,19 +240,29 @@ public sealed class EnsembleComparator(EnsembleComparatorOptions options) : IEns
 
     /// <summary>
     /// z-score del vantaggio di Sharpe del candidato sull'incumbent (test a un campione), usando
-    /// l'errore standard asintotico dello Sharpe di Lo (2002): SE(SR) ≈ √((1 + ½·SR²) / T).
-    /// Restituisce 0 se la dimensione campionaria è ignota/non positiva. Un campione più piccolo
-    /// gonfia SE → z più basso → più difficile giustificare uno swap (esattamente l'intento anti-churn).
+    /// l'errore standard asintotico dello Sharpe di Lo (2002): SE(SR) ≈ √((1 + ½·SR²) / T), dove
+    /// <b>SR e T devono stare nella stessa frequenza</b>. Restituisce 0 se la finestra è ignota o
+    /// non positiva. Una finestra più corta gonfia SE → z più basso → più difficile giustificare
+    /// uno swap (esattamente l'intento anti-churn).
+    ///
+    /// [A4, 2026-08-20] Qui SR è ANNUALIZZATO (<c>Statistics.SharpeRatio</c> moltiplica per √ppy),
+    /// e prima passava come T il conteggio TRADE dell'holdout: due grandezze diverse, con SE
+    /// 4,5-20× troppo piccolo e uno z che ne usciva altrettanto gonfiato. De-annualizzando Lo si
+    /// ottiene Var(SR_annuo) = (1 + SR_annuo²/(2k)) / Y, con k = periodi/anno e Y = anni di holdout.
+    /// Il termine correttivo SR²/(2k) vale ≤ 0,006 per ogni timeframe supportato a Sharpe ≤ 2
+    /// (a 4h, k = 2190, Sharpe 1 ⇒ 0,00023), cioè sotto la precisione con cui lo z viene mostrato:
+    /// si usa la forma <b>SE = 1/√Y</b>, che è l'espressione nota dell'errore standard di uno Sharpe
+    /// annualizzato e non richiede di trasportare un ppy dentro l'<see cref="EnsembleSummary"/>.
     /// </summary>
-    internal static decimal SharpeAdvantageZ(decimal candidateSharpe, decimal incumbentSharpe, int observations)
+    internal static decimal SharpeAdvantageZ(decimal candidateSharpe, decimal incumbentSharpe, decimal? holdoutMonths)
     {
-        if (observations <= 1)
+        if (holdoutMonths is not > 0m)
         {
             return 0m;
         }
-        var sr = (double)candidateSharpe;
-        var se = Math.Sqrt((1.0 + 0.5 * sr * sr) / observations);
-        if (se <= 0.0)
+        var years = (double)holdoutMonths.Value / 12.0;
+        var se = Math.Sqrt(1.0 / years);
+        if (se <= 0.0 || double.IsNaN(se) || double.IsInfinity(se))
         {
             return 0m;
         }

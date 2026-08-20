@@ -47,6 +47,7 @@ public sealed class StrategyDiscoveryEngine(
                 InitialCapital = config.InitialCapital,
                 CommissionPercent = config.CommissionPercent,
                 SlippagePercent = config.SlippagePercent,
+                FundingRatePercentPer8h = config.FundingRatePercentPer8h,   // [M3]
                 PositionSizePercent = 100m,
                 StrategyName = job.Strategy,
                 ParameterRanges = DefaultRanges(job.Strategy),

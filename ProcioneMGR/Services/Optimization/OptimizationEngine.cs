@@ -557,6 +557,9 @@ public sealed class OptimizationEngine(
         // [R2] Prima mancava: la selezione dei parametri girava senza attrito mentre la validazione
         // holdout lo applicava. Vedi OptimizationConfiguration.SlippagePercent.
         SlippagePercent = config.SlippagePercent,
+        // [M3] Stesso difetto, stessa riga: il funding entrava nella validazione e non nella
+        // selezione. Vedi OptimizationConfiguration.FundingRatePercentPer8h.
+        FundingRatePercentPer8h = config.FundingRatePercentPer8h,
         StrategyName = config.StrategyName,
         StrategyParameters = new Dictionary<string, decimal>(combo),
     };

@@ -277,7 +277,11 @@
                     <input type="number" step="any" class="form-control" style="width: 8rem;" @bind="_initialCapital" disabled="@_busy" />
                 </div>
                 <div class="col-auto">
-                    <label class="form-label">Commissione %</label>
+                    <label class="form-label">
+                        Commissione %
+                        <i class="bi bi-info-circle small text-muted"
+                           title="Oltre alla commissione, ogni backtest della ricerca applica anche lo slippage (0,05% per fill) e il funding dei perpetual (0,01%/8h), gli stessi costi con cui il candidato verrà poi giudicato dalla validazione. Selezionare con costi più bassi di quelli del giudizio premia le strategie ad alto turnover e quelle long-biased."></i>
+                    </label>
                     <input type="number" step="any" class="form-control" style="width: 7rem;" @bind="_commission" disabled="@_busy" />
                 </div>
                 <div class="col-auto">

@@ -78,7 +78,28 @@ public class EnsembleStrategy
     public string StrategyName { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public Dictionary<string, decimal> Parameters { get; set; } = new();
+
+    /// <summary>
+    /// Peso della gamba dentro l'ensemble, in percentuale (somma ≈ 100 sulle gambe attive di una corsia).
+    ///
+    /// [A3, 2026-08-20] <b>È un peso di CONFRONTO, non una frazione di capitale.</b> Ha esattamente due
+    /// consumatori: <c>PipelineApplier.GetCurrentEnsembleSummaryAsync</c>, che con questo pesa lo Sharpe
+    /// medio e l'RF95 medio su cui <see cref="EnsembleComparator"/> decide se sostituire l'ensemble
+    /// schierato; e la colonna «Alloc %» di /ensemble. Il percorso che dimensiona gli ordini vivi
+    /// (<c>SignalOrderBuilder.TryOpenAsync</c>) NON lo legge: ogni gamba della corsia apre a
+    /// <c>TotalCapital × PositionSizePercent</c>, uguale per tutte. Collegarlo alla taglia reale è una
+    /// decisione aperta e non un dettaglio dimenticato — cambierebbe l'esposizione aggregata della
+    /// corsia e va fatto solo dopo aver allineato il backtest, che non conosce pesi per gamba
+    /// (<c>EnsembleManager.BuildBtConfig</c> gira ogni gamba a PositionSizePercent = 100).
+    /// </summary>
     public decimal CurrentAllocation { get; set; }
+
+    /// <summary>
+    /// Capitale nominale della gamba. [A3] Scritto dal ribilanciamento e <b>letto da nessuno</b>:
+    /// il capitale vero di una corsia è <see cref="EnsembleConfiguration.TotalCapital"/> e la taglia
+    /// di un ordine non passa di qui. Non confonderlo con <c>StrategyStatus.CurrentCapital</c>,
+    /// che è un altro tipo e alimenta la colonna «Capitale» della tabella live.
+    /// </summary>
     public decimal CurrentCapital { get; set; }
     public bool IsActive { get; set; } = true;
     public int? SavedStrategyId { get; set; }

@@ -86,8 +86,52 @@ public class SavedMlModel
     /// <summary>
     /// Deflated Sharpe (Fase 1) associato al modello: è il gate di promozione a Champion. null se non
     /// ancora misurato ⇒ non promuovibile a Champion (nessuna promozione "alla cieca").
+    ///
+    /// <para><b>[M2, 2026-08-20] Questa colonna ha DUE scrittori che scrivono due statistiche
+    /// diverse con lo stesso nome</b>, ed è la ragione per cui esistono i due campi qui sotto.
+    /// Il salvataggio da /ml calcola un DSR con N = 1 tentativo — che per costruzione collassa sul
+    /// Probabilistic Sharpe, cioè SR* = 0 e nessuna deflazione — su un'equity senza slippage né
+    /// funding. La pipeline scrive invece un DSR deflazionato su N = max(candidati, combinazioni
+    /// esplorate) × rapporto di collasso, nella pratica centinaia o migliaia, misurato sull'holdout
+    /// coi costi pieni. Il primo produce sistematicamente il numero più alto. Confrontarli fra loro
+    /// — che è ciò che fa il gate «batti l'incumbent» — è confrontare due grandezze diverse.</para>
     /// </summary>
     public double? DeflatedSharpe { get; set; }
+
+    /// <summary>
+    /// [M2] Il numero di tentativi con cui <see cref="DeflatedSharpe"/> è stato deflazionato.
+    /// null = ignoto (righe scritte prima del 2026-08-20): in quel caso il valore non è
+    /// confrontabile con nessun altro e il registry lo dichiara invece di fingere che lo sia.
+    /// </summary>
+    public int? DeflatedSharpeTrials { get; set; }
+
+    /// <summary>
+    /// [M2] Chi ha prodotto <see cref="DeflatedSharpe"/>: <c>"ml-lab"</c> (pagina /ml: un solo
+    /// track, nessuna deflazione, backtest senza slippage né funding) oppure <c>"pipeline"</c>
+    /// (gate anti-overfitting sull'holdout, costi pieni). null nelle righe storiche.
+    /// </summary>
+    [MaxLength(32)]
+    public string? DeflatedSharpeSource { get; set; }
+
+    /// <summary>[M2] Valore di <see cref="DeflatedSharpeSource"/> scritto dalla pagina /ml.</summary>
+    public const string DsrSourceMlLab = "ml-lab";
+
+    /// <summary>[M2] Valore di <see cref="DeflatedSharpeSource"/> scritto dal gate della pipeline.</summary>
+    public const string DsrSourcePipeline = "pipeline";
+
+    /// <summary>
+    /// [M2] Due DSR sono confrontabili solo se entrambi dichiarano il proprio N e i due N non
+    /// differiscono di oltre un ordine di grandezza. Un DSR su 1 tentativo e uno su 800 non
+    /// misurano la stessa cosa: il primo non è deflazionato affatto, e metterli in una
+    /// disuguaglianza produce un verdetto che sembra numerico ed è arbitrario.
+    /// </summary>
+    public static bool DsrComparable(int? trialsA, int? trialsB)
+    {
+        if (trialsA is not > 0 || trialsB is not > 0) return false;
+        var hi = Math.Max(trialsA.Value, trialsB.Value);
+        var lo = Math.Min(trialsA.Value, trialsB.Value);
+        return hi <= lo * 10;
+    }
 
     /// <summary>Quando è diventato Champion l'ultima volta (null se non lo è mai stato).</summary>
     public DateTime? PromotedAtUtc { get; set; }

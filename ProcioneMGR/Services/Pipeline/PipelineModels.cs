@@ -347,13 +347,24 @@ public sealed class VolatilityOutput
     public double Beta { get; set; }
     public double Persistence { get; set; }
 
-    /// <summary>Current per-period conditional volatility (stddev, not variance).</summary>
+    /// <summary>
+    /// Current per-period conditional volatility (stddev, not variance) — per-period significa
+    /// «per candela del timeframe primario» in ENTRAMBI i rami di <see cref="ForecastSource"/>:
+    /// il ramo log-HAR riporta le sue varianze giornaliere sulla scala della candela prima della
+    /// radice (AnalysisStages, [A1] 2026-08-20). Chi confronta questi valori con una misura
+    /// realizzata deve calcolarla sullo stesso timeframe.
+    /// </summary>
     public double CurrentVolatility { get; set; }
 
-    /// <summary>Long-run per-period volatility implied by the model.</summary>
+    /// <summary>Long-run per-period volatility implied by the model (stessa scala di <see cref="CurrentVolatility"/>).</summary>
     public double LongRunVolatility { get; set; }
 
-    /// <summary>Forecast per-period volatility 24 steps ahead.</summary>
+    /// <summary>
+    /// Forecast per-period volatility 24 steps ahead (stessa scala di <see cref="CurrentVolatility"/>).
+    /// L'ORIZZONTE però dipende dalla sorgente e non è lo stesso numero: col GARCH è la volatilità
+    /// del 24-esimo passo singolo, col log-HAR è la media sui prossimi <c>horizonDays</c> giorni
+    /// riportata a scala di candela. Confrontabile in scala, non in significato.
+    /// </summary>
     public double ForecastVolatility24 { get; set; }
 
     /// <summary>"Bassa" / "Media" / "Alta" vs the long-run level (thresholds from pipeline rules).</summary>
@@ -557,9 +568,11 @@ public sealed class ProposedLeg
     public decimal HoldoutMaxDrawdown { get; set; }
 
     /// <summary>
-    /// Holdout trade count of the originating candidate — carried as the effective sample size behind
-    /// the leg's Sharpe so the auto-reapply comparator can test a swap's statistical significance
-    /// (<see cref="Ensemble.EnsembleSummary.Observations"/>). Verdict-only, never a selection input.
+    /// Holdout trade count of the originating candidate. Serve al RACCONTO (quanto è spesso il
+    /// campione dietro una gamba) e al ritmo atteso di <c>TradeFrequency.PerMonth</c>; NON è il
+    /// campione del test di significatività del comparatore, che vuole la durata dell'holdout
+    /// nell'unità dello Sharpe annualizzato (<see cref="Ensemble.EnsembleSummary.HoldoutMonths"/>,
+    /// [A4] 2026-08-20). Verdict-only, never a selection input.
     /// </summary>
     public int HoldoutTrades { get; set; }
 

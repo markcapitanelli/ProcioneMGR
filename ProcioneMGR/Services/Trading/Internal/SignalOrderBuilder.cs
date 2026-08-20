@@ -50,6 +50,15 @@ internal sealed class SignalOrderBuilder(
         //
         // Sopra a questo, il DOSAGGIO sulla volatilità: col default (tetto 1,0) può solo ridurre la
         // dimensione, quindi non può far superare i cap validati a StartAsync. Spento di default.
+        //
+        // [A3, 2026-08-20] `strat.CurrentAllocation` NON entra qui, ed è deliberato: ogni gamba della
+        // corsia apre alla STESSA taglia. Il peso dell'ensemble è un peso di confronto (pesa lo
+        // Sharpe medio su cui il comparatore decide una sostituzione), non una frazione di capitale.
+        // Chi volesse collegarlo tenga presente che (a) l'esposizione aggregata della corsia
+        // cambierebbe — 3 gambe 50/30/20 passerebbero da 3×8% a 8% complessivo — e (b) il backtest
+        // che valida la gamba non conosce pesi per gamba, quindi si validerebbe una strategia e se
+        // ne opererebbe un'altra, la stessa classe di difetto corretta il 2026-08-20 sullo specchio
+        // della posizione. La superficie che lo dichiara è la guida di /ensemble.
         var cfg = safety.CurrentValue;
         var volMultiplier = VolatilityScaler.Compute(recentCloses ?? [], state.Timeframe, cfg);
         var margin = state.TotalCapital * cfg.PositionSizePercent / 100m * volMultiplier;

@@ -26,6 +26,13 @@ public class StrategyDiscoveryConfiguration
     /// il default è onesto e non zero.
     /// </summary>
     public decimal SlippagePercent { get; set; } = Pipeline.PipelineCosts.DefaultSlippagePercent;
+
+    /// <summary>
+    /// [M3] Funding dei perpetual propagato all'ottimizzatore, stessa strada dello slippage e stesso
+    /// motivo. Vedi <see cref="Optimization.OptimizationConfiguration.FundingRatePercentPer8h"/>.
+    /// </summary>
+    public decimal FundingRatePercentPer8h { get; set; } = Pipeline.PipelineCosts.DefaultFundingRatePercentPer8h;
+
     public WalkForwardConfiguration WalkForward { get; set; } = new();
 
     /// <summary>Quante candidate restituire (ordinate per Sharpe out-of-sample).</summary>

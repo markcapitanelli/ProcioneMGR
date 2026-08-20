@@ -27,6 +27,7 @@
 @inject IOptionsMonitor<LlmOptions> LlmMonitor
 @inject IOptionsMonitor<SupervisorAgentOptions> SupervisorAgentMonitor
 @inject IOptionsMonitor<DriftMonitorOptions> DriftMonitor
+@inject IOptionsMonitor<ProcioneMGR.Services.Alpha.FactorDriftOptions> FactorDriftMonitor
 @inject ILlmClient LlmClient
 @inject LlmSupervisorWorker LlmWorker
 @inject FeatureDriftWorker DriftWorker
@@ -96,6 +97,7 @@
     <a class="me-2" href="#p-sentiment">Sentiment</a>
     <a class="me-2" href="#p-pairswatch">Spread coppie</a>
     <a class="me-2" href="#p-drift">Drift feature</a>
+    <a class="me-2" href="#p-factordrift">Deriva fattori</a>
     <a class="me-2" href="#p-carry">Carry</a>
     <a class="me-2" href="#p-liq">Liquidazioni</a>
     <a class="me-2" href="#p-sync">Sync &amp; regimi</a>
@@ -1304,6 +1306,62 @@
     </div>
 </div>
 
+@* ==================== 5b. Deriva dei fattori alpha (sezione FactorDrift) ==================== *@
+@* [M1, 2026-08-20] Questa sezione governa un worker vivo e non aveva pannello: il worker leggeva le
+   quattro chiavi con l'overload GetValue a tipo inferito, che nessuno dei due guardiani di copertura
+   UI sa riconoscere. Non era un'omissione dell'inventario, era un buco negli strumenti — ed è la
+   ragione per cui la sezione è passata sotto ai controlli per mesi girando sui soli default. *@
+<div class="card mb-3" id="p-factordrift">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-activity me-1"></i>Deriva dei fattori alpha</span>
+        <span>@StateBadge(_factorDrift.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Misura periodicamente se l'<em>information coefficient</em> dei fattori alpha si sta
+            spegnendo su una serie: gli otto fattori scritti a mano, più quelli dichiarati dal
+            modello Champion di quella coppia. È in <strong>sola lettura e advisory</strong>: scrive
+            la storia dell'IC e accende l'avviso in Home e in <a href="feature-selection">/feature-selection</a>,
+            non ritira nulla e non tocca corsie.
+        </p>
+
+        <div class="alert alert-secondary py-2 small">
+            <strong>La manopola che conta è «serie per giro».</strong> Il monitor ruota sulla
+            watchlist: con @_factorDrift.EffectiveMaxSeries() serie ogni @_factorDrift.EffectiveIntervalHours() ore,
+            un giro completo su @(_watchlistSeriesCount?.ToString() ?? "N") serie richiede
+            <strong>@FactorDriftCoverageText()</strong>. Fino ad allora «nessun allarme di deriva»
+            su una serie può voler dire soltanto <em>non l'ho ancora guardata</em>: alzare il numero
+            accorcia il giro e alza il costo di CPU, che è la ragione per cui il default è basso.
+        </div>
+
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="fd_en" @bind="_factorDrift.Enabled" />
+                <label class="form-check-label" for="fd_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Intervallo (ore) @Restart()</label>
+                <input type="number" class="form-control" @bind="_factorDrift.IntervalHours" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Serie della watchlist esaminate a ogni giro, in rotazione: ha la precedenza chi è stato provato più tempo fa. Ammesso 1..30.">
+                    Serie per giro @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_factorDrift.MaxSeries" min="1" max="30" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Tetto di candele lette per serie in un giro: limita la finestra su cui si misura l'IC. Ammesso 1.000..200.000.">
+                    Candele per serie @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_factorDrift.MaxCandles" min="1000" max="200000" style="width: 10rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("FactorDrift", _factorDrift, "Deriva dei fattori alpha")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 @* ============================ 6. Sync dati & retraining regime ============================ *@
 <div class="card mb-3" id="p-sync">
     <div class="card-header"><i class="bi bi-cloud-arrow-down me-1"></i>Sync dati di mercato &amp; retraining regime</div>
@@ -1514,12 +1572,23 @@
             </div>
             <div class="col-auto">
                 <label class="form-label">z di significatività @Restart()</label>
-                <input type="number" step="0.1" class="form-control" @bind="_comparator.MinSharpeSignificanceZ" style="width: 9rem;" />
+                <input type="number" step="0.05" class="form-control" @bind="_comparator.MinSharpeSignificanceZ" style="width: 9rem;" />
             </div>
             <div class="col-auto">
                 <button class="btn btn-primary" @onclick='() => SaveAsync("EnsembleComparator", _comparator, "Comparatore ensemble")' disabled="@_busy">Salva</button>
             </div>
         </div>
+        <p class="text-muted small mt-2 mb-0">
+            <strong>La z si legge insieme alla finestra di holdout.</strong> Il campione del test è la
+            <em>durata</em> dell'holdout, non il numero di trade: z = ΔSharpe&nbsp;×&nbsp;√(anni). Con
+            l'holdout a 4 mesi che usano le campagne oggi: z&nbsp;0,25 ⇒ serve ΔSharpe ≥ 0,43 ·
+            <strong>z&nbsp;0,35 ⇒ ≥ 0,61</strong> (il valore in vigore) · z&nbsp;0,50 ⇒ ≥ 0,87 ·
+            z&nbsp;1,00 ⇒ ≥ 1,73, che con questa finestra chiude di fatto la sostituzione per Sharpe.
+            Quando l'holdout si allunga la stessa z diventa più facile da superare: è il
+            comportamento voluto, ma va rivista insieme alla finestra.
+            Se la raccomandazione non porta la finestra (JSON storici) il gate <em>si salta</em> e
+            decide la sola isteresi percentuale qui accanto.
+        </p>
         <hr />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
@@ -2221,6 +2290,13 @@
     private string _sentimentSymbolsCsv = "";
     private string _heritageFundingSymbolsCsv = "";
     private DriftMonitorOptions _drift = new();
+
+    /// <summary>[M1] Sezione FactorDrift: quattro chiavi vive che fino al 2026-08-20 non avevano pannello.</summary>
+    private ProcioneMGR.Services.Alpha.FactorDriftOptions _factorDrift = new();
+
+    /// <summary>[M1] Serie ABILITATE della watchlist: il denominatore della copertura del monitor. Null se non contabile.</summary>
+    private int? _watchlistSeriesCount;
+
     private MarketDataConfig _marketData = new();
 
     /// <summary>[E4] Vero quando lo scheduling del sync vive nel servizio ingestion remoto: i campi qui sono inerti e vanno dichiarati tali.</summary>
@@ -2480,6 +2556,7 @@
         _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols);
         _drift = Clone(DriftMonitor.CurrentValue);
         _driftStagesCsv = SymbolsToCsv(_drift.MonitorStages);
+        _factorDrift = Clone(FactorDriftMonitor.CurrentValue);
         _marketData = new MarketDataConfig
         {
             Enabled = Config.GetValue("MarketData:Enabled", true),
@@ -2541,6 +2618,7 @@
         };
         await LoadDriftResultsAsync();
         await LoadDriftModelCountsAsync();
+        await LoadWatchlistSeriesCountAsync();   // [M1] il denominatore della copertura del monitor fattori
         await LoadAgentStateAsync();
     }
 
@@ -2682,6 +2760,38 @@
         {
             _driftModelCounts = null;
         }
+    }
+
+    /// <summary>
+    /// [M1] Le serie abilitate in watchlist: è il denominatore che rende leggibile «serie per giro».
+    /// Senza, la manopola è un numero senza scala e nessuno può sapere che coi default un giro
+    /// completo costa settimane. Fail-open: se il conteggio non riesce si dice N, non si inventa.
+    /// </summary>
+    private async Task LoadWatchlistSeriesCountAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _watchlistSeriesCount = await db.TrackedSeries.AsNoTracking().CountAsync(s => s.Enabled);
+        }
+        catch
+        {
+            _watchlistSeriesCount = null;
+        }
+    }
+
+    /// <summary>[M1] Quanto ci mette il monitor a completare un giro sulla watchlist, in parole.</summary>
+    private string FactorDriftCoverageText()
+    {
+        if (_watchlistSeriesCount is not int total || total <= 0)
+        {
+            return "un tempo non calcolabile finché la watchlist non risponde";
+        }
+        var rounds = (int)Math.Ceiling((double)total / _factorDrift.EffectiveMaxSeries());
+        var hours = (long)rounds * _factorDrift.EffectiveIntervalHours();
+        return hours < 48
+            ? $"{hours} ore ({rounds} giri)"
+            : $"circa {hours / 24.0:0.#} giorni ({rounds} giri)";
     }
 
     private async Task LoadDriftResultsAsync()

@@ -30,6 +30,17 @@ public static class BacktestOverfitting
     /// strategia (stessa lunghezza temporale; se differiscono si usa la lunghezza minima comune).
     /// <paramref name="partitions"/> S (pari, ≥ 4): l'asse temporale è diviso in S blocchi e per ogni
     /// combinazione di S/2 blocchi a train (resto a test) si confronta il migliore IS con il suo rango OOS.
+    ///
+    /// <para><b>[A2, 2026-08-20] Due ipotesi che questa funzione non può verificare, e che il
+    /// chiamante deve garantire.</b> (1) Le serie devono avere la <i>stessa granularità</i>: gli
+    /// Sharpe si confrontano PER BARRA, quindi mescolare timeframe diversi confronta grandezze
+    /// diverse. (2) Le serie devono essere <i>allineate per data</i>: le partizioni sono blocchi
+    /// contigui di INDICI e qui non arrivano timestamp, quindi «la barra i-esima» si assume lo
+    /// stesso istante per tutti. Il troncamento alla lunghezza minima è deliberato — è ciò che
+    /// permette di partizionare — ma quando le lunghezze differiscono il verdetto poggia solo sulla
+    /// finestra comune, e le serie più lunghe vengono tagliate in coda: nessun riallineamento per
+    /// calendario. Chi chiama deve dichiararlo (lo fa <c>OverfittingGate.Apply</c>, che lo scrive
+    /// nel log del run) o, meglio, passare serie già intersecate sull'asse temporale.</para>
     /// </summary>
     public static PboResult ProbabilityOfOverfitting(IReadOnlyList<IReadOnlyList<double>> perStrategyReturns, int partitions = 10)
     {

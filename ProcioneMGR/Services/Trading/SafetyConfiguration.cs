@@ -95,6 +95,17 @@ public class SafetyConfiguration
     /// semantica va VERIFICATA su Demo/Testnet prima di attivarli in Live. Il branch guardato non
     /// blocca mai l'apertura: se il piazzamento del trigger fallisce, logga un warning e restano
     /// gli stop software.
+    ///
+    /// <para><b>[M4, 2026-08-20] Sulle corsie Futures, accendere questa spunta DISATTIVA
+    /// l'esecuzione a fette.</b> Il trigger si piazza una volta sola, alla nascita della posizione,
+    /// sulla quantità di quell'istante: con un piano a fette coprirebbe solo la prima (1/12 con un
+    /// TWAP ai valori correnti) e non verrebbe mai ri-armato, nemmeno a piano completato. Fra una
+    /// protezione che sopravvive al processo e una riduzione d'impatto sull'ingresso vince la
+    /// protezione (regola 4), quindi <see cref="Internal.ExecutionSlicePlanner"/> ricade
+    /// sull'apertura immediata a quantità piena e lo scrive in audit
+    /// (<c>ExecutionPlanSkippedForRestingStops</c>). Le due manopole non si possono avere entrambe
+    /// finché il bracket non impara a ri-armarsi per fetta. Sullo <b>Spot</b> nulla cambia: il
+    /// bracket resting vive solo nel percorso di apertura Futures.</para>
     /// </summary>
     public bool UseExchangeRestingStops { get; set; }
 

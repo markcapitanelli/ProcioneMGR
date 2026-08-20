@@ -50,7 +50,8 @@ public sealed class RegistryPageRenderTests : BunitContext
 
     private static async Task<int> SeedModelAsync(
         IDbContextFactory<ApplicationDbContext> dbFactory, ModelStage stage,
-        string? retiredReason = null, double? dsr = 0.90)
+        string? retiredReason = null, double? dsr = 0.90,
+        int? dsrTrials = 500, string? dsrSource = SavedMlModel.DsrSourcePipeline)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
         var user = new ApplicationUser { UserName = "tester", Email = "tester@example.com" };
@@ -62,6 +63,8 @@ public sealed class RegistryPageRenderTests : BunitContext
             UserId = user.Id, Name = "RF momentum BTC 1h", ModelType = "RandomForest",
             Symbol = "BTCUSDT", Timeframe = "1h", FactorsJson = "[]", ModelBytes = [1],
             DeflatedSharpe = dsr, Stage = stage,
+            DeflatedSharpeTrials = dsr is null ? null : dsrTrials,
+            DeflatedSharpeSource = dsr is null ? null : dsrSource,
             RetiredReason = retiredReason,
             RetiredAtUtc = retiredReason is null ? null : DateTime.UtcNow.AddHours(-3),
         };
@@ -229,5 +232,66 @@ public sealed class RegistryPageRenderTests : BunitContext
         Assert.Contains("già ritirato", cut.Markup);        // qualificato come passato
         Assert.Contains("Storia, non stato attuale", cut.Markup);
         Assert.False(HasButton(cut, "Riporta in Staging")); // non è ritirato: niente rientro da offrire
+    }
+
+    // ---------------------------------------------- [M2, 2026-08-20] la provenienza del DSR in UI
+
+    /// <summary>
+    /// Il DSR della pipeline dichiara il proprio metro accanto al numero. Senza questa colonna due
+    /// valori incomparabili — /ml a N=1 e pipeline a N=800 — si leggono come una classifica.
+    /// </summary>
+    [Fact]
+    public async Task DsrDellaPipeline_DichiaraIlProprioMetro()
+    {
+        var db = await RegisterAsync();
+        await SeedModelAsync(db, ModelStage.Champion, dsr: 0.60, dsrTrials: 800,
+            dsrSource: SavedMlModel.DsrSourcePipeline);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Registry>();
+        cut.WaitForAssertion(() => Assert.Contains("Misurato su", cut.Markup), TimeSpan.FromSeconds(10));
+
+        Assert.Contains("pipeline · N=800", cut.Markup);
+        Assert.Contains("slippage", cut.Markup);   // il tooltip spiega COSA rende il metro severo
+    }
+
+    /// <summary>
+    /// Il DSR di /ml nasce da un solo track: N = 1 significa nessuna deflazione. Il badge lo dice,
+    /// e la guida della pagina spiega perché quel numero risulta sistematicamente più alto.
+    /// </summary>
+    [Fact]
+    public async Task DsrDiMlLab_DichiaraCheNonEDeflazionato()
+    {
+        var db = await RegisterAsync();
+        await SeedModelAsync(db, ModelStage.Staging, dsr: 0.97, dsrTrials: 1,
+            dsrSource: SavedMlModel.DsrSourceMlLab);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Registry>();
+        cut.WaitForAssertion(() => Assert.Contains("ml-lab · N=1", cut.Markup), TimeSpan.FromSeconds(10));
+
+        Assert.Contains("nessuna deflazione", cut.Markup);
+        Assert.Contains("sistematicamente più alto", cut.Markup);
+
+        // La guida nasce chiusa: si apre come farebbe l'operatore, e deve dichiarare il rifiuto del
+        // gate. Senza questa parte, il badge direbbe la provenienza senza dire che cosa comporta.
+        cut.Find(".guida-panel-header").Click();
+        Assert.Contains("la promozione viene", cut.Markup);
+        Assert.Contains("ordine di grandezza", cut.Markup);
+    }
+
+    /// <summary>
+    /// Le righe misurate prima del 2026-08-20 non dichiarano N: mostrare il DSR come se fosse
+    /// confrontabile sarebbe la solita rassicurazione. Il badge dice «metro ignoto», che è la
+    /// verità e la ragione per cui il gate di promozione le rifiuta.
+    /// </summary>
+    [Fact]
+    public async Task DsrStorico_SenzaProvenienza_EDichiaratoNonConfrontabile()
+    {
+        var db = await RegisterAsync();
+        await SeedModelAsync(db, ModelStage.Staging, dsr: 0.95, dsrTrials: null, dsrSource: null);
+
+        var cut = Render<ProcioneMGR.Components.Pages.Registry>();
+        cut.WaitForAssertion(() => Assert.Contains("metro ignoto", cut.Markup), TimeSpan.FromSeconds(10));
+
+        Assert.DoesNotContain("N=", cut.Markup);
     }
 }

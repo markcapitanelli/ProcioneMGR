@@ -1718,3 +1718,66 @@ condivisi e oggi **entrambi senza tetto vero**. È il motivo per cui stanno in F
 periodici vivono nel processo locale avviato al logon. La copertura è **uptime dell'host**, non
 «sessioni di lavoro» — ma la gamba di riparazione del watchdog passa da `run-postgres.ps1`, che muore
 col cluster giù, cioè proprio quando il watchdog scatta.
+
+---
+
+## Revisione di tutti gli algoritmi (2026-08-20) — le undici decisioni, CHIUSE
+
+Richiesta del proprietario: rivedere **tutti** gli algoritmi, non solo quelli dell'ondata di
+integrazione, controllando anche integrazione e configurabilità da UI. Il metodo e i risultati stanno
+in `docs/audit/31_REVISIONE_ALGORITMI_2026-08.md`; qui resta ciò che è stato **deciso** e ciò che
+resta aperto.
+
+Il difetto grave — il backtest validava una strategia e il motore vivo ne operava un'altra, su due
+corsie Paper vive — era già corretto nel commit del giorno prima. Restavano **undici ritrovamenti
+confermati e non corretti**, ciascuno perché richiedeva una scelta non tecnica.
+
+### Prima di decidere: ri-ancorare al codice
+
+Undici investigatori, uno per ritrovamento, più uno scettico per ciascuno dei cinque di gravità alta,
+incaricato di demolire la caratterizzazione. **Tutti e undici ancora veri a HEAD.** Ma:
+
+- **A5 non era una decisione**: è A1 visto dal lato del consumatore, e si chiude correggendo A1. Le
+  decisioni erano dieci.
+- **A2 era sopravvalutato e la sua correzione «minima» non era neutra.** Monte Carlo sul CSCV
+  reimplementato: su pannello misto il PBO viene 0,505, cioè il valore giusto per un pannello di
+  rumore — il gate scatta eccome (un batch reale è stato bloccato a 0,619). Il difetto è di
+  **validità**, non di cecità. E «lanciare invece di troncare» spegnerebbe un gate bloccante appena
+  una serie ha una candela in meno, cioè aprirebbe gambe verso le corsie.
+- **M3 partiva da una premessa sbagliata**: `FundingHistory` è popolata, ma solo da /backtest a leva
+  > 1. Nella pipeline entrambe le fasi girano sulla costante, quindi la differenza è secca — selezione
+  0, validazione 0,01%/8h — e il difetto non è inerte.
+
+### Le dieci correzioni
+
+| # | decisione | tocca numeri? |
+|---|---|---|
+| A1+A5 | riscalare la stima log-HAR al timeframe (σ_candela = √(RV_giorno × min_tf/1440)) | i valori mostrati sì (÷4,90 su 1h); il `ratio`, e quindi Level, dosaggio e gate C3, **no** |
+| A2 | vietare gli universi a timeframe misti; dichiarare nel log del run la frazione di finestra su cui poggia il PBO | **no** — le campagne sono già a timeframe singolo |
+| A3 | dichiarare che «Alloc %» è un peso di CONFRONTO e non dimensiona gli ordini | **no** |
+| A4 | `HoldoutMonths` al denominatore dello z **e** `MinSharpeSignificanceZ` 1,0 → **0,35** nello stesso commit | sì, un gate: serve ΔSharpe ≥ 0,61 invece di ≈0,19 |
+| M1 | POCO `FactorDriftOptions` + pannello + inventario + regole; il pannello dichiara la **copertura** | no |
+| M2 | persistere N e provenienza del DSR; il gate «batti l'incumbent» **rifiuta** confronti fra grandezze diverse | sì, un gate — inerte oggi (nessun Champion) |
+| M3 | propagare il funding alla selezione, come [R2] fece per lo slippage | **sì**: gli Sharpe IS/OOS scendono per i long-biased e salgono per gli short |
+| M4 | con gli stop resting attivi il piano a fette non si costruisce (fail-closed, regola 4) | no |
+| M5 | dichiarare l'incomparabilità del risk-free e mostrarne l'ampiezza (rf/σ) | no |
+| M6 | dichiarare gambe **e** sopravvissuti pieni, e quante vengono dalla fascia grigia | no |
+
+**Due numeri di gate cambiano davvero, e vanno tenuti a mente leggendo i run futuri**: la soglia di
+significatività del comparatore (A4) e i costi della selezione (M3). I run archiviati restano su
+un'altra base di costo: **due generazioni di numeri non confrontabili fra loro.**
+
+### Aperti, e sono scelte non rinvii
+
+- **PBO allineato per DATA** invece che per indice: chiude la metà del difetto che il divieto sui
+  timeframe misti non copre, ma cambia il numero di un gate bloccante su tutte le configurazioni in
+  uso. Va misurato su un run archiviato **prima** di essere applicato.
+- **Bracket ri-armato a ogni fetta**: la correzione vera di M4. Prezzo: fino a 44 round-trip firmati
+  in più per piano e il rischio di trigger orfano moltiplicato per le fette, su un percorso che
+  nessuno ha mai visto scattare dal vivo.
+- **Confronto realizzato-vs-atteso su base di capitale comune** (M5 pieno): colonna nuova, migrazione,
+  degrado dichiarato per le gambe già schierate.
+- **Collegare i pesi di allocazione alla taglia**: possibile, ma **solo dopo** la parità col backtest.
+  Oggi `EnsembleManager.BuildBtConfig` gira ogni gamba a `PositionSizePercent = 100` e non conosce
+  pesi per gamba: collegarli senza allineare il backtest rifarebbe la stessa classe di difetto
+  corretta poche ore prima sullo specchio della posizione.

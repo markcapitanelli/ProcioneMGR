@@ -46,7 +46,7 @@ sovrascritto**. Conseguenza: nella stessa cartella convivono due numerazioni par
 | **27** | **[27_TEST_INVENTORY.md](27_TEST_INVENTORY.md)** | **ogni metodo di test**: l'elenco delle garanzie effettive |
 | **28** | **[28_GRAPH_REACHABILITY_AND_FLOW.md](28_GRAPH_REACHABILITY_AND_FLOW.md)** | **grafo, raggiungibilità, cicli, DI morta, catene interrotte** |
 | **30** | **[30_CARRY_CAPACITA_2026-08.md](30_CARRY_CAPACITA_2026-08.md)** | **[I16/F12] capacità e universo del carry: verdetto NEGATIVO**, il premio è sparito — misura su 42.644 eventi di funding reale |
-| **31** | **[31_REVISIONE_ALGORITMI_2026-08.md](31_REVISIONE_ALGORITMI_2026-08.md)** | **revisione di TUTTI gli algoritmi**: correttezza, integrazione, configurabilità da UI. Il backtest validava una strategia e il motore ne operava un'altra |
+| **31** | **[31_REVISIONE_ALGORITMI_2026-08.md](31_REVISIONE_ALGORITMI_2026-08.md)** | **revisione di TUTTI gli algoritmi**: correttezza, integrazione, configurabilità da UI. Il backtest validava una strategia e il motore ne operava un'altra. **CHIUSO**: le undici decisioni prese e le dieci correzioni in codice — due numeri di gate cambiano (soglia z del comparatore, funding nella selezione) |
 | — | [project_map.json](project_map.json) | versione machine-readable della mappa |
 
 ### 🔴 E-01 — Il funding storico è raccolto, riempito all'indietro e mai letto

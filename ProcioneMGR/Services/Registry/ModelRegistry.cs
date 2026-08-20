@@ -171,8 +171,32 @@ public sealed class ModelRegistry(
             .ToListAsync(ct);
 
         var incumbent = champions.OrderByDescending(c => c.DeflatedSharpe).FirstOrDefault();
-        if (incumbent?.DeflatedSharpe is { } champDsr && dsr < champDsr)
-            return new PromotionOutcome(false, $"DSR {dsr:F3} < Champion in carica {champDsr:F3}: promozione rifiutata.");
+        if (incumbent?.DeflatedSharpe is { } champDsr)
+        {
+            // [M2, 2026-08-20] Prima di confrontare, verificare che i due numeri siano la stessa
+            // grandezza. La colonna DeflatedSharpe ha due scrittori: /ml scrive un DSR a N = 1, che
+            // per costruzione NON è deflazionato (SR* = 0, cioè un Probabilistic Sharpe) e nasce da
+            // un'equity senza slippage né funding; la pipeline scrive un DSR deflazionato su
+            // centinaia o migliaia di tentativi coi costi pieni. Il primo è sistematicamente più
+            // alto. «DSR 0,97 batte 0,30» sembra un verdetto numerico e non lo è — è un modello
+            // giudicato con un metro più generoso che scavalca uno giudicato con quello severo, e
+            // il premio è la carica di Champion, cioè i segnali che alimentano MlStrategy.
+            //
+            // Fail-closed: se i due N non sono confrontabili non si promuove, e si dice quali sono
+            // e come rimediare. Le righe scritte prima di M2 hanno N ignoto e ricadono qui: è
+            // corretto, perché di quel numero non si sa con che metro è stato fatto.
+            if (!SavedMlModel.DsrComparable(model.DeflatedSharpeTrials, incumbent.DeflatedSharpeTrials))
+            {
+                return new PromotionOutcome(false,
+                    $"DSR non confrontabili: candidato {dsr:F3} su {TrialsText(model)} contro Champion in carica "
+                    + $"{champDsr:F3} su {TrialsText(incumbent)}. Sono due statistiche diverse con lo stesso nome — "
+                    + "un DSR a pochi tentativi non è deflazionato e risulta sempre più alto. "
+                    + "Fai passare entrambi i modelli dalla stessa validazione (una HoldoutValidation della pipeline) "
+                    + "prima di metterli in classifica.");
+            }
+            if (dsr < champDsr)
+                return new PromotionOutcome(false, $"DSR {dsr:F3} < Champion in carica {champDsr:F3}: promozione rifiutata.");
+        }
 
         var now = DateTime.UtcNow;
         int? demotedId = incumbent?.Id;
@@ -202,6 +226,11 @@ public sealed class ModelRegistry(
             model.Id, model.Name, model.Symbol, model.Timeframe, dsr, champions.Count);
         return new PromotionOutcome(true, "Promosso a Champion.", demotedId);
     }
+
+    /// <summary>[M2] Come si racconta l'N di un DSR, compreso il caso «non dichiarato».</summary>
+    private static string TrialsText(SavedMlModel m) => m.DeflatedSharpeTrials is int n
+        ? $"{n} tentativi [{m.DeflatedSharpeSource ?? "origine ignota"}]"
+        : "un numero di tentativi NON dichiarato (misurato prima del 2026-08-20)";
 
     public async Task<StageChangeOutcome> RetireAsync(int modelId, string reason, bool requestRetrain, CancellationToken ct = default)
     {

@@ -1113,7 +1113,7 @@ public sealed class TradingEngine(
     /// Decide fra apertura IMMEDIATA (comportamento odierno) ed esecuzione a fette. L'aggancio è QUI,
     /// dopo il gate di conferma manuale Live, così lo slicing non lo scavalca mai. Rif. ROADMAP-QLIB §1.2.
     /// </summary>
-    private ExecutionSlicePlanner ExecutionSlicePlanner => new(executionAlgorithms, liveExecution, safety, metrics, Persistence, laneId);
+    private ExecutionSlicePlanner ExecutionSlicePlanner => new(executionAlgorithms, liveExecution, safety, metrics, Persistence, logger, laneId);
 
     private Task TryBuildAndStartExecutionPlanAsync(Order order, EnsembleStrategy? strat, string strategyName, decimal price, DateTime ts, CancellationToken ct, bool isExisting) =>
         ExecutionSlicePlanner.TryBuildAndStartExecutionPlanAsync(

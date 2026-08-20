@@ -52,6 +52,22 @@ public class OptimizationConfiguration
     /// </summary>
     public decimal SlippagePercent { get; set; } = Pipeline.PipelineCosts.DefaultSlippagePercent;
 
+    /// <summary>
+    /// [M3, 2026-08-20] Costo di mantenimento dei perpetual, in % ogni 8 ore. Stessa storia di
+    /// <see cref="SlippagePercent"/> e stessa correzione, un mese dopo: la SELEZIONE girava a
+    /// funding zero mentre la VALIDAZIONE applicava <see cref="Pipeline.PipelineCosts"/>, cioè
+    /// 0,01%/8h. Un candidato poteva quindi essere scelto con un costo e bocciato con un altro.
+    ///
+    /// L'asimmetria ha un verso: il funding è un costo per chi sta LONG e un incasso per chi sta
+    /// SHORT, quindi selezionare senza funding premia sistematicamente le strategie long-biased che
+    /// tengono posizione a lungo — fino a ~10,95%/anno di nozionale se sempre esposte — e penalizza
+    /// le short. Non è un decimale: è un pollice sulla bilancia nella direzione più affollata.
+    ///
+    /// Default = <see cref="Pipeline.PipelineCosts.DefaultFundingRatePercentPer8h"/>, per la stessa
+    /// ragione: il default è quello onesto, e il comportamento storico si chiede mettendo 0.
+    /// </summary>
+    public decimal FundingRatePercentPer8h { get; set; } = Pipeline.PipelineCosts.DefaultFundingRatePercentPer8h;
+
     /// <summary>% del capitale impegnata per trade durante l'ottimizzazione.</summary>
     public decimal PositionSizePercent { get; set; } = 100m;
 

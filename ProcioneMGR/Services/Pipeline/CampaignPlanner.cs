@@ -251,14 +251,23 @@ public sealed class CampaignPlanner(
     private async Task EvaluateCompletedRunAsync(ApplicationDbContext db, VettingCampaign campaign, PipelineRun run, CancellationToken ct)
     {
         var recommendation = RunApplyEvaluator.DeserializeRecommendation(run.RecommendationJson);
-        var survivors = recommendation?.EnsembleLegs.Count ?? 0;
 
-        if (survivors == 0)
+        // [M6, 2026-08-20] Questo numero sono le GAMBE assemblate, non i sopravvissuti: i due
+        // divergono perché l'assemblaggio tronca i sopravvissuti a maxLegs e poi riempie i posti
+        // liberi con gambe di FASCIA GRIGIA. Il ramo decisionale è giusto così — è lo stesso
+        // criterio di RunApplyEvaluator, «c'è qualcosa da schierare?» — ma per sedici giorni ha
+        // detto all'operatore «2 sopravvissuti: ensemble schierato» anche quando i sopravvissuti
+        // pieni erano ZERO e le due gambe venivano entrambe dalla fascia grigia. Il nome della
+        // variabile ora dice cosa contiene, e la provenienza viaggia nei messaggi.
+        var legs = recommendation?.EnsembleLegs.Count ?? 0;
+        var provenance = DescribeProvenance(recommendation);
+
+        if (legs == 0)
         {
             MarkConfigOutcome(campaign, run.Id, "NoSurvivors");
             campaign.PendingRunId = null;
             SetOutcome(campaign,
-                $"0 sopravvissuti all'holdout (config {run.ConfigurationId}): prossima config della rotazione " +
+                $"Nessuna gamba schierabile (config {run.ConfigurationId}{provenance}): prossima config della rotazione " +
                 $"(questa non si ripete prima di {campaign.BackoffHours}h).");
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Campagna {Id}: {Outcome}", campaign.Id, campaign.LastOutcome);
@@ -271,23 +280,23 @@ public sealed class CampaignPlanner(
         // dallo scheduler, quindi con la ri-applica SPENTA la campagna schierava lo stesso. Un
         // interruttore che chiude una porta e ne lascia aperta un'altra è la stessa forma dei
         // pannelli che scrivevano sul processo sbagliato — e qui la porta aperta riscrive corsie.
-        // I sopravvissuti non si perdono: restano registrati e notificati, pronti per un click umano.
+        // Le gambe non si perdono: restano registrate e notificate, pronte per un click umano.
         if (options.CurrentValue.RespectAutoReapplyGate && !autoReapply.CurrentValue.Enabled)
         {
             MarkConfigOutcome(campaign, run.Id, "NotApplied");
             campaign.PendingRunId = null;
             SetOutcome(campaign,
-                $"{survivors} sopravvissuti (config {run.ConfigurationId}) NON schierati: la ri-applica automatica " +
+                $"{legs} gambe proposte (config {run.ConfigurationId}{provenance}) NON schierate: la ri-applica automatica " +
                 "è spenta (AutoReapply:Enabled = false) e il percorso campagna la rispetta. " +
                 "Il run resta disponibile per un'applica manuale da /pipeline.");
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Campagna {Id}: {Outcome}", campaign.Id, campaign.LastOutcome);
             await NotifyAsync(Notifications.NotificationSeverity.Info,
-                $"Campagna '{campaign.Name}': {survivors} sopravvissuti da applicare a mano", campaign.LastOutcome!, ct);
+                $"Campagna '{campaign.Name}': {legs} gambe da applicare a mano", campaign.LastOutcome!, ct);
             return;
         }
 
-        // Sopravvissuti: la STESSA catena valuta-e-applica della ri-applica automatica
+        // C'è qualcosa da schierare: la STESSA catena valuta-e-applica della ri-applica automatica
         // (supervisore con veto → isteresi → applier). Idempotente per run.
         var outcome = await applyEvaluator.EvaluateAndMaybeApplyAsync(run.Id, ct);
 
@@ -298,7 +307,7 @@ public sealed class CampaignPlanner(
             campaign.Status = CampaignStatus.Observing;
             campaign.ObservedLanes = outcome.LanesUsed; // stato ATTESO di flotta per il riallineamento C3
             SetOutcome(campaign,
-                $"{survivors} sopravvissuti (config {run.ConfigurationId}): ensemble schierato su {outcome.LanesUsed} corsie. " +
+                $"{legs} gambe proposte (config {run.ConfigurationId}{provenance}): ensemble schierato su {outcome.LanesUsed} corsie. " +
                 "Rotazione ferma, campagna in osservazione.");
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Campagna {Id}: {Outcome}", campaign.Id, campaign.LastOutcome);
@@ -315,11 +324,37 @@ public sealed class CampaignPlanner(
             MarkConfigOutcome(campaign, run.Id, "NotApplied");
             campaign.PendingRunId = null;
             SetOutcome(campaign,
-                $"{survivors} sopravvissuti (config {run.ConfigurationId}) ma ensemble NON schierato: {outcome.Message} " +
+                $"{legs} gambe proposte (config {run.ConfigurationId}{provenance}) ma ensemble NON schierato: {outcome.Message} " +
                 "La rotazione continua.");
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Campagna {Id}: {Outcome}", campaign.Id, campaign.LastOutcome);
         }
+    }
+
+    /// <summary>
+    /// [M6] La provenienza delle gambe, dai dati che la raccomandazione già porta con sé: quanti
+    /// candidati sono stati valutati, quanti sono sopravvissuti PIENI all'holdout, e quante delle
+    /// gambe proposte vengono dalla fascia GRIGIA. Serve a distinguere «ensemble di sopravvissuti»
+    /// da «ensemble di sole gambe grigie», che finora si leggevano identici. Stringa vuota quando
+    /// la raccomandazione non porta i campi (JSON storici): meglio tacere che inventare uno zero.
+    /// </summary>
+    internal static string DescribeProvenance(PipelineRecommendation? recommendation)
+    {
+        if (recommendation is null || recommendation.CandidatesEvaluated <= 0)
+        {
+            return string.Empty;
+        }
+
+        var grey = recommendation.EnsembleLegs.Count(l => string.Equals(l.SourceVerdict, "Grey", StringComparison.OrdinalIgnoreCase));
+        var parts = new List<string>
+        {
+            $"{recommendation.Survivors} sopravvissuti pieni su {recommendation.CandidatesEvaluated} candidati",
+        };
+        if (grey > 0)
+        {
+            parts.Add($"{grey} dalla FASCIA GRIGIA");
+        }
+        return $" — {string.Join("; ", parts)}";
     }
 
     // ------------------------------------------------------------ rotazione
