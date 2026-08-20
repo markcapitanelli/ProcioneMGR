@@ -319,3 +319,82 @@ passa. Che non passi per compiacenza è stato verificato inserendo una propriet�
 > su») e `/trading` (l'avviso sulla spunta degli stop resting). La **migrazione**
 > `AddDeflatedSharpeProvenance` aggiunge due colonne nullable a `SavedMlModels` e si applica
 > all'avvio.
+
+---
+
+## 6. Livello 4 eseguito sull'app vera (2026-08-20, dopo il merge)
+
+Mergiata la PR #99, il repo principale riportato su `master` e riavviato `procione-main`. Le
+superfici sono state guardate una per una sul database e sul motore reali. **Il collaudo ha trovato
+più di quanto cercava.**
+
+### Tre migrazioni erano ferme dal 19 agosto, e nessuno poteva saperlo
+
+Al primo riavvio il migratore ha rifiutato di dichiarare lo schema allineato:
+
+> «Nessuna migrazione pendente (**20 note**), ma il MODELLO differisce dallo snapshot dell'ultima
+> migrazione conosciuta … l'assembly `ProcioneMGR.Migrations.Postgres` accanto all'eseguibile è
+> VECCHIO — `dotnet build` dell'app non lo ricostruisce.»
+
+È la trappola nota della DLL delle migrazioni, ma vista dal lato che non era mai stato pagato: non
+sbaglia la *generazione*, impedisce l'**applicazione**. Ricostruito il progetto nella stessa
+configurazione con cui gira l'app (`-c Release`), le migrazioni note sono passate da 20 a 24 e ne
+sono state applicate **quattro**:
+
+| migrazione | quando | cosa mancava a database |
+|---|---|---|
+| `AddCampaignPausedUntil` | 19/08 | colonna della pausa campagne |
+| `AddPairCandidates` | 19/08 | **tabella `PairCandidates`** |
+| `AddPairSpreadWindows` | 19/08 | **tabella `PairSpreadWindows`** |
+| `AddDeflatedSharpeProvenance` | 20/08 | le due colonne di M2 |
+
+Le due tabelle del Filone I **non esistevano**: i sottosistemi mergiati il giorno prima giravano
+contro tabelle assenti, per un giorno intero. Il migratore ha fatto il suo mestiere — fail-closed sul
+*verdetto*, non sull'avvio — ma l'unica traccia era un `fail:` in un log che nessuno guarda.
+**Regola nuova: dopo ogni merge che contenga una migrazione, `dotnet build
+ProcioneMGR.Migrations.Postgres -c Release`, e leggere la riga `DatabaseMigrator`.** La spia è il
+numero fra parentesi: se «N note» è più basso del numero di file in `Migrations/`, la DLL è vecchia.
+
+### Le sei superfici, con i numeri veri
+
+| dove | esito |
+|---|---|
+| `/admin/autonomy#p-factordrift` | card presente e **ATTIVO**, quattro manopole editabili coi vincoli giusti (serie 1..30, candele 1.000..200.000). La riga di copertura dice, sui dati veri: *«con 5 serie ogni 12 ore, un giro completo su **222 serie** richiede circa **22,5 giorni** (45 giri)»*. È esattamente il numero che nessuno poteva conoscere prima |
+| `/admin/autonomy#p-thresholds` | **z di significatività = 0,35** letta dalla configurazione viva: il default nuovo è in vigore. La nota con la tabella ΔSharpe per l'holdout a 4 mesi è al suo posto |
+| `/registry` | la colonna «Misurato su» rende. **164 modelli, ZERO con un DSR**: tutte le righe mostrano «—», non «metro ignoto». Vedi sotto |
+| `/ensemble` | il riquadro su «Alloc %» e la voce di glossario ci sono; il tooltip sull'intestazione dice *«NON dimensiona gli ordini»*. La corsia 4 (XRP/USDT) ha una gamba sola al 100%, di fascia grigia |
+| `/trading` | l'avviso sulla spunta degli stop resting rende per intero, **inclusa la qualificazione sullo Spot** aggiunta dopo la rilettura del diff. La spunta è spenta. La configurazione di sicurezza è letta dal MOTORE via gRPC: il port-forward regge |
+| `/campaign` | gli esiti reali dicono **«nessuna gamba»** invece di «0 sopravvissuti», su entrambe le configurazioni |
+
+Zero errori in console dopo il riavvio, zero errori server.
+
+### Il difetto di M2 è inerte per una ragione in più di quella prevista
+
+Si sapeva che il gate «batti l'incumbent» non poteva scattare perché **non esiste alcun Champion**.
+Il collaudo ne aggiunge una seconda, più profonda: su **164 modelli salvati, nessuno ha un Deflated
+Sharpe**. La colonna è vuota ovunque, quindi non c'è nemmeno il numero da confrontare — e
+`PersistMlDeflatedSharpeAsync`, lo scrittore della pipeline, a quanto pare non ha mai scritto nulla,
+pur essendoci 164 modelli quasi tutti chiamati `Pipeline <hash>`. **È un'osservazione, non una
+diagnosi**: va misurata a parte, ed è della stessa famiglia dei gate senza soggetto. Conseguenza per
+il collaudo: i tre badge di provenienza non sono osservabili sull'app vera, e restano coperti dai soli
+test di rendering.
+
+### Il codice nuovo ha già girato da solo
+
+Dopo il riavvio, senza che nessuno lo chiedesse:
+
+- il **worker della deriva** è partito leggendo il POCO nuovo — `FactorDriftWorker avviato (ogni 12h,
+  Enabled=True, 5 serie/giro)` — e ha registrato finestre nuove per DOT/USDT;
+- un **run di pipeline** ha attraversato `HoldoutValidation` **senza essere saltato**: il divieto di
+  A2 sui timeframe misti non ha rotto le configurazioni reali, che sono a timeframe singolo. Il gate
+  ha girato con N = 6.120 tentativi effettivi (64 candidati, 8.160 combinazioni, collasso 0,75), e la
+  riga nuova sul troncamento del PBO **non è comparsa** — perché su quel pannello le serie avevano
+  tutte la stessa lunghezza. La dichiarazione parla solo quando c'è qualcosa da dichiarare;
+- il **planner** ha scritto la motivazione nella forma nuova, con la provenienza: *«Campagna 2:
+  Nessuna gamba schierabile (config 18 — **0 sopravvissuti pieni su 64 candidati**): prossima config
+  della rotazione»*. Prima avrebbe detto «0 sopravvissuti all'holdout», che è un altro numero.
+
+La campagna 2 è in **`WaitingForTrigger`** — «rotazione esaurita senza ensemble schierato, in attesa
+di un trigger contestuale». È precisamente lo stato che il braccio volatilità difettoso svegliava a
+vuoto fino a quattro volte al giorno, bypassando il backoff di 12h: da adesso quella sveglia arriva
+solo se la volatilità esce davvero dalla banda.

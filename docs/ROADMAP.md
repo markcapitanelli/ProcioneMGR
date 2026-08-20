@@ -1781,3 +1781,30 @@ un'altra base di costo: **due generazioni di numeri non confrontabili fra loro.*
   Oggi `EnsembleManager.BuildBtConfig` gira ogni gamba a `PositionSizePercent = 100` e non conosce
   pesi per gamba: collegarli senza allineare il backtest rifarebbe la stessa classe di difetto
   corretta poche ore prima sullo specchio della posizione.
+
+### Collaudo in browser (2026-08-20, app vera dopo il merge) — e tre migrazioni ferme da un giorno
+
+Mergiata la PR #99 e riavviato `procione-main`, il collaudo delle sei superfici ha trovato **più di
+quanto cercava**: al primo riavvio il migratore ha rifiutato di dichiarare lo schema allineato perché
+la DLL delle migrazioni accanto all'eseguibile era **vecchia** (`dotnet build` dell'app non la
+ricostruisce). Ricostruito il progetto in `-c Release`, le migrazioni note sono passate da 20 a 24 e
+ne sono state applicate **quattro**: la nuova di M2 più **tre ferme dal 19 agosto**
+(`AddCampaignPausedUntil`, `AddPairCandidates`, `AddPairSpreadWindows`). Le tabelle
+`PairSpreadWindows` e `PairCandidates` **non esistevano nel database vero**: i sottosistemi del Filone
+I giravano contro tabelle assenti, per un giorno intero, e l'unica traccia era un `fail:` in un log.
+
+> **Regola operativa nuova**: dopo *ogni* merge che contenga una migrazione,
+> `dotnet build ProcioneMGR.Migrations.Postgres -c Release`, poi riavviare, poi **leggere la riga
+> `DatabaseMigrator`**. La spia è il numero fra parentesi: se «N note» è più basso del numero di file
+> in `Migrations/`, la DLL è vecchia e le migrazioni nuove non verranno applicate.
+
+Le sei superfici sono tutte a posto, coi numeri veri: la copertura del monitor di deriva dichiara
+**22,5 giorni su 222 serie**, la z del comparatore è **0,35** letta dalla configurazione viva, gli
+esiti delle campagne dicono «nessuna gamba» e la motivazione porta la provenienza («0 sopravvissuti
+pieni su 64 candidati»). Zero errori in console, zero errori server.
+
+**Un'osservazione da misurare a parte**: su **164 modelli salvati, nessuno ha un Deflated Sharpe**.
+Il gate di M2 è quindi inerte per due ragioni, non una (niente Champion *e* niente DSR), e lo
+scrittore della pipeline `PersistMlDeflatedSharpeAsync` sembra non aver mai scritto nulla pur essendo
+i modelli quasi tutti chiamati `Pipeline <hash>`. È della famiglia dei gate senza soggetto: va
+misurato, non dedotto.
