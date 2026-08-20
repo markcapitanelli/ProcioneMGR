@@ -434,19 +434,33 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     }
 
     /// <summary>
-    /// Scrive il Deflated Sharpe calcolato dal gate sui <c>SavedMlModel</c> dei candidati "Ml" (quelli
-    /// con un <c>SavedModelId</c>), così anche i modelli addestrati DALLA PIPELINE hanno il DSR che il
+    /// Scrive l'esito della validazione sui <c>SavedMlModel</c> dei candidati "Ml" (quelli con un
+    /// <c>SavedModelId</c>), così anche i modelli addestrati DALLA PIPELINE hanno il DSR che il
     /// <c>ModelRegistry</c> richiede per la promozione a Champion — completa P0-6 sul percorso pipeline.
-    /// Il DSR viene persistito anche per i candidati scartati dal gate: è una proprietà del modello, e
-    /// se è sotto soglia il registry non lo promuoverà comunque.
+    ///
+    /// <para><b>[M2b, 2026-08-20] Il commento precedente diceva «il DSR viene persistito anche per i
+    /// candidati scartati dal gate», e non era vero.</b> Il DSR non veniva nemmeno CALCOLATO per loro:
+    /// <c>OverfittingGate.Apply</c> salta i non sopravvissuti (<c>if (!v.Survived) continue;</c>), che è
+    /// giusto — la deflazione serve a giudicare chi è arrivato in fondo, e il permutation test costa.
+    /// La conseguenza però era invisibile e ha morso: al 2026-08-20, su <b>164 modelli salvati, zero
+    /// avevano un DSR</b>. Non per un guasto della catena — 50 candidati "Ml" erano stati regolarmente
+    /// validati — ma perché <b>nessuno è mai sopravvissuto</b>: Sharpe holdout da −1,06 a −61,89. La
+    /// colonna vuota in /registry si leggeva come «non misurato», mentre la verità era «misurato, e
+    /// bocciato prima di arrivare al gate».</para>
+    ///
+    /// <para>Ora si scrive comunque la PROVENIENZA, anche senza numero: il modello porta con sé il
+    /// fatto di essere stato validato e scartato. Il DSR resta null — non si inventa un numero che il
+    /// gate non ha prodotto, e soprattutto non si allarga l'insieme che alimenta la fascia grigia
+    /// (<see cref="GreyZone.IsGrey"/> guarda proprio <c>DeflatedSharpe</c>).</para>
     /// </summary>
     private async Task PersistMlDeflatedSharpeAsync(PipelineContext ctx, CancellationToken ct)
     {
-        var byModelId = new Dictionary<int, double>();
+        // Esito per modello: il DSR se il gate l'ha prodotto, altrimenti null = validato e scartato prima.
+        var byModelId = new Dictionary<int, double?>();
         foreach (var v in ctx.Validated)
         {
-            if (v.StrategyName != "Ml" || v.DeflatedSharpe is not double dsr) continue;
-            if (v.Parameters.TryGetValue("SavedModelId", out var idDec)) byModelId[(int)idDec] = dsr;
+            if (v.StrategyName != "Ml") continue;
+            if (v.Parameters.TryGetValue("SavedModelId", out var idDec)) byModelId[(int)idDec] = v.DeflatedSharpe;
         }
         if (byModelId.Count == 0) return;
 
@@ -458,15 +472,34 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         var trials = ctx.DsrEffectiveTrials > 0 ? ctx.DsrEffectiveTrials : (int?)null;
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var scartati = 0;
         foreach (var (id, dsr) in byModelId)
         {
             var model = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == id, ct);
             if (model is null) continue;
-            model.DeflatedSharpe = dsr;
-            model.DeflatedSharpeTrials = trials;
-            model.DeflatedSharpeSource = SavedMlModel.DsrSourcePipeline;
+
+            if (dsr is double misurato)
+            {
+                model.DeflatedSharpe = misurato;
+                model.DeflatedSharpeTrials = trials;
+                model.DeflatedSharpeSource = SavedMlModel.DsrSourcePipeline;
+            }
+            else
+            {
+                // Nessun numero, ma un fatto: questo modello è passato per la validazione ed è stato
+                // fermato prima del gate DSR. Il DSR resta null di proposito.
+                model.DeflatedSharpeTrials = null;
+                model.DeflatedSharpeSource = SavedMlModel.DsrSourceRejectedBeforeGate;
+                scartati++;
+            }
         }
         await db.SaveChangesAsync(ct);
+
+        if (scartati > 0)
+        {
+            ctx.LogLine($"[{Name}] {scartati} modelli ML validati e scartati PRIMA del gate DSR: "
+                      + "nessun Deflated Sharpe da scrivere, e il registry lo dichiara invece di mostrare un trattino.");
+        }
     }
 
     /// <summary>

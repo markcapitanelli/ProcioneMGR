@@ -78,6 +78,14 @@ public sealed record AgentStateReport(IReadOnlyList<AgentState> Agents, DateTime
 /// Senza il trigger contestuale nessun wake avviene mai: una campagna in <c>WaitingForTrigger</c>
 /// resta ferma per sempre. Il gate va guardato, non presunto acceso.
 /// </param>
+/// <param name="RegimeTriggerArms">
+/// [A5b, 2026-08-20] **Acceso non basta.** Il trigger ha due bracci e ciascuno ha i suoi
+/// prerequisiti: il K-means pretende un regime nello snapshot di baseline E un modello di regime
+/// attivo per quella serie, la volatilità pretende un forecast positivo. Se cadono entrambi il wake
+/// non arriva mai, e fino a oggi questa sonda diceva comunque «un wake la rimette in rotazione da
+/// solo» perché guardava il solo flag. Null quando l'armamento non è stato interrogato (nessun
+/// rilevatore iniettato): in quel caso si ricade sul vecchio giudizio, dichiarandolo.
+/// </param>
 /// <param name="FleetExecutionImplemented">
 /// Da <see cref="Fleet.FleetOrchestratorWorker.RetirementArmImplemented"/>. <c>Fleet:DryRun</c> dice
 /// che cosa è stato CHIESTO; questo dice che cosa il codice sa FARE. Dedurre il secondo dal primo
@@ -101,6 +109,7 @@ public sealed record AgentStateFacts(
     int CampaignsRotating,
     int CampaignsWaitingForTrigger,
     bool RegimeTriggerEnabled,
+    RegimeTriggerHealth? RegimeTriggerArms,
     bool FleetEnabled,
     bool FleetDryRun,
     bool FleetExecutionImplemented,
@@ -160,7 +169,8 @@ public sealed class AgentStateProbe(
     IOptionsMonitor<RegimeTriggerOptions> regimeTrigger,
     IPipelineApplier applier,
     ILogger<AgentStateProbe> logger,
-    IAiKeyStore? keyStore = null)
+    IAiKeyStore? keyStore = null,
+    IRegimeChangeDetector? regimeChangeDetector = null)
 {
     /// <summary>
     /// Finestra su cui si contano i voti del comitato. Dichiarata e non configurabile: è un
@@ -242,11 +252,33 @@ public sealed class AgentStateProbe(
         // che per metà delle campagne non esiste (WakeAsync filtra Status != Observing).
         if (f.CampaignsWaitingForTrigger > 0)
         {
-            return f.RegimeTriggerEnabled
-                ? new AgentState(name, AgentActivation.AccesoOperante,
-                    $"{f.CampaignsEnabled} campagne abilitate, {f.CampaignsWaitingForTrigger} in attesa di trigger: un wake del trigger contestuale le rimette in rotazione da solo")
-                : new AgentState(name, AgentActivation.AccesoInerte,
+            if (!f.RegimeTriggerEnabled)
+            {
+                return new AgentState(name, AgentActivation.AccesoInerte,
                     $"{f.CampaignsEnabled} campagne abilitate, {f.CampaignsWaitingForTrigger} in attesa di trigger, ma il trigger contestuale è SPENTO: non ripartono da sole");
+            }
+
+            // [A5b, 2026-08-20] Acceso non basta: se nessuno dei due bracci sa produrre un verdetto,
+            // il wake non arriva MAI e la campagna resta ferma per sempre. Prima si concludeva
+            // «le rimette in rotazione da solo» dal solo flag — la promessa che non poteva mantenere.
+            // Il rischio è diventato concreto proprio togliendo la sveglia spuria di [A5]: fino ad
+            // allora le campagne si svegliavano comunque, e un braccio cieco non si sarebbe visto.
+            if (f.RegimeTriggerArms is { AnyArmArmed: false } cieco)
+            {
+                var perche = cieco.Reasons.Count > 0 ? " — " + string.Join("; ", cieco.Reasons) : "";
+                return new AgentState(name, AgentActivation.AccesoInerte,
+                    $"{f.CampaignsEnabled} campagne abilitate, {f.CampaignsWaitingForTrigger} in attesa di trigger: il trigger è ACCESO ma nessuno dei due bracci può esprimersi, quindi il wake non arriverà mai{perche}");
+            }
+
+            var bracci = f.RegimeTriggerArms switch
+            {
+                null => " (armamento dei bracci non interrogato)",
+                { RegimeArmArmed: true, VolatilityArmArmed: true } => " (entrambi i bracci armati)",
+                { RegimeArmArmed: true } => " (armato il solo braccio K-means: " + string.Join("; ", f.RegimeTriggerArms.Reasons) + ")",
+                _ => " (armato il solo braccio volatilità: " + string.Join("; ", f.RegimeTriggerArms.Reasons) + ")",
+            };
+            return new AgentState(name, AgentActivation.AccesoOperante,
+                $"{f.CampaignsEnabled} campagne abilitate, {f.CampaignsWaitingForTrigger} in attesa di trigger: un wake del trigger contestuale le rimette in rotazione da solo{bracci}");
         }
 
         // Restano le sole campagne in osservazione: la rotazione è ferma, ma al primo tick dopo un
@@ -376,7 +408,28 @@ public sealed class AgentStateProbe(
         var savedModels = 0;
         int? champions = null;
         int? committeeVotes = null;
+        RegimeTriggerHealth? regimeArms = null;
         var since = DateTime.UtcNow.AddDays(-CommitteeVoteWindowDays);
+
+        // [A5b] L'armamento dei bracci si interroga SOLO se c'è qualcuno che ne dipende: la domanda
+        // costa una query e un caricamento di modello, e senza campagne in attesa non cambia il
+        // verdetto. Fail-open come tutto il resto della sonda: se non risponde, si dichiara che non
+        // è stato interrogato invece di dedurne un armamento che nessuno ha visto.
+        try
+        {
+            await using var probeDb = await dbFactory.CreateDbContextAsync(ct);
+            var attesa = await probeDb.VettingCampaigns.AsNoTracking()
+                .CountAsync(c => c.Enabled && c.Status == CampaignStatus.WaitingForTrigger, ct);
+            if (attesa > 0 && regimeChangeDetector is not null && regimeTrigger.CurrentValue.Enabled)
+            {
+                regimeArms = await regimeChangeDetector.DescribeHealthAsync(ct);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Sonda agenti: armamento del trigger contestuale non interrogabile.");
+        }
+
         try
         {
             await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -438,6 +491,7 @@ public sealed class AgentStateProbe(
             CampaignsRotating: campaignsRotating,
             CampaignsWaitingForTrigger: campaignsWaiting,
             RegimeTriggerEnabled: regimeTrigger.CurrentValue.Enabled,
+            RegimeTriggerArms: regimeArms,
             FleetEnabled: fleetOpt.Enabled,
             FleetDryRun: fleetOpt.DryRun,
             FleetExecutionImplemented: Fleet.FleetOrchestratorWorker.RetirementArmImplemented,

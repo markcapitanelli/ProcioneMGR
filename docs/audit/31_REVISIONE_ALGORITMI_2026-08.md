@@ -398,3 +398,87 @@ La campagna 2 è in **`WaitingForTrigger`** — «rotazione esaurita senza ensem
 di un trigger contestuale». È precisamente lo stato che il braccio volatilità difettoso svegliava a
 vuoto fino a quattro volte al giorno, bypassando il backoff di 12h: da adesso quella sveglia arriva
 solo se la volatilità esce davvero dalla banda.
+
+---
+
+## 7. Le due anomalie del collaudo, analizzate e risolte (2026-08-20)
+
+Il collaudo aveva lasciato due cose «che non tornano». Misurate sul database vero, sono risultate una
+cosa sola travestita da due: **nessuna delle due era un guasto della catena, ed entrambe erano
+superfici che dicevano una cosa mentre ne era vera un'altra.**
+
+### 7.1 «164 modelli, nessun DSR» — la catena funziona, il racconto no
+
+Interrogato il database di produzione:
+
+| domanda | risposta |
+|---|---|
+| modelli salvati | **164**, tutti `Staging`, tutti direzionali, tutti chiamati `Pipeline <hash>` |
+| con un Deflated Sharpe | **0** |
+| run completati che portano un candidato `Ml` con `SavedModelId` | **50** |
+| di quei 50 candidati, quanti sono **sopravvissuti** all'holdout | **0** — Sharpe da **−1,06 a −61,89** |
+
+Quindi la catena non è rotta: i modelli diventano candidati (50 su 164 superano il gate di
+correlazione `minTestCorrelation`), arrivano alla validazione, e vengono **bocciati nel merito**. Il
+DSR non è mai stato scritto perché **non è mai stato calcolato**: `OverfittingGate.Apply` lo calcola
+solo per chi supera il primo esame (`if (!v.Survived) continue;`), che è giusto — la deflazione
+giudica chi è arrivato in fondo, e il permutation test costa.
+
+**Il difetto vero era una frase.** Il commento di `PersistMlDeflatedSharpeAsync` dichiarava: *«Il DSR
+viene persistito anche per i candidati scartati dal gate»*. Non accadeva, e non poteva accadere. La
+conseguenza sulla superficie: 164 righe con un trattino, che si legge «non ancora valutato», quando la
+verità era «valutato, e bocciato prima di arrivare al gate» — con due pulsanti di promozione accanto,
+come se fossero materiale in attesa di una decisione.
+
+**Correzione.** La provenienza si scrive **anche senza numero**: un modello validato e scartato porta
+`DeflatedSharpeSource = "pipeline:scartato"`, e /registry mostra il badge
+«scartato prima del gate» con il motivo nel tooltip. Il DSR resta `null` di proposito — e questa non è
+pigrizia:
+
+> **Perché NON si calcola il DSR anche per gli scartati**, che era la correzione ovvia.
+> `GreyZone.IsGrey` guarda proprio `DeflatedSharpe`: scrivere un DSR su candidati che oggi non ne
+> hanno uno **allargherebbe l'insieme che alimenta la fascia grigia**, cioè ciò che può finire su una
+> corsia. Con questi modelli non succederebbe (`IsGrey` pretende `HoldoutSharpe > 0` e i loro sono
+> tutti negativi), ma la regola generale sì: un candidato bocciato per Sharpe basso *ma positivo*
+> potrebbe entrare in banda [0,80–0,95) e diventare schierabile. Una correzione che sistema una
+> colonna e apre una porta sul trading non è una correzione.
+
+Il trattino, dove resta, ora significa una cosa sola: **nessun esito registrato** (run precedenti al
+2026-08-20). Le 164 righe storiche restano tali finché non le si ripassa.
+
+### 7.2 «Campagna 2 in WaitingForTrigger» — lo stato è corretto, la promessa no
+
+Lo stato è l'esito onesto di una rotazione esaurita senza nulla da schierare. La domanda vera era
+un'altra, e nasce proprio dalla correzione [A5]: **tolta la sveglia spuria, quella campagna può ancora
+ripartire?**
+
+Verificato sul database: sì. Lo snapshot di baseline porta `CurrentRegimeId = 3` ed **esiste un
+modello di regime attivo** per AAVE/USDT 1h (addestrato il 2026-07-27), quindi il braccio K-means è
+armato; e il forecast di volatilità c'è. Nessun orfano.
+
+**Ma nessuno lo stava guardando.** `AgentStateProbe` decideva sul solo flag `RegimeTrigger:Enabled` e
+concludeva *«un wake del trigger contestuale le rimette in rotazione da solo»* — una promessa che
+regge solo se almeno un braccio sa esprimersi. Il braccio K-means pretende **due** cose (un regime
+nello snapshot **e** un modello attivo), il braccio volatilità ne pretende una (un forecast positivo).
+Se cadono entrambi, la campagna resta ferma **per sempre** e la sonda continua a dire «operante».
+
+Il rischio è diventato concreto proprio oggi: **fino a stamattina il braccio volatilità scattava per
+un errore di unità**, quindi le campagne si svegliavano comunque e la cecità dell'altro braccio non si
+sarebbe mai vista. Correggere [A5] ha tolto la rete.
+
+**Correzione.** `IRegimeChangeDetector.DescribeHealthAsync` dice quali bracci sono armati e **perché**
+no; la sonda lo usa e declassa a `AccesoInerte` con la ragione quando nessuno può esprimersi. Quando
+uno solo è armato resta «operante», ma dichiara quale manca — altrimenti la prima cecità si
+scoprirebbe solo il giorno in cui cade anche il secondo. `null` significa «non l'ho chiesto», e si
+dichiara: dedurne un armamento sarebbe la stessa bugia di prima spostata di un campo.
+
+**Verificato che può fallire**: neutralizzato il ramo nuovo, il caso «entrambi ciechi» diventa rosso;
+ripristinato, torna verde.
+
+### Quanto costava il difetto [A5], misurato
+
+Nei dieci giorni precedenti la piattaforma ha completato circa **6 run al giorno**, contro i **4** che
+il solo backoff di 12h su due configurazioni consentirebbe. L'eccedenza è compatibile con le sveglie
+spurie che bypassavano il backoff — **è un indizio, non una prova** (un run manuale conta uguale). Da
+oggi il braccio volatilità scatta solo su un'uscita vera dalla banda: se il ritmo scende verso 4/giorno
+nei prossimi giorni, l'indizio diventa misura.

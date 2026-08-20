@@ -1808,3 +1808,26 @@ Il gate di M2 è quindi inerte per due ragioni, non una (niente Champion *e* nie
 scrittore della pipeline `PersistMlDeflatedSharpeAsync` sembra non aver mai scritto nulla pur essendo
 i modelli quasi tutti chiamati `Pipeline <hash>`. È della famiglia dei gate senza soggetto: va
 misurato, non dedotto.
+
+#### Le due anomalie del collaudo, risolte in giornata
+
+**«164 modelli, nessun DSR» non era un guasto.** 50 candidati `Ml` sono stati regolarmente validati e
+**tutti bocciati** sull'holdout (Sharpe da −1,06 a −61,89); il DSR si calcola solo per chi supera quel
+primo esame, quindi non è mai esistito un numero da scrivere. Il difetto era **una frase**: il commento
+del metodo dichiarava di persistere il DSR «anche per i candidati scartati». Ora la **provenienza** si
+scrive anche senza numero e /registry mostra «scartato prima del gate» invece di un trattino ambiguo.
+**Il DSR resta null di proposito**: calcolarlo anche per gli scartati allargherebbe l'insieme che
+alimenta `GreyZone.IsGrey`, cioè ciò che può finire su una corsia — una correzione che sistema una
+colonna e apre una porta sul trading non è una correzione.
+
+**«Campagna 2 in WaitingForTrigger» era lo stato giusto, con una promessa sbagliata accanto.** I due
+bracci del trigger sono armati (regime nello snapshot + modello attivo su AAVE/USDT 1h; forecast
+presente), quindi la campagna può ripartire. Ma `AgentStateProbe` lo deduceva dal solo flag
+`RegimeTrigger:Enabled`: con entrambi i bracci ciechi avrebbe continuato a dire «un wake la rimette in
+rotazione da solo» di una campagna ferma per sempre. **Il rischio è nato oggi**: fino a stamattina il
+braccio volatilità scattava per l'errore di unità di [A5], quindi le sveglie arrivavano comunque e una
+cecità non si sarebbe vista. Ora il rilevatore dichiara l'armamento dei bracci e la sonda declassa a
+inerte, con la ragione.
+
+*Misura da rifare fra qualche giorno*: nei dieci giorni precedenti il ritmo era di ~6 run/giorno contro
+i 4 consentiti dal solo backoff. Se scende verso 4, l'eccedenza era davvero delle sveglie spurie.

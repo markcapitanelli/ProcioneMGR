@@ -2,6 +2,7 @@ using ProcioneMGR.Data;
 using ProcioneMGR.Services.Discovery;
 using ProcioneMGR.Services.Ensemble;
 using ProcioneMGR.Services.Exchanges;
+using ProcioneMGR.Services.Health;
 using ProcioneMGR.Services.Monitoring;
 using ProcioneMGR.Services.Pipeline;
 using ProcioneMGR.Services.Pipeline.Stages;
@@ -242,6 +243,87 @@ public class RevisioneAlgoritmi2026_08Tests
 
         Assert.Equal(ratioPrima, ratioDopo, precision: 12);
     }
+
+    // ------------------------- A5b: il trigger dichiara se i suoi bracci sanno esprimersi
+
+    private static AgentStateFacts AttesaDiTrigger(bool triggerAcceso, RegimeTriggerHealth? bracci) => new(
+        CampaignEnabled: true, CampaignsEnabled: 1, CampaignsRotating: 0, CampaignsWaitingForTrigger: 1,
+        RegimeTriggerEnabled: triggerAcceso, RegimeTriggerArms: bracci,
+        FleetEnabled: false, FleetDryRun: true, FleetExecutionImplemented: false, FleetAuthorizedLanes: 0,
+        FleetUseCommittee: false, FleetGovernedLanes: 5,
+        CommitteeEnabled: false, CommitteeProviders: 3, CommitteeProvidersWithKey: 3,
+        CommitteeMinValidVotes: 2, CommitteeVotesInWindow: 0, CommitteeWindowDays: 14,
+        DriftEnabled: false, DriftRetireChampionOnAlert: false, SavedModelCount: 164, ChampionCount: 0);
+
+    private static AgentState Campagne(AgentStateFacts f) =>
+        AgentStateProbe.Describe(f, new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc))
+            .Agents.Single(a => a.Name == "Campaign Planner");
+
+    [Fact]
+    public void A5b_TriggerAccesoMaEntrambiIBracciCiechi_ELaCampagnaEDichiarataFERMA()
+    {
+        // È il caso per cui la sonda esiste, ed è quello che prima superava: con l'interruttore
+        // acceso concludeva «un wake la rimette in rotazione da solo», qualunque cosa i bracci
+        // potessero fare. Una campagna in WaitingForTrigger con due bracci ciechi non riparte MAI.
+        var ciechi = new RegimeTriggerHealth(false, false,
+            ["braccio K-means cieco: nessun modello di regime ATTIVO per AAVE/USDT 1h",
+             "braccio volatilità cieco: il run di baseline non porta un forecast di volatilità"]);
+
+        var stato = Campagne(AttesaDiTrigger(triggerAcceso: true, ciechi));
+
+        Assert.Equal(AgentActivation.AccesoInerte, stato.Activation);
+        Assert.Contains("non arriverà mai", stato.Detail);
+        Assert.Contains("nessun modello di regime ATTIVO", stato.Detail);   // il PERCHÉ, non solo il verdetto
+    }
+
+    [Fact]
+    public void A5b_UnSoloBraccioArmato_RestaOperanteMaDiceQualeManca()
+    {
+        // Un braccio basta per ripartire: il verdetto resta «operante», ma non tace sull'altro —
+        // altrimenti la prima cecità si scoprirebbe solo il giorno in cui cade anche il secondo.
+        var soloVol = new RegimeTriggerHealth(false, true,
+            ["braccio K-means cieco: lo snapshot del run di baseline non porta un regime corrente"]);
+
+        var stato = Campagne(AttesaDiTrigger(triggerAcceso: true, soloVol));
+
+        Assert.Equal(AgentActivation.AccesoOperante, stato.Activation);
+        Assert.Contains("solo braccio volatilità", stato.Detail);
+        Assert.Contains("non porta un regime corrente", stato.Detail);
+    }
+
+    [Fact]
+    public void A5b_EntrambiArmati_EOperanteELoDichiara()
+    {
+        var stato = Campagne(AttesaDiTrigger(triggerAcceso: true, new RegimeTriggerHealth(true, true, [])));
+
+        Assert.Equal(AgentActivation.AccesoOperante, stato.Activation);
+        Assert.Contains("entrambi i bracci armati", stato.Detail);
+    }
+
+    [Fact]
+    public void A5b_ArmamentoNonInterrogato_NonSiDeduce()
+    {
+        // Null = «non l'ho chiesto». Dedurne un armamento sarebbe la stessa bugia di prima, spostata
+        // di un campo: si ricade sul vecchio giudizio, ma dichiarandolo.
+        var stato = Campagne(AttesaDiTrigger(triggerAcceso: true, bracci: null));
+
+        Assert.Equal(AgentActivation.AccesoOperante, stato.Activation);
+        Assert.Contains("non interrogato", stato.Detail);
+    }
+
+    [Fact]
+    public void A5b_TriggerSpento_RestaIlVerdettoPiuForte()
+    {
+        // L'interruttore spento vince sull'armamento: inutile parlare di bracci se nessuno chiede.
+        var stato = Campagne(AttesaDiTrigger(triggerAcceso: false, new RegimeTriggerHealth(true, true, [])));
+
+        Assert.Equal(AgentActivation.AccesoInerte, stato.Activation);
+        Assert.Contains("SPENTO", stato.Detail);
+    }
+
+    [Fact]
+    public void A5b_SenzaBaseline_NessunBraccioEArmato()
+        => Assert.False(RegimeTriggerHealth.NoBaseline.AnyArmArmed);
 
     [Fact]
     public void A5_ConLaScalaSbagliata_IlRamoCompressioneEraVeroPerAritmetica()

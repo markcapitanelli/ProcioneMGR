@@ -120,6 +120,18 @@ public class SavedMlModel
     public const string DsrSourcePipeline = "pipeline";
 
     /// <summary>
+    /// [M2b, 2026-08-20] Il modello è passato per la validazione della pipeline ed è stato
+    /// <b>scartato prima</b> di arrivare al gate DSR (tipicamente Sharpe holdout sotto soglia o
+    /// troppo pochi trade), quindi un Deflated Sharpe non è mai stato calcolato:
+    /// <see cref="DeflatedSharpe"/> resta null <i>di proposito</i>.
+    ///
+    /// <para>Esiste perché «nessun numero» e «numero mai misurato» sono due fatti diversi che la
+    /// colonna vuota confondeva. Al 2026-08-20 tutti i 164 modelli salvati erano nel primo caso e
+    /// /registry li mostrava come il secondo.</para>
+    /// </summary>
+    public const string DsrSourceRejectedBeforeGate = "pipeline:scartato";
+
+    /// <summary>
     /// [M2] Due DSR sono confrontabili solo se entrambi dichiarano il proprio N e i due N non
     /// differiscono di oltre un ordine di grandezza. Un DSR su 1 tentativo e uno su 800 non
     /// misurano la stessa cosa: il primo non è deflazionato affatto, e metterli in una
