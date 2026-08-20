@@ -34,6 +34,14 @@ public sealed class DecayMonitorOptions
 
     /// <summary>Sotto questa frazione di RealizedSharpe/ExpectedSharpe scatta l'alert (default 50%).</summary>
     public decimal AlertThresholdRatio { get; set; } = 0.5m;
+
+    /// <summary>
+    /// [M5b] Il tasso risk-free annuo con cui è stato calcolato lo Sharpe ATTESO
+    /// (<c>Statistics.SharpeRatio</c>, default 2%). Serve solo a quantificare in
+    /// <see cref="DecayReport.RiskFreeBiasSharpe"/> quanto il realizzato — che è LORDO — sia
+    /// lusingato rispetto all'atteso. Non viene sottratto a nulla: vedi il commento del campo.
+    /// </summary>
+    public decimal ExpectedRiskFreeRateAnnual { get; set; } = 0.02m;
 }
 
 public sealed class DecayReport
@@ -57,8 +65,33 @@ public sealed class DecayReport
     /// </summary>
     public decimal? RealizedTradeSharpe { get; set; }
 
-    /// <summary>RealizedSharpe - ExpectedSharpe.</summary>
+    /// <summary>RealizedSharpe - ExpectedSharpe. Vedi <see cref="RiskFreeBiasSharpe"/>: il delta NON è pulito.</summary>
     public decimal? SharpeDelta { get; set; }
+
+    /// <summary>
+    /// [M5b, 2026-08-20] Di quanti punti di Sharpe il <see cref="RealizedSharpe"/> è
+    /// <b>lusingato</b> rispetto all'<see cref="ExpectedSharpe"/> per la sola differenza di
+    /// convenzione sul tasso risk-free.
+    ///
+    /// <para>L'atteso nasce da <c>Statistics.SharpeRatio</c>, che sottrae un risk-free (default 2%
+    /// annuo); il realizzato è calcolato qui come mean/std × √(bucket/anno), <b>senza</b> alcun
+    /// termine di risk-free. Sono due Sharpe diversi, e il secondo è sistematicamente più alto di
+    /// rf/σ_annualizzata. La correzione M5 del 2026-08-19 aveva allineato la BASE TEMPORALE, non
+    /// il risk-free — e infatti il test di sanità, per far tornare i due numeri, deve passare
+    /// esplicitamente <c>riskFreeRateAnnual: 0</c> al lato atteso.</para>
+    ///
+    /// <para><b>Perché si dichiara invece di correggere.</b> Sottrarre lo stesso 2% al realizzato
+    /// sembrerebbe la mossa ovvia ed è sbagliata: le due serie non hanno la stessa base di
+    /// capitale. L'atteso viene da un'equity con posizioni a una frazione del capitale, il
+    /// realizzato da <c>PnlPercent</c>, cioè un rendimento sul nozionale (spot) o sul margine
+    /// (futures) della singola posizione. Applicare rf al secondo darebbe una correzione di
+    /// ampiezza sbagliata di circa un ordine di grandezza. Renderli davvero confrontabili richiede
+    /// di persistere la taglia con cui l'holdout è stato girato, che oggi non si salva: è un lavoro
+    /// a sé, non una riga. Finché non c'è, il numero si mostra e non si applica.</para>
+    ///
+    /// <para>Null quando non calcolabile (serie degenere o volatilità nulla).</para>
+    /// </summary>
+    public decimal? RiskFreeBiasSharpe { get; set; }
 
     /// <summary>RealizedSharpe / ExpectedSharpe (1 = in linea, &lt;0.5 = alert di default). Null se ExpectedSharpe non è positivo (il rapporto non è interpretabile).</summary>
     public decimal? SharpeRatio { get; set; }
@@ -153,6 +186,11 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
         // all'atteso, e la soglia del 50% scattava (o taceva) senza significato. Qui i trade
         // vengono proiettati sui bucket del timeframe (bucket senza trade = rendimento 0, come le
         // candele piatte dell'holdout) e annualizzati con la STESSA convenzione.
+        //
+        // [M5b, 2026-08-20] La base TEMPORALE è omogenea; il RISK-FREE no. L'atteso è netto di
+        // ExpectedRiskFreeRateAnnual, il realizzato qui sotto è lordo. Non si allinea sottraendo:
+        // le due serie non hanno la stessa base di capitale (vedi DecayReport.RiskFreeBiasSharpe).
+        // Si misura l'ampiezza del divario e la si dichiara, così il Delta non si legge come pulito.
         var (periodReturns, bucketsPerYear) = BuildPeriodReturns(window, timeframe);
         var realizedSharpe = AnnualizedSharpe(periodReturns, bucketsPerYear);
         var (tradeSharpe, realizedPf) = ComputeTradeMetrics(window);
@@ -161,6 +199,7 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
         report.RealizedTradeSharpe = tradeSharpe;
         report.RealizedProfitFactor = realizedPf;
         report.SharpeDelta = realizedSharpe - expected;
+        report.RiskFreeBiasSharpe = RiskFreeBias(periodReturns, bucketsPerYear, options.ExpectedRiskFreeRateAnnual);
 
         if (expected <= 0m)
         {
@@ -174,9 +213,16 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
         var ratio = realizedSharpe / expected;
         report.SharpeRatio = ratio;
         report.IsAlert = ratio < options.AlertThresholdRatio;
-        report.StatusMessage = report.IsAlert
+        // [M5b] Il divario di risk-free viaggia col verdetto: il realizzato è LORDO, l'atteso è
+        // netto, e il rapporto è quindi generoso di quella quantità. Dirlo qui è ciò che impedisce
+        // di leggere «in linea» come una misura pulita — regola 5, degradare dicendolo.
+        var bias = report.RiskFreeBiasSharpe is decimal b && b > 0.01m
+            ? FormattableString.Invariant(
+                $" Il realizzato è LORDO e l'atteso è netto di {options.ExpectedRiskFreeRateAnnual:P0}/anno: a parità di base di capitale il confronto lo favorisce di ~{b:F2} punti di Sharpe.")
+            : string.Empty;
+        report.StatusMessage = (report.IsAlert
             ? $"ALERT: Sharpe realizzato {realizedSharpe:F2} vs atteso {expected:F2} ({ratio:P0}) — sotto la soglia {options.AlertThresholdRatio:P0}."
-            : $"In linea: Sharpe realizzato {realizedSharpe:F2} vs atteso {expected:F2} ({ratio:P0}).";
+            : $"In linea: Sharpe realizzato {realizedSharpe:F2} vs atteso {expected:F2} ({ratio:P0}).") + bias;
         return report;
     }
 
@@ -211,7 +257,33 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
         return (returns, (decimal)ppy / k);
     }
 
-    /// <summary>Sharpe annualizzato mean/std × sqrt(bucket/anno), varianza di popolazione (coerente con Statistics.SharpeRatio). 0 se degenere.</summary>
+    /// <summary>
+    /// [M5b] Punti di Sharpe di cui il realizzato LORDO supera un realizzato calcolato con lo stesso
+    /// risk-free dell'atteso: rf_annuo / σ_annualizzata. È l'ampiezza del disallineamento di
+    /// convenzione, misurata sulla volatilità della serie realizzata stessa — non una correzione
+    /// da applicare (le due serie non condividono la base di capitale). Null se non calcolabile.
+    /// </summary>
+    internal static decimal? RiskFreeBias(IReadOnlyList<decimal> returns, decimal periodsPerYear, decimal riskFreeRateAnnual)
+    {
+        if (returns.Count < 2 || riskFreeRateAnnual <= 0m || periodsPerYear <= 0m) return null;
+        var mean = returns.Average();
+        decimal sumSq = 0m;
+        foreach (var r in returns)
+        {
+            var d = r - mean;
+            sumSq += d * d;
+        }
+        var stdDev = (decimal)Math.Sqrt((double)(sumSq / returns.Count));
+        if (stdDev <= 0m) return null;
+        var annualizedSigma = stdDev * (decimal)Math.Sqrt((double)periodsPerYear);
+        return annualizedSigma <= 0m ? null : riskFreeRateAnnual / annualizedSigma;
+    }
+
+    /// <summary>
+    /// Sharpe annualizzato mean/std × sqrt(bucket/anno), varianza di popolazione (coerente con
+    /// Statistics.SharpeRatio tranne che per il risk-free, che qui NON si sottrae — vedi
+    /// <see cref="DecayReport.RiskFreeBiasSharpe"/>). 0 se degenere.
+    /// </summary>
     private static decimal AnnualizedSharpe(IReadOnlyList<decimal> returns, decimal periodsPerYear)
     {
         if (returns.Count < 2) return 0m;

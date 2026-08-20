@@ -19,7 +19,7 @@
 @inject IIcFeatureSelector Selector
 @inject IFactorDriftAnalyzer DriftAnalyzer
 @inject IFactorIcHistoryStore IcHistory
-@inject IConfiguration Config
+@inject Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Alpha.FactorDriftOptions> DriftOptions
 @inject IAlphaFactorFactory Factory
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IJSRuntime JS
@@ -268,8 +268,9 @@
                     </span>
                 }
                 Il job calcola sulle ultime <strong>@_recordedMaxCandles.ToString("N0")</strong> candele
-                (tetto <code>FactorDrift:MaxCandles</code>): se qui sotto valuti un periodo più lungo, la
-                finestra proposta è più ampia e la soglia più bassa — stessa regola, campione diverso.
+                (tetto <code>FactorDrift:MaxCandles</code>, regolabile in
+                <a href="admin/autonomy#p-factordrift">Autonomia</a>): se qui sotto valuti un periodo più
+                lungo, la finestra proposta è più ampia e la soglia più bassa — stessa regola, campione diverso.
             </div>
             <div class="form-text mt-2">
                 Ultimo calcolo del job: <strong>@_recorded.ComputedAtUtc.ToString("yyyy-MM-dd HH:mm") UTC</strong>
@@ -561,8 +562,10 @@
         }
         catch (JsonException) { _lastHoldout = null; }
 
-        _recordedIntervalHours = Math.Max(1, Config.GetValue("FactorDrift:IntervalHours", 12));
-        _recordedMaxCandles = Math.Clamp(Config.GetValue("FactorDrift:MaxCandles", 20_000), 1_000, 200_000);
+        // [M1] Dallo stesso POCO che governa il worker, non da due letture parallele della stessa
+        // chiave: le manopole stanno in /admin/autonomy, qui si mostra soltanto cosa è in vigore.
+        _recordedIntervalHours = DriftOptions.CurrentValue.EffectiveIntervalHours();
+        _recordedMaxCandles = DriftOptions.CurrentValue.EffectiveMaxCandles();
         await LoadRecordedAsync();
     }
 

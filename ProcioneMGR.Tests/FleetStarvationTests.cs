@@ -442,4 +442,32 @@ public sealed class FleetStarvationTests
         Assert.True(FleetOrchestratorWorker.RetirementArmImplemented);
         Assert.False(FleetOrchestratorWorker.AssignmentArmImplemented);
     }
+
+    /// <summary>
+    /// [revisione algoritmi 2026-08-20] <b>Il dedup vale anche FRA un tick e l'altro.</b>
+    ///
+    /// <para>La prima versione accorpava le proposte con la stessa identità dentro un tick, e
+    /// bastava a non mandare quaranta notifiche insieme. Ma «già gestito» era per RUN: il giorno dopo
+    /// un run NUOVO con la stessa coppia strategia/serie/parametri tornava a proporsi come se fosse
+    /// la prima volta. È il meccanismo che aveva prodotto le <b>91 proposte per sei cose distinte</b>
+    /// misurate il 2026-08-19 — quello dentro il tick non lo tocca.</para>
+    ///
+    /// <para>Qui l'identità eredita lo stato: se anche uno dei run che la portano è già stato
+    /// gestito, lo sono tutti.</para>
+    /// </summary>
+    [Fact]
+    public void UnIdentitaGiaGestita_NonSiRipropone_NemmenoDaUnRunNuovo()
+    {
+        var gestito = GreyRun("Ema|ADA/USDT|4h|p=1", ageDays: 5) with { AlreadyHandled = true };
+        var nuovoStessaCosa = GreyRun("Ema|ADA/USDT|4h|p=1", ageDays: 1);   // run diverso, identità uguale
+        var nuovoAltraCosa = GreyRun("Rsi|BTC/USDT|1h|p=1", ageDays: 1);
+
+        // Il lettore marca per identità; qui si simula il suo esito e si verifica la decisione.
+        var comeIlLettore = new[] { gestito, nuovoStessaCosa with { AlreadyHandled = true }, nuovoAltraCosa };
+        var proposte = FleetOrchestrator.Decide(WithCandidates(comeIlLettore), Options())
+            .Actions.OfType<ProposeGreyCandidate>().ToList();
+
+        var sola = Assert.Single(proposte);
+        Assert.Equal(nuovoAltraCosa.RunId, sola.RunId);
+    }
 }

@@ -261,6 +261,11 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
             InitialCapital = ctx.InitialCapital,
             CommissionPercent = costs.FeePercent,
             SlippagePercent = costs.SlippagePercent,
+            // [M3, 2026-08-20] La terza manopola dei costi era DICHIARATA qui (PipelineCosts.
+            // ParameterDefinitions la espone da R2) e non propagata: la selezione girava a funding
+            // zero mentre la validazione applicava 0,01%/8h. Una manopola visibile che non fa
+            // niente è la classe di difetto del Filone E; e l'asimmetria premiava i long-biased.
+            FundingRatePercentPer8h = costs.FundingRatePercentPer8h,
             TopN = config.GetInt("topN", 15),
             WalkForward = new WalkForwardConfiguration
             {
@@ -325,7 +330,36 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     ];
 
     public string? ValidateInput(PipelineContext ctx)
-        => ctx.Candidates.Count == 0 ? "Nessun candidato da validare (Discovery/MlTraining non hanno prodotto candidati)." : null;
+    {
+        if (ctx.Candidates.Count == 0)
+        {
+            return "Nessun candidato da validare (Discovery/MlTraining non hanno prodotto candidati).";
+        }
+
+        // [A2, 2026-08-20] Il PBO di pannello di questo stage confronta gli Sharpe PER BARRA dei
+        // candidati su partizioni costruite per INDICE, non per data. È corretto solo se tutte le
+        // serie hanno la stessa granularità: con timeframe misti nello stesso pannello, «la barra
+        // i-esima» significa istanti diversi per candidati diversi e il verdetto — che è BLOCCANTE
+        // sull'intero batch — poggia su un confronto che non ha un asse comune. L'ipotesi era
+        // implicita e non scritta da nessuna parte; ora è un rifiuto esplicito PRIMA di spendere il
+        // run, non un numero prodotto lo stesso. Le campagne reali sono già tutte a timeframe
+        // singolo, quindi nessun run esistente cambia: si fissa un vincolo, non un comportamento.
+        //
+        // Resta aperto l'altro mezzo difetto, che questo gate non copre: a parità di timeframe le
+        // serie possono comunque avere lunghezze diverse (listing recenti, buchi di ingestione) e
+        // il PBO tronca alla più corta. Quello si chiude allineando il pannello per DATA invece che
+        // per indice, e va misurato su un run archiviato prima di cambiare un numero che blocca un
+        // batch: qui sotto, intanto, il troncamento viene DICHIARATO nel log del run.
+        var timeframes = ctx.Universe.Select(u => u.Timeframe).Distinct().ToList();
+        if (timeframes.Count > 1)
+        {
+            return $"Universo a timeframe MISTI ({string.Join(", ", timeframes.OrderBy(t => t))}): il PBO di pannello "
+                 + "confronta Sharpe per barra su partizioni per indice, e con granularità diverse le barre non sono "
+                 + "confrontabili. Usa una configurazione per timeframe (è ciò che fanno già le campagne).";
+        }
+
+        return null;
+    }
 
     public async Task ExecuteAsync(PipelineContext ctx, StageConfig config, CancellationToken ct)
     {
@@ -416,11 +450,21 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         }
         if (byModelId.Count == 0) return;
 
+        // [M2, 2026-08-20] Insieme al numero si scrive con QUANTI tentativi è stato deflazionato e
+        // da quale percorso viene. Senza, la colonna resta un valore senza unità: l'altro scrittore
+        // (/ml) mette lì un DSR a N=1 — cioè un PSR, non deflazionato — e il registry li confronta.
+        // È l'N EFFETTIVO del gate (nominale × collasso dei correlati), lo stesso che ha prodotto il
+        // numero: usare il nominale direbbe una deflazione più severa di quella applicata.
+        var trials = ctx.DsrEffectiveTrials > 0 ? ctx.DsrEffectiveTrials : (int?)null;
+
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         foreach (var (id, dsr) in byModelId)
         {
             var model = await db.SavedMlModels.FirstOrDefaultAsync(m => m.Id == id, ct);
-            if (model is not null) model.DeflatedSharpe = dsr;
+            if (model is null) continue;
+            model.DeflatedSharpe = dsr;
+            model.DeflatedSharpeTrials = trials;
+            model.DeflatedSharpeSource = SavedMlModel.DsrSourcePipeline;
         }
         await db.SaveChangesAsync(ct);
     }
@@ -782,6 +826,22 @@ public static class OverfittingGate
         var panel = holdoutReturns.Where(r => r.Length >= 10).Select(r => (IReadOnlyList<double>)r).ToList();
         if (panel.Count >= 2)
         {
+            // [A2, 2026-08-20] Il CSCV taglia tutte le serie alla più corta. Non è un dettaglio
+            // interno: se un candidato ha una serie molto più breve (listing recente, buco di
+            // ingestione), il verdetto sull'INTERO pannello — che può azzerare il batch — poggia su
+            // quella frazione di finestra, e per giunta le serie lunghe vengono troncate in CODA
+            // mentre la corta copre un altro tratto di calendario. Finché il pannello non sarà
+            // allineato per DATA (lavoro a sé: cambia il numero su ogni configurazione, va misurato
+            // su un run archiviato prima), il minimo onesto è dire quanto si sta buttando via.
+            var minLen = panel.Min(p => p.Count);
+            var maxLen = panel.Max(p => p.Count);
+            if (minLen < maxLen)
+            {
+                log?.Invoke(
+                    $"PBO di pannello: serie di lunghezza disomogenea ({minLen}..{maxLen} barre), il CSCV le tronca a {minLen} "
+                    + $"— il verdetto poggia sul {(double)minLen / maxLen:P0} della finestra più lunga, allineato per indice e non per data.");
+            }
+
             try { panelPbo = BacktestOverfitting.ProbabilityOfOverfitting(panel, partitions: 10).ProbabilityOfBacktestOverfitting; }
             catch (ArgumentException) { panelPbo = null; } // serie troppo corte per le partizioni
         }

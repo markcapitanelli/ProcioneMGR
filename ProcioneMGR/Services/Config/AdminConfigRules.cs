@@ -231,6 +231,17 @@ public static class AdminConfigRules
             (o.Thresholds.MinObservations >= 20,
                 "Servono almeno 20 osservazioni per lato perché un test di distribuzione significhi qualcosa.")),
 
+        // [M1] Deriva dei fattori alpha. I limiti sono quelli che il worker applicava in silenzio a
+        // ogni lettura (Math.Max/Math.Clamp): dirli al salvataggio è meglio che correggerli dopo,
+        // perché un valore fuori scala salvato e poi silenziosamente ricondotto è un pannello che
+        // mostra un numero e ne applica un altro.
+        ProcioneMGR.Services.Alpha.FactorDriftOptions o => Check(
+            (o.IntervalHours >= 1, "L'intervallo del monitor dev'essere almeno 1 ora."),
+            (o.MaxSeries is >= 1 and <= 30,
+                "Serie per giro fra 1 e 30: sopra, un giro può saturare il database condiviso; sotto, non guarda niente."),
+            (o.MaxCandles is >= 1_000 and <= 200_000,
+                "Candele per serie fra 1.000 e 200.000: sotto, l'information coefficient è rumore; sopra, il costo del giro esplode.")),
+
         NotificationOptions o => Check(
             (o.Provider is "Logging" or "Telegram", "Provider ammessi: Logging oppure Telegram."),
             (o.MaxPerHour >= 1, "Il rate-limit dev'essere almeno 1 messaggio all'ora."),

@@ -52,9 +52,16 @@ public class ModelRegistryTests : IAsyncDisposable
         return user.Id;
     }
 
+    /// <param name="dsrTrials">
+    /// [M2, 2026-08-20] Con quanti tentativi il DSR è stato deflazionato. Default 500, cioè il
+    /// profilo di un DSR prodotto dalla pipeline: il gate «batti l'incumbent» ora confronta solo
+    /// grandezze omogenee, e lasciare questo campo a null renderebbe ogni confronto un rifiuto.
+    /// I casi che vogliono provare proprio il rifiuto lo passano esplicitamente.
+    /// </param>
     private static async Task<int> AddModelAsync(
         IDbContextFactory<ApplicationDbContext> factory, string userId,
-        string symbol, string timeframe, double? deflatedSharpe, ModelStage stage = ModelStage.Staging)
+        string symbol, string timeframe, double? deflatedSharpe, ModelStage stage = ModelStage.Staging,
+        int? dsrTrials = 500, string? dsrSource = SavedMlModel.DsrSourcePipeline)
     {
         await using var db = await factory.CreateDbContextAsync();
         var model = new SavedMlModel
@@ -62,6 +69,8 @@ public class ModelRegistryTests : IAsyncDisposable
             UserId = userId, Name = $"m_{Guid.NewGuid():N}", ModelType = "Linear",
             Symbol = symbol, Timeframe = timeframe, FactorsJson = "[]", ModelBytes = new byte[] { 1 },
             DeflatedSharpe = deflatedSharpe, Stage = stage,
+            DeflatedSharpeTrials = deflatedSharpe is null ? null : dsrTrials,
+            DeflatedSharpeSource = deflatedSharpe is null ? null : dsrSource,
             PromotedAtUtc = stage == ModelStage.Champion ? DateTime.UtcNow : null,
         };
         db.SavedMlModels.Add(model);
@@ -154,6 +163,73 @@ public class ModelRegistryTests : IAsyncDisposable
         Assert.Equal(better, champions[0].Id);
         var demoted = await db.SavedMlModels.FindAsync(oldChamp);
         Assert.Equal(ModelStage.Retired, demoted!.Stage); // il vecchio è Retired
+    }
+
+    /// <summary>
+    /// [M2, 2026-08-20] Il caso che il gate esiste per fermare: un modello salvato da /ml con DSR
+    /// 0,97 su UN solo tentativo — cioè non deflazionato affatto, e per giunta su un backtest senza
+    /// slippage né funding — contro un Champion validato dalla pipeline con DSR 0,60 su 800
+    /// tentativi coi costi pieni. «0,97 &gt; 0,60» sembra un verdetto numerico: è un modello giudicato
+    /// col metro generoso che scavalca uno giudicato col metro severo, e il premio sono i segnali
+    /// che alimentano MlStrategy.
+    /// </summary>
+    [Fact]
+    public async Task Promote_DsrConNDiversiDiUnOrdineDiGrandezza_ERifiutato()
+    {
+        var f = await BuildFactoryAsync();
+        var user = await SeedUserAsync(f);
+        var champ = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.60, ModelStage.Champion,
+            dsrTrials: 800, dsrSource: SavedMlModel.DsrSourcePipeline);
+        var mlLab = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.97,
+            dsrTrials: 1, dsrSource: SavedMlModel.DsrSourceMlLab);
+        var registry = NewRegistry(f);
+
+        var outcome = await registry.TryPromoteToChampionAsync(mlLab);
+
+        Assert.False(outcome.Promoted, outcome.Reason);
+        Assert.Contains("non confrontabili", outcome.Reason);
+        Assert.Contains("800", outcome.Reason);
+        Assert.Contains(SavedMlModel.DsrSourceMlLab, outcome.Reason);
+        Assert.Equal(champ, (await registry.GetChampionAsync("BTCUSDT", "1h"))!.Id);
+    }
+
+    /// <summary>
+    /// [M2] Le righe scritte prima che la provenienza venisse registrata hanno N ignoto: di quel
+    /// numero non si sa con che metro è stato fatto, quindi non entra in una disuguaglianza.
+    /// Fail-closed, e il messaggio dice come rimediare.
+    /// </summary>
+    [Fact]
+    public async Task Promote_ConNNonDichiarato_ERifiutato()
+    {
+        var f = await BuildFactoryAsync();
+        var user = await SeedUserAsync(f);
+        await AddModelAsync(f, user, "BTCUSDT", "1h", 0.60, ModelStage.Champion, dsrTrials: 800);
+        var storico = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.95, dsrTrials: null, dsrSource: null);
+        var registry = NewRegistry(f);
+
+        var outcome = await registry.TryPromoteToChampionAsync(storico);
+
+        Assert.False(outcome.Promoted, outcome.Reason);
+        Assert.Contains("NON dichiarato", outcome.Reason);
+    }
+
+    /// <summary>
+    /// [M2] Il gate nuovo non deve mordere quando NON c'è un incumbent: senza Champion in carica
+    /// non c'è alcun confronto da rifiutare, e un modello con N ignoto resta promuovibile come prima.
+    /// Senza questo caso, la correzione avrebbe potuto bloccare la prima promozione in assoluto.
+    /// </summary>
+    [Fact]
+    public async Task Promote_SenzaIncumbent_NonRichiedeLaProvenienza()
+    {
+        var f = await BuildFactoryAsync();
+        var user = await SeedUserAsync(f);
+        var id = await AddModelAsync(f, user, "BTCUSDT", "1h", 0.97, dsrTrials: null, dsrSource: null);
+        var registry = NewRegistry(f);
+
+        var outcome = await registry.TryPromoteToChampionAsync(id);
+
+        Assert.True(outcome.Promoted, outcome.Reason);
+        Assert.Equal(id, (await registry.GetChampionAsync("BTCUSDT", "1h"))!.Id);
     }
 
     [Fact]

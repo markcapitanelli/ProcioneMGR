@@ -71,10 +71,12 @@
   },
   "EnsembleComparator": {
     "_comment": "Confronto oggettivo 'nuovo ensemble vs corrente' per la ri-applica automatica. MinSharpeImprovementPercent e' l'hysteresis: sotto questa soglia di miglioramento l'ensemble corrente resta (niente cambi per rumore).",
+    "_comment_z": "[A4 2026-08-20] MinSharpeSignificanceZ si legge INSIEME alla finestra di holdout: il campione del test e' la durata, non il conteggio trade, e z = DeltaSharpe x radice(anni). Con holdout 4 mesi: z 0,25 => Delta >= 0,43; z 0,35 => >= 0,61 (in vigore); z 0,50 => >= 0,87; z 1,00 => >= 1,73, che con questa finestra chiude di fatto la sostituzione per Sharpe. 0 = gate spento.",
     "MinSharpeImprovementPercent": 10,
     "MinRiskFactorImprovementPercent": 15,
     "MinLegs": 2,
-    "MinDistinctSymbols": 2
+    "MinDistinctSymbols": 2,
+    "MinSharpeSignificanceZ": 0.35
   },
   "AutoReapply": {
     "_comment": "Ri-applica automatica dell'ensemble migliore trovato dai run schedulati. Enabled=true: lo scheduler, dopo ogni run schedulato completato, se il nuovo ensemble batte il corrente (comparatore con hysteresis) E il supervisore non pone veto, lo schiera da solo sulle corsie in Paper. Scrive solo configurazione: mai avvia trading, mai Live.",

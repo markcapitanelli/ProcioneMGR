@@ -14,11 +14,19 @@
 <GuidaPanel Title="Campaign Planner — cosa fare DOPO un run, deciso dalla piattaforma">
     <p>
         Una campagna è un elenco <strong>ordinato</strong> di configurazioni di caccia che il planner
-        ruota da solo: <em>0 sopravvissuti</em> → prossima config (con backoff, la stessa non si ripete
-        prima di N ore); <em>sopravvissuti</em> → l'ensemble passa dalla <strong>stessa catena</strong>
-        della ri-applica automatica (supervisore AI con veto + isteresi) e, se schierato, la rotazione
-        si ferma e la campagna va in <strong>osservazione</strong>; rotazione esaurita → la campagna
-        aspetta un <strong>trigger contestuale</strong> (cambio regime/volatilità) o l'operatore.
+        ruota da solo: <em>nessuna gamba schierabile</em> → prossima config (con backoff, la stessa non
+        si ripete prima di N ore); <em>almeno una gamba</em> → l'ensemble passa dalla
+        <strong>stessa catena</strong> della ri-applica automatica (supervisore AI con veto + isteresi)
+        e, se schierato, la rotazione si ferma e la campagna va in <strong>osservazione</strong>;
+        rotazione esaurita → la campagna aspetta un <strong>trigger contestuale</strong>
+        (cambio regime/volatilità) o l'operatore.
+    </p>
+    <p class="small text-muted">
+        <strong>Gambe ≠ sopravvissuti.</strong> Il planner conta le gambe che l'ensemble ha davvero
+        assemblato: i sopravvissuti pieni all'holdout vengono troncati al numero massimo di gambe, e i
+        posti liberi possono essere riempiti con candidati di <strong>fascia grigia</strong>. Un
+        ensemble di sole gambe grigie ha <em>zero</em> sopravvissuti pieni: l'esito lo dichiara,
+        così non si legge come un successo pieno.
     </p>
     <dl class="row mb-0">
         <dt class="col-sm-3">Doppio gate</dt>
@@ -224,12 +232,16 @@
         _ => status,
     };
 
+    // [M6, 2026-08-20] Le etichette dicono GAMBE, perché è ciò che il planner conta: i sopravvissuti
+    // pieni sono un altro numero, e l'assemblaggio può riempire i posti liberi con la fascia grigia.
+    // Il codice persistito "NoSurvivors" resta com'è — le righe già scritte non si riscrivono per
+    // una parola — ma la traduzione mostrata all'operatore non promette più un dato non misurato.
     private static string OutcomeLabel(string? outcome) => outcome switch
     {
         null => "—",
-        "NoSurvivors" => "0 sopravvissuti",
+        "NoSurvivors" => "nessuna gamba",
         "Applied" => "✅ schierato",
-        "NotApplied" => "sopravvissuti ma non schierato",
+        "NotApplied" => "gambe proposte, non schierate",
         "Failed" => "❌ run fallito",
         _ => outcome,
     };

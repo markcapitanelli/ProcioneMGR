@@ -134,6 +134,7 @@ switch (phase)
     case "pipeconfig": await PipeConfigAsync(); break;
     case "regimepersistence": await RegimePersistenceAsync(); break;
     case "carrynow": await CarryNowAsync(); break;
+    case "carrycapacity": await CarryCapacityAsync(args.Length > 1 ? args[1] : "all"); break;
     case "jumpmodel": await JumpModelAsync(
         args.Length > 1 ? args[1] : "BTC/USDT",
         args.Length > 2 ? args[2] : "1h",
@@ -1836,6 +1837,105 @@ async Task CarryNowAsync()
 
     Console.WriteLine("\nHold = il funding non paga abbastanza per aprire; Open = il worker Paper sta simulando l'apertura.");
     Console.WriteLine("È la STESSA funzione pura del worker: stessi input ⇒ stessa decisione dell'app in esecuzione.");
+}
+
+
+// =================================================================================================
+// [I16 ≡ F12] CAPACITA' E UNIVERSO DEL CARRY.
+//
+// Il carry e' l'unica classe con edge misurato positivo e l'unica che opera davvero — ed era l'unica
+// che nessuno stava dimensionando, mentre il basis si comprime. Questa fase misura tre cose insieme:
+//   1. il PREMIO per simbolo e per anno, dai sette anni di funding reale;
+//   2. il PAREGGIO: quanti giorni servono a ripagare un round trip, alla soglia in vigore;
+//   3. la CURVA DI CAPACITA': che cosa resta del netto al crescere della taglia (legge √-Almgren).
+//
+// Il premio e' MISURATO. La capacita' e' MODELLATA: il coefficiente d'impatto e' dichiarato
+// illustrativo nel repo e non e' calibrato su fill veri. Le due cose non hanno lo stesso statuto e
+// vanno lette diversamente — dirlo fa parte del risultato.
+// =================================================================================================
+async Task CarryCapacityAsync(string quale)
+{
+    string[] tutti = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+    var symbols = quale == "all" ? tutti : [quale.ToUpperInvariant()];
+
+    var baseCfg = new ProcioneMGR.Services.Carry.CarryConfiguration
+    {
+        InitialCapital = 10_000m, PositionSizePercent = 50m,
+        EnterAnnualFundingPercent = 5m, ExitAnnualFundingPercent = 2m,
+        TrailingFundingEvents = 9, FundingEventsPerDay = 3,
+        SpotFeePercent = 0.1m, PerpFeePercent = 0.05m, SlippagePercent = 0.03m,
+    };
+    decimal[] soglie = [3m, 5m, 8m, 12m, 20m];
+    decimal[] taglie = [100_000m, 1_000_000m, 5_000_000m, 20_000_000m, 100_000_000m];
+
+    Console.WriteLine("=== [I16/F12] CAPACITA' E UNIVERSO DEL CARRY ===\n");
+
+    var costoRoundTrip = 2m * (baseCfg.SpotFeePercent + baseCfg.SlippagePercent)
+                       + 2m * (baseCfg.PerpFeePercent + baseCfg.SlippagePercent);
+    Console.WriteLine($"Costo di un round trip (4 fill, 2 gambe, slippage base): {costoRoundTrip:F3}% del nozionale.");
+    foreach (var premio in new[] { 3m, 5m, 8m, 12m, 20m })
+    {
+        var gg = ProcioneMGR.Services.Carry.CarryCapacityAnalyzer.BreakEvenDays(premio, baseCfg);
+        Console.WriteLine($"  a {premio,5:F0}% annualizzato servono {gg,6:F1} giorni in posizione solo per PAREGGIARE");
+    }
+    Console.WriteLine();
+
+    await using var db = await dbFactory.CreateDbContextAsync();
+
+    foreach (var sym in symbols)
+    {
+        var punti = await db.SentimentMetricPoints.AsNoTracking()
+            .Where(p => p.Source == ProcioneMGR.Data.SentimentMetricSources.BinanceFutures
+                        && p.Metric == ProcioneMGR.Data.SentimentMetrics.FundingRate && p.Symbol == sym)
+            .OrderBy(p => p.TimestampUtc)
+            .Select(p => new { p.TimestampUtc, p.Value })
+            .ToListAsync();
+        if (punti.Count < 100) { Console.WriteLine($"{sym}: solo {punti.Count} eventi, salto.\n"); continue; }
+
+        var funding = punti
+            .Select(p => new ProcioneMGR.Services.Backtesting.FundingRatePoint(p.TimestampUtc, p.Value))
+            .ToList();
+
+        // ADV degli ultimi 90 giorni: la scala di liquidita' di OGGI. Il premio invece e' storico —
+        // la curva mescola quindi due epoche, e va detto. Per questo si stampa anche il periodo.
+        var da = DateTime.UtcNow.AddDays(-90);
+        var adv = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == sym + "/USDT" && c.Timeframe == "1d" && c.TimestampUtc >= da)
+            .Select(c => c.Volume * c.Close)
+            .ToListAsync();
+        var advMedio = adv.Count > 0 ? adv.Average() : 0m;
+
+        Console.WriteLine($"--- {sym} ---");
+        Console.WriteLine($"  funding: {funding.Count} eventi dal {funding[0].TimestampUtc:yyyy-MM-dd} al {funding[^1].TimestampUtc:yyyy-MM-dd}");
+        Console.WriteLine($"  ADV (90gg): {advMedio:N0} USDT/giorno");
+        if (advMedio <= 0m) { Console.WriteLine("  nessun ADV: curva di capacita' NON calcolabile.\n"); continue; }
+
+        // Il periodo RECENTE e' quello che conta per decidere adesso: l'ADV e' di oggi.
+        var recenti = funding.Where(f => f.TimestampUtc >= DateTime.UtcNow.AddDays(-365)).ToList();
+
+        foreach (var (etichetta, serie) in new[] { ("ultimi 365 giorni", recenti), ("storia intera", funding) })
+        {
+            if (serie.Count < 50) continue;
+            var curva = ProcioneMGR.Services.Carry.CarryCapacityAnalyzer.Sweep(
+                serie, baseCfg, advMedio, taglie, soglie);
+            if (curva.Count == 0) continue;
+
+            Console.WriteLine($"\n  [{etichetta}]  soglia | taglia/gamba | slip% | netto ann.% | episodi | trade/mese | mediana gg | in pos.%");
+            foreach (var pt in curva.OrderBy(c => c.EnterThresholdPercent).ThenBy(c => c.NotionalUsd))
+            {
+                Console.WriteLine($"          {pt.EnterThresholdPercent,6:F0} | {pt.NotionalUsd,12:N0} | {pt.SlippagePercent,5:F3} | "
+                                + $"{pt.NetAnnualizedPercent,11:F2} | {pt.Episodes,7} | {pt.TradesPerMonth,10:F2} | {pt.MedianHoldDays,10:F1} | {pt.TimeInPositionPercent,8:F1}");
+            }
+            Console.WriteLine($"\n  VERDETTO ({etichetta}): {ProcioneMGR.Services.Carry.CarryCapacityAnalyzer.Verdict(curva, baseCfg.EnterAnnualFundingPercent)}");
+        }
+        Console.WriteLine();
+    }
+
+    Console.WriteLine("Il PREMIO e' misurato (funding reale). La CAPACITA' e' MODELLATA: il coefficiente");
+    Console.WriteLine("d'impatto e' illustrativo e non calibrato su fill veri — la curva dice la FORMA,");
+    Console.WriteLine("non il livello. E l'ADV e' di oggi mentre il funding e' storico: sulla storia intera");
+    Console.WriteLine("la capacita' e' quindi misurata con la liquidita' sbagliata, ed e' per questo che la");
+    Console.WriteLine("riga da guardare per decidere adesso e' quella degli ultimi 365 giorni.");
 }
 
 // Riassunto leggibile di una spec Composite dai suoi parametri decimali.

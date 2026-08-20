@@ -1205,7 +1205,7 @@ di dire di no e di dichiarazione di copertura.**
 | I13 | **Freno per gamba: prima la misura, poi l'azione** — (a) l'avviso di deriva esteso alle **gambe attive** (oggi una gamba disattivata continua a operare fino al riavvio della corsia e nessuno lo dice); (b) pannello di sola lettura sui trade veri; (c) **condizionato** all'esito di (b), freno dove si applica `mayOpen`, mai un `continue` che lasci posizioni orfane | **(a)+(b) FATTI**, (c) sospeso in attesa della misura | **il gate di (b) può chiudere il filone e va bene così**: a 2-6 trade/mese «≥20 trade sul simbolo attuale» può dare zero gambe misurabili — allora il pannello lo dice e (c) non si fa. L1 il riferimento indipendente **esiste già in repo** |
 | I14 | **`PairCandidate` + `PairSpreadWindow` col loro lettore** — indice derivato dagli 86 artefatti mai letti, sul progetto di `ResearchCandidateIndex`; storia dello spread sul pattern `FactorIcWindows`; pannello in `/pairs-trading`. Sola lettura, nessuna decisione automatica | **FATTO** | **L2 decisivo**: su due random walk indipendenti il monitor non deve **mai** dichiarare cointegrazione; su una relazione piantata deve trovarla. L1 il rebuild combacia con l'aggregato SQL sugli artefatti |
 | I15 | **Corpus notizie esentato dalla purge + riga nel guardiano di profondità** (decisione del proprietario); da spenta la riga resta **misurata** e mostrata come «non sorvegliata», mai un OK finto | **FATTO** | L1 profondità e conteggio combaciano col `SELECT` a mano; L2 corpus profondo ⇒ il guardiano tace per tre giri |
-| I16 ≡ F12 | **Capacità e universo del carry**: l'unica classe con edge misurato positivo, l'unica che opera oggi, l'unica che nessuno sta dimensionando — mentre il basis è in compressione | aperto | **report con verdetto scritto anche se è «la soglia attuale è già ottima»**; trade/mese e durata mediana dichiarati |
+| I16 ≡ F12 | **Capacità e universo del carry**: l'unica classe con edge misurato positivo, l'unica che opera oggi, l'unica che nessuno sta dimensionando — mentre il basis è in compressione | **FATTO** (verdetto NEGATIVO, vedi `docs/audit/30_CARRY_CAPACITA_2026-08.md`) | **report con verdetto scritto anche se è «la soglia attuale è già ottima»**; trade/mese e durata mediana dichiarati |
 
 
 ### Fase 3 e Fase 4 eseguite (2026-08-19) — I11 e I12
@@ -1314,6 +1314,43 @@ senza una data è un'informazione a metà.
 > ALERT» su gambe con un solo trade: la classe «controllo che rassicura» al contrario — allarmare su
 > un numero che non esiste.
 
+
+
+### Fase 6 (2026-08-20) — I16 ≡ F12: il carry misurato, e il verdetto è negativo
+
+Report completo: **`docs/audit/30_CARRY_CAPACITA_2026-08.md`**.
+Riproducibile: `dotnet run --project tools/PlatformExpand -- carrycapacity all`.
+
+**Negli ultimi 365 giorni il carry non è profittevole su nessuno dei sei mercati, a nessuna soglia
+che apra e a nessuna taglia.** Non è una questione di parametri: il premio non c'è più.
+
+La compressione, misurata sui nostri 42.644 eventi di funding reale: la frazione di tempo in cui il
+funding paga abbastanza per aprire è passata dall'**82,6% del 2021** al **19,9% del 2026** — e nel
+2026 si è **negativo il 35,9% del tempo**. Il benchmark esterno della roadmap (basis 25% → <5% in due
+anni) è confermato e superato.
+
+**Il numero che spiega tutto è il pareggio.** Un round trip costa 0,420% del nozionale (quattro fill,
+due gambe). A 5% annualizzato si incassano 0,0137% al giorno: servono **30,7 giorni in posizione solo
+per non perdere**. La durata mediana degli episodi misurata è di 3-14 giorni su quattro mercati su
+sei — si paga il round trip più volte di quante lo si ripaghi.
+
+Ne segue che **la soglia a 5% era sbagliata anche negli anni buoni**: sulla storia intera l'ottimo è
+12-20% su tutti e sei, e a 5% si lasciano da 1,5 a 14 punti di netto annualizzato. E la **capacità**,
+quando l'edge c'era, era di **1-5 milioni per gamba** su BTC/ETH, un milione su SOL/XRP, centomila su
+DOGE — un vincolo da conoscere prima di dimensionare.
+
+**Due difetti trovati dalla misura stessa, entrambi della classe già bonificata in questa ondata.**
+Il primo: il verdetto presentava come «soglia migliore» una soglia che *non apre mai*, perché su un
+periodo in perdita lo zero batte tutto — cioè incoronava l'astenersi. Il secondo: quando la migliore
+soglia perde, la frase «non c'è niente da cambiare» contraddiceva quella immediatamente precedente.
+Entrambi corretti, entrambi con il loro test.
+
+**Non si propone nulla di automatico.** Il carry Paper resta acceso: produce osservazioni a costo
+zero ed è la sorgente che dirà se e quando il premio torna.
+
+> **Un limite dichiarato**: solo Binance. Bitget — l'unico exchange a leva utilizzabile da IT/UE dopo
+> la restrizione MiCA — non ha storia di funding in questo database. Il premio potrebbe esservi
+> diverso, e non lo sappiamo.
 
 ### Fase 5 (2026-08-19) — I15 fatto, I14 a metà
 
@@ -1681,3 +1718,66 @@ condivisi e oggi **entrambi senza tetto vero**. È il motivo per cui stanno in F
 periodici vivono nel processo locale avviato al logon. La copertura è **uptime dell'host**, non
 «sessioni di lavoro» — ma la gamba di riparazione del watchdog passa da `run-postgres.ps1`, che muore
 col cluster giù, cioè proprio quando il watchdog scatta.
+
+---
+
+## Revisione di tutti gli algoritmi (2026-08-20) — le undici decisioni, CHIUSE
+
+Richiesta del proprietario: rivedere **tutti** gli algoritmi, non solo quelli dell'ondata di
+integrazione, controllando anche integrazione e configurabilità da UI. Il metodo e i risultati stanno
+in `docs/audit/31_REVISIONE_ALGORITMI_2026-08.md`; qui resta ciò che è stato **deciso** e ciò che
+resta aperto.
+
+Il difetto grave — il backtest validava una strategia e il motore vivo ne operava un'altra, su due
+corsie Paper vive — era già corretto nel commit del giorno prima. Restavano **undici ritrovamenti
+confermati e non corretti**, ciascuno perché richiedeva una scelta non tecnica.
+
+### Prima di decidere: ri-ancorare al codice
+
+Undici investigatori, uno per ritrovamento, più uno scettico per ciascuno dei cinque di gravità alta,
+incaricato di demolire la caratterizzazione. **Tutti e undici ancora veri a HEAD.** Ma:
+
+- **A5 non era una decisione**: è A1 visto dal lato del consumatore, e si chiude correggendo A1. Le
+  decisioni erano dieci.
+- **A2 era sopravvalutato e la sua correzione «minima» non era neutra.** Monte Carlo sul CSCV
+  reimplementato: su pannello misto il PBO viene 0,505, cioè il valore giusto per un pannello di
+  rumore — il gate scatta eccome (un batch reale è stato bloccato a 0,619). Il difetto è di
+  **validità**, non di cecità. E «lanciare invece di troncare» spegnerebbe un gate bloccante appena
+  una serie ha una candela in meno, cioè aprirebbe gambe verso le corsie.
+- **M3 partiva da una premessa sbagliata**: `FundingHistory` è popolata, ma solo da /backtest a leva
+  > 1. Nella pipeline entrambe le fasi girano sulla costante, quindi la differenza è secca — selezione
+  0, validazione 0,01%/8h — e il difetto non è inerte.
+
+### Le dieci correzioni
+
+| # | decisione | tocca numeri? |
+|---|---|---|
+| A1+A5 | riscalare la stima log-HAR al timeframe (σ_candela = √(RV_giorno × min_tf/1440)) | i valori mostrati sì (÷4,90 su 1h); il `ratio`, e quindi Level, dosaggio e gate C3, **no** |
+| A2 | vietare gli universi a timeframe misti; dichiarare nel log del run la frazione di finestra su cui poggia il PBO | **no** — le campagne sono già a timeframe singolo |
+| A3 | dichiarare che «Alloc %» è un peso di CONFRONTO e non dimensiona gli ordini | **no** |
+| A4 | `HoldoutMonths` al denominatore dello z **e** `MinSharpeSignificanceZ` 1,0 → **0,35** nello stesso commit | sì, un gate: serve ΔSharpe ≥ 0,61 invece di ≈0,19 |
+| M1 | POCO `FactorDriftOptions` + pannello + inventario + regole; il pannello dichiara la **copertura** | no |
+| M2 | persistere N e provenienza del DSR; il gate «batti l'incumbent» **rifiuta** confronti fra grandezze diverse | sì, un gate — inerte oggi (nessun Champion) |
+| M3 | propagare il funding alla selezione, come [R2] fece per lo slippage | **sì**: gli Sharpe IS/OOS scendono per i long-biased e salgono per gli short |
+| M4 | con gli stop resting attivi il piano a fette non si costruisce (fail-closed, regola 4) | no |
+| M5 | dichiarare l'incomparabilità del risk-free e mostrarne l'ampiezza (rf/σ) | no |
+| M6 | dichiarare gambe **e** sopravvissuti pieni, e quante vengono dalla fascia grigia | no |
+
+**Due numeri di gate cambiano davvero, e vanno tenuti a mente leggendo i run futuri**: la soglia di
+significatività del comparatore (A4) e i costi della selezione (M3). I run archiviati restano su
+un'altra base di costo: **due generazioni di numeri non confrontabili fra loro.**
+
+### Aperti, e sono scelte non rinvii
+
+- **PBO allineato per DATA** invece che per indice: chiude la metà del difetto che il divieto sui
+  timeframe misti non copre, ma cambia il numero di un gate bloccante su tutte le configurazioni in
+  uso. Va misurato su un run archiviato **prima** di essere applicato.
+- **Bracket ri-armato a ogni fetta**: la correzione vera di M4. Prezzo: fino a 44 round-trip firmati
+  in più per piano e il rischio di trigger orfano moltiplicato per le fette, su un percorso che
+  nessuno ha mai visto scattare dal vivo.
+- **Confronto realizzato-vs-atteso su base di capitale comune** (M5 pieno): colonna nuova, migrazione,
+  degrado dichiarato per le gambe già schierate.
+- **Collegare i pesi di allocazione alla taglia**: possibile, ma **solo dopo** la parità col backtest.
+  Oggi `EnsembleManager.BuildBtConfig` gira ogni gamba a `PositionSizePercent = 100` e non conosce
+  pesi per gamba: collegarli senza allineare il backtest rifarebbe la stessa classe di difetto
+  corretta poche ore prima sullo specchio della posizione.

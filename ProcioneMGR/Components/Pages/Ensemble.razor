@@ -41,13 +41,25 @@
 <GuidaPanel Title="Ensemble — più strategie insieme, pesate in base a chi sta rendendo meglio">
     <p>
         Invece di scommettere tutto su una sola strategia, un <strong>ensemble</strong> ne combina
-        più contemporaneamente, dividendo il capitale tra loro. La piattaforma ricalcola
-        periodicamente (rebalance) quanto capitale dare a ciascuna in base a come si è comportata
-        di recente (<em>rolling Sharpe</em>): le strategie che stanno rendendo bene ricevono più
-        capitale, quelle che stanno andando male ne ricevono meno — senza però mai escluderle del
-        tutto (i limiti Min/Max % lo impediscono), perché una strategia "in pausa" può tornare utile
-        quando cambiano le condizioni di mercato.
+        più contemporaneamente sulla stessa coppia. La piattaforma ricalcola periodicamente
+        (rebalance) un <strong>peso</strong> per ciascuna in base a come si è comportata di recente
+        (<em>rolling Sharpe</em>): le strategie che stanno rendendo bene pesano di più, quelle che
+        stanno andando male pesano di meno — senza però mai escluderle del tutto (i limiti Min/Max %
+        lo impediscono), perché una strategia "in pausa" può tornare utile quando cambiano le
+        condizioni di mercato.
     </p>
+    <div class="alert alert-warning py-2 small mb-3">
+        <i class="bi bi-info-circle me-1"></i>
+        <strong>«Alloc %» è un peso di CONFRONTO, non una fetta di capitale.</strong> È il numero con
+        cui si calcola lo Sharpe medio e il rischio medio dell'ensemble — quelli che il
+        <a href="admin/autonomy">comparatore</a> usa per decidere se un ensemble nuovo sostituisce
+        quello in corsia. <strong>Non dimensiona gli ordini</strong>: il motore apre ogni gamba alla
+        stessa taglia, quella decisa da <em>Dimensione posizione %</em> in
+        <a href="trading">Trading</a>, indipendentemente dal peso. Una gamba al 50% e una al 20%
+        aprono posizioni identiche. Collegare i pesi alla taglia reale è una decisione aperta, non un
+        dettaglio mancante: cambierebbe l'esposizione aggregata della corsia e richiederebbe prima di
+        allineare il backtest, che non conosce pesi per gamba.
+    </div>
     <dl class="row mb-0">
         <dt class="col-sm-3">Capitale / Symbol / Timeframe</dt>
         <dd class="col-sm-9">Il capitale totale gestito dall'ensemble e la coppia/timeframe su cui operano tutte le strategie al suo interno.</dd>
@@ -64,10 +76,18 @@
         <dt class="col-sm-3">Sharpe rolling (giorni)</dt>
         <dd class="col-sm-9">Su quanti giorni recenti si misura la performance di ciascuna strategia per decidere i nuovi pesi (una finestra "mobile", non tutto lo storico).</dd>
         <dt class="col-sm-3">Min % / Max %</dt>
-        <dd class="col-sm-9">Limiti di sicurezza: nessuna strategia scende sotto il minimo (resta sempre un po' in gioco) né sale sopra il massimo (nessuna concentrazione eccessiva su una sola).</dd>
+        <dd class="col-sm-9">Limiti entro cui resta il peso di ciascuna strategia: nessuna scende sotto il minimo (resta sempre un po' in gioco) né sale sopra il massimo (nessuna concentrazione eccessiva su una sola). Sono limiti sul <em>peso di confronto</em>, non sul capitale impegnato.</dd>
+        <dt class="col-sm-3">Alloc %</dt>
+        <dd class="col-sm-9">
+            Il peso della gamba nella media dell'ensemble. Serve a due cose e solo a quelle: pesare
+            lo <strong>Sharpe medio</strong> e il <strong>fattore di rischio medio</strong> che il
+            comparatore confronta quando decide se schierare un ensemble nuovo, e mostrare quale
+            gamba il ribilanciamento sta premiando. <strong>Non arriva agli ordini</strong> — vedi
+            il riquadro in alto.
+        </dd>
         <dt class="col-sm-3">Strategie nell'ensemble</dt>
         <dd class="col-sm-9">
-            L'elenco delle strategie incluse, con la loro allocazione attuale. Puoi aggiungerne di
+            L'elenco delle strategie incluse, con il loro peso attuale. Puoi aggiungerne di
             predefinite, oppure una già ottimizzata da <a href="optimization">Optimization</a>/
             <a href="discovery">Discovery</a> (badge "Optimized"), oppure un modello di
             machine learning da <a href="ml">ML Lab</a> (badge "ML") — solo quelli addestrati sullo
@@ -237,7 +257,7 @@ else
             }
             <div class="table-responsive">
                 <table class="table table-sm align-middle">
-                    <thead><tr><th>Strategia</th><th>Parametri</th><th>Attiva</th><th>Alloc %</th><th>SL %</th><th>TP %</th><th>Trailing %</th><th>Sharpe atteso</th><th>PF atteso</th><th>MaxDD atteso %</th><th>Esecuzione</th><th></th></tr></thead>
+                    <thead><tr><th>Strategia</th><th>Parametri</th><th>Attiva</th><th title="Peso di confronto: pesa lo Sharpe e il rischio medi dell'ensemble. NON dimensiona gli ordini — tutte le gambe aprono alla stessa taglia.">Alloc % <i class="bi bi-question-circle small text-muted"></i></th><th>SL %</th><th>TP %</th><th>Trailing %</th><th>Sharpe atteso</th><th>PF atteso</th><th>MaxDD atteso %</th><th>Esecuzione</th><th></th></tr></thead>
                     <tbody>
                         @foreach (var s in _config.Strategies)
                         {

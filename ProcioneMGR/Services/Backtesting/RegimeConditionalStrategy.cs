@@ -49,7 +49,6 @@ public sealed class RegimeConditionalStrategy : IStrategy
 
     private int[] _bucket = [];          // 0 = up, 1 = down, 2 = flat, -1 = warm-up
     private IStrategy?[] _sub = new IStrategy?[3];
-    private int _lastBucket = -1;
 
     public async Task InitializeAsync(
         IReadOnlyList<decimal> closes,
@@ -105,7 +104,6 @@ public sealed class RegimeConditionalStrategy : IStrategy
             await sub.InitializeAsync(closes, candles, defaults, indicators, ct);
             _sub[bucket] = sub;
         }
-        _lastBucket = -1;
     }
 
     private static bool ValidIdx(int idx) => idx >= 0 && idx < SubStrategyCatalog.Count;
@@ -118,10 +116,17 @@ public sealed class RegimeConditionalStrategy : IStrategy
             return Signal.Hold;
         }
 
-        // Regime hand-over: go flat first, delegate from the next bar.
-        if (bucket != _lastBucket)
+        // Regime hand-over: si va flat prima, e si delega dalla barra dopo.
+        //
+        // [revisione 2026-08-20] Il confronto e' con il bucket della barra PRECEDENTE, non con uno
+        // stato interno. Prima era `_lastBucket`, azzerato a -1 da InitializeAsync: nel backtest
+        // l'istanza vive e lo stato regge, ma il motore vivo ne crea una NUOVA a ogni candela —
+        // quindi `bucket != -1` era sempre vero e la strategia emetteva Close a OGNI barra, senza
+        // aprire mai. Il cambio di regime e' un fatto dei DATI, non della sessione: derivarlo dai
+        // dati lo rende identico nei due motori per costruzione, invece che per fortuna.
+        var precedente = index > 0 ? _bucket[index - 1] : bucket;
+        if (bucket != precedente)
         {
-            _lastBucket = bucket;
             return Signal.Close;
         }
 

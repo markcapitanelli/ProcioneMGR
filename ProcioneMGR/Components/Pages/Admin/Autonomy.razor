@@ -27,6 +27,7 @@
 @inject IOptionsMonitor<LlmOptions> LlmMonitor
 @inject IOptionsMonitor<SupervisorAgentOptions> SupervisorAgentMonitor
 @inject IOptionsMonitor<DriftMonitorOptions> DriftMonitor
+@inject IOptionsMonitor<ProcioneMGR.Services.Alpha.FactorDriftOptions> FactorDriftMonitor
 @inject ILlmClient LlmClient
 @inject LlmSupervisorWorker LlmWorker
 @inject FeatureDriftWorker DriftWorker
@@ -96,6 +97,7 @@
     <a class="me-2" href="#p-sentiment">Sentiment</a>
     <a class="me-2" href="#p-pairswatch">Spread coppie</a>
     <a class="me-2" href="#p-drift">Drift feature</a>
+    <a class="me-2" href="#p-factordrift">Deriva fattori</a>
     <a class="me-2" href="#p-carry">Carry</a>
     <a class="me-2" href="#p-liq">Liquidazioni</a>
     <a class="me-2" href="#p-sync">Sync &amp; regimi</a>
@@ -311,6 +313,19 @@
             <div class="col-auto">
                 <label class="form-label">Sharpe retrocessione @Hot()</label>
                 <input type="number" step="0.1" class="form-control" @bind="_promotion.DemoteSharpeThreshold" style="width: 8rem;" />
+            </div>
+            @* [revisione 2026-08-20] Due manopole della retrocessione non avevano pannello: la
+               finestra minima e l'audit. Senza la prima, «Sharpe retrocessione» qui accanto e' meta'
+               della regola — l'altra meta' decide dopo QUANTO si giudica. *@
+            <div class="col-auto">
+                <label class="form-label" title="Settimane minime di osservazione prima che una retrocessione sia un giudizio e non rumore. E' la meta' mancante della soglia qui accanto: senza, uno Sharpe basso per tre giorni basterebbe.">Settimane min retroc. @Hot()</label>
+                <input type="number" class="form-control" @bind="_promotion.DemoteMinWeeks" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="pr_notify" @bind="_promotion.NotifyOnPromotion" />
+                <label class="form-check-label" for="pr_notify" title="Scrive una voce di audit visibile a ogni promozione e retrocessione. Spegnerlo rende i cambi di modalita' silenziosi: restano nei log, ma non piu' sotto gli occhi.">
+                    Audit su promozioni @Hot()
+                </label>
             </div>
             <div class="col-auto">
                 <label class="form-label">Intervallo (ore) @Restart()</label>
@@ -725,8 +740,52 @@
                 <input class="form-check-input" type="checkbox" id="llm_nd" @bind="_llm.NotifyDecisions" />
                 <label class="form-check-label" for="llm_nd">Notifica decisioni @Hot()</label>
             </div>
+            @* [revisione 2026-08-20] La CATENA DI FAILOVER e il timeout per provider non avevano
+               pannello, ed e' la parte che decide cosa succede quando un provider non risponde —
+               il layer AI si e' gia' fermato in silenzio una volta, per credito esaurito. Gli
+               endpoint restano modificabili perche' il mandato e' «tutto da UI», col rischio
+               scritto accanto: puntarli altrove manda le richieste a un servizio diverso. *@
+            <div class="col-12">
+                <div class="border rounded p-2">
+                    <div class="small text-muted mb-2">
+                        <strong>Failover fra provider</strong> — l'ordine in cui si prova un altro fornitore quando
+                        il primo non risponde. Il budget è <em>per provider</em>: un timeout non consuma il tempo
+                        degli altri. Con la catena vuota non c'è failover: un provider giù ferma la supervisione.
+                    </div>
+                    <div class="d-flex flex-wrap gap-3">
+                        <div class="flex-fill" style="min-width: 20rem;">
+                            <label class="form-label mb-1" for="llm_fo">Catena di failover @Hot()</label>
+                            <input class="form-control" id="llm_fo" @bind="_llmFailoverCsv"
+                                   placeholder="es. Nvidia, Groq, Gemini  (vuoto = nessun failover)" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Timeout per provider (s) @Hot()</label>
+                            <input type="number" class="form-control" @bind="_llm.PerProviderTimeoutSeconds" min="1" style="width: 9rem;" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12">
+                <details>
+                    <summary class="small text-muted">Endpoint dei provider (cambiali solo se sai perché)</summary>
+                    <div class="d-flex flex-wrap gap-3 mt-2">
+                        <div><label class="form-label mb-1 small">NVIDIA @Hot()</label>
+                            <input class="form-control form-control-sm" @bind="_llm.NvidiaBaseUrl" style="width: 20rem;" /></div>
+                        <div><label class="form-label mb-1 small">Gemini @Hot()</label>
+                            <input class="form-control form-control-sm" @bind="_llm.GeminiBaseUrl" style="width: 20rem;" /></div>
+                        <div><label class="form-label mb-1 small">Groq @Hot()</label>
+                            <input class="form-control form-control-sm" @bind="_llm.GroqBaseUrl" style="width: 20rem;" /></div>
+                        <div><label class="form-label mb-1 small">Hugging Face @Hot()</label>
+                            <input class="form-control form-control-sm" @bind="_llm.HuggingFaceBaseUrl" style="width: 20rem;" /></div>
+                    </div>
+                    <div class="form-text">
+                        Puntarli altrove manda le richieste (e i prompt) a un servizio diverso. Sono qui perché il
+                        mandato è che ogni configurazione si governi dall'interfaccia, non perché vadano toccati.
+                    </div>
+                </details>
+            </div>
             <div class="col-auto">
-                <button class="btn btn-primary me-2" @onclick='() => SaveAsync("Llm", _llm, "Supervisione AI")' disabled="@_busy">Salva</button>
+                <button class="btn btn-primary me-2" @onclick="SaveLlmAsync" disabled="@_busy">Salva</button>
                 <button class="btn btn-outline-secondary" @onclick="RunLlmNowAsync" disabled="@_busy">
                     @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                     Esegui supervisione ora
@@ -877,6 +936,53 @@
                 <label class="form-label">Liquidazioni: punti min @Hot()</label>
                 <input type="number" class="form-control" @bind="_sentiment.HeritageGuard.LiquidationsMinPoints" min="1" style="width: 8rem;" />
             </div>
+            @* [revisione 2026-08-20] I PESI DEL COMPOSITE non avevano pannello, e sono ciò che
+               decide quanto ogni fonte conta nel segnale: cambiarli cambia il numero che finisce
+               nelle raccomandazioni. Si potevano toccare solo editando il file a mano.
+               Sono rinormalizzati sui componenti DISPONIBILI, quindi non devono sommare a 1: se una
+               fonte manca, il suo peso si redistribuisce sulle altre. *@
+            <div class="col-12">
+                <div class="border rounded p-2">
+                    <div class="small text-muted mb-2">
+                        <strong>Pesi del composite di mercato</strong> — quanto ogni fonte pesa nel punteggio
+                        aggregato. Non devono sommare a 1: vengono <em>rinormalizzati sui componenti
+                        effettivamente disponibili</em>, quindi se una fonte è muta il suo peso si
+                        redistribuisce sulle altre invece di far crollare il punteggio.
+                        Somma attuale dichiarata: <strong>@((_sentiment.WeightNews + _sentiment.WeightFearGreed + _sentiment.WeightFunding + _sentiment.WeightLongShort + _sentiment.WeightTaker).ToString("0.##"))</strong>.
+                    </div>
+                    <div class="d-flex flex-wrap gap-3">
+                        <div>
+                            <label class="form-label mb-1">Notizie @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightNews" min="0" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Fear &amp; Greed @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightFearGreed" min="0" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Funding @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightFunding" min="0" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Long/Short @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightLongShort" min="0" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1">Taker @Hot()</label>
+                            <input type="number" step="0.05" class="form-control" @bind="_sentiment.WeightTaker" min="0" style="width: 7rem;" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Giorni di storia su cui si calcola la baseline (media e deviazione) contro cui si misurano gli z-score delle metriche. Piu' lunga = piu' stabile ma piu' lenta a riconoscere un regime nuovo.">Baseline (giorni) @Hot()</label>
+                <input type="number" class="form-control" @bind="_sentiment.BaselineDays" min="7" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Retention delle metriche di sentiment. NON tocca le serie-patrimonio (funding, Fear & Greed, liquidazioni), che sono esenti dalla purge: quelle si governano dal guardiano di profondita' qui sotto.">Retention metriche (gg) @Hot()</label>
+                <input type="number" class="form-control" @bind="_sentiment.MetricRetentionDays" min="30" style="width: 9rem;" />
+            </div>
+
             @* [I15] Il corpus di notizie con punteggio: esente dalla purge dal 2026-08-19, e
                quindi patrimonio come le altre tre. Nasce NON sorvegliato di proposito — vedi il
                title dell'interruttore: la purge ha girato da sempre e nessuna àncora plausibile
@@ -1200,6 +1306,62 @@
     </div>
 </div>
 
+@* ==================== 5b. Deriva dei fattori alpha (sezione FactorDrift) ==================== *@
+@* [M1, 2026-08-20] Questa sezione governa un worker vivo e non aveva pannello: il worker leggeva le
+   quattro chiavi con l'overload GetValue a tipo inferito, che nessuno dei due guardiani di copertura
+   UI sa riconoscere. Non era un'omissione dell'inventario, era un buco negli strumenti — ed è la
+   ragione per cui la sezione è passata sotto ai controlli per mesi girando sui soli default. *@
+<div class="card mb-3" id="p-factordrift">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-activity me-1"></i>Deriva dei fattori alpha</span>
+        <span>@StateBadge(_factorDrift.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Misura periodicamente se l'<em>information coefficient</em> dei fattori alpha si sta
+            spegnendo su una serie: gli otto fattori scritti a mano, più quelli dichiarati dal
+            modello Champion di quella coppia. È in <strong>sola lettura e advisory</strong>: scrive
+            la storia dell'IC e accende l'avviso in Home e in <a href="feature-selection">/feature-selection</a>,
+            non ritira nulla e non tocca corsie.
+        </p>
+
+        <div class="alert alert-secondary py-2 small">
+            <strong>La manopola che conta è «serie per giro».</strong> Il monitor ruota sulla
+            watchlist: con @_factorDrift.EffectiveMaxSeries() serie ogni @_factorDrift.EffectiveIntervalHours() ore,
+            un giro completo su @(_watchlistSeriesCount?.ToString() ?? "N") serie richiede
+            <strong>@FactorDriftCoverageText()</strong>. Fino ad allora «nessun allarme di deriva»
+            su una serie può voler dire soltanto <em>non l'ho ancora guardata</em>: alzare il numero
+            accorcia il giro e alza il costo di CPU, che è la ragione per cui il default è basso.
+        </div>
+
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="fd_en" @bind="_factorDrift.Enabled" />
+                <label class="form-check-label" for="fd_en">Abilitato @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Intervallo (ore) @Restart()</label>
+                <input type="number" class="form-control" @bind="_factorDrift.IntervalHours" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Serie della watchlist esaminate a ogni giro, in rotazione: ha la precedenza chi è stato provato più tempo fa. Ammesso 1..30.">
+                    Serie per giro @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_factorDrift.MaxSeries" min="1" max="30" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Tetto di candele lette per serie in un giro: limita la finestra su cui si misura l'IC. Ammesso 1.000..200.000.">
+                    Candele per serie @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_factorDrift.MaxCandles" min="1000" max="200000" style="width: 10rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick='() => SaveAsync("FactorDrift", _factorDrift, "Deriva dei fattori alpha")' disabled="@_busy">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 @* ============================ 6. Sync dati & retraining regime ============================ *@
 <div class="card mb-3" id="p-sync">
     <div class="card-header"><i class="bi bi-cloud-arrow-down me-1"></i>Sync dati di mercato &amp; retraining regime</div>
@@ -1410,12 +1572,23 @@
             </div>
             <div class="col-auto">
                 <label class="form-label">z di significatività @Restart()</label>
-                <input type="number" step="0.1" class="form-control" @bind="_comparator.MinSharpeSignificanceZ" style="width: 9rem;" />
+                <input type="number" step="0.05" class="form-control" @bind="_comparator.MinSharpeSignificanceZ" style="width: 9rem;" />
             </div>
             <div class="col-auto">
                 <button class="btn btn-primary" @onclick='() => SaveAsync("EnsembleComparator", _comparator, "Comparatore ensemble")' disabled="@_busy">Salva</button>
             </div>
         </div>
+        <p class="text-muted small mt-2 mb-0">
+            <strong>La z si legge insieme alla finestra di holdout.</strong> Il campione del test è la
+            <em>durata</em> dell'holdout, non il numero di trade: z = ΔSharpe&nbsp;×&nbsp;√(anni). Con
+            l'holdout a 4 mesi che usano le campagne oggi: z&nbsp;0,25 ⇒ serve ΔSharpe ≥ 0,43 ·
+            <strong>z&nbsp;0,35 ⇒ ≥ 0,61</strong> (il valore in vigore) · z&nbsp;0,50 ⇒ ≥ 0,87 ·
+            z&nbsp;1,00 ⇒ ≥ 1,73, che con questa finestra chiude di fatto la sostituzione per Sharpe.
+            Quando l'holdout si allunga la stessa z diventa più facile da superare: è il
+            comportamento voluto, ma va rivista insieme alla finestra.
+            Se la raccomandazione non porta la finestra (JSON storici) il gate <em>si salta</em> e
+            decide la sola isteresi percentuale qui accanto.
+        </p>
         <hr />
         <div class="row g-3 align-items-end">
             <div class="col-auto">
@@ -2049,6 +2222,9 @@
     private LiveExecutionOptions _liveExec = new();
     private AutoReapplyOptions _autoReapply = new();
     private PromotionEvaluatorOptions _promotion = new();
+    /// <summary>[revisione 2026-08-20] La catena di failover come CSV: forma di scrittura, non secondo stato.</summary>
+    private string _llmFailoverCsv = string.Empty;
+
     private ProcioneMGR.Services.PairsTrading.PairsWatchOptions _pairsWatch = new();
 
     /// <summary>[I14c] Le coppie sorvegliate come CSV: la forma con cui si scrive una lista, non un secondo stato.</summary>
@@ -2114,6 +2290,13 @@
     private string _sentimentSymbolsCsv = "";
     private string _heritageFundingSymbolsCsv = "";
     private DriftMonitorOptions _drift = new();
+
+    /// <summary>[M1] Sezione FactorDrift: quattro chiavi vive che fino al 2026-08-20 non avevano pannello.</summary>
+    private ProcioneMGR.Services.Alpha.FactorDriftOptions _factorDrift = new();
+
+    /// <summary>[M1] Serie ABILITATE della watchlist: il denominatore della copertura del monitor. Null se non contabile.</summary>
+    private int? _watchlistSeriesCount;
+
     private MarketDataConfig _marketData = new();
 
     /// <summary>[E4] Vero quando lo scheduling del sync vive nel servizio ingestion remoto: i campi qui sono inerti e vanno dichiarati tali.</summary>
@@ -2339,6 +2522,7 @@
         // [AF2] Config (editabile), stato e journal della flotta.
         _fleet = Clone(FleetMonitor.CurrentValue);
         _fleetExecutionLanesCsv = string.Join(", ", _fleet.ExecutionLanes);
+        _llmFailoverCsv = string.Join(", ", _llm.FailoverProviders);
         _pairsWatch = Clone(PairsWatchMonitor.CurrentValue);
         _pairsWatchPairsCsv = string.Join(", ", _pairsWatch.Pairs);
         _fleetFootprint = PipelineApplier.LaneCount; // l'impronta storica dell'auto-apply: il confine della flotta
@@ -2372,6 +2556,7 @@
         _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols);
         _drift = Clone(DriftMonitor.CurrentValue);
         _driftStagesCsv = SymbolsToCsv(_drift.MonitorStages);
+        _factorDrift = Clone(FactorDriftMonitor.CurrentValue);
         _marketData = new MarketDataConfig
         {
             Enabled = Config.GetValue("MarketData:Enabled", true),
@@ -2433,6 +2618,7 @@
         };
         await LoadDriftResultsAsync();
         await LoadDriftModelCountsAsync();
+        await LoadWatchlistSeriesCountAsync();   // [M1] il denominatore della copertura del monitor fattori
         await LoadAgentStateAsync();
     }
 
@@ -2501,6 +2687,20 @@
     /// poter mettere in sorveglianza qualcosa che il worker poi salterebbe a ogni giro con un
     /// warning che nessuno legge — meglio vederlo sparire subito dal campo.
     /// </summary>
+    /// <summary>
+    /// [revisione 2026-08-20] Salva la sezione Llm traducendo prima il CSV della catena di failover.
+    /// Passa dalla <c>SaveAsync</c> comune — stessa validazione, stesso percorso.
+    /// </summary>
+    private async Task SaveLlmAsync()
+    {
+        _llm.FailoverProviders = (_llmFailoverCsv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _llmFailoverCsv = string.Join(", ", _llm.FailoverProviders);
+        await SaveAsync("Llm", _llm, "Supervisione AI");
+    }
+
     private async Task SavePairsWatchAsync()
     {
         _pairsWatch.Pairs = (_pairsWatchPairsCsv ?? string.Empty)
@@ -2560,6 +2760,38 @@
         {
             _driftModelCounts = null;
         }
+    }
+
+    /// <summary>
+    /// [M1] Le serie abilitate in watchlist: è il denominatore che rende leggibile «serie per giro».
+    /// Senza, la manopola è un numero senza scala e nessuno può sapere che coi default un giro
+    /// completo costa settimane. Fail-open: se il conteggio non riesce si dice N, non si inventa.
+    /// </summary>
+    private async Task LoadWatchlistSeriesCountAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _watchlistSeriesCount = await db.TrackedSeries.AsNoTracking().CountAsync(s => s.Enabled);
+        }
+        catch
+        {
+            _watchlistSeriesCount = null;
+        }
+    }
+
+    /// <summary>[M1] Quanto ci mette il monitor a completare un giro sulla watchlist, in parole.</summary>
+    private string FactorDriftCoverageText()
+    {
+        if (_watchlistSeriesCount is not int total || total <= 0)
+        {
+            return "un tempo non calcolabile finché la watchlist non risponde";
+        }
+        var rounds = (int)Math.Ceiling((double)total / _factorDrift.EffectiveMaxSeries());
+        var hours = (long)rounds * _factorDrift.EffectiveIntervalHours();
+        return hours < 48
+            ? $"{hours} ore ({rounds} giri)"
+            : $"circa {hours / 24.0:0.#} giorni ({rounds} giri)";
     }
 
     private async Task LoadDriftResultsAsync()

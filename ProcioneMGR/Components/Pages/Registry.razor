@@ -23,6 +23,17 @@
         modello con DSR inferiore non sostituisce mai quello in carica. Il monitor di drift, se un
         Champion degrada, lo <strong>ritira e accoda un retrain</strong> — mai un'azione sul trading Live.
     </p>
+    <p>
+        <strong>Due DSR non sono automaticamente confrontabili</strong>, ed è per questo che accanto al
+        numero c'è la colonna «Misurato su». Un DSR prodotto dalla pagina <a href="ml">/ml</a> nasce da
+        un solo track: N&nbsp;=&nbsp;1 significa <em>nessuna deflazione</em> — è di fatto un
+        Probabilistic Sharpe — e per giunta su un backtest senza slippage né funding, quindi risulta
+        sistematicamente più alto. Un DSR della pipeline è deflazionato sui tentativi veri della ricerca
+        e misurato coi costi pieni. Se i due N differiscono di oltre un ordine di grandezza, o se uno
+        dei due non è dichiarato (righe misurate prima del 2026-08-20), <strong>la promozione viene
+        rifiutata</strong> invece di decidere su un confronto arbitrario: fai ripassare entrambi da una
+        validazione della pipeline.
+    </p>
     <p class="mb-0">
         <strong>Il ritiro si può annullare, ma non si annulla da solo.</strong> Un modello ritirato —
         a mano o dal monitor di drift — si riporta in <em>Staging</em> dal pulsante sulla sua riga:
@@ -64,7 +75,7 @@
         </div>
         <div class="table-responsive">
             <table class="table table-sm align-middle mb-0">
-                <thead><tr><th>Modello</th><th>Tipo</th><th>Stadio</th><th class="text-end">DSR</th><th class="text-end">Ver</th><th>Note</th><th class="text-end">Azioni</th></tr></thead>
+                <thead><tr><th>Modello</th><th>Tipo</th><th>Stadio</th><th class="text-end">DSR</th><th>Misurato su</th><th class="text-end">Ver</th><th>Note</th><th class="text-end">Azioni</th></tr></thead>
                 <tbody>
                     @foreach (var m in g.Value)
                     {
@@ -73,6 +84,20 @@
                             <td>@m.ModelType</td>
                             <td><span class="badge @StageClass(m.Stage)">@m.Stage</span></td>
                             <td class="text-end">@Fmt(m.DeflatedSharpe)</td>
+                            @* [M2] La colonna DSR ha due scrittori con due metri diversi: senza la
+                               provenienza accanto, due numeri incomparabili si leggono come una
+                               classifica. Il gate di promozione ora rifiuta il confronto, ma chi
+                               guarda la tabella deve poterlo vedere prima di premere il pulsante. *@
+                            <td class="small">
+                                @if (DsrProvenance(m) is { } prov)
+                                {
+                                    <span class="badge @prov.Css" title="@prov.Hint">@prov.Label</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                            </td>
                             <td class="text-end">@m.Version</td>
                             <td class="small">
                                 @* I tre campi del ritiro descrivono l'ULTIMO ritiro, lo stadio dice se è in corso:
@@ -125,7 +150,7 @@
                         @if (_confirmRetire == m.Id)
                         {
                             <tr class="table-warning">
-                                <td colspan="7">
+                                <td colspan="8">
                                     <div class="small mb-2">
                                         <strong>Ritirare «@m.Name»?</strong>
                                         @if (m.Stage == ModelStage.Champion)
@@ -152,7 +177,7 @@
                         @if (_confirmReinstate == m.Id)
                         {
                             <tr class="table-info">
-                                <td colspan="7">
+                                <td colspan="8">
                                     <div class="small mb-2">
                                         <strong>Riportare «@m.Name» in Staging?</strong>
                                         <span>
@@ -283,6 +308,36 @@
     private void SetMsg(string msg, bool ok) { _message = msg; _messageOk = ok; }
 
     private static string Fmt(double? dsr) => dsr is { } v ? (v * 100).ToString("F1") + "%" : "—";
+
+    /// <summary>
+    /// [M2] Con quale metro è stato misurato il DSR della riga: etichetta, spiegazione e colore.
+    /// <c>null</c> quando non c'è nessun DSR. Il caso «metro ignoto» è quello delle righe scritte
+    /// prima del 2026-08-20: non si sa con che N, quindi il numero non è confrontabile con nessun
+    /// altro e il gate di promozione lo rifiuta invece di indovinare.
+    /// </summary>
+    private static (string Label, string Hint, string Css)? DsrProvenance(SavedMlModel m)
+    {
+        if (m.DeflatedSharpe is null) return null;
+        if (m.DeflatedSharpeTrials is not int n)
+        {
+            return ("metro ignoto",
+                "Misurato prima che la provenienza venisse registrata: non si sa con quanti tentativi è stato "
+                + "deflazionato, quindi non è confrontabile con altri DSR. Rifallo passare da una validazione della pipeline.",
+                "bg-warning text-dark");
+        }
+        return m.DeflatedSharpeSource switch
+        {
+            SavedMlModel.DsrSourcePipeline => ($"pipeline · N={n}",
+                "Gate anti-overfitting della pipeline sull'holdout, con slippage, commissioni e funding pieni, "
+                + "deflazionato sui tentativi effettivi della ricerca.",
+                "bg-success"),
+            SavedMlModel.DsrSourceMlLab => ($"ml-lab · N={n}",
+                "Pagina /ml: un solo track, quindi N = 1 e nessuna deflazione (di fatto un Probabilistic Sharpe), "
+                + "su un backtest senza slippage né funding. Risulta sistematicamente più alto di un DSR della pipeline.",
+                "bg-secondary"),
+            _ => ($"{m.DeflatedSharpeSource ?? "?"} · N={n}", "Origine non riconosciuta.", "bg-secondary"),
+        };
+    }
 
     private static string StageClass(ModelStage s) => s switch
     {

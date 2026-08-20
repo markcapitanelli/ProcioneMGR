@@ -217,6 +217,9 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.FactorDriftSnapshot>();
 // Storia dell'IC su tabella: il worker la scrive, la Home la ritrova già pronta dopo un riavvio
 // del guscio e il pannello può mostrare quando un fattore si è spento senza ricalcolare.
 builder.Services.AddSingleton<ProcioneMGR.Services.Alpha.IFactorIcHistoryStore, ProcioneMGR.Services.Alpha.FactorIcHistoryStore>();
+// [M1] La sezione FactorDrift governava un worker vivo senza pannello e senza POCO: il worker la
+// leggeva con GetValue a tipo inferito, invisibile a entrambi i guardiani di copertura UI.
+builder.Services.Configure<ProcioneMGR.Services.Alpha.FactorDriftOptions>(builder.Configuration.GetSection("FactorDrift"));
 builder.Services.AddHostedService<ProcioneMGR.Services.Alpha.FactorDriftWorker>();
 // [C4] Etichettatura triple-barrier + meta-labeling: puri e deterministici, quindi Singleton.
 builder.Services.AddSingleton<ProcioneMGR.Services.ML.Labeling.ITripleBarrierLabeler, ProcioneMGR.Services.ML.Labeling.TripleBarrierLabeler>();

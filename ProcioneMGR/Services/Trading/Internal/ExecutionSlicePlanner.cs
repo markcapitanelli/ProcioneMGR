@@ -24,8 +24,36 @@ internal sealed class ExecutionSlicePlanner(
     IOptionsMonitor<SafetyConfiguration> safety,
     ProcioneMetrics? metrics,
     TradingPersistence persistence,
+    ILogger logger,
     int laneId)
 {
+    /// <summary>
+    /// Quando l'apertura passerebbe da un piano a fette invece che da un market order immediato:
+    /// mai in Paper (nessun impatto da ridurre su un fill simulato), mai senza un algoritmo diverso
+    /// da <c>Immediate</c>, mai con l'esecuzione a fette spenta a configurazione.
+    /// </summary>
+    internal static bool WouldSlice(TradingMode mode, string? algorithmName, bool liveExecutionEnabled)
+        => mode != TradingMode.Paper
+           && !string.IsNullOrEmpty(algorithmName) && algorithmName != "Immediate"
+           && liveExecutionEnabled;
+
+    /// <summary>
+    /// [M4] La combinazione vietata: un piano a fette mentre gli stop resting sull'exchange sono
+    /// attivi. Vero ⇒ il piano NON si costruisce e si apre a quantità piena. Predicato separato
+    /// perché è una regola, non un dettaglio di flusso: va potuta leggere e provare da sola.
+    ///
+    /// Vincolato ai <b>Futures</b> di proposito: il bracket resting viene piazzato solo nel percorso
+    /// di apertura Futures (<c>PositionOpener.ExecuteFuturesOpenAsync</c>), quindi su una corsia Spot
+    /// la spunta non arma alcun trigger e non c'è niente da proteggere. Sopprimere le fette anche lì
+    /// peggiorerebbe l'esecuzione in cambio di nulla — un divieto che protegge da un rischio
+    /// inesistente è solo un danno con una buona intenzione.
+    /// </summary>
+    internal static bool SlicingSuppressedByRestingStops(
+        TradingMode mode, MarketType marketType, string? algorithmName, bool liveExecutionEnabled, bool useExchangeRestingStops)
+        => useExchangeRestingStops
+           && marketType == MarketType.Futures
+           && WouldSlice(mode, algorithmName, liveExecutionEnabled);
+
     public async Task TryBuildAndStartExecutionPlanAsync(
         TradingEngineState state, List<OpenPosition> positions, List<ExecutionJob> executionJobs,
         Func<decimal, TradingEngineStatus> buildSafetyStatus,
@@ -35,9 +63,35 @@ internal sealed class ExecutionSlicePlanner(
         Exchanges.SymbolFilters? filters = null)
     {
         var algoName = strat?.ExecutionAlgorithmName;
-        var sliced = state.Mode != TradingMode.Paper
-                     && !string.IsNullOrEmpty(algoName) && algoName != "Immediate"
-                     && liveExecution.CurrentValue.Enabled;
+        var sliced = WouldSlice(state.Mode, algoName, liveExecution.CurrentValue.Enabled);
+
+        // [M4, 2026-08-20] Fette ed exchange-resting-stop si contraddicono, e vince la protezione.
+        //
+        // Il bracket sull'exchange viene piazzato una volta sola, quando NASCE la posizione, cioè
+        // sulla fetta #1, con la quantità di quell'istante (PositionOpener, ramo `mergeInto is null`
+        // → BracketOrderManager, `Quantity = pos.Quantity`). Le fette 2..K fondono nella posizione e
+        // fanno crescere pos.Quantity senza toccare il trigger: la sotto-copertura NON è temporanea,
+        // resta per tutta la vita della posizione anche a piano completato. Non è nemmeno un ordine
+        // "chiudi tutto": entrambi i client mandano una size esplicita con reduceOnly, quindi
+        // l'exchange arma davvero solo quella frazione — con un TWAP a 12 fette, 1/12 della
+        // posizione. Chi accende `UseExchangeRestingStops` sta comprando la protezione che sopravvive
+        // alla morte del processo: dargliela sull'8% della posizione è peggio che non dargliela,
+        // perché ci si crede coperti. Regola 4, fail-closed: si rinuncia alla riduzione d'impatto
+        // dello slicing e si apre a quantità piena, che il bracket copre per intero. La combinazione
+        // è dichiarata nel testo d'aiuto della spunta in /trading, così nessuno sceglie Twap e
+        // ottiene Immediate senza saperlo.
+        if (SlicingSuppressedByRestingStops(
+                state.Mode, state.MarketType, algoName,
+                liveExecution.CurrentValue.Enabled, safety.CurrentValue.UseExchangeRestingStops))
+        {
+            logger.LogInformation(
+                "Corsia {Lane}: piano di esecuzione {Algo} NON costruito perché gli stop resting sull'exchange sono attivi "
+                + "(coprirebbero solo la prima fetta, per sempre). Apertura immediata a quantità piena.",
+                laneId, algoName);
+            await persistence.AuditAsync("ExecutionPlanSkippedForRestingStops",
+                new { strategyName, algoName, qty = order.Quantity, price }, state.Mode, ts, ct);
+            sliced = false;
+        }
 
         if (!sliced)
         {

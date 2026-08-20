@@ -314,25 +314,38 @@ public sealed class VolatilityRegimeStage(IGarchModel garch) : IPipelineStage
         var forecastVol = Math.Sqrt(Math.Max(0, fit.ForecastVariance(horizon)));
 
         // [C3] Previsore del Level: log-HAR sulla RV giornaliera dai 5m, se i 5m bastano. Il ratio
-        // forecast/lungo-periodo resta adimensionale: numeratore e denominatore sono entrambi su
-        // scala GIORNALIERA (la classificazione confronta livelli, non unità). Il fallback GARCH
-        // scatta anche a metà strada: qualunque intoppo sui 5m non deve far fallire lo stage.
+        // forecast/lungo-periodo resta adimensionale: numeratore e denominatore si riscalano insieme
+        // (la classificazione confronta livelli, non unità). Il fallback GARCH scatta anche a metà
+        // strada: qualunque intoppo sui 5m non deve far fallire lo stage.
+        //
+        // [A1, 2026-08-20] Le tre grandezze del log-HAR nascono da varianze realizzate GIORNALIERE e
+        // finivano tali e quali dentro campi il cui contratto dice «per-period», cioè per candela del
+        // timeframe primario: su 1h il numero scritto era 4,90× troppo grande. Il ratio non se ne
+        // accorgeva, quindi Level, dosaggio e gate C3 erano salvi — ma il trigger contestuale, che
+        // confronta ForecastVolatility24 con una realizzata PER CANDELA, ne usciva degenerato: con
+        // banda 1,5 il ramo «compressione» era vero per aritmetica su ogni timeframe intraday, e ogni
+        // sveglia spuria bypassava il backoff della campagna. Si riporta la varianza sulla scala della
+        // candela PRIMA della radice (la varianza è additiva nel tempo, quindi il fattore è lineare
+        // sulla varianza e in radice sul sigma). Approssimazione dichiarata: assume assenza di
+        // stagionalità intragiornaliera e di drift, che è la convenzione standard di riscalamento.
         var forecastSource = "garch";
         if (!string.Equals(config.GetString("volForecaster", "auto"), "garch", StringComparison.OrdinalIgnoreCase))
         {
             try
             {
+                var tfMinutes = Timeframes.Supported.GetValueOrDefault(primary.Timeframe, TimeSpan.FromHours(1)).TotalMinutes;
                 var bars5m = await ctx.Candles.GetAsync(primary.Symbol, "5m", to.AddDays(-365), to, ct);
                 var daily = RealizedVariance.DailyFromIntraday(bars5m);
-                var horizonDays = Math.Clamp((int)Math.Round(
-                    horizon * Timeframes.Supported.GetValueOrDefault(primary.Timeframe, TimeSpan.FromHours(1)).TotalMinutes / 1440.0), 1, 5);
+                var horizonDays = Math.Clamp((int)Math.Round(horizon * tfMinutes / 1440.0), 1, 5);
                 var rv = daily.Select(d => d.Rv).ToList();
                 var harSeries = HarRvForecaster.ForecastSeries(rv, horizonDays, onLogRv: true);
                 if (harSeries.Length > 0 && harSeries[^1] is { } harVariance)
                 {
-                    var harForecastVol = Math.Sqrt(harVariance);
-                    var harLongRunVol = Math.Sqrt(rv.Average());
-                    var harCurrentVol = Math.Sqrt(rv[^1]);
+                    // Da varianza giornaliera a varianza per candela del timeframe primario.
+                    var perCandle = tfMinutes / 1440.0;
+                    var harForecastVol = Math.Sqrt(harVariance * perCandle);
+                    var harLongRunVol = Math.Sqrt(rv.Average() * perCandle);
+                    var harCurrentVol = Math.Sqrt(rv[^1] * perCandle);
                     if (harLongRunVol > 0)
                     {
                         forecastVol = harForecastVol;

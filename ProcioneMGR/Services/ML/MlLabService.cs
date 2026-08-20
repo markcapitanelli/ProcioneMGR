@@ -595,6 +595,13 @@ public sealed class MlLabService(
                 TrainRowCount = TrainRowCount,
                 TrainCorrelation = TrainCorrelation,
                 DeflatedSharpe = deflatedSharpe,
+                // [M2] La provenienza viaggia col numero. Un solo track ⇒ N = 1, che nel Deflated
+                // Sharpe significa SR* = 0, cioè nessuna deflazione: quello che si scrive qui è di
+                // fatto un Probabilistic Sharpe, e per giunta su un'equity senza slippage né
+                // funding. Dichiararlo è ciò che impedisce al registry di confrontarlo con un DSR
+                // della pipeline, deflazionato su centinaia di tentativi e coi costi pieni.
+                DeflatedSharpeTrials = deflatedSharpe is null ? null : 1,
+                DeflatedSharpeSource = deflatedSharpe is null ? null : SavedMlModel.DsrSourceMlLab,
             });
             await db.SaveChangesAsync(ct);
 

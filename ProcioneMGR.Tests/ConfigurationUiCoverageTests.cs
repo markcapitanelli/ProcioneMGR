@@ -32,6 +32,12 @@ public sealed class ConfigurationUiCoverageTests
         ["PipelineSupervisor"] = "Components/Pages/Admin/Autonomy.razor",
         ["Sentiment"] = "Components/Pages/Admin/Autonomy.razor",
         ["Drift"] = "Components/Pages/Admin/Autonomy.razor",
+        // [M1] Deriva dei fattori alpha. La sezione governava un worker vivo da mesi senza pannello e
+        // senza che questo test protestasse: il worker leggeva le chiavi con l'overload GetValue a
+        // tipo INFERITO, che il regex qui sotto non riconosce. Il buco era nello strumento, non
+        // nell'inventario — ora la sezione ha un POCO registrato con Configure<T>, che entrambi i
+        // guardiani sanno vedere.
+        ["FactorDrift"] = "Components/Pages/Admin/Autonomy.razor",
         ["Campaign"] = "Components/Pages/Admin/Autonomy.razor",
         ["RegimeTrigger"] = "Components/Pages/Admin/Autonomy.razor",
         ["EnsembleComparator"] = "Components/Pages/Admin/Autonomy.razor",

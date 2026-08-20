@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.ML;
 
@@ -76,9 +76,13 @@ public sealed class FactorDriftSnapshot
 
 /// <summary>
 /// Calcola periodicamente la deriva dei fattori sulle serie della watchlist e aggiorna
-/// <see cref="FactorDriftSnapshot"/>. Config: <c>FactorDrift:Enabled</c> (default true, è
-/// sola lettura e advisory), <c>FactorDrift:IntervalHours</c> (default 12),
-/// <c>FactorDrift:MaxSeries</c> (default 5), <c>FactorDrift:MaxCandles</c> (default 20000).
+/// <see cref="FactorDriftSnapshot"/>. Configurazione: <see cref="FactorDriftOptions"/>
+/// (sezione <c>FactorDrift</c>, pannello in /admin/autonomy).
+///
+/// [M1, 2026-08-20] Prima leggeva le quattro chiavi da <c>IConfiguration</c> con l'overload a tipo
+/// inferito: nessuno dei due guardiani di copertura UI riusciva a vederle, e la sezione governava un
+/// worker vivo senza avere un pannello. Ora passa da un POCO registrato, che è ciò che entrambi i
+/// guardiani sanno guardare.
 /// </summary>
 public sealed class FactorDriftWorker(
     IServiceScopeFactory scopeFactory,
@@ -86,7 +90,7 @@ public sealed class FactorDriftWorker(
     IAlphaFactorFactory factorFactory,
     IFactorIcHistoryStore history,
     FactorDriftSnapshot snapshot,
-    IConfiguration configuration,
+    IOptionsMonitor<FactorDriftOptions> options,
     ILogger<FactorDriftWorker> logger) : BackgroundService
 {
     /// <summary>Orizzonte forward del monitor periodico: una barra, come il pannello.</summary>
@@ -170,9 +174,9 @@ public sealed class FactorDriftWorker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var hours = Math.Max(1, configuration.GetValue("FactorDrift:IntervalHours", 12));
-        logger.LogInformation("FactorDriftWorker avviato (ogni {Hours}h, Enabled={Enabled}).",
-            hours, configuration.GetValue("FactorDrift:Enabled", true));
+        var hours = options.CurrentValue.EffectiveIntervalHours();
+        logger.LogInformation("FactorDriftWorker avviato (ogni {Hours}h, Enabled={Enabled}, {MaxSeries} serie/giro).",
+            hours, options.CurrentValue.Enabled, options.CurrentValue.EffectiveMaxSeries());
 
         // IDRATAZIONE: prima di qualunque calcolo, la fotografia si ricostruisce da ciò che è già
         // registrato. È il pezzo che rende l'alert in Home presente SUBITO dopo un riavvio del
@@ -190,7 +194,7 @@ public sealed class FactorDriftWorker(
             try
             {
                 // Riletto a ogni tick: il toggle prende effetto a caldo, come negli altri worker.
-                if (configuration.GetValue("FactorDrift:Enabled", true))
+                if (options.CurrentValue.Enabled)
                 {
                     await RunOnceAsync(stoppingToken);
                 }
@@ -279,8 +283,8 @@ public sealed class FactorDriftWorker(
     /// <summary>Un giro completo. Pubblico per poterlo esercitare nei test senza aspettare il timer.</summary>
     public async Task RunOnceAsync(CancellationToken ct = default)
     {
-        var maxSeries = Math.Clamp(configuration.GetValue("FactorDrift:MaxSeries", 5), 1, 30);
-        var maxCandles = Math.Clamp(configuration.GetValue("FactorDrift:MaxCandles", 20_000), 1_000, 200_000);
+        var maxSeries = options.CurrentValue.EffectiveMaxSeries();
+        var maxCandles = options.CurrentValue.EffectiveMaxCandles();
 
         using var scope = scopeFactory.CreateScope();
         var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();

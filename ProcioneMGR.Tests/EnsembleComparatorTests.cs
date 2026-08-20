@@ -92,38 +92,86 @@ public class EnsembleComparatorTests
     }
 
     // ------------------------------------------------------------------ significatività dello swap
+    //
+    // [A4, 2026-08-20] Il campione del test è la DURATA dell'holdout, non il conteggio trade: lo
+    // Sharpe è annualizzato e l'errore standard di Lo vuole T nella stessa frequenza. Prima qui si
+    // passava il numero di trade, e un test costruito su quel numero restava verde con l'unità
+    // sbagliata — è la ragione per cui questi casi si scrivono ora sui mesi.
 
-    private static EnsembleSummary SummaryObs(decimal sharpe, int legs, int symbols, int observations)
+    private static EnsembleSummary SummaryWindow(decimal sharpe, int legs, int symbols, decimal? holdoutMonths, int trades = 40)
     {
         var s = Summary(sharpe, legs, symbols);
-        s.Observations = observations;
+        s.HoldoutMonths = holdoutMonths;
+        s.Observations = trades;
         return s;
     }
 
     [Fact]
-    public void LargeImprovement_TinySample_NotSignificant_Keeps()
+    public void LargeImprovement_ShortWindow_NotSignificant_Keeps()
     {
-        // +50% di Sharpe ma solo 4 osservazioni → z sotto 1.0 → non si scambia (rumore).
-        var c = Make().Compare(Summary(1.0m, 2, 2), SummaryObs(1.5m, 2, 2, observations: 4));
+        // +50% di Sharpe ma su 4 mesi di holdout: z = 0,5 × √(4/12) = 0,29 < 0,35 → rumore.
+        var c = Make().Compare(Summary(1.0m, 2, 2), SummaryWindow(1.5m, 2, 2, holdoutMonths: 4m));
         Assert.False(c.ShouldReplace);
         Assert.Contains("non significativo", c.Reason);
-        Assert.True(c.SignificanceZ < 1.0m, $"z={c.SignificanceZ}");
+        Assert.True(c.SignificanceZ < 0.35m, $"z={c.SignificanceZ}");
     }
 
     [Fact]
-    public void SameImprovement_LargeSample_Significant_Replaces()
+    public void SameImprovement_LongWindow_Significant_Replaces()
     {
-        // Stesso +50% ma con 30 osservazioni → z sopra 1.0 → scambio giustificato.
-        var c = Make().Compare(Summary(1.0m, 2, 2), SummaryObs(1.5m, 2, 2, observations: 30));
+        // Stesso +50% ma su 18 mesi: z = 0,5 × √1,5 = 0,61 ≥ 0,35 → scambio giustificato.
+        var c = Make().Compare(Summary(1.0m, 2, 2), SummaryWindow(1.5m, 2, 2, holdoutMonths: 18m));
         Assert.True(c.ShouldReplace);
-        Assert.True(c.SignificanceZ >= 1.0m, $"z={c.SignificanceZ}");
+        Assert.True(c.SignificanceZ >= 0.35m, $"z={c.SignificanceZ}");
     }
 
     [Fact]
-    public void UnknownSample_FallsBackToHysteresisOnly()
+    public void UnknownWindow_FallsBackToHysteresisOnly()
     {
-        // Observations=0 → gate di significatività inattivo → decide la sola isteresi percentuale.
-        var c = Make().Compare(Summary(1.0m, 2, 2), SummaryObs(1.5m, 2, 2, observations: 0));
+        // HoldoutMonths null (raccomandazione storica) → gate inattivo → decide la sola isteresi.
+        var c = Make().Compare(Summary(1.0m, 2, 2), SummaryWindow(1.5m, 2, 2, holdoutMonths: null));
         Assert.True(c.ShouldReplace);
+    }
+
+    [Fact]
+    public void TradeCount_AloneDoesNotActivateTheGate()
+    {
+        // Il conteggio trade non è più il campione del test: da solo non accende il gate.
+        // Senza questa asserzione l'unità vecchia potrebbe rientrare senza che nessuno se ne accorga.
+        var candidate = Summary(1.5m, 2, 2);
+        candidate.Observations = 4;               // campione "sottile" nell'unità sbagliata
+        var c = Make().Compare(Summary(1.0m, 2, 2), candidate);
+        Assert.True(c.ShouldReplace);
+        Assert.Equal(0m, c.SignificanceZ);
+    }
+
+    [Theory]
+    // z = ΔSharpe × √(mesi/12), verificato contro il calcolo a mano.
+    [InlineData(1.0, 12, 1.00)]
+    [InlineData(0.5, 3, 0.25)]
+    [InlineData(0.61, 4, 0.35)]
+    [InlineData(1.73, 4, 1.00)]
+    public void SharpeAdvantageZ_ScalesWithTheSquareRootOfTheWindow(double delta, int months, double atteso)
+    {
+        var z = EnsembleComparator.SharpeAdvantageZ(1.0m + (decimal)delta, 1.0m, months);
+        Assert.Equal(atteso, (double)z, precision: 2);
+    }
+
+    [Fact]
+    public void SharpeAdvantageZ_IsIndependentOfTheSharpeLevel()
+    {
+        // La forma 1/√Y non dipende dal livello dello Sharpe: due coppie con lo stesso Δ e la stessa
+        // finestra danno lo stesso z. È la semplificazione dichiarata nel commento della funzione.
+        var basso = EnsembleComparator.SharpeAdvantageZ(0.5m, 0.0m, 6m);
+        var alto = EnsembleComparator.SharpeAdvantageZ(2.5m, 2.0m, 6m);
+        Assert.Equal((double)basso, (double)alto, precision: 6);
+    }
+
+    [Fact]
+    public void SharpeAdvantageZ_NonPositiveWindow_IsNeutral()
+    {
+        Assert.Equal(0m, EnsembleComparator.SharpeAdvantageZ(2.0m, 1.0m, null));
+        Assert.Equal(0m, EnsembleComparator.SharpeAdvantageZ(2.0m, 1.0m, 0m));
+        Assert.Equal(0m, EnsembleComparator.SharpeAdvantageZ(2.0m, 1.0m, -3m));
     }
 }

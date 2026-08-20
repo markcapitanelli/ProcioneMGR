@@ -403,6 +403,13 @@ internal sealed class PositionOpener(
         // posizione Testnet/Live. Non blocca mai l'apertura — se un trigger reduce-only non viene piazzato
         // (rifiuto dell'exchange), registra un warning e restano gli stop software (fonte di verità).
         // Vedi SafetyConfiguration.UseExchangeRestingStops.
+        // [M4, 2026-08-20] `mergeInto is null` = solo alla NASCITA della posizione, con la quantità
+        // di quell'istante. Se esistesse un piano a fette, le fette 2..K passerebbero di qui col
+        // ramo merge e il trigger resterebbe armato sulla sola prima fetta, per sempre. Non è un
+        // caso da gestire: ExecutionSlicePlanner rifiuta di costruire il piano quando questa spunta
+        // è accesa, quindi qui `pos.Quantity` È la posizione intera. Se un domani si volesse la
+        // combinazione, il posto della correzione è il ramo merge qui sotto (cancella e ripiazza),
+        // non questa riga.
         if (mergeInto is null && state.Mode != TradingMode.Paper
             && safety.CurrentValue.UseExchangeRestingStops && credsOrNull is TradingCredentials restingCreds)
         {

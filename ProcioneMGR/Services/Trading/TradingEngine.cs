@@ -561,6 +561,24 @@ public sealed class TradingEngine(
                         ? await ResolveChampionStrategyAsync(ct)
                         : strategyFactory.Create(strat.StrategyName);
                     await s.InitializeAsync(closes, _buffer, strat.Parameters, indicators, ct);
+
+                    // [revisione algoritmi 2026-08-20] LO SPECCHIO DELLA POSIZIONE, rimesso in pari.
+                    //
+                    // Qui sopra si crea un'istanza NUOVA a ogni candela, e InitializeAsync azzera lo
+                    // stato interno. Quattro strategie tengono uno specchio della posizione aperta —
+                    // i loro commenti lo dicono — e senza questa riga quello specchio ripartiva da
+                    // "flat" a ogni barra: i rami di uscita che dipendono da esso NON si
+                    // raggiungevano mai. Grid apriva e non prendeva mai il proprio profitto, su due
+                    // corsie Paper vive. Il backtest, che tiene una sola istanza, validava un'altra
+                    // strategia rispetto a quella che operava.
+                    //
+                    // La posizione del motore e' la sorgente autorevole: gliela si ridice.
+                    if (s is IPositionMirroringStrategy specchio)
+                    {
+                        var aperta = _positions.FirstOrDefault(p => p.StrategyId == strat.StrategyId);
+                        specchio.RestorePosition(aperta?.Side, aperta?.EntryPrice ?? 0m, aperta?.OpenedAtUtc ?? default);
+                    }
+
                     var sig = s.EvaluateSignal(closes.Count - 1, price, ts);
 
                     // Dual-read ML (Fase 2a): confronto OSSERVATIVO col servizio remoto. Fire-and-forget,
@@ -1095,7 +1113,7 @@ public sealed class TradingEngine(
     /// Decide fra apertura IMMEDIATA (comportamento odierno) ed esecuzione a fette. L'aggancio è QUI,
     /// dopo il gate di conferma manuale Live, così lo slicing non lo scavalca mai. Rif. ROADMAP-QLIB §1.2.
     /// </summary>
-    private ExecutionSlicePlanner ExecutionSlicePlanner => new(executionAlgorithms, liveExecution, safety, metrics, Persistence, laneId);
+    private ExecutionSlicePlanner ExecutionSlicePlanner => new(executionAlgorithms, liveExecution, safety, metrics, Persistence, logger, laneId);
 
     private Task TryBuildAndStartExecutionPlanAsync(Order order, EnsembleStrategy? strat, string strategyName, decimal price, DateTime ts, CancellationToken ct, bool isExisting) =>
         ExecutionSlicePlanner.TryBuildAndStartExecutionPlanAsync(

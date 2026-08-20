@@ -555,6 +555,15 @@
                 { <span class="badge bg-success">pilota ONNX: modello caricato</span> }
                 else
                 { <span class="badge bg-secondary">pilota ONNX: non addestrato</span> }
+                @* [revisione 2026-08-20] Il PERCORSO del modello era l'unica configurazione della
+                   piattaforma senza pannello. Non e' una manopola da girare — e' un vincolo di
+                   deploy — ma il mandato non ammette eccezioni implicite: si mostra dove il codice
+                   sta guardando, cosi' un «non addestrato» inspiegabile ha una spiegazione. *@
+                <div class="form-text">
+                    modello atteso in <code>@SentimentOptionsMonitor.CurrentValue.OnnxModelPath</code>
+                    (relativo alla radice dell'app se non assoluto; il file non sta nel repository —
+                    lo genera il pulsante qui accanto)
+                </div>
             </div>
             <div class="col-auto">
                 <button class="btn btn-outline-primary" @onclick="TrainOnnxAsync" disabled="@_onnxTraining">
