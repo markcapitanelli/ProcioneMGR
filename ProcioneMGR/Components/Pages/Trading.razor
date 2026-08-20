@@ -962,6 +962,44 @@
                         <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.FeePercent" />
                         <div class="form-text">Applicata in apertura e in chiusura. Tienila allineata al fee tier reale dell'exchange.</div>
                     </div>
+                    @* [revisione 2026-08-20] Le tre manopole della SANITA' DEI FILL e degli stop
+                       lato exchange non avevano pannello: si potevano toccare solo editando il file
+                       a mano. Sono governate dal mandato «tutto amministrabile da UI» come le altre,
+                       e non sono di contorno — la banda sui fill esiste per il bug B1, dove un
+                       testnet rispondeva «Filled @ 0» e il PnL segnava −1,8 milioni. *@
+                    <div class="col-md-4">
+                        <label class="form-label small">Banda prezzo di fill (± %)</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MaxFillPriceDeviationPercent" />
+                        <div class="form-text">
+                            Oltre questa distanza dal prezzo di mercato il fill è <strong>SOSPETTO</strong> e non viene
+                            adottato. Largo apposta: il riferimento è la chiusura dell'ultima candela e può ritardare
+                            il mercato di una candela intera. A 0 nessun fill sarebbe mai accettato.
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Tolleranza quantità di fill (± %)</label>
+                        <input type="number" step="any" min="0" class="form-control form-control-sm" @bind="Service.Safety.MaxFillQuantityDeviationPercent" />
+                        <div class="form-text">
+                            Deliberatamente <strong>stretta</strong>: su un market order un parziale fuori tolleranza è
+                            un'anomalia, e finisce in verifica manuale anche se genuino.
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="restingStops" @bind="Service.Safety.UseExchangeRestingStops" />
+                            <label class="form-check-label" for="restingStops">
+                                Piazza gli stop <strong>sull'exchange</strong> invece che solo via software
+                                <span class="text-muted">(da verificare su Testnet prima del Live)</span>
+                            </label>
+                            <div class="form-text">
+                                Gli stop software vivono nel processo: se il guscio si ferma, non proteggono più.
+                                Quelli sull'exchange restano — ma la loro semantica varia da venue a venue e va
+                                verificata su Demo/Testnet. Se il piazzamento fallisce l'apertura NON viene bloccata:
+                                restano gli stop software, con un warning nei log.
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="col-12">
                         <div class="form-check">
                             <input type="checkbox" class="form-check-input" id="reqConfirm" @bind="Service.Safety.RequireManualConfirmationForLive" />

@@ -28,7 +28,7 @@ namespace ProcioneMGR.Services.Backtesting;
 ///
 /// Lo stop loss non è compito della strategia: resta l'overlay del motore, come per tutte le altre.
 /// </summary>
-public sealed class GridMeanReversionStrategy : IStrategy
+public sealed class GridMeanReversionStrategy : IStrategy, IPositionMirroringStrategy
 {
     public string Name => "GridMeanReversion";
     public string DisplayName => "Grid Mean Reversion (gradini fissi)";
@@ -71,6 +71,22 @@ public sealed class GridMeanReversionStrategy : IStrategy
         _anchor = [.. await indicators.CalculateSmaAsync([.. closes], anchorPeriod, ct)];
         _side = 0;
         _entryPrice = 0m;
+    }
+
+    /// <summary>
+    /// [revisione 2026-08-20] Rimette lo specchio in pari con la posizione vera. Senza, dal vivo
+    /// <c>_side</c> ripartiva da 0 a ogni candela e i due rami di uscita qui sotto non si
+    /// raggiungevano MAI: la griglia apriva e non prendeva mai il proprio profitto.
+    /// </summary>
+    public void RestorePosition(ProcioneMGR.Services.Trading.OrderSide? side, decimal entryPrice, DateTime openedAtUtc)
+    {
+        _side = side switch
+        {
+            ProcioneMGR.Services.Trading.OrderSide.Buy => 1,
+            ProcioneMGR.Services.Trading.OrderSide.Sell => -1,
+            _ => 0,
+        };
+        _entryPrice = _side == 0 ? 0m : entryPrice;
     }
 
     public Signal EvaluateSignal(int index, decimal currentPrice, DateTime timestamp)

@@ -29,7 +29,7 @@ namespace ProcioneMGR.Services.Backtesting;
 /// STATE: tracks its own open-trade bar index (like DonchianBreakout tracks _side); the
 /// backtest engine always honors signals so the mirror stays in sync.
 /// </summary>
-public sealed class EventTriggerStrategy : IStrategy
+public sealed class EventTriggerStrategy : IStrategy, IPositionMirroringStrategy
 {
     public string Name => "EventTrigger";
     public string DisplayName => "Event Trigger (time-bound)";
@@ -51,6 +51,9 @@ public sealed class EventTriggerStrategy : IStrategy
     private int _maxHold = 24;
     private int _openIndex = -1; // -1 = flat (mirrors the engine position)
 
+    /// <summary>[revisione 2026-08-20] Le barre viste, per tradurre l'istante di apertura in un indice.</summary>
+    private IReadOnlyList<OhlcvData> _bars = [];
+
     public async Task InitializeAsync(
         IReadOnlyList<decimal> closes,
         IReadOnlyList<OhlcvData> candles,
@@ -58,6 +61,7 @@ public sealed class EventTriggerStrategy : IStrategy
         ITechnicalIndicatorsService indicators,
         CancellationToken ct)
     {
+        _bars = candles;
         _eventType = (int)parameters.GetOrDefault("EventType", 0m);
         _short = parameters.GetOrDefault("Direction", 0m) >= 0.5m;
         _threshold = parameters.GetOrDefault("Threshold", 90m);
@@ -121,6 +125,29 @@ public sealed class EventTriggerStrategy : IStrategy
         }
         return result;
     }
+    /// <summary>
+    /// [revisione 2026-08-20] Rimette in pari lo specchio della posizione. Questa strategia conta le
+    /// BARRE da quando e' aperta, quindi l'istante di apertura va tradotto in un indice: si cerca
+    /// l'ultima barra che non e' successiva all'apertura.
+    ///
+    /// <para>Senza, dal vivo <c>_openIndex</c> restava -1 a ogni candela e l'uscita a tempo — che il
+    /// commento di classe chiama «priorita' assoluta» — non scattava mai.</para>
+    /// </summary>
+    public void RestorePosition(ProcioneMGR.Services.Trading.OrderSide? side, decimal entryPrice, DateTime openedAtUtc)
+    {
+        if (side is null) { _openIndex = -1; return; }
+
+        var idx = -1;
+        for (var i = 0; i < _bars.Count; i++)
+        {
+            if (_bars[i].TimestampUtc <= openedAtUtc) idx = i; else break;
+        }
+        // Apertura precedente alla finestra caricata: si conta dalla prima barra nota. Sottostima
+        // le barre trascorse, quindi ritarda l'uscita a tempo invece di anticiparla — nel dubbio si
+        // sbaglia dalla parte che non chiude una posizione prima del previsto.
+        _openIndex = idx >= 0 ? idx : 0;
+    }
+
 
     public Signal EvaluateSignal(int index, decimal currentPrice, DateTime timestamp)
     {
