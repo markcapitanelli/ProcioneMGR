@@ -1831,3 +1831,26 @@ inerte, con la ragione.
 
 *Misura da rifare fra qualche giorno*: nei dieci giorni precedenti il ritmo era di ~6 run/giorno contro
 i 4 consentiti dal solo backoff. Se scende verso 4, l'eccedenza era davvero delle sveglie spurie.
+
+#### Backfill del registry e la fascia grigia misurata (2026-08-20, sera)
+
+**Backfill eseguito** sulle 164 righe storiche di `SavedMlModels`, ricostruendo l'esito dagli snapshot
+dei run: **50 «validato e scartato prima del gate»**, **114 «mai proposto»** (la correlazione di test
+non ha superato `minTestCorrelation`, quindi non sono mai diventati candidati). Additivo e idempotente:
+scritto solo dove `DeflatedSharpeSource` era null, nessun DSR toccato. Da qui in avanti la provenienza
+la scrive il codice — anche per i modelli che non diventano candidati, che sono la maggioranza.
+
+**«Finestra corta» misurata**: è la bocciatura per **meno di 20 trade nell'holdout di ~5 mesi**, cioè
+per mancanza di prove, non di merito — ed è la ragione per cui quei candidati sono *grigi* (`IsGrey`
+pretende Sharpe positivo: un grigio che perde è bocciato nel merito). Sui 30 giorni: 1.127 bocciati
+così, con 2-19 trade.
+
+**Sono gli unici grigi perché la banda DSR è IRRAGGIUNGIBILE.** 402 candidati sono arrivati al gate
+DSR e il **massimo prodotto è 0,773**, contro un pavimento di **0,80**: la seconda porta della fascia
+grigia è sopra il tetto di ciò che questo assetto genera. Gate senza strumento, e nessuna superficie lo
+diceva. Ora ogni run che misura dei DSR senza raggiungere il pavimento **lo dichiara nel log**.
+
+*Tre leve, misurate e NON applicate* (cambiano cosa arriva su una corsia): abbassare il pavimento
+(a 0,75 entrerebbero 3 candidati/mese, a 0,70 quarantanove, sotto è allentare la sicurezza);
+**ridurre la griglia di ricerca** — 8.160 combinazioni per run schiacciano ogni DSR via SR\*, ed è
+l'unica leva che alza i numeri senza spostare un criterio; allungare l'holdout.

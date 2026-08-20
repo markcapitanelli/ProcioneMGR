@@ -116,10 +116,11 @@ public sealed class MlModelTrainingStage(
         var minCorr = (double)config.GetDecimal("minTestCorrelation", 0.02m);
         if (config.GetBool("saveModel", true) && !string.IsNullOrEmpty(ctx.UserId))
         {
-            output.SavedMlModelId = await PersistModelAsync(ctx, mlContext, predictor, factors, dataset.RowCount, testCorrelation, modelType, horizon, ct);
+            var diventaCandidato = testCorrelation >= minCorr;
+            output.SavedMlModelId = await PersistModelAsync(ctx, mlContext, predictor, factors, dataset.RowCount, testCorrelation, modelType, horizon, diventaCandidato, ct);
             ctx.LogLine($"[{Name}] Modello salvato (Id {output.SavedMlModelId}), correlazione test {testCorrelation:F4}.");
 
-            if (testCorrelation >= minCorr)
+            if (diventaCandidato)
             {
                 // Register as an "Ml" strategy candidate: the holdout stage validates it with
                 // the SAME discipline as every rule-based candidate — the model proposes, the
@@ -150,9 +151,15 @@ public sealed class MlModelTrainingStage(
         ctx.MlTraining = output;
     }
 
+    /// <param name="diventaCandidato">
+    /// [M2c] Se il modello supererà il gate di correlazione e quindi entrerà nella validazione. Serve
+    /// a scrivere subito la provenienza giusta: un modello che NON diventa candidato non verrà mai
+    /// giudicato, e senza questa riga resterebbe per sempre un trattino in /registry — indistinguibile
+    /// da uno mai valutato per altre ragioni. Al 2026-08-20 era il caso di 114 modelli su 164.
+    /// </param>
     private async Task<int> PersistModelAsync(
         PipelineContext ctx, MLContext mlContext, IReturnPredictor predictor, List<FactorSpec> factors,
-        int rowCount, double testCorrelation, string modelType, int horizon, CancellationToken ct)
+        int rowCount, double testCorrelation, string modelType, int horizon, bool diventaCandidato, CancellationToken ct)
     {
         var tempPath = Path.Combine(Path.GetTempPath(), $"mlmodel_pipeline_{Guid.NewGuid():N}.zip");
         byte[] bytes;
@@ -185,6 +192,10 @@ public sealed class MlModelTrainingStage(
             ModelBytes = bytes,
             TrainRowCount = rowCount,
             TrainCorrelation = testCorrelation,
+            // [M2c] La provenienza nasce col modello. Se non diventa candidato, questo è tutto ciò
+            // che si saprà mai di lui, e va detto subito invece di lasciare un campo vuoto che
+            // significa «non so».
+            DeflatedSharpeSource = diventaCandidato ? null : SavedMlModel.DsrSourceNeverValidated,
         };
         db.SavedMlModels.Add(saved);
         await db.SaveChangesAsync(ct);
@@ -914,6 +925,32 @@ public static class OverfittingGate
                 v.Survived = false;
                 v.RejectReason = $"permutation p {pperm:F3} ≥ {maxPermutationPValue:F2} (Sharpe holdout compatibile col rumore)";
                 log?.Invoke($"{v.Key}: scartato dal gate — {v.RejectReason}.");
+            }
+        }
+
+        // [F5b, 2026-08-20] LA BANDA GRIGIA PUÒ ESSERE IRRAGGIUNGIBILE, e nessuno lo diceva.
+        //
+        // La fascia grigia ammette due strade: bocciatura per finestra corta, oppure DSR dentro
+        // [0,80; 0,95). Misurato sui 30 giorni al 2026-08-20: 402 candidati sono arrivati al gate
+        // DSR e il **massimo osservato è 0,773** — sotto il pavimento. La banda non è «rara»: è
+        // sopra il tetto di ciò che questo assetto produce, perché il DSR è deflazionato su
+        // migliaia di tentativi e SR* cresce con la dimensione della ricerca. Risultato: OGNI
+        // grigio arriva dalla finestra corta, e la seconda strada è un ramo morto che nessuna
+        // superficie dichiarava. È la famiglia «gate senza strumento» già pagata il 2026-07-28:
+        // chiedersi «dove si legge il numero, e può esistere in questo assetto?».
+        //
+        // Qui non si cambia nessuna soglia — è una decisione del proprietario. Si dice il fatto,
+        // con il numero accanto, in modo che la scelta sia informata invece che rimandata.
+        var dsrMisurati = validated.Where(v => v.DeflatedSharpe is not null).Select(v => v.DeflatedSharpe!.Value).ToList();
+        if (dsrMisurati.Count > 0)
+        {
+            var dsrMax = dsrMisurati.Max();
+            if (dsrMax < GreyZone.DsrFloor)
+            {
+                log?.Invoke(
+                    $"Banda grigia IRRAGGIUNGIBILE in questo run: DSR massimo {dsrMax:F3} su {dsrMisurati.Count} candidati misurati, "
+                  + $"sotto il pavimento {GreyZone.DsrFloor:F2}. Nessun candidato può entrare in fascia grigia per DSR: "
+                  + "gli unici grigi possibili sono quelli bocciati per finestra corta.");
             }
         }
 

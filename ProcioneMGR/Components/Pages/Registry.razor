@@ -330,6 +330,14 @@
         // [M2b] «Nessun numero» e «numero mai misurato» sono due fatti diversi. Un modello che la
         // pipeline ha validato e scartato prima del gate DSR lo dichiara: il trattino da solo si
         // leggeva come «non ancora valutato», e su 164 modelli su 164 era il contrario.
+        if (m.DeflatedSharpeSource == SavedMlModel.DsrSourceNeverValidated)
+        {
+            return ("mai proposto",
+                "Il modello è stato addestrato e salvato, ma la correlazione di test non ha superato la soglia "
+                + "(minTestCorrelation): non è mai diventato un candidato, quindi non è mai entrato nella validazione "
+                + "holdout e nessun giudizio esiste su di lui. Non è «in attesa di valutazione»: è «messo da parte prima di provarlo».",
+                "bg-secondary");
+        }
         if (m.DeflatedSharpeSource == SavedMlModel.DsrSourceRejectedBeforeGate)
         {
             return ("scartato prima del gate",

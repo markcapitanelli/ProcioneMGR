@@ -482,3 +482,88 @@ il solo backoff di 12h su due configurazioni consentirebbe. L'eccedenza è compa
 spurie che bypassavano il backoff — **è un indizio, non una prova** (un run manuale conta uguale). Da
 oggi il braccio volatilità scatta solo su un'uscita vera dalla banda: se il ritmo scende verso 4/giorno
 nei prossimi giorni, l'indizio diventa misura.
+
+---
+
+## 8. «Finestra corta»: che cos'è, e perché è l'UNICA porta della fascia grigia (2026-08-20)
+
+Domanda del proprietario: *tutti i candidati che finiscono in fascia grigia sono bocciati solo per
+«finestra corta» — che significa, e si può migliorare?* Misurato sui **30 giorni** al 2026-08-20,
+**11.496 candidati validati**, campagne 17 e 18.
+
+### Che cosa significa
+
+«Finestra corta» è la bocciatura per **numero di trade insufficiente nell'holdout**, non per
+prestazione: `RejectReason = "Solo N trade in holdout (< M)"`, con **M = 20** nelle due configurazioni
+attive (non il default 10) e un holdout di **~5 mesi** (2026-03-01 → 2026-07-27). È la ragione per cui
+questi candidati sono *grigi* e non bocciati: `GreyZone.IsGrey` li ammette solo se hanno **Sharpe
+holdout positivo e almeno un trade** — un grigio che perde non è grigio, è bocciato nel merito.
+Tradotto: **«non ho abbastanza prove per giudicarti», non «sei scarso»**.
+
+I numeri: i 1.127 bocciati per finestra corta hanno da **2 a 19 trade** (massimo osservato 19, contro
+la soglia 20) e Sharpe medio fra 0,77 e 1,90. Sono strategie che in cinque mesi hanno operato meno di
+quattro volte al mese.
+
+### Perché sono gli UNICI grigi: la banda DSR è irraggiungibile
+
+La fascia grigia ha due porte: la finestra corta, oppure un **DSR dentro [0,80; 0,95)**. Sui 30 giorni:
+
+| esito | candidati | di cui con Sharpe > 0 |
+|---|---|---|
+| bocciati: Sharpe holdout sotto soglia | 9.967 | 866 |
+| bocciati: **finestra corta** | 1.127 | 1.127 |
+| bocciati: **gate DSR** | 402 | 402 |
+| **sopravvissuti** | **0** | — |
+
+I 402 che arrivano al gate DSR un numero ce l'hanno. Ecco come si distribuisce:
+
+| fascia | candidati | DSR min | DSR max |
+|---|---|---|---|
+| DSR < 0,50 | 194 | 0,140 | 0,487 |
+| DSR 0,50–0,80 | 208 | 0,529 | **0,773** |
+| **DSR 0,80–0,95 ← fascia grigia** | **0** | — | — |
+| DSR ≥ 0,95 (passa) | 0 | — | — |
+
+**Il DSR massimo prodotto dal sistema in 30 giorni è 0,773, e il pavimento della fascia grigia è
+0,80.** La banda non è «rara»: è **sopra il tetto** di ciò che questo assetto può produrre. È un gate
+senza strumento — la stessa famiglia della lezione del 2026-07-28 («dove si legge il numero, e può
+esistere in questo assetto?»), e finora nessuna superficie lo diceva.
+
+**Correzione fatta**: quando un run misura dei DSR e nessuno raggiunge il pavimento, lo dichiara nel
+log — *«Banda grigia IRRAGGIUNGIBILE in questo run: DSR massimo 0,773 su 402 candidati misurati, sotto
+il pavimento 0,80»*. Nessuna soglia è stata toccata: **quella è una decisione del proprietario**, e
+qui sotto ci sono i numeri per prenderla.
+
+### Le tre leve, misurate
+
+**1. Abbassare il pavimento della fascia grigia** (oggi 0,80). Quanti candidati entrerebbero, sugli
+stessi 30 giorni:
+
+| pavimento | entrerebbero | Sharpe medio | trade medi |
+|---|---|---|---|
+| 0,80 (oggi) | **0** | — | — |
+| 0,75 | 3 | 1,45 | 20 |
+| 0,70 | 49 | 1,07 | 25 |
+| 0,65 | 95 | 1,10 | 32 |
+| 0,60 | 158 | 1,16 | 29 |
+| 0,50 | 208 | 1,09 | 31 |
+
+A 0,75 la banda si riapre con tre candidati al mese — pochi, e i migliori. Sotto 0,70 si ammette roba
+che il DSR dice essere *più probabilmente rumore che edge*, ed è un allentamento del criterio di
+sicurezza, non una taratura.
+
+**2. Cercare di meno.** Il DSR è deflazionato su **8.160 combinazioni esplorate** per run (N effettivo
+≈ 6.120 dopo il collasso dei correlati), e SR\* cresce con la dimensione della ricerca: è il
+denominatore che schiaccia ogni DSR sotto 0,80. Ridurre la griglia dei parametri alzerebbe **tutti** i
+DSR senza toccare alcuna soglia. È la leva più onesta e la meno esplorata.
+
+**3. Allungare l'holdout.** Con M = 20 trade in cinque mesi si chiede ~4 trade/mese: chi opera meno
+viene scartato per mancanza di prove, non di merito. Un holdout più lungo produce più trade per
+candidato — ma toglie storia alla selezione, e il fatto già misurato resta
+(*«il DSR su 4 mesi è insuperabile per aritmetica: Sharpe 1,0 ⇒ 6,2 anni»*).
+
+> **Il consiglio, se serve.** La leva 2 è quella che migliora i numeri senza spostare un criterio di
+> sicurezza: ogni altra scelta compra candidati abbassando l'asticella. La 1 a **0,75** è difendibile
+> come misura-ponte e riapre la banda con i soli tre migliori del mese; sotto 0,70 non la
+> consiglierei. **Nessuna delle tre è stata applicata**: cambiano numeri che decidono cosa arriva su
+> una corsia.
