@@ -548,9 +548,10 @@ stessi 30 giorni:
 | 0,60 | 158 | 1,16 | 29 |
 | 0,50 | 208 | 1,09 | 31 |
 
-A 0,75 la banda si riapre con tre candidati al mese — pochi, e i migliori. Sotto 0,70 si ammette roba
-che il DSR dice essere *più probabilmente rumore che edge*, ed è un allentamento del criterio di
-sicurezza, non una taratura.
+A 0,75 la banda si riapre con tre candidati al mese; a 0,70 con quarantanove. Scendendo si ammette
+evidenza progressivamente più debole — *(correzione a una frase imprecisa della prima stesura: il DSR
+è la probabilità che l'edge sia reale dopo la deflazione, quindi a 0,60 non è «più probabilmente
+rumore che edge», è «probabilmente vero ma poco». Il lancio di moneta è 0,50.)*
 
 **2. Cercare di meno.** Il DSR è deflazionato su **8.160 combinazioni esplorate** per run (N effettivo
 ≈ 6.120 dopo il collasso dei correlati), e SR\* cresce con la dimensione della ricerca: è il
@@ -567,3 +568,48 @@ candidato — ma toglie storia alla selezione, e il fatto già misurato resta
 > come misura-ponte e riapre la banda con i soli tre migliori del mese; sotto 0,70 non la
 > consiglierei. **Nessuna delle tre è stata applicata**: cambiano numeri che decidono cosa arriva su
 > una corsia.
+
+### La decisione presa (2026-08-20, delega del proprietario)
+
+Delegata la scelta fra le leve, ho fatto **una sola cosa**: portato il pavimento della fascia grigia
+da **0,80 a 0,70**. Prima di farlo ho misurato che cosa cambia davvero, perché «49 candidati in più»
+non dice se qualcuno di loro verrebbe mai scelto.
+
+| porta della fascia grigia | nel pool | **finirebbero schierati** | trade medi | Sharpe walk-forward medio |
+|---|---|---|---|---|
+| finestra corta (l'unica di prima) | 1.127 | 290 | 10,7 | 1,43 |
+| **nuova: banda DSR 0,70–0,95** | 49 | **24** | **25,2** | 1,10 |
+
+Il pool grigio si ordina per Sharpe walk-forward e ne prende i primi a riempire i posti che i
+sopravvissuti lasciano liberi: **24 dei 49 entrerebbero davvero**. Non è cosmetico, e non è un
+allentamento — è uno **scambio di qualità delle prove**: candidati con **più del doppio delle
+osservazioni** (25,2 trade contro 10,7) al prezzo di uno Sharpe walk-forward più basso (1,10 contro
+1,43). È esattamente lo scambio che la storia di questa piattaforma raccomanda: i campioni sottili con
+Sharpe alto non sopravvivono al forward test.
+
+**Un sospetto verificato e smontato.** Temevo che l'ordinamento per Sharpe walk-forward premiasse i
+campioni sottili — un candidato fortunato a 2 trade che scavalca uno solido a 25. Misurato: i primi
+tre di ogni run hanno **10,0 trade medi** contro gli **11,0** di tutti gli altri, e la quota di
+candidati con ≤ 5 trade è la stessa (17% contro 18%). **Nessun bias**: l'ordinamento non è il problema,
+e cambiarlo non serve.
+
+### Che cosa NON ho fatto, e perché
+
+**Non ho ridotto la griglia di ricerca**, che nella prima stesura avevo indicato come «la leva più
+onesta». Ci ho ripensato, ed è una correzione che vale la pena scrivere: ridurre N alza *tutti* i DSR
+per costruzione, perché SR\* dipende da quante cose hai provato. È legittimo **solo se la riduzione ha
+una ragione propria** — griglia ridondante, parametri che non muovono nulla — misurata. Farlo per
+spostare un gate è fabbricare significatività, cioè l'errore già pagato il 2026-07-20 randomizzando su
+asset correlati. Non ho alcuna misura che dica che le 8.160 combinazioni siano ridondanti, e finché
+non c'è, toccare la griglia sarebbe un modo elegante di mentire a se stessi.
+
+**Non ho reso configurabile il pavimento.** `GreyZone` esiste per essere **l'unica** definizione — il
+suo commento lo dice: *«Due soglie in due posti sarebbero due verdetti sulla stessa riga»*. I
+consumatori sono cinque (lettore di flotta, deployer, indice dei candidati, due stage). Trasformare
+una costante centralizzata in una manopola richiede di passarla a tutti e cinque senza che nessuno usi
+il default per sbaglio: è un lavoro a sé, e farlo di fretta ricrea proprio il difetto che quella
+classe è nata per chiudere.
+
+**Un test nuovo impedisce che la porta si murri di nuovo**: `IlPavimento_RestaSottoIlMassimoCheLaMacchinaProduce`
+diventa rosso se qualcuno riporta il pavimento sopra 0,773, che è il tetto misurato. È il guardiano
+che mancava quando la banda è morta in silenzio.

@@ -1854,3 +1854,29 @@ diceva. Ora ogni run che misura dei DSR senza raggiungere il pavimento **lo dich
 (a 0,75 entrerebbero 3 candidati/mese, a 0,70 quarantanove, sotto è allentare la sicurezza);
 **ridurre la griglia di ricerca** — 8.160 combinazioni per run schiacciano ogni DSR via SR\*, ed è
 l'unica leva che alza i numeri senza spostare un criterio; allungare l'holdout.
+
+#### Fascia grigia: pavimento a 0,70 (2026-08-20, delega del proprietario)
+
+Delegata la scelta fra le leve, ne è stata applicata **una sola**: `GreyZone.DsrFloor` da **0,80 a
+0,70**. Misurato prima di cambiarlo, perché «49 candidati in più» non dice se qualcuno verrebbe scelto:
+
+| porta della fascia grigia | nel pool | **schierati davvero** | trade medi | Sharpe WF medio |
+|---|---|---|---|---|
+| finestra corta (l'unica di prima) | 1.127 | 290 | 10,7 | 1,43 |
+| **nuova: banda DSR 0,70–0,95** | 49 | **24** | **25,2** | 1,10 |
+
+**Non è un allentamento, è uno scambio di qualità delle prove**: più del doppio delle osservazioni al
+prezzo di uno Sharpe walk-forward più basso — lo scambio che la storia della piattaforma raccomanda,
+visto che i campioni sottili con Sharpe alto non sopravvivono al forward test. Un test nuovo
+(`IlPavimento_RestaSottoIlMassimoCheLaMacchinaProduce`) diventa rosso se il pavimento risale sopra
+0,773, cioè il tetto misurato: è il guardiano che mancava quando la banda è morta in silenzio.
+
+*Sospetto verificato e smontato*: l'ordinamento del pool per Sharpe walk-forward **non** premia i
+campioni sottili (10,0 trade medi fra i primi tre contro 11,0 fra gli altri). Non è il problema.
+
+**NON è stata ridotta la griglia di ricerca**, che la prima stesura indicava come «la leva più
+onesta» — correzione: ridurre N alza tutti i DSR *per costruzione*, ed è legittimo solo se la
+riduzione ha una ragione propria (ridondanza misurata). Farlo per spostare un gate è fabbricare
+significatività, l'errore già pagato il 2026-07-20. **NON è stato reso configurabile il pavimento**:
+`GreyZone` esiste per essere l'unica definizione, e passarla ai cinque consumatori di fretta ricrea il
+difetto che quella classe chiude.
