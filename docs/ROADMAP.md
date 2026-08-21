@@ -1977,3 +1977,66 @@ controllo che confronti la revisione del core viva con `HEAD` e lo dica in `/tra
 - [ ] decidere sulle 5 righe con chiusura precedente all'apertura (`TradeRecords` 159, 248, 269,
       283, 292): causa già corretta il 2026-08-17, i dati restano sporchi. Non le ho toccate —
       bonificare dati di produzione è una decisione del proprietario
+
+---
+
+## La riassegnazione che non si può fare (2026-08-21) — il dodicesimo no
+
+*Documento completo: [`docs/audit/34_RIASSEGNAZIONE_CORSIE_2026-08-21.md`](audit/34_RIASSEGNAZIONE_CORSIE_2026-08-21.md).*
+
+Richiesta: togliere le vecchie coppie dalle corsie e metterci le nuove strategie. Fatto il lavoro —
+censimento su cinque assi, tre proposte di allocazione da angoli diversi, tre scettici per proposta,
+sintesi. **Dei 738 candidati distinti dell'archivio ne sopravvive zero.**
+
+| passo | criterio | superstiti |
+|---|---|---|
+| 0 | candidati **distinti** (13.893 righe) | **738** |
+| 1 | la terza finestra deve **esistere** | — |
+| 2 | tre finestre positive, ≥60 trade sel., ≥18 hold. | **16** |
+| 3 | costo ≥2× al denominatore della **barra** | **2** |
+| 4 | provenienza risolvibile, non respinta da un gate | **1** |
+| 5 | tenuta sui **25 giorni mai visti** | **0** |
+
+È più informativo degli undici no precedenti perché non dice «lo Sharpe non è significativo»: dice
+che **tre strumenti di misura non misuravano**.
+
+1. **Il walk-forward non è un walk-forward.** 9.665 righe su 13.893 (69,6%) hanno
+   `WalkForwardOosSharpe = round(SelectionSharpe, 2)` — sulla cfg 18 è il **100%**. Per due terzi
+   dell'archivio la terza finestra è la prima, arrotondata.
+2. **Il PBO è uno scalare di run**, non del candidato: 0 run su 162 hanno più di un valore. Il PBO
+   0,079 è condiviso da tutti i 64 candidati di quel run, compresi quelli con holdout −7,78.
+3. **Mancava il benchmark banale.** Sei gambe su nove fra quelle proposte non battono «tieni la
+   stessa direzione e non fare niente» sulla loro stessa finestra. E quattro su sette erano
+   **short-only su corsie Spot**, senza che la proposta se ne accorgesse.
+
+**Il test che ha ucciso l'ultimo superstite**: le finestre di holdout finivano il 2026-07-27. Dal
+27/07 a oggi, **14 simboli su 14 sono positivi** (CRV +51%, ADA +30%, XRP +27%…). L'intero menu è
+stato selezionato su un mercato che scendeva.
+
+### Fatto
+
+Migrazione applicata · immagine del core `local-a422f7f8` costruita, importata e verificata con
+crictl, `newTag` bumpato · **otto corsie ferme, zero posizioni aperte** (obbligatorio: con
+`ActiveStrategiesJson` NULL su 8 su 8, il rollout avrebbe risvegliato cinque corsie con gambe
+short-biased del regime precedente) · cfg 20 ha finalmente `includeGreyZone` · **finestre di 17 e 18
+scongelate** (holdout 26/03 → **21/08**, larghezza invariata) e caccia 1h rilanciata sui 25 giorni
+vergini.
+
+### Rettifica su una decisione del 2026-08-20
+
+Il pavimento DSR era stato abbassato a 0,70 con la motivazione «a 0,70 entrano 49 candidati al mese,
+24 schierati». **Quelle 49 sono righe, non candidati**: i `CandidateKey` distinti mai in banda sono
+**sei**, e due soli ne producono 42. Peggio, quei due erano usciti dalla banda **undici giorni
+prima**, il 2026-08-09, quando è entrata la correzione del conteggio tentativi: −0,089 esatti con
+Sharpe e trade invariati. Da allora il DSR massimo è **0,659**. L'abbassamento **non ha ammesso
+nessuno**. Valore invariato (a entrambe le altezze la porta è chiusa), commento rettificato.
+
+### Aperto
+
+- [ ] `kubectl apply -k infra/k8s/trading` — immagine pronta e pin committato, manca l'apply
+- [ ] la **sonda di fedeltà** sulla corsia 5: previsione esatta di 5 trade chiusi nel replay
+- [ ] riparare `WalkForwardOosSharpe`
+- [ ] **benchmark passivo come gate** della fascia grigia (toglie 6 gambe su 9)
+- [ ] `GreyDeployer` deve risolvere sulla `CandidateKey`, non sulla terna
+- [ ] cancello di costo al denominatore della barra (oggi sottostimato da 5× a 40×)
+- [ ] sonda «core stantio»: le immagini erano indietro di 4, 5 e **11 giorni**
