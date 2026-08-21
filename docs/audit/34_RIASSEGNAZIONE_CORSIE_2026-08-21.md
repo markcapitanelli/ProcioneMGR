@@ -218,3 +218,36 @@ testa hanno un costo 3-4 volte il margine lordo per trade.
       di oggi hanno zero righe pur avendo tutti gli artefatti.
 - [ ] **Una sonda «core stantio»**: revisione del pod contro `HEAD`, visibile in `/trading`. Le
       immagini erano indietro di 4 (trading), 5 (ingestion) e **11 giorni (ml)**.
+
+---
+
+## 9. Le due cacce sui 25 giorni vergini — l'esito
+
+Scongelate le finestre, entrambe le cacce sono state rilanciate lo stesso pomeriggio.
+
+| caccia | run | candidati valutati | **sopravvissuti** | migliore |
+|---|---|---|---|---|
+| **1h** universo largo | `240272c8` | 64 | **0** | `RegimeConditional` XLM/USDT — Sharpe 1,35 su **42 trade**, PF 1,84, DSR 0,653 |
+| **4h** universo largo | `b49a4c8c` | 141 | **0** | `RegimeConditional` NEAR/USDT — Sharpe 1,90 su **60 trade**, PF 1,67, DSR 0,367 |
+
+**Zero sopravvissuti anche sui dati che nessuno aveva mai visto**, e nessun candidato raggiunge
+nemmeno il pavimento grigio di 0,70. È il tredicesimo no — ma questa volta misurato su un mercato
+che sale, non su quello che scendeva.
+
+Vale la pena guardare i due migliori: sono entrambi `RegimeConditional`, ed è la sola famiglia che
+qui compaia con un campione serio (42 e 60 trade contro i 2-19 di quasi tutti gli altri). XLM/USDT
+1h regge: era già il miglior candidato dell'archivio col DSR vero (holdout 1,08 su 48 trade prima,
+1,35 su 42 adesso), è **long/fermo** e non short, e batte il passivo di +0,70 nella sua finestra.
+Resta bocciato nel merito — DSR 0,653 contro un pavimento 0,70 — ma è l'unico oggetto che sopravvive
+al cambio di regime senza cambiare segno.
+
+### La conferma del difetto n.1 sui dati nuovi
+
+Sul run 1h appena eseguito: **64 righe su 64** hanno `WalkForwardOosSharpe = round(SelectionSharpe, 2)`.
+Sul 4h: **82 su 141 (58%)**, che combacia col 59,0% storico della cfg 17.
+
+Non è un residuo di archivio: **il difetto è vivo adesso**. E l'asimmetria dice anche dove guardare —
+le righe col walk-forward *vero* sono tutte delle famiglie `GridMeanReversion` / `DonchianBreakout` /
+`RsiOversold` / `Supertrend` (es. `GridMeanReversion ALGO/USDT`: wf 4,98 contro sel 0,181), mentre
+`RegimeConditional`, `Composite` ed `EventTrigger` hanno sempre il campo copiato. È il primo indizio
+concreto su quale ramo del codice non lo calcola.
