@@ -77,4 +77,40 @@ images:
     # «AFFAMATA» su tutte e sette le corsie. Corretto (battito che ricade sul segnalibro + grazia
     # post-avvio pari a una barra piena più la tolleranza) e ripromosso.
     # Precedente: local-0e97f5ea, poi local-dcea49b1.
-    newTag: local-9a3e8dbe
+    #
+    # [2026-08-21] Promozione — e prima di tutto la ragione per cui era urgente: il pin qui sopra
+    # (local-9a3e8dbe, commit del 17 agosto) è rimasto fermo QUATTRO GIORNI mentre master
+    # avanzava, e nessuno se n'era accorto. Il guscio si aggiorna con l'app, il core si promuove a
+    # mano: finora quel prezzo non lo pagava nessuno perché nessuno lo guardava. Conseguenze
+    # misurate, non ipotizzate:
+    #  · la correzione dello SPECCHIO DELLA POSIZIONE (2026-08-20) non stava girando —
+    #    GridMeanReversion apriva e non prendeva mai il proprio profitto perché lo specchio
+    #    ripartiva «flat» a ogni barra. Le corsie 4 e 5 erano state lasciate intatte apposta come
+    #    «unico test pulito della correzione»: eseguivano la versione rotta, e quell'esperimento
+    #    non era mai partito;
+    #  · l'immagine non conosceva nemmeno RunningStrategyIds (I13a, campo proto 25), quindi il
+    #    confronto configurato-vs-eseguito di /ensemble non poteva funzionare per costruzione.
+    #
+    # QUESTO bump porta nel motore il difetto D1 corretto, che è la ragione per cui la flotta era
+    # viva e muta: `_active`, `_creds` e `_filters` li valorizzava SOLO StartAsync, e
+    # EnsureLoadedAsync — la strada di ogni riavvio del processo — non li restaurava. La corsia
+    # ripartiva con IsRunning = true, riceveva candele, marcava a mercato e onorava gli stop di ciò
+    # che era già aperto, e il `foreach (var strat in _active)` girava a vuoto: nessuna apertura,
+    # per sempre, in silenzio. Misurato il 2026-08-21: cinque corsie «in esecuzione», feed
+    # all'ultima candela, UN SOLO ordine in tutta la flotta in sette giorni, mentre sulla sola
+    # corsia 1 l'RSI a 14 era sceso sotto soglia 57 volte. Con ~8 restart del pod al giorno, il
+    # percorso freddo era la norma, non l'eccezione.
+    # Entra anche il presidio D2: una chiusura Testnet/Live senza credenziali non si finalizza più
+    # SOLO LOCALMENTE (prima rimuoveva la posizione e scriveva il TradeRecord senza aver chiuso
+    # nulla sull'exchange — fail-OPEN sull'unica strada che non può esserlo, regola 4).
+    #
+    # PREREQUISITO DI QUESTO BUMP, già assolto: la migrazione additiva
+    # 20260821034147_SessionActiveStrategies dev'essere applicata PRIMA (colonna
+    # TradingEngineStates.ActiveStrategiesJson), o il motore nuovo interroga una colonna che non
+    # esiste. Applicata il 2026-08-21 con `dotnet-ef database update`.
+    #
+    # DOPO IL ROLLOUT serve un passo che il deploy non fa da solo: ogni corsia va FERMATA E
+    # RIAVVIATA da /trading. Il ripiego dichiarato copre l'intervallo, ma solo uno StartAsync
+    # lascia sulla riga la fotografia delle gambe di questa sessione.
+    # Vedi docs/audit/33_FLOTTA_INERTE_2026-08-21.md.
+    newTag: local-a422f7f8
