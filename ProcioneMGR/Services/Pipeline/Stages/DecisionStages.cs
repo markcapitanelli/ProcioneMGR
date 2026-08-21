@@ -39,7 +39,10 @@ public sealed class EnsembleAssemblyStage(
         new("portfolioOptimizer", "Optimizer dei pesi", "HRP",
             "HRP (default storico) | MeanVariance | RiskParity — nome sconosciuto = HRP, dichiarato nel log"),
         new("includeGreyZone", "Includi fascia grigia", "false",
-            "true = i candidati grigi (bocciati per sola finestra corta o DSR in [0,80–0,95), Sharpe holdout positivo) "
+            // [2026-08-21] La banda si LEGGE dalle costanti, non si riscrive a mano: il pavimento è
+            // passato da 0,80 a 0,70 il 2026-08-20 e questo testo continuava a dichiarare il vecchio.
+            $"true = i candidati grigi (bocciati per sola finestra corta o DSR in "
+            + $"[{GreyZone.DsrFloor:0.00}–{GreyZone.DsrCeiling:0.00}), Sharpe holdout positivo) "
             + "riempiono i posti che i sopravvissuti pieni lasciano liberi — mai al loro posto. Le gambe grigie sono "
             + "etichettate come tali ovunque: è un secondo giro di selezione, non una promozione. "
             + "ATTENZIONE se questa configurazione è SCHEDULATA e AutoReapply è acceso: da qui in poi i run "

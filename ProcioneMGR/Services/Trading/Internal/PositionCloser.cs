@@ -45,6 +45,42 @@ internal sealed class PositionCloser(
     }
 
     /// <summary>
+    /// [D2, 2026-08-21] <b>Una chiusura Testnet/Live senza credenziali non si finalizza.</b>
+    ///
+    /// <para>Il ramo che piazza l'ordine reale era guardato da
+    /// <c>state.Mode != Paper &amp;&amp; credsOrNull is TradingCredentials</c>: con le credenziali
+    /// <b>null</b> la condizione era falsa e il codice <i>proseguiva</i> — rimuoveva la posizione
+    /// locale, scriveva il TradeRecord e registrava ClosePosition, <b>senza aver mai chiuso nulla
+    /// sull'exchange</b>. L'esposizione reale restava aperta, e la piattaforma non ne aveva piu'
+    /// traccia. E' fail-OPEN sull'unica strada che non puo' esserlo (regola 4).</para>
+    ///
+    /// <para>Lo stato non e' ipotetico: <c>_creds</c> era valorizzato solo da <c>StartAsync</c>, e
+    /// dopo un riavvio del processo restava null su una corsia che il DB dichiarava in esecuzione
+    /// (vedi <c>TradingEngineState.ActiveStrategiesJson</c>, difetto D1). La causa e' corretta;
+    /// questo e' il presidio, e vale comunque — stessa forma del ramo «chiusura incerta»: una
+    /// chiusura non si finalizza MAI da uno stato ignoto, la posizione resta e si ritenta.</para>
+    /// </summary>
+    private async Task<bool> RefusesLocalOnlyCloseAsync(
+        TradingEngineState state, TradingCredentials? credsOrNull, OpenPosition pos,
+        string reason, DateTime ts, CancellationToken ct)
+    {
+        if (state.Mode == TradingMode.Paper || credsOrNull is not null) return false;
+
+        logger.LogCritical(
+            "Chiusura {Pid} su {Symbol} in {Mode} RIFIUTATA: nessuna credenziale {Exchange} in questo processo. "
+            + "La posizione e' REALE sull'exchange e resta aperta — finalizzarla solo localmente ne farebbe "
+            + "perdere traccia. Motivo dell'uscita mancata: {Reason}. Verificare /settings/exchanges, poi "
+            + "fermare e riavviare la corsia da /trading.",
+            pos.PositionId, pos.Symbol, state.Mode, state.ExchangeName, reason);
+        await persistence.AuditAsync("CloseRefusedNoCredentials", new
+        {
+            pos.PositionId, pos.Symbol, pos.Side, pos.Quantity, reason,
+            exchange = state.ExchangeName,
+        }, state.Mode, ts, ct);
+        return true;
+    }
+
+    /// <summary>
     /// [B1] Fill di chiusura implausibile (vedi <see cref="FillSanityCheck"/>): la chiusura si
     /// finalizza comunque — l'ordine è andato a buon fine e rifiutarla riaprirebbe il loop di
     /// oversell del bug H2 — ma al prezzo di riferimento locale, MAI ai valori riportati.
@@ -78,6 +114,8 @@ internal sealed class PositionCloser(
         TradingEngineState state, List<OpenPosition> positions, TradingCredentials? credsOrNull, decimal feeFrac,
         OpenPosition pos, decimal exitPrice, string reason, DateTime ts, CancellationToken ct)
     {
+        if (await RefusesLocalOnlyCloseAsync(state, credsOrNull, pos, reason, ts, ct)) return;
+
         var qty = pos.Quantity;
         var entry = pos.EntryPrice;
         var closeSide = pos.Side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
@@ -229,6 +267,8 @@ internal sealed class PositionCloser(
         // [Fase 1] Come nel ramo Spot: il riferimento va salvato prima che il fill lo sostituisca.
         decimal? arrivalPrice = null;
         int? submitLatencyMs = null;
+
+        if (!alreadyClosedOnExchange && await RefusesLocalOnlyCloseAsync(state, credsOrNull, pos, reason, ts, ct)) return;
 
         if (!alreadyClosedOnExchange && state.Mode != TradingMode.Paper && credsOrNull is TradingCredentials creds)
         {

@@ -168,8 +168,118 @@ public sealed class TradingEngine(
         _executionJobs.Clear();
         _executionJobs.AddRange(jobs);
         _loaded = true;
-        logger.LogInformation("TradingEngine: stato ripristinato dal DB (running={Run}, emergency={Emg}, posizioni={N}).",
-            _state.IsRunning, _state.IsEmergencyStopped, _positions.Count);
+
+        // [D1, 2026-08-21] LE GAMBE DELLA SESSIONE, che questa strada non restaurava.
+        //
+        // Fino a oggi `_active` restava vuota dopo un riavvio del processo: la corsia ripartiva con
+        // IsRunning = true, riceveva candele, marcava a mercato e onorava gli stop delle posizioni
+        // gia' aperte — e il `foreach (var strat in _active)` di ProcessCandleAsync girava a vuoto.
+        // Nessun segnale, nessun ordine, nessun errore, per sempre. Cinque corsie in questo stato
+        // il 2026-08-21, con UN solo ordine in tutta la flotta in sette giorni.
+        if (_state.IsRunning)
+        {
+            await RestoreActiveLegsAsync(ct);
+            await RestoreExchangeContextAsync(ct);
+        }
+
+        logger.LogInformation("TradingEngine: stato ripristinato dal DB (running={Run}, emergency={Emg}, posizioni={N}, gambe={G}).",
+            _state.IsRunning, _state.IsEmergencyStopped, _positions.Count, _active.Count);
+    }
+
+    /// <summary>Le gambe congelate dalla sessione, in JSON. Vedi <see cref="TradingEngineState.ActiveStrategiesJson"/>.</summary>
+    private static string SerializeActive(List<EnsembleStrategy> active)
+        => System.Text.Json.JsonSerializer.Serialize(active);
+
+    /// <summary>
+    /// [D1] Rimette in piedi <c>_active</c> dopo un riavvio. Prima la fotografia della sessione;
+    /// se manca (riga scritta prima della colonna, o JSON illeggibile) si ripiega sulla
+    /// configurazione viva <b>dicendolo</b> — una corsia viva e muta e' peggio di una corsia viva e
+    /// dichiaratamente approssimata.
+    /// </summary>
+    private async Task RestoreActiveLegsAsync(CancellationToken ct)
+    {
+        if (_active.Count > 0) return;   // StartAsync in questo processo: gia' in pari
+
+        if (!string.IsNullOrWhiteSpace(_state.ActiveStrategiesJson))
+        {
+            try
+            {
+                var frozen = System.Text.Json.JsonSerializer.Deserialize<List<EnsembleStrategy>>(_state.ActiveStrategiesJson);
+                if (frozen is { Count: > 0 })
+                {
+                    _active = frozen;
+                    logger.LogInformation(
+                        "Corsia {Lane}: ripristinate {N} gambe dalla fotografia della sessione ({Nomi}).",
+                        laneId, _active.Count, string.Join(", ", _active.Select(s => s.StrategyName)));
+                    return;
+                }
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                logger.LogError(ex, "Corsia {Lane}: fotografia delle gambe illeggibile, si ripiega sulla configurazione viva.", laneId);
+            }
+        }
+
+        var cfg = await ensemble.GetConfigurationAsync(ct);
+        _active = cfg.Strategies.Where(s => s.IsActive).ToList();
+        logger.LogCritical(
+            "Corsia {Lane}: la sessione non porta la fotografia delle proprie gambe (sessione avviata prima del 2026-08-21). "
+            + "Ripresa con le {N} gambe ATTIVE IN CONFIGURAZIONE su {Symbol} {Timeframe}: se la configurazione e' stata "
+            + "riscritta dopo l'avvio, queste NON sono le gambe che la sessione aveva validato. Ferma e riavvia la corsia "
+            + "da /trading per rimettere le due verita' in pari.",
+            laneId, _active.Count, _state.Symbol, _state.Timeframe);
+        await AuditAsync("ActiveLegsRestoredFromConfig", new
+        {
+            restored = _active.Count,
+            symbol = _state.Symbol,
+            timeframe = _state.Timeframe,
+            strategyNames = _active.Select(s => s.StrategyName).ToArray(),
+        }, DateTime.UtcNow, ct);
+    }
+
+    /// <summary>
+    /// [D2/D3] Credenziali e filtri del simbolo dopo un riavvio, che erano anch'essi solo di
+    /// <c>StartAsync</c>. Su Paper non serve nulla; su Testnet/Live la loro assenza NON e' innocua:
+    /// senza filtri nessun ordine si arrotonda al lotto reale (R15, gia' fail-closed), e senza
+    /// credenziali una chiusura protettiva finiva per essere solo LOCALE — vedi il presidio in
+    /// <c>PositionCloser</c>. Qui si prova a rimetterle a posto; se non ci si riesce si grida.
+    /// </summary>
+    private async Task RestoreExchangeContextAsync(CancellationToken ct)
+    {
+        if (_state.Mode == TradingMode.Paper || _creds is not null) return;
+
+        var testnet = _state.Mode == TradingMode.Testnet;
+        try
+        {
+            _creds = await LoadCredentialsAsync(_state.ExchangeName, testnet, ct);
+            if (_state.MarketType == MarketType.Futures)
+            {
+                _filters = await exchangeFactory.CreateFutures(_state.ExchangeName)
+                    .GetFuturesSymbolFiltersAsync(_state.Symbol, testnet, ct);
+            }
+            else
+            {
+                _filters = await exchangeFactory.Create(_state.ExchangeName)
+                    .GetSymbolFiltersAsync(_state.Symbol, testnet, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogCritical(ex,
+                "Corsia {Lane} in {Mode}: contesto exchange NON ripristinato dopo il riavvio. "
+                + "Le aperture restano bloccate (R15) e le chiusure protettive NON verranno finalizzate "
+                + "solo localmente: intervenire in /settings/exchanges.",
+                laneId, _state.Mode);
+        }
+
+        if (_creds is null)
+        {
+            logger.LogCritical(
+                "Corsia {Lane} in {Mode}: nessuna credenziale {Exchange} disponibile dopo il riavvio. "
+                + "La corsia ha {N} posizioni aperte REALI che questo processo non puo' chiudere sull'exchange.",
+                laneId, _state.Mode, _state.ExchangeName, _positions.Count);
+        }
     }
 
     // ---------------------------------------------------------------- lifecycle
@@ -270,6 +380,10 @@ public sealed class TradingEngine(
                 UpdatedAtUtc = DateTime.UtcNow,
             };
             _active = cfg.Strategies.Where(s => s.IsActive).ToList();
+            // [D1] La fotografia va anche a DATABASE, non solo in memoria: senza, il riavvio del
+            // processo la perdeva e la corsia ripartiva viva e incapace di aprire (vedi
+            // TradingEngineState.ActiveStrategiesJson).
+            _state.ActiveStrategiesJson = SerializeActive(_active);
             _positions.Clear();
             _buffer.Clear();
             _equity.Clear();

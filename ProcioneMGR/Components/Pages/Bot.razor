@@ -213,8 +213,14 @@
                                   Positive="false"
                                   Hint="@($"limite {Service.Profile.MaxDrawdownPercent:F0}%")" />
                         </div>
+                        @* [C1, 2026-08-21] Le operazioni di QUESTO test, non di tutte le vite della
+                           corsia: gli altri tre riquadri parlano della sessione corrente, e questo
+                           mostrava il totale storico (159 sulla corsia 0, zero sulla coppia attuale).
+                           Stessa correzione che /trading ha ricevuto il 2026-08-03. *@
                         <div class="col-6">
-                            <Stat Label="Operazioni chiuse" Value="@Service.Status.TotalTrades.ToString()" />
+                            <Stat Label="Operazioni chiuse"
+                                  Value="@(Service.TradesDelTest?.ToString() ?? "—")"
+                                  Hint="@OperazioniHint()" />
                         </div>
                     </div>
 
@@ -284,6 +290,25 @@
         {
             Service.Capital = v;
         }
+    }
+
+    /// <summary>
+    /// [C1] Che cosa sta contando il riquadro, detto sotto il numero. I due casi che meritano una
+    /// frase sono quello in cui la corsia non è mai partita (nessun test corrente da contare) e
+    /// quello in cui esistono operazioni di vite precedenti: senza dirlo, uno zero legittimo si
+    /// legge come un guasto e un totale storico si legge come il risultato di oggi.
+    /// </summary>
+    private string OperazioniHint()
+    {
+        if (Service.TradesDelTest is null)
+        {
+            return Service.TradesDiVitePrecedenti > 0
+                ? $"mai avviata; {Service.TradesDiVitePrecedenti} operazioni di configurazioni precedenti"
+                : "corsia mai avviata";
+        }
+        return Service.TradesDiVitePrecedenti > 0
+            ? $"da questo test; altre {Service.TradesDiVitePrecedenti} sono di vite precedenti della corsia"
+            : "da questo test";
     }
 
     private void SelectProfile(string name) => Service.ProfileName = name;

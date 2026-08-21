@@ -382,4 +382,36 @@ public sealed class PipelinePageService(
         var universe = JsonSerializer.Deserialize<List<SeriesSpec>>(config.UniverseJson) ?? [];
         return universe.Count == 0 ? "—" : string.Join(", ", universe.Take(4).Select(u => $"{u.Symbol} {u.Timeframe}")) + (universe.Count > 4 ? $" +{universe.Count - 4}" : "");
     }
+
+    /// <summary>
+    /// [C2, 2026-08-21] I timeframe dell'universo quando sono <b>più di uno</b>, altrimenti null.
+    ///
+    /// <para>È la condizione che fa saltare <c>HoldoutValidationStage</c>: il PBO di pannello
+    /// confronta Sharpe <i>per barra</i> su partizioni costruite per <i>indice</i>, e con granularità
+    /// diverse «la barra i-esima» è un istante diverso per ogni candidato. Lo stage si rifiuta, il run
+    /// prosegue e finisce con zero sopravvissuti — corretto, ma invisibile finché non è troppo tardi.
+    /// Il 2026-08-21 quattro configurazioni erano in quello stato e <b>una girava ogni notte</b>
+    /// esplorando 46.000 combinazioni per non produrre nulla. Questo derivato serve a dirlo nella
+    /// lista, cioè dove si sceglie che cosa eseguire.</para>
+    /// </summary>
+    public static string? MixedTimeframes(PipelineConfiguration config)
+    {
+        var universe = JsonSerializer.Deserialize<List<SeriesSpec>>(config.UniverseJson) ?? [];
+        var tfs = universe.Select(u => u.Timeframe)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(t => t, StringComparer.Ordinal)
+            .ToList();
+        return tfs.Count > 1 ? string.Join(" + ", tfs) : null;
+    }
+
+    /// <summary>
+    /// [C3, 2026-08-21] Le date della finestra di una config, o null se il JSON non è leggibile.
+    /// Un solo punto di deserializzazione, perché tre copie darebbero tre verità sulla stessa riga.
+    /// </summary>
+    public static PipelineDateRanges? DateRangesOf(PipelineConfiguration config)
+    {
+        try { return JsonSerializer.Deserialize<PipelineDateRanges>(config.DateRangesJson); }
+        catch (JsonException) { return null; }
+    }
 }

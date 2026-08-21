@@ -63,6 +63,28 @@ public sealed class PipelineDateRanges
         // 30,44 qui e 30,0 di là, ai due lati della stessa disuguaglianza.
         return days < 7 ? null : (decimal)days / Fleet.TradeFrequency.DaysPerMonth;
     }
+
+    /// <summary>
+    /// [C3, 2026-08-21] Da quanti giorni la finestra di holdout è CHIUSA, cioè quanto mercato recente
+    /// il verdetto di questa configurazione non ha mai visto. Da non confondere con
+    /// <see cref="HoldoutMonths"/>, che misura l'AMPIEZZA della finestra: quella dice quanto è largo
+    /// il campione, questa quanto è vecchio.
+    ///
+    /// <para>Serve perché nessuna superficie lo diceva, e la colonna che l'operatore leggeva come
+    /// freschezza — «Aggiornata» — è l'ora dell'ultimo <i>salvataggio</i> della configurazione, non
+    /// della finestra. Il 2026-08-21 tutte le configurazioni preesistenti avevano l'holdout chiuso
+    /// al 20-27 luglio: un mese di dati freschi che nessuna caccia stava usando, e nessun numero in
+    /// pagina lo lasciava sospettare.</para>
+    ///
+    /// <para><b>Dichiara, non aggiorna.</b> La finestra non va spostata da sola: fissarla PRIMA di
+    /// guardare i risultati è la disciplina anti-overfitting del progetto, e una finestra che
+    /// insegue il presente è una fabbrica di significatività. Questo derivato esiste per far vedere
+    /// l'età a chi decide, non per correggerla.</para>
+    ///
+    /// <para>Negativo se la finestra si chiude nel futuro (configurazione appena creata): si
+    /// restituisce comunque il numero, perché anche quello è un fatto da vedere.</para>
+    /// </summary>
+    public double HoldoutAgeDays(DateTime nowUtc) => (nowUtc - HoldoutTo).TotalDays;
 }
 
 /// <summary>Per-stage configuration inside a pipeline configuration (JSON column).</summary>

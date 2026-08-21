@@ -42,6 +42,23 @@ public sealed class DecayMonitorOptions
     /// lusingato rispetto all'atteso. Non viene sottratto a nulla: vedi il commento del campo.
     /// </summary>
     public decimal ExpectedRiskFreeRateAnnual { get; set; } = 0.02m;
+
+    /// <summary>
+    /// [C1b] Oltre questo <c>|PnlPercent|</c> una riga non è un'operazione, è un <b>fill rotto</b>:
+    /// va tolta dal calcolo e <b>dichiarata</b>, non silenziata.
+    ///
+    /// <para>Il caso è reale e vive ancora in tabella: la corsia 2 ha un trade SUI/USDT del 9 luglio
+    /// 2026 entrato a 0,7694 e uscito a 1748,18 — <b>−227.340%</b> — prodotto dai fill patologici del
+    /// testnet. Il buco è chiuso dal 18 luglio (<c>FillSanityCheck</c> guarda il fill al ritorno), ma
+    /// quel guardiano protegge solo le righe NUOVE: la riga storica resta, e basta a decidere da sola
+    /// lo Sharpe «realizzato» di una gamba se la corsia torna su quel simbolo.</para>
+    ///
+    /// <para>Il valore è volutamente <b>assurdo</b> e non una soglia statistica: 1.000% su una singola
+    /// operazione non è una perdita grande, è aritmeticamente impossibile con i limiti di leva e di
+    /// dimensione del motore. Non serve a togliere le code — quelle sono il segnale — ma a togliere
+    /// ciò che non è un rendimento. Zero o negativo disattiva il filtro.</para>
+    /// </summary>
+    public decimal MaxPlausibleTradeReturnPercent { get; set; } = 1000m;
 }
 
 public sealed class DecayReport
@@ -119,6 +136,13 @@ public sealed class DecayReport
     /// spiegazione si legge come un guasto.</para>
     /// </summary>
     public int TradesExcludedOtherSymbol { get; set; }
+
+    /// <summary>
+    /// [C1b] Trade di questa gamba <b>scartati</b> perché il rendimento riportato è impossibile
+    /// (oltre <see cref="DecayMonitorOptions.MaxPlausibleTradeReturnPercent"/>): fill rotti, non
+    /// operazioni. Sempre &gt; 0 significa che in tabella c'è ancora una riga da bonificare.
+    /// </summary>
+    public int TradesExcludedImplausible { get; set; }
 
     /// <summary>
     /// [I13b] <b>Questa gamba è misurabile?</b> Vero quando i trade sul simbolo attuale bastano

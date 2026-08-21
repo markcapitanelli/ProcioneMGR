@@ -148,7 +148,19 @@ public sealed class PromotionEvaluator(
     {
         var engine = serviceProvider.GetRequiredKeyedService<ITradingEngine>(laneId);
         var status = await engine.GetStatusAsync(ct);
-        var perf = await engine.GetPerformanceAsync(from: status.StartedAtUtc, ct);
+
+        // [C1, 2026-08-21] `StartedAtUtc` è nullable, e `GetPerformanceAsync(from: null)` NON applica
+        // alcuna finestra: aggrega l'intero storico della corsia, tutte le vite e tutti i simboli.
+        // Due righe più sotto lo stesso null è invece gestito (osservazione = zero), quindi la
+        // funzione trattava lo stesso fatto in due modi opposti nello stesso metodo. L'effetto
+        // pratico era smorzato — senza avvio l'osservazione è zero e nessuna promozione scatta — ma
+        // è un invariante che regge per fortuna, non per costruzione: bastava che una soglia
+        // smettesse di dipendere dall'osservazione perché una corsia mai avviata venisse giudicata
+        // sui trade di un'altra coppia. Senza avvio non esiste un test da misurare: si passa una
+        // finestra vuota, non nessuna finestra.
+        var perf = status.StartedAtUtc is DateTime avvio
+            ? await engine.GetPerformanceAsync(from: avvio, ct)
+            : await engine.GetPerformanceAsync(from: DateTime.UtcNow, ct);
 
         var observation = status.StartedAtUtc is DateTime start ? DateTime.UtcNow - start : TimeSpan.Zero;
         var metrics = new LaneMetrics

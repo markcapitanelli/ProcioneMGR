@@ -46,6 +46,22 @@ public sealed class BotPageService(
     public List<OpenPosition> Positions { get; private set; } = [];
     public List<TradeRecord> RecentTrades { get; private set; } = [];
 
+    /// <summary>
+    /// [C1, 2026-08-21] Operazioni chiuse dal TEST CORRENTE: dall'avvio della corsia e sulla coppia
+    /// che ha configurata adesso. <c>null</c> = la corsia non è mai stata avviata, quindi un test
+    /// corrente non esiste — e mostrare un totale storico al suo posto sarebbe dire una cosa per
+    /// un'altra. È la stessa base di <c>TradingPageService.Perf</c>, e la stessa dei riquadri PnL
+    /// che le stanno accanto in pagina.
+    /// </summary>
+    public int? TradesDelTest { get; private set; }
+
+    /// <summary>
+    /// [C1] Operazioni che appartengono a VITE PRECEDENTI della corsia (altra coppia, o prima
+    /// dell'avvio corrente). Si dichiara invece di sparire: sulla corsia 0 sono 159 su 159, e senza
+    /// questo numero «0 operazioni» si legge come un guasto anziché come una corsia appena riavviata.
+    /// </summary>
+    public int TradesDiVitePrecedenti { get; private set; }
+
     /// <summary>Cosa la corsia è configurata per operare, in una riga leggibile. Null se non c'è nulla.</summary>
     public string? StrategySummary { get; private set; }
 
@@ -116,6 +132,43 @@ public sealed class BotPageService(
                 .OrderByDescending(t => t.ClosedAtUtc)
                 .Take(10)
                 .ToListAsync(ct);
+
+            // [C1, 2026-08-21] Le operazioni del TEST CORRENTE, non di tutte le vite della corsia.
+            //
+            // `Status.TotalTrades` conta ogni riga con questo LaneId, senza finestra e senza simbolo:
+            // la corsia 0 ne ha **159**, tutte su BTC, ATOM e NEAR, e **zero** sulla coppia che ha
+            // configurata oggi. La pagina lo mostrava accanto a «Guadagno/perdita», «Variazione» e
+            // «Calo dal massimo», che vengono invece dallo stato della SESSIONE: quattro riquadri,
+            // due basi diverse, nessuna etichetta che lo dicesse.
+            //
+            // È esattamente il difetto che /trading ha corretto il 2026-08-03 — il commento è su
+            // TradingPageService.Perf, «tre finestre diverse nella stessa pagina» — e che questa
+            // pagina non aveva mai ricevuto. Stessa medicina: la finestra è l'avvio del test, e in
+            // più si conta quanto resta fuori, così l'assenza di operazioni ha una spiegazione
+            // invece di sembrare un guasto (regola 5).
+            var simbolo = Status?.Symbol;
+            var dallAvvio = Status?.StartedAtUtc;
+            if (dallAvvio is DateTime da)
+            {
+                var delTest = db.TradeRecords.AsNoTracking()
+                    .Where(t => t.LaneId == BotLaneId && t.ClosedAtUtc >= da);
+                if (!string.IsNullOrEmpty(simbolo))
+                {
+                    delTest = delTest.Where(t => t.Symbol == simbolo);
+                }
+                var conteggio = await delTest.CountAsync(ct);
+                TradesDelTest = conteggio;
+                // Mai negativo: se il totale di Status fosse più basso del conteggio finestrato
+                // (dati incoerenti fra le due letture) si dichiara zero invece di un numero assurdo.
+                TradesDiVitePrecedenti = Math.Max(0, (Status?.TotalTrades ?? 0) - conteggio);
+            }
+            else
+            {
+                // Corsia mai avviata: non c'è un test corrente di cui contare le operazioni. Dirlo
+                // vale più di mostrare un totale storico che parla di un'altra configurazione.
+                TradesDelTest = null;
+                TradesDiVitePrecedenti = Status?.TotalTrades ?? 0;
+            }
         }
         catch (Exception ex)
         {
