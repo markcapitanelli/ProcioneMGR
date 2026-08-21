@@ -1880,3 +1880,42 @@ riduzione ha una ragione propria (ridondanza misurata). Farlo per spostare un ga
 significatività, l'errore già pagato il 2026-07-20. **NON è stato reso configurabile il pavimento**:
 `GreyZone` esiste per essere l'unica definizione, e passarla ai cinque consumatori di fretta ricrea il
 difetto che quella classe chiude.
+
+---
+
+## La notte intraday (2026-08-21) — la prima caccia dove il proprietario vuole operare
+
+Richiesta: *«sfrutta la piattaforma al massimo … per investimenti possibilmente intraday»*. Traccia
+completa in `docs/audit/32_NOTTE_INTRADAY_2026-08-21.md`.
+
+**La diagnosi che ha riorientato tutto.** In sette giorni l'intera flotta ha chiuso **UN trade**: sei
+corsie su otto sono a 4h, e il forward test — l'unico giudice che questa piattaforma riconosca — era a
+digiuno. E l'archivio di ricerca, su 13.814 candidati, ne aveva **162 intraday**, l'ultimo di un mese
+fa. L'intraday non era stato provato e bocciato: **non era stato provato**, pur avendo 5,16 M candele
+a 5m fresche e trenta serie in watchlist.
+
+**Fatto**: due configurazioni nuove (19 = 5m, 20 = 15m), universo ristretto a **10 majors** per tenere
+basso N, finestra fissata *prima*, holdout esteso al 2026-08-20, walk-forward riadattato (con i 18
+mesi di in-sample delle cacce 1h non ci sarebbe stata nemmeno una finestra).
+
+**Esito**: **0 sopravvissuti su 15 (5m) e su 27 (15m)** — l'undicesimo e il dodicesimo no. Ma tre cose
+valgono più dello zero:
+
+1. **La cadenza intraday c'è**: 79, 55, 38, 28 trade nell'holdout contro i 10-20 di 1h/4h. Il problema
+   dell'intraday non è la frequenza, è l'edge.
+2. **L'holdout ha lavorato benissimo**: `GridMeanReversion` BTC 5m aveva il walk-forward OOS più alto
+   del run (**2,98**) e sull'holdout ha fatto **−2,31**. Chi guarda solo il walk-forward schiera la
+   peggiore.
+3. **Ridurre la ricerca non salva nessuno** — ed è la risposta misurata alla leva rifiutata il giorno
+   prima: N è sceso da 6.120 a **3.744** (−39%) e il DSR migliore resta **0,267**. A questi livelli di
+   Sharpe il vincolo non è N, è il segnale.
+
+**Corretto strada facendo**: `AltDataSyncStage` faceva fallire l'INTERO run per una violazione di
+chiave univoca nel sync delle notizie — metà dottrina applicata (lo snapshot era già protetto, la sync
+no). Fail-open sulla diagnostica, regola 4.
+
+**Nessuna corsia è stata modificata.** Avevo preparato tre bracci di forward test intraday, ma due si
+basano su candidati che il gate DSR ha respinto: portarli su una corsia, anche solo in Paper, è
+erodere un gate con l'argomento «tanto non costa nulla» — la stessa mossa del ridurre la griglia per
+spostare una soglia, con un'altra maschera. La lista corta, coi parametri esatti e il verdetto atteso,
+è nel documento: è una decisione del proprietario.

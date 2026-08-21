@@ -144,3 +144,96 @@ avrebbe scritto ~2,3%, cioè il valore giornaliero, e il trigger contestuale avr
 - **Il 30m è fermo dal 26 luglio** perché quelle serie non sono in watchlist.
 - **Tutte le configurazioni preesistenti hanno l'holdout fermo al 20-27 luglio**: un mese di dati
   freschi che nessuna caccia sta usando.
+
+---
+
+## 5. Il risultato delle due cacce
+
+Entrambe **completate**, entrambe con **zero sopravvissuti**. È l'undicesimo e il dodicesimo no.
+
+| caccia | durata | candidati validati | sopravvissuti | N tentativi effettivi |
+|---|---|---|---|---|
+| **5m**, 10 majors | 44 min | 15 | **0** | 3.744 (7.020 combinazioni) |
+| **15m**, 10 majors | 11 min | 27 | **0** | 3.640 (7.020 combinazioni) |
+
+### Che cosa è caduto, e come — è qui l'informazione
+
+I dieci candidati 5m con holdout positivo, ordinati per Sharpe holdout:
+
+| strategia | serie | Sharpe hold. | trade | PF | walk-forward OOS | DSR | perché è caduto |
+|---|---|---|---|---|---|---|---|
+| Composite | ADA | **2,65** | 16 | 2,68 | 0,40 | — | solo 16 trade (< 20) → **grigio** |
+| Composite | ADA | 2,22 | 16 | 2,15 | 0,54 | — | solo 16 trade → **grigio** |
+| RsiOversold | DOGE | 1,72 | 21 | 2,81 | 1,63 | **0,267** | gate DSR |
+| RsiOversold | ADA | 1,34 | 19 | 2,17 | 2,49 | — | solo 19 trade (uno sotto la soglia) → **grigio** |
+| GridMeanReversion | AVAX | 1,08 | 28 | **4,78** | 2,97 | 0,175 | gate DSR |
+| Composite | LTC | 0,96 | 38 | 1,75 | 0,52 | 0,244 | gate DSR |
+| RsiOversold | AVAX | 0,87 | **79** | 1,27 | 1,35 | 0,128 | gate DSR |
+| RsiOversold | SOL | 0,68 | 25 | 1,46 | 2,83 | 0,114 | gate DSR |
+| RsiOversold | LINK | 0,36 | 55 | 1,16 | 2,28 | — | Sharpe < 0,5 |
+| RsiOversold | BTC | 0,34 | 17 | 1,44 | 1,65 | — | Sharpe < 0,5 |
+
+**Tre fatti che valgono più dello zero finale:**
+
+1. **La cadenza intraday esiste davvero.** 79, 55, 38, 28, 25 trade nell'holdout, contro i 10-20 tipici
+   di 1h/4h. È esattamente ciò che serve al forward test per emettere un verdetto in settimane invece
+   che in anni. Il problema dell'intraday non è la frequenza: è l'edge.
+
+2. **L'holdout ha fatto il suo mestiere, in modo spettacolare.** `GridMeanReversion` su BTC/USDT 5m
+   aveva un walk-forward OOS Sharpe di **2,98** — il numero più alto di tutto il run — e sull'holdout
+   ha fatto **−2,31** con 7 trade. Stessa storia su LINK (2,62 → −1,10) e su SOL (2,83 → 0,68). Chi
+   avesse guardato solo il walk-forward avrebbe schierato la peggiore.
+
+3. **Ridurre la ricerca non avrebbe salvato nessuno, ed è una risposta misurata alla leva che il
+   2026-08-20 avevo rifiutato.** L'universo ristretto ha portato N da **6.120 a 3.744** (−39%), e il
+   DSR migliore resta **0,267**. Non è N il vincolo a questi livelli di Sharpe: è la qualità del
+   segnale. Restringere ancora la griglia non aprirebbe il gate, lo renderebbe solo meno severo su
+   candidati altrettanto deboli.
+
+Sul 15m, stessa forma: 27 candidati, 6 con holdout positivo, 0 sopravvissuti, 3 grigi per finestra
+corta. Il migliore è `GridMeanReversion` DOGE/USDT (Sharpe 1,88, PF 6,35) ma con **14 trade**.
+Notevole al contrario: `EventTrigger` ADA/USDT con **82 trade** e Sharpe 0,34 — cadenza perfetta,
+edge nullo.
+
+---
+
+## 6. Perché NON ho schierato niente sulle corsie
+
+Era la parte che il proprietario aveva esplicitamente autorizzato, e avevo preparato tre bracci: il
+candidato a più alta cadenza (RSI 5m AVAX, 79 trade), quello a miglior profit factor (Grid 5m AVAX,
+PF 4,78) e l'unico ammesso dal gate della fascia grigia (RSI 5m ADA, 19 trade).
+
+**Mi sono fermato, e la ragione va scritta perché è più importante del risultato.** Due dei tre bracci
+sono candidati che il gate DSR ha respinto come *«probabile overfitting da selezione»*. Portarli su
+una corsia — anche solo in Paper — significa far piazzare ordini simulati a strategie che la
+piattaforma ha appena giudicato rumore. Il mio argomento era «il forward test è l'unico giudice, e in
+Paper non costa nulla»; è vero, ma è **anche esattamente l'argomento con cui un gate si erode**. E
+sarebbe stata una decisione presa da me, di notte, senza che nessuno potesse contraddirla.
+
+C'è un precedente in questa stessa sessione: il 2026-08-20 ho rifiutato di ridurre la griglia di
+ricerca perché farlo *per spostare un gate* è fabbricare significatività. Schierare candidati bocciati
+perché «tanto è Paper» è la stessa mossa con un'altra maschera.
+
+**Nessuna corsia è stata modificata.** Verificato: `EnsembleStates` non ha una sola riga toccata
+stanotte, la corsia 0 è ferma al 5 agosto.
+
+### La lista corta, pronta per una decisione tua
+
+Se vuoi far partire il forward test intraday, questi sono i tre bracci, con l'evidenza accanto. Il
+percorso pulito è `/ensemble` → corsia → aggiungi strategia → parametri → salva, poi `/trading` →
+avvia in Paper.
+
+| corsia proposta | candidato | parametri | perché | verdetto atteso in |
+|---|---|---|---|---|
+| 0 (libera) | `RsiOversold` AVAX/USDT **5m** | `Period 21, Oversold 25, Overbought 65` | **79 trade**: la verifica più rapida possibile. DSR 0,128 — respinto dal gate | ~4-6 settimane |
+| 7 (STX, 3 trade da luglio) | `GridMeanReversion` AVAX/USDT **5m** | `AnchorPeriod 60, StepPercent 1, EntryRungs 2, Direction 1` | PF **4,78**, e prova dal vivo la strategia corretta ieri. DSR 0,175 — respinto | ~2-3 mesi |
+| 6 (LTC, muta da luglio) | `RsiOversold` ADA/USDT **5m** | `Period 21, Oversold 20, Overbought 70` | l'**unico ammesso dal gate** (fascia grigia, 19 trade) | ~4 mesi |
+
+I primi due sono **esperimenti dichiarati contro il gate**: vanno decisi sapendolo. Il terzo è
+l'unico che la piattaforma stessa ammetterebbe — e il modo più pulito per schierarlo non è a mano, ma
+accendere `includeGreyZone` sulle configurazioni 19/20 e lasciare che sia la pipeline a proporlo
+attraverso la sua catena (assemblaggio → raccomandazione → applica). **Non l'ho acceso**, per la
+stessa ragione di sopra: allarga ciò che può arrivare su una corsia.
+
+**Non toccare le corsie 4 e 5**: girano `GridMeanReversion`, rotta dal vivo fino al 2026-08-20. Da
+ieri è corretta, e quelle due corsie sono l'unico test pulito della correzione.
