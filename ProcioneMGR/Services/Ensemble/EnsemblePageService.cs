@@ -162,9 +162,21 @@ public sealed class EnsemblePageService(
             // attive «non sono eseguite». Il ramo «non determinabile» della pagina, scritto apposta,
             // non poteva scattare mai perche' pretendeva null.
             //
-            // Nota: un motore in corsa esegue sempre almeno una gamba — altrimenti non sarebbe
-            // partito (StartAsync fotografa le attive). Quindi «in corsa + lista vuota» e'
-            // impossibile se il campo c'e', e diagnostico se non c'e'.
+            // [2026-08-21] LA NOTA CHE STAVA QUI ERA SBAGLIATA, e vale la pena dire perche'.
+            //
+            // Diceva: «un motore in corsa esegue sempre almeno una gamba — altrimenti non sarebbe
+            // partito (StartAsync fotografa le attive), quindi in corsa + lista vuota e' impossibile
+            // se il campo c'e'». Il presupposto e' falso: `IsRunning` non lo scrive solo StartAsync,
+            // lo RESTAURA dal database EnsureLoadedAsync a ogni riavvio del processo — e fino al
+            // 2026-08-21 quella strada non restaurava le gambe (difetto D1). «In corsa + lista
+            // vuota» non era impossibile: era lo stato NORMALE di ogni corsia dopo un riavvio, ed
+            // era esattamente il guasto. Questo ramo lo prendeva e lo trasformava in «non te lo so
+            // dire», cioe' nel riquadro grigio che rassicura.
+            //
+            // La causa e' corretta (la sessione porta ora le proprie gambe a database). Il ramo
+            // resta, perche' l'altro caso e' reale — un motore remoto con un'immagine precedente al
+            // campo 25 risponde vuoto mentre esegue, e proto3 non distingue assente da vuoto — ma
+            // ora la pagina nomina ENTRAMBE le cause invece di affermarne una sola.
             EngineRunningStrategyIds = status.IsRunning && status.RunningStrategyIds.Count == 0
                 ? null
                 : status.RunningStrategyIds;

@@ -12,6 +12,7 @@
 @using ProcioneMGR.Services.ML
 @using ProcioneMGR.Services.Monitoring
 @using ProcioneMGR.Services.Monitoring.Drift
+@using ProcioneMGR.Services.Pipeline
 @using ProcioneMGR.Services.Registry
 @using ProcioneMGR.Services.Trading
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
@@ -249,10 +250,20 @@ else
             }
             @if (Svc.EngineIsRunning is true && Svc.EngineRunningStrategyIds is null)
             {
-                <div class="alert alert-secondary py-2 small">
-                    La corsia gira ma <strong>quali gambe stia davvero eseguendo non è determinabile</strong>
-                    (motore non leggibile, o motore remoto precedente a questo confronto): la colonna
-                    «Attiva» qui sotto dice cosa è <em>configurato</em>, non cosa il motore <em>sta facendo</em>.
+                <div class="alert alert-warning py-2 small">
+                    La corsia gira ma <strong>non nomina nessuna gamba</strong>. Le cause possibili sono due,
+                    e da qui non si distinguono:
+                    <ul class="mb-1 mt-1">
+                        <li><strong>Il motore è davvero inerte</strong> — riceve candele, marca a mercato e
+                            onora gli stop delle posizioni già aperte, ma <em>non può aprire più nulla</em>.
+                            È lo stato in cui l'intera flotta si è trovata il 2026-08-21 dopo un riavvio
+                            (difetto D1, corretto): se la sessione è stata avviata prima di quella data,
+                            <strong>fermala e riavviala da <a href="trading">/trading</a></strong>.</li>
+                        <li><strong>Il motore non sa rispondere</strong> — non leggibile, o remoto con
+                            un'immagine precedente a questo confronto.</li>
+                    </ul>
+                    In entrambi i casi la colonna «Attiva» qui sotto dice cosa è <em>configurato</em>,
+                    non cosa il motore <em>sta facendo</em>.
                 </div>
             }
             <div class="table-responsive">
@@ -276,7 +287,7 @@ else
                                     {
                                         @* [T3] Una gamba grigia non deve MAI potersi leggere come un sopravvissuto pieno. *@
                                         <span class="badge bg-warning text-dark ms-1"
-                                              title="Candidato di fascia grigia: bocciato per sola finestra corta o DSR in [0,80–0,95). Il forward test Paper è il giudice.">Grigia</span>
+                                              title="Candidato di fascia grigia: bocciato per sola finestra corta o DSR in [@GreyZone.DsrFloor.ToString("F2")–@GreyZone.DsrCeiling.ToString("F2")). Il forward test Paper è il giudice.">Grigia</span>
                                     }
                                 </td>
                                 <td><code class="small">@FormatParams(s.Parameters)</code></td>
@@ -393,7 +404,7 @@ else
                            salvata), non i campi live editabili sopra: se divergono, l'aggiunta rifiuta. *@
                         <label class="form-label small mb-0 fw-semibold">Da fascia grigia (@(Svc.GreyCandidatesFor?.Symbol) @(Svc.GreyCandidatesFor?.Timeframe)) — @_greyCandidates.Count candidati</label>
                         <div class="form-text mt-0">
-                            Bocciati per <strong>sola finestra corta</strong> o DSR in [0,80–0,95), con Sharpe holdout positivo:
+                            Bocciati per <strong>sola finestra corta</strong> o DSR in [@GreyZone.DsrFloor.ToString("F2")–@GreyZone.DsrCeiling.ToString("F2")), con Sharpe holdout positivo:
                             candidabili al forward test Paper, <strong>non promossi</strong>. Scegliere fra @_greyCandidates.Count
                             candidati è un secondo giro di selezione — usa «Valuta ridondanza» prima di salvare.
                             <a href="research">→ Archivio candidati</a>
@@ -561,6 +572,17 @@ else
                         <span class="d-block mt-1">
                             @esclusi trade esclusi perché su un simbolo diverso da @(_config?.Symbol): questa corsia ha
                             avuto vite precedenti, e mescolarne i mercati renderebbe il realizzato non interpretabile.
+                        </span>
+                    }
+                    @* [C1b] Il fill rotto non e' una perdita: e' una riga da bonificare, e finche' resta
+                       in tabella va detto che c'e'. *@
+                    @if (_decayReports.Sum(r => r.TradesExcludedImplausible) is var rotti && rotti > 0)
+                    {
+                        <span class="d-block mt-1 text-danger">
+                            <strong>@rotti operazioni scartate perché il rendimento riportato è impossibile</strong>
+                            (oltre ±@(new DecayMonitorOptions().MaxPlausibleTradeReturnPercent.ToString("N0"))%): sono
+                            <em>fill rotti</em> rimasti in tabella da prima del <code>FillSanityCheck</code> (18 luglio 2026),
+                            non perdite. Il calcolo qui sotto le ignora; la tabella va bonificata.
                         </span>
                     }
                 </div>

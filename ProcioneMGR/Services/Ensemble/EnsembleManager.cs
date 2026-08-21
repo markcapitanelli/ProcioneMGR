@@ -176,7 +176,16 @@ public sealed class EnsembleManager(
             var legTrades = db.TradeRecords.AsNoTracking()
                 .Where(t => t.LaneId == laneId && t.StrategyId == s.StrategyId);
 
-            var recentTrades = await legTrades
+            // [C1b] E il filtro sui fill ROTTI, che il simbolo da solo non copre. La corsia 2 ha in
+            // tabella un trade a -227.340%: un fill patologico del testnet del 9 luglio, chiuso dal
+            // FillSanityCheck il 18 luglio — ma quel guardiano protegge le righe nuove, non quelle
+            // gia' scritte. Una sola riga cosi' decide da sola lo Sharpe "realizzato" di una gamba.
+            var tetto = options.MaxPlausibleTradeReturnPercent;
+            var plausibili = tetto > 0m
+                ? legTrades.Where(t => t.PnlPercent > -tetto && t.PnlPercent < tetto)
+                : legTrades;
+
+            var recentTrades = await plausibili
                 .Where(t => t.Symbol == cfg.Symbol)
                 .OrderByDescending(t => t.ClosedAtUtc)
                 .Take(options.WindowTradeCount)
@@ -184,14 +193,25 @@ public sealed class EnsembleManager(
 
             // Quanti ne sono stati scartati: un conteggio piu' basso senza spiegazione si legge
             // come un guasto, e la spiegazione qui e' "quella corsia faceva un altro mestiere".
-            var excluded = await legTrades.CountAsync(t => t.Symbol != cfg.Symbol, ct);
+            var excluded = await plausibili.CountAsync(t => t.Symbol != cfg.Symbol, ct);
+            var rotti = tetto > 0m
+                ? await legTrades.CountAsync(t => t.PnlPercent <= -tetto || t.PnlPercent >= tetto, ct)
+                : 0;
 
             // [M5] Il timeframe della corsia porta il realizzato sulla stessa base per-candela
             // dell'atteso (vedi StrategyDecayMonitor.BuildPeriodReturns).
             var report = decayMonitor.Analyze(s, recentTrades, cfg.Timeframe, options);
             report.Symbol = cfg.Symbol;
             report.TradesExcludedOtherSymbol = excluded;
+            report.TradesExcludedImplausible = rotti;
             reports.Add(report);
+
+            if (rotti > 0)
+            {
+                logger.LogWarning(
+                    "Corsia {Lane}, gamba {StrategyId}: {Rotti} operazioni scartate dal calcolo perché il rendimento riportato supera ±{Tetto}% — sono fill rotti rimasti in tabella, non perdite. Vanno bonificate.",
+                    laneId, s.StrategyId, rotti, tetto);
+            }
 
             if (report.IsAlert)
             {

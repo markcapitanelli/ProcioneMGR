@@ -63,6 +63,33 @@ public class TradingEngineState
     public bool IsEmergencyStopped { get; set; }
     public string? EmergencyStopReason { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
+
+    /// <summary>
+    /// [D1, 2026-08-21] <b>Le gambe che questa sessione sta eseguendo</b>, congelate da
+    /// <c>StartAsync</c> e persistite — JSON di <c>EnsembleStrategy</c>.
+    ///
+    /// <para><b>Il guasto che questa colonna chiude.</b> Il motore fotografava le gambe attive in
+    /// <c>StartAsync</c> e le teneva SOLO in memoria. <c>EnsureLoadedAsync</c> — la strada che si
+    /// percorre a ogni riavvio del processo — restaurava stato, posizioni e piani di esecuzione, ma
+    /// non quella lista: la corsia ripartiva con <c>IsRunning = true</c>, riceveva candele, marcava
+    /// a mercato e onorava gli stop delle posizioni gia' aperte, e <b>non poteva aprire piu'
+    /// nulla</b>, per sempre, in silenzio. Misurato il 2026-08-21: cinque corsie «in esecuzione»,
+    /// feed all'ultima candela, <b>un solo ordine in tutta la flotta in sette giorni</b> — mentre
+    /// sulla sola corsia 1 l'RSI a 14 era sceso sotto la soglia 57 volte.</para>
+    ///
+    /// <para>Congelata e non riletta dalla configurazione viva per la stessa ragione per cui lo sono
+    /// <see cref="Symbol"/> e <see cref="Timeframe"/>: la configurazione puo' essere riscritta
+    /// mentre la corsia opera (auto-apply della flotta, o un Salva da /ensemble), e una ripresa che
+    /// leggesse di li' farebbe operare gambe diverse da quelle validate — «si valida una strategia
+    /// e se ne opera un'altra», la classe di difetto corretta il 2026-08-20 sullo specchio della
+    /// posizione. Una sessione ha una sola verita', e questa colonna la porta oltre il riavvio.</para>
+    ///
+    /// <para>Null sulle righe scritte prima di questa colonna: in quel caso la ripresa ripiega
+    /// sulla configurazione viva e lo <b>dichiara</b> (log critico + <c>ActiveLegsRestoredFromConfig</c>
+    /// in audit), perche' una corsia viva e muta e' peggio di una corsia viva e dichiaratamente
+    /// approssimata. Azzerata da un nuovo <c>StartAsync</c> insieme al resto della sessione.</para>
+    /// </summary>
+    public string? ActiveStrategiesJson { get; set; }
 }
 
 /// <summary>Audit trail: ogni azione di trading (ordine, chiusura, emergency, start/stop) è loggata.</summary>

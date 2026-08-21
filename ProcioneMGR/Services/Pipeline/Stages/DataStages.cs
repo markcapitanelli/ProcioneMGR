@@ -133,8 +133,33 @@ public sealed class AltDataSyncStage(
         var inserted = 0;
         if (config.GetBool("sync", true))
         {
-            inserted = await altDataSync.SyncAllAsync(ct);
-            ctx.LogLine($"[{Name}] {inserted} nuovi elementi ingeriti.");
+            // [2026-08-21] DIFENSIVO come lo snapshot qui sotto, e per la stessa ragione: questo
+            // stage porta dati ACCESSORI (notizie, sentiment), non il prezzo su cui si fanno i
+            // backtest. Fino a stanotte metà della dottrina era applicata — lo snapshot protetto,
+            // la sync no — e una violazione di chiave univoca su `AltDataPoints` ha fatto fallire
+            // l'INTERA caccia intraday al secondo stage su diciassette, con l'ingestione dei prezzi
+            // già completata con successo. È il rovescio della regola 4: fail-closed sulla
+            // sicurezza, fail-open sulla DIAGNOSTICA. Un run che perde le notizie di oggi vale
+            // ancora; un run che non parte non vale niente.
+            //
+            // Il caso reale era `23505: duplicate key ... IX_AltDataPoints_DedupeKey`, cioè due
+            // sync sovrapposte che ingeriscono la stessa notizia — raro (1 run su 170) e proprio per
+            // questo insidioso: si manifesta quando si lancia una caccia a mano mentre il worker
+            // periodico sta già sincronizzando.
+            try
+            {
+                inserted = await altDataSync.SyncAllAsync(ct);
+                ctx.LogLine($"[{Name}] {inserted} nuovi elementi ingeriti.");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                ctx.LogLine($"[{Name}] sync dei dati alternativi FALLITA ({ex.GetType().Name}: {ex.Message}). "
+                          + "Si prosegue con le notizie già presenti nel database: il run non si ferma per un dato accessorio.");
+            }
         }
 
         var since = DateTime.UtcNow.AddHours(-24);

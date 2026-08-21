@@ -121,13 +121,31 @@
     {
         <div class="table-responsive">
             <table class="table table-sm mb-0 align-middle">
-                <thead><tr><th>Nome</th><th>Universo</th><th>Modalità</th><th>Schedulazione</th><th>Aggiornata</th><th class="text-end">Azioni</th></tr></thead>
+                <thead><tr><th>Nome</th><th>Universo</th><th>Finestra</th><th>Modalità</th><th>Schedulazione</th><th>Aggiornata</th><th class="text-end">Azioni</th></tr></thead>
                 <tbody>
                     @foreach (var c in _configs)
                     {
                         <tr>
-                            <td>@c.Name</td>
+                            <td>
+                                @c.Name
+                                @* [C2, 2026-08-21] Un universo a timeframe MISTI fa saltare la
+                                   validazione holdout — il PBO confronta Sharpe per barra su
+                                   partizioni per indice, e barre di granularità diversa non sono
+                                   confrontabili. Quattro configurazioni erano in quello stato e una
+                                   girava ogni notte producendo nulla: il badge lo dice qui, dove si
+                                   sceglie cosa eseguire, invece di lasciarlo scoprire a run finito. *@
+                                @if (TimeframeMisti(c) is { } tfs)
+                                {
+                                    <span class="badge bg-danger ms-1"
+                                          title="@($"Universo a timeframe misti ({tfs}): la validazione holdout viene SALTATA e il run non produrrà alcun candidato. Il PBO di pannello confronta Sharpe per barra su partizioni per indice, e barre di granularità diversa non sono confrontabili. Dividi la configurazione, una per timeframe.")">
+                                        timeframe misti
+                                    </span>
+                                }
+                            </td>
                             <td class="small text-muted">@UniverseSummary(c)</td>
+                            <td class="small">
+                                <span class="@FinestraClass(c)" title="@FinestraTooltip(c)">@FinestraText(c)</span>
+                            </td>
                             <td><span class="badge @(c.ExecutionMode == "Live" ? "bg-danger" : c.ExecutionMode == "Paper" ? "bg-info text-dark" : "bg-secondary")">@c.ExecutionMode</span></td>
                             <td>
                                 <span class="badge @ScheduleBadgeClass(c)" title="@ScheduleTooltip(c)">@ScheduleBadgeText(c)</span>
@@ -661,6 +679,49 @@
     }
 
     /// <summary>Ultimo run noto per questa config (dallo storico già caricato, niente campi duplicati sulla config — vedi commento su PipelineConfiguration.NextRunAt).</summary>
+    /// <summary>
+    /// [C2] I timeframe dell'universo, se sono più di uno — cioè la condizione che fa saltare la
+    /// validazione holdout. <c>null</c> quando l'universo è omogeneo (o vuoto), che è il caso normale.
+    /// </summary>
+    private static string? TimeframeMisti(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
+        => PipelinePageService.MixedTimeframes(c);
+
+    /// <summary>
+    /// [C3] L'ETÀ della finestra di holdout, che è un'altra cosa dalla colonna «Aggiornata» —
+    /// quella è l'ora dell'ultimo salvataggio e si legge come freschezza senza esserlo.
+    /// </summary>
+    private static string FinestraText(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
+    {
+        if (PipelinePageService.DateRangesOf(c) is not { } r) return "—";
+        var giorni = r.HoldoutAgeDays(DateTime.UtcNow);
+        var fino = r.HoldoutTo.ToString("dd/MM");
+        if (giorni < 0) return $"fino al {fino} (in corso)";
+        if (giorni < 1.5) return $"fino al {fino} (oggi)";
+        return $"fino al {fino} ({giorni:F0} gg fa)";
+    }
+
+    /// <summary>Rossa oltre il mese, gialla oltre la settimana: sono soglie di LETTURA, non gate.</summary>
+    private static string FinestraClass(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
+    {
+        if (PipelinePageService.DateRangesOf(c) is not { } r) return "text-muted";
+        var giorni = r.HoldoutAgeDays(DateTime.UtcNow);
+        return giorni >= 30 ? "text-danger fw-semibold" : giorni >= 7 ? "text-warning" : "text-muted";
+    }
+
+    private static string FinestraTooltip(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
+    {
+        if (PipelinePageService.DateRangesOf(c) is not { } r) return "Finestra non leggibile.";
+        var giorni = r.HoldoutAgeDays(DateTime.UtcNow);
+        var ampiezza = r.HoldoutMonths() is decimal m ? $"{m:0.#} mesi" : "meno di una settimana";
+        var eta = giorni < 0
+            ? "la finestra non è ancora chiusa"
+            : $"chiusa da {giorni:F0} giorni: il verdetto non ha mai visto il mercato di questo periodo";
+        return $"Selezione {r.SelectionFrom:dd/MM/yyyy} → {r.SelectionTo:dd/MM/yyyy}; holdout "
+             + $"{r.HoldoutFrom:dd/MM/yyyy} → {r.HoldoutTo:dd/MM/yyyy} ({ampiezza}). {eta}. "
+             + "La finestra NON si sposta da sola: fissarla prima di guardare i risultati è la disciplina "
+             + "anti-overfitting del progetto — questo numero serve a farti decidere, non a correggerla.";
+    }
+
     private string ScheduleTooltip(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
     {
         if (string.IsNullOrWhiteSpace(c.Schedule)) return "Nessuna espressione cron impostata.";

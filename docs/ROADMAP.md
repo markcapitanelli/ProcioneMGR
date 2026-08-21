@@ -1880,3 +1880,100 @@ riduzione ha una ragione propria (ridondanza misurata). Farlo per spostare un ga
 significatività, l'errore già pagato il 2026-07-20. **NON è stato reso configurabile il pavimento**:
 `GreyZone` esiste per essere l'unica definizione, e passarla ai cinque consumatori di fretta ricrea il
 difetto che quella classe chiude.
+
+---
+
+## La notte intraday (2026-08-21) — la prima caccia dove il proprietario vuole operare
+
+Richiesta: *«sfrutta la piattaforma al massimo … per investimenti possibilmente intraday»*. Traccia
+completa in `docs/audit/32_NOTTE_INTRADAY_2026-08-21.md`.
+
+**La diagnosi che ha riorientato tutto.** In sette giorni l'intera flotta ha chiuso **UN trade**: sei
+corsie su otto sono a 4h, e il forward test — l'unico giudice che questa piattaforma riconosca — era a
+digiuno. E l'archivio di ricerca, su 13.814 candidati, ne aveva **162 intraday**, l'ultimo di un mese
+fa. L'intraday non era stato provato e bocciato: **non era stato provato**, pur avendo 5,16 M candele
+a 5m fresche e trenta serie in watchlist.
+
+**Fatto**: due configurazioni nuove (19 = 5m, 20 = 15m), universo ristretto a **10 majors** per tenere
+basso N, finestra fissata *prima*, holdout esteso al 2026-08-20, walk-forward riadattato (con i 18
+mesi di in-sample delle cacce 1h non ci sarebbe stata nemmeno una finestra).
+
+**Esito**: **0 sopravvissuti su 15 (5m) e su 27 (15m)** — l'undicesimo e il dodicesimo no. Ma tre cose
+valgono più dello zero:
+
+1. **La cadenza intraday c'è**: 79, 55, 38, 28 trade nell'holdout contro i 10-20 di 1h/4h. Il problema
+   dell'intraday non è la frequenza, è l'edge.
+2. **L'holdout ha lavorato benissimo**: `GridMeanReversion` BTC 5m aveva il walk-forward OOS più alto
+   del run (**2,98**) e sull'holdout ha fatto **−2,31**. Chi guarda solo il walk-forward schiera la
+   peggiore.
+3. **Ridurre la ricerca non salva nessuno** — ed è la risposta misurata alla leva rifiutata il giorno
+   prima: N è sceso da 6.120 a **3.744** (−39%) e il DSR migliore resta **0,267**. A questi livelli di
+   Sharpe il vincolo non è N, è il segnale.
+
+**Corretto strada facendo**: `AltDataSyncStage` faceva fallire l'INTERO run per una violazione di
+chiave univoca nel sync delle notizie — metà dottrina applicata (lo snapshot era già protetto, la sync
+no). Fail-open sulla diagnostica, regola 4.
+
+**Nessuna corsia è stata modificata.** Avevo preparato tre bracci di forward test intraday, ma due si
+basano su candidati che il gate DSR ha respinto: portarli su una corsia, anche solo in Paper, è
+erodere un gate con l'argomento «tanto non costa nulla» — la stessa mossa del ridurre la griglia per
+spostare una soglia, con un'altra maschera. La lista corta, coi parametri esatti e il verdetto atteso,
+è nel documento: è una decisione del proprietario.
+
+---
+
+## La flotta era viva e non poteva aprire (2026-08-21) — difetto D1/D2/D3
+
+*Trovato mentre liberavo e correggevo le corsie. Dettaglio completo in
+[`docs/audit/33_FLOTTA_INERTE_2026-08-21.md`](audit/33_FLOTTA_INERTE_2026-08-21.md); il codice è
+nella PR #102.*
+
+**Cinque corsie «in esecuzione», feed all'ultima candela, un solo ordine in tutta la flotta in sette
+giorni.** Non era il mercato: sulla sola corsia 1 (`RsiOversold` DOT 15m, soglia 20) l'RSI a 14 è
+sceso sotto soglia **57 volte** nei 25 giorni dall'avvio.
+
+`_active`, `_creds` e `_filters` li valorizzava **solo `StartAsync`**. `EnsureLoadedAsync` — la
+strada di ogni riavvio del processo — restaurava stato, posizioni e piani di esecuzione, ma nessuno
+dei tre. La corsia ripartiva viva, riceveva candele, marcava a mercato, onorava gli stop di ciò che
+era già aperto, e `foreach (var strat in _active)` girava a vuoto. Per sempre, in silenzio.
+
+Verificato **sul motore vivo**: nei log del pod, cinque `stato ripristinato dal DB (running=True…)`
+e zero `Trading engine avviato in modalità…`. Il pod ha ~8 restart al giorno: la flotta non è stata
+inerte per sette giorni, lo è stata quasi ininterrottamente.
+
+| | |
+|---|---|
+| **D1** | la sessione porta le proprie gambe a database (`ActiveStrategiesJson`), **congelate** come già lo sono `Symbol`/`Timeframe`; righe precedenti ⇒ ripiego dalla configurazione, **dichiarato** |
+| **D2** | una chiusura Testnet/Live **senza credenziali non si finalizza** più solo localmente: era fail-**open** sulla strada che non può esserlo |
+| **D3** | credenziali e filtri del simbolo tornano anch'essi alla ripresa |
+| **C1b** | il fill rotto della corsia 2 (−227.340%) resta in tabella: tetto dichiarato a 1000%, si scarta e **si conta** |
+
+**Il rilevatore esisteva e gli era stato insegnato a tacere.** I13a confrontava configurato-vs-
+eseguito, ma una nota affermava che «in corsa + lista vuota è impossibile, altrimenti non sarebbe
+partito». `IsRunning` lo *restaura* `EnsureLoadedAsync`: quello stato non era impossibile, era il
+guasto — e il ramo lo convertiva nel riquadro grigio che rassicura. È il filone E in forma nuova:
+non un controllo mancante, un controllo **istruito a scartare il proprio segnale**.
+
+### Il punto che vale più della correzione
+
+**L'immagine del core è ferma al 17 agosto** (`local-9a3e8dbe`). Non contiene
+`IPositionMirroringStrategy`: **la correzione dello specchio della posizione non sta girando**, e le
+corsie 4 e 5 — lasciate intatte apposta come «unico test pulito» — eseguono la versione rotta.
+Tutto ciò che è stato corretto fra il 18 e il 21 agosto vive in master e nel guscio, **non nel
+processo che opera**.
+
+Il guscio si aggiorna con l'app, il core si promuove a mano: è il prezzo dell'architettura core
+caldo/guscio freddo, e finora non lo pagava nessuno perché nessuno lo guardava. **Serve un
+controllo che confronti la revisione del core viva con `HEAD` e lo dica in `/trading`.**
+
+### Aperto
+
+- [ ] **promuovere l'immagine del core** (`build-images-local.ps1 -Targets procionemgr-trading`,
+      poi rollout) — senza questo nulla di quanto corretto in quattro giorni sta operando
+- [ ] applicare la migrazione `SessionActiveStrategies` (una colonna, additiva, retrocompatibile)
+- [ ] riavviare le corsie una per una da `/trading`: serve uno `StartAsync` per lasciare la
+      fotografia sulla riga
+- [ ] **una sonda «core stantio»**: revisione del pod vs `HEAD`, visibile in `/trading`
+- [ ] decidere sulle 5 righe con chiusura precedente all'apertura (`TradeRecords` 159, 248, 269,
+      283, 292): causa già corretta il 2026-08-17, i dati restano sporchi. Non le ho toccate —
+      bonificare dati di produzione è una decisione del proprietario
