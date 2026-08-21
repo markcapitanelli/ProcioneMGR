@@ -132,11 +132,19 @@ avrebbe scritto ~2,3%, cioè il valore giornaliero, e il trigger contestuale avr
 
 ## 4. Cose trovate strada facendo, da non perdere
 
-- **Il PnL della corsia 2 (−227.328%) è un artefatto**: un solo trade **SUI/USDT** del 9 luglio,
-  entrato a 0,7694 e uscito a 1748,18 con `EmergencyStop`. È il bug dei fill patologici, **già
-  corretto il 18 luglio**. Non è un guasto vivo, ma sporca ogni aggregato che somma `PnlPercent` per
-  corsia — e le corsie sono state riassegnate fra simboli diversi, quindi quegli aggregati mescolano
-  serie. Vale la pena escluderlo o segmentare per simbolo dove il numero viene mostrato.
+- **Il PnL della corsia 2 (−227.340%) è un artefatto**: un solo trade **SUI/USDT** del 9 luglio,
+  entrato a 0,7694 e uscito a 1748,18. È il bug dei fill patologici, **già corretto il 18 luglio**
+  — ma il `FillSanityCheck` protegge le righe *nuove*, e quella storica è ancora in tabella.
+
+  > **Precisazione [2026-08-21].** Qui avevo scritto che «sporca ogni aggregato che somma
+  > `PnlPercent` per corsia». Verificato: **nessuna superficie della UI somma `PnlPercent` per
+  > corsia** — il PnL mostrato viene dal capitale del motore, non dalla somma dei rendimenti dei
+  > trade. Il consumatore vivo è **uno solo**: lo Sharpe «realizzato» del monitor di decadimento
+  > (`StrategyDecayMonitor` via `EnsembleManager`), dove una riga così deciderebbe da sola il
+  > risultato di una gamba. Oggi il filtro sul simbolo (I13b) la esclude *per caso* — la corsia 2 è
+  > passata ad ADA — e la rifarebbe rientrare un ritorno su SUI. Chiuso il 2026-08-21 con un tetto
+  > dichiarato (`MaxPlausibleTradeReturnPercent`): si scarta, **si conta**, e `/ensemble` lo dice.
+  > Vedi `33_FLOTTA_INERTE_2026-08-21.md` §6.
 - **Le configurazioni 8, 10, 12 e 13 sono a timeframe misti** (1h+4h, 15m+5m) e da ieri la guardia A2
   le fa **saltare** allo stage di validazione holdout. È il comportamento voluto — il PBO non può
   confrontare barre di granularità diversa — ma significa che quelle quattro configurazioni oggi non
