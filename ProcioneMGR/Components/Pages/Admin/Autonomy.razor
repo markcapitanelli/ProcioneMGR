@@ -561,11 +561,16 @@
                     </div>
                     <div class="col-auto">
                         <label class="form-label mb-0 small">Candidato (grigi del run)</label>
-                        <select class="form-select form-select-sm" style="width: 26rem" @bind="_greyChoiceKey">
+                        <select class="form-select form-select-sm" style="width: 32rem" @bind="_greyChoiceKey">
                             @foreach (var c in _greyChoices)
                             {
-                                <option value="@($"{c.StrategyName}|{c.Symbol}|{c.Timeframe}")">
-                                    @c.StrategyName @c.Symbol @c.Timeframe — Sharpe @c.HoldoutSharpe.ToString("F2") su @c.HoldoutTrades trade
+                                @* [Difetto C, 2026-08-22] Il valore E' la CandidateKey. Prima era la terna:
+                                   due gambe della stessa terna avevano lo STESSO valore, e nel run 835ffba9
+                                   (Composite LTC/USDT 15m, entrambe Sharpe 0,97 su 9 trade) anche etichette
+                                   identiche al carattere. L'impronta dei parametri e' l'unica cosa che le
+                                   distingue: si mostra, altrimenti la scelta resta cieca. *@
+                                <option value="@c.CandidateKey">
+                                    @c.CandidateKey — Sharpe @c.HoldoutSharpe.ToString("F2") su @c.HoldoutTrades trade
                                 </option>
                             }
                         </select>
@@ -2461,8 +2466,9 @@
             _greyChoices = (await GreyDeployer.ListGreyAsync(runId)).ToList();
             if (_greyChoices.Count > 0)
             {
-                var first = _greyChoices[0];
-                _greyChoiceKey = $"{first.StrategyName}|{first.Symbol}|{first.Timeframe}";
+                // [Difetto C] La preselezione e' la prima della lista MOSTRATA (Sharpe holdout piu'
+                // alto), identificata dalla sua chiave: cio' che si vede e cio' che parte coincidono.
+                _greyChoiceKey = _greyChoices[0].CandidateKey;
             }
             else
             {
@@ -2474,13 +2480,18 @@
 
     private async Task DeployGreyAsync()
     {
-        if (_greyRunId is not Guid runId || string.IsNullOrEmpty(_greyChoiceKey)) return;
-        var parts = _greyChoiceKey.Split('|');
-        if (parts.Length != 3) return;
+        if (_greyRunId is not Guid runId) return;
+        if (string.IsNullOrEmpty(_greyChoiceKey))
+        {
+            // [Difetto C] Prima si usciva in silenzio: il click non faceva nulla e nessuno lo diceva.
+            _greyStatus = "Nessun candidato selezionato: scegli una gamba dal menù.";
+            _greyIsError = true;
+            return;
+        }
         _busy = true;
         try
         {
-            var result = await GreyDeployer.DeployAsync(runId, parts[0], parts[1], parts[2], _greyLaneId, _greyStartPaper);
+            var result = await GreyDeployer.DeployAsync(runId, _greyChoiceKey, _greyLaneId, _greyStartPaper);
             _greyStatus = result.Message;
             _greyIsError = !result.Success;
             if (result.Success)

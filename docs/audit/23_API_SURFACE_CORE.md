@@ -2060,12 +2060,14 @@ Trading, esecuzione, rischio, carry, flotta, sicurezza: **il codice che può muo
 | | Firma | Descrizione |
 |---|---|---|
 | `m` | `Task&lt;IReadOnlyList&lt;GreyChoice&gt;&gt; ListGreyAsync(Guid runId, CancellationToken ct = default)` | — |
+| `m` | `Task&lt;GreyDeployResult&gt; DeployAsync(Guid runId, string candidateKey, int laneId, bool startPaper, CancellationToken ct = default)` | **[Difetto C, 2026-08-22]** Si schiera per `candidateKey` (`PipelineCandidateKey`), **mai per terna**. Prima la firma prendeva `(strategyName, symbol, timeframe)` e risolveva con `FirstOrDefault`: la terna non è una chiave, e su `b49a4c8c` la riga preselezionata avrebbe schierato l'altra specifica (0,53 su 3 trade invece di 1,29 su 8). Simbolo e timeframe si LEGGONO dal candidato risolto. Fail-closed su zero **e** su più di una corrispondenza. |
 
 ### 📦 `GreyDeployer` `(`
 
 | | Firma | Descrizione |
 |---|---|---|
-| `m` | `Task&lt;IReadOnlyList&lt;GreyChoice&gt;&gt; ListGreyAsync(Guid runId, CancellationToken ct = default)` | — |
+| `m` | `Task&lt;IReadOnlyList&lt;GreyChoice&gt;&gt; ListGreyAsync(Guid runId, CancellationToken ct = default)` | La `GreyChoice` porta ora la `CandidateKey`: è il valore dell'`option` in `/admin/autonomy` ed è ciò che torna a `DeployAsync`. |
+| `m` | `(ValidatedCandidate?, string?) ResolveGrey(IReadOnlyList&lt;ValidatedCandidate&gt;, string candidateKey)` | `internal static`, pura: la risoluzione per identità, collaudabile senza il circuito. |
 
 # `Services/Security/`
 
