@@ -284,7 +284,12 @@ public sealed class FleetStateReader(
         return new CandidateVerdict("grey",
             TradeFrequency.PerMonth(best.HoldoutTrades, months) ?? 0m,
             best.Timeframe,
-            $"{best.StrategyName} {best.Symbol} {best.Timeframe}: Sharpe holdout {best.HoldoutSharpe:F2} su {best.HoldoutTrades} trade"
+            // [Difetto C, 2026-08-22] La proposta nomina la CHIAVE, come il menù e il journal —
+            // `Identity: best.Key` era già due righe sotto. Lasciare la terna qui significava avere
+            // metà catena che parla per identità e metà per terna, cioè la doppia verità che
+            // GreyZone dichiara di voler evitare: due Composite XLM/USDT 4h dello stesso run
+            // producevano la stessa identica riga di proposta.
+            $"{best.Key}: Sharpe holdout {best.HoldoutSharpe:F2} su {best.HoldoutTrades} trade"
             + (grey.Count > 1 ? $" (+{grey.Count - 1} altri in fascia grigia)" : ""),
             // [I12] L'identità del grigio PROPOSTO (non del run): due run che ritrovano gli stessi
             // parametri sulla stessa serie sono una proposta sola, e vanno mostrati come tale.

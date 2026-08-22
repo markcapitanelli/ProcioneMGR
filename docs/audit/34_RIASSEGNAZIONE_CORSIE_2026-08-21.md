@@ -210,9 +210,17 @@ testa hanno un costo 3-4 volte il margine lordo per trade.
 - [ ] **Benchmark passivo come gate**, non come commento: nessun candidato entra in fascia grigia se
       non batte il buy&hold nella sua direzione prevalente. Sull'archivio di oggi toglie sei gambe
       su nove.
-- [ ] **`GreyDeployer` risolve sulla `CandidateKey`**, non sulla terna `(strategia, simbolo, tf)`:
-      nel run `5f6e1001` ci sono **due** `Composite | NEAR/USDT | 4h` grigi e `FirstOrDefault`
-      prende il peggiore mentre la UI mostra in cima il migliore.
+- [x] **`GreyDeployer` risolve sulla `CandidateKey`** — **FATTO il 2026-08-22.** Due rettifiche alla
+      riga che avevo scritto qui: (a) le «119 terne ambigue» sono **12 distinte** ricomparse in 119
+      run-istanze, perché la caccia notturna ritrova ogni notte la stessa griglia — è lo stesso
+      errore di conteggio righe-vs-distinti già rettificato su `GreyZone.DsrFloor`; (b) **nessuno
+      schieramento sbagliato è mai avvenuto**: dei 6 click umani, il solo su terna ambigua aveva le
+      due gambe con Sharpe identico. Il valore della correzione è **prospettico**, e il caso vivo è
+      `b49a4c8c`, dove la riga **preselezionata** (Composite XLM/USDT 4h, Sharpe 1,29 su 8 trade)
+      avrebbe schierato l'altra specifica della stessa terna (0,53 su 3 trade) senza alcun errore
+      dell'operatore. Corretti anche il `FirstOrDefaultAsync` su `(RunId, Kind)` — che non è una
+      chiave e ha già duplicati per altri `Kind` — e la proposta di `FleetStateReader`, che nominava
+      ancora la terna mentre due righe sotto passava già `Identity: best.Key`.
 - [ ] **Cancello di costo al denominatore della barra** dentro la pipeline.
 - [ ] **`ResearchCandidates` va indicizzata dal run**, non all'apertura di `/research`: quattro run
       di oggi hanno zero righe pur avendo tutti gli artefatti.

@@ -9,10 +9,29 @@ using ProcioneMGR.Services.Trading;
 
 namespace ProcioneMGR.Services.Fleet;
 
-/// <summary>Un candidato grigio schierabile, come lo mostra il form.</summary>
-public sealed record GreyChoice(
-    string StrategyName, string Symbol, string Timeframe,
-    decimal HoldoutSharpe, int HoldoutTrades, string? RejectReason);
+/// <summary>
+/// Un candidato grigio schierabile, come lo mostra il form.
+///
+/// <para>[Difetto C, 2026-08-22] <b><see cref="CandidateKey"/> è l'unica identità.</b> La terna
+/// (strategia, simbolo, timeframe) NON è una chiave, e il form la usava come valore dell'option:
+/// vedi <see cref="GreyDeployer.ResolveGrey"/> per la misura.</para>
+///
+/// <para>Deliberatamente <b>NON posizionale</b>: quattro <c>string</c> adiacenti in testa a un
+/// record posizionale si scambiano senza che il compilatore fiati, e un default <c>= ""</c>
+/// renderebbe legale anche l'omissione. Con <c>required init</c> entrambi sono errori di
+/// compilazione.</para>
+/// </summary>
+public sealed record GreyChoice
+{
+    /// <summary>L'identità canonica (<see cref="PipelineCandidateKey"/>): è questa che torna indietro a <see cref="IGreyDeployer.DeployAsync"/>.</summary>
+    public required string CandidateKey { get; init; }
+    public required string StrategyName { get; init; }
+    public required string Symbol { get; init; }
+    public required string Timeframe { get; init; }
+    public required decimal HoldoutSharpe { get; init; }
+    public required int HoldoutTrades { get; init; }
+    public string? RejectReason { get; init; }
+}
 
 /// <summary>Esito dello schieramento, scritto per un umano.</summary>
 public sealed record GreyDeployResult(bool Success, string Message);
@@ -34,8 +53,13 @@ public interface IGreyDeployer
 {
     Task<IReadOnlyList<GreyChoice>> ListGreyAsync(Guid runId, CancellationToken ct = default);
 
+    /// <summary>
+    /// [Difetto C, 2026-08-22] Si schiera per <paramref name="candidateKey"/>
+    /// (<see cref="PipelineCandidateKey"/>), <b>mai per terna</b>. Simbolo e timeframe si LEGGONO
+    /// dal candidato risolto: non sono più parametri, così non possono divergere da lui.
+    /// </summary>
     Task<GreyDeployResult> DeployAsync(
-        Guid runId, string strategyName, string symbol, string timeframe,
+        Guid runId, string candidateKey,
         int laneId, bool startPaper, CancellationToken ct = default);
 }
 
@@ -52,12 +76,24 @@ public sealed class GreyDeployer(
         var grey = await LoadGreyCandidatesAsync(runId, ct);
         return grey
             .OrderByDescending(c => c.HoldoutSharpe)
-            .Select(c => new GreyChoice(c.StrategyName, c.Symbol, c.Timeframe, c.HoldoutSharpe, c.HoldoutTrades, c.RejectReason))
+            // [Difetto C] La chiave viaggia FINO al form: è il valore che tornerà indietro in
+            // DeployAsync. Senza, l'ordinamento per Sharpe di questa riga e l'ordine dell'artifact
+            // letto in DeployAsync producevano due liste diverse sulla stessa terna.
+            .Select(c => new GreyChoice
+            {
+                CandidateKey = c.Key,
+                StrategyName = c.StrategyName,
+                Symbol = c.Symbol,
+                Timeframe = c.Timeframe,
+                HoldoutSharpe = c.HoldoutSharpe,
+                HoldoutTrades = c.HoldoutTrades,
+                RejectReason = c.RejectReason,
+            })
             .ToList();
     }
 
     public async Task<GreyDeployResult> DeployAsync(
-        Guid runId, string strategyName, string symbol, string timeframe,
+        Guid runId, string candidateKey,
         int laneId, bool startPaper, CancellationToken ct = default)
     {
         // --- La corsia: di flotta, libera, senza vincoli. Si RILEGGE lo stato adesso, non ci si
@@ -83,14 +119,15 @@ public sealed class GreyDeployer(
         }
 
         // --- Il candidato: deve esistere nel run ED essere grigio per il filtro del lettore.
-        var candidate = (await LoadGreyCandidatesAsync(runId, ct)).FirstOrDefault(c =>
-            c.StrategyName.Equals(strategyName, StringComparison.Ordinal)
-            && c.Symbol.Equals(symbol, StringComparison.Ordinal)
-            && c.Timeframe.Equals(timeframe, StringComparison.Ordinal));
+        // Risolto per IDENTITÀ, non per terna, e fail-closed su entrambi i lati. Vedi ResolveGrey.
+        var (candidate, resolveError) = ResolveGrey(await LoadGreyCandidatesAsync(runId, ct), candidateKey);
         if (candidate is null)
         {
-            return new(false, "Candidato non trovato fra i GRIGI di quel run: questo pulsante schiera solo le proposte della fascia grigia, non qualunque cosa.");
+            return new(false, resolveError!);
         }
+        // Simbolo e timeframe vengono dal candidato risolto: unica fonte di verità.
+        var symbol = candidate.Symbol;
+        var timeframe = candidate.Timeframe;
 
         // --- Il bracket: stesso calcolo dell'applica. Senza protezioni derivabili non si parte.
         var (sl, tp) = await AutoBracket.ComputeAsync(dbFactory, excursion, symbol, timeframe, ct);
@@ -161,15 +198,71 @@ public sealed class GreyDeployer(
                 Applied = error is null,
                 DryRun = false,
                 Error = error,
-                Reason = $"[F5, click umano] {candidate.StrategyName} {symbol} {timeframe} → corsia {laneId}, {startedText}. " +
+                // [Difetto C, 2026-08-22] Nel journal va la CHIAVE, non la terna: la specifica
+                // schierata il 2026-08-03 su corsia 6 (Composite LTC/USDT 15m, terna ambigua) si
+                // può ancora ricostruire, ma solo dai Parameters della corsia e solo finché quella
+                // corsia non viene riassegnata. Il journal, da solo, non bastava.
+                Reason = $"[F5, click umano] {candidate.Key} → corsia {laneId}, {startedText}. " +
                          $"Sharpe holdout {candidate.HoldoutSharpe:F2} su {candidate.HoldoutTrades} trade; SL {sl:F2}% / TP {tp:F2}%.",
             });
             await db.SaveChangesAsync(ct);
         }
 
-        logger.LogInformation("Candidato grigio schierato: {Strategy} {Symbol} {Timeframe} → corsia {Lane} ({Stato}).",
-            candidate.StrategyName, symbol, timeframe, laneId, startedText);
-        return new(error is null, $"{candidate.StrategyName} {symbol} {timeframe} → corsia {laneId}: {startedText}. SL {sl:F2}% / TP {tp:F2}% (bracket automatico).");
+        logger.LogInformation("Candidato grigio schierato: {Candidato} → corsia {Lane} ({Stato}).",
+            candidate.Key, laneId, startedText);
+        return new(error is null, $"{candidate.Key} → corsia {laneId}: {startedText}. SL {sl:F2}% / TP {tp:F2}% (bracket automatico).");
+    }
+
+    /// <summary>
+    /// [Difetto C, 2026-08-22] Il candidato si risolve per IDENTITÀ
+    /// (<see cref="PipelineCandidateKey"/>), mai per la terna.
+    ///
+    /// <para><b>La terna non è una chiave.</b> <c>CreativeDiscoveryStage</c> conferma più specifiche
+    /// distinte della stessa meta-strategia sulla stessa serie — è esattamente il motivo per cui la
+    /// chiave canonica esiste. Misurato sugli artifact il 2026-08-22: su 1.414 righe grigie in 146
+    /// run ci sono <b>12 terne ambigue distinte</b>, che ricompaiono in 119 run-istanze perché la
+    /// caccia notturna ritrova ogni notte la stessa griglia (le istanze non sono problemi: è lo
+    /// stesso errore di conteggio già rettificato su <c>GreyZone.DsrFloor</c>).</para>
+    ///
+    /// <para>Il danno operativo è concentrato: dei 10 run raggiungibili dal menù, <b>2 hanno la
+    /// terna ambigua sulla riga PRESELEZIONATA</b> e schieravano la gamba peggiore senza alcun
+    /// errore dell'operatore — su <c>b49a4c8c</c> il journal propone <c>Composite XLM/USDT 4h</c>
+    /// Sharpe 1,29 su 8 trade, e il codice avrebbe schierato l'altra specifica della stessa terna,
+    /// Sharpe 0,53 su 3 trade. <b>Nessuno schieramento sbagliato è mai avvenuto</b> (dei 6 click
+    /// umani, il solo su terna ambigua aveva le due gambe con Sharpe identico): il valore di questa
+    /// correzione è prospettico.</para>
+    ///
+    /// <para><b>Fail-closed su entrambi i lati.</b> Zero corrispondenze o più di una fanno
+    /// RIFIUTARE. Il ramo «più di una» è <i>irraggiungibile per costruzione</i> con i generatori
+    /// attuali — la chiave degenera nella terna solo con zero parametri, e nessuno dei produttori
+    /// di <c>DiscoveryCandidate</c> ne emette senza (verificato: 0 righe su 14.492) — ma resta come
+    /// guardia di contratto: se l'identità non discrimina, non si tira a sorte su un'azione che
+    /// scrive su una corsia.</para>
+    ///
+    /// <para><b>Artifact vecchi.</b> Non esiste il caso «payload senza l'identificatore nuovo»:
+    /// <see cref="ValidatedCandidate.Key"/> è calcolata dai <c>Parameters</c> ed è RICOSTRUITA alla
+    /// deserializzazione, mai letta dal JSON. E <c>ListGreyAsync</c> e <c>DeployAsync</c>
+    /// deserializzano lo STESSO payload, quindi le due liste hanno per costruzione le stesse chiavi.</para>
+    ///
+    /// Statica e pura per essere collaudabile senza il circuito.
+    /// </summary>
+    internal static (ValidatedCandidate? Candidate, string? Error) ResolveGrey(
+        IReadOnlyList<ValidatedCandidate> grey, string candidateKey)
+    {
+        if (string.IsNullOrWhiteSpace(candidateKey))
+        {
+            return (null, "Nessun candidato selezionato: scegli una gamba dal menù.");
+        }
+
+        var matches = grey.Where(c => string.Equals(c.Key, candidateKey, StringComparison.Ordinal)).ToList();
+        return matches.Count switch
+        {
+            1 => (matches[0], null),
+            0 => (null, $"Candidato «{candidateKey}» non trovato fra i GRIGI di quel run: la lista può essere "
+                        + "invecchiata (ricarica la pagina). Questo pulsante schiera solo le proposte della fascia grigia."),
+            _ => (null, $"Identità AMBIGUA: «{candidateKey}» corrisponde a {matches.Count} candidati grigi di quel run — "
+                        + "stessa terna e stessa impronta dei parametri. Non si schiera a caso: segnala l'artifact del run."),
+        };
     }
 
     /// <summary>I candidati GRIGI del run, con lo STESSO filtro del lettore della flotta (nessuna doppia verità).</summary>
@@ -178,6 +271,13 @@ public sealed class GreyDeployer(
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var payload = await db.PipelineArtifacts.AsNoTracking()
             .Where(a => a.RunId == runId && a.Kind == "ValidatedCandidates")
+            // [Difetto C, 2026-08-22] Un First su un filtro che NON è una chiave: non esiste indice
+            // unico su (RunId, Kind), e in questa tabella i duplicati per quella coppia esistono
+            // già per altri Kind (AutoResumeAttempt su 7 run, LlmAdvisory su 2). Per
+            // ValidatedCandidates oggi il rapporto è 169 artifact / 169 run, quindi è latente —
+            // ma senza ordinamento il menù e la risoluzione potrebbero essere serviti da due
+            // payload diversi, che è di nuovo il difetto C sotto un'altra forma.
+            .OrderBy(a => a.Id)
             .Select(a => a.PayloadJson)
             .FirstOrDefaultAsync(ct);
         if (string.IsNullOrWhiteSpace(payload)) return [];
