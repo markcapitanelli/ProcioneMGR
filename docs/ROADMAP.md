@@ -2040,3 +2040,88 @@ nessuno**. Valore invariato (a entrambe le altezze la porta è chiusa), commento
 - [ ] `GreyDeployer` deve risolvere sulla `CandidateKey`, non sulla terna
 - [ ] cancello di costo al denominatore della barra (oggi sottostimato da 5× a 40×)
 - [ ] sonda «core stantio»: le immagini erano indietro di 4, 5 e **11 giorni**
+
+---
+
+## I tre strumenti di misura, riparati (2026-08-22)
+
+*Diagnosi profonda + due scettici per patch + sintesi che doveva risolvere ogni fatale. Dettaglio in
+[`docs/audit/34_RIASSEGNAZIONE_CORSIE_2026-08-21.md`](audit/34_RIASSEGNAZIONE_CORSIE_2026-08-21.md).*
+
+### C — la gamba schierata non era quella cliccata (PR #104)
+
+`GreyDeployer` risolveva sulla terna `(strategia, simbolo, timeframe)`, che non è una chiave. Sul run
+`b49a4c8c` la riga **preselezionata** (Composite XLM/USDT 4h, Sharpe 1,29 su 8 trade) avrebbe
+schierato l'altra specifica della stessa terna, 0,53 su 3 trade. Ora si risolve per
+`PipelineCandidateKey`, **fail-closed** su zero e su più di una corrispondenza.
+
+Due rettifiche, entrambe contro di me: le «119 terne ambigue» sono **12 distinte** ricomparse 119
+volte (lo stesso errore righe-vs-distinti del pavimento DSR), e **nessuno schieramento sbagliato è
+mai avvenuto** — il valore è prospettico.
+
+### A — il walk-forward non era un walk-forward
+
+**Non un campo copiato: un calcolo giusto su un input sbagliato.** `StrategyComposer` passava al
+motore l'intera lista di candele, e quell'overload **ignora `config.From/To`**: le N finestre erano N
+esecuzioni identiche sul range intero. 9.665 righe su 9.665 della scoperta creativa, zero su 3.833
+della discovery classica.
+
+**La conseguenza che nessuno aveva visto: il gate di conferma era una tautologia.** Tutte le campagne
+vive hanno `minOosSharpe == minScreenSharpe`, quindi quella fase **non ha mai respinto nulla**.
+
+La cura ovvia — affettare le candele — aveva tre difetti fatali (cache per-istanza del
+`SignalCatalog` distrutta; warm-up dei segnali percentile troncato, 125 osservazioni contro le ~122
+di una finestra 1d di quattro mesi; zero non neutro reintrodotto). Si **segmenta la curva di equity**
+dello screening, che c'era già ed era buttata via: i tre spariscono per costruzione e gli N backtest
+**spariscono** invece di moltiplicarsi.
+
+Con essi: la **provenienza** del numero (`WalkForwardSource`, quattro costanti), il campo diventa
+nullable — «non misurato» non è 0, e uno zero batte qualunque Sharpe negativo nell'ordinamento — e la
+**bonifica dello storico dentro l'indicizzatore**, non in una UPDATE una-tantum: la tabella è
+derivata, e `RebuildAsync` la rifà dagli artifact che contengono lo stesso numero falso.
+
+**Ordinamento della riserva grigia → Sharpe di holdout.** Non è una deroga a «holdout = solo
+verdetto», che protegge la *promozione*: i grigi sono già bocciati, e il giudice successivo è il
+forward test in Paper. È il precedente già documentato due volte (`RejectionDigestBuilder`; il PRD
+Memoria-Caccia) e allinea la quarta verità — gli altri tre consumatori del grigio ordinavano già così.
+
+### B — il benchmark passivo: la misura sì, il gate no
+
+Il gate come l'avevo proposto era indifendibile: i numeri che lo giustificavano erano contaminati da
+due artefatti **più grandi del margine su cui avrebbe deciso**.
+
+1. **Il funding** è applicato *firmato* — con tasso positivo il long paga e lo short **incassa** — ed
+   è una costante inventata (`FundingHistory` non è popolata da nessuno). Il passivo sta a mercato il
+   100% della finestra: gli avrebbe regalato ~0,21 Sharpe.
+2. **Il risk-free** al 2%/anno è sottratto al **capitale intero** mentre ne è investito il 10%. Il
+   drag `rf/σ` vale **0,6-1,6 Sharpe** per il candidato contro ~0,4 per il passivo: da 0,2 a 1,2
+   Sharpe di handicap fabbricato.
+
+Corretti quei due, **i due «ribaltamenti» del rapporto 34 evaporano** (+0,15/−0,03 e +0,12/−0,02).
+Entra quindi solo la **misura**, a rf = 0 su entrambe le gambe e col passivo senza funding, in un
+`try/catch` dedicato: un guasto sulla misura accessoria non deve toccare il verdetto del candidato —
+sarebbe la classe del worker morto su un'OCE.
+
+### Aperto, in ordine di valore
+
+- [ ] **Il risk-free al 2% sul capitale intero con il 10% investito distorce OGNI Sharpe della
+      piattaforma** di `1,8%/σ` — da 0,3 a 1,5 a seconda della strategia. Toccarlo sposta
+      `minHoldoutSharpe`, il pavimento DSR e ogni soglia storica: va misurato su un run archiviato
+      **prima** di cambiarlo. È il più grande dei difetti rimasti.
+- [ ] **Lo Sharpe del percorso classico è un MASSIMO** su centinaia di combinazioni (media 1,788 in
+      archivio contro un holdout medio di −1,350): anche dopo A, l'ordinamento confronta un massimo
+      con una media.
+- [ ] **`ResearchCandidates` va indicizzata dal run**, non all'apertura di `/research`. È il
+      prerequisito per calibrare il gate di B: i due run sui 25 giorni in salita **non sono
+      indicizzati**.
+- [ ] `CreativeDiscoveryStage` non espone manopole di costo: cambiare i costi del run non cambia la
+      scoperta creativa.
+- [ ] `BuildOosWindows` scarta la coda più corta di mezza finestra (53 giorni su cfg 18, i più
+      recenti). Prima di A non era una perdita, dopo lo diventa.
+- [ ] **MKR/USDT non è «serie assente»**: 54.055 candele su 4 timeframe, ma il massimo timestamp è
+      **2025-09-15**. Ingestione ferma da 11 mesi senza che nessuno se ne sia accorto.
+- [ ] `PipelineApplier` riscrive le corsie `0..lanesUsed−1` **per indice**: se una proposta scende da
+      3 gruppi a 1, la corsia 0 viene riscritta e le 1-2 restano con la configurazione vecchia, senza
+      che nessuna riga lo dichiari.
+- [ ] Il `DisplayName` della gamba grigia non porta l'impronta: in `/trading` due gambe della stessa
+      terna su corsie diverse restano indistinguibili.

@@ -501,6 +501,33 @@ public sealed class ValidatedCandidate
     public int HoldoutTrades { get; set; }
     public decimal HoldoutProfitFactor { get; set; }
 
+    // ----------------------------------------------- [Difetto B, 2026-08-22] il benchmark banale
+    //
+    // MISURA, non gate: nessun consumatore cambia comportamento e GreyZone non e' toccata. Serve a
+    // rispondere alla domanda che nessuno stadio poneva — «hai battuto una posizione costante nella
+    // tua stessa direzione, sulla tua stessa finestra?» — perche' uno Sharpe positivo su un mercato
+    // che scende non e' un edge se la strategia era short: sta prendendo il beta col segno giusto
+    // per caso. Misurato il 2026-08-22: sei gambe su nove fra quelle proposte non battevano il
+    // passivo, e dal 27 luglio (14 simboli su 14 in salita) hanno cambiato segno.
+    //
+    // Tutti nullable: sulle righe STORICHE non sono ricavabili — i blob degli artifact non
+    // contengono i trade — quindi restano vuoti, e la pagina lo dichiara invece di mostrare 0.
+
+    /// <summary>Direzione prevalente, misurata sul TEMPO a mercato e non sul numero di trade.</summary>
+    public string? DominantDirection { get; set; }
+
+    /// <summary>(oreLong − oreShort)/oreTotali: +1 = solo long, −1 = solo short, 0 = bilanciato.</summary>
+    public decimal? NetExposure { get; set; }
+
+    /// <summary>Frazione della finestra passata a mercato. null nel ramo degenere (trade istantanei).</summary>
+    public decimal? TimeInMarketFraction { get; set; }
+
+    /// <summary>Sharpe del passivo nella direzione prevalente, sull'holdout, a rf = 0 e SENZA funding.</summary>
+    public decimal? PassiveHoldoutSharpe { get; set; }
+
+    /// <summary>Candidato meno passivo, ENTRAMBI misurati a rf = 0. Vedi <see cref="PassiveBenchmark"/>.</summary>
+    public decimal? ExcessHoldoutSharpe { get; set; }
+
     public bool Survived { get; set; }
     public string? RejectReason { get; set; }
 

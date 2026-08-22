@@ -195,6 +195,7 @@
                     <th>Parametri</th>
                     <th class="text-end" title="Sharpe della fase di selezione. Passa il mouse sul valore: le provenienze NON sono sulla stessa scala, e le righe bonificate mostrano un trattino.">Sharpe sel. <i class="bi bi-question-circle small text-muted"></i></th>
                     <th class="text-end" title="Sharpe sull'holdout (mai usato per selezionare)">Sharpe hold.</th>
+                    <th class="text-end" title="Quanto il candidato batte «tieni la stessa direzione e non fare niente» sulla SUA finestra. Entrambi misurati a risk-free zero. Vuoto sulle righe precedenti al 2026-08-22: non e' ricavabile dai blob storici.">vs passivo <i class="bi bi-question-circle small text-muted"></i></th>
                     <th class="text-end">DSR</th>
                     <th class="text-end">Trade</th>
                     <th>Verdetto</th>
@@ -217,6 +218,12 @@
                             @(c.WalkForwardOosSharpe is { } wf ? wf.ToString("F2") : "—")
                         </td>
                         <td class="text-end @(c.HoldoutSharpe > 0 ? "text-success" : "text-danger")">@c.HoldoutSharpe.ToString("F2")</td>
+                        @* [Difetto B, 2026-08-22] Il numero da solo non basta: il tooltip porta direzione,
+                           esposizione netta, tempo a mercato e passivo — senza, «+0,15» non dice contro cosa. *@
+                        <td class="text-end @(c.ExcessHoldoutSharpe is { } e ? (e > 0 ? "text-success" : "text-danger") : "")"
+                            title="@ResearchPageService.SpiegaConfrontoPassivo(c)">
+                            @(c.ExcessHoldoutSharpe is { } ex ? ex.ToString("+0.00;-0.00") : "—")
+                        </td>
                         <td class="text-end">@(c.DeflatedSharpe is { } dsr ? dsr.ToString("F2") : "—")</td>
                         <td class="text-end">@c.HoldoutTrades</td>
                         <td>

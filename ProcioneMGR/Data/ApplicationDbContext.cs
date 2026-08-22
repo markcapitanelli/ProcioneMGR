@@ -604,6 +604,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // di conseguenza. Una colonna piu' larga del troncamento non rompe, ma la coppia
             // troncamento/colonna e' il contratto — e qui il difetto sarebbe silenzioso.
             e.Property(x => x.WalkForwardSource).HasMaxLength(32);
+            e.Property(x => x.DominantDirection).HasMaxLength(16);
             // UNICO: l'indicizzazione dev'essere idempotente per run — rilanciare l'incrementale
             // o incrociare due gusci non deve mai duplicare un candidato.
             e.HasIndex(x => new { x.RunId, x.CandidateKey })

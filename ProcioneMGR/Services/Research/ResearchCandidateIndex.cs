@@ -52,6 +52,19 @@ public class ResearchCandidate
     public decimal HoldoutProfitFactor { get; set; }
     public int HoldoutTrades { get; set; }
 
+    // [Difetto B, 2026-08-22] Il confronto col passivo. Tutti nullable e SENZA backfill possibile:
+    // i blob storici non contengono i trade, quindi le righe vecchie restano vuote e la pagina lo dice.
+    /// <summary>Direzione prevalente misurata sul TEMPO a mercato (Long/Short/Mixed/Unknown).</summary>
+    public string? DominantDirection { get; set; }
+    /// <summary>(oreLong − oreShort)/oreTotali.</summary>
+    public decimal? NetExposure { get; set; }
+    /// <summary>Frazione della finestra passata a mercato. null nel ramo degenere.</summary>
+    public decimal? TimeInMarketFraction { get; set; }
+    /// <summary>Sharpe del passivo sulla stessa finestra, a rf = 0 e senza funding.</summary>
+    public decimal? PassiveHoldoutSharpe { get; set; }
+    /// <summary>Candidato meno passivo, entrambi a rf = 0.</summary>
+    public decimal? ExcessHoldoutSharpe { get; set; }
+
     public bool Survived { get; set; }
     public string? RejectReason { get; set; }
 
@@ -272,6 +285,11 @@ public sealed class ResearchCandidateIndexer(
                     HoldoutMaxDrawdown = v.HoldoutMaxDrawdown,
                     HoldoutProfitFactor = v.HoldoutProfitFactor,
                     HoldoutTrades = v.HoldoutTrades,
+                    DominantDirection = Truncate(v.DominantDirection, 16),
+                    NetExposure = v.NetExposure,
+                    TimeInMarketFraction = v.TimeInMarketFraction,
+                    PassiveHoldoutSharpe = v.PassiveHoldoutSharpe,
+                    ExcessHoldoutSharpe = v.ExcessHoldoutSharpe,
                     Survived = v.Survived,
                     RejectReason = Truncate(v.RejectReason, 256),
                     DeflatedSharpe = v.DeflatedSharpe,

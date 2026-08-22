@@ -347,6 +347,8 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         new("minDeflatedSharpe", "Deflated Sharpe minimo", "0.95", "gate anti-overfitting (Bailey-López de Prado): sotto questa soglia il candidato è scartato"),
         new("maxPbo", "PBO massimo di pannello", "0.5", "se la Probability of Backtest Overfitting del batch supera questa soglia l'intero ensemble è bloccato"),
         new("trialCorrelationThreshold", "Soglia ρ cluster tentativi", "0.5", "DSR con N effettivo: candidati con correlazione dei rendimenti holdout ≥ questa soglia contano come un solo test (1 = disattivo, usa N nominale)"),
+        new("passiveBenchmark", "Benchmark passivo", "declared", "«declared» misura, per OGNI candidato compresi i bocciati, quanto avrebbe reso «tieni la stessa direzione e non fare niente» sulla stessa finestra — e scrive l'eccesso accanto al numero. NON è un gate: nessun candidato viene respinto per questo. «off» lo spegne. Costo: fino a +28% sul run, una esecuzione passiva per combinazione simbolo×timeframe×lato."),
+        new("directionNetThreshold", "Soglia direzione prevalente", "0.60", "quanto un lato deve dominare il TEMPO a mercato (non il numero di trade) perché il candidato sia chiamato long o short: sotto, è «misto» e il passivo non ha un lato ovvio"),
     ];
 
     public string? ValidateInput(PipelineContext ctx)
@@ -390,6 +392,21 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         var trialCorrThreshold = (double)config.GetDecimal("trialCorrelationThreshold", 0.5m);
         var costs = PipelineCosts.FromConfig(config);
         var sizePercent = config.GetDecimal("positionSizePercent", 10m);
+        // [Difetto B, 2026-08-22] Un valore ignoto ricade su «declared» CON una riga di log, come
+        // fa ResolveOptimizer: un refuso in configurazione non deve spegnere in silenzio una misura.
+        var benchmarkMode = config.GetString("passiveBenchmark", "declared");
+        if (!string.Equals(benchmarkMode, "off", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(benchmarkMode, "declared", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.LogLine($"[{Name}] passiveBenchmark = «{benchmarkMode}» non riconosciuto: uso «declared».");
+            benchmarkMode = "declared";
+        }
+        var benchmarkOn = !string.Equals(benchmarkMode, "off", StringComparison.OrdinalIgnoreCase);
+        var directionThreshold = config.GetDecimal("directionNetThreshold", 0.60m);
+        // Una esecuzione passiva per (simbolo, timeframe, lato): senza cache il costo passerebbe
+        // da +28% a +100% del run.
+        var passiveCache = new Dictionary<string, BacktestResult>(StringComparer.Ordinal);
+        var benchmarkFalliti = 0;
 
         ctx.Validated.Clear();
         // Rendimenti periodici holdout per candidato, allineati per indice a ctx.Validated: alimentano
@@ -445,6 +462,65 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
                 validated.HoldoutTrades = holdout.TotalTrades;
                 validated.HoldoutProfitFactor = ProfitFactor(holdout.Trades);
 
+                // [Difetto B, 2026-08-22] Il benchmark banale, in un try/catch SUO.
+                //
+                // Sta fuori dal try del candidato per una ragione precisa: li' dentro, una qualunque
+                // eccezione del passivo finirebbe nel catch che riscrive Survived = false e
+                // RejectReason = "Backtest fallito: …", buttando via il verdetto di holdout GIA'
+                // calcolato — e con esso il prefisso "Solo " che e' l'unica porta della fascia
+                // grigia. Un guasto su una misura accessoria cancellerebbe il candidato dallo
+                // schieramento. E' la classe del worker morto su un'OCE (2026-08-15) e del sync
+                // accessorio che uccideva una caccia (2026-08-11): fail-open sulla diagnostica.
+                //
+                // Si misura per TUTTI i candidati, compresi i bocciati: la fascia grigia e' fatta di
+                // bocciati, e misurare solo i sopravvissuti sarebbe la lezione M2b ripetuta.
+                if (benchmarkOn)
+                {
+                    try
+                    {
+                        var (direzione, netta, frazione) = PassiveBenchmark.ClassifyDirection(
+                            holdout.Trades, ctx.Ranges.HoldoutFrom, ctx.Ranges.HoldoutTo, directionThreshold);
+                        validated.DominantDirection = direzione.ToString();
+                        validated.NetExposure = netta;
+                        validated.TimeInMarketFraction = frazione;
+
+                        if (direzione is Pipeline.DominantDirection.Long or Pipeline.DominantDirection.Short)
+                        {
+                            var isLong = direzione == Pipeline.DominantDirection.Long;
+                            var chiave = $"{candidate.Symbol}|{candidate.Timeframe}|{(isLong ? "L" : "S")}";
+                            if (!passiveCache.TryGetValue(chiave, out var passivo))
+                            {
+                                var cfg = PassiveBenchmark.BuildConfig(
+                                    costs.ApplyTo(new BacktestConfiguration
+                                    {
+                                        ExchangeName = ctx.ExchangeName,
+                                        Symbol = candidate.Symbol,
+                                        Timeframe = candidate.Timeframe,
+                                        InitialCapital = ctx.InitialCapital,
+                                        PositionSizePercent = sizePercent,
+                                    }),
+                                    ctx.Ranges.HoldoutFrom, ctx.Ranges.HoldoutTo);
+                                passivo = await backtest.RunBacktestAsync(
+                                    cfg, await ctx.Candles.GetAsync(candidate.Symbol, candidate.Timeframe, ctx.Ranges.HoldoutFrom, ctx.Ranges.HoldoutTo, ct),
+                                    new PassiveHoldStrategy(isLong), ct);
+                                passiveCache[chiave] = passivo;
+                            }
+
+                            var confronto = PassiveBenchmark.Compare(
+                                holdout.EquityCurve, passivo.EquityCurve, ppy, direzione, netta, frazione);
+                            validated.PassiveHoldoutSharpe = confronto.PassiveSharpe;
+                            validated.ExcessHoldoutSharpe = confronto.ExcessSharpe;
+                        }
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (Exception exBench)
+                    {
+                        benchmarkFalliti++;
+                        ctx.LogLine($"[{Name}] benchmark passivo non calcolabile per {validated.Key} "
+                            + $"({exBench.GetType().Name}: {exBench.Message}). Il verdetto del candidato resta intatto.");
+                    }
+                }
+
                 if (validated.HoldoutSharpe < minSharpe)
                 {
                     validated.RejectReason = $"Sharpe holdout {validated.HoldoutSharpe:F2} < {minSharpe}";
@@ -465,6 +541,12 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
             ctx.Validated.Add(validated);
             holdoutReturns.Add(holdoutRets);
             ctx.LogLine($"[{Name}] {validated.Key}: holdout Sharpe {validated.HoldoutSharpe:F2}, {validated.HoldoutTrades} trade → {(validated.Survived ? "SOPRAVVISSUTO (pre-gate)" : validated.RejectReason)}");
+        }
+
+        if (benchmarkFalliti > 0)
+        {
+            ctx.LogLine($"[{Name}] benchmark passivo non calcolato su {benchmarkFalliti} candidati: "
+                + "i campi restano vuoti e i verdetti sono intatti (la misura e' accessoria, il verdetto no).");
         }
 
         if (undeclared > 0)
