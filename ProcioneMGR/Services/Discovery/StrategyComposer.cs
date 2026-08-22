@@ -469,28 +469,53 @@ public sealed class StrategyComposer(
             }
         }
 
-        // Fixed-parameter walk-forward on the top few: rolling OOS windows over the selection
-        // range. No optimization happens here (parameters are frozen), so every window is
-        // out-of-sample by construction.
+        // Conferma per SOTTOPERIODI sui migliori dello screening: finestre contigue dentro il range
+        // di selezione, parametri congelati, metriche ricavate SEGMENTANDO la curva di equity dello
+        // screening (vedi MeasureSubPeriod per il difetto che questo chiude e per il motivo per cui
+        // NON si affettano le candele). Il backtest sul range intero c'è già: era nella tupla, e
+        // veniva buttato via con `_`.
+        //
+        // [2026-08-22] Il nome è «sottoperiodi» e NON «out-of-sample»: le spec sono state scelte
+        // (top-N per Sharpe) sull'INTERO range, quindi le finestre sono in-sample per selezione
+        // anche se non per fitting. Il fuori campione vero di questa piattaforma resta l'holdout.
+        // Conseguenza già misurata del vecchio difetto: con oosSharpe == screenSharpe il gate qui
+        // sotto era una TAUTOLOGIA — tutte le campagne vive hanno minOosSharpe == minScreenSharpe
+        // == 0,4, quindi una spec che aveva passato lo screening non poteva essere respinta dalla
+        // conferma. La fase «conferma walk-forward» non ha mai respinto nulla.
         var confirmed = new List<DiscoveryCandidate>();
-        foreach (var (spec, screenSharpe, _) in screened.OrderByDescending(s => s.Sharpe).Take(screening.ConfirmTopN))
+        foreach (var (spec, screenSharpe, screenResult) in screened.OrderByDescending(s => s.Sharpe).Take(screening.ConfirmTopN))
         {
             ct.ThrowIfCancellationRequested();
             var windows = BuildOosWindows(screening.From, screening.To, screening.OosWindowMonths);
             var sharpes = new List<decimal>();
             var trades = 0;
-            var totalReturn = 0m;
-            var maxDd = 0m;
+            var mute = 0;
             foreach (var (from, to) in windows)
             {
-                var result = await backtest.RunBacktestAsync(BuildConfig(spec, screening, from, to), candles, ct);
-                sharpes.Add(Statistics.SharpeRatio(result.EquityCurve, ppy));
-                trades += result.TotalTrades;
-                totalReturn += result.TotalReturnPercent;
-                maxDd = Math.Max(maxDd, result.MaxDrawdownPercent);
+                var (wSharpe, wTrades) = MeasureSubPeriod(screenResult, from, to, ppy);
+                if (wSharpe is not decimal s) { mute++; continue; }
+                sharpes.Add(s);
+                trades += wTrades;
             }
-            var oosSharpe = sharpes.Count > 0 ? sharpes.Average() : 0m;
-            if (oosSharpe >= screening.MinOosSharpe && trades >= screening.MinTrades)
+
+            if (sharpes.Count == 0)
+            {
+                // Nessun sottoperiodo misurabile: NON si inventa uno 0. Nell'ordinamento delle gambe
+                // uno zero vale più di qualunque Sharpe negativo — sarebbe una promozione travestita
+                // da valore neutro. La spec semplicemente non si conferma.
+                progress?.Report($"NON CONFERMATA {spec.Description} — nessuno dei {windows.Count} sottoperiodi è misurabile");
+                continue;
+            }
+            if (mute > 0)
+            {
+                // Degradare dicendolo, e sul canale che l'operatore legge davvero: `progress` finisce
+                // in ctx.LogLine via CreativeDiscoveryStage, un LogDebug no.
+                progress?.Report($"{spec.Description}: {mute}/{windows.Count} sottoperiodi senza attività, "
+                    + "esclusi dalla media invece di entrarci come zero.");
+            }
+
+            var subSharpe = sharpes.Average();
+            if (subSharpe >= screening.MinOosSharpe && trades >= screening.MinTrades)
             {
                 confirmed.Add(new DiscoveryCandidate
                 {
@@ -498,14 +523,22 @@ public sealed class StrategyComposer(
                     Symbol = screening.Symbol,
                     Timeframe = screening.Timeframe,
                     Parameters = new(spec.Parameters),
-                    OutOfSampleSharpe = Math.Round(oosSharpe, 2),
+                    OutOfSampleSharpe = Math.Round(subSharpe, 2),
+                    // La provenienza viaggia col numero: a valle nessuno deve indovinare cosa sia.
+                    WalkForwardSource = DiscoveryCandidate.SourceSelectionSubPeriods,
                     InSampleSharpe = Math.Round(screenSharpe, 2),
-                    TotalReturn = Math.Round(totalReturn, 2),
-                    MaxDrawdown = Math.Round(maxDd, 2),
+                    // [2026-08-22] Rendimento e drawdown del range di selezione, UNA volta. Prima
+                    // erano la somma di N esecuzioni identiche: TotalReturn valeva N volte il
+                    // rendimento vero, e MaxDrawdown era il massimo di N copie dello stesso numero.
+                    TotalReturn = Math.Round(screenResult.TotalReturnPercent, 2),
+                    MaxDrawdown = Math.Round(screenResult.MaxDrawdownPercent, 2),
+                    // Trade ENTRATI nei sottoperiodi misurati: prima era il conteggio del range
+                    // intero moltiplicato per il numero di finestre, quindi il gate anti-rumore
+                    // «trades >= MinTrades» valeva in realtà T >= MinTrades/N.
                     TotalTrades = trades,
-                    Windows = windows.Count,
+                    Windows = sharpes.Count,   // le finestre MISURATE, non quelle generate
                 });
-                progress?.Report($"CONFERMATA {spec.Description} — OOS {oosSharpe:F2} su {windows.Count} finestre");
+                progress?.Report($"CONFERMATA {spec.Description} — {subSharpe:F2} medio su {sharpes.Count}/{windows.Count} sottoperiodi, {trades} trade");
             }
         }
 
@@ -531,6 +564,82 @@ public sealed class StrategyComposer(
             FeePercent = screening.FeePercent,
             FundingRatePercentPer8h = screening.FundingRatePercentPer8h,
         };
+
+    /// <summary>
+    /// Metriche di un SOTTOPERIODO [from, toExclusive), ricavate SEGMENTANDO la curva di equity del
+    /// backtest di screening — non rieseguendo il backtest su una fetta di candele.
+    ///
+    /// <para><b>[2026-08-22] Il difetto che questo chiude.</b> Qui il ciclo di conferma passava al
+    /// motore l'INTERA lista <c>candles</c>, e l'overload con candele precaricate <b>ignora
+    /// <c>config.From/To</c></b>: nel core di <c>BacktestEngine</c> quelle due proprietà non
+    /// compaiono mai — le sole occorrenze stanno nell'altro overload, quello che carica dal DB, e il
+    /// contratto di <c>IBacktestEngine</c> dice che filtrare tocca al chiamante. Risultato: N
+    /// esecuzioni <b>identiche</b> sul range intero, la cui media è per forza lo Sharpe della
+    /// selezione. Su 13.893 righe di <c>ResearchCandidates</c>, <b>tutte e 9.665</b> prodotte da
+    /// questa fase avevano <c>WalkForwardOosSharpe = round(SelectionSharpe, 2)</c> — nessuna
+    /// esclusa — contro <b>zero</b> delle 3.833 della discovery classica, che affetta davvero.</para>
+    ///
+    /// <para><b>La cura ovvia era peggio del male.</b> Affettare le candele rompe due cose misurate:
+    /// (a) <c>SignalCatalog.GetMatrixAsync</c> è una cache per ISTANZA di lista, quindi ogni fetta è
+    /// una lista nuova e servirebbero <c>ConfirmTopN × N</c> ricalcoli della matrice dove oggi ce ne
+    /// sono <i>zero</i>; (b) <c>CausalPercentile</c> pretende 125 osservazioni prima di emettere, e
+    /// una finestra 1d di quattro mesi ne ha ~122: su quelle campagne <b>ogni</b> finestra sarebbe
+    /// stata interamente warm-up, tutti i segnali percentile null, zero candidati confermati per
+    /// sempre e senza una riga che lo dicesse.</para>
+    ///
+    /// <para>Segmentando la curva non si affetta niente: i segnali restano quelli calcolati una
+    /// volta sull'intera serie, la cache non viene toccata, e gli N backtest della conferma
+    /// <b>spariscono</b> invece di moltiplicarsi.</para>
+    ///
+    /// <para><b>Sharpe null quando la finestra NON è misurabile</b>: meno di 3 punti di equity,
+    /// oppure capitale costante per tutta la finestra. In quel caso <c>Statistics.SharpeRatio</c>
+    /// restituirebbe <c>0m</c> per varianza nulla — uno zero <i>fabbricato</i>, indistinguibile da
+    /// una misura, che diluirebbe la media verso il basso senza che nessuno lo veda. Non si media
+    /// ciò che non si è misurato.</para>
+    ///
+    /// <para>Caveat dichiarato: i sottoperiodi vengono da <b>un'unica corsa continua</b> (posizioni
+    /// e capitale attraversano i confini) invece che da N corse indipendenti con capitale fresco. È
+    /// più fedele, non meno: un trade aperto in una finestra e chiuso nella successiva contribuisce
+    /// al P&amp;L di entrambe, e conta come un trade in quella di <b>ingresso</b>.</para>
+    ///
+    /// Internal per il collaudo diretto (InternalsVisibleTo su ProcioneMGR.Tests).
+    /// </summary>
+    internal static (decimal? Sharpe, int Trades) MeasureSubPeriod(
+        BacktestResult run, DateTime from, DateTime toExclusive, int ppy)
+    {
+        var curve = run.EquityCurve;
+        int i0 = -1, i1 = -2;
+        for (var i = 0; i < curve.Count; i++)
+        {
+            var ts = curve[i].Timestamp;
+            if (ts < from) continue;
+            if (ts >= toExclusive) break;   // la curva è ordinata: oltre la fine si esce
+            if (i0 < 0) i0 = i;
+            i1 = i;
+        }
+        if (i0 < 0 || i1 < i0) return (null, 0);
+
+        // Si include il punto PRECEDENTE alla finestra, quando c'è: il rendimento della prima barra
+        // è (equity[i0] − equity[i0−1])/equity[i0−1], e senza quel punto la prima barra non
+        // produrrebbe alcun rendimento.
+        var start = i0 > 0 ? i0 - 1 : i0;
+        var seg = new List<EquityPoint>(i1 - start + 1);
+        for (var i = start; i <= i1; i++) seg.Add(curve[i]);
+
+        var mossa = false;
+        for (var i = 1; i < seg.Count; i++)
+        {
+            if (seg[i].Capital != seg[0].Capital) { mossa = true; break; }
+        }
+        if (seg.Count < 3 || !mossa) return (null, 0);
+
+        var trades = 0;
+        foreach (var t in run.Trades)
+        {
+            if (t.EntryTime >= from && t.EntryTime < toExclusive) trades++;
+        }
+        return (Statistics.SharpeRatio(seg, ppy), trades);
+    }
 
     /// <summary>Rolling, non-overlapping OOS windows covering [from, to]. Public for direct testability.</summary>
     public static List<(DateTime From, DateTime To)> BuildOosWindows(DateTime from, DateTime to, int windowMonths)

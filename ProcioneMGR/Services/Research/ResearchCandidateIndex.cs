@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Pipeline;
@@ -32,7 +32,14 @@ public class ResearchCandidate
     public string ParametersJson { get; set; } = "{}";
 
     // Metriche di selezione (walk-forward)
-    public decimal WalkForwardOosSharpe { get; set; }
+    /// <summary>
+    /// Sharpe della fase di selezione. <b>null = mai misurato</b>, e la pagina lo mostra come «—».
+    /// Vedi <see cref="WalkForwardSource"/>: le provenienze NON sono sulla stessa scala.
+    /// </summary>
+    public decimal? WalkForwardOosSharpe { get; set; }
+
+    /// <summary>Provenienza del numero qui sopra (costanti <c>DiscoveryCandidate.Source*</c> + le due storiche di bonifica).</summary>
+    public string? WalkForwardSource { get; set; }
     public decimal SelectionSharpe { get; set; }
     public decimal SelectionReturn { get; set; }
     public decimal SelectionMaxDrawdown { get; set; }
@@ -133,6 +140,73 @@ public sealed class ResearchCandidateIndexer(
     private static string? Truncate(string? s, int max) =>
         s is null || s.Length <= max ? s : s[..max];
 
+    // --------------------------------------------------- bonifica dello storico [2026-08-22]
+    //
+    // STA QUI, e non in una UPDATE una-tantum, perché la tabella è DERIVATA: RebuildAsync la
+    // cancella e la rifà dagli artifact, e gli artifact contengono lo stesso numero falso. Una
+    // UPDATE verrebbe annullata al primo click sul bottone di ricostruzione, e nessuno se ne
+    // accorgerebbe.
+    //
+    // L'impronta è verificata sull'INTERO archivio, senza eccezioni in nessuna delle due direzioni:
+    // famiglia della scoperta creativa + due decimali esatti + uguale a round(SelectionSharpe, 2)
+    // seleziona 9.665 righe su 9.665 prodotte da CreativeDiscovery e ZERO delle 3.833 della
+    // discovery classica. Nessuna informazione si perde: quel valore È round(SelectionSharpe, 2), e
+    // SelectionSharpe resta nella stessa riga a piena precisione.
+
+    /// <summary>Le tre meta-strategie della scoperta creativa, cioè del percorso che copiava.</summary>
+    private static readonly HashSet<string> FamiglieComposer =
+        new(StringComparer.Ordinal) { "Composite", "EventTrigger", "RegimeConditional" };
+
+    /// <summary>Storico: il numero era una copia arrotondata dello Sharpe di selezione.</summary>
+    private const string SorgenteCopiaPreFix = "CopiaSelezionePreFix";
+
+    /// <summary>Storico: c'è un numero, ma da quale percorso venga non è più ricostruibile.</summary>
+    private const string SorgenteIgnota = "SconosciutaPreFix";
+
+    private static bool CopiaDaSelezione(ValidatedCandidate v)
+        => v.WalkForwardSource is null
+        && v.WalkForwardOosSharpe is decimal wf
+        && FamiglieComposer.Contains(v.StrategyName)
+        && wf == decimal.Round(wf, 2)
+        && wf == decimal.Round(v.SelectionSharpe, 2);
+
+    /// <summary>Candidato "Ml" storico: nessuna discovery lo ha mai misurato, lo 0 è il default del POCO.</summary>
+    private static bool ZeroInventato(ValidatedCandidate v)
+        => v.WalkForwardSource is null && v.StrategyName == "Ml" && v.WalkForwardOosSharpe == 0m;
+
+    internal static decimal? WalkForwardBonificato(ValidatedCandidate v)
+        => CopiaDaSelezione(v) || ZeroInventato(v) ? null : v.WalkForwardOosSharpe;
+
+    internal static string? SorgenteStorica(ValidatedCandidate v)
+        => CopiaDaSelezione(v) ? SorgenteCopiaPreFix
+         : ZeroInventato(v) ? Discovery.DiscoveryCandidate.SourceNone
+         : v.WalkForwardOosSharpe is null ? null
+         : SorgenteIgnota;
+
+    /// <summary>
+    /// [2026-08-22] Come si legge la provenienza dello Sharpe di selezione. Un trattino senza
+    /// spiegazione sarebbe metà del difetto che stiamo correggendo.
+    /// </summary>
+    public static string SpiegaSorgenteWalkForward(string? source) => source switch
+    {
+        Discovery.DiscoveryCandidate.SourceWalkForward =>
+            "Walk-forward vero: parametri scelti sull'in-sample, giudicati sull'out-of-sample che segue. "
+            + "È il MASSIMO su centinaia di combinazioni provate, quindi ottimistico per selection bias.",
+        Discovery.DiscoveryCandidate.SourceSelectionSubPeriods =>
+            "MEDIA su sottoperiodi contigui dentro il range di selezione, parametri congelati. "
+            + "È una misura di coerenza, non un fuori campione — e non è sulla stessa scala del walk-forward vero.",
+        Discovery.DiscoveryCandidate.SourceNone =>
+            "Mai misurato: questo candidato non viene da una discovery (modello ML). Il vuoto è la verità.",
+        Discovery.DiscoveryCandidate.SourceUndeclared =>
+            "Il produttore non ha dichiarato la provenienza: il numero è stato scartato per non farlo passare per una misura.",
+        SorgenteCopiaPreFix =>
+            "Bonificato: era una COPIA arrotondata dello Sharpe di selezione, non un walk-forward. La scoperta "
+            + "creativa rieseguiva N volte lo stesso backtest sul range intero (corretto il 2026-08-22).",
+        SorgenteIgnota =>
+            "Numero precedente alla tracciatura della provenienza (2026-08-22): c'è, ma da quale percorso venga non è ricostruibile.",
+        _ => "Provenienza non registrata.",
+    };
+
     // Internal e non private: il test della gara fra processi deve poter passare una lista
     // "stantia" di run già indicizzati — dall'API pubblica la finestra non è riproducibile.
     internal async Task<ResearchIndexResult> IndexAsync(ApplicationDbContext db, List<Guid> alreadyIndexed, CancellationToken ct)
@@ -151,6 +225,10 @@ public sealed class ResearchCandidateIndexer(
         var runsIndexed = 0;
         var candidatesIndexed = 0;
         var runsSkipped = 0;
+        // [2026-08-22] Quante righe la bonifica ha svuotato. Si conta per DIRLO: se i due
+        // arrotondamenti (decimal.Round e' banker's, la verifica in SQL era half-up) selezionassero
+        // insiemi diversi, senza questo numero la divergenza resterebbe implicita.
+        var bonificate = 0;
 
         foreach (var source in sources)
         {
@@ -183,7 +261,8 @@ public sealed class ResearchCandidateIndexer(
                     Timeframe = Truncate(v.Timeframe, 8)!,
                     CandidateKey = Truncate(v.Key, 160)!,
                     ParametersJson = JsonSerializer.Serialize(v.Parameters),
-                    WalkForwardOosSharpe = v.WalkForwardOosSharpe,
+                    WalkForwardOosSharpe = WalkForwardBonificato(v),
+                    WalkForwardSource = Truncate(v.WalkForwardSource ?? SorgenteStorica(v), 32),
                     SelectionSharpe = v.SelectionSharpe,
                     SelectionReturn = v.SelectionReturn,
                     SelectionMaxDrawdown = v.SelectionMaxDrawdown,
@@ -230,12 +309,20 @@ public sealed class ResearchCandidateIndexer(
             }
             runsIndexed++;
             candidatesIndexed += rows.Count;
+            bonificate += rows.Count(r => r.WalkForwardOosSharpe is null && r.WalkForwardSource is not null);
         }
 
         if (runsIndexed > 0)
         {
             logger.LogInformation("Indice candidati: {Runs} run, {Candidates} candidati aggiunti ({Skipped} run illeggibili).",
                 runsIndexed, candidatesIndexed, runsSkipped);
+        }
+        if (bonificate > 0)
+        {
+            logger.LogInformation(
+                "Indice candidati: {N} righe bonificate — il loro «Sharpe di selezione» era una copia arrotondata "
+                + "dello Sharpe di selezione (o lo 0 di default dei modelli Ml). Ora e' vuoto e dichiarato.",
+                bonificate);
         }
         return new ResearchIndexResult(runsIndexed, candidatesIndexed, runsSkipped);
     }

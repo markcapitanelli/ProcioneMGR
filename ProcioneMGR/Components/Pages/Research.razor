@@ -1,4 +1,4 @@
-@page "/research"
+﻿@page "/research"
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Authorization
 @using ProcioneMGR.Data
@@ -193,7 +193,7 @@
                     <th>TF</th>
                     <th>Strategia</th>
                     <th>Parametri</th>
-                    <th class="text-end" title="Sharpe walk-forward della selezione">Sharpe sel.</th>
+                    <th class="text-end" title="Sharpe della fase di selezione. Passa il mouse sul valore: le provenienze NON sono sulla stessa scala, e le righe bonificate mostrano un trattino.">Sharpe sel. <i class="bi bi-question-circle small text-muted"></i></th>
                     <th class="text-end" title="Sharpe sull'holdout (mai usato per selezionare)">Sharpe hold.</th>
                     <th class="text-end">DSR</th>
                     <th class="text-end">Trade</th>
@@ -210,7 +210,12 @@
                         <td class="text-muted">@c.Timeframe</td>
                         <td>@c.StrategyName</td>
                         <td><code class="small">@ResearchPageService.FormatParams(c.ParametersJson)</code></td>
-                        <td class="text-end">@c.WalkForwardOosSharpe.ToString("F2")</td>
+                        @* [2026-08-22] Un trattino SENZA spiegazione sarebbe meta' del difetto che
+                           stiamo correggendo: il tooltip dice sempre da dove viene il numero, o perche'
+                           non c'e'. *@
+                        <td class="text-end" title="@ResearchCandidateIndexer.SpiegaSorgenteWalkForward(c.WalkForwardSource)">
+                            @(c.WalkForwardOosSharpe is { } wf ? wf.ToString("F2") : "—")
+                        </td>
                         <td class="text-end @(c.HoldoutSharpe > 0 ? "text-success" : "text-danger")">@c.HoldoutSharpe.ToString("F2")</td>
                         <td class="text-end">@(c.DeflatedSharpe is { } dsr ? dsr.ToString("F2") : "—")</td>
                         <td class="text-end">@c.HoldoutTrades</td>

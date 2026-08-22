@@ -1,4 +1,4 @@
-using ProcioneMGR.Data;
+﻿using ProcioneMGR.Data;
 using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Discovery;
 using ProcioneMGR.Services.Regime;
@@ -475,7 +475,20 @@ public sealed class ValidatedCandidate
     public Dictionary<string, decimal> Parameters { get; set; } = new();
 
     // Selection-phase metrics (walk-forward)
-    public decimal WalkForwardOosSharpe { get; set; }
+
+    /// <summary>
+    /// Sharpe della fase di selezione. <b>null = non misurato</b>, e va mostrato come tale, mai come
+    /// 0: nell'ordinamento delle gambe uno zero batte qualunque Sharpe negativo, quindi «non
+    /// misurato» diventerebbe una promozione travestita da valore neutro.
+    ///
+    /// <para>[2026-08-22] La scala NON e' omogenea fra le provenienze — vedi
+    /// <see cref="WalkForwardSource"/>: una sorgente e' il MASSIMO su centinaia di combinazioni,
+    /// l'altra una MEDIA su sottoperiodi.</para>
+    /// </summary>
+    public decimal? WalkForwardOosSharpe { get; set; }
+
+    /// <summary>Provenienza del numero qui sopra (costanti <c>DiscoveryCandidate.Source*</c>).</summary>
+    public string? WalkForwardSource { get; set; }
     public decimal SelectionSharpe { get; set; }
     public decimal SelectionReturn { get; set; }
     public decimal SelectionMaxDrawdown { get; set; }

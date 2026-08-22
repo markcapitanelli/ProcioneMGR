@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.ML;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Alpha;
@@ -136,6 +136,10 @@ public sealed class MlModelTrainingStage(
                         ["LongThreshold"] = config.GetDecimal("longThreshold", 0.002m),
                         ["ShortThreshold"] = config.GetDecimal("shortThreshold", 0.002m),
                     },
+                    // [2026-08-22] Nessuna discovery ha misurato questo candidato: OutOfSampleSharpe
+                    // restava lo 0m del default e finiva in /research come «0,00», indistinguibile
+                    // da una misura. 51 righe su 51 in archivio. Ora e' dichiarato assente.
+                    WalkForwardSource = DiscoveryCandidate.SourceNone,
                 });
             }
             else
@@ -305,7 +309,12 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
 
     public StageSummary Summarize(PipelineContext ctx)
     {
-        var best = ctx.Candidates.OrderByDescending(c => c.OutOfSampleSharpe).FirstOrDefault();
+        // [2026-08-22] Chi non ha una misura non compete per il titolo di «migliore»: lo 0m dei
+        // candidati Ml batteva qualunque Sharpe negativo e poteva vincere questa riga.
+        var best = ctx.Candidates
+            .Where(c => c.WalkForwardSource != DiscoveryCandidate.SourceNone)
+            .OrderByDescending(c => c.OutOfSampleSharpe)
+            .FirstOrDefault();
         return new StageSummary
         {
             StageName = Name,
@@ -386,6 +395,9 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         // Rendimenti periodici holdout per candidato, allineati per indice a ctx.Validated: alimentano
         // il gate anti-overfitting (DSR per-candidato + PBO di pannello) applicato DOPO il ciclo.
         var holdoutReturns = new List<double[]>(ctx.Candidates.Count);
+        // [2026-08-22] Quanti produttori non hanno dichiarato la provenienza dello Sharpe di
+        // selezione. Si conta per dirlo: il numero scartato in silenzio sarebbe invisibile.
+        var undeclared = 0;
 
         foreach (var candidate in ctx.Candidates)
         {
@@ -396,8 +408,23 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
                 Symbol = candidate.Symbol,
                 Timeframe = candidate.Timeframe,
                 Parameters = new(candidate.Parameters),
-                WalkForwardOosSharpe = candidate.OutOfSampleSharpe,
+                // [2026-08-22] Il numero viaggia con la sua provenienza, e SENZA provenienza non
+                // viaggia affatto. Due sorgenti diverse finivano su questa colonna senza dirlo: il
+                // MASSIMO su centinaia di combinazioni (discovery classica) e, fino a oggi, una
+                // copia arrotondata dello Sharpe di selezione (scoperta creativa: 9.665 righe su
+                // 9.665 in ResearchCandidates). I candidati "Ml" non hanno nessuna misura e
+                // lasciavano lo 0m del default — 51 righe su 51, indistinguibili da una misura.
+                //
+                // Un produttore che NON dichiara la provenienza perde il numero, e lo si dice nel
+                // log del run: un null silenzioso qui sarebbe la stessa classe di difetto del
+                // Filone E, un controllo che rassicura a prescindere.
+                WalkForwardOosSharpe = candidate.WalkForwardSource is null
+                                       || candidate.WalkForwardSource == DiscoveryCandidate.SourceNone
+                    ? null
+                    : candidate.OutOfSampleSharpe,
+                WalkForwardSource = candidate.WalkForwardSource ?? DiscoveryCandidate.SourceUndeclared,
             };
+            if (candidate.WalkForwardSource is null) undeclared++;
             var holdoutRets = Array.Empty<double>();
 
             try
@@ -438,6 +465,13 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
             ctx.Validated.Add(validated);
             holdoutReturns.Add(holdoutRets);
             ctx.LogLine($"[{Name}] {validated.Key}: holdout Sharpe {validated.HoldoutSharpe:F2}, {validated.HoldoutTrades} trade → {(validated.Survived ? "SOPRAVVISSUTO (pre-gate)" : validated.RejectReason)}");
+        }
+
+        if (undeclared > 0)
+        {
+            ctx.LogLine($"[{Name}] {undeclared} candidati senza provenienza dichiarata per lo Sharpe di "
+                + "selezione: il numero e' stato SCARTATO. E' un produttore che non imposta "
+                + "DiscoveryCandidate.WalkForwardSource.");
         }
 
         ApplyOverfittingGate(ctx, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrThreshold);
