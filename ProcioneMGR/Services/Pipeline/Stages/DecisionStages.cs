@@ -93,11 +93,26 @@ public sealed class EnsembleAssemblyStage(
         ctx.LogLine($"[{Name}] Optimizer dei pesi: {optimizer.Name}.");
 
         // Ordered by SELECTION-phase walk-forward Sharpe (the holdout stays verdict-only).
+        //
+        // [2026-08-22] La dottrina resta, ed è documentata testualmente in `25_API_SURFACE_PLATFORM`:
+        // «Selection = where every decision is allowed to look; Holdout = verdict-only, never used
+        // for any choice (the holdout exists to catch overfitting, so nothing may peek at it)». Qui
+        // si sceglie fra SOPRAVVISSUTI, cioè si decide una promozione: l'holdout non può entrarci.
+        //
+        // Chi non ha il numero va in fondo PER SCELTA DICHIARATA, non per l'accidente che un null
+        // (o il vecchio 0) capiti in coda: uno zero avrebbe battuto qualunque Sharpe negativo.
         var legs = ctx.Validated
             .Where(v => v.Survived)
-            .OrderByDescending(v => v.WalkForwardOosSharpe)
+            .OrderByDescending(v => v.WalkForwardOosSharpe ?? decimal.MinValue)
             .Take(maxLegs)
             .ToList();
+
+        var senzaMisura = ctx.Validated.Count(v => v.Survived && v.WalkForwardOosSharpe is null);
+        if (senzaMisura > 0)
+        {
+            ctx.LogLine($"[{Name}] {senzaMisura} sopravvissuti senza Sharpe di selezione misurato: "
+                + "ordinati per ultimi e dichiarati (è un'assenza, non uno zero).");
+        }
 
         // [T1] La fascia grigia riempie SOLO i posti che i sopravvissuti lasciano liberi: un
         // grigio non spiazza mai un sopravvissuto, qualunque Sharpe abbia — sono verdetti di
@@ -106,14 +121,31 @@ public sealed class EnsembleAssemblyStage(
         var greyKeys = new HashSet<string>(StringComparer.Ordinal);
         if (includeGrey && legs.Count < maxLegs && greyPool.Count > 0)
         {
+            // [2026-08-22] I GRIGI si ordinano per Sharpe di HOLDOUT, e non è una deroga alla regola
+            // «holdout = solo verdetto»: quella regola protegge la PROMOZIONE, e questi candidati
+            // sono già stati bocciati: il verdetto su di loro l'holdout l'ha già dato. Ordinare fra
+            // bocciati non fa trapelare nulla nel giudice successivo, che è il forward test in Paper.
+            //
+            // Ed è il precedente già stabilito e documentato due volte: `RejectionDigestBuilder` —
+            // «L'ordine dei "migliori fra i bocciati" è lo Sharpe holdout decrescente» — e la scelta
+            // del grigio schierato sulla corsia 2 nel PRD Memoria-Caccia, «candidato grigio con il
+            // miglior Sharpe holdout di sempre, pari a 3,19».
+            //
+            // La ragione per cambiare è che il vecchio criterio ora è peggio del prima: dopo la
+            // correzione dei sottoperiodi, `WalkForwardOosSharpe` porta DUE scale incomparabili — un
+            // MASSIMO su centinaia di combinazioni (discovery classica) e una MEDIA su sottoperiodi
+            // (scoperta creativa) — e il 60% dei grigi in archivio viene dalla seconda. Gli altri
+            // tre consumatori del grigio (FleetStateReader, GreyDeployer, EnsemblePageService)
+            // ordinavano già per holdout: questa era la quarta verità.
             var taken = greyPool
-                .OrderByDescending(v => v.WalkForwardOosSharpe)
+                .OrderByDescending(v => v.HoldoutSharpe)
                 .Take(maxLegs - legs.Count)
                 .ToList();
             foreach (var g in taken) greyKeys.Add(g.Key);
             legs.AddRange(taken);
             ctx.LogLine($"[{Name}] Fascia grigia inclusa: {taken.Count} gambe su {greyPool.Count} ammissibili "
-                + "(scelta deterministica per Sharpe walk-forward; etichettate come grigie ovunque).");
+                + "(scelta deterministica per Sharpe HOLDOUT, come gli altri consumatori del grigio; "
+                + "etichettate come grigie ovunque).");
         }
         else if (!includeGrey && legs.Count == 0 && greyPool.Count > 0)
         {

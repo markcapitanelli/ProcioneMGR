@@ -1,4 +1,4 @@
-using ProcioneMGR.Data;
+﻿using ProcioneMGR.Data;
 using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Discovery;
 using ProcioneMGR.Services.Regime;
@@ -475,7 +475,20 @@ public sealed class ValidatedCandidate
     public Dictionary<string, decimal> Parameters { get; set; } = new();
 
     // Selection-phase metrics (walk-forward)
-    public decimal WalkForwardOosSharpe { get; set; }
+
+    /// <summary>
+    /// Sharpe della fase di selezione. <b>null = non misurato</b>, e va mostrato come tale, mai come
+    /// 0: nell'ordinamento delle gambe uno zero batte qualunque Sharpe negativo, quindi «non
+    /// misurato» diventerebbe una promozione travestita da valore neutro.
+    ///
+    /// <para>[2026-08-22] La scala NON e' omogenea fra le provenienze — vedi
+    /// <see cref="WalkForwardSource"/>: una sorgente e' il MASSIMO su centinaia di combinazioni,
+    /// l'altra una MEDIA su sottoperiodi.</para>
+    /// </summary>
+    public decimal? WalkForwardOosSharpe { get; set; }
+
+    /// <summary>Provenienza del numero qui sopra (costanti <c>DiscoveryCandidate.Source*</c>).</summary>
+    public string? WalkForwardSource { get; set; }
     public decimal SelectionSharpe { get; set; }
     public decimal SelectionReturn { get; set; }
     public decimal SelectionMaxDrawdown { get; set; }
@@ -487,6 +500,33 @@ public sealed class ValidatedCandidate
     public decimal HoldoutMaxDrawdown { get; set; }
     public int HoldoutTrades { get; set; }
     public decimal HoldoutProfitFactor { get; set; }
+
+    // ----------------------------------------------- [Difetto B, 2026-08-22] il benchmark banale
+    //
+    // MISURA, non gate: nessun consumatore cambia comportamento e GreyZone non e' toccata. Serve a
+    // rispondere alla domanda che nessuno stadio poneva — «hai battuto una posizione costante nella
+    // tua stessa direzione, sulla tua stessa finestra?» — perche' uno Sharpe positivo su un mercato
+    // che scende non e' un edge se la strategia era short: sta prendendo il beta col segno giusto
+    // per caso. Misurato il 2026-08-22: sei gambe su nove fra quelle proposte non battevano il
+    // passivo, e dal 27 luglio (14 simboli su 14 in salita) hanno cambiato segno.
+    //
+    // Tutti nullable: sulle righe STORICHE non sono ricavabili — i blob degli artifact non
+    // contengono i trade — quindi restano vuoti, e la pagina lo dichiara invece di mostrare 0.
+
+    /// <summary>Direzione prevalente, misurata sul TEMPO a mercato e non sul numero di trade.</summary>
+    public string? DominantDirection { get; set; }
+
+    /// <summary>(oreLong − oreShort)/oreTotali: +1 = solo long, −1 = solo short, 0 = bilanciato.</summary>
+    public decimal? NetExposure { get; set; }
+
+    /// <summary>Frazione della finestra passata a mercato. null nel ramo degenere (trade istantanei).</summary>
+    public decimal? TimeInMarketFraction { get; set; }
+
+    /// <summary>Sharpe del passivo nella direzione prevalente, sull'holdout, a rf = 0 e SENZA funding.</summary>
+    public decimal? PassiveHoldoutSharpe { get; set; }
+
+    /// <summary>Candidato meno passivo, ENTRAMBI misurati a rf = 0. Vedi <see cref="PassiveBenchmark"/>.</summary>
+    public decimal? ExcessHoldoutSharpe { get; set; }
 
     public bool Survived { get; set; }
     public string? RejectReason { get; set; }

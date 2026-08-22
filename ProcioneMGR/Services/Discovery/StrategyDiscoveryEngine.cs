@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Optimization;
 
@@ -69,6 +69,9 @@ public sealed class StrategyDiscoveryEngine(
                         Timeframe = job.Timeframe,
                         Parameters = new Dictionary<string, decimal>(best.Parameters),
                         OutOfSampleSharpe = best.OutOfSampleSharpe,
+                        // [2026-08-22] Walk-forward VERO: qui le finestre sono affettate davvero
+                        // (OptimizationEngine.Slice) e il numero e' il massimo su tutta la griglia.
+                        WalkForwardSource = DiscoveryCandidate.SourceWalkForward,
                         InSampleSharpe = best.InSampleSharpe,
                         TotalReturn = best.TotalReturn,
                         MaxDrawdown = best.MaxDrawdown,

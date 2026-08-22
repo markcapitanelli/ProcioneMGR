@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+﻿using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Services.Security;
 
@@ -599,6 +599,12 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.Property(x => x.CandidateKey).HasMaxLength(160);
             e.Property(x => x.RejectReason).HasMaxLength(256);
             e.Property(x => x.BestStopVariant).HasMaxLength(32);
+            // [2026-08-22] Senza questa riga EF emette `text`, non il varchar(32) che Truncate
+            // promette: ogni altra stringa di questa entita' ha il suo HasMaxLength ed e' troncata
+            // di conseguenza. Una colonna piu' larga del troncamento non rompe, ma la coppia
+            // troncamento/colonna e' il contratto — e qui il difetto sarebbe silenzioso.
+            e.Property(x => x.WalkForwardSource).HasMaxLength(32);
+            e.Property(x => x.DominantDirection).HasMaxLength(16);
             // UNICO: l'indicizzazione dev'essere idempotente per run — rilanciare l'incrementale
             // o incrociare due gusci non deve mai duplicare un candidato.
             e.HasIndex(x => new { x.RunId, x.CandidateKey })
