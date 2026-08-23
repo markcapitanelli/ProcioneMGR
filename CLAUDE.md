@@ -64,6 +64,23 @@ modificare (leggilo) · qualsiasi cosa introdotta dopo il 2026-08-04.
 
 ## Comandi
 
+**Prima di diagnosticare a mano lo stato della piattaforma, chiedilo alla plancia.** Copre Docker,
+cluster kind, proxy dell'API server, i tre servizi in-cluster, i port-forward, il guscio, Postgres,
+le automazioni e i backup — e per ognuno dice il rimedio. `docs/PLANCIA-CONSOLE.md`.
+
+```bash
+procione stato
+```
+
+Dal **2026-08-23** la plancia ospita anche le automazioni: `watchdog.ps1` ogni 5 minuti e
+`db-backup.ps1` alle 03:30 girano *dentro* di lei, con l'output catturato — non più da attività
+pianificate che aprivano una finestra PowerShell davanti all'utente. Gli script non sono cambiati:
+è cambiato chi li chiama. `procione attivita migra` fa il passaggio; `procione lavoro` mostra
+cadenza, ultimo esito e prossima scadenza di ognuno.
+
+Ogni script di `scripts/` è raggiungibile dalla plancia: quelli senza un comando proprio con
+`procione esegui <nome> [argomenti]`.
+
 ```bash
 dotnet run --project ProcioneMGR --no-launch-profile -c Release
 ```

@@ -44,6 +44,7 @@ stata scelta.
 - [Mappa delle pagine](#mappa-delle-pagine)
 - [Requisiti](#requisiti)
 - [Setup e avvio](#setup-e-avvio)
+- [Plancia di comando (console)](#plancia-di-comando-console)
 - [Test](#test)
 - [Infrastruttura e deployment](#infrastruttura-e-deployment)
 - [Struttura del repository](#struttura-del-repository)
@@ -335,12 +336,50 @@ Protection vivono su volumi dedicati: la ricreazione dei container non li perde.
    ```
 
 3. **Avvio:**
-   ```bash
+   ```powershell
+   ./procione avvia                  # bring-up completo e verificato (consigliato)
+   # oppure
    dotnet run --project ProcioneMGR --no-launch-profile -c Release
    ```
    Lo script `./scripts/run-postgres.ps1` aggiunge i port-forward verso il cluster kind, ma
    **muore se il cluster è giù** (`$ErrorActionPreference="Stop"` più lo stderr di `kubectl`):
    finché non è corretto, con il cluster spento usa `dotnet run` diretto.
+
+## Plancia di comando (console)
+
+`procione` è l'applicazione master da console: un solo comando per **vedere** lo stato di tutti i
+processi della piattaforma e per **agire** su di essi — Docker, cluster kind e il suo proxy, i tre
+servizi in-cluster, i port-forward, il guscio, Postgres, attività pianificate, backup, ArgoCD,
+observability.
+
+```bash
+procione            # plancia interattiva: quadro che si aggiorna + comandi a un tasto
+procione stato      # un quadro e via (esce 0 in ordine, 1 avvisi, 2 guasti)
+procione ripara     # rimette a posto quel che trova rotto
+procione aiuto      # tutti i comandi
+```
+
+**Le automazioni girano qui dentro.** Fino al 2026-08-23 la piattaforma si faceva sorvegliare da tre
+meccanismi separati — due attività pianificate più un `.cmd` in Esecuzione automatica — e ognuno
+apriva la sua finestra PowerShell: quella del watchdog **288 volte al giorno**. Ora c'è un
+supervisore dentro questo stesso programma, che esegue gli **stessi script** con la **stessa
+cadenza** e l'output catturato: nessuna finestra nasce più da sola, e l'esito di ogni giro si legge
+nel quadro invece che nel Task Scheduler — che è il motivo per cui il dump notturno poté fallire sei
+notti di fila senza che nessuno se ne accorgesse.
+
+```bash
+procione attivita migra   # da tre meccanismi a uno. Si fa una volta.
+procione lavoro           # cadenza, ultimo esito, prossima scadenza di ogni automazione
+procione log supervisore  # il log che prima non esisteva
+```
+
+Il principio è che **il verdetto è la risposta, non lo stato dichiarato**: il proxy dell'API server
+si giudica interrogando `/livez` *attraverso* di esso, un port-forward si giudica confrontando il
+pod che serviva con quello vivo adesso, il motore si interroga sulla porta health e mai sulla gRPC.
+La plancia non riscrive gli script di `scripts/`: li chiama, e aggiunge i guardrail della regola «un
+solo scrittore» più la verifica dell'esito.
+
+Dettagli, comandi e note di verifica: **[docs/PLANCIA-CONSOLE.md](docs/PLANCIA-CONSOLE.md)**.
 
 ## Test
 
@@ -374,6 +413,8 @@ ProcioneMGR.Ml/                  Microservizio inferenza ML
 ProcioneMGR.Trading/             Microservizio motore di trading
 ProcioneMGR.Migrations.Postgres/ Migrazioni EF Core (PostgreSQL)
 ProcioneMGR.Tests/               Suite di test (3.029)
+procione.cmd                     Scorciatoia per la plancia di comando (compila alla prima esecuzione)
+tools/Procione/                  Plancia di comando: `procione` (stato, avvio, riparazione, supervisore)
 tools/                           CLI: DbBackup, FuturesVerify, PlatformExpand, SpotVerify, StrategyHunter
 infra/k8s/                       Manifest Kubernetes (deployment/service/networkpolicy) + ArgoCD, jobs
 scripts/                         bringup, watchdog, build-images-local, db-backup, bootstrap K8s/ArgoCD, osservabilità
