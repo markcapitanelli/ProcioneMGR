@@ -1,4 +1,4 @@
-using ProcioneMGR.Services.Backtesting;
+﻿using ProcioneMGR.Services.Backtesting;
 
 namespace ProcioneMGR.Services.Ensemble;
 
@@ -150,6 +150,21 @@ public class EnsembleStrategy
     /// possibile (comportamento invariato: nessun monitoraggio per questa gamba).
     /// </summary>
     public decimal? ExpectedSharpe { get; set; }
+
+    /// <summary>
+    /// [RF0, 2026-08-22] <b>Quando</b> <see cref="ExpectedSharpe"/> e' stato misurato. Serve a UNA
+    /// cosa: impedire a <c>EnsembleComparator</c> di confrontare uno Sharpe congelato di vecchia
+    /// convenzione (risk-free 2% sull'equity totale) con uno fresco di nuova.
+    ///
+    /// <para>Il divario e' di PURA unita' di misura: sulle otto gambe schierate il 2026-08-22 la
+    /// media pesata sarebbe passata da 1,934 a ~2,395 — <b>+23,9% contro un'isteresi del 10%</b> —
+    /// e il gate di significativita' scatta a un delta di 0,55 mentre il dazio mediano per candidato
+    /// e' 0,545: un margine del 2%, cioe' una coincidenza, non un presidio.</para>
+    ///
+    /// <para>null = convenzione vecchia (gambe deserializzate da prima del taglio). Fail-closed.</para>
+    /// </summary>
+    public DateTime? ExpectedSharpeAtUtc { get; set; }
+
     public decimal? ExpectedProfitFactor { get; set; }
     public decimal? ExpectedMaxDrawdown { get; set; }
 

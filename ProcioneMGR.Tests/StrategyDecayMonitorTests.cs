@@ -1,4 +1,4 @@
-using ProcioneMGR.Services.Backtesting;
+﻿using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Ensemble;
 using ProcioneMGR.Services.Monitoring;
 using ProcioneMGR.Services.Optimization;
@@ -278,7 +278,11 @@ public class StrategyDecayMonitorTests
         }
 
         var report = monitor.Analyze(Strategy(expectedSharpe: 1m), trades, Timeframe);
-        var holdoutSharpe = Statistics.SharpeRatio(equity, Statistics.PeriodsPerYear(Timeframe), riskFreeRateAnnual: 0m);
+        // [RF0, 2026-08-22] L'argomento esplicito `riskFreeRateAnnual: 0m` E' STATO RIMOSSO: che
+        // questo test ne avesse bisogno per far tornare i conti ERA il difetto — era l'unico punto
+        // di tutto il repo a passare un risk-free a mano, e lo passava a zero. Che ora passi col
+        // default è la prova che la convenzione è una sola.
+        var holdoutSharpe = Statistics.SharpeRatio(equity, Statistics.PeriodsPerYear(Timeframe));
 
         Assert.NotNull(report.RealizedSharpe);
         Assert.NotEqual(0m, holdoutSharpe);

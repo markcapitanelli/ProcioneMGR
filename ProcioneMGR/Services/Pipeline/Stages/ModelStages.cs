@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.ML;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Alpha;
@@ -945,11 +945,20 @@ public static class OverfittingGate
         if (dsrMisurati.Count > 0)
         {
             var dsrMax = dsrMisurati.Max();
+            // [RF0, 2026-08-22] INCONDIZIONATO. Prima si stampava solo quando la banda era
+            // irraggiungibile, cioe' la riga compariva esattamente quando il numero era gia'
+            // deciso — e mancava proprio quando serviva per capire di quanto ci si stesse
+            // avvicinando. E' con questa riga, sui run veri, che si misura se il passaggio a
+            // risk-free zero ha mosso il DSR: SR* dipende dalla varianza degli Sharpe dei
+            // tentativi, che cambia convenzione, mentre l'osservato era gia' a rf = 0. Il segno
+            // dello spostamento non si deduce per inversione algebrica: si legge qui.
+            log?.Invoke($"DSR massimo del run: {dsrMax:F3} su {dsrMisurati.Count} candidati misurati "
+                      + $"(pavimento fascia grigia {GreyZone.DsrFloor:F2}, gate {minDeflatedSharpe:F2}).");
             if (dsrMax < GreyZone.DsrFloor)
             {
                 log?.Invoke(
-                    $"Banda grigia IRRAGGIUNGIBILE in questo run: DSR massimo {dsrMax:F3} su {dsrMisurati.Count} candidati misurati, "
-                  + $"sotto il pavimento {GreyZone.DsrFloor:F2}. Nessun candidato può entrare in fascia grigia per DSR: "
+                    $"Banda grigia IRRAGGIUNGIBILE in questo run: DSR massimo {dsrMax:F3} sotto il pavimento "
+                  + $"{GreyZone.DsrFloor:F2}. Nessun candidato può entrare in fascia grigia per DSR: "
                   + "gli unici grigi possibili sono quelli bocciati per finestra corta.");
             }
         }

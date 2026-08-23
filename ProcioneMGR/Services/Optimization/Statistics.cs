@@ -1,4 +1,4 @@
-using ProcioneMGR.Services.Backtesting;
+﻿using ProcioneMGR.Services.Backtesting;
 
 namespace ProcioneMGR.Services.Optimization;
 
@@ -23,8 +23,39 @@ public static class Statistics
     ///   returns[i] = (equity[i] - equity[i-1]) / equity[i-1]
     ///   Sharpe = (mean - rfPerPeriod) / stdDev * sqrt(periodsPerYear)
     /// Ritorna 0 se i dati sono insufficienti o se stdDev == 0 (niente divisioni per zero).
+    ///
+    /// <para><b>[RF0, 2026-08-22] Il risk-free di default è ZERO, e non è una svista: è la
+    /// convenzione.</b> Nel motore la cassa NON rende nulla (<c>BacktestEngine.Portfolio.Equity</c>
+    /// = cash + margine + PnL non realizzato, nessun accredito periodico da nessuna parte) mentre è
+    /// investito solo <c>PositionSizePercent</c> del capitale. Sottrarre rf sull'equity INTERA
+    /// addebitava quindi il costo-opportunità di capitale che la simulazione stessa tiene fermo a
+    /// zero: un doppio conteggio, non prudenza.</para>
+    ///
+    /// <para><b>Perché zero e non «rf scalato per l'esposizione».</b> La convenzione contabilmente
+    /// corretta — accreditare rf a tutta l'equity e poi sottrarlo — dà lo STESSO numero di rf = 0,
+    /// per identità algebrica: r'ᵢ = rᵢ + rf_pp ⇒ (media′ − rf_pp)/σ = media/σ. Verificata a quattro
+    /// decimali su serie reali. La variante «rf × taglia × esposizione» richiederebbe di trasportare
+    /// la taglia con cui la curva è stata prodotta, che questa firma non riceve e che oggi non si
+    /// persiste (vedi <c>StrategyDecayMonitor.RiskFreeBiasSharpe</c>).</para>
+    ///
+    /// <para><b>La misura che lo motiva.</b> Il dazio valeva rf/σ_annualizzata, cioè una funzione
+    /// dell'ESPOSIZIONE e non della qualità: sui 12.967 candidati d'archivio con σ ricostruibile la
+    /// mediana era <b>0,545 punti di Sharpe</b> — più dell'intero gate <c>minHoldoutSharpe = 0,5</c>
+    /// — con q1 0,362 e q3 0,749. E non era uniforme: sistematicamente peggiore per le strategie
+    /// SELETTIVE (RegimeConditional 0,625, Composite 0,618) che per quelle sempre a mercato
+    /// (Stochastic 0,310, PriceSmaCross 0,345), cioè penalizzava proprio il profilo intraday che
+    /// questa piattaforma cerca. Il quintile a σ più bassa aveva <b>1 sopravvissuto su 2.166</b>.</para>
+    ///
+    /// <para>Effetto sull'archivio, misurato riga per riga: le righe oltre il gate Sharpe passano da
+    /// 1.775 a <b>2.670</b> (+50%). Le soglie NON sono state ritarate in questo commit: vedi
+    /// <c>docs/audit/35_RISK_FREE_2026-08-22.md</c>.</para>
+    ///
+    /// <para><b>Non esporre questo parametro in configurazione</b>: una manopola qui è una manopola
+    /// per reintrodurre il difetto. Il guardiano è il test <c>Sharpe_InvarianteAllaScalaDeiRendimenti</c>
+    /// — lo Sharpe di una serie DEVE essere invariante alla scala dei rendimenti, e il termine
+    /// −rf/σ è l'unica cosa che può romperlo, perché σ scala e rf no.</para>
     /// </summary>
-    public static decimal SharpeRatio(IReadOnlyList<EquityPoint> equityCurve, int periodsPerYear, decimal riskFreeRateAnnual = 0.02m)
+    public static decimal SharpeRatio(IReadOnlyList<EquityPoint> equityCurve, int periodsPerYear, decimal riskFreeRateAnnual = 0m)
     {
         if (equityCurve is null || equityCurve.Count < 3 || periodsPerYear <= 0)
         {
@@ -95,8 +126,13 @@ public static class Statistics
         }
         if (returns.Count < 2) return null;
 
-        var sharpe = SharpeRatio(equityCurve, periodsPerYear);
-        var validation = Validation.SelectionValidator.Validate([sharpe], returns, periodsPerYear);
+        // [RF0, 2026-08-22] Lo Sharpe passato qui non entra MAI nel risultato: con un solo trial
+        // SR* vale 0 per DUE strade indipendenti (TrialVariance ritorna 0 sotto i 2 elementi,
+        // ExpectedMaxSharpe ritorna 0 per trials <= 1), e l'osservato lo ricalcola SelectionValidator
+        // dai rendimenti. Calcolarlo era codice morto che sembrava vivo — e con la vecchia
+        // convenzione era anche un numero di scala diversa da quello ricalcolato: si passa uno zero
+        // esplicito, che è ciò che il calcolo produce comunque.
+        var validation = Validation.SelectionValidator.Validate([0m], returns, periodsPerYear);
         return double.IsNaN(validation.DeflatedSharpe) ? null : validation.DeflatedSharpe;
     }
 
@@ -136,8 +172,10 @@ public static class Statistics
     /// (solo i rendimenti sotto il MAR contribuiscono, gli altri contano 0), non la deviazione
     /// standard totale. Penalizza solo il rischio "cattivo".
     /// </summary>
+    // [RF0, 2026-08-22] Stessa convenzione dello Sharpe: senza, il tearsheet mostrerebbe due
+    // metriche gemelle calcolate su due basi diverse.
     public static decimal SortinoRatio(IReadOnlyList<EquityPoint> equityCurve, int periodsPerYear,
-        decimal riskFreeRateAnnual = 0.02m, decimal minimumAcceptableReturnPerPeriod = 0m)
+        decimal riskFreeRateAnnual = 0m, decimal minimumAcceptableReturnPerPeriod = 0m)
     {
         var returns = PeriodicReturns(equityCurve);
         if (returns.Count < 2 || periodsPerYear <= 0) return 0m;
@@ -371,7 +409,8 @@ public static class Statistics
         IReadOnlyList<EquityPoint> equityCurve,
         IReadOnlyList<BacktestTrade> trades,
         int periodsPerYear,
-        decimal riskFreeRateAnnual = 0.02m) => new()
+        // [RF0, 2026-08-22] Vedi SharpeRatio: la convenzione è una sola per tutto il tearsheet.
+        decimal riskFreeRateAnnual = 0m) => new()
     {
         Sharpe = SharpeRatio(equityCurve, periodsPerYear, riskFreeRateAnnual),
         Sortino = SortinoRatio(equityCurve, periodsPerYear, riskFreeRateAnnual),

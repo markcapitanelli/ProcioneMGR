@@ -1,4 +1,4 @@
-using ProcioneMGR.Services.Backtesting;
+﻿using ProcioneMGR.Services.Backtesting;
 using ProcioneMGR.Services.Optimization;
 
 namespace ProcioneMGR.Tests;
@@ -13,18 +13,28 @@ public class OptimizationStatisticsTests
     public void PeriodsPerYear_IsCorrect(string tf, int expected)
         => Assert.Equal(expected, Statistics.PeriodsPerYear(tf));
 
+    /// <summary>
+    /// [RF0, 2026-08-22] Questo test era la MINIATURA del difetto: rendimenti [+0,10, −0,10], media
+    /// esattamente ZERO, e asseriva −0,002137. Cioè il 100% del suo valore atteso era il termine
+    /// risk-free: una serie a media nulla otteneva uno Sharpe NEGATIVO, e nessuno se ne stupiva.
+    ///
+    /// <para>Con la convenzione corretta il numero è 0, che è la risposta giusta a «qual è lo Sharpe
+    /// di una serie che in media non guadagna né perde».</para>
+    /// </summary>
     [Fact]
-    public void Sharpe_KnownEquity_MatchesHandComputed()
+    public void Sharpe_MediaNulla_DaZero_NonUnNumeroNegativo()
     {
-        // equity [100, 110, 99] -> returns [+0.10, -0.10], mean=0, std(pop)=0.10
-        // rfPerPeriod = 0.02/8760; Sharpe = (0 - rf)/0.10 * sqrt(8760) ≈ -0.002137
+        // equity [100, 110, 99] -> returns [+0.10, -0.10], mean = 0, std(pop) = 0.10
         var eq = new List<EquityPoint>
         {
             new() { Capital = 100m }, new() { Capital = 110m }, new() { Capital = 99m },
         };
 
         var sharpe = Statistics.SharpeRatio(eq, periodsPerYear: 8760);
-        Assert.True(Math.Abs((double)sharpe - (-0.002137)) < 1e-4, $"Sharpe={sharpe}");
+
+        Assert.Equal(0m, sharpe);
+        // E il vecchio numero, per memoria: con rf = 2% valeva ≈ −0,002137, tutto risk-free.
+        Assert.True(Math.Abs((double)Statistics.SharpeRatio(eq, 8760, 0.02m) - (-0.002137)) < 1e-4);
     }
 
     [Fact]

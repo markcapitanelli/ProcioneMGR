@@ -2040,3 +2040,65 @@ nessuno**. Valore invariato (a entrambe le altezze la porta è chiusa), commento
 - [ ] `GreyDeployer` deve risolvere sulla `CandidateKey`, non sulla terna
 - [ ] cancello di costo al denominatore della barra (oggi sottostimato da 5× a 40×)
 - [ ] sonda «core stantio»: le immagini erano indietro di 4, 5 e **11 giorni**
+
+---
+
+## Il risk-free sottratto a capitale che non lavorava (2026-08-22)
+
+*Documento completo: [`docs/audit/35_RISK_FREE_2026-08-22.md`](audit/35_RISK_FREE_2026-08-22.md).
+Trovato lavorando sul benchmark passivo; misurato con tre indagini indipendenti, ciascuna passata
+sotto uno scettico, e una sintesi che ha dovuto risolvere sei difetti fatali.*
+
+`Statistics.SharpeRatio` sottraeva un risk-free del 2% ai rendimenti della **curva di equity**, ma è
+investito solo `PositionSizePercent` del capitale e il cash non rende nulla. Si addebitava il
+costo-opportunità del capitale **intero** a rendimenti che il capitale intero non ha prodotto.
+
+**Perché è doppio conteggio e non prudenza**: accreditare rf a tutta l'equity e poi sottrarlo — la
+convenzione contabilmente corretta — dà **esattamente lo stesso Sharpe di rf = 0** (`r'ᵢ = rᵢ + rf_pp`
+⇒ `(media′ − rf_pp)/σ = media/σ`), verificato a quattro decimali. Quindi rf = 0 **è** quella
+convenzione, a costo zero.
+
+### Quanto costava
+
+Dazio `rf/σ` su 12.967 candidati: mediana **0,545 punti di Sharpe**, q1 0,362, q3 0,749 — **più
+dell'intero gate `minHoldoutSharpe = 0,5`** che li giudicava. E **non uniforme**: dentro lo stesso
+run, RegimeConditional 0,625 e Composite 0,618 contro Stochastic 0,310 e PriceSmaCross 0,345.
+**Penalizzava il doppio proprio il profilo selettivo intraday che questa piattaforma cerca**, quindi
+non spostava solo la soglia — **cambiava la classifica**.
+
+Conseguenza più netta: il quintile a σ più bassa aveva **1 sopravvissuto su 2.166**; con rf = 0 ne
+avrebbe 92. La piattaforma era **cieca a un quinto del proprio spazio di ricerca**.
+
+**25 chiamanti su 25** prendevano il default. L'unico punto del repo che passava un rf esplicito era
+un **test**, e lo passava a **zero**, «per far tornare due numeri che altrimenti non tornavano». E due
+convenzioni si incontravano **nella stessa invocazione**: `SelectionValidator` riceve gli Sharpe dei
+tentativi a rf = 2% e ricalcola l'osservato a rf = 0.
+
+### La parte non negoziabile
+
+`AutoReapply` e la campagna sono accesi, e riscrivono le corsie da soli. Senza freno, al primo run il
+comparatore avrebbe confrontato **due generazioni di numeri**: le 8 gambe schierate valgono 1,934
+congelate e ~2,395 ri-misurate (**+23,9% contro un'isteresi del 10%**), e il gate z scatta a 0,55
+contro un dazio mediano di 0,545 — **margine del 2%, cioè una coincidenza**. Quindi nello stesso
+commit: timbro di convenzione sulla gamba (`ExpectedSharpeAtUtc`) e **rifiuto fail-closed** del
+comparatore, che si sblocca ri-applicando l'ensemble.
+
+### Lo storico
+
+Niente bonifica, niente colonna: una **data di taglio** (`MetricsConvention`). La tabella è derivata e
+si autodistrugge al primo «Ricostruisci»; la data che serve (`RunCompletedUtc`) c'è già ed è stabile
+fra i rebuild; e riscrivere i numeri con l'identità di correzione produrrebbe, dentro una tabella di
+misure, valori che nessun run ha mai prodotto — ed è cieca su 926 righe.
+
+### Aperto — decisioni del proprietario, rispondibili con un numero
+
+- [ ] **`minHoldoutSharpe`** (0,5): lasciarla — allargo del 50%, righe oltre il gate da 1.775 a
+      **2.670** — o portarla a **0,97** (iso-numerosità: stesso numero di ammessi, ma l'89,6% è la
+      stessa identità, 185 righe cambiano perché è cambiato il metro)?
+- [ ] **`MinSharpeRealized` 0,8 / `DemoteSharpeThreshold` 0,5**, entrambi con automazione accesa: lo
+      Sharpe di corsia sale di **0,36–1,01**. Promuovere diventa più facile, retrocedere più
+      difficile — entrambe permissive. Fermi o ritarati?
+- [ ] **`Fleet.RetireSharpeThreshold`**: si annunceranno meno ritiri.
+- [ ] Il **DSR** non si dichiara e non si ritara: l'osservato era già a rf = 0 e si sposta solo SR*,
+      il cui segno non è deducibile per inversione. Si legge sul primo run vero dal log `dsrMax`, ora
+      reso incondizionato.

@@ -593,6 +593,13 @@ public sealed class EnsembleManager(
         Timeframe = cfg.Timeframe,
         // Capitale e size fissi: lo Sharpe che decide i pesi è invariante di scala, contano solo
         // i ritorni relativi. La fee invece NO: è quella viva del motore (vedi liveFeePercent).
+        //
+        // [RF0, 2026-08-22] Questa affermazione era FALSA fino a oggi, ed è la ragione per cui la
+        // si data. Col risk-free al 2% sottratto sull'equity totale, lo Sharpe valeva
+        // media/σ − rf/σ, e σ scala con la taglia mentre rf no: la stessa strategia dosata al 100%
+        // e al 10% dava due numeri diversi (dazio 0,036 contro 0,365 su serie reali). Da oggi
+        // l'invarianza è vera **al prim'ordine**: lo scarto residuo misurato fra taglia 50% e 5% è
+        // 0,015–0,077, e viene dal fatto che il nozionale è fissato all'ingresso, non dal rf.
         InitialCapital = 10_000m,
         PositionSizePercent = 100m,
         FeePercent = liveFeePercent?.Invoke() ?? 0.1m,

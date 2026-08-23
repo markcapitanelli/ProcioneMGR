@@ -1,4 +1,4 @@
-namespace ProcioneMGR.Services.Ensemble;
+﻿namespace ProcioneMGR.Services.Ensemble;
 
 /// <summary>
 /// Objective, deterministic comparison of two ensembles (the one currently deployed on the trading
@@ -65,6 +65,17 @@ public sealed class EnsembleSummary
 
     /// <summary>Number of distinct symbols the legs span (diversification proxy).</summary>
     public int DistinctSymbols { get; set; }
+
+    /// <summary>
+    /// [RF0, 2026-08-22] Almeno una gamba porta uno Sharpe atteso misurato con la <b>convenzione
+    /// precedente</b> (risk-free 2% sottratto sull'equity totale). Vedi <c>MetricsConvention</c>.
+    ///
+    /// <para>Quando e' vero il confronto NON si fa: il candidato fresco guadagnerebbe ~0,5 punti di
+    /// pura unita' di misura contro un'isteresi del 10% e un gate di significativita' che scatta a
+    /// 0,55 — cioe' quasi esattamente il dazio mediano. La corsia si sblocca ri-applicando
+    /// l'ensemble da /ensemble, che ri-misura le gambe con la convenzione corrente.</para>
+    /// </summary>
+    public bool HasLegacyMetrics { get; set; }
 
     /// <summary>
     /// Conteggio trade dell'holdout dietro <see cref="WeightedAverageSharpe"/> (il minimo fra le gambe).
@@ -159,6 +170,31 @@ public sealed class EnsembleComparator(EnsembleComparatorOptions options) : IEns
                 ShouldReplace = true,
                 Reason = $"Nessun ensemble corrente: applico il candidato (Sharpe medio {candidate.WeightedAverageSharpe:F2}, {candidate.SurvivingLegs} gambe).",
                 SharpeDelta = candidate.WeightedAverageSharpe,
+            };
+        }
+
+        // [RF0, 2026-08-22] FAIL-CLOSED sul confronto fra CONVENZIONI DIVERSE.
+        //
+        // Le gambe schierate prima del 2026-08-22 portano uno Sharpe atteso col risk-free del 2%
+        // dentro; il candidato fresco no. Il divario e' di PURA unita' di misura, e i numeri dicono
+        // che nessuno dei presidi esistenti lo fermerebbe: sulle otto gambe schierate quel giorno la
+        // media pesata sarebbe passata da 1,934 a ~2,395, cioe' +23,9% contro un'isteresi del 10%;
+        // e il gate z scatta a un delta di 0,55 su 4,87 mesi di holdout mentre il dazio mediano per
+        // candidato e' 0,545 — un margine del 2%, che e' una coincidenza, non un presidio.
+        //
+        // Sta QUI e non piu' in alto di proposito: il ramo «nessun incumbent» non ha nulla da
+        // confrontare, quindi non ha il problema. Regola 4: in dubbio non si sostituisce, e si dice
+        // perche'.
+        if (current.HasLegacyMetrics)
+        {
+            return new EnsembleComparison
+            {
+                ShouldReplace = false,
+                Reason = "Ensemble corrente mantenuto: le gambe schierate portano uno Sharpe atteso di convenzione "
+                       + $"precedente al {Optimization.MetricsConvention.RiskFreeZeroSinceUtc:yyyy-MM-dd} (risk-free 2% sull'equity "
+                       + "totale). Confrontarlo con un candidato calcolato a risk-free 0 regalerebbe al candidato ~0,5 "
+                       + "punti di puro cambio di unità di misura. Ri-applica l'ensemble da /ensemble per ri-misurare "
+                       + "le gambe con la convenzione corrente.",
             };
         }
 

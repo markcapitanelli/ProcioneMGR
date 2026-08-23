@@ -1,4 +1,4 @@
-using ProcioneMGR.Services.Ensemble;
+﻿using ProcioneMGR.Services.Ensemble;
 using ProcioneMGR.Services.Optimization;
 using ProcioneMGR.Services.Trading;
 
@@ -41,7 +41,14 @@ public sealed class DecayMonitorOptions
     /// <see cref="DecayReport.RiskFreeBiasSharpe"/> quanto il realizzato — che è LORDO — sia
     /// lusingato rispetto all'atteso. Non viene sottratto a nulla: vedi il commento del campo.
     /// </summary>
-    public decimal ExpectedRiskFreeRateAnnual { get; set; } = 0.02m;
+    /// <summary>
+    /// [RF0, 2026-08-22] Portato a ZERO: dal 2026-08-22 <c>Statistics.SharpeRatio</c> non sottrae
+    /// piu' alcun risk-free, quindi atteso e realizzato sono entrambi lordi e non c'e' nulla da
+    /// quantificare. Il campo NON si rimuove: resta come guardiano — se
+    /// <see cref="DecayReport.RiskFreeBiasSharpe"/> tornasse non nullo, qualcuno ha rimesso un
+    /// risk-free sull'equity da qualche parte.
+    /// </summary>
+    public decimal ExpectedRiskFreeRateAnnual { get; set; } = 0m;
 
     /// <summary>
     /// [C1b] Oltre questo <c>|PnlPercent|</c> una riga non è un'operazione, è un <b>fill rotto</b>:
@@ -240,10 +247,20 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
         // [M5b] Il divario di risk-free viaggia col verdetto: il realizzato è LORDO, l'atteso è
         // netto, e il rapporto è quindi generoso di quella quantità. Dirlo qui è ciò che impedisce
         // di leggere «in linea» come una misura pulita — regola 5, degradare dicendolo.
+        // [RF0, 2026-08-22] La meta' RISK-FREE del disallineamento e' chiusa: Statistics.SharpeRatio
+        // non sottrae piu' nulla, quindi atteso e realizzato sono entrambi LORDI e
+        // RiskFreeBiasSharpe e' null per costruzione. Il ramo resta come GUARDIANO: se un giorno
+        // tornasse non nullo, qualcuno ha rimesso un risk-free sull'equity.
+        //
+        // Resta aperta la meta' BASE DI CAPITALE, e va detta lo stesso: il realizzato e' un
+        // rendimento sul NOZIONALE (PnlPercent), l'atteso una curva di equity a una frazione del
+        // capitale. Il rapporto fra le due sigma e' dell'ordine di 10x, ma non si puo' correggere
+        // finche' la taglia con cui l'holdout e' girato non viene persistita: si DICHIARA, non si
+        // applica — inventare un fattore sarebbe peggio del silenzio.
         var bias = report.RiskFreeBiasSharpe is decimal b && b > 0.01m
             ? FormattableString.Invariant(
-                $" Il realizzato è LORDO e l'atteso è netto di {options.ExpectedRiskFreeRateAnnual:P0}/anno: a parità di base di capitale il confronto lo favorisce di ~{b:F2} punti di Sharpe.")
-            : string.Empty;
+                $" ATTENZIONE: risk-free residuo di {options.ExpectedRiskFreeRateAnnual:P0}/anno sull'atteso (~{b:F2} punti di Sharpe). Dal 2026-08-22 dovrebbe essere zero: qualcuno lo ha rimesso.")
+            : " Attenzione: il realizzato è un rendimento sul NOZIONALE, l'atteso su un'equity a una frazione del capitale. Il rapporto non è pulito, e non si può correggere: la taglia con cui l'holdout è girato non viene persistita.";
         report.StatusMessage = (report.IsAlert
             ? $"ALERT: Sharpe realizzato {realizedSharpe:F2} vs atteso {expected:F2} ({ratio:P0}) — sotto la soglia {options.AlertThresholdRatio:P0}."
             : $"In linea: Sharpe realizzato {realizedSharpe:F2} vs atteso {expected:F2} ({ratio:P0}).") + bias;
