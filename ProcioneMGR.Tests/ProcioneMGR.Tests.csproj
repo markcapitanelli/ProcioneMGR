@@ -37,6 +37,9 @@
     <ProjectReference Include="..\ProcioneMGR.Contracts\ProcioneMGR.Contracts.csproj" />
     <ProjectReference Include="..\ProcioneMGR.Ml\ProcioneMGR.Ml.csproj" />
     <ProjectReference Include="..\ProcioneMGR.Trading\ProcioneMGR.Trading.csproj" />
+    <!-- La plancia di comando (`procione`). Riferimento a un Exe: serve solo a provarne la logica
+         pura di lettura e verdetto, quella che potrebbe mentire in silenzio. -->
+    <ProjectReference Include="..\tools\Procione\Procione.csproj" />
   </ItemGroup>
 
   <ItemGroup>

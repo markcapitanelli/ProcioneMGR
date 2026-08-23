@@ -2205,3 +2205,76 @@ strade coincidono, così se il default cambiasse di nuovo la riga cadrebbe di nu
 Lezione registrata: **la CI verde su due rami non è la CI verde sul merge**, e un'asserzione
 formulata contro un *default* invece che contro il *fatto* che vuole proteggere invecchia insieme a
 quel default.
+
+---
+
+## Le automazioni dentro un solo programma (2026-08-23)
+
+*Richiesta del proprietario: «il fatto che gli script funzionino tutti separatamente mi infastidisce
+un po', soprattutto vedere una finestra PowerShell che si esegue ogni x minuti aprendosi sopra tutti
+gli altri lavori».*
+
+### Cosa c'era davvero
+
+Non due meccanismi, **tre**, tutti fuori dalla plancia di comando che pure esisteva già:
+
+| | Cosa | Cosa si vedeva |
+|---|---|---|
+| task `ProcioneMGR Watchdog` | `powershell.exe -File watchdog.ps1`, `PT5M`, `LogonType=Interactive` | una console davanti a tutto, **288 volte al giorno** |
+| task `ProcioneMGR Backup DB` | `powershell.exe -File db-backup.ps1`, 03:30 | idem, una volta a notte |
+| `Startup\ProcioneMGR-BringUp.cmd` | `start /min powershell -File bringup.ps1` | una finestra minimizzata a ogni logon |
+
+Il terzo non era nemmeno un'attività pianificata: era il **ripiego non elevato** di
+`bringup.ps1 -Register`, depositato in Esecuzione automatica il 2026-08-02 e da allora mai più
+guardato da nessuno. È il motivo per cui `procione stato` diceva «BringUp: non registrata» pur
+girando a ogni accensione.
+
+### La forma della correzione
+
+La plancia **non riscrive** gli script: li chiama. Quel principio regge anche qui — gli stessi
+`watchdog.ps1` e `db-backup.ps1`, gli stessi argomenti, la stessa cadenza. Cambia **chi** li chiama:
+un supervisore residente dentro `procione`, che li esegue con l'output **catturato**
+(`CreateNoWindow`). Nessuna finestra nasce più da sola.
+
+Il fastidio era la parte visibile. La parte seria è che quegli esiti si potevano leggere **solo**
+aprendo il Task Scheduler — ed è esattamente così che il dump notturno poté fallire **sei notti di
+fila** (2026-08-17) senza che nessuno se ne accorgesse: il task usciva `1`, e quel codice non lo
+leggeva nessuno. Ora l'esito di ogni giro sta nel quadro accanto a tutto il resto, e c'è un log solo
+(`procione log supervisore`) dove prima non ce n'era nessuno.
+
+| # | Cosa | Stato |
+|---|---|---|
+| P1 | La plancia consolidata su `master` (era lavoro non committato in un worktree, su base più vecchia) | fatto |
+| P2 | `Schedule` — cadenza a intervallo, giornaliera, all'avvio; **funzioni pure, l'orologio è un parametro** | fatto, 12 test |
+| P3 | `Supervisor` — ciclo residente, esclusione a mutex, battito osservabile, log con rotazione, arresto pulito a evento | fatto, verificato dal vivo |
+| P4 | `procione attivita migra` — da tre meccanismi a **uno**: registra `ProcioneMGR Plancia` al logon, poi ritira i vecchi | fatto |
+| P5 | Copertura completa: nessuno dei 19 script resta fuori (`segreti`, `postgres`, `veglia`, `argocd installa/ripunta`, `esegui`, `strumenti`) | fatto |
+| P6 | I verdetti nuovi: supervisore, per-lavoro, doppione, backup | fatto, 21 test |
+
+### Tre decisioni che valeva la pena scrivere
+
+**Il recupero avviene una volta sola.** Un'occorrenza persa perché il PC era spento non si salta
+(è la regola `-StartWhenAvailable` del Task Scheduler, e la ragione per cui esiste), ma si tiene
+l'**ultima** esecuzione, non l'elenco delle mancate: dopo sei notti spente parte **un** backup, non
+sei. E l'ultima esecuzione del backup si legge dal **disco** — il dump più recente — non dalla
+memoria del supervisore: è il dato osservabile, e copre il backup fatto a mano, quello fatto dal
+vecchio task prima della migrazione, e la macchina che ha cambiato repository.
+
+**Il verdetto non deve mentire nemmeno per eccesso di zelo.** La prima stesura diceva «veglia e
+backup NON stanno girando» ogni volta che il supervisore era spento. Su una macchina non ancora
+migrata è **falso**: girano, dal Task Scheduler, ed è l'unica cosa che veglia sulla piattaforma. Il
+verdetto ora distingue i due casi, e chiama il task vecchio **DOPPIONE** solo quando il supervisore
+c'è davvero. Un rosso su una cosa che funziona è il modo più rapido di rendere inutile un quadro.
+
+**Togliere qualcosa che funzionava è un peggioramento travestito da pulizia.** Il bring-up al logon
+c'era; il lavoro `avvio` nasce spento perché dura minuti e non è ciò che ci si aspetta aprendo una
+console. Quindi la migrazione lo **accende** — ma solo se sta togliendo un bring-up al logon che
+esisteva già. E «all'avvio» significa una volta per **sessione**, non per processo: altrimenti
+riaprire la plancia farebbe ripartire un bring-up da venti minuti, e la si imparerebbe a non aprire.
+
+### Il lampo che resta
+
+Un'applicazione console avviata dal Task Scheduler riceve una console **dall'host**, e non esiste
+flag di avvio che la sopprima: l'unico modo è che il processo la nasconda da sé
+(`ShowWindow(GetConsoleWindow(), SW_HIDE)`, in `--muto`). Resta quindi un lampo di qualche
+millisecondo, **una volta al logon**, al posto di una finestra ogni cinque minuti per sempre.
