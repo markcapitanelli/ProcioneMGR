@@ -132,9 +132,12 @@ internal static class Program
             case "attivita" or "tasks":
                 return (Arg(args) ?? "stato") switch
                 {
-                    "migra" or "migrate" => await Tasks.MigrateAsync(),
+                    // `--si` vale qui e non su `cluster distruggi`, che pretende una parola
+                    // DIGITATA: la differenza e' voluta. Una migrazione e' reversibile
+                    // (`procione attivita migra` di nuovo, o `rimuovi`); un cluster distrutto no.
+                    "migra" or "migrate" => await Tasks.MigrateAsync(si),
                     "registra" or "register" => Tasks.RegisterSupervisor(),
-                    "rimuovi" or "remove" => await Tasks.RemoveAllAsync(),
+                    "rimuovi" or "remove" => await Tasks.RemoveAllAsync(si),
                     _ => await Stato(false), // lo stato delle attivita' e' gia' una sezione del quadro
                 };
 
@@ -292,8 +295,8 @@ internal static class Program
             ("procione lavoro",               "i lavori: cadenza, ultimo esito, prossima scadenza"),
             ("procione lavoro <nome> ora",    "esegui un lavoro adesso, fuori cadenza (veglia, backup, avvio)"),
             ("procione lavoro <nome> accendi|spegni", "acceso/spento e' una preferenza, sopravvive al riavvio"),
-            ("procione attivita migra",       "DA TRE MECCANISMI A UNO: toglie i task vecchi e registra solo la plancia"),
-            ("procione attivita rimuovi",     "toglie ogni avvio automatico: si torna a lanciare tutto a mano"),
+            ("procione attivita migra [--si]", "DA TRE MECCANISMI A UNO: toglie i task vecchi e registra solo la plancia"),
+            ("procione attivita rimuovi [--si]", "toglie ogni avvio automatico: si torna a lanciare tutto a mano"),
         ]);
 
         Sezione("Accendere e spegnere", [
