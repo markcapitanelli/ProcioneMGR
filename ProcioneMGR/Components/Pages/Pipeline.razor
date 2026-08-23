@@ -65,9 +65,16 @@
             momentum…), trigger su eventi discreti (picchi di volatilità, shock di prezzo, con
             uscita a tempo) e meta-strategie condizionate dal regime. La generazione è
             deterministica (stesso seed → stesse spec) e ogni candidata passa gli stessi filtri
-            delle altre: screening sul periodo di selezione, conferma walk-forward a parametri
-            fissi, poi l'holdout. I parametri della fase (quante spec, quali generatori, quali
-            segnali) si configurano con l'ingranaggio.
+            delle altre: screening sul periodo di selezione, conferma su <strong>sotto-periodi
+            della selezione</strong>, poi l'holdout. I parametri della fase (quante spec, quali
+            generatori, quali segnali) si configurano con l'ingranaggio.
+            <div class="small text-muted mt-1">
+                Non chiamarla walk-forward: i parametri di una spec generata sono già fissi, quindi
+                riottimizzare non ha nulla da riottimizzare. Fino al 2026-08-22 la colonna
+                «walk-forward» di queste famiglie riportava lo Sharpe di selezione ricopiato; oggi
+                la conferma segmenta la curva di equity e la provenienza del numero è scritta
+                accanto a ogni candidato in <a href="research">Archivio candidati</a>.
+            </div>
         </dd>
     </dl>
 </GuidaPanel>

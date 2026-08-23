@@ -25,6 +25,24 @@
         non risulta leggibile viene <strong>eliminato</strong> e segnalato l'errore — non viene mai
         conservato un backup corrotto.
     </p>
+    <div class="alert alert-info mb-3">
+        <strong>Questa pagina non è l'unico posto in cui esistono backup, e non li vede tutti.</strong>
+        L'elenco qui sotto mostra <em>solo</em> i backup fatti a mano da questo pulsante, che finiscono
+        in <code>@BackupService.BackupDirectory</code>. Il <strong>backup notturno</strong> è un'altra
+        cosa: lo esegue <code>scripts/db-backup.ps1</code> da un'operazione pianificata di Windows
+        («ProcioneMGR Backup DB», ogni notte alle 03:30) e scrive in
+        <code>%USERPROFILE%\ProcioneMGR-Backup</code>. Quei file <strong>non compaiono qui</strong>:
+        una data vecchia in questo elenco non vuol dire che il backup notturno non stia girando, e
+        una data recente non dimostra che stia girando. Per lo stato del notturno:
+        <code>.\scripts\db-backup.ps1 -Verify</code>.
+        <div class="small mt-1">
+            Il CronJob <code>dbbackup-nightly</code> nel cluster è sospeso <em>di proposito</em>: con
+            un <code>emptyDir</code> i backup verrebbero creati e persi alla terminazione del pod.
+            E il notturno è già morto una volta per sei notti di fila in silenzio (2026-08-17),
+            perché il task puntava a un worktree con la sua configurazione stantia — motivo per cui
+            oggi lo script risolve da sé il repo principale.
+        </div>
+    </div>
     <dl class="row mb-0">
         <dt class="col-sm-3">Crea backup ora</dt>
         <dd class="col-sm-9">Esegue <code>pg_dump -Fc</code> + verifica leggibilità. Il file <code>.dump</code> finisce in <code>backup/</code>.</dd>

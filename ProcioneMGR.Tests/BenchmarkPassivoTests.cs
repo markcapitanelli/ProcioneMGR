@@ -114,12 +114,22 @@ public class BenchmarkPassivoTests
     // ---------------------------------------------------- il risk-free ZERO su entrambe le gambe
 
     /// <summary>
-    /// <b>Il difetto fatale F2.</b> <c>Statistics.SharpeRatio</c> sottrae il 2%/anno al rendimento
-    /// del <b>capitale intero</b> mentre ne è investito il 10%. Il drag vale <c>rf/σ</c>, e le σ non
-    /// sono paragonabili: da 1,23% a 5,26% sui grigi in archivio contro ~4,8% del passivo. Con
-    /// rf = 2% il candidato prende un handicap di 0,6-1,6 Sharpe contro lo 0,4 del passivo:
+    /// <b>Il difetto fatale F2.</b> <c>Statistics.SharpeRatio</c> sottraeva il 2%/anno al rendimento
+    /// del <b>capitale intero</b> mentre ne è investita una frazione. Il drag vale <c>rf/σ</c>, e le
+    /// σ non sono paragonabili: da 1,23% a 5,26% sui grigi in archivio contro ~4,8% del passivo. Con
+    /// rf = 2% il candidato prendeva un handicap di 0,6-1,6 Sharpe contro lo 0,4 del passivo:
     /// <b>da 0,2 a 1,2 Sharpe di differenza fabbricata</b>, più grande del margine su cui un gate
-    /// deciderebbe. Fallisce se torna il risk-free di default.
+    /// deciderebbe. Per questo <see cref="PassiveBenchmark.Compare"/> passa rf = 0 <i>esplicito</i>
+    /// su entrambe le gambe.
+    ///
+    /// <para>[2026-08-23] <b>Il guardiano è stato spostato, non tolto.</b> Nella sua prima stesura
+    /// questo test chiudeva confrontandosi col <em>default</em> di <c>SharpeRatio</c> e pretendendo
+    /// che fosse diverso. Poi RF0 ha portato il default stesso a zero: l'asserzione è diventata una
+    /// tautologia — «zero esplicito ≠ zero implicito» — e ha cominciato a fallire dicendo il vero.
+    /// Confermarla addomesticandola (tolleranze, o cancellandola) avrebbe lasciato la gamba
+    /// scoperta, perché il rischio reale non è mai stato «il default è 2%»: è <b>«qualcuno
+    /// reintroduce un risk-free non nullo da qualche parte»</b>. Quindi ora il confronto è con un
+    /// rf esplicitamente non nullo, che resta diverso qualunque cosa faccia il default.</para>
     /// </summary>
     [Fact]
     public void EccessoCalcolatoARiskFreeZERO_SuEntrambeLeGambe()
@@ -136,9 +146,18 @@ public class BenchmarkPassivoTests
         Assert.Equal(attesoPassivo, c.PassiveSharpe);
         Assert.Equal(attesoCandidato - attesoPassivo, c.ExcessSharpe);
 
-        // E soprattutto: NON è la differenza calcolata col risk-free di default.
-        var conRfDefault = Statistics.SharpeRatio(candidato, 8760) - Statistics.SharpeRatio(passivo, 8760);
-        Assert.NotEqual(conRfDefault, c.ExcessSharpe);
+        // Il default oggi È zero: qui si asserisce che le due strade coincidono, il che vale finché
+        // nessuno rimette un risk-free nel default. Se qualcuno lo rimettesse, questa riga cade.
+        var conDefault = Statistics.SharpeRatio(candidato, 8760) - Statistics.SharpeRatio(passivo, 8760);
+        Assert.Equal(conDefault, c.ExcessSharpe);
+
+        // E la misura del perché la scelta conta: con un rf NON nullo il confronto cambierebbe, e
+        // cambierebbe in modo asimmetrico fra le due gambe (σ diverse ⇒ drag rf/σ diversi).
+        var conRfNonNullo = Statistics.SharpeRatio(candidato, 8760, 0.02m) - Statistics.SharpeRatio(passivo, 8760, 0.02m);
+        Assert.NotEqual(conRfNonNullo, c.ExcessSharpe);
+        Assert.True(Math.Abs(conRfNonNullo - c.ExcessSharpe) > 0.2m,
+            $"la differenza fabbricata da rf = 2% su queste due σ vale {Math.Abs(conRfNonNullo - c.ExcessSharpe)}: "
+            + "se è scesa sotto 0,2 le curve di prova non mordono più dove il difetto morde.");
     }
 
     private static List<EquityPoint> Curva(int punti, Func<int, decimal> capitale) =>

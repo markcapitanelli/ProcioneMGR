@@ -30,6 +30,37 @@
     </div>
 </div>
 
+<GuidaPanel Title="Bot — la modalità semplice: due scelte e un pulsante">
+    <p>
+        Questa pagina è la versione ridotta di <a href="trading">Trading</a> per quando non vuoi
+        decidere nulla: scegli <strong>quanto capitale</strong> affidare e <strong>quanto rischio</strong>
+        accettare, premi Avvia, e cosa far girare lo decide la piattaforma con quello che la ricerca
+        ha prodotto. Tutte le manopole che qui non vedi esistono lo stesso — sono solo impostate al
+        posto tuo.
+    </p>
+    <p>
+        <strong>Gira sempre e solo in simulazione.</strong> Il bot usa la
+        <strong>corsia @ProcioneMGR.Services.Risk.BotPageService.BotLaneId</strong> in modalità
+        Paper: denaro finto, nessun ordine reale, nessuna credenziale richiesta. Da questa pagina
+        non si passa a Testnet né a Live, e non c'è un pulsante per farlo — quel passaggio si fa a
+        mano dai controlli di modalità in Trading, con conferma esplicita.
+    </p>
+    <p>
+        <strong>I tre profili non sono «poco / medio / tanto guadagno».</strong> Prudente,
+        Equilibrato e Dinamico cambiano quanto capitale entra in ogni operazione, quante operazioni
+        possono stare aperte insieme e a quale perdita il bot si ferma da solo. Il riquadro qui
+        sotto traduce il profilo scelto in numeri concreti <em>prima</em> che tu prema Avvia: è lì
+        apposta, perché il posto sbagliato per scoprire quanto stavi rischiando è l'estratto conto.
+    </p>
+    <p class="mb-0">
+        <strong>Se compare il riquadro rosso, il bot si è fermato da solo.</strong> Non riavviarlo
+        senza aver guardato perché: l'arresto di emergenza scatta al superamento di un limite di
+        sicurezza, e ripartire senza sapere quale limite è saltato ripete l'incidente. Questa
+        corsia è la stessa che <a href="trading">Trading</a> mostra per esteso, con ordini,
+        posizioni e motivi di rifiuto.
+    </p>
+</GuidaPanel>
+
 @if (!string.IsNullOrEmpty(Service.Message))
 {
     <div class="alert @(Service.IsError ? "alert-danger" : "alert-success") py-2">@Service.Message</div>

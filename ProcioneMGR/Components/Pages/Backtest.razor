@@ -56,6 +56,29 @@
         </dd>
         <dt class="col-sm-3">Fee %</dt>
         <dd class="col-sm-9">La commissione dell'exchange su ogni operazione (tipicamente 0.05–0.1%), sottratta dal risultato per non essere ottimisti rispetto alla realtà.</dd>
+        <dt class="col-sm-3">Slippage %</dt>
+        <dd class="col-sm-9">
+            La differenza fra il prezzo che vedi e il prezzo a cui vieni davvero eseguito: chi
+            compra paga un po' di più, chi vende incassa un po' di meno. Parte da
+            <strong>@ProcioneMGR.Services.Pipeline.PipelineCosts.DefaultSlippagePercent.ToString("0.###")%</strong>,
+            non da zero, ed è lo stesso valore che assume la ricerca — così un risultato di questa
+            pagina è confrontabile con uno della pipeline. Il costo dipende dal
+            <em>turnover</em>, non dalla risoluzione delle candele: una strategia che opera dieci
+            volte più spesso paga dieci volte tanto, anche a parità di timeframe.
+        </dd>
+        <dt class="col-sm-3">Funding %/8h</dt>
+        <dd class="col-sm-9">
+            Solo per i Futures perpetui: il pagamento periodico fra chi è long e chi è short, che
+            su una posizione tenuta a lungo può contare più delle commissioni. È il costo che una
+            strategia <em>carry</em> incassa invece di pagare.
+            <div class="small text-muted mt-1">
+                Questo campo è solo il <strong>ripiego</strong>. Se per il periodo esiste la serie
+                storica dei funding, il backtest usa quella — con il <em>segno</em> vero, quindi
+                gli short incassano quando il funding è positivo e i regimi negativi non spariscono.
+                Il risultato dichiara sempre quale dei due modelli ha usato: non fidarti della
+                costante senza guardare quella riga.
+            </div>
+        </dd>
         <dt class="col-sm-3">Run Backtest / Stop</dt>
         <dd class="col-sm-9">Avvia o interrompe la simulazione (può richiedere qualche secondo su range lunghi).</dd>
         <dt class="col-sm-3">Salva come strategia</dt>

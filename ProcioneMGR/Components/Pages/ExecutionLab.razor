@@ -26,10 +26,19 @@
 
 <GuidaPanel Title="Execution Lab — quanto costa DAVVERO eseguire un ordine">
     <p>
-        Oggi la piattaforma esegue ogni ordine in un colpo solo. Su size significative, però,
-        distribuire l'ordine nel tempo (<strong>TWAP</strong>, <strong>VWAP</strong>,
-        <strong>Iceberg</strong>) riduce l'impatto di mercato. Qui si <strong>misura</strong> questa
-        differenza sulle candele fini recenti, invece di assumerla (rif. ROADMAP-QLIB §1.2).
+        Su size significative, distribuire un ordine nel tempo (<strong>TWAP</strong>,
+        <strong>VWAP</strong>, <strong>Iceberg</strong>) riduce l'impatto di mercato rispetto a
+        prenderlo tutto subito. Qui si <strong>misura</strong> quella differenza sulle candele fini
+        recenti, invece di assumerla (rif. <code>docs/archive/ROADMAP-QLIB.md §1.2</code>).
+    </p>
+    <p>
+        <strong>Non è più solo un laboratorio.</strong> L'esecuzione a fette è in produzione: le
+        <em>aperture</em> di corsia in Testnet/Live possono passare da un piano a fette invece che
+        da un ordine unico, si sceglie in <a href="trading">Trading</a> e l'avanzamento delle fette
+        lo gestisce un worker dedicato. Due limiti dichiarati: le chiusure restano immediate (una
+        protezione non si rateizza), e con gli stop appoggiati sull'exchange il piano viene saltato,
+        perché l'exchange armerebbe solo la frazione già eseguita. Il costo davvero pagato si legge
+        in <a href="metrics">Metriche</a>, alla riga «costo assunto vs pagato».
     </p>
     <p class="mb-0">
         Il modello di impatto è semplificato (lineare nella quota di volume assorbita) e va calibrato

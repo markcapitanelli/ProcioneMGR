@@ -59,8 +59,18 @@
         <dd class="col-sm-9">
             Se la master key della piattaforma (<code>Security:MasterKey</code>) cambia, le credenziali
             salvate con la chiave precedente non sono più leggibili: la riga resta in elenco con un
-            badge di avviso ma non è utilizzabile. Rimedio: eliminala e reinserisci le chiavi (oppure
-            ripristina la chiave originale).
+            badge di avviso ma non è utilizzabile.
+        </dd>
+        <dt class="col-sm-3">🔁 Rotazione della master key</dt>
+        <dd class="col-sm-9">
+            <strong>Cambiare la master key non obbliga più a ricreare le chiavi API.</strong> Dal
+            2026-08-09 esiste un <em>keyring</em>: si mette la chiave nuova in
+            <code>Security:MasterKey</code> e quella vecchia in
+            <code>Security:PreviousMasterKeys</code>, l'app riesce a leggere le righe cifrate con
+            entrambe, e da qui si lancia la <strong>ri-cifratura</strong> riga per riga. A rotazione
+            conclusa si svuota l'elenco delle chiavi precedenti e il pannello sparisce da solo — la
+            sua presenza <em>è</em> l'avviso che una rotazione è ancora aperta.
+            Reinserire le chiavi a mano resta la via d'uscita solo se la chiave vecchia è perduta.
         </dd>
     </dl>
 </GuidaPanel>

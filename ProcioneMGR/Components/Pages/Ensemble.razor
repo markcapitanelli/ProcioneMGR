@@ -408,6 +408,18 @@ else
                             candidabili al forward test Paper, <strong>non promossi</strong>. Scegliere fra @_greyCandidates.Count
                             candidati è un secondo giro di selezione — usa «Valuta ridondanza» prima di salvare.
                             <a href="research">→ Archivio candidati</a>
+                            @* [RF0, 2026-08-22] Una lista che si accorcia senza spiegazione si legge come
+                               «non ce ne sono», che e' falso. Regola 5: degradare dicendolo. *@
+                            @if (Svc.GreyCandidatesEsclusiPerConvenzione > 0)
+                            {
+                                <div class="mt-1 text-warning-emphasis">
+                                    <strong>@Svc.GreyCandidatesEsclusiPerConvenzione candidati esclusi</strong> perché misurati
+                                    prima del @ProcioneMGR.Services.Optimization.MetricsConvention.RiskFreeZeroSinceUtc.ToString("dd/MM/yyyy"),
+                                    quando lo Sharpe portava dentro un risk-free del 2% sottratto sull'equity totale.
+                                    Il divario mediano è di <strong>0,5 punti di Sharpe</strong>: confrontarli con i nuovi
+                                    sarebbe confrontare due unità di misura. Torneranno man mano che le cacce li ri-registrano.
+                                </div>
+                            }
                         </div>
                     </div>
                     <div class="col-auto">
