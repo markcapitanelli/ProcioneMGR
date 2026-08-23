@@ -34,15 +34,33 @@
 
 <GuidaPanel Title="Supervisione AI — un consulente sulle cacce, non un esecutore">
     <p>
-        A ogni run del pipeline concluso, un agente AR (Claude) legge la <code>PipelineRecommendation</code>
-        prodotta dal motore e scrive un <strong>parere leggibile</strong>: un riepilogo, eventuali
-        aggiustamenti proposti ai parametri di caccia, e le decisioni che richiedono la tua
-        <strong>conferma esplicita</strong>.
+        A ogni run del pipeline concluso, un modello linguistico legge la
+        <code>PipelineRecommendation</code> prodotta dal motore e scrive un
+        <strong>parere leggibile</strong>: un riepilogo, eventuali aggiustamenti proposti ai
+        parametri di caccia, e le decisioni che richiedono la tua <strong>conferma esplicita</strong>.
+    </p>
+    <p>
+        <strong>Non c'è un solo fornitore.</strong> Dal 2026-08-02 il layer è multi-provider —
+        @string.Join(", ", AiProviders.Known) — con <strong>failover automatico</strong>: se il
+        provider attivo va in timeout o esaurisce il budget, la chiamata passa al successivo
+        configurato invece di fallire. Ogni provider ha il suo budget separato, così un fornitore
+        lento non consuma quello degli altri. Anthropic è ancora supportato ma non è più il
+        predefinito.
+    </p>
+    <p>
+        <strong>Il comitato è un'altra cosa dal parere.</strong> Il parere sopra è un singolo
+        modello che commenta un run. Il <em>comitato</em> più in basso è una votazione fra più
+        modelli su una domanda circoscritta (quale candidato schierare su una corsia libera), e
+        <strong>nasce solo se c'è davvero un pareggio da rompere</strong>: servono almeno due
+        candidati idonei e una corsia libera. Silenzio non vuol dire guasto — vuol dire che non
+        c'era niente da chiedere. Il pannello di diagnosi dice quale delle due condizioni manca.
     </p>
     <p class="mb-0">
         <strong>Confine di sicurezza (non negoziabile):</strong> l'AI è <em>solo advisory</em>. Non può
         avviare il trading live, non può bypassare i controlli di sicurezza (<code>SafetyChecker</code>),
-        non apre posizioni. I suoi suggerimenti sui parametri sono spunti da valutare, mai comandi
+        non apre posizioni, e nessun servizio di esecuzione vive sotto <code>Services/Llm/</code>.
+        Il potere massimo del layer è il <strong>veto</strong>: può fermare una ri-applica, non
+        può ordinarne una. I suoi suggerimenti sui parametri sono spunti da valutare, mai comandi
         applicati in automatico. Il layer è attivo solo se <code>Llm:Enabled=true</code> e il provider
         attivo ha una chiave (inserita qui sotto, cifrata a riposo, o via variabile d'ambiente).
     </p>

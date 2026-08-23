@@ -40,11 +40,19 @@
 
 <GuidaPanel Title="Metriche — cosa sta facendo la piattaforma, in numeri">
     <p>
-        Questa dashboard legge i contatori interni emessi dal motore (<code>ProcioneMetrics</code>)
-        e li mostra dal vivo — <strong>senza</strong> alcun servizio esterno. I totali sono
-        <em>dalla partenza del processo</em>: si azzerano a ogni riavvio dell'applicazione. Se un
-        numero è a zero, quell'evento non è ancora avvenuto in questa sessione (es. nessun trade
-        eseguito, nessun job di esecuzione a fette, nessuna promozione di corsia).
+        Questa dashboard legge i contatori interni (<code>ProcioneMetrics</code>) e li mostra dal
+        vivo — <strong>senza</strong> alcun servizio esterno. I totali sono <em>dalla partenza del
+        processo</em>: si azzerano a ogni riavvio.
+    </p>
+    <p>
+        <strong>Uno zero qui non significa «non è successo».</strong> I contatori sono quelli del
+        processo in cui gira <em>questa pagina</em>, cioè il guscio. Con
+        <code>Trading:UseRemoteTrading</code> attivo il motore che apre e chiude le posizioni vive
+        in un altro processo e i suoi contatori restano lì: trade, job di esecuzione e promozioni
+        di corsia restano a zero <em>per sempre</em>, non perché non stia succedendo nulla ma
+        perché sta succedendo altrove. In quello stato la pagina mostra un avviso in cima; se
+        l'avviso c'è, per lo stato vero del motore vai in <a href="trading">Trading</a>.
+        Il collegamento al motore remoto è l'item F7 della roadmap, ancora aperto.
     </p>
     <dl class="row mb-0">
         <dt class="col-sm-3">Trade eseguiti</dt>

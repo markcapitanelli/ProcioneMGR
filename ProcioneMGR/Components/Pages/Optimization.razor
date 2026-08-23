@@ -35,6 +35,17 @@
         (<em>out-of-sample</em>, il vero test). Il numero che conta davvero è lo Sharpe
         <strong>out-of-sample</strong>, non quello in-sample.
     </p>
+    <p>
+        <strong>Come si legge lo Sharpe qui.</strong> È la media dei rendimenti divisa per la loro
+        deviazione standard, annualizzata, con tasso privo di rischio <strong>zero</strong>. Dal
+        2026-08-22 è così ovunque nella piattaforma, e non è una svista: nella simulazione la cassa
+        non rende nulla ed è investita solo una frazione del capitale, quindi sottrarre il
+        costo-opportunità del capitale <em>intero</em> era un doppio conteggio. Il dazio valeva
+        <code>rf/σ</code>, cioè una funzione dell'<em>esposizione</em> e non della qualità:
+        penalizzava di più le strategie selettive, poco a mercato — proprio il profilo che questa
+        piattaforma cerca. Un numero prodotto <em>prima</em> di quella data è più basso in misura
+        non uniforme (mediana 0,545 punti di Sharpe): non confrontarlo con uno prodotto dopo.
+    </p>
     <dl class="row mb-0">
         <dt class="col-sm-3">Symbol / Timeframe / Da-A</dt>
         <dd class="col-sm-9">Lo stesso significato del Backtest: la coppia, la granularità delle candele e il periodo storico complessivo su cui girare l'intera analisi walk-forward.</dd>

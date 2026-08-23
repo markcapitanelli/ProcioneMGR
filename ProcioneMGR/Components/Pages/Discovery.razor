@@ -53,8 +53,21 @@
             alto E trend a favore"), trigger su eventi discreti (picchi di volatilità, shock di
             prezzo, con uscita a tempo) e meta-strategie che cambiano comportamento col regime.
             Ogni spec generata passa dagli stessi filtri onesti delle altre: screening sul
-            periodo, poi conferma walk-forward a parametri fissi. Le confermate compaiono in
-            classifica insieme alle classiche e sono salvabili/usabili ovunque.
+            periodo, poi conferma su <strong>sotto-periodi del periodo di selezione</strong>. Le
+            confermate compaiono in classifica insieme alle classiche e sono salvabili/usabili
+            ovunque.
+            <div class="alert alert-warning small mt-2 mb-0">
+                <strong>Attenzione: la conferma delle strategie generate NON è un walk-forward.</strong>
+                Fino al 2026-08-22 questa colonna diceva «walk-forward», ma per le famiglie generate
+                (Composite, EventTrigger, RegimeConditional) i parametri sono già fissati dalla
+                spec: rieseguire il backtest su finestre mobili restituiva <em>N volte lo stesso
+                numero</em>, cioè lo Sharpe di selezione riscritto sotto un'altra intestazione — su
+                <strong>10.200 righe d'archivio</strong>. Oggi la conferma segmenta davvero la curva
+                di equity in sotto-periodi e la <strong>provenienza è dichiarata</strong> candidato
+                per candidato in <a href="research">Archivio candidati</a>. Resta comunque una
+                misura <em>dentro</em> il periodo di selezione: il verdetto vero è l'holdout, e il
+                giudice ultimo è il forward test in Paper.
+            </div>
         </dd>
     </dl>
 </GuidaPanel>

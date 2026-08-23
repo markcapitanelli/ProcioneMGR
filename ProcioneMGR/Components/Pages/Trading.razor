@@ -80,15 +80,42 @@
         modalità pensate per aumentare gradualmente il rischio, così puoi fidarti di una strategia
         prima di rischiare soldi veri.
     </p>
+    <p>
+        <strong>Ogni corsia è un motore a sé.</strong> Le corsie sono otto e indipendenti: modalità,
+        credenziali, posizioni e soglie sono per-corsia, e su ciascuna serie scrive
+        <em>un solo</em> motore. Le prime tre sono l'«impronta storica» che la ri-applica della
+        pipeline riscrive per indice; dalla quarta in su sono corsie di flotta, governate
+        dall'orchestratore in <a href="admin/autonomy">Autonomia</a>.
+    </p>
     <dl class="row mb-0">
         <dt class="col-sm-3">Modalità: Paper</dt>
         <dd class="col-sm-9">Denaro <strong>finto</strong>, nessun ordine reale — perfetta per osservare come si comporterebbe una strategia "dal vivo" senza alcun rischio.</dd>
         <dt class="col-sm-3">Modalità: Testnet</dt>
-        <dd class="col-sm-9">Ordini <strong>reali</strong> ma su un ambiente di prova dell'exchange (Binance Testnet) con soldi finti forniti dall'exchange stesso — serve una credenziale testnet salvata in <a href="settings/exchanges">Credenziali Exchange</a>. Un passo intermedio realistico prima del Live.</dd>
+        <dd class="col-sm-9">
+            Ordini <strong>reali</strong> ma su un ambiente di prova dell'exchange, con soldi finti
+            forniti dall'exchange stesso — serve una credenziale testnet salvata in
+            <a href="settings/exchanges">Credenziali Exchange</a>. Un passo intermedio realistico
+            prima del Live. <strong>Per operare a leva serve Bitget:</strong> dal 1° luglio 2026
+            Binance non offre più derivati nello Spazio Economico Europeo (MiCA), quindi su Binance
+            resta il solo Spot.
+        </dd>
         <dt class="col-sm-3">Modalità: Live</dt>
         <dd class="col-sm-9">Soldi <strong>veri</strong>. Richiede una conferma esplicita per partire, e ogni singolo ordine automatico resta "in attesa" finché non lo confermi tu manualmente (vedi sotto) — un'ulteriore rete di sicurezza oltre alla configurazione.</dd>
         <dt class="col-sm-3">Avvia / Ferma trading</dt>
-        <dd class="col-sm-9">Avvia o ferma il motore. In Paper riparte da zero ogni volta; in Testnet/Live riprende lo stato (posizioni aperte incluse) da dove era rimasto, anche dopo un riavvio dell'applicazione.</dd>
+        <dd class="col-sm-9">
+            Avvia o ferma il motore di <em>questa</em> corsia. Dopo un riavvio dell'applicazione la
+            corsia riprende da dove era rimasta — <strong>in tutte e tre le modalità</strong>:
+            stato, posizioni aperte e <em>gambe attive</em>. Le posizioni si ricaricano solo se
+            aperte nella modalità corrente: un residuo di un'altra modalità viene purgato con
+            audit, perché una posizione simulata non deve mai sembrare esposizione reale.
+            <div class="small text-muted mt-1">
+                Fino al 2026-08-21 non era così: le gambe attive vivevano solo in memoria e si
+                popolavano soltanto premendo «Avvia». Dopo ogni riavvio del processo — e ce n'erano
+                circa otto al giorno — la corsia restava <code>IsRunning = true</code>, riceveva
+                candele e onorava gli stop, ma con <em>zero</em> strategie caricate: non poteva
+                aprire più nulla, e non lo diceva. Ora le gambe sono persistite con la sessione.
+            </div>
+        </dd>
         <dt class="col-sm-3">EMERGENCY STOP</dt>
         <dd class="col-sm-9">Chiude <strong>immediatamente tutte</strong> le posizioni aperte e blocca nuovi ordini — da usare se qualcosa non va e vuoi uscire subito da ogni esposizione, senza aspettare i segnali della strategia.</dd>
         <dt class="col-sm-3">Conferme in attesa (Live)</dt>
@@ -413,9 +440,19 @@
                     La promozione è <strong>reversibile</strong>: se in Testnet l'edge svanisce, la corsia torna a Paper.
                     I pulsanti «→ Testnet» / «→ Paper» fanno lo stesso passaggio a mano, quando vuoi anticipare tu.
                 </p>
+                <p class="mb-1">
+                    <strong>Non basta lo Sharpe: conta anche il ritmo.</strong> Una corsia che non
+                    produce una frazione dichiarata dei trade che l'holdout prometteva viene
+                    giudicata <em>in inedia</em> e ritirata per liberare il posto — dopo un periodo
+                    minimo di osservazione, altrimenti si condannerebbe una corsia appena avviata.
+                    L'orizzonte di riferimento della piattaforma è intraday/swing breve: una
+                    strategia che promette venti trade al mese e ne fa due non è prudente, è rotta.
+                </p>
                 <p class="mb-0">
                     <strong>Confine non negoziabile:</strong> il passaggio a <strong>Live</strong> non è mai
                     automatico e non ha un pulsante qui: si fa dai controlli di modalità, con conferma esplicita.
+                    L'unica automazione ammessa che tocchi una corsia Live è la
+                    <em>retrocessione</em> a Testnet quando degrada, ed è opt-in.
                 </p>
             </GuidaPanel>
             @if (Service.Promotions.Count == 0)

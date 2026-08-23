@@ -13,13 +13,31 @@
 
 <GuidaPanel Title="Gestione Utenti — chi può vedere e fare cosa">
     <p>
-        La piattaforma ha tre ruoli con permessi crescenti: <strong>User</strong> (accesso base:
-        Dashboard, Backtest, le proprie strategie e credenziali), <strong>Manager</strong> (in più:
-        Watchlist, Optimization, Discovery, Ensemble, ML Lab e tutte le altre pagine di analisi
-        avanzata/amministrazione dati), <strong>Admin</strong> (in più: questa pagina e le
-        impostazioni di sicurezza del trading live). Il primo utente mai registrato sulla
-        piattaforma diventa Admin automaticamente; tutti gli altri partono come User.
+        La piattaforma ha tre ruoli con permessi crescenti. Il primo utente mai registrato diventa
+        <strong>Admin</strong> automaticamente; tutti gli altri partono come <strong>User</strong>.
     </p>
+    <dl class="row">
+        <dt class="col-sm-3">User</dt>
+        <dd class="col-sm-9">
+            Le sei pagine che non muovono e non configurano niente: Home, Dashboard,
+            Analisi della serie, Backtest, Le mie strategie e le proprie credenziali exchange.
+            Può <em>simulare</em> quanto vuole; non può vedere né toccare le corsie.
+        </dd>
+        <dt class="col-sm-3">Manager</dt>
+        <dd class="col-sm-9">
+            In più: tutta la ricerca e l'operatività — Watchlist, Optimization, Discovery,
+            Pipeline, Ensemble, ML Lab, Registry, Archivio candidati, Campagne, Metriche,
+            Supervisione AI, Modalità semplice e <strong>Trading</strong>, quindi avvio e arresto
+            delle corsie. Il pannello delle soglie di sicurezza dentro <em>Trading</em> resta però
+            di sola lettura: quello è Admin.
+        </dd>
+        <dt class="col-sm-3">Admin</dt>
+        <dd class="col-sm-9">
+            In più le quattro pagine che cambiano le regole del gioco: questa,
+            <a href="admin/autonomy">Autonomia</a>, <a href="admin/protections">Protezioni</a> e
+            <a href="admin/backup">Backup</a> — più le soglie di sicurezza in Trading.
+        </dd>
+    </dl>
     <dl class="row mb-0">
         <dt class="col-sm-3">Ruolo attuale</dt>
         <dd class="col-sm-9">I permessi che l'utente ha in questo momento.</dd>

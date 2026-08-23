@@ -24,12 +24,22 @@
         Invece di scegliere fra fattori già scritti, qui un algoritmo <strong>genetico</strong> evolve
         <em>formule matematiche</em> nuove (alberi di espressione su prezzo/volume) massimizzando
         l'<strong>Information Coefficient</strong> sul periodo di selezione, con una penalità di
-        complessità contro l'overfitting (rif. ROADMAP-QLIB §1.7).
+        complessità contro l'overfitting (rif. <code>docs/archive/ROADMAP-QLIB.md §1.7</code>).
     </p>
-    <p class="mb-0">
+    <p>
         Disciplina non negoziabile: le formule si scelgono SOLO sulla selezione, ma il
         <strong>verdetto è sull'holdout mai visto</strong>. Una formula con IC alto in selezione ma
         nullo/opposto sull'holdout è overfit: non va fidata. Salva solo le sopravvissute.
+    </p>
+    <p class="mb-0">
+        <strong>Sappi cosa stai facendo qui.</strong> Un algoritmo genetico che evolve formule
+        prova un numero enorme di ipotesi, e più ipotesi provi più è probabile che la migliore sia
+        fortunata invece che vera. Su questa piattaforma la ricerca direzionale-tecnica ha già dato
+        una decina di risposte negative consecutive, l'ultima su un mese di dati mai toccati:
+        l'edge misurato positivo finora viene dal <em>carry</em> e dal forward test in Paper, non
+        da formule nuove. Trattare un IC alto trovato qui come una scoperta, e non come un
+        candidato da far passare dall'holdout e poi da mesi di Paper, è il modo più rapido per
+        perdere tempo.
     </p>
 </GuidaPanel>
 

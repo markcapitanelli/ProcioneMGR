@@ -56,9 +56,31 @@
         <dt class="col-sm-3">Soglia Long / Short</dt>
         <dd class="col-sm-9">Il rendimento previsto minimo, in positivo o negativo, oltre il quale il modello apre effettivamente una posizione (sotto soglia resta fuori dal mercato).</dd>
         <dt class="col-sm-3">Esegui backtest (out-of-sample)</dt>
-        <dd class="col-sm-9">Il vero momento della verità: simula le operazioni SOLO sul periodo "Test" mai visto in addestramento — è questo risultato, non la correlazione in-sample, quello a cui prestare attenzione.</dd>
+        <dd class="col-sm-9">
+            Il vero momento della verità: simula le operazioni SOLO sul periodo "Test" mai visto in
+            addestramento — è questo risultato, non la correlazione in-sample, quello a cui prestare
+            attenzione.
+            <div class="alert alert-warning small mt-2 mb-0">
+                <strong>Questo backtest è più ottimista di quelli del resto della piattaforma.</strong>
+                Applica le commissioni ma <strong>non</strong> lo slippage e <strong>non</strong> il
+                funding, mentre <a href="backtest">Backtest</a> e la pipeline partono entrambi da
+                @ProcioneMGR.Services.Pipeline.PipelineCosts.DefaultSlippagePercent.ToString("0.###")%
+                di slippage. Un numero prodotto qui non è confrontabile con uno prodotto lì: è un
+                confronto fra modelli, non una stima di quanto renderebbe dal vivo.
+            </div>
+        </dd>
         <dt class="col-sm-3">Salva modello</dt>
-        <dd class="col-sm-9">Salva il modello addestrato per riusarlo in <a href="optimization">Optimization</a> o <a href="ensemble">Ensemble</a> senza doverlo riaddestrare ogni volta.</dd>
+        <dd class="col-sm-9">
+            Salva il modello addestrato per riusarlo in <a href="optimization">Optimization</a> o
+            <a href="ensemble">Ensemble</a> senza doverlo riaddestrare ogni volta.
+            <div class="small text-muted mt-1">
+                Per diventare <em>Champion</em> in <a href="registry">Registry</a> serve il gate del
+                Deflated Sharpe, e un DSR nato qui vale meno di uno nato dalla pipeline: qui c'è un
+                solo tentativo, e con N&nbsp;=&nbsp;1 non c'è nulla da deflazionare — è di fatto un
+                Probabilistic Sharpe, su costi incompleti. Il Registry lo dichiara e rifiuta il
+                confronto quando i due N sono incomparabili.
+            </div>
+        </dd>
     </dl>
 </GuidaPanel>
 
