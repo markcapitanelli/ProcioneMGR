@@ -66,14 +66,21 @@ public class ProcioneSupervisorTests
     //  Cadenza giornaliera — il backup, alle 03:30
     // =============================================================================================
 
+    // Il fuso si passa SEMPRE esplicitamente nei test della cadenza giornaliera. Non e' pignoleria:
+    // «le 03:30» sono un orario a muro, quindi dipendono dal fuso, e T() costruisce istanti a
+    // +02:00 (l'ora italiana d'agosto). Lasciando decidere a TimeZoneInfo.Local questi test
+    // passerebbero su questa macchina e cadrebbero sulla CI, che gira in UTC — cosa puntualmente
+    // successa alla prima esecuzione. Un test che dipende dal fuso della macchina prova il fuso,
+    // non il codice.
+
     [Fact]
     public void Giornaliera_dopo_l_esecuzione_di_stanotte_tocca_domani()
     {
         // Il caso normale, quello che deve restare MUTO: stanotte alle 03:31 il dump c'e' stato.
         var s = Schedule.Alle(3, 30);
 
-        Assert.Equal(T(21, 3, 30), s.Next(T(20, 3, 31), T(20, 10)));
-        Assert.False(s.IsDue(T(20, 3, 31), T(20, 10)));
+        Assert.Equal(T(21, 3, 30), s.Next(T(20, 3, 31), T(20, 10), Roma));
+        Assert.False(s.IsDue(T(20, 3, 31), T(20, 10), Roma));
     }
 
     [Fact]
@@ -84,7 +91,7 @@ public class ProcioneSupervisorTests
         // fa con -StartWhenAvailable. Aspettare la notte dopo raddoppierebbe il buco.
         var s = Schedule.Alle(3, 30);
 
-        Assert.True(s.IsDue(T(19, 3, 31), T(20, 10)));
+        Assert.True(s.IsDue(T(19, 3, 31), T(20, 10), Roma));
     }
 
     [Fact]
@@ -94,11 +101,11 @@ public class ProcioneSupervisorTests
         // lanciare un pg_dump ogni volta che si apre la plancia.
         var s = Schedule.Alle(3, 30);
 
-        Assert.False(s.IsDue(null, T(20, 10)));
-        Assert.Equal(T(21, 3, 30), s.Next(null, T(20, 10)));
+        Assert.False(s.IsDue(null, T(20, 10), Roma));
+        Assert.Equal(T(21, 3, 30), s.Next(null, T(20, 10), Roma));
 
         // Prima dell'ora del giorno: la prossima e' oggi, non domani.
-        Assert.Equal(T(20, 3, 30), s.Next(null, T(20, 1)));
+        Assert.Equal(T(20, 3, 30), s.Next(null, T(20, 1), Roma));
     }
 
     [Fact]
@@ -110,10 +117,10 @@ public class ProcioneSupervisorTests
         // di Greenwich lancerebbe).
         var s = Schedule.Alle(3, 30);
 
-        var prossimo = s.Next(DateTimeOffset.MinValue, T(20, 10));
+        var prossimo = s.Next(DateTimeOffset.MinValue, T(20, 10), Roma);
 
         Assert.True(prossimo < T(20, 10));
-        Assert.True(s.IsDue(DateTimeOffset.MinValue, T(20, 10)));
+        Assert.True(s.IsDue(DateTimeOffset.MinValue, T(20, 10), Roma));
     }
 
     [Fact]
@@ -121,15 +128,18 @@ public class ProcioneSupervisorTests
     {
         var s = Schedule.Alle(3, 30);
 
-        Assert.False(s.IsDue(T(19, 3, 30), T(20, 3, 29)));
-        Assert.True(s.IsDue(T(19, 3, 30), T(20, 3, 30)));
+        Assert.False(s.IsDue(T(19, 3, 30), T(20, 3, 29), Roma));
+        Assert.True(s.IsDue(T(19, 3, 30), T(20, 3, 30), Roma));
     }
 
     // =============================================================================================
     //  Il cambio dell'ora — la notte in cui un backup diventa due
     // =============================================================================================
 
-    /// Il fuso di questa macchina. Il nome Windows prima, quello IANA come ripiego.
+    /// <summary>
+    /// Il fuso in cui vive la piattaforma. Il nome Windows prima, quello IANA come ripiego: la CI
+    /// gira su Linux, e un test che conosce un solo nome di fuso non e' portabile.
+    /// </summary>
     private static TimeZoneInfo Roma
     {
         get
