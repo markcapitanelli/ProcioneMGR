@@ -195,6 +195,14 @@ internal static class Verdicts
                     ? $"{job.When.Describe()} — gira ancora dal Task Scheduler, fuori dalla plancia"
                     : $"{job.When.Describe()} — fermo, {quando}");
 
+        // STA GIRANDO ADESSO. Il campo c'e' gia' (serve a riconoscere le esecuzioni interrotte), e
+        // non usarlo qui costava caro proprio quando serviva: un bring-up dura minuti, e per tutti
+        // quei minuti il quadro diceva «mai eseguito, in partenza adesso» — cioe' taceva sull'unica
+        // cosa che stava succedendo davvero.
+        if (st?.RunningSince is { } da)
+            return new Check("supervisore", job.Name, Level.Ok,
+                $"IN CORSO da {Ui.Age(adesso - da)} (tetto {Ui.Age(job.Timeout)}) — {job.When.Describe()}");
+
         var prossimo = job.When.Next(ultimo, adesso);
         var fra = prossimo == DateTimeOffset.MaxValue
             ? "non si ripete"
