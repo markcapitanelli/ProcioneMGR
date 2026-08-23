@@ -198,8 +198,30 @@ if ($shellOk) {
     Log "Guscio   : gia' in ascolto su 5199." 'Green'
 } else {
     $runScript = Join-Path $repoRoot 'scripts\run-postgres.ps1'
-    Start-Process -WindowStyle Minimized powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$runScript`""
-    Log "Guscio   : avviato con run-postgres.ps1 (finestra minimizzata; la 5199 arriva fra qualche istante)." 'Green'
+    # Console NASCOSTA, non minimizzata, con l'output su file.
+    #
+    # PERCHE' (2026-08-23): quella finestra minimizzata NON conteneva l'output di qualcosa, ERA il
+    # guscio — chiuderla, e prima o poi qualcuno la chiude, spegne l'applicazione. E' successo
+    # poche ore dopo aver spostato le automazioni dentro la plancia: unico rosso del quadro, unica
+    # cosa caduta, e nessuno se n'era accorto guardando lo schermo.
+    #
+    # Non si perde niente: quel testo non lo leggeva nessuno, e adesso e' un file — `procione log
+    # guscio`. Il verdetto sulla salute resta /health, non «la finestra c'e'».
+    $guscioLog = Join-Path $env:TEMP 'procionemgr-guscio.log'
+    $argomenti = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$runScript`"")
+    try {
+        Start-Process -WindowStyle Hidden powershell -RedirectStandardOutput $guscioLog `
+            -ArgumentList $argomenti -ErrorAction Stop
+        Log "Guscio   : avviato con run-postgres.ps1 (nessuna finestra; log in $guscioLog)." 'Green'
+    } catch {
+        # Il log e' un di piu', il guscio no. Se il file e' occupato (un'istanza precedente che non
+        # ha ancora mollato la presa) si parte SENZA redirezione invece di lasciare la piattaforma
+        # senza applicazione — un bring-up che fallisce per non aver potuto scrivere un log
+        # sarebbe la coda che morde il cane.
+        Log "Guscio   : log non scrivibile ($($_.Exception.Message)); avvio senza redirezione." 'Yellow'
+        Start-Process -WindowStyle Hidden powershell -ArgumentList $argomenti
+        Log "Guscio   : avviato con run-postgres.ps1 (nessuna finestra)." 'Green'
+    }
 }
 
 Log "=== BringUp completato ===" 'Cyan'

@@ -512,6 +512,33 @@ public class ProcioneSupervisorTests
     //  Le automazioni vecchie: doppione o unica sorveglianza?
     // =============================================================================================
 
+    // =============================================================================================
+    //  Worktree: uno scratch, non una fonte di verita'
+    // =============================================================================================
+
+    [Theory]
+    [InlineData(@"C:\Users\proci\Desktop\ProgettoP", false)]
+    [InlineData(@"C:\Users\proci\Desktop\ProgettoP\.claude\worktrees\sleepy-lovelace-286898", true)]
+    // Il confronto e' insensibile alle maiuscole: i percorsi Windows arrivano come capita.
+    [InlineData(@"C:\Users\proci\Desktop\ProgettoP\.Claude\Worktrees\x", true)]
+    [InlineData(@"C:\qualcosa\senza\niente", false)]
+    [InlineData(null, false)]
+    public void InWorktree_riconosce_una_cartella_usa_e_getta(string? percorso, bool atteso)
+        => Assert.Equal(atteso, Platform.InWorktree(percorso));
+
+    [Fact]
+    public void MainRepoRoot_taglia_il_worktree_e_restituisce_il_repo_vero()
+    {
+        // La stessa funzione di Get-MainRepoRoot in db-backup.ps1, e per la stessa ragione: un
+        // worktree e' uno scratch. Ci si registra un'attivita' pianificata e muore col `git
+        // worktree remove`; ci si avvia il guscio e legge un appsettings.json fermo al giorno in
+        // cui il worktree e' nato.
+        //
+        // Non si prova il valore assoluto di MainRepoRoot (dipende da dove gira la suite), ma
+        // l'INVARIANTE che conta: qualunque cosa sia, non e' dentro un worktree.
+        Assert.False(Platform.InWorktree(Platform.MainRepoRoot));
+    }
+
     [Fact]
     public void Un_task_DISABILITATO_non_conta_come_sorveglianza()
     {

@@ -141,18 +141,24 @@ internal static class Proc
         => Inherit(PowerShellExe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", comando]);
 
     /// <summary>
-    /// Avvia un processo in una finestra SEPARATA e non lo aspetta. Serve per il guscio, che vive
+    /// Avvia un processo in una console SEPARATA e non lo aspetta. Serve per il guscio, che vive
     /// per giorni: tenerlo figlio della plancia significherebbe ucciderlo alla chiusura di questa.
+    ///
+    /// La console e' NASCOSTA, non minimizzata. La differenza si e' vista il 2026-08-23: una
+    /// finestra minimizzata nella barra delle applicazioni e' una finestra che qualcuno chiude — e
+    /// chiuderla uccide l'applicazione, perche' quella console E' il guscio. Non conteneva niente
+    /// che valesse la pena guardare: l'output e' gia' su file (`procione log guscio`) e la salute
+    /// si legge da `procione stato`, che interroga /health invece di fidarsi di cosa scorre.
     /// </summary>
-    public static bool Detach(string comandoPowerShell, bool minimizzata = true)
+    public static bool Detach(string comandoPowerShell, bool visibile = false)
     {
         var psi = new ProcessStartInfo(PowerShellExe)
         {
-            // UseShellExecute = true e' l'unico modo, da .NET, di ottenere una finestra NUOVA
+            // UseShellExecute = true e' l'unico modo, da .NET, di ottenere una console NUOVA
             // (CREATE_NEW_CONSOLE non e' esposto). Con true si deve usare Arguments, non
             // ArgumentList: quest'ultima non e' supportata e Process.Start lancerebbe.
             UseShellExecute = true,
-            WindowStyle = minimizzata ? ProcessWindowStyle.Minimized : ProcessWindowStyle.Normal,
+            WindowStyle = visibile ? ProcessWindowStyle.Normal : ProcessWindowStyle.Hidden,
             Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{comandoPowerShell.Replace("\"", "\\\"")}\"",
         };
         try { return Process.Start(psi) is not null; }
