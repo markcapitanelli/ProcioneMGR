@@ -2187,3 +2187,21 @@ misure, valori che nessun run ha mai prodotto — ed è cieca su 926 righe.
 - [ ] Il **DSR** non si dichiara e non si ritara: l'osservato era già a rf = 0 e si sposta solo SR*,
       il cui segno non è deducibile per inversione. Si legge sul primo run vero dal log `dsrMax`, ora
       reso incondizionato.
+
+### Una coda che solo il merge poteva far vedere (2026-08-23)
+
+Il benchmark passivo (#105) e il risk-free zero (#106) erano corretti ciascuno per conto suo, e
+ciascuno verde sul proprio ramo. Il merge li ha fatti incontrare e un test è caduto:
+`EccessoCalcolatoARiskFreeZERO_SuEntrambeLeGambe` chiudeva pretendendo che l'eccesso calcolato a
+rf = 0 **differisse** da quello calcolato col *default* — vero quando il default era 2%, tautologia
+falsa da quando il default è 0.
+
+Il test aveva ragione a cadere, e la tentazione era di addomesticarlo. Non è stato fatto: il rischio
+che quel guardiano copre non è mai stato «il default vale 2%», è **«qualcuno rimette un risk-free
+non nullo da qualche parte»**. Quindi il confronto si è spostato su un rf esplicitamente non nullo —
+che resta diverso qualunque cosa faccia il default — e si è aggiunta l'asserzione che oggi le due
+strade coincidono, così se il default cambiasse di nuovo la riga cadrebbe di nuovo.
+
+Lezione registrata: **la CI verde su due rami non è la CI verde sul merge**, e un'asserzione
+formulata contro un *default* invece che contro il *fatto* che vuole proteggere invecchia insieme a
+quel default.
