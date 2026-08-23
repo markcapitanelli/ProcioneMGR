@@ -223,6 +223,29 @@ procione apri [rotta]
 procione cluster distruggi
 ```
 
+### Le corsie di trading
+
+```bash
+procione corsie stato                        # quali girano, e in che modalità
+procione corsie avvia tutte --modalita paper # oppure `avvia 1,2,3`
+procione corsie ferma tutte
+```
+
+Delega a `tools/LaneControl`, che parla col motore per lo **stesso gRPC del guscio** e con lo stesso
+segreto condiviso — non apre un percorso nuovo, ne apre uno da console a quello che c'era. Nasce il
+2026-08-23, quando le otto corsie sono rimaste ferme **nove giorni** (ultimo ordine 2026-08-14) dopo
+un riavvio del pod del motore: si comandavano solo dalla pagina `/trading`, dietro login, e nessuno
+strumento poteva nemmeno *dirlo* senza aprire il browser.
+
+**Live no, e non c'è un flag.** Lo strumento rifiuta `--modalita live` e la modalità non ha un
+default: va scritta. Un default su un parametro che decide se gli ordini sono simulati o veri è un
+default che prima o poi qualcuno non legge; e uno strumento da riga di comando che sa dire «Live» è
+precisamente il percorso automatico che questo progetto non vuole. Verso Live si passa da
+`/trading`, dove `Trading:Safety:RequireManualConfirmationForLive` pretende una conferma umana.
+
+Ogni avvio è **verificato**: dopo `StartLane` lo strumento richiede lo stato e guarda se la corsia
+risulta davvero in marcia, invece di fidarsi dell'assenza di eccezioni.
+
 ### Tutto il resto
 
 Nessuno dei diciannove script di `scripts/` resta fuori: quelli che non hanno un comando proprio si

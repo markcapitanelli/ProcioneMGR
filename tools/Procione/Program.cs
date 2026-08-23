@@ -129,6 +129,10 @@ internal static class Program
             case "veglia" or "watchdog":
                 return Actions.Watchdog();
 
+            case "corsie" or "lanes":
+                // Argomenti GREZZI: `--modalita paper` appartiene allo strumento, non a noi.
+                return Actions.Lanes(grezzi);
+
             case "attivita" or "tasks":
                 return (Arg(args) ?? "stato") switch
                 {
@@ -317,6 +321,8 @@ internal static class Program
 
         Sezione("Manutenzione", [
             ("procione backup [--verifica]", "pg_dump adesso, oppure controlla i dump esistenti"),
+            ("procione corsie stato",        "quali corsie stanno girando, e in che modalita'"),
+            ("procione corsie avvia tutte --modalita paper", "le avvia (Live NO: si passa da /trading)"),
             ("procione veglia",              "un giro di watchdog.ps1 adesso, sotto i tuoi occhi"),
             ("procione segreti [quale]",     "i Secret del cluster: tutti (da appsettings), postgres, trading, ui"),
             ("procione postgres",            "il guscio come lo avvia run-postgres.ps1 (ambiente Production)"),
