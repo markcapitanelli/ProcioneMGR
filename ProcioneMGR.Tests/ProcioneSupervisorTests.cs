@@ -441,6 +441,35 @@ public class ProcioneSupervisorTests
     }
 
     [Fact]
+    public void Un_lavoro_che_sta_girando_ADESSO_lo_dice()
+    {
+        // Il bring-up dura minuti. Per tutti quei minuti il quadro diceva «mai eseguito, in
+        // partenza adesso»: taceva sull'unica cosa che stava succedendo davvero, pur avendone il
+        // dato in mano (RunningSince serve gia' a riconoscere le esecuzioni interrotte).
+        var inCorso = new JobState { Name = "avvio", Enabled = true, RunningSince = T(20, 9, 55) };
+
+        var c = Verdicts.Job(Jobs.Find("avvio")!, inCorso, supervisoreVivo: true, T(20, 10));
+
+        Assert.Equal("Ok", c.Level.ToString());
+        Assert.Contains("IN CORSO da 5m", c.Detail);
+        Assert.DoesNotContain("mai eseguito", c.Detail);
+    }
+
+    [Fact]
+    public void Un_lavoro_in_corso_SENZA_supervisore_non_e_in_corso()
+    {
+        // Il file di stato conserva RunningSince finche' un supervisore non riparte e lo legge come
+        // «interrotto». Nel frattempo, dire «in corso» sarebbe affermare che qualcosa sta girando
+        // mentre non gira niente.
+        var inCorso = new JobState { Name = "avvio", Enabled = true, RunningSince = T(20, 9, 55) };
+
+        var c = Verdicts.Job(Jobs.Find("avvio")!, inCorso, supervisoreVivo: false, T(20, 10));
+
+        Assert.Equal("NotApplicable", c.Level.ToString());
+        Assert.DoesNotContain("IN CORSO", c.Detail);
+    }
+
+    [Fact]
     public void Acceso_e_spento_si_leggono_dalle_PREFERENZE_non_dalla_fotografia()
     {
         // `procione lavoro avvio accendi` scrive le preferenze, ma lo stato del supervisore resta

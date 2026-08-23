@@ -64,7 +64,11 @@ internal static class Tasks
             "$t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue; " +
             "if(-not $t){ $n + '|ASSENTE||'; continue }; " +
             "$i = Get-ScheduledTaskInfo -TaskName $n -ErrorAction SilentlyContinue; " +
-            "$lr = ''; if($i -and $i.LastRunTime -and $i.LastRunTime.Year -gt 1900){ $lr = $i.LastRunTime.ToString('yyyy-MM-dd HH:mm') }; " +
+            // Un'attivita' mai eseguita non ha LastRunTime NULL: il Task Scheduler restituisce
+            // 1999-11-30 00:00, che con una soglia al 1900 passava per una data vera — e il quadro
+            // diceva «ultima 1999-11-30» su un'attivita' appena registrata. Una data inventata e'
+            // peggio di «mai eseguita», perche' sembra un'informazione.
+            "$lr = ''; if($i -and $i.LastRunTime -and $i.LastRunTime.Year -gt 2000){ $lr = $i.LastRunTime.ToString('yyyy-MM-dd HH:mm') }; " +
             "$rc = ''; if($i){ $rc = [string]$i.LastTaskResult }; " +
             "$n + '|' + $t.State + '|' + $lr + '|' + $rc }";
 
@@ -208,7 +212,16 @@ internal static class Tasks
     /// Al contrario, un fallimento a meta' lascerebbe la piattaforma senza NESSUNA sorveglianza —
     /// che e' il modo in cui un'unificazione peggiora le cose invece di migliorarle.
     /// </summary>
-    public static async Task<int> MigrateAsync()
+    /// <param name="confermato">
+    /// La conferma e' gia' stata data sulla riga di comando (<c>--si</c>).
+    ///
+    /// Serve perche' <see cref="Ui.Confirm"/>, quando lo standard input non e' una console, non
+    /// puo' chiedere niente e risponde NO — dicendo «rilancia con --si». Finche' quel flag non
+    /// arrivava fin qui, era un consiglio che non funzionava: la migrazione restava impossibile da
+    /// dentro uno script o da una shell non interattiva, che e' esattamente meta' del motivo per
+    /// cui la plancia accetta argomenti.
+    /// </param>
+    public static async Task<int> MigrateAsync(bool confermato = false)
     {
         Ui.Title("Migrazione delle automazioni dentro la plancia");
 
@@ -242,7 +255,7 @@ internal static class Tasks
         if (daTogliere.Count == 0 && !startupBringUp)
             Ui.Line("    · nessuna automazione vecchia da togliere: c'e' solo da registrare la nuova.", ConsoleColor.Gray);
 
-        if (!Ui.Confirm("Procedere?"))
+        if (!confermato && !Ui.Confirm("Procedere?"))
         {
             Ui.Info("annullato: nulla e' stato toccato.");
             return 1;
@@ -296,7 +309,8 @@ internal static class Tasks
     }
 
     /// <summary>Toglie tutto: si torna a lanciare ogni cosa a mano.</summary>
-    public static async Task<int> RemoveAllAsync()
+    /// <param name="confermato">Come in <see cref="MigrateAsync"/>: la conferma arriva da <c>--si</c>.</param>
+    public static async Task<int> RemoveAllAsync(bool confermato = false)
     {
         var nomi = Jobs.Legacy.Select(l => l.Task).Append(Platform.SupervisorTask).ToList();
         var lette = await QueryAsync(nomi);
@@ -310,7 +324,7 @@ internal static class Tasks
         }
         foreach (var n in presenti) Ui.Line($"    · attivita' «{n}»", ConsoleColor.Gray);
         foreach (var s in startup) Ui.Line($"    · {s}", ConsoleColor.Gray);
-        if (!Ui.Confirm("Togliere tutto? Da quel momento nulla parte piu' da solo."))
+        if (!confermato && !Ui.Confirm("Togliere tutto? Da quel momento nulla parte piu' da solo."))
         {
             Ui.Info("annullato.");
             return 1;
