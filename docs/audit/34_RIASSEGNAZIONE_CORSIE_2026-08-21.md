@@ -1,4 +1,4 @@
-# La riassegnazione che non si può fare — 2026-08-21
+﻿# La riassegnazione che non si può fare — 2026-08-21
 
 > Il proprietario ha chiesto di aggiornare le corsie con i nuovi investimenti: togliere le vecchie
 > coppie, mettere le nuove strategie. Ho fatto il lavoro. **Il risultato è che non c'è niente da
@@ -205,11 +205,30 @@ testa hanno un costo 3-4 volte il margine lordo per trade.
       19/08 +2,57% in 164h) più una short aperta dal 20/08. **4-6 chiusure a quei prezzi ⇒ la
       correzione dello specchio è viva. 0-1 e nessuna chiusura ⇒ non è atterrata.** In entrambi i
       casi si impara la cosa che serve.
-- [ ] **Riparare `WalkForwardOosSharpe`**: finché il 69,6% dell'archivio ha due finestre spacciate
-      per tre, ogni classifica per «coerenza» è un artefatto.
-- [ ] **Benchmark passivo come gate**, non come commento: nessun candidato entra in fascia grigia se
-      non batte il buy&hold nella sua direzione prevalente. Sull'archivio di oggi toglie sei gambe
-      su nove.
+- [x] **Riparare `WalkForwardOosSharpe`** — **FATTO il 2026-08-22.** E la causa non era quella che
+      avevo scritto: non è un campo *copiato*, è un **calcolo giusto su un input sbagliato**.
+      `StrategyComposer` passava al motore l'intera lista di candele, e quell'overload **ignora
+      `config.From/To`** — le N finestre erano N esecuzioni identiche sul range intero. La cura
+      ovvia (affettare le candele) aveva tre difetti fatali: distrugge la cache per-istanza del
+      `SignalCatalog`, tronca il warm-up dei segnali percentile (125 osservazioni contro le ~122 di
+      una finestra 1d di quattro mesi) e reintroduce lo zero non neutro. Si segmenta invece la
+      **curva di equity** dello screening, che c'era già ed era buttata via: i tre spariscono per
+      costruzione e gli N backtest **spariscono** invece di moltiplicarsi.
+      **La conseguenza che non avevo visto**: con `oosSharpe == screenSharpe` il gate di conferma era
+      una **tautologia** — tutte le campagne vive hanno `minOosSharpe == minScreenSharpe` — quindi
+      quella fase non ha mai respinto nulla.
+- [x] **Benchmark passivo — la MISURA fatta il 2026-08-22, il GATE no**, e la ragione è che i numeri
+      con cui l'avevo giustificato erano contaminati da due artefatti più grandi del margine su cui
+      avrebbe deciso. (1) Il **funding**: `BacktestEngine` lo applica **firmato** — con tasso positivo
+      il long paga e lo short *incassa* — ed è una costante inventata (`FundingHistory` non è popolata
+      da nessuno). Il passivo sta a mercato il 100% della finestra: gli avrebbe regalato ~0,21 Sharpe.
+      (2) Il **risk-free**: `Statistics.SharpeRatio` sottrae il 2%/anno al **capitale intero** mentre
+      ne è investito il 10%, e il drag `rf/σ` vale **0,6-1,6 Sharpe** per il candidato contro ~0,4 per
+      il passivo — da 0,2 a 1,2 Sharpe di handicap fabbricato.
+      **Corretti quei due, i due «ribaltamenti» di §2c evaporano**: ATOM 1h e FIL 4h danno eccessi di
+      +0,15/−0,03 e +0,12/−0,02, indistinguibili da zero. Il §2c aveva ragione sull'esito e torto sul
+      metodo (lo specchio `short = −long` è davvero sbagliato: −0,735 Sharpe medio su 197 combinazioni).
+      Il gate arriva quando saranno decise convenzione di costo e materiale di calibrazione.
 - [x] **`GreyDeployer` risolve sulla `CandidateKey`** — **FATTO il 2026-08-22.** Due rettifiche alla
       riga che avevo scritto qui: (a) le «119 terne ambigue» sono **12 distinte** ricomparse in 119
       run-istanze, perché la caccia notturna ritrova ogni notte la stessa griglia — è lo stesso

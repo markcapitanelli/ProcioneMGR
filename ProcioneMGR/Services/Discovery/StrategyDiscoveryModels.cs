@@ -54,6 +54,43 @@ public class DiscoveryCandidate
     public int Windows { get; set; }
 
     /// <summary>
+    /// Da DOVE viene <see cref="OutOfSampleSharpe"/>.
+    ///
+    /// <para>[2026-08-22] Stesso rimedio adottato il 2026-08-20 per
+    /// <c>SavedMlModel.DeflatedSharpeSource</c>: un numero senza provenienza è stato letto per un
+    /// mese come un walk-forward mentre era lo Sharpe in-sample della selezione, arrotondato. Le
+    /// sorgenti <b>non sono sulla stessa scala</b> e non andrebbero ordinate insieme senza saperlo —
+    /// una è il MASSIMO su centinaia di combinazioni, l'altra una MEDIA su sottoperiodi.</para>
+    /// </summary>
+    public string? WalkForwardSource { get; set; }
+
+    /// <summary>
+    /// Walk-forward vero: parametri scelti sull'in-sample, giudicati sull'OOS che segue
+    /// (<c>StrategyDiscoveryEngine</c>). È il <b>massimo</b> su centinaia di combinazioni, quindi
+    /// ottimistico per selection bias — è la ragione per cui esiste il Deflated Sharpe.
+    /// </summary>
+    public const string SourceWalkForward = "WalkForward";
+
+    /// <summary>
+    /// <b>Media</b> su sottoperiodi contigui DENTRO il range di selezione, parametri congelati
+    /// (<c>StrategyComposer</c>): è una misura di coerenza, non un fuori campione.
+    /// </summary>
+    public const string SourceSelectionSubPeriods = "SottoperiodiDiSelezione";
+
+    /// <summary>
+    /// Nessuna misura ESISTE: il candidato non viene da una discovery (i modelli <c>Ml</c>).
+    /// Dichiarato esplicitamente, perché «non impostato» e «non misurato» non sono la stessa cosa —
+    /// e lo <c>0m</c> del default era indistinguibile da una misura.
+    /// </summary>
+    public const string SourceNone = "NonMisurata";
+
+    /// <summary>
+    /// Un produttore che non dichiara la provenienza. Non è un valore da scrivere a mano: lo mette
+    /// lo scrittore quando trova null, e lo dice nel log del run.
+    /// </summary>
+    public const string SourceUndeclared = "NonDichiarata";
+
+    /// <summary>
     /// Verdetto anti-overfitting (Fase 1) ereditato dallo sweep di ottimizzazione della candidata:
     /// Deflated Sharpe che corregge lo Sharpe OOS per il numero di combinazioni provate. null se non
     /// calcolabile. Permette di ordinare/filtrare le candidate per significatività, non solo per Sharpe.

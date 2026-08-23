@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Pipeline;
@@ -172,6 +172,38 @@ public sealed class ResearchPageService(
         + $"&timeframe={Uri.EscapeDataString(c.Timeframe)}"
         + $"&strategy={Uri.EscapeDataString(c.StrategyName)}"
         + $"&parameters={Uri.EscapeDataString(c.ParametersJson)}";
+
+    /// <summary>
+    /// [Difetto B, 2026-08-22] Come si legge il confronto col passivo. Il numero da solo non dice
+    /// contro cosa: il tooltip porta direzione prevalente, esposizione netta, tempo a mercato e
+    /// Sharpe del passivo — e, quando manca, dichiara <b>perché</b> manca invece di lasciare un
+    /// trattino muto.
+    /// </summary>
+    public static string SpiegaConfrontoPassivo(ResearchCandidate c)
+    {
+        if (c.ExcessHoldoutSharpe is not decimal eccesso)
+        {
+            return c.DominantDirection switch
+            {
+                null => "Non misurato: riga precedente al 2026-08-22. Non e' ricavabile a posteriori — "
+                        + "i blob degli artifact non contengono i trade.",
+                "Unknown" => "Direzione non determinabile (nessun trade, o trade tutti istantanei): "
+                             + "non esiste un passivo con cui confrontarsi.",
+                "Mixed" => $"Direzione mista (esposizione netta {c.NetExposure:+0.00;-0.00}): nessun lato domina "
+                           + "abbastanza da rendere ovvio quale passivo sia il confronto giusto.",
+                _ => "Benchmark non calcolabile su questo candidato; il suo verdetto e' intatto.",
+            };
+        }
+
+        var tempo = c.TimeInMarketFraction is decimal f ? $"{f:P0} del tempo a mercato" : "tempo a mercato non misurabile";
+        var verso = eccesso > 0m ? "BATTE" : "NON batte";
+        return $"{verso} il passivo di {eccesso:+0.00;-0.00} Sharpe. "
+             + $"Direzione prevalente {c.DominantDirection} (esposizione netta {c.NetExposure:+0.00;-0.00}), {tempo}. "
+             + $"Passivo {c.PassiveHoldoutSharpe:F2} contro candidato {(c.PassiveHoldoutSharpe + eccesso):F2}. "
+             + "Entrambi a risk-free ZERO, e il passivo senza funding: il funding e' una costante inventata "
+             + "che il long paga e lo short incassa, e il passivo sta a mercato il 100% della finestra. "
+             + "Residuo dichiarato: l'eccesso resta favorevole al candidato, che la sua carry ce l'ha dentro.";
+    }
 
     /// <summary>Parametri leggibili per la cella della tabella ("k=v, k=v"); JSON illeggibile ⇒ testo grezzo.</summary>
     public static string FormatParams(string parametersJson)

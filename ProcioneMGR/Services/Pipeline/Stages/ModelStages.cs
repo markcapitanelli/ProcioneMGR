@@ -136,6 +136,10 @@ public sealed class MlModelTrainingStage(
                         ["LongThreshold"] = config.GetDecimal("longThreshold", 0.002m),
                         ["ShortThreshold"] = config.GetDecimal("shortThreshold", 0.002m),
                     },
+                    // [2026-08-22] Nessuna discovery ha misurato questo candidato: OutOfSampleSharpe
+                    // restava lo 0m del default e finiva in /research come «0,00», indistinguibile
+                    // da una misura. 51 righe su 51 in archivio. Ora e' dichiarato assente.
+                    WalkForwardSource = DiscoveryCandidate.SourceNone,
                 });
             }
             else
@@ -305,7 +309,12 @@ public sealed class StrategyDiscoveryStage(IStrategyDiscovery discovery) : IPipe
 
     public StageSummary Summarize(PipelineContext ctx)
     {
-        var best = ctx.Candidates.OrderByDescending(c => c.OutOfSampleSharpe).FirstOrDefault();
+        // [2026-08-22] Chi non ha una misura non compete per il titolo di «migliore»: lo 0m dei
+        // candidati Ml batteva qualunque Sharpe negativo e poteva vincere questa riga.
+        var best = ctx.Candidates
+            .Where(c => c.WalkForwardSource != DiscoveryCandidate.SourceNone)
+            .OrderByDescending(c => c.OutOfSampleSharpe)
+            .FirstOrDefault();
         return new StageSummary
         {
             StageName = Name,
@@ -338,6 +347,8 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         new("minDeflatedSharpe", "Deflated Sharpe minimo", "0.95", "gate anti-overfitting (Bailey-López de Prado): sotto questa soglia il candidato è scartato"),
         new("maxPbo", "PBO massimo di pannello", "0.5", "se la Probability of Backtest Overfitting del batch supera questa soglia l'intero ensemble è bloccato"),
         new("trialCorrelationThreshold", "Soglia ρ cluster tentativi", "0.5", "DSR con N effettivo: candidati con correlazione dei rendimenti holdout ≥ questa soglia contano come un solo test (1 = disattivo, usa N nominale)"),
+        new("passiveBenchmark", "Benchmark passivo", "declared", "«declared» misura, per OGNI candidato compresi i bocciati, quanto avrebbe reso «tieni la stessa direzione e non fare niente» sulla stessa finestra — e scrive l'eccesso accanto al numero. NON è un gate: nessun candidato viene respinto per questo. «off» lo spegne. Costo: fino a +28% sul run, una esecuzione passiva per combinazione simbolo×timeframe×lato."),
+        new("directionNetThreshold", "Soglia direzione prevalente", "0.60", "quanto un lato deve dominare il TEMPO a mercato (non il numero di trade) perché il candidato sia chiamato long o short: sotto, è «misto» e il passivo non ha un lato ovvio"),
     ];
 
     public string? ValidateInput(PipelineContext ctx)
@@ -381,11 +392,29 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
         var trialCorrThreshold = (double)config.GetDecimal("trialCorrelationThreshold", 0.5m);
         var costs = PipelineCosts.FromConfig(config);
         var sizePercent = config.GetDecimal("positionSizePercent", 10m);
+        // [Difetto B, 2026-08-22] Un valore ignoto ricade su «declared» CON una riga di log, come
+        // fa ResolveOptimizer: un refuso in configurazione non deve spegnere in silenzio una misura.
+        var benchmarkMode = config.GetString("passiveBenchmark", "declared");
+        if (!string.Equals(benchmarkMode, "off", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(benchmarkMode, "declared", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.LogLine($"[{Name}] passiveBenchmark = «{benchmarkMode}» non riconosciuto: uso «declared».");
+            benchmarkMode = "declared";
+        }
+        var benchmarkOn = !string.Equals(benchmarkMode, "off", StringComparison.OrdinalIgnoreCase);
+        var directionThreshold = config.GetDecimal("directionNetThreshold", 0.60m);
+        // Una esecuzione passiva per (simbolo, timeframe, lato): senza cache il costo passerebbe
+        // da +28% a +100% del run.
+        var passiveCache = new Dictionary<string, BacktestResult>(StringComparer.Ordinal);
+        var benchmarkFalliti = 0;
 
         ctx.Validated.Clear();
         // Rendimenti periodici holdout per candidato, allineati per indice a ctx.Validated: alimentano
         // il gate anti-overfitting (DSR per-candidato + PBO di pannello) applicato DOPO il ciclo.
         var holdoutReturns = new List<double[]>(ctx.Candidates.Count);
+        // [2026-08-22] Quanti produttori non hanno dichiarato la provenienza dello Sharpe di
+        // selezione. Si conta per dirlo: il numero scartato in silenzio sarebbe invisibile.
+        var undeclared = 0;
 
         foreach (var candidate in ctx.Candidates)
         {
@@ -396,8 +425,23 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
                 Symbol = candidate.Symbol,
                 Timeframe = candidate.Timeframe,
                 Parameters = new(candidate.Parameters),
-                WalkForwardOosSharpe = candidate.OutOfSampleSharpe,
+                // [2026-08-22] Il numero viaggia con la sua provenienza, e SENZA provenienza non
+                // viaggia affatto. Due sorgenti diverse finivano su questa colonna senza dirlo: il
+                // MASSIMO su centinaia di combinazioni (discovery classica) e, fino a oggi, una
+                // copia arrotondata dello Sharpe di selezione (scoperta creativa: 9.665 righe su
+                // 9.665 in ResearchCandidates). I candidati "Ml" non hanno nessuna misura e
+                // lasciavano lo 0m del default — 51 righe su 51, indistinguibili da una misura.
+                //
+                // Un produttore che NON dichiara la provenienza perde il numero, e lo si dice nel
+                // log del run: un null silenzioso qui sarebbe la stessa classe di difetto del
+                // Filone E, un controllo che rassicura a prescindere.
+                WalkForwardOosSharpe = candidate.WalkForwardSource is null
+                                       || candidate.WalkForwardSource == DiscoveryCandidate.SourceNone
+                    ? null
+                    : candidate.OutOfSampleSharpe,
+                WalkForwardSource = candidate.WalkForwardSource ?? DiscoveryCandidate.SourceUndeclared,
             };
+            if (candidate.WalkForwardSource is null) undeclared++;
             var holdoutRets = Array.Empty<double>();
 
             try
@@ -417,6 +461,65 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
                 validated.HoldoutMaxDrawdown = holdout.MaxDrawdownPercent;
                 validated.HoldoutTrades = holdout.TotalTrades;
                 validated.HoldoutProfitFactor = ProfitFactor(holdout.Trades);
+
+                // [Difetto B, 2026-08-22] Il benchmark banale, in un try/catch SUO.
+                //
+                // Sta fuori dal try del candidato per una ragione precisa: li' dentro, una qualunque
+                // eccezione del passivo finirebbe nel catch che riscrive Survived = false e
+                // RejectReason = "Backtest fallito: …", buttando via il verdetto di holdout GIA'
+                // calcolato — e con esso il prefisso "Solo " che e' l'unica porta della fascia
+                // grigia. Un guasto su una misura accessoria cancellerebbe il candidato dallo
+                // schieramento. E' la classe del worker morto su un'OCE (2026-08-15) e del sync
+                // accessorio che uccideva una caccia (2026-08-11): fail-open sulla diagnostica.
+                //
+                // Si misura per TUTTI i candidati, compresi i bocciati: la fascia grigia e' fatta di
+                // bocciati, e misurare solo i sopravvissuti sarebbe la lezione M2b ripetuta.
+                if (benchmarkOn)
+                {
+                    try
+                    {
+                        var (direzione, netta, frazione) = PassiveBenchmark.ClassifyDirection(
+                            holdout.Trades, ctx.Ranges.HoldoutFrom, ctx.Ranges.HoldoutTo, directionThreshold);
+                        validated.DominantDirection = direzione.ToString();
+                        validated.NetExposure = netta;
+                        validated.TimeInMarketFraction = frazione;
+
+                        if (direzione is Pipeline.DominantDirection.Long or Pipeline.DominantDirection.Short)
+                        {
+                            var isLong = direzione == Pipeline.DominantDirection.Long;
+                            var chiave = $"{candidate.Symbol}|{candidate.Timeframe}|{(isLong ? "L" : "S")}";
+                            if (!passiveCache.TryGetValue(chiave, out var passivo))
+                            {
+                                var cfg = PassiveBenchmark.BuildConfig(
+                                    costs.ApplyTo(new BacktestConfiguration
+                                    {
+                                        ExchangeName = ctx.ExchangeName,
+                                        Symbol = candidate.Symbol,
+                                        Timeframe = candidate.Timeframe,
+                                        InitialCapital = ctx.InitialCapital,
+                                        PositionSizePercent = sizePercent,
+                                    }),
+                                    ctx.Ranges.HoldoutFrom, ctx.Ranges.HoldoutTo);
+                                passivo = await backtest.RunBacktestAsync(
+                                    cfg, await ctx.Candles.GetAsync(candidate.Symbol, candidate.Timeframe, ctx.Ranges.HoldoutFrom, ctx.Ranges.HoldoutTo, ct),
+                                    new PassiveHoldStrategy(isLong), ct);
+                                passiveCache[chiave] = passivo;
+                            }
+
+                            var confronto = PassiveBenchmark.Compare(
+                                holdout.EquityCurve, passivo.EquityCurve, ppy, direzione, netta, frazione);
+                            validated.PassiveHoldoutSharpe = confronto.PassiveSharpe;
+                            validated.ExcessHoldoutSharpe = confronto.ExcessSharpe;
+                        }
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (Exception exBench)
+                    {
+                        benchmarkFalliti++;
+                        ctx.LogLine($"[{Name}] benchmark passivo non calcolabile per {validated.Key} "
+                            + $"({exBench.GetType().Name}: {exBench.Message}). Il verdetto del candidato resta intatto.");
+                    }
+                }
 
                 if (validated.HoldoutSharpe < minSharpe)
                 {
@@ -438,6 +541,19 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
             ctx.Validated.Add(validated);
             holdoutReturns.Add(holdoutRets);
             ctx.LogLine($"[{Name}] {validated.Key}: holdout Sharpe {validated.HoldoutSharpe:F2}, {validated.HoldoutTrades} trade → {(validated.Survived ? "SOPRAVVISSUTO (pre-gate)" : validated.RejectReason)}");
+        }
+
+        if (benchmarkFalliti > 0)
+        {
+            ctx.LogLine($"[{Name}] benchmark passivo non calcolato su {benchmarkFalliti} candidati: "
+                + "i campi restano vuoti e i verdetti sono intatti (la misura e' accessoria, il verdetto no).");
+        }
+
+        if (undeclared > 0)
+        {
+            ctx.LogLine($"[{Name}] {undeclared} candidati senza provenienza dichiarata per lo Sharpe di "
+                + "selezione: il numero e' stato SCARTATO. E' un produttore che non imposta "
+                + "DiscoveryCandidate.WalkForwardSource.");
         }
 
         ApplyOverfittingGate(ctx, holdoutReturns, minDeflatedSharpe, maxPbo, trialCorrThreshold);
