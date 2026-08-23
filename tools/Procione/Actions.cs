@@ -19,9 +19,47 @@ internal static class Actions
     //  Avvio
     // =============================================================================================
 
+    /// <summary>
+    /// Rifiuta di mettere sulla 5199 un guscio che vive in un WORKTREE.
+    ///
+    /// PERCHE' (2026-07-20, e di nuovo il 2026-08-23 per mano di chi scriveva questo guardrail):
+    /// ogni worktree ha un <c>appsettings.json</c> PROPRIO — e' gitignorato, quindi viene
+    /// fotografato quando il worktree nasce e non lo aggiorna piu' nessuno. Master key e password
+    /// di Postgres possono essere quelle di mesi fa. L'istanza parte lo stesso, si prende la 5199,
+    /// e intercetta l'utente: la UI si apre e il login non funziona, oppure funziona e sta
+    /// leggendo un database sbagliato.
+    ///
+    /// La regola c'era gia' scritta nei documenti. Non era applicata da nessuna parte: bastava
+    /// lanciare la plancia dal posto sbagliato.
+    /// </summary>
+    /// <returns>true se il comando va rifiutato.</returns>
+    private static bool GuscioDaWorktree(bool forza)
+    {
+        if (!Platform.InWorktree(Platform.RepoRoot)) return false;
+
+        if (forza)
+        {
+            Ui.Warn("questo eseguibile comanda un WORKTREE: il guscio partira' da li' (--forza).");
+            Ui.Info($"repo: {Platform.RepoRoot}");
+            return false;
+        }
+
+        Ui.Error("questo eseguibile comanda un WORKTREE: il guscio partirebbe da li'.");
+        Ui.Info($"repo    : {Platform.RepoRoot}");
+        Ui.Info($"dovrebbe: {Platform.MainRepoRoot}");
+        Ui.Info("un worktree ha un appsettings.json PROPRIO, gitignorato e fermo al giorno in cui e'");
+        Ui.Info("nato: master key e password di Postgres possono essere di mesi fa. L'istanza si");
+        Ui.Info("prende la 5199 e intercetta l'utente (incidente del 2026-07-20).");
+        Ui.Info($"rimedio : $env:PROCIONE_REPO = '{Platform.MainRepoRoot}'   —  oppure --forza, se sai perche'.");
+        return true;
+    }
+
     /// <summary>Bring-up completo. E' bringup.ps1: idempotente, non fallisce mai in modo bloccante.</summary>
     public static int UpAll(bool forza)
     {
+        // Il bring-up avvia anche il guscio: vale lo stesso divieto.
+        if (GuscioDaWorktree(forza)) return 2;
+
         var (kind, compose) = Probes.LayoutQuick();
         if (compose && !forza)
         {
@@ -36,6 +74,8 @@ internal static class Actions
     /// <summary>Avvia il guscio come fa il profilo `procione-main` di .claude/launch.json.</summary>
     public static int UpShell(bool forza)
     {
+        if (GuscioDaWorktree(forza)) return 2;
+
         if (Probes.ListeningPorts().Contains(Platform.ShellPort) && !forza)
         {
             Ui.Error($"la porta {Platform.ShellPort} e' gia' occupata: c'e' gia' un guscio.");
@@ -73,6 +113,8 @@ internal static class Actions
         Ui.Title("Avvio del guscio");
         Ui.Info($"repo   : {Platform.RepoRoot}");
         Ui.Info($"log    : {log}   (`procione log guscio`)");
+        Ui.Info("parte senza finestra: e' un processo a se', sopravvive alla chiusura della plancia.");
+        Ui.Info("per fermarlo: `procione ferma guscio` (nessuna finestra da chiudere per sbaglio).");
         if (!Proc.Detach(cmd)) return 2;
 
         // Il verdetto e' la VERIFICA, non l'assenza di errori all'avvio: `dotnet run` compila prima
@@ -179,6 +221,9 @@ internal static class Actions
 
     public static int RepairAll()
     {
+        // Rilancia il bring-up, che avvia anche il guscio: stesso divieto.
+        if (GuscioDaWorktree(forza: false)) return 2;
+
         Ui.Title("Riparazione completa (scripts/bringup.ps1)");
         return Proc.Script("bringup.ps1");
     }
@@ -301,7 +346,8 @@ internal static class Actions
                 {
                     Ui.Warn($"nessun log in {Platform.ShellLog}.");
                     Ui.Info("il monolite non scrive su file: il log esiste solo se il guscio e' stato avviato");
-                    Ui.Info("con `procione avvia guscio`. Altrimenti l'output e' nella finestra che lo esegue.");
+                    Ui.Info("da qui — `procione avvia guscio`, oppure il bring-up. Se e' partito in un altro");
+                    Ui.Info("modo, l'output e' dove lo ha lasciato chi lo ha lanciato.");
                     return 1;
                 }
                 return TailFile(Platform.ShellLog, righe, segui);
@@ -511,6 +557,9 @@ internal static class Actions
                 // Esecuzione ESPLICITA, fuori cadenza. Non serve possedere il mutex: e' l'operatore
                 // che l'ha chiesta, e la vede scorrere. Il supervisore residente, se c'e', continua
                 // per conto suo — e ricalcolera' la prossima scadenza dal proprio ultimo giro.
+                // Il lavoro «avvio» e' il bring-up, che accende il guscio: stesso divieto.
+                if (lavoro.Name == "avvio" && GuscioDaWorktree(forza: false)) return 2;
+
                 Ui.Title($"{lavoro.Name}: {lavoro.Script} {string.Join(' ', lavoro.Args)}".TrimEnd());
                 if (vivo) Ui.Info("(un supervisore e' attivo: questo giro e' in piu', non al posto suo)");
                 return Proc.Script(lavoro.Script, lavoro.Args);
@@ -703,6 +752,8 @@ internal static class Actions
     /// </summary>
     public static int Postgres()
     {
+        if (GuscioDaWorktree(forza: false)) return 2;
+
         var (kind, _) = Probes.LayoutQuick();
         if (!kind)
         {
