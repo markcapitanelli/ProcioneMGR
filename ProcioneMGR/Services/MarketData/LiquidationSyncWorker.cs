@@ -4,6 +4,35 @@ using ProcioneMGR.Data;
 
 namespace ProcioneMGR.Services.MarketData;
 
+/// <summary>
+/// [2026-08-24] Lo stato REALE del feed di liquidazioni, per chi deve spiegare perché la serie è
+/// vuota.
+///
+/// <para>Esiste perché il guardiano delle serie-patrimonio diceva «serie ASSENTE: nessun punto in
+/// SentimentMetricPoints» — la stessa frase della perdita di patrimonio del funding, che manda a
+/// cercare un incidente che non c'è. La causa vera (lo stream futures Binance non consegna frame
+/// da questa postazione) era scritta solo in un commento del codice, e un commento non è un dato:
+/// se domani il feed ripartisse, la frase resterebbe identica. Ora la causa si LEGGE.</para>
+/// </summary>
+public interface ILiquidationFeedDiagnostics
+{
+    /// <summary>L'accumulo è acceso in configurazione.</summary>
+    bool Enabled { get; }
+
+    /// <summary>Il socket è aperto adesso.</summary>
+    bool IsConnected { get; }
+
+    /// <summary>Messaggi ricevuti da quando l'applicazione è partita.</summary>
+    long TotalMessages { get; }
+
+    /// <summary>
+    /// Il worker ha diagnosticato «connesso e muto»: handshake riuscito, zero frame per tre
+    /// connessioni consecutive e mai un messaggio. È la firma del blocco EEA sulla famiglia
+    /// WebSocket dei derivati Binance.
+    /// </summary>
+    bool EndpointLikelyBlocked { get; }
+}
+
 /// <summary>Configurazione dell'accumulo liquidazioni (sezione "Liquidations").</summary>
 public sealed class LiquidationsOptions
 {
@@ -54,7 +83,7 @@ public sealed class LiquidationSyncWorker(
     IWebSocketTransportFactory transportFactory,
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IOptionsMonitor<LiquidationsOptions> options,
-    ILogger<LiquidationSyncWorker> logger) : BackgroundService
+    ILogger<LiquidationSyncWorker> logger) : BackgroundService, ILiquidationFeedDiagnostics
 {
     /// <summary>Attesa fra due controlli quando l'accumulo è spento: nessuna connessione aperta.</summary>
     private static readonly TimeSpan DisabledPollInterval = TimeSpan.FromSeconds(30);
@@ -66,6 +95,17 @@ public sealed class LiquidationSyncWorker(
 
     /// <summary>Messaggi ricevuti da quando l'applicazione è partita.</summary>
     public long TotalMessages { get; private set; }
+
+    /// <inheritdoc />
+    public bool Enabled => options.CurrentValue.Enabled;
+
+    /// <summary>
+    /// [2026-08-24] La diagnosi «connesso e muto», ESPOSTA. Prima viveva in una variabile locale di
+    /// <see cref="ExecuteAsync"/> e finiva in un log una volta sola: chi doveva spiegare all'utente
+    /// perché la serie è vuota non aveva modo di leggerla, e la spiegava a commento — cioè per
+    /// sempre uguale, anche il giorno in cui il feed fosse ripartito.
+    /// </summary>
+    public bool EndpointLikelyBlocked { get; private set; }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -168,6 +208,7 @@ public sealed class LiquidationSyncWorker(
             else consecutiveSilentConnects = 0;
 
             var endpointLikelyBlocked = IsEndpointLikelyBlocked(totalMessagesEver, consecutiveSilentConnects);
+            EndpointLikelyBlocked = endpointLikelyBlocked;
             if (endpointLikelyBlocked)
             {
                 if (!blockAnnounced)

@@ -12,8 +12,40 @@ public sealed record IntegrityResult(bool Ok, string Message);
 /// <summary>Esito di un backup completo.</summary>
 public sealed record BackupResult(bool Success, string BackupPath, long SizeBytes, IntegrityResult Integrity, string? Error = null);
 
+/// <summary>
+/// Chi ha prodotto un file di backup. Non è decorazione: fino al 2026-08-23 <c>/admin/backup</c>
+/// elencava una sola cartella e la spacciava per «i backup», mentre quelli veri stavano altrove.
+/// Una riga senza provenienza dichiarata non dice se il backup è ancora vivo.
+/// </summary>
+public enum BackupSource
+{
+    /// <summary>Creato da questa applicazione (pulsante «Crea backup ora»).</summary>
+    Manual,
+
+    /// <summary>Prodotto dal backup notturno (<c>scripts/db-backup.ps1</c>, Task Scheduler).</summary>
+    Nightly,
+
+    /// <summary>
+    /// Le due cartelle coincidono: i nomi dei file sono identici in forma
+    /// (<c>procionemgr-&lt;stamp&gt;.dump</c>), quindi la provenienza <b>non è distinguibile</b>.
+    /// Dirlo è meglio che indovinare.
+    /// </summary>
+    Shared,
+}
+
 /// <summary>Metadati di un file di backup già presente.</summary>
-public sealed record BackupInfo(string FileName, string FullPath, DateTime CreatedUtc, long SizeBytes);
+/// <param name="CreatedUtc">
+/// Istante dell'<b>ultima scrittura</b>, non della creazione: è ciò che riporta
+/// <c>db-backup.ps1 -Verify</c> (<c>LastWriteTime</c>), e per un dump scritto in streaming è
+/// l'istante che conta — quello in cui il file è diventato un backup. Due misure diverse della
+/// stessa cosa sono due verità che prima o poi divergono.
+/// </param>
+public sealed record BackupInfo(
+    string FileName,
+    string FullPath,
+    DateTime CreatedUtc,
+    long SizeBytes,
+    BackupSource Source = BackupSource.Manual);
 
 /// <summary>
 /// Helper (puro, senza stato) per il backup/ripristino di un database PostgreSQL tramite gli
@@ -89,14 +121,19 @@ public static class DatabaseBackupHelper
             : new IntegrityResult(false, "archivio vuoto o TOC illeggibile");
     }
 
-    /// <summary>Elenca i backup (*.dump) in <paramref name="backupDir"/>, più recenti prima.</summary>
-    public static IReadOnlyList<BackupInfo> ListBackups(string backupDir)
+    /// <summary>
+    /// Elenca i backup (*.dump) in <paramref name="backupDir"/>, più recenti prima, marcandoli con
+    /// la provenienza <paramref name="source"/>. Una cartella assente o un percorso vuoto danno
+    /// lista vuota, non un'eccezione: la destinazione notturna può stare su un disco che questo
+    /// processo non vede, ed è un fatto da mostrare, non da far esplodere.
+    /// </summary>
+    public static IReadOnlyList<BackupInfo> ListBackups(string backupDir, BackupSource source = BackupSource.Manual)
     {
-        if (!Directory.Exists(backupDir)) return [];
+        if (string.IsNullOrWhiteSpace(backupDir) || !Directory.Exists(backupDir)) return [];
         return Directory.EnumerateFiles(backupDir, "*.dump")
             .Select(p => new FileInfo(p))
-            .OrderByDescending(f => f.CreationTimeUtc)
-            .Select(f => new BackupInfo(f.Name, f.FullName, f.CreationTimeUtc, f.Length))
+            .OrderByDescending(f => f.LastWriteTimeUtc)
+            .Select(f => new BackupInfo(f.Name, f.FullName, f.LastWriteTimeUtc, f.Length, source))
             .ToList();
     }
 

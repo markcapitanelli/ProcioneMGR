@@ -5,14 +5,26 @@
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Alpha
 @using ProcioneMGR.Services.Ensemble
+@using ProcioneMGR.Services.Trading
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject AuthenticationStateProvider AuthProvider
-@inject IEnsembleManager EnsembleMgr
+@* [2026-08-24] NON più `IEnsembleManager` non-keyed. Quella registrazione è un fallback che
+   risolve SEMPRE la corsia 0 (TradingServiceCollectionExtensions: «serve ai consumer non ancora
+   aggiornati con un selettore di corsia esplicito»), e dal 2026-08-05 la corsia 0 ha
+   configurazione VUOTA — le otto gambe Paper vive stanno sulle corsie 1-7. Il ciclo sulle gambe
+   non eseguiva mai, il conteggio era 0 per sempre, e il blocco non aveva nemmeno il ramo
+   «nessun allarme»: la Home taceva, e quel silenzio era indistinguibile da «nessuna gamba sta
+   decadendo». Era l'unico allarme di questa pagina che parla di capitale in movimento. *@
+@inject ILaneDirectory LaneDirectory
+@inject IServiceProvider Services
 @inject FactorDriftSnapshot FactorDrift
 @* [I6] L'omonimo ma diverso: deriva delle FEATURE dei modelli ML (PSI/KS/Page-Hinkley), non
    dell'IC dei fattori. Letto direttamente perché è un singleton già composto — nessuna query. *@
 @inject ProcioneMGR.Services.Monitoring.Drift.FeatureDriftSnapshot FeatureDrift
+@* Serve alla riga di copertura: una fotografia vecchia con il ciclo SPENTO non è «non ancora
+   ricalcolata», è «non verrà ricalcolata». Sono due frasi diverse e solo una è vera. *@
+@inject Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Monitoring.Drift.DriftMonitorOptions> DriftOptions
 @inject ProcioneMGR.Services.Sentiment.SentimentHeritageSnapshot HeritageSnapshot
 
 <PageTitle>ProcioneMGR</PageTitle>
@@ -54,17 +66,25 @@
             @* Guardiano serie-patrimonio: la storia del funding è già sparita due volte in silenzio
                (2026-08-11) — una serie esente dalla purge che si accorcia deve gridare QUI, non
                aspettare che qualcuno apra /sentiment. *@
-            @if (_heritageViolations.Count > 0)
+            @* [2026-08-24] DUE blocchi, non uno. La versione precedente metteva nello stesso elenco
+               «una serie che avevo e ho perso» e «una fonte che non ha mai consegnato niente», e
+               allegava a entrambe la conseguenza della prima: «carry e backtest a leva leggono
+               queste serie». Sulle liquidazioni quella frase è FALSA — nessun componente le legge,
+               il composite somma solo metriche nominate e le liquidazioni non ci sono — e per un
+               mese e mezzo la Home ha dichiarato in rosso un danno che non esisteva, con la stessa
+               formula usata per la perdita vera del funding. Due fatti diversi, due frasi diverse,
+               due gravità diverse. *@
+            @if (_heritageShortened.Count > 0)
             {
                 <div class="alert alert-danger">
                     <div class="d-flex align-items-center gap-2 mb-2">
                         <i class="bi bi-shield-exclamation fs-5"></i>
                         <strong>
-                            @_heritageViolations.Count serie-patrimonio sotto la profondità attesa
+                            @_heritageShortened.Count serie-patrimonio si @(_heritageShortened.Count == 1 ? "è" : "sono") ACCORCIAT@(_heritageShortened.Count == 1 ? "A" : "E")
                         </strong>
                     </div>
                     <ul class="mb-2 small">
-                        @foreach (var v in _heritageViolations.Take(6))
+                        @foreach (var v in _heritageShortened.Take(6))
                         {
                             <li><strong>@v.DisplayName</strong> — @v.Problem</li>
                         }
@@ -74,6 +94,31 @@
                         Carry e backtest a leva leggono queste serie: finché la profondità non rientra,
                         i loro numeri sono calcolati su una storia corta.
                         @(HeritageSnapshot.LastRunUtc is { } lastRun ? $"Ultimo controllo {lastRun:yyyy-MM-dd HH:mm} UTC." : "")
+                    </div>
+                </div>
+            }
+
+            @if (_heritageNeverStarted.Count > 0)
+            {
+                <div class="alert alert-warning">
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <i class="bi bi-plug fs-5"></i>
+                        <strong>
+                            @_heritageNeverStarted.Count font@(_heritageNeverStarted.Count == 1 ? "e" : "i")-patrimonio non @(_heritageNeverStarted.Count == 1 ? "ha" : "hanno") mai consegnato dati
+                        </strong>
+                    </div>
+                    <ul class="mb-2 small">
+                        @foreach (var v in _heritageNeverStarted.Take(6))
+                        {
+                            <li><strong>@v.DisplayName</strong> — @v.Problem</li>
+                        }
+                    </ul>
+                    <a href="sentiment" class="alert-link">Dettaglio e soglie in Sentiment →</a>
+                    <div class="form-text mt-1">
+                        Non è una perdita di patrimonio e nessun calcolo in corso ne è alterato: è una
+                        fonte da collegare. Diventa un problema il giorno in cui qualcosa comincerà a
+                        leggerla.
+                        @(HeritageSnapshot.LastRunUtc is { } lastRun2 ? $"Ultimo controllo {lastRun2:yyyy-MM-dd HH:mm} UTC." : "")
                     </div>
                 </div>
             }
@@ -88,10 +133,43 @@
                     <ul class="mb-2 small">
                         @foreach (var a in _decayAlerts)
                         {
-                            <li>@a.DisplayName — Sharpe realizzato @(a.RealizedSharpe?.ToString("F2")) vs atteso @(a.ExpectedSharpe?.ToString("F2")) (@(a.SharpeRatio?.ToString("P0")))</li>
+                            <li>
+                                <strong>corsia @a.LaneId</strong> (@a.Symbol @a.Timeframe) — @a.Report.DisplayName:
+                                Sharpe realizzato @(a.Report.RealizedSharpe?.ToString("F2")) vs atteso
+                                @(a.Report.ExpectedSharpe?.ToString("F2")) (@(a.Report.SharpeRatio?.ToString("P0")))
+                                su @a.Report.TradeCount trade
+                            </li>
                         }
                     </ul>
                     <a href="ensemble#decay-monitor" class="alert-link">Vedi il dettaglio in Ensemble →</a>
+                    <div class="form-text mt-1">@DecayCoverage()</div>
+                </div>
+            }
+            else if (_decayError is not null)
+            {
+                @* Regola 4: fail-open sulla diagnostica, ma DICENDOLO. Un widget che sparisce quando
+                   la lettura fallisce è indistinguibile da un widget che tace perché va tutto bene. *@
+                <div class="text-body-secondary small mb-3">
+                    <i class="bi bi-exclamation-circle me-1"></i>
+                    Decadimento delle gambe: <strong>non verificato</strong> — @_decayError
+                </div>
+            }
+            else if (_decayLegs > 0)
+            {
+                @* [2026-08-24] Il ramo che mancava, ed è la ragione per cui la cecità è passata
+                   inosservata per diciannove giorni: senza, «nessun allarme» e «non ho guardato»
+                   producono lo stesso schermo vuoto. I due blocchi di deriva qui sotto ce l'hanno
+                   entrambi dal giorno in cui sono nati; questo, che parla di soldi, no. *@
+                <div class="text-body-secondary small mb-3">
+                    <i class="bi bi-activity me-1"></i>
+                    Decadimento delle gambe: nessun allarme. @DecayCoverage()
+                </div>
+            }
+            else if (_decayLanes > 0)
+            {
+                <div class="text-body-secondary small mb-3">
+                    <i class="bi bi-activity me-1"></i>
+                    Decadimento delle gambe: nessuna gamba configurata sulle @_decayLanes corsie attive.
                 </div>
             }
 
@@ -109,11 +187,25 @@
                     <ul class="mb-2 small">
                         @foreach (var alert in _factorDriftAlerts.Take(6))
                         {
+                            @* [2026-08-24] Ogni riga porta la fine della PROPRIA finestra recente.
+                               Il dato c'era già e non veniva mai stampato: le finestre si
+                               costruivano in avanti dalla candela più vecchia, quindi la «recente»
+                               si chiudeva in media 120 giorni fa sulle serie 1d — mentre in fondo
+                               alla scheda si leggeva «Ultimo calcolo» di stamattina. Ora le
+                               finestre partono dal fondo, ma la data resta stampata: è ciò che
+                               rende la riga falsificabile. *@
                             <li>
                                 <strong>@alert.Report.FeatureName</strong> su @alert.Series.Symbol @alert.Series.Timeframe —
-                                @(alert.Report.Status == FactorDriftStatus.SignFlip ? "segno invertito" : "si è spento"):
+                                @(alert.Report.Status == FactorDriftStatus.SignFlip ? "segno invertito" : "si è indebolito"):
                                 IC da @alert.Report.ReferenceIc.ToString("F3") a @alert.Report.RecentIc.ToString("F3")
-                                (soglia @alert.Report.NoiseFloor.ToString("F3"))
+                                @if (!double.IsNaN(alert.Report.PValue))
+                                {
+                                    <text>(@alert.Report.TStatistic.ToString("F1") errori standard, p=@alert.Report.PValue.ToString("F3"))</text>
+                                }
+                                @if (alert.Report.RecentWindowEndUtc is { } fine)
+                                {
+                                    <span class="text-body-secondary">— finestra fino al @fine.ToString("yyyy-MM-dd")</span>
+                                }
                             </li>
                         }
                     </ul>
@@ -167,14 +259,30 @@
                     </div>
                 </div>
             }
-            else if (FeatureDrift.LastRunUtc is not null)
+            else if (FeatureDrift.All.Count > 0)
             {
                 @* «Nessun allarme» vale solo insieme a quanti modelli sono stati davvero guardati:
                    senza i saltati, «0 allarmi su 53» si legge come un via libera anche se 50 di
-                   quei 53 non sono stati esaminati affatto. *@
+                   quei 53 non sono stati esaminati affatto.
+
+                   [2026-08-24] La guardia era `LastRunUtc is not null`, non `All.Count > 0`: con
+                   zero modelli sorvegliati — che dal 2026-08-19 è il caso NORMALE, 176 modelli
+                   tutti in Staging contro stage sorvegliati Champion+Challenger — questo ramo
+                   stampava «nessun allarme» mentre la riga di copertura usciva subito perché il
+                   totale era zero. Verde su zero modelli guardati: il difetto che [I6] dichiarava
+                   di aver chiuso, sopravvissuto proprio nel caso che [I6c] ha reso normale. Il
+                   gemello D2 qui sopra la guardia giusta ce l'aveva già. *@
                 <div class="text-body-secondary small mb-3">
                     <i class="bi bi-diagram-3 me-1"></i>
                     Deriva delle feature ML: nessun allarme. @FeatureDriftCoverage()
+                </div>
+            }
+            else if (FeatureDrift.LastRunUtc is not null)
+            {
+                <div class="text-body-secondary small mb-3">
+                    <i class="bi bi-diagram-3 me-1"></i>
+                    Deriva delle feature ML: <strong>nessun modello esaminato</strong> — il monitor
+                    non ha soggetto. @FeatureDriftCoverage()
                 </div>
             }
         }
@@ -216,11 +324,27 @@
 @code {
     private string? _displayName;
     private HomeStats? _stats;
-    private List<ProcioneMGR.Services.Monitoring.DecayReport> _decayAlerts = new();
+
+    /// <summary>Un alert di decadimento con la corsia a cui appartiene: senza, otto corsie che
+    /// eseguono strategie omonime darebbero righe indistinguibili.</summary>
+    private sealed record LaneDecayAlert(int LaneId, string Symbol, string Timeframe, ProcioneMGR.Services.Monitoring.DecayReport Report);
+
+    private List<LaneDecayAlert> _decayAlerts = new();
+
+    /// <summary>Corsie configurate interrogate in questo caricamento.</summary>
+    private int _decayLanes;
+
+    /// <summary>Gambe trovate su quelle corsie, e quante di esse hanno abbastanza trade per un verdetto.</summary>
+    private int _decayLegs;
+    private int _decayMeasurable;
+
+    /// <summary>Perché la lettura non è stata possibile. Non-null ⇒ la Home lo dichiara invece di tacere.</summary>
+    private string? _decayError;
 
     // Serie-patrimonio sotto soglia: stessa filosofia della deriva — fotografia in memoria del
     // guardiano, zero I/O al rendering.
-    private IReadOnlyList<ProcioneMGR.Services.Sentiment.HeritageSeriesDepth> _heritageViolations = [];
+    private IReadOnlyList<ProcioneMGR.Services.Sentiment.HeritageSeriesDepth> _heritageShortened = [];
+    private IReadOnlyList<ProcioneMGR.Services.Sentiment.HeritageSeriesDepth> _heritageNeverStarted = [];
 
     // [D2] Deriva dei fattori: lettura della fotografia in memoria aggiornata dal worker — nessun
     // calcolo sul caricamento della Home, che deve restare veloce.
@@ -228,6 +352,10 @@
     private int _factorDriftSeries;
     private int _factorDriftTracked;
     private DateTime? _factorDriftLastRun;
+
+    /// <summary>Serie ricalcolate nelle ultime 24 ore, e la meno fresca di tutte: è la copertura VERA.</summary>
+    private int _factorDriftFresh24h;
+    private DateTime? _factorDriftOldest;
 
     /// <summary>
     /// [I6] La copertura della deriva FEATURE. Dichiara sempre quanti modelli sono stati saltati:
@@ -238,20 +366,59 @@
     /// </summary>
     private RenderFragment FeatureDriftCoverage() => builder =>
     {
-        var total = FeatureDrift.All.Count;
-        if (total == 0) return;
-
-        var skipped = FeatureDrift.ModelsSkipped;
-        var testo = skipped > 0
-            ? $"Copertura: {FeatureDrift.ModelsWithVerdict} modelli giudicati su {total} esaminati ({skipped} saltati: candele insufficienti, nessuna feature valutabile o finestra sovrapposta al training)."
-            : $"Copertura: {total} modelli, tutti giudicati.";
+        // [2026-08-24] L'ETÀ PRIMA DEL NUMERO. La versione precedente metteva la staleness in coda,
+        // dopo la copertura, e la frase era «non ancora ricalcolata da questo avvio» — che promette
+        // un aggiornamento imminente. Con Drift:Enabled=false quell'aggiornamento non arriva MAI:
+        // la fotografia del 2026-08-19 è tornata in Home a ogni riavvio per cinque giorni,
+        // annunciandosi come temporanea. «Degradare dicendolo» non è mettere la nota in fondo: è
+        // far incontrare all'occhio la vecchiaia prima del verdetto.
+        var testa = "";
         if (FeatureDrift.LastRunUtc is DateTime at)
         {
-            testo += FeatureDrift.FromStoredHistory
-                ? $" Fotografia ricostruita dall'ultimo tick registrato ({at:yyyy-MM-dd HH:mm} UTC), non ancora ricalcolata da questo avvio."
-                : $" Ultimo controllo: {at:yyyy-MM-dd HH:mm} UTC.";
+            var giorni = (DateTime.UtcNow - at).TotalDays;
+            if (FeatureDrift.FromStoredHistory)
+            {
+                var eta = giorni >= 1 ? $"{giorni:0.#} giorni" : $"{giorni * 24:0} ore";
+                testa = $"Fotografia di {eta} fa (tick del {at:yyyy-MM-dd HH:mm} UTC), ripresa dalla storia registrata";
+                testa += DriftOptions.CurrentValue.Enabled
+                    ? " e non ancora rifatta da questo avvio. "
+                    : " — e il ciclo automatico è SPENTO (Drift:Enabled=false), quindi non verrà rifatta finché non lo si accende o non si preme «Esegui check ora». ";
+            }
+            else
+            {
+                testa = $"Ultimo controllo: {at:yyyy-MM-dd HH:mm} UTC. ";
+            }
         }
-        builder.AddContent(0, testo);
+
+        var total = FeatureDrift.All.Count;
+        string copertura;
+        if (total == 0)
+        {
+            // Prima qui c'era un `return` secco: la riga spariva, e il ramo «nessun allarme» qui
+            // sopra restava senza qualificazioni. Zero esaminati è un'informazione, non un vuoto.
+            copertura = "Nessun modello esaminato in questo tick.";
+        }
+        else if (FeatureDrift.All.All(m => m.IsSentinel))
+        {
+            copertura = FeatureDrift.All[0].SkipReason ?? "Nessun modello negli stage sorvegliati.";
+            copertura = char.ToUpperInvariant(copertura[0]) + copertura[1..] + ".";
+        }
+        else
+        {
+            var registro = FeatureDrift.RegistrySize;
+            var suRegistro = registro > 0 && registro != total ? $" su {registro} salvati nel registro" : "";
+            var skipped = FeatureDrift.ModelsSkipped;
+            copertura = skipped > 0
+                ? $"Copertura: {FeatureDrift.ModelsWithVerdict} modelli giudicati su {total} esaminati{suRegistro} ({skipped} saltati: candele insufficienti, nessuna feature valutabile o finestra sovrapposta al training)."
+                : $"Copertura: {total} modelli giudicati{suRegistro}.";
+        }
+
+        if (FeatureDrift.DroppedNotMonitored > 0)
+        {
+            copertura += $" {FeatureDrift.DroppedNotMonitored} righe di quel tick sono state scartate: quei modelli non esistono più o non ricadono negli stage sorvegliati.";
+        }
+
+        builder.AddContent(0, testa + copertura);
     };
 
     /// <summary>
@@ -265,10 +432,28 @@
     {
         if (_factorDriftSeries <= 0) return;
 
+        // [2026-08-24] La riga diceva «222 serie già calcolate su 222 in watchlist … Ultimo calcolo
+        // 03:49 UTC», e i due numeri erano presi su scale temporali diverse: il primo è un
+        // cumulato «da sempre», il secondo è l'istante dell'ULTIMA serie toccata — e il job ne
+        // tocca cinque per giro. Sul database vero solo 40 serie su 222 erano state ricalcolate
+        // nelle ultime 24 ore e 78 erano ferme da oltre una settimana, la più vecchia di 12 giorni.
+        // Insieme, le due cifre si leggevano come «tutta la watchlist, stamattina».
         var text = _factorDriftTracked > 0
-            ? $"Copertura: {_factorDriftSeries} serie già calcolate su {_factorDriftTracked} in watchlist (il job ruota sulle più vecchie)."
-            : $"Copertura: {_factorDriftSeries} serie già calcolate.";
-        if (_factorDriftLastRun is { } at) text += $" Ultimo calcolo {at:yyyy-MM-dd HH:mm} UTC.";
+            ? $"Copertura: {_factorDriftSeries} serie su {_factorDriftTracked} in watchlist hanno un verdetto"
+            : $"Copertura: {_factorDriftSeries} serie hanno un verdetto";
+        if (_factorDriftFresh24h > 0 || _factorDriftSeries > 0)
+        {
+            text += $", ma solo {_factorDriftFresh24h} ricalcolate nelle ultime 24 ore (il job ne prende poche per giro, a rotazione sulle più vecchie)";
+        }
+        text += ".";
+        if (_factorDriftOldest is { } vecchia)
+        {
+            var giorni = (DateTime.UtcNow - vecchia).TotalDays;
+            text += $" La serie meno fresca è ferma da {giorni:0.#} giorni.";
+        }
+        if (_factorDriftLastRun is { } at) text += $" Ultimo calcolo in assoluto {at:yyyy-MM-dd HH:mm} UTC.";
+        text += " Il conteggio degli allarmi aggrega serie indipendenti: la correzione per molteplicità"
+              + " è applicata DENTRO ogni serie, non fra serie diverse.";
 
         builder.OpenElement(0, "span");
         builder.AddAttribute(1, "class", "d-block");
@@ -301,22 +486,41 @@
             .ToListAsync()).FirstOrDefault(defaultValue: -1d);
         var totalCandles = estimate >= 0 ? (long)estimate : await db.OhlcvData.LongCountAsync();
         var myStrategies = userId is null ? 0 : await db.SavedStrategies.CountAsync(s => s.UserId == userId);
-        var tradingState = await db.TradingEngineStates.FirstOrDefaultAsync();
 
-        var tradingLabel = tradingState is null ? "Mai avviato" : tradingState.IsRunning ? $"{tradingState.Mode} attivo" : "Fermo";
-        _stats = new HomeStats(trackedSeries, totalCandles, myStrategies, tradingLabel, tradingState?.IsRunning ?? false);
+        // [2026-08-24] Le corsie si leggono TUTTE, una volta sola: servono sia alla stat card
+        // «Trading» sia al monitor di decadimento qui sotto, e ILaneDirectory le prende con due
+        // query per l'intera flotta (non due per corsia).
+        //
+        // La stat card prima faceva `TradingEngineStates.FirstOrDefaultAsync()`: l'unica delle
+        // dieci letture di quella tabella in tutto il repo senza filtro su LaneId e senza OrderBy.
+        // Postgres non garantisce un ordine, quindi mostrava lo stato di UNA CORSIA A CASO
+        // spacciandolo per «il Trading» — e la riga poteva cambiare da sola a ogni UPDATE che
+        // riscriveva la tupla. Con otto corsie attive la domanda «il trading è acceso?» non ha
+        // più una risposta scalare: si dichiara il conteggio.
+        IReadOnlyList<LaneSummary> lanes = [];
+        try { lanes = await LaneDirectory.ListAsync(); }
+        catch (Exception ex) { _decayError = $"elenco delle corsie non leggibile ({ex.GetType().Name})."; }
 
-        try
-        {
-            _decayAlerts = (await EnsembleMgr.GetDecayReportsAsync()).Where(r => r.IsAlert).ToList();
-        }
-        catch { /* widget non bloccante: se il monitor fallisce, la home resta comunque utilizzabile */ }
+        var configured = lanes.Where(l => l.IsConfigured).ToList();
+        var running = configured.Where(l => l.IsRunning).ToList();
+        var modes = running.Select(l => l.Mode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var tradingLabel = configured.Count == 0
+            ? "Mai avviato"
+            : running.Count == 0
+                ? $"Ferme ({configured.Count} corsie)"
+                : modes.Count == 1
+                    ? $"{running.Count}/{configured.Count} in {modes[0]}"
+                    : $"{running.Count}/{configured.Count} attive";
+        _stats = new HomeStats(trackedSeries, totalCandles, myStrategies, tradingLabel, running.Count > 0);
+
+        await LoadDecayAsync(configured);
 
         // Sola lettura in memoria: se il worker non ha ancora girato la lista è vuota e il widget
         // non compare, senza far aspettare nessuno.
         try
         {
-            _heritageViolations = HeritageSnapshot.Violations;
+            _heritageShortened = HeritageSnapshot.Shortened;
+            _heritageNeverStarted = HeritageSnapshot.NeverStarted;
         }
         catch { /* stesso principio del widget sopra */ }
 
@@ -328,9 +532,77 @@
             // usa il conteggio già calcolato per la card in cima: meglio del silenzio.
             _factorDriftTracked = FactorDrift.TrackedSeriesCount > 0 ? FactorDrift.TrackedSeriesCount : trackedSeries;
             _factorDriftLastRun = FactorDrift.LastRunUtc;
+
+            // La freschezza si legge per SERIE, non dal massimo globale: con la rotazione il
+            // massimo è l'istante dell'ultima serie toccata, non l'età della fotografia.
+            var soglia = DateTime.UtcNow.AddHours(-24);
+            _factorDriftFresh24h = FactorDrift.All.Count(s => s.ComputedAtUtc >= soglia);
+            _factorDriftOldest = FactorDrift.All.Count > 0 ? FactorDrift.All.Min(s => s.ComputedAtUtc) : null;
         }
         catch { /* stesso principio del widget sopra */ }
     }
+
+    /// <summary>
+    /// [2026-08-24] Il decadimento delle gambe, su TUTTE le corsie configurate.
+    ///
+    /// <para>Il manager si risolve per CHIAVE di corsia, come fanno già /ensemble, /trading e
+    /// /admin/autonomy. La registrazione non-keyed che questa pagina usava è un fallback dichiarato
+    /// «per i consumer non ancora aggiornati», e risolve sempre la corsia 0: da quando la flotta è
+    /// stata riassegnata (2026-08-05) quella corsia è vuota, quindi il monitor girava a vuoto.</para>
+    ///
+    /// <para>Solo le corsie CONFIGURATE, e in parallelo: ogni corsia costa un caricamento di
+    /// configurazione più tre query per gamba, e la Home è la pagina d'ingresso. Le istanze sono
+    /// una per corsia (keyed singleton), quindi il gate interno di ciascuna non serializza le altre.</para>
+    /// </summary>
+    private async Task LoadDecayAsync(IReadOnlyList<LaneSummary> configured)
+    {
+        _decayLanes = configured.Count;
+        if (configured.Count == 0) return;
+
+        try
+        {
+            var perLane = await Task.WhenAll(configured.Select(async lane =>
+            {
+                var mgr = Services.GetKeyedService<IEnsembleManager>(lane.Id);
+                if (mgr is null) return (lane, reports: (IReadOnlyList<ProcioneMGR.Services.Monitoring.DecayReport>)[]);
+                return (lane, reports: await mgr.GetDecayReportsAsync());
+            }));
+
+            _decayLegs = perLane.Sum(x => x.reports.Count);
+            _decayMeasurable = perLane.Sum(x => x.reports.Count(r => r.IsMeasurable));
+            _decayAlerts = perLane
+                .SelectMany(x => x.reports.Where(r => r.IsAlert)
+                    .Select(r => new LaneDecayAlert(x.lane.Id, x.lane.Symbol, x.lane.Timeframe, r)))
+                .OrderBy(a => a.LaneId)
+                .ToList();
+            _decayError = null;
+        }
+        catch (Exception ex)
+        {
+            // Fail-open, ma non muto: il ramo di markup dedicato lo dichiara.
+            _decayError = $"lettura del monitor fallita ({ex.GetType().Name}). Il dettaglio resta in /ensemble.";
+        }
+    }
+
+    /// <summary>
+    /// La copertura del decadimento. È la stessa domanda che /ensemble pone col verdetto di
+    /// misurabilità: un confronto realizzato-vs-atteso su meno trade della finestra non è
+    /// interpretabile, e contarlo come «nessun allarme» sarebbe un via libera costruito su gambe
+    /// che nessuno ha potuto giudicare. Qui si dichiarano i due numeri; il verdetto per esteso —
+    /// con il tempo che manca a ciascuna gamba — resta nella pagina che può mostrarlo.
+    /// </summary>
+    private RenderFragment DecayCoverage() => builder =>
+    {
+        if (_decayLegs == 0) return;
+        var testo = _decayMeasurable == _decayLegs
+            ? $"Copertura: {_decayLegs} gambe su {_decayLanes} corsie, tutte con abbastanza trade per un verdetto."
+            : $"Copertura: {_decayMeasurable} gambe misurabili su {_decayLegs} ({_decayLanes} corsie); "
+              + $"per le altre i trade sul simbolo attuale non bastano ancora, e il loro confronto non è interpretabile.";
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", "d-block");
+        builder.AddContent(2, testo);
+        builder.CloseElement();
+    };
 
     private RenderFragment StatCard(string label, string value, string icon, bool? highlight = null) => builder =>
     {

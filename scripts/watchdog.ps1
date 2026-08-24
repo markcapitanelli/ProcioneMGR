@@ -18,9 +18,12 @@
 #                 "motore sano", scoperto il 2026-08-11 (l'anti-spam sulle transizioni aveva
 #                 zittito il falso "giu'" permanente).
 #    3. Postgres: TCP  localhost:5432
-#    4. backup  : eta' del dump piu' recente in %USERPROFILE%\ProcioneMGR-Backup (soglia 48h).
+#    4. backup  : eta' del dump piu' recente nella cartella notturna (sezione "Backup" di
+#                 appsettings.json; default %USERPROFILE%\ProcioneMGR-Backup, soglia 48h).
 #                 Non e' un servizio da pingare: e' l'unico controllo che vede il caso in cui il
 #                 task notturno NON PARTE proprio — e quindi non puo' lamentarsi da solo.
+#                 Cartella e soglia NON sono scritte qui: dal 2026-08-23 la fonte e' una sola,
+#                 condivisa con db-backup.ps1 e /admin/backup (vedi Get-BackupWatch).
 #
 #  Anti-spam: notifica UNA volta per transizione (OK->GUASTO e GUASTO->OK), mai a raffica. Lo
 #  stato fra le esecuzioni vive in %TEMP%\procionemgr-watchdog-state.json (stato di macchina,
@@ -71,6 +74,35 @@ if ($Register) {
 
 $stateFile = Join-Path $env:TEMP 'procionemgr-watchdog-state.json'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+
+# ---------------------------------------------------------------------------------------------
+#  Dove finiscono i backup, e da che eta' sono "vecchi": si legge dalla sezione "Backup" di
+#  appsettings.json, la STESSA che leggono db-backup.ps1 e /admin/backup.
+#
+#  PERCHE' (2026-08-23): questa cartella e questa soglia erano scritte a mano in tre posti — qui,
+#  nello script di backup e (implicitamente) nella pagina, che guardava tutt'altra cartella e per
+#  questo dichiarava fermo un backup sano. Con tre copie, cambiare la destinazione da un solo
+#  posto significa che gli altri due continuano a guardare dove non c'e' piu' niente: il watchdog
+#  griderebbe "backup vecchio" ogni cinque minuti su un backup di stanotte, e dopo il terzo falso
+#  allarme nessuno leggerebbe piu' nemmeno quelli veri.
+#
+#  Come tutto il resto di questo script, non deve poter fallire: senza il file, senza la sezione o
+#  con un JSON rotto restano i default storici.
+function Get-BackupWatch([string]$root) {
+    $cfg = @{
+        Directory       = (Join-Path $env:USERPROFILE 'ProcioneMGR-Backup')
+        StaleAfterHours = 48
+    }
+    $settings = Join-Path $root 'ProcioneMGR\appsettings.json'
+    if (-not (Test-Path $settings)) { return $cfg }
+    try { $section = (Get-Content $settings -Raw | ConvertFrom-Json).Backup } catch { return $cfg }
+    if (-not $section) { return $cfg }
+    if (-not [string]::IsNullOrWhiteSpace($section.NightlyDirectory)) { $cfg.Directory = $section.NightlyDirectory.Trim() }
+    if ($section.StaleAfterHours -ge 1) { $cfg.StaleAfterHours = [int]$section.StaleAfterHours }
+    return $cfg
+}
+
+$backupWatch = Get-BackupWatch $repoRoot
 
 function Read-State {
     $defaults = [ordered]@{ shell = $true; engine = $true; postgres = $true; backup = $true }
@@ -188,12 +220,14 @@ else {
 #  uno script sparito, PC spento all'ora giusta. L'unica prova che regge in tutti i casi e' l'ETA'
 #  del dump piu' recente, e va guardata DA FUORI — cioe' da qui.
 #  Indipendente dall'assetto: i backup sono sempre sul disco dell'host (vedi db-backup.ps1).
-$backupDir = Join-Path $env:USERPROFILE 'ProcioneMGR-Backup'
+$backupDir = $backupWatch.Directory
 $lastBackup = Get-ChildItem -Path $backupDir -Filter 'procionemgr-*.dump' -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
-# 48h e non 24h: una notte saltata (PC spento) non e' un guasto, due lo sono. Stessa soglia di
-# db-backup.ps1 -Verify, cosi' i due strumenti non possono dare verdetti diversi.
-$backupOk = ($null -ne $lastBackup) -and (((Get-Date) - $lastBackup.LastWriteTime).TotalHours -le 48)
+# 48h e non 24h: una notte saltata (PC spento) non e' un guasto, due lo sono. La soglia e' quella
+# CONFIGURATA (sezione Backup), la stessa che usano db-backup.ps1 -Verify e /admin/backup: tre
+# strumenti che guardano lo stesso fatto non possono avere tre soglie proprie, o prima o poi danno
+# tre verdetti diversi sullo stesso backup.
+$backupOk = ($null -ne $lastBackup) -and (((Get-Date) - $lastBackup.LastWriteTime).TotalHours -le $backupWatch.StaleAfterHours)
 $backupFix = 'lancia scripts\db-backup.ps1 a mano e LEGGI l''errore; poi controlla il task "ProcioneMGR Backup DB".'
 # "GIU'" non descrive un backup vecchio: qui l'allarme deve dire DA QUANTO, altrimenti non si
 # capisce se e' una notte saltata o un guasto che dura da una settimana.

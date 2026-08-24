@@ -98,6 +98,8 @@ public sealed class ConfigurationBindingTests
         Assert.Equal(5000, options.HeritageGuard.FundingMinEventsPerSymbol);
         Assert.Equal(2019, options.HeritageGuard.FearGreedMinStartUtc.Year);
         Assert.True(options.HeritageGuard.LiquidationsEnforced);
-        Assert.Equal(new DateTime(2026, 8, 1), options.HeritageGuard.LiquidationsMinStartUtc.Date);
+        // [2026-08-24] Non più un'àncora a data: su un feed senza backfill una data già passata è
+        // una violazione perpetua. Si lega la soglia di SILENZIO, che è rientrabile.
+        Assert.Equal(12, options.HeritageGuard.LiquidationsStaleAfterHours);
     }
 }

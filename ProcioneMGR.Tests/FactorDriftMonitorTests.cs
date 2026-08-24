@@ -175,8 +175,18 @@ public sealed class FactorDriftWorkerTests : IAsyncDisposable
         return new StaticOptionsMonitor<FactorDriftOptions>(options);
     }
 
-    /// <summary>Serie con una relazione fattore→rendimento che si spegne a metà: alert atteso.</summary>
-    private static List<OhlcvData> DecayingSeries(int n, string symbol, string timeframe, int seed = 4)
+    /// <summary>
+    /// Serie con una relazione fattore→rendimento che si spegne sul CONFINE riferimento/recente:
+    /// alert atteso.
+    ///
+    /// <para>[2026-08-24] La rottura era a metà serie. Con la regola precedente — soglia assoluta —
+    /// la posizione non contava; da quando il calo si giudica contro la propria dispersione, sì:
+    /// una rottura a metà cade DENTRO il periodo di riferimento, che diventa incoerente con sé
+    /// stesso e non può fare da metro. Il decadimento che questo monitor dichiara di trovare è
+    /// quello recente, e il test ora lo pianta lì.</para>
+    /// </summary>
+    private static List<OhlcvData> DecayingSeries(
+        int n, string symbol, string timeframe, int seed = 4, double breakFraction = 0.75)
     {
         var rnd = new Random(seed);
         var candles = new List<OhlcvData>(n);
@@ -186,9 +196,9 @@ public sealed class FactorDriftWorkerTests : IAsyncDisposable
 
         for (var i = 0; i < n; i++)
         {
-            // Prima metà: forte momentum (il rendimento continua quello precedente).
-            // Seconda metà: rumore puro. Il fattore Momentum deve accorgersene.
-            var drift = i < n / 2
+            // Prima parte: forte momentum (il rendimento continua quello precedente).
+            // Coda: rumore puro. Il fattore Momentum deve accorgersene.
+            var drift = i < (int)(n * breakFraction)
                 ? prevReturn * 0.7 + (rnd.NextDouble() - 0.5) * 0.004
                 : (rnd.NextDouble() - 0.5) * 0.02;
             prevReturn = drift;
@@ -254,7 +264,27 @@ public sealed class FactorDriftWorkerTests : IAsyncDisposable
 
         var alerts = snapshot.Alerts;
         Assert.NotEmpty(alerts);
-        Assert.Contains(alerts, a => a.Report.FeatureName == "Momentum");
+
+        // [2026-08-24] Si pretende che il monitor trovi il FENOMENO piantato, non che a trovarlo
+        // sia un fattore col nome giusto. Il momentum che si spegne fa collassare tutta la
+        // famiglia — MeanReversion, RsiFactor, MacdFactor leggono la stessa struttura — e dopo la
+        // correzione per molteplicità (otto fattori giudicati insieme) non è detto che passino
+        // tutti: pretendere un nome preciso significherebbe pretendere che BH non faccia il suo
+        // mestiere proprio sulla serie in cui c'è più segnale.
+        Assert.All(alerts, a =>
+        {
+            Assert.True(Math.Abs(a.Report.ReferenceIc) > 0.15d,
+                $"{a.Report.FeatureName}: il riferimento deve essere chiaramente informativo, era {a.Report.ReferenceIc:F3}");
+            Assert.True(Math.Abs(a.Report.RecentIc) < 0.05d,
+                $"{a.Report.FeatureName}: il recente deve essersi spento, era {a.Report.RecentIc:F3}");
+        });
+
+        // E il fattore Momentum, che è quello direttamente piantato, deve comunque MOSTRARE il
+        // crollo nei suoi numeri — anche se la correzione per molteplicità lo trattiene dall'essere
+        // un allarme. Il dato non deve sparire con il verdetto.
+        var momentum = snapshot.All.SelectMany(s => s.Reports).Single(r => r.FeatureName == "Momentum");
+        Assert.True(Math.Abs(momentum.ReferenceIc) > Math.Abs(momentum.RecentIc) * 3d,
+            $"Momentum: atteso un crollo, riferimento {momentum.ReferenceIc:F3} contro recente {momentum.RecentIc:F3}");
     }
 
     [Fact]

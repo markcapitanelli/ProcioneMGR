@@ -205,9 +205,14 @@ public static class AdminConfigRules
                 "Le soglie di punti del guardiano devono essere almeno 1: a 0 il controllo è un via libera vuoto."),
             (o.HeritageGuard.FundingMinStartUtc < DateTime.UtcNow
                 && o.HeritageGuard.FearGreedMinStartUtc < DateTime.UtcNow
-                && o.HeritageGuard.LiquidationsMinStartUtc < DateTime.UtcNow
                 && o.HeritageGuard.NewsMinStartUtc < DateTime.UtcNow,
-                "Le date-àncora del guardiano devono stare nel passato: nel futuro sono una violazione perpetua.")),
+                "Le date-àncora del guardiano devono stare nel passato: nel futuro sono una violazione perpetua."),
+            // [2026-08-24] Le liquidazioni non hanno piu' un'ancora a data: erano l'esempio opposto
+            // e speculare della regola qui sopra. Una data GIA' PASSATA su un feed che esiste solo
+            // al presente e' violazione perpetua tanto quanto una data nel futuro — anzi peggio,
+            // perche' sembra ragionevole. Ora si giudica «sta ancora arrivando», che si rientra.
+            (o.HeritageGuard.LiquidationsStaleAfterHours >= 1,
+                "La soglia di silenzio delle liquidazioni dev'essere almeno 1 ora: a 0 l'accumulo risulterebbe fermo appena scritto un punto.")),
 
         DriftMonitorOptions o => Check(
             (o.IntervalHours >= 1, "L'intervallo dev'essere almeno 1 ora."),
@@ -323,6 +328,21 @@ public static class AdminConfigRules
             (o.FlushMinutes >= 1, "Il flush dev'essere almeno ogni minuto."),
             (o.StaleSeconds >= 60, "La soglia di silenzio dev'essere almeno 60 secondi: !forceOrder@arr è un feed di eventi sparsi, e i vuoti brevi sono normali."),
             (o.BlockedRetryMinutes >= 1, "La pausa dopo un endpoint bloccato dev'essere almeno 1 minuto.")),
+
+        // [2026-08-23] Backup del database. La regola che conta e' l'ultima: un percorso RELATIVO
+        // verrebbe risolto contro la directory di lavoro del processo, e quella dell'app non e'
+        // quella del Task Scheduler — la pagina guarderebbe una cartella, lo script ne riempirebbe
+        // un'altra, ed e' precisamente il difetto che questa sezione esiste per chiudere.
+        ProcioneMGR.Services.Admin.BackupOptions o => Check(
+            (o.StaleAfterHours >= 1,
+                "La soglia di stantiezza dev'essere almeno 1 ora: a 0 ogni backup risulterebbe fermo appena creato."),
+            (o.RetentionDays >= 1,
+                "La conservazione dev'essere almeno 1 giorno."),
+            (!string.IsNullOrWhiteSpace(o.ScheduledTaskName),
+                "Serve il nome dell'operazione pianificata: senza, il suo esito non e' interrogabile e la pagina saprebbe solo guardare i file."),
+            (string.IsNullOrWhiteSpace(o.NightlyDirectory) || Path.IsPathFullyQualified(o.NightlyDirectory),
+                "La cartella dei backup notturni dev'essere un percorso ASSOLUTO (oppure vuota, per %USERPROFILE%\\ProcioneMGR-Backup): "
+                + "un percorso relativo significa cartelle diverse per l'app e per il Task Scheduler.")),
 
         ExecutionParameters o => Check(
             (o.MaxSlices >= 1, "Serve almeno 1 fetta."),
