@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Data;
@@ -88,6 +88,13 @@ public sealed class EnsemblePageService(
     /// altrimenti l'etichetta mentirebbe sui candidati elencati (review 2026-08-14).
     /// </summary>
     public (string Symbol, string Timeframe)? GreyCandidatesFor { get; private set; }
+
+    /// <summary>
+    /// [RF0, 2026-08-22] Quanti candidati grigi sono stati ESCLUSI perche' misurati con la
+    /// convenzione precedente (risk-free 2% sull'equity totale). Si mostra: una lista che si
+    /// accorcia senza spiegazione si legge come «non ce ne sono», che e' falso.
+    /// </summary>
+    public int GreyCandidatesEsclusiPerConvenzione { get; private set; }
 
     /// <summary>[T2] Ultimo report di ridondanza calcolato con <see cref="EvaluateLegCorrelationAsync"/>.</summary>
     public Portfolio.LegCorrelationReport? LegCorrelation { get; private set; }
@@ -266,6 +273,7 @@ public sealed class EnsemblePageService(
             // Solo le strategie ottimizzate (walk-forward) hanno uno Sharpe atteso persistito; per le
             // altre resta null e il decay monitor mostra "in attesa" (nessuna baseline da confrontare).
             ExpectedSharpe = saved.OptimizationSharpe,
+            ExpectedSharpeAtUtc = DateTime.UtcNow,   // [RF0] convenzione del numero, vedi MetricsConvention
         });
     }
 
@@ -327,10 +335,18 @@ public sealed class EnsemblePageService(
         var symbol = Config.Symbol;
         var timeframe = Config.Timeframe;
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var raw = await db.ResearchCandidates.AsNoTracking()
+        var taglio = Optimization.MetricsConvention.RiskFreeZeroSinceUtc;
+        // [RF0, 2026-08-22] E' l'UNICO punto che confronta candidati fra run diversi SENZA alcun
+        // filtro d'eta': DedupGreyChoices ordina per HoldoutSharpe fra chiavi di run qualunque,
+        // quindi una chiave di luglio resterebbe in lista per sempre a competere con una nuova —
+        // e vincerebbe o perderebbe per ~0,5 punti di pura unita' di misura. Il taglio qui e'
+        // permanente, non transitorio.
+        var tutti = await db.ResearchCandidates.AsNoTracking()
             .Where(c => c.IsGrey && c.Symbol == symbol && c.Timeframe == timeframe)
             .OrderByDescending(c => c.RunCompletedUtc)
             .ToListAsync(ct);
+        var raw = tutti.Where(c => c.RunCompletedUtc >= taglio).ToList();
+        GreyCandidatesEsclusiPerConvenzione = tutti.Count - raw.Count;
         GreyCandidates = DedupGreyChoices(raw, MaxGreyChoices);
         GreyCandidatesFor = (symbol, timeframe);
     }
@@ -394,6 +410,7 @@ public sealed class EnsemblePageService(
             StopLossPercent = sl > 0m ? sl : null,
             TakeProfitPercent = tp > 0m ? tp : null,
             ExpectedSharpe = c.HoldoutSharpe != 0m ? c.HoldoutSharpe : null,
+            ExpectedSharpeAtUtc = DateTime.UtcNow,   // [RF0] convenzione del numero, vedi MetricsConvention
             ExpectedProfitFactor = c.HoldoutProfitFactor != 0m ? c.HoldoutProfitFactor : null,
             ExpectedMaxDrawdown = c.HoldoutMaxDrawdown != 0m ? c.HoldoutMaxDrawdown : null,
             SourceVerdict = "Grey",

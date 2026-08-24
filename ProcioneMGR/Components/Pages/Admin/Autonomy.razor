@@ -65,22 +65,34 @@
 <GuidaPanel Title="Autonomia — tutti gli automatismi della piattaforma, in un posto solo">
     <p>
         La piattaforma ha diversi cicli automatici (esecuzione a fette, ri-applica dell'ensemble,
-        promozione corsie, supervisione AI, drift monitor, sync dati). Finora si controllavano solo
-        da <code>appsettings.json</code>: questa pagina li espone tutti, con salvataggio immediato.
+        promozione corsie, supervisione AI, comitato, drift monitor, sync dati e
+        <strong>orchestratore di flotta</strong>). Questa pagina li espone tutti, con salvataggio
+        immediato.
         I valori vengono scritti in <code>appsettings.json</code> e ricaricati dall'app entro ~1
         secondo (<em>reload on change</em>) — <strong>senza riavvio</strong> per i campi marcati
         <span class="badge bg-success">a caldo</span>. I campi marcati
         <span class="badge bg-warning text-dark">riavvio</span> (gli intervalli dei timer) vengono
         salvati subito ma il nuovo valore vale dal prossimo riavvio dell'app.
     </p>
+    <p>
+        <strong>Le corsie non sono tutte uguali.</strong> Le prime @(_fleetFootprint) — l'impronta
+        storica — sono quelle che la <em>ri-applica</em> riscrive quando la pipeline propone un
+        ensemble nuovo, e le riscrive <strong>per indice</strong>. Dalla @(_fleetFootprint) in su
+        sono corsie di <em>flotta</em>: le governa l'orchestratore, che schiera la fascia grigia sui
+        posti liberi e ritira i forward test perdenti con isteresi. Un candidato grigio non è un
+        sopravvissuto pieno: è una scommessa dichiarata tale, messa in Paper perché il forward test
+        è l'unico giudice immune al multiple testing su finestre corte.
+    </p>
     <p class="mb-0">
         <strong>Confini di sicurezza (non modificabili da qui):</strong> nessun automatismo può
         portare una corsia in <strong>Live</strong> (la promozione arriva al massimo a Testnet, il
-        Live resta manuale con conferma per-ordine); il layer AI è solo advisory e può al massimo
-        porre un <em>veto</em>; la ri-applica scrive solo configurazione. Questi limiti sono nel
-        codice, non in configurazione. Le protezioni che filtrano o fermano le
-        <em>operazioni</em> (feed real-time, esposizione correlata, router di regime, watchdog)
-        stanno in <a href="admin/protections">Protezioni</a>.
+        Live resta manuale con conferma per-ordine); l'unica automazione ammessa che tocchi una
+        corsia Live è la <em>retrocessione</em> a Testnet, opt-in e in dry-run. Il layer AI è solo
+        advisory e può al massimo porre un <em>veto</em>; la ri-applica scrive solo configurazione.
+        Questi limiti sono nel codice, non in configurazione. Le protezioni che filtrano o fermano
+        le <em>operazioni</em> (feed real-time, ombra dei costi, esposizione correlata, router di
+        regime, invarianti di corsia, verifica Bitget) stanno in
+        <a href="admin/protections">Protezioni</a>.
     </p>
 </GuidaPanel>
 
@@ -2569,7 +2581,7 @@
         _sentimentSymbolsCsv = SymbolsToCsv(_sentiment.Symbols);
         // Si mostra la lista EFFETTIVA (configurata o default incorporati): il campo vuoto direbbe
         // "nessun simbolo sorvegliato" mentre il guardiano ne sorveglia sei.
-        _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols);
+        _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols());
         _drift = Clone(DriftMonitor.CurrentValue);
         _driftStagesCsv = SymbolsToCsv(_drift.MonitorStages);
         _factorDrift = Clone(FactorDriftMonitor.CurrentValue);
@@ -3000,7 +3012,7 @@
         // Campo vuoto = torna ai default incorporati (lista vuota nel POCO per la trappola del
         // binder); il campo si ri-mostra con la lista effettiva, mai vuoto.
         _sentiment.HeritageGuard.FundingSymbols = CsvToSymbols(_heritageFundingSymbolsCsv);
-        _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols);
+        _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols());
         await SaveAsync("Sentiment", _sentiment, "Sentiment");
     }
 

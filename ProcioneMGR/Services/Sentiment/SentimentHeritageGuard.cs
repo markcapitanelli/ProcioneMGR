@@ -178,7 +178,7 @@ public sealed class SentimentHeritageGuardWorker(
 
         // --- Funding: profondità PER SIMBOLO (il backfill è per mercato, e una perdita parziale
         //     — un simbolo ripristinato e cinque no — deve nominare chi manca). ---
-        var fundingSymbols = opt.EffectiveFundingSymbols;
+        var fundingSymbols = opt.EffectiveFundingSymbols();
         var fundingStats = await db.SentimentMetricPoints.AsNoTracking()
             .Where(p => p.Source == SentimentMetricSources.BinanceFutures
                         && p.Metric == SentimentMetrics.FundingRate

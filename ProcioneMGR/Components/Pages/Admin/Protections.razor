@@ -23,17 +23,29 @@
 <GuidaPanel Title="Protezioni — cosa può fermare o filtrare un'operazione, e con quali soglie">
     <p>
         Le soglie del <a href="trading">pannello sicurezza</a> agiscono sul singolo ordine di una
-        singola corsia. Qui vivono i controlli <strong>trasversali</strong>, quelli che nessuna
-        soglia scalare può esprimere: il feed che accorcia i tempi di reazione delle uscite, il
-        limite sull'esposizione <em>correlata</em> fra corsie diverse, il router che decide in quale
-        regime una strategia può operare, il watchdog che manda in quarantena una corsia con la
-        contabilità impossibile.
+        singola corsia. Qui vivono i <strong>sei</strong> controlli <strong>trasversali</strong>,
+        quelli che nessuna soglia scalare può esprimere: il <em>feed real-time</em> che accorcia i
+        tempi di reazione delle uscite, l'<em>ombra dei costi</em> che allarma quando lo slippage
+        pagato supera quello assunto, il limite sull'esposizione <em>correlata</em> fra corsie
+        diverse, il <em>router di regime</em> che decide in quale regime una strategia può operare,
+        gli <em>invarianti di corsia</em> che mandano in quarantena una contabilità impossibile, e
+        la <em>verifica Bitget</em> sull'ordine a mercato spot.
+    </p>
+    <p>
+        <strong>Due</strong> di questi hanno un interruttore <strong>separato</strong> fra
+        <em>osservare</em> e <em>decidere</em> — il feed real-time e il router di regime. Non è
+        ridondanza: si accende la misura, si guarda per settimane che i numeri siano sani, e solo
+        dopo le si dà il potere di chiudere una posizione o zittire una strategia. Un limite tarato
+        male non protegge — paralizza.
     </p>
     <p class="mb-0">
-        Tre di questi hanno un interruttore <strong>separato</strong> fra <em>osservare</em> e
-        <em>decidere</em>. Non è ridondanza: si accende la misura, si guarda per settimane che i
-        numeri siano sani, e solo dopo le si dà il potere di chiudere una posizione o zittire una
-        strategia. Un limite tarato male non protegge — paralizza.
+        <strong>Entrambi gli interruttori «decidi» sono spenti per misura, non per dimenticanza.</strong>
+        Il 2026-07-28 si è confrontato uscire <em>al tocco</em> del prezzo contro uscire a
+        <em>barra chiusa</em>: al tocco è risultato peggiore in <strong>24 configurazioni su 24</strong>,
+        quindi <code>DriveProtectiveExits</code> resta <code>false</code>. Il router di regime ha
+        <code>DriveDecisions = false</code> per lo stesso motivo: la classificazione è utile da
+        <em>guardare</em>, ma il gate su di essa non ha mai mostrato di migliorare l'esito. Se li
+        accendi, stai ribaltando una misura — falla di nuovo prima.
     </p>
 </GuidaPanel>
 

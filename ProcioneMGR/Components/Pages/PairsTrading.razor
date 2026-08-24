@@ -65,6 +65,20 @@
         <dd class="col-sm-9">Si apre una posizione quando lo z-score supera la soglia di entrata (spread anomalo), si chiude quando rientra sotto la soglia di uscita (spread tornato normale).</dd>
         <dt class="col-sm-3">Position size % (per gamba)</dt>
         <dd class="col-sm-9">La percentuale di capitale investita su CIASCUNA delle due gambe della posizione (long e short hanno lo stesso importo).</dd>
+        <dt class="col-sm-3">Fee % / Slippage % (per gamba)</dt>
+        <dd class="col-sm-9">
+            <strong>Il costo si paga su due gambe per trade, e all'andata e al ritorno:</strong>
+            quattro volte fee+slippage per ogni operazione completa. È la ragione per cui una
+            strategia su coppie ha bisogno di uno spread ampio per valere: gli stessi costi che
+            un'operazione direzionale paga due volte, qui si pagano quattro.
+            <div class="small text-muted mt-1">
+                Entrambe le manopole esistevano nel motore ma non erano esposte qui, e lo slippage
+                restava a <strong>zero</strong> mentre <a href="backtest">Backtest</a> e la ricerca
+                partivano da @ProcioneMGR.Services.Pipeline.PipelineCosts.DefaultSlippagePercent.ToString("0.###")%:
+                i risultati di questa pagina non erano confrontabili con quelli del resto della
+                piattaforma. Il default è ora allineato.
+            </div>
+        </dd>
     </dl>
 </GuidaPanel>
 

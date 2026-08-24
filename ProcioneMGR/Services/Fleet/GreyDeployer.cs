@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Data;
@@ -159,6 +159,7 @@ public sealed class GreyDeployer(
                 StopLossPercent = sl > 0m ? sl : null,
                 TakeProfitPercent = tp > 0m ? tp : null,
                 ExpectedSharpe = candidate.HoldoutSharpe != 0m ? candidate.HoldoutSharpe : null,
+                ExpectedSharpeAtUtc = DateTime.UtcNow,   // [RF0] convenzione del numero, vedi MetricsConvention
                 ExpectedProfitFactor = candidate.HoldoutProfitFactor != 0m ? candidate.HoldoutProfitFactor : null,
                 ExpectedMaxDrawdown = candidate.HoldoutMaxDrawdown != 0m ? candidate.HoldoutMaxDrawdown : null,
                 SourceVerdict = "Grey", // [T1] stessa etichetta della pipeline: il badge non dipende dal percorso di schieramento

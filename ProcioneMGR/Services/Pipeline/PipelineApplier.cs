@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Analysis;
@@ -148,6 +148,7 @@ public sealed class PipelineApplier(
         var weights = new List<(decimal weight, decimal sharpe, decimal rf)>();
         var rfKnownWeight = 0m;
         var rfWeightedSum = 0m;
+        var legacyMetrics = false;
 
         for (var lane = 0; lane < LaneCount; lane++)
         {
@@ -164,6 +165,13 @@ public sealed class PipelineApplier(
                 var globalWeight = cfg.TotalCapital * (s.CurrentAllocation <= 0m ? 0m : s.CurrentAllocation) / 100m;
                 if (globalWeight <= 0m) globalWeight = cfg.TotalCapital / Math.Max(1, cfg.Strategies.Count);
                 var sharpe = s.ExpectedSharpe ?? 0m; // unmeasured leg = 0 (conservative, never inflates)
+                // [RF0, 2026-08-22] Una gamba con uno Sharpe MISURATO ma senza timbro di convenzione
+                // (o col timbro precedente al taglio) porta dentro il risk-free del 2%: il
+                // comparatore deve saperlo e rifiutare il confronto, non mediarlo.
+                if (s.ExpectedSharpe is not null && !Optimization.MetricsConvention.IsRiskFreeZero(s.ExpectedSharpeAtUtc))
+                {
+                    legacyMetrics = true;
+                }
                 weights.Add((globalWeight, sharpe, laneRf));
                 if (laneRf > 0m) { rfKnownWeight += globalWeight; rfWeightedSum += laneRf * globalWeight; }
                 legs.Add(new LegSummary
@@ -185,6 +193,7 @@ public sealed class PipelineApplier(
             WeightedAverageRiskFactor95 = rfKnownWeight > 0m ? rfWeightedSum / rfKnownWeight : 0m,
             SurvivingLegs = legs.Count,
             DistinctSymbols = legs.Select(l => l.Symbol).Distinct().Count(),
+            HasLegacyMetrics = legacyMetrics,
             Legs = legs,
         };
     }
@@ -261,6 +270,7 @@ public sealed class PipelineApplier(
             TakeProfitPercent = probe.TakeProfitPercent > 0m ? probe.TakeProfitPercent : (autoTp > 0m ? autoTp : null),
             TrailingStopPercent = probe.TrailingStopPercent > 0m ? probe.TrailingStopPercent : null,
             ExpectedSharpe = l.HoldoutSharpe != 0m ? l.HoldoutSharpe : null,
+            ExpectedSharpeAtUtc = DateTime.UtcNow,   // [RF0] convenzione del numero, vedi MetricsConvention
             ExpectedProfitFactor = l.HoldoutProfitFactor != 0m ? l.HoldoutProfitFactor : null,
             ExpectedMaxDrawdown = l.HoldoutMaxDrawdown != 0m ? l.HoldoutMaxDrawdown : null,
             // [T1] La provenienza del verdetto viaggia con la gamba fino alla corsia: il badge

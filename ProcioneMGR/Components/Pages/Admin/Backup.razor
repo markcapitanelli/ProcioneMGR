@@ -41,6 +41,15 @@
         allarmante quando tutto andava bene, e capace di rassicurare allo stesso modo se il notturno si
         fosse fermato davvero. La destinazione dello script è parametrica, quindi non è ricopiata qui:
         la sezione <code>Backup</code> è l'unica fonte, e la legge sia l'app sia lo script.
+        <div class="mt-1">
+            @* Recuperato dalla Guida precedente, che descriveva il difetto invece di risolverlo: questi
+               due fatti restano veri e non si leggono da nessun'altra parte in pagina. *@
+            Il CronJob <code>dbbackup-nightly</code> nel cluster è sospeso <em>di proposito</em>: con un
+            <code>emptyDir</code> i backup verrebbero creati e persi alla terminazione del pod — per
+            questo il notturno passa dall'host. E il notturno è già morto una volta per sei notti di
+            fila in silenzio (2026-08-17), perché il task puntava a un worktree con la sua
+            configurazione stantia: è il caso che la scheda qui sotto ora riconosce e nomina da sola.
+        </div>
     </div>
     <dl class="row mb-0">
         <dt class="col-sm-3">Crea backup ora</dt>

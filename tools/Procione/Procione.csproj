@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Il comando si chiama `procione`, non `Procione`: e' quello che si digita. -->
+    <AssemblyName>procione</AssemblyName>
+    <RootNamespace>Procione</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Parsing e Verdicts sono la parte che puo' mentire in silenzio: la suite li prova contro
+         casi noti, incluso il caso sano (che deve restare muto). -->
+    <InternalsVisibleTo Include="ProcioneMGR.Tests" />
+  </ItemGroup>
+
+  <!--
+    NESSUN ProjectReference e NESSUN pacchetto NuGet, di proposito.
+
+    Questa e' la plancia di comando: deve poter dire "il guscio non compila" o "Postgres e' giu'"
+    ANCHE quando il guscio non compila e Postgres e' giu'. Se dipendesse da ProcioneMGR.csproj,
+    un errore di compilazione nel monolite renderebbe muto proprio lo strumento che serve a
+    diagnosticarlo. Se dipendesse da NuGet, non partirebbe a rete staccata, che e' esattamente
+    lo scenario in cui la piattaforma va rimessa in piedi (vedi build-images-local.ps1).
+
+    Conseguenza accettata: la plancia parla con la piattaforma solo da FUORI (HTTP, TCP, docker,
+    kubectl, file), mai leggendone i tipi. E' un vincolo, ed e' il punto.
+  -->
+
+</Project>

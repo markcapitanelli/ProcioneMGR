@@ -2126,6 +2126,161 @@ sarebbe la classe del worker morto su un'OCE.
 - [ ] Il `DisplayName` della gamba grigia non porta l'impronta: in `/trading` due gambe della stessa
       terna su corsie diverse restano indistinguibili.
 
+---
+
+## Il risk-free sottratto a capitale che non lavorava (2026-08-22)
+
+*Documento completo: [`docs/audit/35_RISK_FREE_2026-08-22.md`](audit/35_RISK_FREE_2026-08-22.md).
+Trovato lavorando sul benchmark passivo; misurato con tre indagini indipendenti, ciascuna passata
+sotto uno scettico, e una sintesi che ha dovuto risolvere sei difetti fatali.*
+
+`Statistics.SharpeRatio` sottraeva un risk-free del 2% ai rendimenti della **curva di equity**, ma è
+investito solo `PositionSizePercent` del capitale e il cash non rende nulla. Si addebitava il
+costo-opportunità del capitale **intero** a rendimenti che il capitale intero non ha prodotto.
+
+**Perché è doppio conteggio e non prudenza**: accreditare rf a tutta l'equity e poi sottrarlo — la
+convenzione contabilmente corretta — dà **esattamente lo stesso Sharpe di rf = 0** (`r'ᵢ = rᵢ + rf_pp`
+⇒ `(media′ − rf_pp)/σ = media/σ`), verificato a quattro decimali. Quindi rf = 0 **è** quella
+convenzione, a costo zero.
+
+### Quanto costava
+
+Dazio `rf/σ` su 12.967 candidati: mediana **0,545 punti di Sharpe**, q1 0,362, q3 0,749 — **più
+dell'intero gate `minHoldoutSharpe = 0,5`** che li giudicava. E **non uniforme**: dentro lo stesso
+run, RegimeConditional 0,625 e Composite 0,618 contro Stochastic 0,310 e PriceSmaCross 0,345.
+**Penalizzava il doppio proprio il profilo selettivo intraday che questa piattaforma cerca**, quindi
+non spostava solo la soglia — **cambiava la classifica**.
+
+Conseguenza più netta: il quintile a σ più bassa aveva **1 sopravvissuto su 2.166**; con rf = 0 ne
+avrebbe 92. La piattaforma era **cieca a un quinto del proprio spazio di ricerca**.
+
+**25 chiamanti su 25** prendevano il default. L'unico punto del repo che passava un rf esplicito era
+un **test**, e lo passava a **zero**, «per far tornare due numeri che altrimenti non tornavano». E due
+convenzioni si incontravano **nella stessa invocazione**: `SelectionValidator` riceve gli Sharpe dei
+tentativi a rf = 2% e ricalcola l'osservato a rf = 0.
+
+### La parte non negoziabile
+
+`AutoReapply` e la campagna sono accesi, e riscrivono le corsie da soli. Senza freno, al primo run il
+comparatore avrebbe confrontato **due generazioni di numeri**: le 8 gambe schierate valgono 1,934
+congelate e ~2,395 ri-misurate (**+23,9% contro un'isteresi del 10%**), e il gate z scatta a 0,55
+contro un dazio mediano di 0,545 — **margine del 2%, cioè una coincidenza**. Quindi nello stesso
+commit: timbro di convenzione sulla gamba (`ExpectedSharpeAtUtc`) e **rifiuto fail-closed** del
+comparatore, che si sblocca ri-applicando l'ensemble.
+
+### Lo storico
+
+Niente bonifica, niente colonna: una **data di taglio** (`MetricsConvention`). La tabella è derivata e
+si autodistrugge al primo «Ricostruisci»; la data che serve (`RunCompletedUtc`) c'è già ed è stabile
+fra i rebuild; e riscrivere i numeri con l'identità di correzione produrrebbe, dentro una tabella di
+misure, valori che nessun run ha mai prodotto — ed è cieca su 926 righe.
+
+### Aperto — decisioni del proprietario, rispondibili con un numero
+
+- [ ] **`minHoldoutSharpe`** (0,5): lasciarla — allargo del 50%, righe oltre il gate da 1.775 a
+      **2.670** — o portarla a **0,97** (iso-numerosità: stesso numero di ammessi, ma l'89,6% è la
+      stessa identità, 185 righe cambiano perché è cambiato il metro)?
+- [ ] **`MinSharpeRealized` 0,8 / `DemoteSharpeThreshold` 0,5**, entrambi con automazione accesa: lo
+      Sharpe di corsia sale di **0,36–1,01**. Promuovere diventa più facile, retrocedere più
+      difficile — entrambe permissive. Fermi o ritarati?
+- [ ] **`Fleet.RetireSharpeThreshold`**: si annunceranno meno ritiri.
+- [ ] Il **DSR** non si dichiara e non si ritara: l'osservato era già a rf = 0 e si sposta solo SR*,
+      il cui segno non è deducibile per inversione. Si legge sul primo run vero dal log `dsrMax`, ora
+      reso incondizionato.
+
+### Una coda che solo il merge poteva far vedere (2026-08-23)
+
+Il benchmark passivo (#105) e il risk-free zero (#106) erano corretti ciascuno per conto suo, e
+ciascuno verde sul proprio ramo. Il merge li ha fatti incontrare e un test è caduto:
+`EccessoCalcolatoARiskFreeZERO_SuEntrambeLeGambe` chiudeva pretendendo che l'eccesso calcolato a
+rf = 0 **differisse** da quello calcolato col *default* — vero quando il default era 2%, tautologia
+falsa da quando il default è 0.
+
+Il test aveva ragione a cadere, e la tentazione era di addomesticarlo. Non è stato fatto: il rischio
+che quel guardiano copre non è mai stato «il default vale 2%», è **«qualcuno rimette un risk-free
+non nullo da qualche parte»**. Quindi il confronto si è spostato su un rf esplicitamente non nullo —
+che resta diverso qualunque cosa faccia il default — e si è aggiunta l'asserzione che oggi le due
+strade coincidono, così se il default cambiasse di nuovo la riga cadrebbe di nuovo.
+
+Lezione registrata: **la CI verde su due rami non è la CI verde sul merge**, e un'asserzione
+formulata contro un *default* invece che contro il *fatto* che vuole proteggere invecchia insieme a
+quel default.
+
+---
+
+## Le automazioni dentro un solo programma (2026-08-23)
+
+*Richiesta del proprietario: «il fatto che gli script funzionino tutti separatamente mi infastidisce
+un po', soprattutto vedere una finestra PowerShell che si esegue ogni x minuti aprendosi sopra tutti
+gli altri lavori».*
+
+### Cosa c'era davvero
+
+Non due meccanismi, **tre**, tutti fuori dalla plancia di comando che pure esisteva già:
+
+| | Cosa | Cosa si vedeva |
+|---|---|---|
+| task `ProcioneMGR Watchdog` | `powershell.exe -File watchdog.ps1`, `PT5M`, `LogonType=Interactive` | una console davanti a tutto, **288 volte al giorno** |
+| task `ProcioneMGR Backup DB` | `powershell.exe -File db-backup.ps1`, 03:30 | idem, una volta a notte |
+| `Startup\ProcioneMGR-BringUp.cmd` | `start /min powershell -File bringup.ps1` | una finestra minimizzata a ogni logon |
+
+Il terzo non era nemmeno un'attività pianificata: era il **ripiego non elevato** di
+`bringup.ps1 -Register`, depositato in Esecuzione automatica il 2026-08-02 e da allora mai più
+guardato da nessuno. È il motivo per cui `procione stato` diceva «BringUp: non registrata» pur
+girando a ogni accensione.
+
+### La forma della correzione
+
+La plancia **non riscrive** gli script: li chiama. Quel principio regge anche qui — gli stessi
+`watchdog.ps1` e `db-backup.ps1`, gli stessi argomenti, la stessa cadenza. Cambia **chi** li chiama:
+un supervisore residente dentro `procione`, che li esegue con l'output **catturato**
+(`CreateNoWindow`). Nessuna finestra nasce più da sola.
+
+Il fastidio era la parte visibile. La parte seria è che quegli esiti si potevano leggere **solo**
+aprendo il Task Scheduler — ed è esattamente così che il dump notturno poté fallire **sei notti di
+fila** (2026-08-17) senza che nessuno se ne accorgesse: il task usciva `1`, e quel codice non lo
+leggeva nessuno. Ora l'esito di ogni giro sta nel quadro accanto a tutto il resto, e c'è un log solo
+(`procione log supervisore`) dove prima non ce n'era nessuno.
+
+| # | Cosa | Stato |
+|---|---|---|
+| P1 | La plancia consolidata su `master` (era lavoro non committato in un worktree, su base più vecchia) | fatto |
+| P2 | `Schedule` — cadenza a intervallo, giornaliera, all'avvio; **funzioni pure, l'orologio è un parametro** | fatto, 12 test |
+| P3 | `Supervisor` — ciclo residente, esclusione a mutex, battito osservabile, log con rotazione, arresto pulito a evento | fatto, verificato dal vivo |
+| P4 | `procione attivita migra` — da tre meccanismi a **uno**: registra `ProcioneMGR Plancia` al logon, poi ritira i vecchi | fatto |
+| P5 | Copertura completa: nessuno dei 19 script resta fuori (`segreti`, `postgres`, `veglia`, `argocd installa/ripunta`, `esegui`, `strumenti`) | fatto |
+| P6 | I verdetti nuovi: supervisore, per-lavoro, doppione, backup | fatto, 21 test |
+
+### Tre decisioni che valeva la pena scrivere
+
+**Il recupero avviene una volta sola.** Un'occorrenza persa perché il PC era spento non si salta
+(è la regola `-StartWhenAvailable` del Task Scheduler, e la ragione per cui esiste), ma si tiene
+l'**ultima** esecuzione, non l'elenco delle mancate: dopo sei notti spente parte **un** backup, non
+sei. E l'ultima esecuzione del backup si legge dal **disco** — il dump più recente — non dalla
+memoria del supervisore: è il dato osservabile, e copre il backup fatto a mano, quello fatto dal
+vecchio task prima della migrazione, e la macchina che ha cambiato repository.
+
+**Il verdetto non deve mentire nemmeno per eccesso di zelo.** La prima stesura diceva «veglia e
+backup NON stanno girando» ogni volta che il supervisore era spento. Su una macchina non ancora
+migrata è **falso**: girano, dal Task Scheduler, ed è l'unica cosa che veglia sulla piattaforma. Il
+verdetto ora distingue i due casi, e chiama il task vecchio **DOPPIONE** solo quando il supervisore
+c'è davvero. Un rosso su una cosa che funziona è il modo più rapido di rendere inutile un quadro.
+
+**Togliere qualcosa che funzionava è un peggioramento travestito da pulizia.** Il bring-up al logon
+c'era; il lavoro `avvio` nasce spento perché dura minuti e non è ciò che ci si aspetta aprendo una
+console. Quindi la migrazione lo **accende** — ma solo se sta togliendo un bring-up al logon che
+esisteva già. E «all'avvio» significa una volta per **sessione**, non per processo: altrimenti
+riaprire la plancia farebbe ripartire un bring-up da venti minuti, e la si imparerebbe a non aprire.
+
+### Il lampo che resta
+
+Un'applicazione console avviata dal Task Scheduler riceve una console **dall'host**, e non esiste
+flag di avvio che la sopprima: l'unico modo è che il processo la nasconda da sé
+(`ShowWindow(GetConsoleWindow(), SW_HIDE)`, in `--muto`). Resta quindi un lampo di qualche
+millisecondo, **una volta al logon**, al posto di una finestra ogni cinque minuti per sempre.
+
+---
+
 ## La pagina che non sapeva dove fosse il backup (2026-08-23)
 
 `/admin/backup` riportava **«Nessun backup presente in …\ProcioneMGR\backup»**. Nella cartella dei
