@@ -53,10 +53,10 @@ public sealed class SentimentHeritageSnapshotTests
         // La lista è vuota nel POCO per la trappola del binder (che APPENDE ai default): i default
         // veri vivono in DefaultFundingSymbols e valgono quando la config non dice nulla.
         var options = new SentimentHeritageGuardOptions();
-        Assert.Equal(["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"], options.EffectiveFundingSymbols);
+        Assert.Equal(["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"], options.EffectiveFundingSymbols());
 
         options.FundingSymbols = ["BTC"];
-        Assert.Equal(["BTC"], options.EffectiveFundingSymbols);
+        Assert.Equal(["BTC"], options.EffectiveFundingSymbols());
     }
 }
 
