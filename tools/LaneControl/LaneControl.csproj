@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>LaneControl</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      SOLO i contratti: i .proto, i client generati e l'interceptor del segreto condiviso — le
+      stesse tre cose che usa il guscio per parlare col motore. NESSUN riferimento a
+      ProcioneMGR: questo strumento non deve poter toccare il database, la master key o le
+      credenziali degli exchange. Puo' dire al motore «parti» e «fermati», e nient'altro.
+    -->
+    <ProjectReference Include="..\..\ProcioneMGR.Contracts\ProcioneMGR.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

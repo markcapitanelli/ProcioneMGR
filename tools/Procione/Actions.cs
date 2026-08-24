@@ -598,6 +598,7 @@ internal static class Actions
     {
         (string Nome, string Cosa, string Uso)[] elenco =
         [
+            ("LaneControl",   "le corsie di trading: stato, avvio, arresto", "stato | avvia <tutte|0,1> --modalita paper | ferma <tutte|0,1>"),
             ("DbBackup",      "backup/verify/list/restore del database", "backup | verify [file] | list [dir] | restore [file]"),
             ("FuturesVerify", "verifica LIVE dei Futures, solo lettura (testnet/demo)", "nessun argomento"),
             ("SpotVerify",    "verifica LIVE dello spot Bitget, solo lettura", "nessun argomento"),
@@ -768,6 +769,31 @@ internal static class Actions
 
     /// <summary>Un giro di veglia adesso, sotto gli occhi di chi guarda.</summary>
     public static int Watchdog() => Proc.Script("watchdog.ps1");
+
+    /// <summary>
+    /// Le corsie di trading. Delega a <c>tools/LaneControl</c>, che parla col motore per lo stesso
+    /// gRPC del guscio e con lo stesso segreto condiviso.
+    ///
+    /// PERCHE' PASSA DA UNO STRUMENTO e non lo fa la plancia: la plancia non ha, di proposito,
+    /// nessun riferimento ai progetti dell'applicazione — deve poter dire «il guscio non compila»
+    /// anche quando il guscio non compila. Il gRPC vive quindi dove vivono i contratti.
+    ///
+    /// LIVE non passa di qui: lo strumento lo rifiuta e non ha un flag per aggirarlo. Verso Live si
+    /// va dalla pagina /trading, con la conferma umana.
+    /// </summary>
+    public static int Lanes(string[] argomenti)
+    {
+        if (argomenti.Length == 0)
+        {
+            Ui.Info("procione corsie stato                        cosa sta girando, e in che modalita'");
+            Ui.Info("procione corsie avvia tutte --modalita paper  avvia le corsie");
+            Ui.Info("procione corsie ferma tutte                   le ferma");
+            Ui.Info("");
+            Ui.Warn("Live NON si avvia da qui: si passa da /trading, dove la conferma umana e' obbligatoria.");
+            return 0;
+        }
+        return Tools("LaneControl", argomenti);
+    }
 
     /// <summary>
     /// Lo sportello per tutto il resto: qualunque script di <c>scripts/</c>, con i suoi argomenti.
