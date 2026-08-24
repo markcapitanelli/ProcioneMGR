@@ -2576,7 +2576,7 @@
         _sentimentSymbolsCsv = SymbolsToCsv(_sentiment.Symbols);
         // Si mostra la lista EFFETTIVA (configurata o default incorporati): il campo vuoto direbbe
         // "nessun simbolo sorvegliato" mentre il guardiano ne sorveglia sei.
-        _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols);
+        _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols());
         _drift = Clone(DriftMonitor.CurrentValue);
         _driftStagesCsv = SymbolsToCsv(_drift.MonitorStages);
         _factorDrift = Clone(FactorDriftMonitor.CurrentValue);
@@ -3007,7 +3007,7 @@
         // Campo vuoto = torna ai default incorporati (lista vuota nel POCO per la trappola del
         // binder); il campo si ri-mostra con la lista effettiva, mai vuoto.
         _sentiment.HeritageGuard.FundingSymbols = CsvToSymbols(_heritageFundingSymbolsCsv);
-        _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols);
+        _heritageFundingSymbolsCsv = SymbolsToCsv(_sentiment.HeritageGuard.EffectiveFundingSymbols());
         await SaveAsync("Sentiment", _sentiment, "Sentiment");
     }
 

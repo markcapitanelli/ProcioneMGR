@@ -105,8 +105,20 @@ public sealed class SentimentHeritageGuardOptions
     public static readonly IReadOnlyList<string> DefaultFundingSymbols =
         ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
 
-    /// <summary>Simboli effettivi: la lista configurata, o i default incorporati se è vuota.</summary>
-    public IReadOnlyList<string> EffectiveFundingSymbols =>
+    /// <summary>
+    /// Simboli effettivi: la lista configurata, o i default incorporati se è vuota.
+    ///
+    /// <para>È un METODO e non una proprietà calcolata, come <c>EffectiveStages()</c> su
+    /// <c>DriftMonitorOptions</c> e i tre "effettivi" di <c>FactorDriftOptions</c>:
+    /// <c>AppConfigWriter.SaveSectionAsync</c> riscrive la sezione serializzando il POCO
+    /// <b>intero</b>, e System.Text.Json serializza anche le get-only — al primo «Salva» del
+    /// pannello Sentiment di /admin/autonomy sarebbe comparsa in appsettings.json una chiave
+    /// <c>Sentiment:HeritageGuard:EffectiveFundingSymbols</c> che il POCO non sa rileggere.
+    /// <c>ConfigurationKeyUiCoverageTests</c> non l'avrebbe vista — salta le sole-lettura, quindi
+    /// resta verde mentre il file si sporca: il guardiano giusto è
+    /// <c>ConfigPocoComputedPropertyTests</c>, nato da questo caso.</para>
+    /// </summary>
+    public IReadOnlyList<string> EffectiveFundingSymbols() =>
         FundingSymbols.Count > 0 ? FundingSymbols : DefaultFundingSymbols;
 
     /// <summary>

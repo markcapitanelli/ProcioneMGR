@@ -3,6 +3,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcioneMGR.Services.Config;
+using ProcioneMGR.Services.Sentiment;
 
 namespace ProcioneMGR.Tests;
 
@@ -181,6 +182,66 @@ public sealed class AppConfigWriterTests : IDisposable
         await Writer().SaveSectionAsync("Section", new OptionsWithNested { Enabled = true, Child = null });
         section = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!["Section"]!.AsObject();
         Assert.Null(section["Child"]?.GetValue<object?>());
+    }
+
+    /// <summary>
+    /// <b>Il POCO VERO, non un campione.</b> La sezione <c>Sentiment</c> si salva dal pannello di
+    /// /admin/autonomy con questo stesso writer: qui si scrive il file e si legge cosa c'è finito
+    /// dentro, invece di ragionare su cosa dovrebbe esserci.
+    ///
+    /// <para>Il difetto che questo test blocca: <c>EffectiveFundingSymbols</c> era una proprietà
+    /// calcolata <i>get-only</i>, e System.Text.Json serializza anche quelle — al primo «Salva»
+    /// sarebbe comparsa in appsettings.json una chiave <c>HeritageGuard:EffectiveFundingSymbols</c>
+    /// che il POCO non ha come setter, cioè un dato che nessuno rilegge e che al giro dopo qualcuno
+    /// scambia per configurazione. È la stessa trappola già pagata su <c>FactorDriftOptions</c>, e
+    /// la ragione per cui i valori "effettivi" dei POCO di configurazione sono METODI.</para>
+    ///
+    /// <para>L'asserzione non nomina la sola proprietà colpevole: pretende che <b>ogni</b> chiave
+    /// scritta corrisponda a una proprietà scrivibile del POCO. Una calcolata aggiunta domani a
+    /// <c>SentimentOptions</c> cade qui senza che nessuno debba ricordarsi di aggiornare il test.</para>
+    /// </summary>
+    [Fact]
+    public async Task SentimentPoco_WritesOnlySettableKeys_NoComputedProperties()
+    {
+        await File.WriteAllTextAsync(SettingsPath, """{ "AllowedHosts": "*" }""");
+
+        await Writer().SaveSectionAsync("Sentiment", new SentimentOptions());
+
+        var sentiment = JsonNode.Parse(await File.ReadAllTextAsync(SettingsPath))!["Sentiment"]!.AsObject();
+        AssertOnlySettableKeys(typeof(SentimentOptions), sentiment, "Sentiment");
+
+        // La calcolata che ha motivato il test, nominata esplicitamente: se tornasse a essere una
+        // property, il messaggio d'errore direbbe subito quale.
+        Assert.False(sentiment["HeritageGuard"]!.AsObject().ContainsKey("EffectiveFundingSymbols"),
+            "EffectiveFundingSymbols è tornata a essere una proprietà: SaveSectionAsync la scrive in "
+            + "appsettings.json come chiave inventata. Deve restare un METODO.");
+    }
+
+    /// <summary>
+    /// Ogni chiave scritta è una proprietà scrivibile del POCO (o una <c>_comment*</c> per il
+    /// lettore umano), ricorsivamente sui POCO annidati — dove vive <c>Sentiment:HeritageGuard</c>.
+    /// </summary>
+    private static void AssertOnlySettableKeys(Type poco, JsonObject written, string path)
+    {
+        var settable = poco
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Where(p => p.GetSetMethod() is not null)
+            .ToDictionary(p => p.Name, p => p, StringComparer.Ordinal);
+
+        foreach (var (key, value) in written)
+        {
+            if (key.StartsWith('_')) continue; // documentazione, preservata di proposito
+
+            Assert.True(settable.ContainsKey(key),
+                $"'{path}:{key}' è finita in appsettings.json ma il POCO {poco.Name} non ha un setter "
+                + "che la rilegga: è una proprietà calcolata serializzata per sbaglio. Trasformala in "
+                + "un metodo (come EffectiveStages() su DriftMonitorOptions) o marcala [JsonIgnore].");
+
+            if (value is JsonObject nested)
+            {
+                AssertOnlySettableKeys(settable[key].PropertyType, nested, $"{path}:{key}");
+            }
+        }
     }
 
     private enum SampleMode { First, Second }
