@@ -95,7 +95,10 @@ public sealed class SentimentHeritageGuardWorkerTests : IAsyncDisposable
         FundingMinEventsPerSymbol = 50,
         FearGreedMinStartUtc = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         FearGreedMinPoints = 30,
-        LiquidationsMinStartUtc = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+        // [2026-08-24] Le liquidazioni non hanno più un'àncora a data: si giudica l'accumulo
+        // (abbastanza punti + un punto recente), che è l'unica cosa che un feed senza backfill può
+        // rispettare — e l'unica soglia da cui può rientrare.
+        LiquidationsStaleAfterHours = 12,
         LiquidationsMinPoints = 20,
         // [I15] Nei test la riga notizie è SORVEGLIATA: il default di produzione è spento, ma un
         // default spento nei test renderebbe verdi anche le asserzioni su una riga che non giudica.
@@ -155,8 +158,12 @@ public sealed class SentimentHeritageGuardWorkerTests : IAsyncDisposable
         await SeedPointsAsync(dbFactory, SentimentMetricSources.BinanceFutures, SentimentMetrics.FundingRate, "BTC", DeepStart, 60);
         await SeedPointsAsync(dbFactory, SentimentMetricSources.BinanceFutures, SentimentMetrics.FundingRate, "ETH", DeepStart, 60);
         await SeedPointsAsync(dbFactory, SentimentMetricSources.FearGreed, SentimentMetrics.FearGreedIndex, "", DeepStart, 40, TimeSpan.FromDays(1));
+        // [2026-08-24] Le liquidazioni si ancorano ad ADESSO e non a una data fissa: da quando si
+        // giudicano come ACCUMULO, «sana» vuol dire «ha abbastanza punti E ne sta ancora
+        // ricevendo». Una semina a data fissa invecchiava da sola e avrebbe reso il test verde
+        // oggi e rosso fra un mese, senza che nulla fosse cambiato nel codice.
         await SeedPointsAsync(dbFactory, SentimentMetricSources.BinanceLiquidations, SentimentMetrics.LongLiquidationNotional, "BTC",
-            new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc), 30, TimeSpan.FromHours(1));
+            DateTime.UtcNow.AddHours(-30), 30, TimeSpan.FromHours(1));
         await SeedScoredNewsAsync(dbFactory, new DateTime(2026, 7, 24, 0, 0, 0, DateTimeKind.Utc), 15);
     }
 
@@ -356,13 +363,29 @@ public sealed class SentimentHeritageGuardWorkerTests : IAsyncDisposable
 
         var newly = await worker.RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(5, newly.Count); // BTC, ETH, F&G, liquidazioni, notizie: tutte assenti
+        Assert.Equal(5, newly.Count); // BTC, ETH, F&G, liquidazioni, notizie: tutte violate
         var alert = Assert.Single(notifier.Sent);
-        Assert.Contains("5 serie-patrimonio", alert.Title);
+
+        // [2026-08-24] Il titolo nomina le sole ACCORCIATE, che sono quattro: funding BTC ed ETH,
+        // Fear & Greed e notizie. Sono serie con una storia ricostruibile, e uno zero su di loro è
+        // la perdita di patrimonio che questo guardiano esiste per vedere.
+        Assert.Contains("4 serie-patrimonio", alert.Title);
+        Assert.Contains("ACCORCIATE", alert.Title);
         Assert.Contains("Funding BTC", alert.Body);
         Assert.Contains("Fear & Greed", alert.Body);
-        Assert.Contains("Liquidazioni", alert.Body);
         Assert.Contains("Notizie con punteggio", alert.Body);
+
+        // Le liquidazioni stanno nell'ALTRA sezione, e la conseguenza dichiarata è diversa: nessun
+        // componente le legge, quindi nessun calcolo in corso è alterato.
+        Assert.Contains("MAI CONSEGNATO", alert.Body);
+        Assert.Contains("Liquidazioni", alert.Body);
+        Assert.Contains("nessun calcolo in corso ne è alterato", alert.Body);
+
+        // E la frase che valeva per tutte deve valere solo per le prime.
+        var carry = alert.Body.IndexOf("Carry e backtest a leva", StringComparison.Ordinal);
+        var maiConsegnato = alert.Body.IndexOf("MAI CONSEGNATO", StringComparison.Ordinal);
+        Assert.True(carry >= 0 && maiConsegnato > carry,
+            "La conseguenza sul carry deve stare nella sezione delle serie accorciate, non in quella delle fonti mai partite.");
     }
 
     [Fact]

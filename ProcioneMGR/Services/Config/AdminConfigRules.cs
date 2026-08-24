@@ -205,9 +205,14 @@ public static class AdminConfigRules
                 "Le soglie di punti del guardiano devono essere almeno 1: a 0 il controllo è un via libera vuoto."),
             (o.HeritageGuard.FundingMinStartUtc < DateTime.UtcNow
                 && o.HeritageGuard.FearGreedMinStartUtc < DateTime.UtcNow
-                && o.HeritageGuard.LiquidationsMinStartUtc < DateTime.UtcNow
                 && o.HeritageGuard.NewsMinStartUtc < DateTime.UtcNow,
-                "Le date-àncora del guardiano devono stare nel passato: nel futuro sono una violazione perpetua.")),
+                "Le date-àncora del guardiano devono stare nel passato: nel futuro sono una violazione perpetua."),
+            // [2026-08-24] Le liquidazioni non hanno piu' un'ancora a data: erano l'esempio opposto
+            // e speculare della regola qui sopra. Una data GIA' PASSATA su un feed che esiste solo
+            // al presente e' violazione perpetua tanto quanto una data nel futuro — anzi peggio,
+            // perche' sembra ragionevole. Ora si giudica «sta ancora arrivando», che si rientra.
+            (o.HeritageGuard.LiquidationsStaleAfterHours >= 1,
+                "La soglia di silenzio delle liquidazioni dev'essere almeno 1 ora: a 0 l'accumulo risulterebbe fermo appena scritto un punto.")),
 
         DriftMonitorOptions o => Check(
             (o.IntervalHours >= 1, "L'intervallo dev'essere almeno 1 ora."),

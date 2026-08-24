@@ -153,10 +153,35 @@ public sealed class FeatureDriftWorker(
         {
             // Non è un guasto ed è l'esito normale finché nessun modello è schierato: si dichiara,
             // invece di lasciare una tabella vuota che si legge come «non ha girato».
-            logger.LogInformation(
-                "Tick drift: nessun modello negli stage sorvegliati ({Stages}) su {Salvati} salvati — niente da confrontare.",
-                string.Join(", ", opt.EffectiveStages()), salvati);
-            snapshot?.Replace([], checkedAt);
+            var motivo = $"nessun modello negli stage sorvegliati ({string.Join(", ", opt.EffectiveStages())}) su {salvati} salvati";
+            logger.LogInformation("Tick drift: {Motivo} — niente da confrontare.", motivo);
+
+            // [2026-08-24] LA RIGA SENTINELLA, e non più un `return` muto.
+            //
+            // Questo ramo usciva PRIMA di scrivere qualunque riga, quindi un tick senza soggetto
+            // non lasciava traccia in tabella. Conseguenza: all'avvio successivo l'idratazione
+            // ripescava l'ULTIMO tick con righe — quello del 2026-08-19, con 156 allarmi su
+            // modelli che nel frattempo [I6c] ha smesso di sorvegliare — e la Home resuscitava
+            // una fotografia morta. Non era una scheda ferma: era bistabile e zombie, perché il
+            // tick la svuotava in memoria e il riavvio la rimetteva, all'infinito.
+            //
+            // È anche il principio che questa classe DICHIARA poche righe più in basso e che
+            // valeva ovunque tranne che nell'unico caso che si verifica davvero: «ogni check
+            // produce UNA riga per modello, anche quando è tutto pulito, così l'assenza di righe
+            // si distingue da: il worker non sta girando».
+            //
+            // ModelId = 0 non collide: nessun SavedMlModel ha quell'id (identity da 1) e la
+            // colonna non è una FK. Nessuna migrazione.
+            var sentinella = new DriftCheckResult
+            {
+                CheckedAtUtc = checkedAt,
+                ModelId = 0,
+                ModelName = "(nessun modello sorvegliato)",
+                Overall = DriftSeverity.None,
+                SkipReason = motivo,
+            };
+            await PersistAsync([sentinella], checkedAt, ct);
+            snapshot?.Replace([FeatureDriftSnapshot.FromRow(sentinella)], checkedAt, registrySize: salvati);
             metrics?.RecordDriftTick(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, 0, 0, 0);
             return;
         }
@@ -306,21 +331,12 @@ public sealed class FeatureDriftWorker(
             });
         }
 
-        if (rows.Count > 0)
-        {
-            await using var db = await dbFactory.CreateDbContextAsync(ct);
-            db.DriftCheckResults.AddRange(rows);
-            await db.SaveChangesAsync(ct);
-            // Prune nello stesso giro: lo storico oltre la retention non serve a nessuno e la
-            // tabella cresce di N modelli per tick, per sempre.
-            var cutoff = checkedAt.AddDays(-ResultRetentionDays);
-            await db.DriftCheckResults.Where(r => r.CheckedAtUtc < cutoff).ExecuteDeleteAsync(ct);
-        }
+        await PersistAsync(rows, checkedAt, ct);
 
         // [I6] La fotografia per la Home si aggiorna SEMPRE a fine tick, anche quando non c'è nessun
         // allarme: «zero allarmi su 53 modelli di cui 50 saltati» è un'informazione, e senza la
         // fotografia la Home non potrebbe distinguerla da «non ho ancora guardato».
-        snapshot?.Replace(rows.Select(FeatureDriftSnapshot.FromRow), checkedAt);
+        snapshot?.Replace(rows.Select(FeatureDriftSnapshot.FromRow), checkedAt, registrySize: salvati);
 
         // [I6] Il costo del tick, misurato e dichiarato. La riga di riepilogo esiste perché il
         // numero deve poter essere letto anche da chi guarda i log e non la pagina — e perché i
@@ -331,6 +347,28 @@ public sealed class FeatureDriftWorker(
         logger.LogInformation(
             "Tick drift: {Models} modelli ({Verdicts} con verdetto, {Skipped} saltati), {Candles} candele recenti lette, {Features} feature valutate in {Elapsed:F0} ms.",
             models.Count, rows.Count - skipped, skipped, recentCandlesRead, featuresEvaluated, elapsedMs);
+    }
+
+    /// <summary>
+    /// Scrive le righe del tick e pota lo storico oltre la retention.
+    ///
+    /// <para>Estratto perché lo usa anche il ramo SENZA soggetto: finché la persistenza viveva
+    /// solo in fondo a <see cref="TickAsync"/>, il ramo che esce prima non poteva lasciare traccia
+    /// — ed è esattamente da lì che nasceva la fotografia zombie. Il prune sta qui e non altrove
+    /// perché è l'unico DELETE su questa tabella in tutta la codebase: se non gira in un tick, non
+    /// gira mai.</para>
+    /// </summary>
+    private async Task PersistAsync(IReadOnlyList<DriftCheckResult> rows, DateTime checkedAt, CancellationToken ct)
+    {
+        if (rows.Count == 0) return;
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        db.DriftCheckResults.AddRange(rows);
+        await db.SaveChangesAsync(ct);
+        // Prune nello stesso giro: lo storico oltre la retention non serve a nessuno e la
+        // tabella cresce di N modelli per tick, per sempre.
+        var cutoff = checkedAt.AddDays(-ResultRetentionDays);
+        await db.DriftCheckResults.Where(r => r.CheckedAtUtc < cutoff).ExecuteDeleteAsync(ct);
     }
 
     /// <summary>

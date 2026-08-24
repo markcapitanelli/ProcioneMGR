@@ -30,8 +30,18 @@ public class FactorDriftAnalyzerTests
     /// rendimento successivo con correlazione <paramref name="firstHalfSign"/>, e nella seconda
     /// con <paramref name="secondHalfSign"/> (0 = nessuna relazione, solo rumore).
     /// </summary>
+    /// <param name="breakFraction">
+    /// [2026-08-24] DOVE cade la rottura, come frazione della serie. Prima era fissa a metà, e con
+    /// il verdetto basato su una soglia assoluta non faceva differenza. Ora sì, ed è un fatto sul
+    /// mondo, non sul codice: con 8 finestre e <c>RecentWindows = 2</c>, una rottura a metà cade
+    /// <b>dentro il periodo di riferimento</b> — quattro finestre con segnale e due senza. Il
+    /// riferimento diventa esso stesso incoerente, e chiedere allo strumento di gridare lì
+    /// significherebbe chiedergli di ignorare la propria dispersione. Il decadimento che questo
+    /// monitor dichiara di trovare è quello che cade sul CONFINE riferimento/recente: 0,75 con
+    /// otto finestre.
+    /// </param>
     private static (List<OhlcvData> Candles, List<decimal?> Values) BuildSeries(
-        int n, int firstHalfSign, int secondHalfSign, int seed = 3)
+        int n, int firstHalfSign, int secondHalfSign, int seed = 3, double breakFraction = 0.5)
     {
         var rnd = new Random(seed);
         var candles = new List<OhlcvData>(n);
@@ -47,7 +57,7 @@ public class FactorDriftAnalyzerTests
 
         for (var i = 0; i < n; i++)
         {
-            var sign = i < n / 2 ? firstHalfSign : secondHalfSign;
+            var sign = i < (int)(n * breakFraction) ? firstHalfSign : secondHalfSign;
             // Rendimento della barra i: guidato dal segnale della barra PRECEDENTE.
             var driver = i > 0 ? signal[i - 1] : 0;
             var noise = (rnd.NextDouble() * 2 - 1) * 0.002;
@@ -70,9 +80,14 @@ public class FactorDriftAnalyzerTests
         return (candles, values);
     }
 
-    private static FactorDriftReport Run(int firstHalfSign, int secondHalfSign, int n = 2400)
+    /// <summary>
+    /// La rottura cade di default sul CONFINE riferimento/recente (0,75 con otto finestre e due
+    /// recenti): è la posizione che il monitor dichiara di sorvegliare. Vedi <c>breakFraction</c>.
+    /// </summary>
+    private static FactorDriftReport Run(
+        int firstHalfSign, int secondHalfSign, int n = 2400, double breakFraction = 0.75)
     {
-        var (candles, values) = BuildSeries(n, firstHalfSign, secondHalfSign);
+        var (candles, values) = BuildSeries(n, firstHalfSign, secondHalfSign, breakFraction: breakFraction);
         var spec = new FactorSpec("scripted", new ScriptedFactor(values), new Dictionary<string, decimal>());
         var analyzer = new FactorDriftAnalyzer();
         return analyzer.Analyze(spec, candles, new FactorDriftConfig
@@ -158,12 +173,50 @@ public class FactorDriftAnalyzerTests
     [Fact]
     public void FactorThatStopsWorking_IsFlaggedAsWeakening()
     {
-        // Informa nella prima metà, poi solo rumore: è il decadimento classico.
+        // IL CONTROLLO A EDGE PIANTATO, ed è la condizione che rende leggibile il silenzio della
+        // scheda: se dopo la correzione statistica del 2026-08-24 il pannello si svuota, deve
+        // essere perché non c'è niente da dire — non perché lo strumento ha smesso di vedere.
+        // Qui l'edge c'è, è enorme e cade dove il monitor dichiara di guardare.
         var report = Run(firstHalfSign: 1, secondHalfSign: 0);
 
         Assert.Equal(FactorDriftStatus.Weakening, report.Status);
         Assert.True(report.IsAlert);
-        Assert.Contains("spento", report.StatusMessage);
+        Assert.Contains("indebolito", report.StatusMessage);
+        // E lo trova con margine: |IC| da ~1,0 a ~0,0 vale decine di errori standard.
+        Assert.True(report.TStatistic > 5d, $"il calo piantato deve superare largamente il rumore, t = {report.TStatistic:F1}");
+        Assert.True(report.PValue < 0.001d, $"p atteso vicino a zero, ottenuto {report.PValue:F4}");
+    }
+
+    /// <summary>
+    /// Il complemento onesto del test qui sopra, e riguarda il MONDO, non il codice: con otto
+    /// finestre e due «recenti», un decadimento a metà serie cade <b>dentro il periodo di
+    /// riferimento</b>. Il riferimento diventa allora incoerente con sé stesso — quattro finestre
+    /// informative e due no — e chiedere allo strumento di gridare lì significherebbe chiedergli di
+    /// ignorare la propria dispersione, che è il difetto corretto il 2026-08-24.
+    ///
+    /// <para>Non è un limite da nascondere: è la ragione per cui questo monitor va guardato spesso,
+    /// e non è un sostituto del pannello di /feature-selection, che mostra la serie intera.</para>
+    /// </summary>
+    [Fact]
+    public void UnDecadimentoVECCHIO_NonScattaPiu_ELoStrumentoLoAmmette()
+    {
+        var report = Run(firstHalfSign: 1, secondHalfSign: 0, breakFraction: 0.5);
+
+        Assert.False(report.IsAlert);
+
+        // E lo strumento non tace per caso: il riferimento non supera il proprio cancello perché
+        // metà delle sue finestre informano e metà no, quindi la sua dispersione INTERNA è enorme.
+        // Detto in italiano: «questo fattore è troppo incoerente nel periodo di riferimento perché
+        // quel periodo faccia da metro». È una risposta migliore di un allarme, e soprattutto è la
+        // risposta a una domanda che il monitor può davvero porre.
+        Assert.True(Math.Abs(report.ReferenceIc) < report.ReferenceGate,
+            $"|IC| di riferimento {Math.Abs(report.ReferenceIc):F3} contro cancello {report.ReferenceGate:F3}");
+        Assert.Contains("Non informava già", report.StatusMessage, StringComparison.OrdinalIgnoreCase);
+
+        // Il fatto resta visibile dove va guardato: la serie di finestre porta il crollo per intero.
+        var prime = report.Series.Take(4).Average(p => Math.Abs(p.InformationCoefficient));
+        var ultime = report.Series.TakeLast(4).Average(p => Math.Abs(p.InformationCoefficient));
+        Assert.True(prime > ultime * 3, "il crollo c'è ed è nella serie: è il confronto medio-contro-medio che non lo può vedere");
     }
 
     [Fact]
@@ -185,7 +238,70 @@ public class FactorDriftAnalyzerTests
 
         Assert.Equal(FactorDriftStatus.Stable, report.Status);
         Assert.False(report.IsAlert);
-        Assert.Contains("non informava già", report.StatusMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// IL CONTROLLO SUL RUMORE, misurato come TASSO e non su un seme solo — livello 2 dello
+    /// standard di verifica.
+    ///
+    /// <para>È il gemello del controllo a edge piantato, e insieme dicono la cosa che serve: lo
+    /// strumento vede i cali veri (test sopra) e tace sul rumore (questo). Senza il secondo, una
+    /// regola che grida sempre passerebbe il primo a pieni voti — ed è esattamente quello che
+    /// faceva la regola precedente, dove un nullo che conservava il meccanismo di selezione
+    /// produceva PIÙ allarmi del reale (85 su 165 contro 39 su 131).</para>
+    ///
+    /// <para>Si ammette qualche falso: la soglia è α = 0,05 per costruzione, e su 40 semi
+    /// l'attesa è 2. Zero allarmi ammessi sarebbe una pretesa sbagliata — vorrebbe dire una
+    /// soglia molto più severa di quella dichiarata.</para>
+    /// </summary>
+    [Fact]
+    public void SoloRUMORE_IlTassoDiFalsiAllarmiRestaSottoIlDichiarato()
+    {
+        var allarmi = 0;
+        const int semi = 40;
+        for (var seed = 1; seed <= semi; seed++)
+        {
+            var (candles, values) = BuildSeries(2400, 0, 0, seed: seed);
+            var spec = new FactorSpec("scripted", new ScriptedFactor(values), new Dictionary<string, decimal>());
+            var report = new FactorDriftAnalyzer().Analyze(spec, candles,
+                new FactorDriftConfig { ForwardHorizon = 1, WindowSize = 300, RecentWindows = 2 });
+            if (report.IsAlert) allarmi++;
+        }
+
+        // 4 su 40 = 10%: il doppio del nominale, che su 40 prove è ancora dentro la variabilità
+        // campionaria. Sopra questo, la regola starebbe fabbricando allarmi dal nulla.
+        Assert.True(allarmi <= 4, $"{allarmi} falsi allarmi su {semi} semi di puro rumore: troppi per una soglia dichiarata al 5%.");
+    }
+
+    /// <summary>
+    /// IL NULLO CHE CONSERVA IL MECCANISMO DI SELEZIONE — la lezione di D4, applicata qui.
+    ///
+    /// <para>È il test che ha smascherato la regola precedente: applicando lo stesso giudizio alle
+    /// due finestre PIÙ VECCHIE invece che alle due più recenti, il nullo produceva più allarmi del
+    /// reale. Se la posizione «fine serie» non porta informazione, lo strumento sta misurando la
+    /// regressione verso la media e non la deriva.</para>
+    ///
+    /// <para>Qui, su un decadimento piantato al confine, il verso giusto deve gridare e il verso
+    /// rovesciato deve tacere: è la prova che il verdetto dipende da DOVE cade la rottura, cioè da
+    /// un fatto, e non dalla forma del test.</para>
+    /// </summary>
+    [Fact]
+    public void IlNulloARitroso_TACE_DoveIlVersoGiustoGrida()
+    {
+        var config = new FactorDriftConfig { ForwardHorizon = 1, WindowSize = 300, RecentWindows = 2 };
+        var (candles, values) = BuildSeries(2400, 1, 0, seed: 3, breakFraction: 0.75);
+        var spec = new FactorSpec("scripted", new ScriptedFactor(values), new Dictionary<string, decimal>());
+        var vero = new FactorDriftAnalyzer().Analyze(spec, candles, config);
+
+        Assert.True(vero.IsAlert, "il verso giusto deve trovare il decadimento piantato");
+
+        // Il nullo: le stesse finestre, ma «recenti» sono le due più VECCHIE. Sotto quella lettura
+        // il fattore non si è indebolito — si è rafforzato — quindi non ci deve essere allarme.
+        var rovesciate = vero.Series.Reverse().ToList();
+        var nullo = FactorDriftAnalyzer.JudgeSeries("scripted", "rovesciato", rovesciate, config);
+
+        Assert.False(nullo.IsAlert,
+            "il nullo che conserva il meccanismo di selezione deve TACERE: se grida, lo strumento misura la posizione, non la deriva");
     }
 
     [Fact]
@@ -226,7 +342,9 @@ public class FactorDriftAnalyzerTests
         // due fattori IDENTICI — errore commesso nella prima stesura di questo test. Qui si usa
         // una sola serie di candele (segnale che si spegne a metà) e due fattori diversi su di
         // essa: quello che si spegne, e un predittore perfetto che regge fino in fondo.
-        var (candles, decayed) = BuildSeries(2400, 1, 0, seed: 3);
+        // [2026-08-24] La rottura al CONFINE riferimento/recente: è la posizione che il monitor
+        // dichiara di sorvegliare (vedi breakFraction).
+        var (candles, decayed) = BuildSeries(2400, 1, 0, seed: 3, breakFraction: 0.75);
 
         var perfect = new List<decimal?>(candles.Count);
         for (var i = 0; i < candles.Count; i++)

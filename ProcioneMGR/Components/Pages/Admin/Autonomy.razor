@@ -933,9 +933,14 @@
                     Sorveglia liquidazioni @Hot()
                 </label>
             </div>
+            @* [2026-08-24] Era un campo DATA («storia da ≤»), ed era inesigibile: le liquidazioni
+               esistono solo al presente (nessun backfill — i due REST sono stati ritirati e il dump
+               storico USDS-M non è mai esistito), quindi qualunque data già passata condanna la
+               riga per sempre. Anche se lo stream ripartisse domani, il punto più vecchio sarebbe
+               di domani. Ora la manopola è la soglia di SILENZIO, che si può rientrare. *@
             <div class="col-auto">
-                <label class="form-label" title="L'accumulo delle liquidazioni (iniziato il 2026-07-24) NON è ricostruibile: se il punto più vecchio è più recente di questa data, l'accumulo è andato perso.">Liquidazioni: storia da ≤ @Hot()</label>
-                <input type="date" class="form-control" @bind="_sentiment.HeritageGuard.LiquidationsMinStartUtc" style="width: 11rem;" />
+                <label class="form-label" title="Ore senza un punto nuovo oltre le quali l'accumulo è dichiarato FERMO. Sostituisce l'àncora a data: su un feed senza backfill una data già passata è una violazione perpetua, perché il primo punto porta sempre la data del giorno in cui il feed riparte.">Liquidazioni: silenzio max (ore) @Hot()</label>
+                <input type="number" class="form-control" @bind="_sentiment.HeritageGuard.LiquidationsStaleAfterHours" min="1" style="width: 8rem;" />
             </div>
             <div class="col-auto">
                 <label class="form-label">Liquidazioni: punti min @Hot()</label>

@@ -124,6 +124,11 @@ Trading isolato in **corsie** (lane) indipendenti via keyed DI — 8 attive, tut
 | Credere che il file si chiami come il suo contenuto | `AnthropicLlmClient.cs` contiene cinque provider e quello attivo è NVIDIA |
 | Ricopiare in C# un percorso che uno script tiene in un parametro | due verità che divergono al primo cambio. `/admin/backup` guardava `backup/` mentre il notturno scriveva in `%USERPROFILE%\ProcioneMGR-Backup`: 18 giorni di «nessun backup» su un backup sano (R16). Ora la fonte è la sezione `Backup`, letta da pagina, `db-backup.ps1` **e** `watchdog.ps1` |
 | Parsare `schtasks /Query /V` | l'output è **localizzato**: su Windows italiano un parser inglese non trova nulla e conclude «task assente» — un controllo che dichiara morto ciò che gira. Usa `Get-ScheduledTask` + `ConvertTo-Json` (vedi `ScheduledTaskProbe`) |
+| Iniettare `IEnsembleManager`/`ITradingEngine` NON keyed in una pagina | il fallback risolve **sempre la corsia 0**, che dal 2026-08-05 e' vuota. La scheda «gambe in decadimento» in Home e' stata cieca 19 giorni. Risolvi per chiave: `ILaneDirectory` + `GetKeyedService<T>(laneId)`. `/regimes` ha ancora il difetto, ed e' una SCRITTURA |
+| Un ramo che esce prima di persistere l'esito | il tick senza soggetto del drift ML non lasciava traccia, e l'idratazione resuscitava per sempre una fotografia di cinque giorni prima. Se una tabella serve a distinguere «ho girato» da «non giro», **ogni** giro deve scriverci — compreso quello vuoto |
+| Confrontare due medie con numerosita' diverse contro la stessa soglia assoluta | e' un rilevatore di regressione verso la media travestito da rilevatore di deriva. Il calo si giudica contro il **proprio** errore standard, con varianza pooled *within-group* (stimarla sull'intera serie la gonfia col calo stesso) |
+| Correggere per molteplicita' contando i soli candidati | non e' una correzione: condiziona sulla selezione. Il denominatore sono i test **calcolati**, non quelli che sembrano significativi |
+| Un'ancora a DATA su una serie che si puo' solo accumulare | violazione perpetua: il primo punto portera' sempre la data del giorno in cui il feed riparte. Si giudica «sta ancora arrivando», che si rientra |
 
 ## Il cluster kind sotto carico (aggiornamento 2026-08-10/11)
 

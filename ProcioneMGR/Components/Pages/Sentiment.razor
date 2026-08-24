@@ -184,13 +184,29 @@
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>
             <i class="bi bi-shield-exclamation me-1"></i>Profondità delle serie-patrimonio
-            @if (HeritageSnapshot.Violations.Count > 0)
+            @* [2026-08-24] Il badge distingue le due violazioni, e soprattutto NON dice più «OK»
+               ignorando le righe non sorvegliate. Con l'interruttore delle liquidazioni (o delle
+               notizie) spento, due righe su quattro non vengono giudicate: un verde secco le
+               contava come sane — la stessa forma del difetto che questa card esiste per non
+               avere, spostata dall'elenco all'intestazione. *@
+            @if (HeritageSnapshot.Shortened.Count > 0)
             {
-                <span class="badge bg-danger ms-2">@HeritageSnapshot.Violations.Count sotto soglia</span>
+                <span class="badge bg-danger ms-2">@HeritageSnapshot.Shortened.Count accorciat@(HeritageSnapshot.Shortened.Count == 1 ? "a" : "e")</span>
             }
-            else if (HeritageSnapshot.LastRunUtc is not null)
+            @if (HeritageSnapshot.NeverStarted.Count > 0)
+            {
+                <span class="badge bg-warning text-dark ms-2">@HeritageSnapshot.NeverStarted.Count mai partit@(HeritageSnapshot.NeverStarted.Count == 1 ? "a" : "e")</span>
+            }
+            @if (HeritageSnapshot.Violations.Count == 0 && HeritageSnapshot.LastRunUtc is not null)
             {
                 <span class="badge bg-success ms-2">OK</span>
+            }
+            @if (HeritageSnapshot.NotEnforcedCount > 0)
+            {
+                <span class="badge bg-secondary ms-2"
+                      title="Righe misurate ma NON giudicate: l'interruttore di sorveglianza è spento. Non sono un OK.">
+                    @HeritageSnapshot.NotEnforcedCount non sorvegliat@(HeritageSnapshot.NotEnforcedCount == 1 ? "a" : "e")
+                </span>
             }
         </span>
         <button class="btn btn-sm btn-outline-secondary" @onclick="RunHeritageCheckAsync" disabled="@_heritageBusy">

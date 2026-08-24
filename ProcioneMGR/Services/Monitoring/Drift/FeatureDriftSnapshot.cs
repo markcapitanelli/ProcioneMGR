@@ -18,6 +18,14 @@ public sealed record FeatureDriftModelSnapshot(
 {
     /// <summary>Il check ha prodotto un giudizio, non un rinvio.</summary>
     public bool IsVerdict => string.IsNullOrEmpty(SkipReason);
+
+    /// <summary>
+    /// [2026-08-24] La riga SENTINELLA di un tick senza soggetto (<c>ModelId = 0</c>: nessun
+    /// <c>SavedMlModel</c> ha quell'id). Non è un modello saltato — è la prova che il worker ha
+    /// girato e non aveva niente da guardare, che è un'informazione diversa sia da «tutto pulito»
+    /// sia da «il worker non sta girando».
+    /// </summary>
+    public bool IsSentinel => ModelId == 0;
 }
 
 /// <summary>
@@ -47,6 +55,21 @@ public sealed class FeatureDriftSnapshot
     /// <summary>Vero se la fotografia viene dalla tabella e non da un tick di questo processo.</summary>
     public bool FromStoredHistory { get; private set; }
 
+    /// <summary>
+    /// [2026-08-24] Quanti modelli ci sono nel REGISTRO adesso. È il denominatore vero, e mancava:
+    /// «Copertura: 158 modelli, tutti giudicati» contava le righe del tick, non il registro — al
+    /// 2026-08-24 i modelli salvati erano 176, quindi «tutti» copriva 158/176 e lo scarto cresceva
+    /// a ogni modello nuovo. Zero = non dichiarato.
+    /// </summary>
+    public int RegistrySize { get; private set; }
+
+    /// <summary>
+    /// [2026-08-24] Righe del tick SCARTATE all'idratazione perché il modello non esiste più o non
+    /// ricade più negli stage sorvegliati. Va dichiarato: una fotografia che si assottiglia in
+    /// silenzio è un allarme che sparisce senza che nessuno abbia deciso nulla.
+    /// </summary>
+    public int DroppedNotMonitored { get; private set; }
+
     public IReadOnlyList<FeatureDriftModelSnapshot> All => _models;
 
     /// <summary>Modelli su cui il check ha prodotto un giudizio.</summary>
@@ -66,11 +89,18 @@ public sealed class FeatureDriftSnapshot
             .ThenByDescending(m => m.DriftingFeatures)
             .ToList();
 
-    public void Replace(IEnumerable<FeatureDriftModelSnapshot> models, DateTime computedAtUtc, bool fromStoredHistory = false)
+    public void Replace(
+        IEnumerable<FeatureDriftModelSnapshot> models,
+        DateTime computedAtUtc,
+        bool fromStoredHistory = false,
+        int registrySize = 0,
+        int droppedNotMonitored = 0)
     {
         _models = models.ToList();
         LastRunUtc = computedAtUtc;
         FromStoredHistory = fromStoredHistory;
+        RegistrySize = registrySize;
+        DroppedNotMonitored = droppedNotMonitored;
     }
 
     /// <summary>
@@ -86,7 +116,17 @@ public sealed class FeatureDriftSnapshot
     /// diversi mescolate darebbero una fotografia che non è mai esistita, con lo stesso modello
     /// contato due volte a stati diversi. È la lezione delle finestre sovrapposte di D2.b.</para>
     /// </summary>
-    public async Task HydrateAsync(IDbContextFactory<ApplicationDbContext> dbFactory, CancellationToken ct = default)
+    /// <param name="monitoredStages">
+    /// [2026-08-24] Gli stage che il monitor sorveglia ADESSO. Le righe di modelli che non
+    /// ricadono più lì — o che non esistono più — non tornano in Home: sarebbero un allarme su
+    /// una popolazione che il monitor ha deliberatamente smesso di guardare. È la stessa regola,
+    /// e la stessa motivazione, del gemello <c>FactorDriftMonitor.TryHydrateAsync</c>, che scarta
+    /// le serie uscite dalla watchlist. Lista vuota = nessun filtro per stage.
+    /// </param>
+    public async Task HydrateAsync(
+        IDbContextFactory<ApplicationDbContext> dbFactory,
+        IReadOnlyList<string>? monitoredStages = null,
+        CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
@@ -100,7 +140,32 @@ public sealed class FeatureDriftSnapshot
             .Where(r => r.CheckedAtUtc == at)
             .ToListAsync(ct);
 
-        Replace(rows.Select(FromRow), at, fromStoredHistory: true);
+        // Il denominatore vero si legge ADESSO, non si eredita dal tick: è la dimensione del
+        // registro oggi, che è ciò contro cui una copertura va letta.
+        var registrySize = await db.SavedMlModels.AsNoTracking().CountAsync(ct);
+
+        var ids = rows.Where(r => r.ModelId != 0).Select(r => r.ModelId).Distinct().ToList();
+        var stageById = await db.SavedMlModels.AsNoTracking()
+            .Where(m => ids.Contains(m.Id))
+            .Select(m => new { m.Id, m.Stage })
+            .ToDictionaryAsync(x => x.Id, x => x.Stage.ToString(), ct);
+
+        var kept = rows.Where(r => r.ModelId == 0 || IsStillMonitored(r.ModelId, stageById, monitoredStages)).ToList();
+
+        Replace(kept.Select(FromRow), at,
+            fromStoredHistory: true,
+            registrySize: registrySize,
+            droppedNotMonitored: rows.Count - kept.Count);
+    }
+
+    private static bool IsStillMonitored(
+        int modelId,
+        IReadOnlyDictionary<int, string> stageById,
+        IReadOnlyList<string>? monitoredStages)
+    {
+        if (!stageById.TryGetValue(modelId, out var stage)) return false; // modello sparito
+        if (monitoredStages is null || monitoredStages.Count == 0) return true;
+        return monitoredStages.Any(s => string.Equals(s, stage, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Proiezione riga → fotografia. Una sola, così tick e idratazione non possono divergere.</summary>
@@ -116,6 +181,7 @@ public sealed class FeatureDriftSnapshot
 public sealed class FeatureDriftHydrationWorker(
     FeatureDriftSnapshot snapshot,
     IDbContextFactory<ApplicationDbContext> dbFactory,
+    Microsoft.Extensions.Options.IOptionsMonitor<DriftMonitorOptions> options,
     ILogger<FeatureDriftHydrationWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -125,12 +191,13 @@ public sealed class FeatureDriftHydrationWorker(
 
         try
         {
-            await snapshot.HydrateAsync(dbFactory, stoppingToken);
+            await snapshot.HydrateAsync(dbFactory, options.CurrentValue.EffectiveStages(), stoppingToken);
             if (snapshot.LastRunUtc is DateTime at)
             {
                 logger.LogInformation(
-                    "Deriva feature: fotografia ricostruita dalla storia registrata ({Models} modelli, {Alerts} in allarme, {Skipped} saltati, tick del {At:yyyy-MM-dd HH:mm} UTC).",
-                    snapshot.All.Count, snapshot.Alerts.Count, snapshot.ModelsSkipped, at);
+                    "Deriva feature: fotografia ricostruita dalla storia registrata ({Models} modelli, {Alerts} in allarme, {Skipped} saltati, {Dropped} scartati perché non più sorvegliati, registro {Registry}, tick del {At:yyyy-MM-dd HH:mm} UTC).",
+                    snapshot.All.Count, snapshot.Alerts.Count, snapshot.ModelsSkipped,
+                    snapshot.DroppedNotMonitored, snapshot.RegistrySize, at);
             }
         }
         catch (OperationCanceledException) { /* shutdown */ }

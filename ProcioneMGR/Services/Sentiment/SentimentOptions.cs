@@ -138,11 +138,24 @@ public sealed class SentimentHeritageGuardOptions
     public bool LiquidationsEnforced { get; set; } = true;
 
     /// <summary>
-    /// L'accumulo delle liquidazioni (F4, iniziato il 2026-07-24) deve arrivare almeno a questa
-    /// data. Il dato NON è ricostruibile a posteriori: se il punto più vecchio è più recente di
-    /// questa àncora, l'accumulo è andato perso.
+    /// Ore senza un punto nuovo oltre le quali l'accumulo delle liquidazioni è dichiarato FERMO.
+    ///
+    /// <para><b>Ha sostituito un'àncora a data assoluta (2026-08-24).</b> Fino a quel giorno la
+    /// riga era giudicata con <c>LiquidationsMinStartUtc = 2026-08-01</c>, cioè «la storia deve
+    /// arrivare almeno al primo agosto». Su un feed che <b>esiste solo al presente</b> — nessun
+    /// backfill: i due endpoint REST di liquidazione sono stati ritirati e il dump storico USDS-M
+    /// non è mai esistito — quella soglia è <b>inesigibile per aritmetica</b>: anche se lo stream
+    /// ripartisse domani, il punto più vecchio sarebbe di domani, che è più recente dell'àncora, e
+    /// la riga resterebbe rossa <i>per sempre</i>. Cambierebbe solo il messaggio, da «serie
+    /// ASSENTE» a «profondità persa».</para>
+    ///
+    /// <para>La domanda giusta per una serie che si può solo accumulare non è «quanto indietro
+    /// arriva» ma <b>«sta ancora arrivando»</b>, e quella è una soglia che si può rientrare. 12 ore
+    /// e non 1: <c>!forceOrder@arr</c> è un feed di eventi sparsi e i secchi sono orari, quindi i
+    /// vuoti brevi sono normali (stessa lezione di <c>LiquidationsOptions.StaleSeconds</c>, dove
+    /// 120 secondi producevano riconnessioni a vuoto).</para>
     /// </summary>
-    public DateTime LiquidationsMinStartUtc { get; set; } = new(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc);
+    public int LiquidationsStaleAfterHours { get; set; } = 12;
 
     /// <summary>Punti minimi complessivi della fonte liquidazioni (4 metriche/ora/simbolo).</summary>
     public int LiquidationsMinPoints { get; set; } = 100;

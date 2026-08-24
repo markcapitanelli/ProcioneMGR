@@ -17,6 +17,14 @@ namespace ProcioneMGR.Services.Sentiment;
 /// <param name="Problem">Perché la soglia è violata; null = serie sana (o non sorvegliata).</param>
 /// <param name="Enforced">False = misurata ma NON giudicata (interruttore spento con cognizione,
 /// es. liquidazioni da postazione EEA bloccata): la UI la mostra come «non sorvegliata», mai OK.</param>
+/// <param name="NewestUtc">
+/// Punto più recente trovato (null = serie assente). Serve alle serie che si possono solo
+/// ACCUMULARE: per loro la domanda utile non è «quanto indietro arriva» ma «sta ancora arrivando».
+/// </param>
+/// <param name="Accumulating">
+/// [2026-08-24] La serie esiste solo al PRESENTE: non c'è backfill possibile, quindi giudicarla
+/// contro una data assoluta già passata la condanna per aritmetica. Vedi <c>EvaluateAccumulating</c>.
+/// </param>
 public sealed record HeritageSeriesDepth(
     string Key,
     string DisplayName,
@@ -24,9 +32,26 @@ public sealed record HeritageSeriesDepth(
     long Count,
     string Expected,
     string? Problem,
-    bool Enforced = true)
+    bool Enforced = true,
+    DateTime? NewestUtc = null,
+    bool Accumulating = false)
 {
     public bool Violated => Problem is not null;
+
+    /// <summary>
+    /// La fonte non ha MAI consegnato un punto. È un fatto diverso da «si è accorciata», e va
+    /// detto diverso: la seconda è una perdita di patrimonio (una storia che c'era e non c'è più),
+    /// la prima è una fonte che non ha mai funzionato. Fino al 2026-08-24 la Home le impastava
+    /// nella stessa frase — «serie ASSENTE» — e allegava la conseguenza della prima («carry e
+    /// backtest a leva leggono queste serie») anche quando valeva solo per la seconda.
+    ///
+    /// <para><b>Serve <see cref="Accumulating"/>, non basta il conteggio a zero.</b> Il funding a
+    /// zero righe NON è «mai partito»: è la perdita più grave che questo guardiano esista per
+    /// vedere — sette anni di storia spariti due volte, e <i>ricostruibili</i> con
+    /// <c>fundingbackfill</c>. Solo per una fonte che si può unicamente accumulare lo zero
+    /// significa davvero «non ha mai consegnato nulla».</para>
+    /// </summary>
+    public bool NeverStarted => Accumulating && Count == 0;
 }
 
 /// <summary>
@@ -47,6 +72,24 @@ public sealed class SentimentHeritageSnapshot
     /// <summary>Le serie in violazione (le assenti per prime: sono la perdita più grave).</summary>
     public IReadOnlyList<HeritageSeriesDepth> Violations =>
         _all.Where(d => d.Violated).OrderBy(d => d.OldestUtc is null ? 0 : 1).ToList();
+
+    /// <summary>
+    /// [2026-08-24] Le serie che AVEVANO una storia e l'hanno persa. Sono queste — e solo queste —
+    /// quelle di cui è vero dire che «carry e backtest a leva stanno leggendo una serie corta».
+    /// </summary>
+    public IReadOnlyList<HeritageSeriesDepth> Shortened =>
+        _all.Where(d => d.Violated && !d.NeverStarted).ToList();
+
+    /// <summary>
+    /// Le fonti che non hanno MAI consegnato un punto. Non è una perdita di patrimonio: è una fonte
+    /// che non ha mai funzionato, e la sua riga deve nominare la CAUSA invece di mandare a cercare
+    /// un incidente che non c'è.
+    /// </summary>
+    public IReadOnlyList<HeritageSeriesDepth> NeverStarted =>
+        _all.Where(d => d.Violated && d.NeverStarted).ToList();
+
+    /// <summary>Righe MISURATE ma non giudicate (interruttore di sorveglianza spento).</summary>
+    public int NotEnforcedCount => _all.Count(d => !d.Enforced);
 
     public void Replace(IReadOnlyList<HeritageSeriesDepth> depths, DateTime computedAtUtc)
     {
@@ -83,7 +126,10 @@ public sealed class SentimentHeritageGuardWorker(
     IOptionsMonitor<SentimentOptions> options,
     SentimentHeritageSnapshot snapshot,
     ILogger<SentimentHeritageGuardWorker> logger,
-    INotifier? notifier = null) : BackgroundService
+    INotifier? notifier = null,
+    // [2026-08-24] La causa del vuoto si LEGGE dal feed, non si asserisce a commento. Opzionale:
+    // senza (vecchi harness di test) resta il messaggio generico, mai un OK finto.
+    ProcioneMGR.Services.MarketData.ILiquidationFeedDiagnostics? liquidations = null) : BackgroundService
 {
     /// <summary>Serie già segnalate come violate (per Key): l'allarme è sulla transizione.</summary>
     private readonly HashSet<string> _alerted = [];
@@ -163,14 +209,13 @@ public sealed class SentimentHeritageGuardWorker(
         var liquidationsSet = db.SentimentMetricPoints.AsNoTracking()
             .Where(p => p.Source == SentimentMetricSources.BinanceLiquidations);
         var liquidationsOldest = await liquidationsSet.MinAsync(p => (DateTime?)p.TimestampUtc, ct);
+        var liquidationsNewest = await liquidationsSet.MaxAsync(p => (DateTime?)p.TimestampUtc, ct);
         var liquidationsCount = await liquidationsSet.LongCountAsync(ct);
-        depths.Add(opt.LiquidationsEnforced
-            ? Evaluate("Liquidations", "Liquidazioni Binance",
-                liquidationsOldest, liquidationsCount, opt.LiquidationsMinStartUtc, opt.LiquidationsMinPoints)
-            : new HeritageSeriesDepth("Liquidations", "Liquidazioni Binance",
-                liquidationsOldest, liquidationsCount,
-                FormatExpected(opt.LiquidationsMinStartUtc, opt.LiquidationsMinPoints),
-                null, Enforced: false));
+        depths.Add(EvaluateAccumulating(
+            "Liquidations", "Liquidazioni Binance",
+            liquidationsOldest, liquidationsNewest, liquidationsCount,
+            opt.LiquidationsMinPoints, opt.LiquidationsStaleAfterHours,
+            DescribeSilence(liquidations), opt.LiquidationsEnforced));
 
         // --- [I15] Notizie con punteggio: patrimonio dal 2026-08-19 (decisione del proprietario).
         //     Altra TABELLA (AltDataPoints, non SentimentMetricPoints) e altro criterio: conta solo
@@ -228,13 +273,39 @@ public sealed class SentimentHeritageGuardWorker(
         {
             // UNA notifica aggregata per giro: una perdita della tabella colpisce 8 serie insieme
             // e deve produrre un messaggio, non otto.
-            var elenco = string.Join("\n", newlyViolated.Select(v => $"• {v.DisplayName}: {v.Problem}"));
-            await notifier.NotifyAsync(NotificationSeverity.Critical,
-                $"{newlyViolated.Count} serie-patrimonio sotto la profondità attesa",
-                "La storia esente dalla purge si è accorciata (è già successo due volte col funding):\n"
-                + elenco
-                + "\nCarry e backtest a leva stanno leggendo una serie corta. Dettaglio in /sentiment; "
-                + "ripristino funding: dotnet run --project tools/PlatformExpand -- fundingbackfill", ct);
+            //
+            // [2026-08-24] Ma DUE sezioni, non una. Il corpo affermava «Carry e backtest a leva
+            // stanno leggendo una serie corta» per qualunque riga violata: sulle liquidazioni è
+            // falso — nessun componente le legge, il composite di sentiment somma solo metriche
+            // nominate e le liquidazioni non ci sono. Una notifica Critical che dichiara un danno
+            // inesistente è la forma peggiore del controllo che parla a prescindere dalla realtà,
+            // perché arriva sul telefono e pretende attenzione.
+            var accorciate = newlyViolated.Where(v => !v.NeverStarted).ToList();
+            var maiNate = newlyViolated.Where(v => v.NeverStarted).ToList();
+
+            var corpo = new System.Text.StringBuilder();
+            if (accorciate.Count > 0)
+            {
+                corpo.AppendLine("STORIA PERSA (è già successo due volte col funding):");
+                foreach (var v in accorciate) corpo.AppendLine($"• {v.DisplayName}: {v.Problem}");
+                corpo.AppendLine("Carry e backtest a leva stanno leggendo una serie corta.");
+                corpo.AppendLine("Ripristino funding: dotnet run --project tools/PlatformExpand -- fundingbackfill");
+            }
+            if (maiNate.Count > 0)
+            {
+                if (accorciate.Count > 0) corpo.AppendLine();
+                corpo.AppendLine("FONTI CHE NON HANNO MAI CONSEGNATO NULLA:");
+                foreach (var v in maiNate) corpo.AppendLine($"• {v.DisplayName}: {v.Problem}");
+                corpo.AppendLine("Non è una perdita di patrimonio e nessun calcolo in corso ne è alterato: è una fonte da collegare.");
+            }
+            corpo.Append("Dettaglio e soglie in /sentiment.");
+
+            var titolo = accorciate.Count > 0
+                ? $"{accorciate.Count} serie-patrimonio si sono ACCORCIATE"
+                : $"{maiNate.Count} fonti-patrimonio non hanno mai consegnato dati";
+            await notifier.NotifyAsync(
+                accorciate.Count > 0 ? NotificationSeverity.Critical : NotificationSeverity.Warning,
+                titolo, corpo.ToString(), ct);
         }
 
         return newlyViolated;
@@ -274,6 +345,97 @@ public sealed class SentimentHeritageGuardWorker(
         }
 
         return new HeritageSeriesDepth(key, displayName, oldestUtc, count, expected, problem);
+    }
+
+    /// <summary>
+    /// [2026-08-24] Il giudizio per una serie che si può solo ACCUMULARE: liquidazioni oggi, e
+    /// qualunque altro feed di eventi senza backfill domani.
+    ///
+    /// <para><b>Perché non è <see cref="Evaluate"/> con un'altra soglia.</b> Quella confronta il
+    /// punto più vecchio con una data assoluta, ed è la regola giusta per il funding — che una
+    /// storia ce l'ha e la si può riscaricare (<c>fundingbackfill</c>). Su un feed che esiste solo
+    /// al presente la stessa regola è <b>inesigibile</b>: qualunque data già passata condanna la
+    /// serie per sempre, perché il primo punto porterà sempre la data del giorno in cui il feed è
+    /// ripartito. Un allarme che non può rientrare smette di essere letto, e si porta dietro anche
+    /// quelli veri.</para>
+    ///
+    /// <para>Qui si giudicano le due cose che una serie di accumulo può davvero rispettare — <b>ha
+    /// abbastanza punti</b> e <b>ne sta ancora ricevendo</b> — e ognuna delle tre uscite è
+    /// rientrabile: il vuoto rientra quando arriva il primo punto, il «appena partito» quando i
+    /// punti bastano, il «fermo» quando il feed riprende.</para>
+    /// </summary>
+    /// <param name="silenceCause">
+    /// Perché la serie è vuota, letto dallo stato reale del feed. È ciò che distingue «non ha mai
+    /// consegnato niente perché lo stream è muto da questa postazione» da «qualcuno ha cancellato
+    /// la tabella»: due frasi che mandano a fare cose opposte.
+    /// </param>
+    internal static HeritageSeriesDepth EvaluateAccumulating(
+        string key, string displayName,
+        DateTime? oldestUtc, DateTime? newestUtc, long count,
+        int minCount, int staleAfterHours, string silenceCause, bool enforced)
+    {
+        var ore = Math.Max(1, staleAfterHours);
+        var expected = $"accumulo vivo: ≥ {minCount:N0} punti e un punto nuovo entro {ore} ore";
+
+        string? problem = null;
+        if (count == 0)
+        {
+            problem = silenceCause;
+        }
+        else if (count < minCount)
+        {
+            // Transitorio e DICHIARATO tale: senza, i primi minuti di un accumulo sano
+            // sembrerebbero un guasto identico al vuoto perpetuo.
+            problem = $"accumulo appena partito: {count:N0} punti sui {minCount:N0} attesi (dal {oldestUtc:yyyy-MM-dd HH:mm})";
+        }
+        else if (newestUtc is DateTime newest && (DateTime.UtcNow - newest).TotalHours > ore)
+        {
+            var eta = (DateTime.UtcNow - newest).TotalHours;
+            problem = $"accumulo FERMO da {eta:0} ore (ultimo punto {newest:yyyy-MM-dd HH:mm} UTC, soglia {ore} ore)";
+        }
+
+        return new HeritageSeriesDepth(
+            key, displayName, oldestUtc, count, expected,
+            enforced ? problem : null,
+            Enforced: enforced,
+            NewestUtc: newestUtc,
+            Accumulating: true);
+    }
+
+    /// <summary>
+    /// Perché l'accumulo non ha prodotto punti, LETTO dallo stato del feed invece che asserito.
+    ///
+    /// <para>Quattro stati che mandano a fare quattro cose diverse — accendere l'interruttore,
+    /// rassegnarsi al blocco (o cambiare venue), aspettare il primo flush, guardare la rete — e
+    /// prima erano una frase sola, per giunta identica a quella della perdita di patrimonio del
+    /// funding: «serie ASSENTE: nessun punto in SentimentMetricPoints». Chi la leggeva andava a
+    /// cercare un incidente che non c'era.</para>
+    ///
+    /// <para>Statica e pura: si prova senza database, senza rete e senza worker.</para>
+    /// </summary>
+    internal static string DescribeSilence(ProcioneMGR.Services.MarketData.ILiquidationFeedDiagnostics? feed)
+    {
+        if (feed is null)
+        {
+            return "accumulo mai partito: nessun punto in SentimentMetricPoints (stato del feed non interrogabile da qui)";
+        }
+        if (!feed.Enabled)
+        {
+            return "accumulo mai partito: l'interruttore Liquidations:Enabled è SPENTO — nessuna connessione viene aperta";
+        }
+        if (feed.EndpointLikelyBlocked)
+        {
+            return "accumulo mai partito: lo stream futures Binance si connette ma non consegna alcun frame da questa "
+                 + "postazione (blocco EEA sulla famiglia WebSocket dei derivati; il REST futures invece risponde, "
+                 + "ed è la ragione per cui il funding continua ad arrivare). Il dato non è recuperabile a posteriori: "
+                 + "i due endpoint REST di liquidazione sono stati ritirati e il dump storico USDS-M non è mai esistito";
+        }
+        if (feed.IsConnected)
+        {
+            return $"accumulo connesso ma ancora senza punti ({feed.TotalMessages:N0} messaggi ricevuti): "
+                 + "il primo flush arriva entro pochi minuti";
+        }
+        return "accumulo mai partito: il feed non è connesso in questo momento";
     }
 
     /// <summary>

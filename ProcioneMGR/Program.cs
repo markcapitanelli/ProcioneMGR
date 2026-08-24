@@ -341,6 +341,10 @@ builder.Services.TryAddSingleton<ProcioneMGR.Services.MarketData.IWebSocketTrans
 // ricevuti dalla STESSA istanza del hosted service (pattern MetricsCollector/SentimentSyncWorker).
 builder.Services.AddSingleton<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>());
+// [2026-08-24] Lo STESSO singleton visto come diagnostica: il guardiano delle serie-patrimonio deve
+// poter LEGGERE perche' la serie liquidazioni e' vuota, invece di asserirne la causa a commento.
+builder.Services.AddSingleton<ProcioneMGR.Services.MarketData.ILiquidationFeedDiagnostics>(
+    sp => sp.GetRequiredService<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>());
 
 // --- Portfolio optimization (Mean-Variance, Risk Parity, HRP) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.MeanVarianceOptimizer>();
