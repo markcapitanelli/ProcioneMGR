@@ -14,6 +14,13 @@
     "AutoMigrate": true,
     "LockTimeoutSeconds": 120
   },
+  "Backup": {
+    "_comment": "[2026-08-23] Backup del database (pannello in /admin/backup). FONTE UNICA della destinazione notturna: la leggono sia l'app sia scripts/db-backup.ps1, che la prende da QUESTO file nel repo principale. Prima esisteva solo dentro lo script come default di -Destination, e /admin/backup — che conosceva solo backup/ sotto la content root — mostrava l'ultimo backup del 2026-07-09 mentre il dump di stanotte era sano: un controllo che risponde a prescindere dalla realta'. NightlyDirectory vuota = %USERPROFILE%\\ProcioneMGR-Backup; dev'essere ASSOLUTA (un percorso relativo significa cartelle diverse per l'app e per il Task Scheduler) e FUORI dal repository (un dump contiene la master key cifrata e le credenziali exchange). RetentionDays e StaleAfterHours le usa lo script; StaleAfterHours e' anche la soglia del verdetto in pagina. ScheduledTaskName serve a interrogare l'esito dell'ultima esecuzione, non a creare il task (si registra con `.\\scripts\\db-backup.ps1 -Register`).",
+    "NightlyDirectory": "",
+    "RetentionDays": 14,
+    "StaleAfterHours": 48,
+    "ScheduledTaskName": "ProcioneMGR Backup DB"
+  },
   "Llm": {
     "_comment": "Layer AI di supervisione del ciclo di ricerca. La API key NON va qui: si legge SOLO dalla variabile d'ambiente ANTHROPIC_API_KEY (SDK Anthropic, riletta a caldo: niente riavvio). Gli errori transitori (credito API esaurito, rate-limit, rete) aprono un circuit breaker: chiamate sospese dopo BreakerFailureThreshold errori consecutivi, notifica one-shot all'operatore, riprova automatica ogni BreakerCooldownMinutes; nessun advisory d'errore permanente per errori transitori. NotifyDecisions=true notifica (Info) le advisory riuscite con decisioni per l'utente. Confine di sicurezza: il layer AI e' SOLO advisory, non puo' avviare Live ne' bypassare SafetyChecker.",
     "Enabled": true,

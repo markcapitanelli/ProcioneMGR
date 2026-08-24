@@ -2125,3 +2125,63 @@ sarebbe la classe del worker morto su un'OCE.
       che nessuna riga lo dichiari.
 - [ ] Il `DisplayName` della gamba grigia non porta l'impronta: in `/trading` due gambe della stessa
       terna su corsie diverse restano indistinguibili.
+
+## La pagina che non sapeva dove fosse il backup (2026-08-23)
+
+`/admin/backup` riportava **«Nessun backup presente in …\ProcioneMGR\backup»**. Nella cartella dei
+backup notturni, nello stesso momento: **10 dump, 3,2 GB, il più recente di 8 ore prima**, esito
+dell'operazione pianificata `0`. Il backup notturno funzionava dal **2026-08-05**; la pagina non lo
+sapeva perché guardava una cartella sola, e non era quella.
+
+Non è una vista parziale: è la classe di difetto del Filone E — un controllo che **dà una risposta
+a prescindere dalla realtà**. Qui ha risposto per diciotto giorni, e il costo non è teorico:
+il rilievo **R16 «Nessun backup del database esiste» 🔴 ALTA** in `docs/audit/09` cita testualmente
+quella frase. Un pannello che guarda nel posto sbagliato non inganna solo l'occhio: entra negli
+audit, e da lì nelle priorità.
+
+### Perché era successo
+
+La destinazione viveva **solo dentro `db-backup.ps1`**, come default del parametro `-Destination`.
+Un valore parametrico che nessun altro poteva leggere. Ricopiarlo in C# avrebbe prodotto due verità
+destinate a divergere al primo cambio — la pagina sarebbe tornata a mentire, solo con un'altra data.
+
+### Fatto
+
+- Sezione **`Backup`** in `appsettings.json` (`NightlyDirectory`, `RetentionDays`,
+  `StaleAfterHours`, `ScheduledTaskName`): **fonte unica**, letta da tre lettori che prima ne
+  avevano una propria — la pagina, `db-backup.ps1` e `watchdog.ps1` (che aveva cartella e soglia
+  48h scritte a mano: una terza verità pronta a divergere, e la più rumorosa, perché grida su
+  Telegram ogni cinque minuti).
+- `db-backup.ps1 -Register` **non congela più** `-Destination`/`-KeepDays` negli argomenti del task:
+  un argomento congelato è la stessa doppia verità, spostata di un metro. Chi li passa a mano
+  ottiene comunque un task fisso, ma lo script lo dice.
+- La pagina elenca **entrambe** le cartelle con la **sorgente dichiarata** per riga (manuale /
+  notturno, oppure `manuale/notturno` quando coincidono: i nomi hanno la stessa forma e attribuirli
+  sarebbe indovinare).
+- **Interroga l'operazione pianificata** (`ScheduledTaskProbe`): stato, ultima esecuzione, esito
+  decodificato, prossima esecuzione. Senza, un task cancellato o fallito resterebbe invisibile
+  finché i dump non invecchiano — cioè fino al giorno dopo il guasto.
+- **Dice le divergenze** invece di risolverle in silenzio: task che scrive altrove, task assente,
+  script dentro un worktree (il guasto del 2026-08-17), ultima esecuzione con codice ≠ 0, task
+  disabilitato. E quando la domanda non è ponibile (non siamo su Windows) lo dichiara: il silenzio
+  non è una conferma.
+- Il pannello di configurazione soddisfa il mandato «tutto amministrabile da UI»; `AdminConfigRules`
+  rifiuta un percorso **relativo** — si risolverebbe contro la directory di lavoro, che per l'app e
+  per il Task Scheduler non è la stessa.
+- `pg_restore`/`Restore` accettano solo file dentro le due cartelle note.
+
+**Verifica.** 131 test nella famiglia backup+config (24 nuovi sul servizio e sugli script, 7 di
+rendering bUnit della pagina reale, fra cui la regressione: un manuale vecchio di 45 giorni non deve
+più nascondere un notturno di stanotte). Dal vivo su `localhost:5199` con i dati veri: verdetto
+`SANO`, esito del task `0 (riuscita)`, 10 righe marcate `notturno`; portata la soglia a 1 ora il
+verdetto è passato a `FERMO`; puntata la destinazione altrove è comparso l'avviso di divergenza col
+task. Console e log senza errori.
+
+### Aperto
+
+- [ ] Il **drill di restore su server vergine** — l'ultimo il 2026-07-26. `pg_restore --list` legge
+      la TOC, non i blocchi di dati: è l'unica prova che nessuno dei tre strumenti può dare.
+- [ ] Il task registrato oggi porta ancora `-Destination`/`-KeepDays` congelati (registrato prima di
+      questa modifica). Coincidono con la configurazione, quindi non c'è divergenza — ma finché non
+      si ri-registra, cambiare la cartella dalla UI la farebbe comparire.
+

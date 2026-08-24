@@ -122,6 +122,8 @@ Trading isolato in **corsie** (lane) indipendenti via keyed DI — 8 attive, tut
 | Inventare i nomi delle chiavi dei Secret Kubernetes | leggili da `scripts/k8s-*-secret.ps1` |
 | Testare senza Docker | i test d'integrazione con Testcontainers falliscono |
 | Credere che il file si chiami come il suo contenuto | `AnthropicLlmClient.cs` contiene cinque provider e quello attivo è NVIDIA |
+| Ricopiare in C# un percorso che uno script tiene in un parametro | due verità che divergono al primo cambio. `/admin/backup` guardava `backup/` mentre il notturno scriveva in `%USERPROFILE%\ProcioneMGR-Backup`: 18 giorni di «nessun backup» su un backup sano (R16). Ora la fonte è la sezione `Backup`, letta da pagina, `db-backup.ps1` **e** `watchdog.ps1` |
+| Parsare `schtasks /Query /V` | l'output è **localizzato**: su Windows italiano un parser inglese non trova nulla e conclude «task assente» — un controllo che dichiara morto ciò che gira. Usa `Get-ScheduledTask` + `ConvertTo-Json` (vedi `ScheduledTaskProbe`) |
 
 ## Il cluster kind sotto carico (aggiornamento 2026-08-10/11)
 

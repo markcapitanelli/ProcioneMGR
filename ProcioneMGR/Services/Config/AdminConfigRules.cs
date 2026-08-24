@@ -324,6 +324,21 @@ public static class AdminConfigRules
             (o.StaleSeconds >= 60, "La soglia di silenzio dev'essere almeno 60 secondi: !forceOrder@arr è un feed di eventi sparsi, e i vuoti brevi sono normali."),
             (o.BlockedRetryMinutes >= 1, "La pausa dopo un endpoint bloccato dev'essere almeno 1 minuto.")),
 
+        // [2026-08-23] Backup del database. La regola che conta e' l'ultima: un percorso RELATIVO
+        // verrebbe risolto contro la directory di lavoro del processo, e quella dell'app non e'
+        // quella del Task Scheduler — la pagina guarderebbe una cartella, lo script ne riempirebbe
+        // un'altra, ed e' precisamente il difetto che questa sezione esiste per chiudere.
+        ProcioneMGR.Services.Admin.BackupOptions o => Check(
+            (o.StaleAfterHours >= 1,
+                "La soglia di stantiezza dev'essere almeno 1 ora: a 0 ogni backup risulterebbe fermo appena creato."),
+            (o.RetentionDays >= 1,
+                "La conservazione dev'essere almeno 1 giorno."),
+            (!string.IsNullOrWhiteSpace(o.ScheduledTaskName),
+                "Serve il nome dell'operazione pianificata: senza, il suo esito non e' interrogabile e la pagina saprebbe solo guardare i file."),
+            (string.IsNullOrWhiteSpace(o.NightlyDirectory) || Path.IsPathFullyQualified(o.NightlyDirectory),
+                "La cartella dei backup notturni dev'essere un percorso ASSOLUTO (oppure vuota, per %USERPROFILE%\\ProcioneMGR-Backup): "
+                + "un percorso relativo significa cartelle diverse per l'app e per il Task Scheduler.")),
+
         ExecutionParameters o => Check(
             (o.MaxSlices >= 1, "Serve almeno 1 fetta."),
             (o.IcebergClipFraction is > 0m and <= 1m, "Il clip Iceberg è una frazione fra 0 (escluso) e 1."),
