@@ -2591,6 +2591,33 @@ migrate-on-startup applica al primo avvio. Sblocco manuale già eseguito durante
 2, ferma da 43 ore, è stata rimessa in rotazione da `/campaign` (run `ea3ff2ff` config 18 e successivo
 config 17 completati — ed è ricaduta in `WaitingForTrigger`, confermando dal vivo la necessità di J1).
 
+**Deploy ESEGUITO (2026-08-25, pomeriggio — PR #113 mergiata dal proprietario):**
+
+1. ✅ DLL migrazioni ricostruita, guscio riavviato: le 2 migrazioni applicate da sole (il backfill
+   ha marcato **62 run** a universo misto — i 29 della config 8 più le altre config storiche miste);
+   `PairIndexSyncWorker` ha indicizzato **176 run / 70.956 coppie** al primo giro; il ledger J8 ha
+   registrato le 5 corsie di flotta (cold-start dichiarato: Sharpe matura al più presto il
+   2026-09-15, inedia il 2026-09-04).
+2. ✅ **J21**: script eseguito — 5 righe in quarantena, 0 residue col tempo invertito.
+3. ✅ **J2/J5**: config 17/18/19/20 convertite a finestre SCORREVOLI (stesse ampiezze delle
+   assolute: 148/815, 148/663, 112/484, 112/484); 19 e 20 aggiunte alla rotazione della campagna 2 e
+   rotazione riattivata. Verificato dal vivo: il run `b4658f41` (config 19, 5m) è partito con
+   l'holdout risolto a `2026-08-25T12:31` — la finestra scorre.
+4. ✅ **J10**: `Fleet:ExecutionLanes=[7]`, `DryRun=false` nel file vivo (backup in
+   `appsettings.json.bak-preJ10`), e `GreyAutoDeploy` scritto ESPLICITAMENTE `false` (la trappola
+   della sezione assente, già pagata col Drift). Con l'osservazione a zero nessun ritiro può
+   maturare prima del 2026-09-04: il braccio è armato e attende un verdetto.
+
+**Restano al proprietario (servono il login o sono LA decisione):**
+
+- **J9**: `/admin/autonomy` → pannello flotta → «Anteprima» e poi «Ricostruisci e salva» le
+  frequenze attese. Senza, l'inedia resta senza denominatore anche a osservazione matura.
+- **J14**: accendere `Fleet:GreyAutoDeploy` (default false) — il rovesciamento di F5.
+- **Redeploy del pod motore** per l'effetto pieno di J19-J21 lato engine (PnL persistito coi
+  prezzi, guardia anti candele-storiche).
+
+Il piano originale post-merge, per riferimento storico:
+
 **In ordine, dopo il merge:**
 
 1. `dotnet build ProcioneMGR.Migrations.Postgres -c Release` nel repo principale (la DLL delle
@@ -2614,3 +2641,26 @@ config 17 completati — ed è ricaduta in `WaitingForTrigger`, confermando dal 
 8. **Aperto (pod-side, non in questa ondata)**: l'heartbeat del carry persistito dal motore — il
    guardiano J18 oggi dichiara l'inapplicabilità invece di tacere, ma vedere il carry morto richiede
    che il motore scriva un battito leggibile dal guscio.
+
+### L'incidente del deploy, e la sua riparazione (2026-08-25, sera)
+
+**Durante l'ondata un mio `dotnet-ef migrations remove --force --no-build` ha droppato
+`ResearchCandidates` dal database vivo.** La meccanica, da non dimenticare: `remove` decide «qual è
+l'ultima migrazione» leggendo l'ASSEMBLY delle migrazioni, e con `--no-build` quell'assembly era la
+build Debug ferma al 2026-08-14 — quindi «l'ultima» era `AddResearchCandidates`, che `--force` ha
+revertito sul database a cui punta la startup: tabella droppata, riga di history tolta, file della
+migrazione cancellati dal progetto (e finiti cancellati anche in master dentro il commit di J4).
+**Mai `--force` con `--no-build`.**
+
+Nessun dato primario è andato perso: la tabella è DERIVATA («ricostruibile dagli artifact», ed è la
+ragione per cui quel commento esiste). La riparazione, tutta per la via standard: file di
+`AddResearchCandidates` ripristinati da git; due migrazioni correttive idempotenti
+(`RestoreResearchCandidatesAfterAccidentalRevert` per le 6 colonne nate dopo il 14/08,
+`RestoreResearchCandidatesNullability` per il NOT NULL di `WalkForwardOosSharpe` che faceva
+fallire — «156 run illeggibili» che illeggibili non erano — l'indicizzazione dei run storici
+bonificati); `dotnet-ef database update`; ricostruzione totale dell'indice da `/research`.
+**Esito verificato: 15.149 righe / 177 run / 887 chiavi distinte** — più di prima dell'incidente,
+perché le cacce del giorno su finestre scorrevoli hanno già aggiunto candidati nuovi (i grigi
+distinti sono passati da 73 a 100). La sonda J3 in Home, che l'incidente aveva reso l'unica
+superficie a dirlo («Ricerca: non verificabile — PostgresException»), è tornata verde: ha fatto
+esattamente il suo lavoro.
