@@ -27,10 +27,39 @@ public sealed class PairsWatchOptions
     /// correzione per test multipli</b>: al 5%, su 190 coppie ne «trova» una decina per puro rumore,
     /// e le sorveglierebbe come se fossero relazioni. Fabbricherebbe candidati per costruzione — il
     /// primo cugino dell'errore già pagato randomizzando su asset correlati, che fabbricava falsa
-    /// significatività. Il testo dell'item dice «coppie scelte dall'operatore»: è anche l'unica
-    /// lettura difendibile.</para>
+    /// significatività.</para>
+    ///
+    /// <para>[2026-08-25, decisione del proprietario] L'alimentazione automatica ESISTE, dietro
+    /// <see cref="AutoWatch"/> — ma non è il top-N su un test singolo che questo commento temeva:
+    /// il criterio è la <b>replicazione</b> (vedi lì). Le coppie manuali restano e hanno la
+    /// precedenza sul tetto.</para>
     /// </summary>
     public List<string> Pairs { get; set; } = [];
+
+    /// <summary>
+    /// [2026-08-25, decisione del proprietario: «impostiamo anche le coppie in automatico»]
+    /// Alimenta la sorveglianza dai candidati dell'indice (<c>PairCandidates</c>) che
+    /// <b>REPLICANO</b>: una coppia entra solo se risulta operabile in almeno
+    /// <see cref="AutoWatchMinScreens"/> screen DISTINTI che coprono almeno
+    /// <see cref="AutoWatchMinSpanDays"/> giorni.
+    ///
+    /// <para><b>Perché la replicazione e non il top-N.</b> Un singolo passaggio ADF al 5% su ~190
+    /// coppie ne «trova» una decina per puro rumore: sorvegliarle sarebbe fabbricare candidati (il
+    /// commento su <see cref="Pairs"/> esiste per questo). Pretendere che la stessa coppia risulti
+    /// operabile in K screen indipendenti distanti nel tempo è un'altra domanda: il rumore non
+    /// replica su richiesta. È la stessa epistemologia del forward test come giudice — la
+    /// ripetizione batte la significatività di un colpo solo.</para>
+    /// </summary>
+    public bool AutoWatch { get; set; }
+
+    /// <summary>Screen distinti minimi in cui la coppia dev'essere risultata operabile. Sotto 2 il criterio degenererebbe nel test singolo.</summary>
+    public int AutoWatchMinScreens { get; set; } = 3;
+
+    /// <summary>Arco minimo (giorni) fra il primo e l'ultimo screen operabile: la replica a distanza di ore non è indipendenza.</summary>
+    public int AutoWatchMinSpanDays { get; set; } = 14;
+
+    /// <summary>Tetto sul TOTALE sorvegliato (manuali + automatiche). Le manuali non vengono mai sfrattate dal tetto.</summary>
+    public int AutoWatchMaxPairs { get; set; } = 5;
 
     /// <summary>Cadenza in ore. 12 come il gemello sull'IC: lo spread di una coppia non cambia natura in un'ora.</summary>
     public int IntervalHours { get; set; } = 12;
@@ -94,7 +123,7 @@ public sealed class PairSpreadWatchWorker(
         while (!stoppingToken.IsCancellationRequested)
         {
             var opt = options.CurrentValue;
-            if (opt.Enabled && opt.Pairs.Count > 0)
+            if (opt.Enabled && (opt.Pairs.Count > 0 || opt.AutoWatch))
             {
                 try { await RunOnceAsync(stoppingToken); }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
@@ -107,13 +136,102 @@ public sealed class PairSpreadWatchWorker(
         }
     }
 
+    /// <summary>Le coppie AUTO scelte nell'ultimo giro, per il pannello: la selezione va vista, non dedotta.</summary>
+    public IReadOnlyList<string> LastAutoSelected { get; private set; } = [];
+
+    /// <summary>
+    /// [2026-08-25] La lista sorvegliata del giro: le MANUALI sempre e per prime, poi le AUTO che
+    /// replicano (vedi <see cref="SelectAutoPairs"/>), tutto sotto il tetto — che non sfratta mai
+    /// una manuale. Un guasto nella lettura dell'indice non spegne la sorveglianza manuale:
+    /// degrada alle sole manuali, dichiarandolo.
+    /// </summary>
+    internal async Task<List<string>> ResolveWatchlistAsync(PairsWatchOptions opt, CancellationToken ct)
+    {
+        var manuali = opt.Pairs.Distinct(StringComparer.Ordinal).ToList();
+        if (!opt.AutoWatch)
+        {
+            LastAutoSelected = [];
+            return manuali;
+        }
+
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var righe = await db.PairCandidates.AsNoTracking()
+                .Where(c => c.IsTradeable)
+                .Select(c => new AutoWatchRow(c.PairKeyValue, c.RunId, c.RunCompletedUtc, c.AdfStatistic))
+                .ToListAsync(ct);
+
+            var (auto, tagliateDalTetto) = SelectAutoPairs(
+                righe, manuali,
+                Math.Max(2, opt.AutoWatchMinScreens),
+                Math.Max(1, opt.AutoWatchMinSpanDays),
+                Math.Max(1, opt.AutoWatchMaxPairs));
+            LastAutoSelected = auto;
+            if (auto.Count > 0 || tagliateDalTetto > 0)
+            {
+                logger.LogInformation(
+                    "Sorveglianza spread AUTO: {N} coppie per replicazione (≥{Screens} screen su ≥{Giorni}gg){Tagliate}: {Coppie}",
+                    auto.Count, Math.Max(2, opt.AutoWatchMinScreens), Math.Max(1, opt.AutoWatchMinSpanDays),
+                    tagliateDalTetto > 0 ? $", {tagliateDalTetto} qualificate ESCLUSE dal tetto" : "",
+                    string.Join("; ", auto));
+            }
+            return manuali.Concat(auto).ToList();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            // Regola 4: fail-open dichiarato — la sorveglianza manuale non muore per un guasto dell'indice.
+            logger.LogWarning(ex, "Selezione automatica delle coppie fallita: questo giro sorveglia le sole manuali ({N}).", manuali.Count);
+            LastAutoSelected = [];
+            return manuali;
+        }
+    }
+
+    /// <summary>Una riga dell'indice, ridotta a ciò che serve alla selezione. Record per i test.</summary>
+    internal sealed record AutoWatchRow(string PairKey, Guid RunId, DateTime RunCompletedUtc, double AdfStatistic);
+
+    /// <summary>
+    /// [2026-08-25] La selezione AUTO, pura: qualificano le coppie operabili in almeno
+    /// <paramref name="minScreens"/> run DISTINTI il cui primo e ultimo screen distano almeno
+    /// <paramref name="minSpanDays"/> giorni — la replicazione, non il top-N di un test singolo
+    /// (che al 5% su ~190 coppie fabbrica una decina di falsi per costruzione). Ordinate per ADF
+    /// dell'ultimo screen (più forte prima); il tetto vale sul TOTALE e le manuali non si
+    /// sfrattano: si riempie solo lo spazio che lasciano. Ritorna anche quante qualificate sono
+    /// rimaste fuori dal tetto — un taglio silenzioso si leggerebbe come «non c'era altro».
+    /// </summary>
+    internal static (List<string> Selected, int CutByCap) SelectAutoPairs(
+        IReadOnlyList<AutoWatchRow> rows, IReadOnlyList<string> manual,
+        int minScreens, int minSpanDays, int maxTotal)
+    {
+        var manualSet = manual.ToHashSet(StringComparer.Ordinal);
+        var qualificate = rows
+            .GroupBy(r => r.PairKey, StringComparer.Ordinal)
+            .Where(g => !manualSet.Contains(g.Key))
+            .Select(g => new
+            {
+                Pair = g.Key,
+                Screens = g.Select(r => r.RunId).Distinct().Count(),
+                SpanDays = (g.Max(r => r.RunCompletedUtc) - g.Min(r => r.RunCompletedUtc)).TotalDays,
+                LatestAdf = g.OrderByDescending(r => r.RunCompletedUtc).First().AdfStatistic,
+            })
+            .Where(x => x.Screens >= minScreens && x.SpanDays >= minSpanDays)
+            .OrderBy(x => x.LatestAdf) // ADF più negativo = evidenza più forte
+            .Select(x => x.Pair)
+            .ToList();
+
+        var slots = Math.Max(0, maxTotal - manual.Count);
+        return (qualificate.Take(slots).ToList(), Math.Max(0, qualificate.Count - slots));
+    }
+
     /// <summary>Un giro completo. Pubblico per i test e per un futuro «Calcola ora» dalla pagina.</summary>
     public async Task<int> RunOnceAsync(CancellationToken ct)
     {
         var opt = options.CurrentValue;
         var scritte = 0;
 
-        foreach (var chiave in opt.Pairs.Distinct(StringComparer.Ordinal))
+        var sorvegliate = await ResolveWatchlistAsync(opt, ct);
+        foreach (var chiave in sorvegliate)
         {
             ct.ThrowIfCancellationRequested();
             try
@@ -132,7 +250,8 @@ public sealed class PairSpreadWatchWorker(
         LastRowsWritten = scritte;
         if (scritte > 0)
         {
-            logger.LogInformation("Sorveglianza spread: {Righe} finestre nuove su {Coppie} coppie.", scritte, opt.Pairs.Count);
+            logger.LogInformation("Sorveglianza spread: {Righe} finestre nuove su {Coppie} coppie ({Auto} automatiche).",
+                scritte, sorvegliate.Count, LastAutoSelected.Count);
         }
         return scritte;
     }

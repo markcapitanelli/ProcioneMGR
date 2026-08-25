@@ -1087,7 +1087,7 @@
 <div class="card mb-3" id="p-pairswatch">
     <div class="card-header d-flex justify-content-between">
         <span><i class="bi bi-activity me-1"></i>Sorveglianza spread delle coppie</span>
-        <span>@StateBadge(_pairsWatch.Enabled && _pairsWatch.Pairs.Count > 0)</span>
+        <span>@StateBadge(_pairsWatch.Enabled && (_pairsWatch.Pairs.Count > 0 || _pairsWatch.AutoWatch))</span>
     </div>
     <div class="card-body">
         <p class="text-muted small">
@@ -1111,7 +1111,7 @@
             <div class="col-12">
                 <label class="form-label mb-1" for="pw_pairs">
                     Coppie sorvegliate @Hot()
-                    <span class="text-muted small" title="Una per riga o separate da virgola, nella forma «ETH/USDT|BTC/USDT 1h». Le scegli TU: alimentarle da ciò che lo screening marca operabile sceglierebbe fra centinaia di test ADF senza correzione per test multipli, cioè fabbricherebbe candidati per costruzione. Vuoto = nessuna sorveglianza, anche da acceso.">ⓘ</span>
+                    <span class="text-muted small" title="Una per riga o separate da virgola, nella forma «ETH/USDT|BTC/USDT 1h». Le manuali restano sempre e hanno la precedenza sul tetto. Dal 2026-08-25 esiste anche l'alimentazione AUTOMATICA (interruttore qui sotto), col criterio della replicazione — non il top-N di un test singolo, che fabbricherebbe candidati.">ⓘ</span>
                 </label>
                 <input class="form-control" id="pw_pairs" @bind="_pairsWatchPairsCsv"
                        placeholder="es. ETH/USDT|BTC/USDT 1h, SOL/USDT|BTC/USDT 4h  (vuoto = nessuna)" />
@@ -1142,6 +1142,28 @@
             <div class="col-auto">
                 <label class="form-label" title="Quante finestre finali contano come «adesso» nel giudizio di rottura.">Finestre recenti @Hot()</label>
                 <input type="number" class="form-control" @bind="_pairsWatch.RecentWindows" min="1" style="width: 8rem;" />
+            </div>
+            @* [2026-08-25, decisione del proprietario] Alimentazione AUTOMATICA per REPLICAZIONE:
+               una coppia entra solo se operabile in K screen distinti su un arco minimo — il rumore
+               non replica su richiesta. Il top-N su un test singolo resta la trappola dichiarata. *@
+            <div class="col-auto form-check form-switch align-self-end">
+                <input class="form-check-input" type="checkbox" id="pw_auto" @bind="_pairsWatch.AutoWatch" />
+                <label class="form-check-label" for="pw_auto"
+                       title="Aggiunge da sola le coppie dell'indice che REPLICANO: operabili in almeno «Screen min» screen distinti che coprono almeno «Arco min» giorni. Le manuali restano sempre; il tetto vale sul totale. La selezione del giro è dichiarata nei log e qui sotto.">
+                    Coppie automatiche (replicazione) @Hot()
+                </label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Screen distinti minimi in cui la coppia dev'essere risultata operabile. Sotto 2 il criterio degenererebbe nel test singolo — la trappola che questo pannello dichiara da sempre.">Screen min @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.AutoWatchMinScreens" min="2" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Arco minimo (giorni) fra il primo e l'ultimo screen operabile: replicare a distanza di ore non è indipendenza.">Arco min (gg) @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.AutoWatchMinSpanDays" min="1" style="width: 7rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Tetto sul TOTALE sorvegliato (manuali + automatiche). Le manuali non vengono mai sfrattate.">Tetto coppie @Hot()</label>
+                <input type="number" class="form-control" @bind="_pairsWatch.AutoWatchMaxPairs" min="1" style="width: 7rem;" />
             </div>
             <div class="col-auto">
                 <button class="btn btn-primary" @onclick="SavePairsWatchAsync" disabled="@_busy">Salva</button>

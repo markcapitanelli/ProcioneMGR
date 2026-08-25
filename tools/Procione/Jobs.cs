@@ -124,6 +124,19 @@ internal static class Jobs
             "bringup.ps1", [],
             TimeSpan.FromMinutes(15),
             EnabledByDefault: false),
+
+        // [2026-08-25, sera] L'ECCEZIONE DICHIARATA alla regola scritta in testa a questo file
+        // («nessuna automazione nuova qui dentro»): questa E' un'automazione nuova, e c'e' per
+        // decisione esplicita del proprietario — «il sync del trading da ora in poi deve
+        // diventare automatico» — che rovescia il «sync SEMPRE MANUALE» di trading-app.yaml.
+        // Il freno che resta: -IfNewCommit agisce SOLO quando master e' avanzato, cioe' dopo
+        // una merge (un atto umano); a parita' di commit il giro costa un git fetch. ArgoCD
+        // non puo' farlo al posto nostro: non raggiunge il repo privato dal 2026-08-05.
+        new("deploy",
+            "sync automatico del motore: master avanzato -> build locale + import + apply",
+            Schedule.Ogni(TimeSpan.FromMinutes(30)),
+            "deploy-trading.ps1", ["-IfNewCommit"],
+            TimeSpan.FromMinutes(25)),
     ];
 
     public static Job? Find(string nome) =>

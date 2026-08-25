@@ -2642,6 +2642,31 @@ Il piano originale post-merge, per riferimento storico:
    guardiano J18 oggi dichiara l'inapplicabilità invece di tacere, ma vedere il carry morto richiede
    che il motore scriva un battito leggibile dal guscio.
 
+### Le tre decisioni della sera (2026-08-25) — la Queen Bee al comando
+
+Il proprietario ha deciso, in chiaro: «quello che può essere automatizzato e/o gestito dalla Queen
+Bee deve essere configurato e reso tale». Tre rovesciamenti, tutti eseguiti coi freni dichiarati:
+
+1. **Il sync del trading è automatico.** Rovescia il «SEMPRE MANUALE» di `trading-app.yaml` (la
+   storia è registrata lì). ArgoCD non può farlo (repo privato dal 06/08): lo fa la plancia —
+   lavoro `deploy` ogni 30′, `scripts/deploy-trading.ps1 -IfNewCommit` — che agisce SOLO quando
+   master è avanzato (cioè dopo una merge, un atto umano): fetch → build locale → import nel nodo →
+   apply → rollout atteso → pin committato. Nessun selfHeal, nessun prune, nulla a parità di
+   commit. Il pod è già stato promosso a `local-83b200c3` (J19-J21 lato motore in esercizio; il
+   registro di osservazione J8 è sopravvissuto al riavvio: 26.868″ intatti — la prova dal vivo).
+2. **Le coppie di PairsWatch si scelgono da sole — per REPLICAZIONE.** `PairsWatch:AutoWatch`:
+   una coppia entra solo se operabile in almeno `AutoWatchMinScreens` (≥2, default 3) screen
+   DISTINTI che coprono almeno `AutoWatchMinSpanDays` (default 14) giorni — il rumore non replica
+   su richiesta; il top-N su un test singolo resta la trappola dichiarata (al 5% su ~190 coppie ≈
+   una decina di falsi per costruzione). Le manuali restano sempre e il tetto
+   (`AutoWatchMaxPairs`, default 5) non le sfratta mai; la selezione di ogni giro è dichiarata.
+3. **J14 è ACCESO** (`Fleet:GreyAutoDeploy=true`) **e la flotta è tutta autorizzata**
+   (`ExecutionLanes=[3,4,5,6,7]`). Il ciclo completo della Queen Bee è armato: ritiro (quando
+   l'osservazione matura — inedia dal 04/09, Sharpe dal 15/09) → corsia libera → schieramento
+   automatico del grigio migliore, una azione per tick, tetto 3/5, comitato sui pareggi, guardia
+   di esposizione. Con le 5 corsie oggi occupate, il primo schieramento automatico seguirà il
+   primo ritiro maturato.
+
 ### L'incidente del deploy, e la sua riparazione (2026-08-25, sera)
 
 **Durante l'ondata un mio `dotnet-ef migrations remove --force --no-build` ha droppato
