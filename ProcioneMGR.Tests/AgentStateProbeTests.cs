@@ -496,4 +496,58 @@ public class AgentStateProbeTests
 
         Assert.Contains("su 2 Champion in carica", Agent(r, "Drift feature ML").Detail, StringComparison.Ordinal);
     }
+
+    // ------------------------------------------------------------------ [J11] capacità di ritiro
+
+    /// <summary>
+    /// [J11] Il caso che motiva la modifica: «ACCESO E OPERANTE … non esegue» leggeva IDENTICO su
+    /// una flotta i cui due criteri di ritiro erano entrambi strutturalmente irraggiungibili
+    /// (atteso null ovunque, osservazione azzerata a ogni riavvio). La riga ora porta i numeri che
+    /// distinguono «non ha nulla da ritirare» da «non potrebbe ritirare nulla comunque».
+    /// </summary>
+    [Fact]
+    public void Fleet_RitiroStrutturalmenteIrraggiungibile_LoGrida()
+    {
+        var r = AgentStateProbe.Describe(AllOff() with
+        {
+            FleetEnabled = true,
+            FleetLanesWithExpected = 0,
+            FleetLanesMatureForSharpe = 0,
+            FleetLanesMatureForStarvation = 0,
+        }, Now);
+
+        var a = Agent(r, "Orchestratore di flotta");
+        Assert.Contains("0/5 corsie con atteso dichiarato", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("NESSUN ritiro può ancora maturare", a.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Fleet_RitiroMaturabile_PortaINumeri()
+    {
+        var r = AgentStateProbe.Describe(AllOff() with
+        {
+            FleetEnabled = true,
+            FleetLanesWithExpected = 4,
+            FleetLanesMatureForSharpe = 1,
+            FleetLanesMatureForStarvation = 3,
+        }, Now);
+
+        var a = Agent(r, "Orchestratore di flotta");
+        Assert.Contains("4/5 corsie con atteso dichiarato", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("1 per il giudizio Sharpe e 3 per l'inedia", a.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("NESSUN ritiro", a.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Fleet_FontiNonInterrogabili_NonFingeZero()
+    {
+        // Null = fonte non interrogabile: dichiararlo, non trasformarlo in «0 corsie» — un
+        // verdetto costruito sull'ignoranza è peggio di nessun verdetto.
+        var r = AgentStateProbe.Describe(AllOff() with { FleetEnabled = true }, Now);
+
+        var a = Agent(r, "Orchestratore di flotta");
+        Assert.Contains("atteso dichiarato non determinabile", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("maturità dell'osservazione non determinabile", a.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("0/5", a.Detail, StringComparison.Ordinal);
+    }
 }

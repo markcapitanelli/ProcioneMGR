@@ -125,7 +125,15 @@ public sealed record AgentStateFacts(
     bool DriftEnabled,
     bool DriftRetireChampionOnAlert,
     int SavedModelCount,
-    int? ChampionCount);
+    int? ChampionCount,
+    // [J11] I tre numeri che distinguono «non ha nulla da ritirare» da «non potrebbe ritirare
+    // nulla comunque». La riga «ACCESO E OPERANTE … non esegue» leggeva IDENTICA su una flotta i
+    // cui due criteri di ritiro erano entrambi strutturalmente irraggiungibili (atteso null su
+    // ogni gamba, osservazione azzerata a ogni riavvio): era vera e inutile. Null = fonte non
+    // interrogabile, e si dichiara — non si finge zero.
+    int? FleetLanesWithExpected = null,
+    int? FleetLanesMatureForSharpe = null,
+    int? FleetLanesMatureForStarvation = null);
 
 /// <summary>
 /// [I1] <b>La sonda che dice quali agenti autonomi sono vivi.</b>
@@ -170,7 +178,10 @@ public sealed class AgentStateProbe(
     IPipelineApplier applier,
     ILogger<AgentStateProbe> logger,
     IAiKeyStore? keyStore = null,
-    IRegimeChangeDetector? regimeChangeDetector = null)
+    IRegimeChangeDetector? regimeChangeDetector = null,
+    // [J11] Per contare le corsie col ritmo atteso dichiarato. Opzionale: senza, il numero resta
+    // non determinabile e la sonda lo dice invece di inventare uno zero.
+    Trading.ILaneDirectory? laneDirectory = null)
 {
     /// <summary>
     /// Finestra su cui si contano i voti del comitato. Dichiarata e non configurabile: è un
@@ -317,6 +328,17 @@ public sealed class AgentStateProbe(
             (false, true, false) => $"{f.FleetGovernedLanes} corsie sotto governo, DryRun spento ma Fleet:ExecutionLanes è VUOTA: nessuna corsia autorizzata, resta di solo journal",
             (false, true, true) => $"{f.FleetGovernedLanes} corsie sotto governo, ESECUZIONE ATTIVA su {f.FleetAuthorizedLanes} corsie autorizzate: può FERMARLE da solo (l'avvio automatico non è implementato)",
         };
+        // [J11] La riga sopra leggeva IDENTICA su una flotta i cui due criteri di ritiro erano
+        // entrambi strutturalmente irraggiungibili. Il ritiro «può» solo se i criteri POSSONO
+        // maturare: si dichiara quante corsie hanno l'atteso (senza, l'inedia non giudica) e
+        // quante hanno un'osservazione matura. «Non determinabile» resta distinto da zero.
+        detail += " · ritiro: " + (f.FleetLanesWithExpected is int exp
+            ? $"{exp}/{f.FleetGovernedLanes} corsie con atteso dichiarato"
+            : "atteso dichiarato non determinabile");
+        detail += f.FleetLanesMatureForSharpe is int ms && f.FleetLanesMatureForStarvation is int mi
+            ? $", osservazione matura su {ms} per il giudizio Sharpe e {mi} per l'inedia"
+              + (ms == 0 && mi == 0 ? " — NESSUN ritiro può ancora maturare" : "")
+            : ", maturità dell'osservazione non determinabile";
         return new AgentState(name, AgentActivation.AccesoOperante, detail);
     }
 
@@ -485,6 +507,44 @@ public sealed class AgentStateProbe(
         // scritto a mano sarebbe una seconda verità sullo stesso confine.
         var governed = Math.Max(0, TradingLanes.Count - applier.LaneCount);
 
+        // [J11] La capacità di RITIRO, misurata e non presunta: quante corsie governate dichiarano
+        // un atteso (senza, l'inedia non giudica — «l'ignoranza non condanna») e quante hanno
+        // un'osservazione cumulata (J8) matura per ciascun criterio. Fonti separate e ciascuna
+        // fail-open dichiarato: un guasto qui non deve azzerare la sonda intera.
+        int? lanesWithExpected = null;
+        int? matureSharpe = null;
+        int? matureStarvation = null;
+        if (laneDirectory is not null)
+        {
+            try
+            {
+                var summaries = await laneDirectory.ListAsync(ct);
+                lanesWithExpected = summaries.Count(s => s.Id >= applier.LaneCount && s.ExpectedTradesPerMonth is not null);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Sonda agenti: directory delle corsie non leggibile, l'atteso dichiarato resta non determinabile.");
+            }
+        }
+        try
+        {
+            var minSharpeSeconds = (long)TimeSpan.FromDays(7 * Math.Max(1, fleetOpt.RetireMinWeeks)).TotalSeconds;
+            var minStarvSeconds = (long)TimeSpan.FromDays(Math.Max(1, fleetOpt.StarvationMinDays)).TotalSeconds;
+            await using var dbObs = await dbFactory.CreateDbContextAsync(ct);
+            var observations = await dbObs.FleetLaneObservations.AsNoTracking()
+                .Where(o => o.LaneId >= applier.LaneCount)
+                .Select(o => o.ObservedSeconds)
+                .ToListAsync(ct);
+            matureSharpe = observations.Count(s => s >= minSharpeSeconds);
+            matureStarvation = observations.Count(s => s >= minStarvSeconds);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Sonda agenti: registro di osservazione non leggibile, la maturità del ritiro resta non determinabile.");
+        }
+
         return new AgentStateFacts(
             CampaignEnabled: campaignOpt.Enabled,
             CampaignsEnabled: campaignsEnabled,
@@ -507,7 +567,10 @@ public sealed class AgentStateProbe(
             DriftEnabled: driftOpt.Enabled,
             DriftRetireChampionOnAlert: driftOpt.RetireChampionOnAlert,
             SavedModelCount: savedModels,
-            ChampionCount: champions);
+            ChampionCount: champions,
+            FleetLanesWithExpected: lanesWithExpected,
+            FleetLanesMatureForSharpe: matureSharpe,
+            FleetLanesMatureForStarvation: matureStarvation);
     }
 }
 
