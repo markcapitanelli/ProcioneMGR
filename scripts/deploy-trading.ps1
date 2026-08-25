@@ -51,9 +51,17 @@ try {
     $pinLine = Select-String -Path $kustomization -Pattern 'newTag:\s*local-([0-9a-f]+)'
     $pinnedSha = if ($pinLine) { $pinLine.Matches[0].Groups[1].Value } else { '' }
 
-    if ($IfNewCommit -and $pinnedSha -eq $remoteSha) {
-        Write-Host "Gia' allineato: il pin local-$pinnedSha e' l'HEAD di origin/master. Nessun deploy."
-        exit 0
+    if ($IfNewCommit -and $pinnedSha) {
+        # «Nuovo commit» NON significa «HEAD diverso dal pin»: il commit del PIN stesso fa
+        # avanzare master, e confrontare gli sha creerebbe un loop — deploy, pin, master avanza,
+        # nuovo deploy, ogni 30 minuti per sempre (trovato al primo giro vero, 2026-08-25). La
+        # domanda giusta e': da quando abbiamo promosso, e' cambiato QUALCOSA OLTRE al pin?
+        git diff --quiet $pinnedSha origin/master -- . ':(exclude)infra/k8s/trading/kustomization.yaml'
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Gia' allineato: da local-$pinnedSha a origin/master cambia solo il pin. Nessun deploy."
+            exit 0
+        }
+        if ($LASTEXITCODE -ne 1) { throw "git diff fallito (exit $LASTEXITCODE): il pin local-$pinnedSha non e' un commit noto? Serve un occhio umano." }
     }
 
     # --- 2. Allineamento del repo (ff-only: una divergenza è un problema, non un dettaglio) ---
