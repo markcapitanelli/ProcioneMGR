@@ -656,6 +656,9 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Research.IResearchCandidateIn
 // database dal 2026-07 e nessuna query li aveva mai riletti. Singleton come il gemello: porta un
 // semaforo interno, e due indicizzazioni concorrenti nello stesso processo non hanno senso.
 builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.IPairCandidateIndexer, ProcioneMGR.Services.PairsTrading.PairCandidateIndexer>();
+// [J7] L'indicizzazione AUTOMATICA: l'indice era costruito e mai azionato (0 righe contro 174
+// artefatti) — il braccio che lo aziona da solo, coi pulsanti della pagina per il manuale.
+builder.Services.AddHostedService<ProcioneMGR.Services.PairsTrading.PairIndexSyncWorker>();
 // [I14c] La storia dello spread delle coppie sorvegliate. Lo STORE e' sempre registrato — la pagina
 // deve poter leggere una storia gia' scritta anche col worker spento, che e' lo stato di fabbrica.
 builder.Services.Configure<ProcioneMGR.Services.PairsTrading.PairsWatchOptions>(builder.Configuration.GetSection("PairsWatch"));
