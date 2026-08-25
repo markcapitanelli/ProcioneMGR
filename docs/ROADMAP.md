@@ -2641,3 +2641,26 @@ Il piano originale post-merge, per riferimento storico:
 8. **Aperto (pod-side, non in questa ondata)**: l'heartbeat del carry persistito dal motore — il
    guardiano J18 oggi dichiara l'inapplicabilità invece di tacere, ma vedere il carry morto richiede
    che il motore scriva un battito leggibile dal guscio.
+
+### L'incidente del deploy, e la sua riparazione (2026-08-25, sera)
+
+**Durante l'ondata un mio `dotnet-ef migrations remove --force --no-build` ha droppato
+`ResearchCandidates` dal database vivo.** La meccanica, da non dimenticare: `remove` decide «qual è
+l'ultima migrazione» leggendo l'ASSEMBLY delle migrazioni, e con `--no-build` quell'assembly era la
+build Debug ferma al 2026-08-14 — quindi «l'ultima» era `AddResearchCandidates`, che `--force` ha
+revertito sul database a cui punta la startup: tabella droppata, riga di history tolta, file della
+migrazione cancellati dal progetto (e finiti cancellati anche in master dentro il commit di J4).
+**Mai `--force` con `--no-build`.**
+
+Nessun dato primario è andato perso: la tabella è DERIVATA («ricostruibile dagli artifact», ed è la
+ragione per cui quel commento esiste). La riparazione, tutta per la via standard: file di
+`AddResearchCandidates` ripristinati da git; due migrazioni correttive idempotenti
+(`RestoreResearchCandidatesAfterAccidentalRevert` per le 6 colonne nate dopo il 14/08,
+`RestoreResearchCandidatesNullability` per il NOT NULL di `WalkForwardOosSharpe` che faceva
+fallire — «156 run illeggibili» che illeggibili non erano — l'indicizzazione dei run storici
+bonificati); `dotnet-ef database update`; ricostruzione totale dell'indice da `/research`.
+**Esito verificato: 15.149 righe / 177 run / 887 chiavi distinte** — più di prima dell'incidente,
+perché le cacce del giorno su finestre scorrevoli hanno già aggiunto candidati nuovi (i grigi
+distinti sono passati da 73 a 100). La sonda J3 in Home, che l'incidente aveva reso l'unica
+superficie a dirlo («Ricerca: non verificabile — PostgresException»), è tornata verde: ha fatto
+esattamente il suo lavoro.

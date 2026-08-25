@@ -181,7 +181,11 @@
                             <li>
                                 <strong>corsia @a.LaneId</strong> (@a.Symbol @a.Timeframe) — @a.Report.DisplayName:
                                 Sharpe realizzato @(a.Report.RealizedSharpe?.ToString("F2")) vs atteso
-                                @(a.Report.ExpectedSharpe?.ToString("F2")) (@(a.Report.SharpeRatio?.ToString("P0")))
+                                @* [2026-08-25] Percentuale SENZA separatore delle migliaia: il P0
+                                   italiano stampava il rapporto della corsia 4 (−1004%) come
+                                   «−1.005%», che si legge meno-uno-virgola-zero-zero-cinque
+                                   per cento — l'opposto di ciò che il numero grida. *@
+                                @(a.Report.ExpectedSharpe?.ToString("F2")) (@(a.Report.SharpeRatio is decimal sr ? $"{sr * 100:0}%" : ""))
                                 su @a.Report.TradeCount trade
                             </li>
                         }
