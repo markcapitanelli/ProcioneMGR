@@ -12,8 +12,8 @@ using ProcioneMGR.Data;
 namespace ProcioneMGR.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260814122215_AddResearchCandidates")]
-    partial class AddResearchCandidates
+    [Migration("20260825094045_MarkMixedUniverseRuns")]
+    partial class MarkMixedUniverseRuns
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -724,6 +724,13 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.Property<double?>("DeflatedSharpe")
                         .HasColumnType("double precision");
 
+                    b.Property<string>("DeflatedSharpeSource")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<int?>("DeflatedSharpeTrials")
+                        .HasColumnType("integer");
+
                     b.Property<Guid?>("ExperimentRunId")
                         .HasColumnType("uuid");
 
@@ -1223,6 +1230,10 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                         .HasMaxLength(8)
                         .HasColumnType("character varying(8)");
 
+                    b.Property<string>("SkipReason")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
                     b.Property<string>("Symbol")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -1246,6 +1257,146 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.HasIndex("ModelId", "CheckedAtUtc");
 
                     b.ToTable("DriftCheckResults", (string)null);
+                });
+
+            modelBuilder.Entity("ProcioneMGR.Services.PairsTrading.PairCandidate", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<double>("AdfStatistic")
+                        .HasColumnType("double precision");
+
+                    b.Property<int>("AlignedCandles")
+                        .HasColumnType("integer");
+
+                    b.Property<double>("HedgeRatio")
+                        .HasColumnType("double precision");
+
+                    b.Property<bool>("IsCointegrated")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsHedgeRatioPlausible")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsTradeable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("PairKeyValue")
+                        .IsRequired()
+                        .HasMaxLength(96)
+                        .HasColumnType("character varying(96)");
+
+                    b.Property<DateTime>("RunCompletedUtc")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SymbolX")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("SymbolY")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Timeframe")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PairKeyValue", "RunCompletedUtc");
+
+                    b.HasIndex("RunId", "PairKeyValue")
+                        .IsUnique()
+                        .HasDatabaseName("IX_PairCandidates_Run_Coppia");
+
+                    b.ToTable("PairCandidates", (string)null);
+                });
+
+            modelBuilder.Entity("ProcioneMGR.Services.PairsTrading.PairSpreadWindow", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<double>("AdfStatistic")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTime>("ComputedAtUtc")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<double>("CriticalValue")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Estimator")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<double>("HedgeRatio")
+                        .HasColumnType("double precision");
+
+                    b.Property<bool>("IsStationaryWindow")
+                        .HasColumnType("boolean");
+
+                    b.Property<double>("LastZScore")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("PairKeyValue")
+                        .IsRequired()
+                        .HasMaxLength(96)
+                        .HasColumnType("character varying(96)");
+
+                    b.Property<double>("SpreadMean")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("SpreadStdDev")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("SymbolX")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("SymbolY")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Timeframe")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<DateTime>("WindowEndUtc")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<int>("WindowSize")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("WindowStartUtc")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PairKeyValue", "Estimator", "WindowEndUtc");
+
+                    b.HasIndex("PairKeyValue", "Estimator", "WindowSize", "WindowEndUtc")
+                        .IsUnique()
+                        .HasDatabaseName("IX_PairSpreadWindows_Serie_Finestra");
+
+                    b.ToTable("PairSpreadWindows", (string)null);
                 });
 
             modelBuilder.Entity("ProcioneMGR.Services.Pipeline.PipelineArtifact", b =>
@@ -1380,6 +1531,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.Property<string>("ErrorLog")
                         .HasColumnType("text");
 
+                    b.Property<bool>("MixedTimeframeUniverse")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("RecommendationJson")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1451,6 +1605,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
 
                     b.Property<int>("ObservedLanes")
                         .HasColumnType("integer");
+
+                    b.Property<DateTime?>("PausedUntilUtc")
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("PendingRunId")
                         .HasColumnType("uuid");
@@ -1552,6 +1709,13 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.Property<double?>("DeflatedSharpe")
                         .HasColumnType("double precision");
 
+                    b.Property<string>("DominantDirection")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<decimal?>("ExcessHoldoutSharpe")
+                        .HasColumnType("numeric");
+
                     b.Property<decimal>("HoldoutMaxDrawdown")
                         .HasColumnType("numeric");
 
@@ -1570,6 +1734,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.Property<bool>("IsGrey")
                         .HasColumnType("boolean");
 
+                    b.Property<decimal?>("NetExposure")
+                        .HasColumnType("numeric");
+
                     b.Property<double?>("NullTwinPercentile")
                         .HasColumnType("double precision");
 
@@ -1579,6 +1746,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.Property<string>("ParametersJson")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<decimal?>("PassiveHoldoutSharpe")
+                        .HasColumnType("numeric");
 
                     b.Property<double?>("PermutationPValue")
                         .HasColumnType("double precision");
@@ -1618,13 +1788,20 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<decimal?>("TimeInMarketFraction")
+                        .HasColumnType("numeric");
+
                     b.Property<string>("Timeframe")
                         .IsRequired()
                         .HasMaxLength(8)
                         .HasColumnType("character varying(8)");
 
-                    b.Property<decimal>("WalkForwardOosSharpe")
+                    b.Property<decimal?>("WalkForwardOosSharpe")
                         .HasColumnType("numeric");
+
+                    b.Property<string>("WalkForwardSource")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.HasKey("Id");
 
@@ -2123,6 +2300,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("ActiveStrategiesJson")
+                        .HasColumnType("text");
+
                     b.Property<decimal>("AvailableCapital")
                         .HasColumnType("numeric");
 
@@ -2147,6 +2327,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
 
                     b.Property<int>("LaneId")
                         .HasColumnType("integer");
+
+                    b.Property<DateTime?>("LastCandleUtc")
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime?>("LastOrderUtc")
                         .HasColumnType("timestamp without time zone");

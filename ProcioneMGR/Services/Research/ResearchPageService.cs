@@ -44,6 +44,13 @@ public sealed class ResearchPageService(
     private static readonly string[] TimeframeOrder = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"];
 
     public ResearchSummary? Summary { get; private set; }
+
+    /// <summary>[J4] Righe escluse perché il run era a universo misto (verdetti non confrontabili). Da dichiarare in UI.</summary>
+    public int MixedExcludedRows { get; private set; }
+
+    /// <summary>[J4] Le stesse esclusioni contate per CandidateKey distinti — il numero che conta (le righe sono ~19×).</summary>
+    public int MixedExcludedKeys { get; private set; }
+
     public IReadOnlyList<FamilyStat> FamilyStats { get; private set; } = [];
     public IReadOnlyList<RejectReasonStat> RejectReasons { get; private set; } = [];
     public IReadOnlyList<string> Symbols { get; private set; } = [];
@@ -85,7 +92,25 @@ public sealed class ResearchPageService(
     public async Task LoadAsync(ResearchFilter filter, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var all = db.ResearchCandidates.AsNoTracking();
+
+        // [J4] I candidati dei run a universo MISTO escono da OGNI lettura della pagina — aggregati
+        // compresi — perché PBO e DSR di quei run mescolavano due ppy e i loro verdetti non sono
+        // confrontabili con gli altri (dal 2026-08-20 lo stage rifiuta quegli universi; questo
+        // chiude il buco sui run già archiviati). L'esclusione è DICHIARATA col conteggio in UI:
+        // uno scarto silenzioso si leggerebbe come «non c'era nulla».
+        var mixedRunIds = db.PipelineRuns.AsNoTracking()
+            .Where(r => r.MixedTimeframeUniverse)
+            .Select(r => r.Id);
+        MixedExcludedRows = await db.ResearchCandidates.AsNoTracking()
+            .CountAsync(c => mixedRunIds.Contains(c.RunId), ct);
+        MixedExcludedKeys = await db.ResearchCandidates.AsNoTracking()
+            .Where(c => mixedRunIds.Contains(c.RunId))
+            .Select(c => c.CandidateKey)
+            .Distinct()
+            .CountAsync(ct);
+
+        var all = db.ResearchCandidates.AsNoTracking()
+            .Where(c => !mixedRunIds.Contains(c.RunId));
 
         // --- Aggregati globali (mai filtrati: il quadro d'insieme resta fermo mentre si filtra) --
         var totals = await all

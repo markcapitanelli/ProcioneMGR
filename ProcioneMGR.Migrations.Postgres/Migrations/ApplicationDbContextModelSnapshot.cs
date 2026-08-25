@@ -1528,6 +1528,9 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.Property<string>("ErrorLog")
                         .HasColumnType("text");
 
+                    b.Property<bool>("MixedTimeframeUniverse")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("RecommendationJson")
                         .IsRequired()
                         .HasColumnType("text");

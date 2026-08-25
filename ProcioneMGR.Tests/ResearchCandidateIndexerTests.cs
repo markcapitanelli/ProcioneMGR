@@ -69,7 +69,8 @@ public sealed class ResearchCandidateIndexerTests : IAsyncDisposable
     };
 
     private static async Task<Guid> SeedRunAsync(IDbContextFactory<ApplicationDbContext> dbFactory,
-        List<ValidatedCandidate> candidates, DateTime completedAt, string payloadOverride = "")
+        List<ValidatedCandidate> candidates, DateTime completedAt, string payloadOverride = "",
+        bool mixedUniverse = false)
     {
         var runId = Guid.NewGuid();
         await using var db = await dbFactory.CreateDbContextAsync();
@@ -81,6 +82,7 @@ public sealed class ResearchCandidateIndexerTests : IAsyncDisposable
             CompletedAt = completedAt,
             Status = "Completed",
             Trigger = "Manual",
+            MixedTimeframeUniverse = mixedUniverse, // [J4]
         });
         db.PipelineArtifacts.Add(new PipelineArtifact
         {
@@ -195,6 +197,39 @@ public sealed class ResearchCandidateIndexerTests : IAsyncDisposable
     }
 
     // ------------------------------------------------------------------ 4. la pagina legge il vero
+
+    [Fact]
+    public async Task PageService_ExcludesMixedUniverseRuns_AndDeclaresTheCount()
+    {
+        // [J4] I candidati dei run a universo misto escono da OGNI lettura (PBO/DSR calcolati su
+        // un pannello che mescola due ppy: verdetti non confrontabili), e l'esclusione è
+        // DICHIARATA col conteggio — uno scarto silenzioso si leggerebbe come «non c'era nulla».
+        var (dbFactory, indexer) = await BuildAsync();
+        await SeedRunAsync(dbFactory,
+            [Candidate("RsiOversold", "XLM/USDT", survived: true, holdoutSharpe: 1.5m)],
+            DateTime.UtcNow.AddDays(-2));
+        await SeedRunAsync(dbFactory,
+            [
+                Candidate("Momentum", "BTC/USDT", survived: true, holdoutSharpe: 2.0m),
+                Candidate("Momentum", "ETH/USDT", survived: false, holdoutSharpe: 0.8m, reject: "Solo 8 trade in holdout (< 10)"),
+            ],
+            DateTime.UtcNow.AddDays(-1), mixedUniverse: true);
+
+        var page = new ResearchPageService(indexer, dbFactory);
+        await page.InitializeAsync(new ResearchFilter());
+
+        // Gli aggregati contano SOLO il run pulito; l'esclusione porta i suoi due numeri.
+        Assert.NotNull(page.Summary);
+        Assert.Equal(1, page.Summary!.TotalCandidates);
+        Assert.Equal(1, page.Summary.Survivors);
+        Assert.Equal(0, page.Summary.Grey);
+        Assert.Equal(2, page.MixedExcludedRows);
+        Assert.Equal(2, page.MixedExcludedKeys);
+
+        // E la tabella non mostra i candidati del run misto.
+        await page.LoadAsync(new ResearchFilter());
+        Assert.DoesNotContain(page.Candidates, c => c.Symbol == "BTC/USDT");
+    }
 
     [Fact]
     public async Task PageService_FiltersAndAggregates_MatchSeededTruth()

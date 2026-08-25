@@ -85,6 +85,20 @@ public class PipelineRun
     public string RecommendationJson { get; set; } = "{}";
 
     public string? ErrorLog { get; set; }
+
+    /// <summary>
+    /// [J4, PRD autonomia-operativa 2026-08-25] L'universo del run mescolava più timeframe.
+    ///
+    /// <para>Dal 2026-08-20 <c>HoldoutValidationStage.ValidateInput</c> RIFIUTA gli universi misti
+    /// (il PBO di pannello confronta Sharpe per barra su partizioni per indice, e il DSR
+    /// de-annualizzava con il ppy del singolo candidato su un pannello che ne mescolava due). Ma i
+    /// run già archiviati — 29 della config 8, più quelli delle altre config marcate «timeframe
+    /// misti» — restavano indistinguibili dai validi e alimentavano /research, le letture della
+    /// fascia grigia e ogni statistica aggregata. Questo flag li marca: scritto all'avvio del run
+    /// dall'universo del contesto, backfillato per i run storici dallo SNAPSHOT (la verità al
+    /// momento del run, non la config di oggi che può essere cambiata).</para>
+    /// </summary>
+    public bool MixedTimeframeUniverse { get; set; }
 }
 
 /// <summary>

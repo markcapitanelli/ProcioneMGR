@@ -83,6 +83,18 @@
             </div>
         }
     </div>
+    @* [J4] L'esclusione è DICHIARATA: uno scarto silenzioso si leggerebbe come «non c'era nulla». *@
+    @if (Svc.MixedExcludedKeys > 0)
+    {
+        <div class="text-body-secondary small mb-3">
+            <i class="bi bi-funnel me-1"></i>
+            Esclusi dagli aggregati e dalla tabella: <strong>@Svc.MixedExcludedKeys</strong>
+            candidat@(Svc.MixedExcludedKeys == 1 ? "o" : "i") distint@(Svc.MixedExcludedKeys == 1 ? "o" : "i")
+            (@Svc.MixedExcludedRows.ToString("N0") righe) da run a <strong>universo misto</strong>:
+            PBO e DSR di quei run mescolavano timeframe diversi e i verdetti non sono confrontabili
+            (lo stage li rifiuta dal 2026-08-20; qui si chiude il buco sui run già archiviati).
+        </div>
+    }
 }
 
 <div class="card mb-3">

@@ -142,8 +142,22 @@ public sealed class FleetStateReader(
         var minCompleted = now.AddDays(-Math.Max(1, opt.CandidateMaxAgeDays));
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        // [J4] I run a universo MISTO non producono candidati di flotta: PBO e DSR di quei run
+        // erano calcolati su un pannello che mescola due ppy (per questo dal 2026-08-20 lo stage
+        // li rifiuta), quindi né la banda «pass» né la grigia sono verdetti confrontabili. Si
+        // esclude DICHIARANDO il conteggio: uno scarto silenzioso si legge come «non c'era nulla».
+        var mixedExcluded = await db.PipelineRuns.AsNoTracking()
+            .CountAsync(r => r.Status == "Completed" && r.CompletedAt >= minCompleted
+                && r.MixedTimeframeUniverse
+                && !string.IsNullOrEmpty(r.RecommendationJson) && r.RecommendationJson != "{}", ct);
+        if (mixedExcluded > 0)
+        {
+            logger.LogInformation(
+                "Coda candidati: esclusi {N} run a universo misto (verdetti non confrontabili, J4).", mixedExcluded);
+        }
         var runs = await db.PipelineRuns.AsNoTracking()
             .Where(r => r.Status == "Completed" && r.CompletedAt >= minCompleted)
+            .Where(r => !r.MixedTimeframeUniverse)
             .Where(r => !string.IsNullOrEmpty(r.RecommendationJson) && r.RecommendationJson != "{}")
             .Select(r => new { r.Id, r.CompletedAt, r.ConfigurationId, r.RecommendationJson })
             .ToListAsync(ct);

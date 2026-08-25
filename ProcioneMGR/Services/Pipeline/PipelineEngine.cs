@@ -106,6 +106,9 @@ public sealed class PipelineEngine(
             Status = "Running",
             Trigger = trigger,
             ContextSnapshotJson = JsonSerializer.Serialize(ctx, Json),
+            // [J4] Il marcatore si scrive alla NASCITA del run, dall'universo vero del contesto:
+            // un lettore non deve ri-parsare lo snapshot per sapere se i verdetti sono confrontabili.
+            MixedTimeframeUniverse = ctx.Universe.Select(s => s.Timeframe).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1,
         };
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
