@@ -588,6 +588,8 @@ builder.Services.AddHostedService<ProcioneMGR.Services.Notifications.DailyDigest
 builder.Services.Configure<ProcioneMGR.Services.Fleet.FleetOptions>(builder.Configuration.GetSection("Fleet"));
 // [J8] Il registro dell'osservazione cumulata: dichiarato PRIMA del reader che lo consuma.
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneObservationLedger, ProcioneMGR.Services.Fleet.LaneObservationLedger>();
+// [J9] La ricostruzione delle frequenze attese mancanti (azione amministrativa, /admin/autonomy).
+builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IFleetStateReader, ProcioneMGR.Services.Fleet.FleetStateReader>();
 // [F5] Il click umano sui candidati grigi: scrive la config su una corsia di flotta libera e
 // (se richiesto) la avvia in Paper. Solo grigi, solo flotta, solo Paper: non è una porta di servizio.

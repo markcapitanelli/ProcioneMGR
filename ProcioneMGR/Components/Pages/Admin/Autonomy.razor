@@ -43,6 +43,7 @@
 @inject IOptionsMonitor<ProcioneMGR.Services.PairsTrading.PairsWatchOptions> PairsWatchMonitor
 @inject ProcioneMGR.Services.Fleet.FleetOrchestratorWorker FleetWorker
 @inject ProcioneMGR.Services.Fleet.IGreyDeployer GreyDeployer
+@inject ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill FrequencyBackfill
 @inject ILaneDirectory LaneDirectory
 @inject IPipelineApplier PipelineApplier
 @inject IOptionsMonitor<ProcioneMGR.Services.Health.HeartbeatOptions> HeartbeatMonitor
@@ -560,6 +561,33 @@
             <div class="col-auto align-self-end">
                 <button class="btn btn-primary" @onclick="SaveFleetAsync" disabled="@_busy">Salva</button>
             </div>
+        </div>
+        @* [J9] La circolarità dell'inedia: l'atteso è scritto solo da un nuovo schieramento, e le
+           corsie schierate prima di I11 hanno null su ogni gamba — quindi l'inedia non giudica mai
+           e nessuna corsia si libera mai. La ricostruzione usa la STESSA aritmetica dello
+           schieramento nuovo, dall'archivio candidati. *@
+        <div class="border rounded p-2 mb-3">
+            <strong class="small">Frequenze attese mancanti (J9)</strong>
+            <div class="small text-muted mb-2">
+                Ricostruisce <code>ExpectedTradesPerMonth</code> per le gambe che non lo dichiarano,
+                ritrovando il candidato di provenienza nell'archivio per identità canonica. Dove il
+                candidato non si trova, la gamba resta com'è e il perché viene mostrato: un
+                denominatore inventato è peggio di nessun verdetto.
+            </div>
+            <button class="btn btn-outline-secondary btn-sm me-2" @onclick="() => RunBackfillAsync(dryRun: true)" disabled="@_busy">Anteprima (non scrive)</button>
+            <button class="btn btn-warning btn-sm" @onclick="() => RunBackfillAsync(dryRun: false)" disabled="@_busy">Ricostruisci e salva</button>
+            @if (_backfillReport is { } rep)
+            {
+                <div class="small mt-2">
+                    <strong>@(rep.DryRun ? "Anteprima" : "Eseguito"):</strong> @rep.Updated gambe ricostruibili su @rep.Legs.Count esaminate.
+                    <ul class="mb-0">
+                        @foreach (var l in rep.Legs.Take(12))
+                        {
+                            <li class="@(l.Updated ? "" : "text-muted")">corsia @l.LaneId — @l.Leg: @l.Detail</li>
+                        }
+                    </ul>
+                </div>
+            }
         </div>
         @* [F5] IL CLICK UMANO: schiera un candidato grigio proposto su una corsia di flotta libera. *@
         @if (_greyRuns.Count > 0)
@@ -2315,6 +2343,24 @@
     }
 
     // ---- [F5] Il click umano sui candidati grigi ----
+    // [J9] L'ultimo report del backfill delle frequenze attese (null = mai eseguito in questa vista).
+    private ProcioneMGR.Services.Fleet.BackfillReport? _backfillReport;
+
+    private async Task RunBackfillAsync(bool dryRun)
+    {
+        _busy = true;
+        try
+        {
+            _backfillReport = await FrequencyBackfill.RunAsync(dryRun);
+        }
+        catch (Exception ex)
+        {
+            _status = $"Backfill frequenze fallito: {ex.Message}";
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
     private List<Guid> _greyRuns = [];
     private Guid? _greyRunId;
     private List<ProcioneMGR.Services.Fleet.GreyChoice> _greyChoices = [];
