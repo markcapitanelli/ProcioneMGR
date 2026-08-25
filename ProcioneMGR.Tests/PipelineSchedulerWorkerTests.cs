@@ -372,8 +372,11 @@ public class PipelineSchedulerWorkerIntegrationTests : IAsyncDisposable
             Survivors = 2,
             EnsembleLegs =
             {
-                new ProposedLeg { StrategyName = "A", Symbol = "BTC/USDT", Timeframe = "4h", WeightPercent = 50m, HoldoutSharpe = sharpe },
-                new ProposedLeg { StrategyName = "B", Symbol = "ETH/USDT", Timeframe = "4h", WeightPercent = 50m, HoldoutSharpe = sharpe },
+                // [J12] SourceVerdict esplicito come nei JSON reali post-T1 (DecisionStages:290 lo
+                // scrive sempre): senza, la guardia grigia tratterebbe la provenienza ignota da
+                // grigia — fail-closed — e questi test non misurerebbero più la catena di applica.
+                new ProposedLeg { StrategyName = "A", Symbol = "BTC/USDT", Timeframe = "4h", WeightPercent = 50m, HoldoutSharpe = sharpe, SourceVerdict = "Survived" },
+                new ProposedLeg { StrategyName = "B", Symbol = "ETH/USDT", Timeframe = "4h", WeightPercent = 50m, HoldoutSharpe = sharpe, SourceVerdict = "Survived" },
             },
         };
         var runId = Guid.NewGuid();

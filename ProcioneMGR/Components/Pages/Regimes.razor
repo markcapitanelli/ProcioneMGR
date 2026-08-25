@@ -424,11 +424,25 @@
 
     private async Task SaveRegimeAwareAsync()
     {
+        // [J19, PRD autonomia-operativa 2026-08-25] QUESTO TOGGLE SCRIVE LA CORSIA 0. L'inject
+        // non-keyed di IEnsembleManager è un alias della corsia 0 (Program.cs), e questo
+        // read-modify-write ne riscrive l'INTERA configurazione: se la corsia 0 non è configurata,
+        // GetConfigurationAsync restituisce il default (simbolo e timeframe VUOTI) e il salvataggio
+        // persisterebbe quel vuoto — è il percorso indicato come origine della corsia 0 rimasta
+        // sette settimane in corsa senza poter ricevere candele. Fail-closed: su una corsia non
+        // configurata non si scrive, si spiega.
         var cfg = await EnsembleMgr.GetConfigurationAsync();
+        if (string.IsNullOrWhiteSpace(cfg.Symbol) || string.IsNullOrWhiteSpace(cfg.Timeframe))
+        {
+            _regimeAware = cfg.RegimeAwareWeighting; // il toggle torna al valore vero: niente stato finto
+            SetStatus("La corsia 0 non è configurata (simbolo/timeframe vuoti): salvare da qui riscriverebbe "
+                + "la sua configurazione con un vuoto. Configura prima la corsia 0 da /ensemble.", true);
+            return;
+        }
         cfg.RegimeAwareWeighting = _regimeAware;
         await EnsembleMgr.UpdateConfigurationAsync(cfg);
         await LoadCurrentRegimeAsync();
-        SetStatus($"Regime-Aware Weighting {(_regimeAware ? "attivato" : "disattivato")}.", false);
+        SetStatus($"Regime-Aware Weighting {(_regimeAware ? "attivato" : "disattivato")} (scrive la configurazione della corsia 0).", false);
     }
 
     private void SetStatus(string text, bool error) { _status = text; _isError = error; }

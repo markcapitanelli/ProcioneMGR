@@ -21,6 +21,21 @@ public static class LaneInvariantChecker
         var violations = new List<string>();
         var ci = CultureInfo.InvariantCulture;
 
+        // [J19, PRD autonomia-operativa 2026-08-25] CORSIA IN CORSA MA NON ALIMENTABILE: simbolo o
+        // timeframe vuoti significano che il router delle candele non può consegnarle nulla — la
+        // corsia 0 è rimasta così SETTE SETTIMANE (IsRunning=true, Symbol vuoto, ultimo trade
+        // 2026-07-05), gridandolo solo nei log del pod («timeframe "" non riconosciuto», 98
+        // occorrenze in ~10h) che ruotano e che nessuno rilegge. Un motore «acceso» che non può
+        // ricevere candele non è acceso: è un semaforo verde su un binario morto, e va dichiarato
+        // dal canale che qualcuno guarda davvero (il watchdog degli invarianti).
+        if (state.IsRunning && (string.IsNullOrWhiteSpace(state.Symbol) || string.IsNullOrWhiteSpace(state.Timeframe)))
+        {
+            violations.Add(string.Format(ci,
+                "Corsia IN CORSA ma non alimentabile: simbolo «{0}» / timeframe «{1}» — nessuna candela può raggiungerla. "
+                + "Fermarla o configurarla da /ensemble.",
+                state.Symbol, state.Timeframe));
+        }
+
         // Capitale non positivo su una corsia che gira: nessun percorso legittimo lo produce
         // (StartAsync parte da capitale > 0; il SafetyChecker post-fix rifiuta capitale ≤ 0).
         if (state.TotalCapital <= 0m)

@@ -17,6 +17,11 @@ public class LaneInvariantCheckerTests
         LaneId = 2,
         Mode = TradingMode.Testnet,
         IsRunning = true,
+        // [J19] Una corsia SANA in corsa ha simbolo e timeframe: senza, dal 2026-08-25 il checker
+        // la dichiara «non alimentabile» (il caso vero della corsia 0, sette settimane in corsa
+        // senza poter ricevere candele).
+        Symbol = "ETH/USDT",
+        Timeframe = "1h",
         Leverage = leverage,
         TotalCapital = capital,
         AvailableCapital = capital,

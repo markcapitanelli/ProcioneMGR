@@ -341,7 +341,12 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     public IReadOnlyList<StageParameterDefinition> ParameterDefinitions =>
     [
         new("minHoldoutSharpe", "Sharpe holdout minimo", "0.5", ""),
-        new("minHoldoutTrades", "Trade holdout minimi", "10", ""),
+        new("minHoldoutTrades", "Trade holdout minimi", "10",
+            "[J6] il PAVIMENTO assoluto di potenza: sotto questi trade lo Sharpe stimato è rumore, qualunque sia la frequenza del candidato"),
+        new("minHoldoutTradesFraction", "Frazione dell'atteso (0 = solo assoluto)", "0",
+            "[J6] rende il gate RELATIVO alla frequenza del candidato: richiesti = max(pavimento, frazione × trade attesi nell'holdout dal ritmo di selezione). "
+            + "Coglie il sotto-consegnare (30/mese in selezione, 12 nell'holdout = sospetto) senza chiedere l'impossibile ai candidati radi. "
+            + "ATTENZIONE: sposta bocciature dal gate del conteggio a quello del DSR e RIDUCE la fascia grigia — il saldo è dichiarato nel log del run"),
         .. PipelineCosts.ParameterDefinitions,
         new("positionSizePercent", "Size posizione (%)", "10", ""),
         new("minDeflatedSharpe", "Deflated Sharpe minimo", "0.95", "gate anti-overfitting (Bailey-López de Prado): sotto questa soglia il candidato è scartato"),
@@ -387,6 +392,14 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     {
         var minSharpe = config.GetDecimal("minHoldoutSharpe", 0.5m);
         var minTrades = config.GetInt("minHoldoutTrades", 10);
+        // [J6] La frazione dell'atteso: 0 = comportamento storico (solo pavimento assoluto).
+        var minTradesFraction = config.GetDecimal("minHoldoutTradesFraction", 0m);
+        var selectionMonths = (decimal)(ctx.Ranges.SelectionTo - ctx.Ranges.SelectionFrom).TotalDays / Fleet.TradeFrequency.DaysPerMonth;
+        var holdoutMonths = ctx.Ranges.HoldoutMonths();
+        // [J6] Il saldo del gate relativo, da DICHIARARE: chi cambia esito rispetto alla regola
+        // assoluta. Il PRD prevede che il saldo sulla fascia grigia sia NEGATIVO (un bocciato per
+        // DSR sotto 0,70 non è grigio, un bocciato per «Solo N trade» sì): va detto, non nascosto.
+        var bocciatiInPiuDalRelativo = 0;
         var minDeflatedSharpe = (double)config.GetDecimal("minDeflatedSharpe", 0.95m);
         var maxPbo = (double)config.GetDecimal("maxPbo", 0.5m);
         var trialCorrThreshold = (double)config.GetDecimal("trialCorrelationThreshold", 0.5m);
@@ -525,9 +538,19 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
                 {
                     validated.RejectReason = $"Sharpe holdout {validated.HoldoutSharpe:F2} < {minSharpe}";
                 }
-                else if (validated.HoldoutTrades < minTrades)
+                else
                 {
-                    validated.RejectReason = $"Solo {validated.HoldoutTrades} trade in holdout (< {minTrades})";
+                    // [J6] Il requisito di trade, RELATIVO alla frequenza del candidato quando la
+                    // frazione è accesa: max(pavimento, frazione × attesi-dall'holdout). Il
+                    // RejectReason conserva il prefisso «Solo » — è la porta della fascia grigia
+                    // (GreyZone.ShortWindowRejectPrefix) — e dichiara da dove viene il numero.
+                    var (required, origine) = RequiredHoldoutTrades(
+                        minTrades, minTradesFraction, validated.SelectionTrades, selectionMonths, holdoutMonths);
+                    if (validated.HoldoutTrades < required)
+                    {
+                        if (validated.HoldoutTrades >= minTrades) bocciatiInPiuDalRelativo++;
+                        validated.RejectReason = $"Solo {validated.HoldoutTrades} trade in holdout (< {required}{origine})";
+                    }
                 }
                 validated.Survived = validated.RejectReason is null;
             }
@@ -541,6 +564,15 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
             ctx.Validated.Add(validated);
             holdoutReturns.Add(holdoutRets);
             ctx.LogLine($"[{Name}] {validated.Key}: holdout Sharpe {validated.HoldoutSharpe:F2}, {validated.HoldoutTrades} trade → {(validated.Survived ? "SOPRAVVISSUTO (pre-gate)" : validated.RejectReason)}");
+        }
+
+        // [J6] Il saldo del gate relativo, dichiarato dove si va a leggere l'esito del run.
+        if (minTradesFraction > 0m)
+        {
+            ctx.LogLine($"[{Name}] Gate trade RELATIVO attivo (frazione {minTradesFraction:0.##} dell'atteso, pavimento {minTrades}): "
+                + $"{bocciatiInPiuDalRelativo} candidati bocciati per sotto-consegna che la regola assoluta avrebbe promosso. "
+                + "Nota di lettura: la regola relativa sposta bocciature verso il gate del DSR e RIDUCE la fascia grigia "
+                + "(un bocciato per DSR sotto il pavimento non è grigio, un «Solo N trade» sì).");
         }
 
         if (benchmarkFalliti > 0)
@@ -580,6 +612,42 @@ public sealed class HoldoutValidationStage(IBacktestEngine backtest, IDbContextF
     /// gate non ha prodotto, e soprattutto non si allarga l'insieme che alimenta la fascia grigia
     /// (<see cref="GreyZone.IsGrey"/> guarda proprio <c>DeflatedSharpe</c>).</para>
     /// </summary>
+    /// <summary>
+    /// [J6, PRD autonomia-operativa 2026-08-25] Il requisito di trade dell'holdout, e la sua
+    /// origine in chiaro (vuota quando vale il solo pavimento).
+    ///
+    /// <para><b>Perché relativo.</b> Il gate assoluto era mal dimensionato per costruzione: un
+    /// intero, non una frequenza — sui 4h chiedeva ~4 trade/mese a candidati che ne fanno 2,3, e
+    /// bocciava 67 chiavi distinte TUTTE in guadagno (Sharpe medio 1,12, misura del 2026-08-25);
+    /// il massimo Sharpe holdout dell'archivio (3,19) non ha mai ricevuto un DSR perché fermato
+    /// qui. La regola relativa coglie anche il verso opposto: 30 trade/mese in selezione e 12
+    /// nell'holdout è un candidato che sotto-consegna — sospetto, non sfortunato.</para>
+    ///
+    /// <para><b>La trappola auto-referenziale, e perché il pavimento non si tocca.</b> Un candidato
+    /// a bassissima frequenza avrebbe un atteso minuscolo: senza pavimento passerebbe con 3 trade,
+    /// e uno Sharpe su 3 trade non è una stima, è un aneddoto (l'errore standard dello Sharpe
+    /// per-trade scala come 1/√n: sotto ~10 trade supera metà dello Sharpe stesso). Il pavimento
+    /// assoluto è il prezzo di potenza statistica che OGNI candidato paga, qualunque sia il suo
+    /// ritmo: la frazione può solo ALZARE il requisito, mai abbassarlo.</para>
+    ///
+    /// Pura e interna: si prova senza backtest.
+    /// </summary>
+    internal static (int Required, string Origin) RequiredHoldoutTrades(
+        int minTrades, decimal fraction, int selectionTrades, decimal selectionMonths, decimal? holdoutMonths)
+    {
+        if (fraction <= 0m || holdoutMonths is not decimal hm || selectionMonths <= 0m || selectionTrades <= 0)
+        {
+            // Frazione spenta, o atteso non derivabile: vale il pavimento, senza inventare numeri.
+            return (Math.Max(1, minTrades), string.Empty);
+        }
+
+        var expected = selectionTrades / selectionMonths * hm;
+        var relative = (int)Math.Ceiling(fraction * expected);
+        return relative > minTrades
+            ? (relative, $": {fraction:0.##} × {expected:0.#} attesi dal ritmo di selezione")
+            : (Math.Max(1, minTrades), string.Empty);
+    }
+
     private async Task PersistMlDeflatedSharpeAsync(PipelineContext ctx, CancellationToken ct)
     {
         // Esito per modello: il DSR se il gate l'ha prodotto, altrimenti null = validato e scartato prima.
@@ -1068,8 +1136,22 @@ public static class OverfittingGate
             // risk-free zero ha mosso il DSR: SR* dipende dalla varianza degli Sharpe dei
             // tentativi, che cambia convenzione, mentre l'osservato era gia' a rf = 0. Il segno
             // dello spostamento non si deduce per inversione algebrica: si legge qui.
-            log?.Invoke($"DSR massimo del run: {dsrMax:F3} su {dsrMisurati.Count} candidati misurati "
-                      + $"(pavimento fascia grigia {GreyZone.DsrFloor:F2}, gate {minDeflatedSharpe:F2}).");
+            //
+            // [J16, 2026-08-25] LA RIGA DEVE DICHIARARE LA CENSURA. Il DSR si calcola SOLO per chi
+            // ha gia' passato Sharpe e conteggio trade (il continue su !Survived qui sopra): sui
+            // dati veri e' ~4% dell'archivio, e il candidato con lo Sharpe holdout piu' alto
+            // (3,19, 17 trade) non ha MAI ricevuto un DSR perche' fermato dal gate del conteggio.
+            // Senza il denominatore vero, «DSR massimo 0,674» si leggeva come «e' il DSR che
+            // blocca tutto» — un controllo che rassicura sul cancello sbagliato.
+            var sharpeMaxSenzaDsr = validated
+                .Where(v => v.DeflatedSharpe is null && v.HoldoutSharpe > 0m)
+                .Select(v => (decimal?)v.HoldoutSharpe)
+                .DefaultIfEmpty(null)
+                .Max();
+            log?.Invoke($"DSR massimo del run: {dsrMax:F3} su {dsrMisurati.Count} candidati misurati di {validated.Count} totali "
+                      + "(il DSR si calcola solo DOPO i gate di Sharpe e conteggio trade: i bocciati a monte non sono misurati"
+                      + (sharpeMaxSenzaDsr is decimal sm ? $"; il miglior Sharpe holdout senza DSR è {sm:F2}" : "")
+                      + $") — pavimento fascia grigia {GreyZone.DsrFloor:F2}, gate {minDeflatedSharpe:F2}.");
             if (dsrMax < GreyZone.DsrFloor)
             {
                 log?.Invoke(

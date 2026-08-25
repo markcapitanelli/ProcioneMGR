@@ -106,6 +106,9 @@ public sealed class PipelineEngine(
             Status = "Running",
             Trigger = trigger,
             ContextSnapshotJson = JsonSerializer.Serialize(ctx, Json),
+            // [J4] Il marcatore si scrive alla NASCITA del run, dall'universo vero del contesto:
+            // un lettore non deve ri-parsare lo snapshot per sapere se i verdetti sono confrontabili.
+            MixedTimeframeUniverse = ctx.Universe.Select(s => s.Timeframe).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1,
         };
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
@@ -216,6 +219,12 @@ public sealed class PipelineEngine(
     private PipelineContext BuildContext(PipelineConfiguration config, string? userId)
     {
         var ranges = JsonSerializer.Deserialize<PipelineDateRanges>(config.DateRangesJson) ?? new PipelineDateRanges();
+
+        // [J2] Le finestre RELATIVE si risolvono QUI, all'avvio del run, contro «adesso»: le date
+        // assolute risolte finiscono nel ContextSnapshotJson (riga sotto, nel chiamante) e il
+        // resume rilegge lo snapshot — la finestra di un run non cambia mai a metà corsa. Su una
+        // config assoluta Resolve è l'identità.
+        ranges = ranges.Resolve(DateTime.UtcNow);
 
         // [D-03, Fase 1 PRD-RISANAMENTO] L'invariante selezione/holdout sta sul percorso OBBLIGATO
         // (l'avvio del run), non solo nel salvataggio UI. La politica vive in

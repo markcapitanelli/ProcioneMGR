@@ -26,6 +26,7 @@
    ricalcolata», è «non verrà ricalcolata». Sono due frasi diverse e solo una è vera. *@
 @inject Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Monitoring.Drift.DriftMonitorOptions> DriftOptions
 @inject ProcioneMGR.Services.Sentiment.SentimentHeritageSnapshot HeritageSnapshot
+@inject ProcioneMGR.Services.Health.ResearchLivenessProbe ResearchProbe
 
 <PageTitle>ProcioneMGR</PageTitle>
 
@@ -121,6 +122,50 @@
                         @(HeritageSnapshot.LastRunUtc is { } lastRun2 ? $"Ultimo controllo {lastRun2:yyyy-MM-dd HH:mm} UTC." : "")
                     </div>
                 </div>
+            }
+
+            @* [J3] La macchina della ricerca: il numero che distingue «non ha trovato» da «non ha
+               cercato». Il 2026-08-23 la ricerca si è fermata e per 43+ ore nessuna superficie lo
+               ha detto — chi apriva lo scheduler vedeva 13 config spente, chi leggeva
+               Campaign:Enabled=true concludeva l'opposto. *@
+            @if (_research is { } ric)
+            {
+                @if (ric.State == ProcioneMGR.Services.Health.ResearchLivenessState.Ferma)
+                {
+                    <div class="alert alert-warning">
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <i class="bi bi-binoculars fs-5"></i>
+                            <strong>La ricerca è FERMA</strong>
+                        </div>
+                        <div class="small mb-2">@ric.Reason.</div>
+                        @if (ric.Facts is { } rf)
+                        {
+                            <div class="small text-body-secondary">
+                                @RicercaNumeri(rf)
+                            </div>
+                        }
+                        <a href="campaign" class="alert-link">Rimetti in rotazione da Campagne →</a>
+                    </div>
+                }
+                else if (ric.State == ProcioneMGR.Services.Health.ResearchLivenessState.NonMisurabile)
+                {
+                    @* Regola 4: fail-open sulla diagnostica, ma DICENDOLO — «non misurabile» non è «viva». *@
+                    <div class="text-body-secondary small mb-3">
+                        <i class="bi bi-exclamation-circle me-1"></i>
+                        Ricerca: <strong>non verificabile</strong> — @ric.Reason
+                    </div>
+                }
+                else
+                {
+                    <div class="text-body-secondary small mb-3">
+                        <i class="bi bi-binoculars me-1"></i>
+                        Ricerca viva: @ric.Reason.
+                        @if (ric.Facts is { } rf)
+                        {
+                            @RicercaNumeri(rf)
+                        }
+                    </div>
+                }
             }
 
             @if (_decayAlerts.Count > 0)
@@ -348,6 +393,16 @@
 
     // [D2] Deriva dei fattori: lettura della fotografia in memoria aggiornata dal worker — nessun
     // calcolo sul caricamento della Home, che deve restare veloce.
+    // [J3] Il verdetto della sonda «la ricerca è viva» (null = non ancora letto).
+    private ProcioneMGR.Services.Health.ResearchLivenessReport? _research;
+
+    /// <summary>[J3] I numeri della card, in una riga: chiavi DISTINTE, mai righe (artefatto 19×).</summary>
+    private static string RicercaNumeri(ProcioneMGR.Services.Health.ResearchLivenessFacts rf) =>
+        $"{rf.RunsCompleted24h} run/24h · {rf.DistinctCandidates24h} candidati distinti/24h · " +
+        $"{rf.NewCandidates7d} mai visti prima/7g" +
+        (rf.LastHoldoutToUtc is { } h ? $" · holdout fino al {h:dd/MM}" : "") +
+        (rf.CampaignStatusSummary is { Length: > 0 } cs ? $" · {cs}" : "");
+
     private IReadOnlyList<(FactorDriftSeriesSnapshot Series, FactorDriftReport Report)> _factorDriftAlerts = [];
     private int _factorDriftSeries;
     private int _factorDriftTracked;
@@ -521,6 +576,13 @@
         {
             _heritageShortened = HeritageSnapshot.Shortened;
             _heritageNeverStarted = HeritageSnapshot.NeverStarted;
+        }
+        catch { /* stesso principio del widget sopra */ }
+
+        try
+        {
+            // [J3] La sonda fa da sé il proprio try/catch e degrada a NON MISURABILE dichiarato.
+            _research = await ResearchProbe.ProbeAsync();
         }
         catch { /* stesso principio del widget sopra */ }
 

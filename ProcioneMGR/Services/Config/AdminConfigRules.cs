@@ -118,7 +118,10 @@ public static class AdminConfigRules
             (o.StarvationMinDays >= 1, "L'osservazione minima per l'inedia dev'essere almeno 1 giorno: a 0 si giudicherebbe una corsia appena avviata."),
             (o.MaxExecutionsPerTick >= 1, "Serve almeno 1 azione possibile per tick."),
             (o.ExecutionLanes.All(l => l >= 0),
-                "Le corsie autorizzate all'esecuzione sono numeri di corsia: nessuno puo' essere negativo.")),
+                "Le corsie autorizzate all'esecuzione sono numeri di corsia: nessuno puo' essere negativo."),
+            // [J14] Zero e' ammesso ed e' un modo legittimo di dire «niente grigi automatici»
+            // tenendo il flag acceso per il futuro; negativo no.
+            (o.MaxGreyLanes >= 0, "Il tetto delle corsie grigie non puo' essere negativo (0 = nessuno schieramento grigio automatico).")),
 
         // [I14c] La sorveglianza dello spread. La soglia di persistenza e' quella che puo' fare
         // danno restando "valida" per il binder: a 0 ogni coppia risulta persistente (anche il puro
@@ -138,7 +141,11 @@ public static class AdminConfigRules
 
         AutoReapplyOptions o => Check(
             (o.LookbackDays >= 1, "Il lookback dev'essere almeno 1 giorno."),
-            (o.MaxPerTick >= 1, "Serve almeno un run per tick.")),
+            (o.MaxPerTick >= 1, "Serve almeno un run per tick."),
+            // [J12] Il tetto ha un massimo deliberatamente basso: oltre una manciata di gambe
+            // grigie non e' piu' un'eccezione dichiarata, e' l'F5 rovesciato da una casella.
+            (o.MaxGreyLegs is >= 0 and <= 5,
+                "Le gambe grigie tollerate in auto-applica stanno fra 0 (solo sopravvissuti, il default F5) e 5.")),
 
         PromotionEvaluatorOptions o => Check(
             (o.MinTradeCount >= 1, "Servono almeno 1 trade per valutare una promozione."),
@@ -257,7 +264,10 @@ public static class AdminConfigRules
             (o.TickSeconds >= 10, "Il tick del planner dev'essere almeno 10 secondi."),
             // [I7] Zero è legittimo (comportamento storico), negativo no: una pausa negativa
             // scadrebbe nel passato, cioè sarebbe una pausa che non mette in pausa.
-            (o.CancelPauseMinutes >= 0, "La pausa dopo un annullamento non può essere negativa (0 = nessuna pausa).")),
+            (o.CancelPauseMinutes >= 0, "La pausa dopo un annullamento non può essere negativa (0 = nessuna pausa)."),
+            // [J1] Nessun massimo: un riarmo lunghissimo è una scelta legittima; negativo no.
+            (o.RearmHours >= 0, "Il riarmo a tempo non può essere negativo (0 = mai: si esce solo per trigger o a mano)."),
+            (o.StallAlertHours >= 1, "La soglia di fermo della ricerca dev'essere almeno 1 ora.")),
 
         RegimeTriggerOptions o => Check(
             (o.CheckIntervalMinutes >= 1, "L'intervallo di controllo dev'essere almeno 1 minuto."),

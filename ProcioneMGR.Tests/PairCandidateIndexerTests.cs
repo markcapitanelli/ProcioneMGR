@@ -365,6 +365,47 @@ public sealed class PairCandidateIndexerTests : IAsyncDisposable
         Assert.Equal(prima, dopo);
     }
 
+    /// <summary>
+    /// [J7, PRD autonomia-operativa 2026-08-25] Il worker che aziona l'indice DA SOLO. L'indice
+    /// era costruito, collaudato e mai azionato: 0 righe contro 174 artefatti — uno strumento che
+    /// esiste solo dietro un click che nessuno dà. Il tick delega all'incrementale (idempotente)
+    /// e non deve morire su un guasto transitorio.
+    /// </summary>
+    [Fact]
+    public async Task Worker_TickOnce_IndicizzaLArretrato_EDueGiriNonDuplicano()
+    {
+        var (dbFactory, indexer) = await BuildAsync();
+        await SeedRunAsync(dbFactory, [Pair("ETH/USDT", "BTC/USDT", true, 0.05)], DateTime.UtcNow.AddDays(-2));
+        var worker = new ProcioneMGR.Services.PairsTrading.PairIndexSyncWorker(
+            indexer, NullLogger<ProcioneMGR.Services.PairsTrading.PairIndexSyncWorker>.Instance);
+
+        await worker.TickOnceAsync(CancellationToken.None);
+        await worker.TickOnceAsync(CancellationToken.None); // idempotente: il secondo giro non duplica
+
+        await using var db = await dbFactory.CreateDbContextAsync();
+        Assert.Equal(1, await db.PairCandidates.CountAsync());
+    }
+
+    [Fact]
+    public async Task Worker_GuastoDellIndice_NonPropaga()
+    {
+        // Un guasto transitorio (qui: DB irraggiungibile) non deve uccidere il worker: il
+        // prossimo giro riprova. Se questo lanciasse, l'hosted service morirebbe in silenzio.
+        var services = new ServiceCollection();
+        services.AddSingleton<ProcioneMGR.Services.Security.IEncryptionService, PassthroughEncryption>();
+        services.AddDbContextFactory<ApplicationDbContext>(o => o.UseNpgsql(
+            "Host=localhost;Port=1;Database=inesistente;Username=x;Password=x;Timeout=1"));
+        var provider = services.BuildServiceProvider();
+        _provider = provider;
+        var indexer = new PairCandidateIndexer(
+            provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
+            NullLogger<PairCandidateIndexer>.Instance);
+        var worker = new ProcioneMGR.Services.PairsTrading.PairIndexSyncWorker(
+            indexer, NullLogger<ProcioneMGR.Services.PairsTrading.PairIndexSyncWorker>.Instance);
+
+        await worker.TickOnceAsync(CancellationToken.None); // non deve lanciare
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();

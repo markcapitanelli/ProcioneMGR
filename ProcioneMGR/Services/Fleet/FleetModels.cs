@@ -126,6 +126,33 @@ public sealed class FleetOptions
     /// menù che il core ha già validato: una risposta invalida ricade sul default deterministico.
     /// </summary>
     public bool UseCommittee { get; set; }
+
+    // --- [J14] Il rovesciamento di F5: schieramento AUTOMATICO dei grigi, coi freni ---
+
+    /// <summary>
+    /// [J14, PRD autonomia-operativa 2026-08-25] <b>Il rovesciamento di F5, per decisione del
+    /// proprietario.</b> F5 stabiliva che il grigio si propone al click umano e non si schiera da
+    /// solo — perché il forward test Paper è l'unico giudice immune al multiple testing e va speso
+    /// con parsimonia. La decisione registrata nel PRD lo rovescia: con questo flag (e SOLO nella
+    /// flotta, mai nel percorso campagna→impronta chiuso da J12) l'orchestratore può schierare da
+    /// solo un candidato grigio su una corsia libera e autorizzata.
+    ///
+    /// <para>Default <b>false</b>: è IL cambio di natura della fascia grigia e si accende apposta.
+    /// I freni che la campagna non aveva valgono tutti: banda e frequenza filtrate dal core,
+    /// tetto <see cref="MaxGreyLanes"/>, corsie solo in <see cref="ExecutionLanes"/>, dry-run,
+    /// budget per tick, guardia di esposizione, arbitrato del comitato sui pareggi, e il ritiro
+    /// (J8-J10) che libera le corsie — senza un ritiro che funziona si riempiono cinque corsie
+    /// una volta sola e non si liberano più.</para>
+    /// </summary>
+    public bool GreyAutoDeploy { get; set; }
+
+    /// <summary>
+    /// [J14] Tetto di corsie di flotta occupabili da candidati GRIGI contemporaneamente. Il
+    /// default 3 su 5 è la raccomandazione del PRD (§8): due corsie restano alla banda «pass» per
+    /// il giorno in cui il gate tornerà a produrne. Una corsia dalla provenienza IGNOTA conta come
+    /// grigia ai fini del tetto: non sapere non allarga il permesso.
+    /// </summary>
+    public int MaxGreyLanes { get; set; } = 3;
 }
 
 /// <summary>Fotografia di una corsia come la vede l'orchestratore (sola lettura).</summary>
@@ -147,7 +174,14 @@ public sealed record FleetLaneState(
     /// configurazione dell'ensemble. <c>null</c> = non dichiarato da almeno una gamba, e in quel
     /// caso il ritiro per inedia NON si esprime: l'ignoranza non condanna.
     /// </summary>
-    decimal? ExpectedTradesPerMonth = null);
+    decimal? ExpectedTradesPerMonth = null,
+    /// <summary>
+    /// [J14] La corsia esegue gambe di fascia GRIGIA? Dalla configurazione (SourceVerdict delle
+    /// gambe attive): true = almeno una grigia, false = tutte dichiarate sopravvissute, null =
+    /// provenienza ignota — e ai fini del tetto MaxGreyLanes l'ignoto conta come grigio
+    /// (fail-closed: non sapere non allarga il permesso).
+    /// </summary>
+    bool? GreySourced = null);
 
 /// <summary>
 /// Un run candidato al forward test. <paramref name="Band"/>: "pass" = sopravvissuti alla
@@ -202,8 +236,21 @@ public sealed class FleetState
 /// <summary>Le azioni che l'orchestratore può decidere. Chiuse: non esiste un'azione "avvia Live" per costruzione.</summary>
 public abstract record FleetAction(string Reason);
 
-/// <summary>Schiera il candidato sulla corsia libera indicata e la avvia in Paper (AF2b; in DryRun solo journal).</summary>
-public sealed record AssignCandidateToLane(Guid RunId, int LaneId, string Reason) : FleetAction(Reason);
+/// <summary>
+/// Schiera il candidato sulla corsia libera indicata e la avvia in Paper (AF2b; in DryRun solo
+/// journal). [J13] <paramref name="CandidateKey"/> è l'identità del candidato da schierare quando
+/// la raccomandazione è a gamba SINGOLA; null = ensemble multi-gamba, che il braccio non esegue
+/// (lo schieramento di un ensemble su una corsia sola non è definito: una corsia ha un simbolo) —
+/// resta di solo journal, col motivo dichiarato.
+/// </summary>
+public sealed record AssignCandidateToLane(Guid RunId, int LaneId, string Reason, string? CandidateKey = null) : FleetAction(Reason);
+
+/// <summary>
+/// [J14] Schiera un candidato GRIGIO sulla corsia libera indicata e la avvia in Paper. Azione
+/// distinta da <see cref="AssignCandidateToLane"/> di proposito: il journal e i log devono poter
+/// dire «grigio» senza ispezionare nulla, e i freni (tetto, flag) valgono solo qui.
+/// </summary>
+public sealed record AssignGreyCandidateToLane(Guid RunId, string CandidateKey, int LaneId, string Reason) : FleetAction(Reason);
 
 /// <summary>Ferma un forward test perdente e libera la corsia.</summary>
 public sealed record StopAndFreeLane(int LaneId, string Reason) : FleetAction(Reason);

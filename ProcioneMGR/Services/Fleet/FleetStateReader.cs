@@ -28,6 +28,10 @@ public sealed class FleetStateReader(
     IPipelineApplier applier,
     IOptionsMonitor<Risk.CorrelatedExposureOptions> exposureOptions,
     IOptionsMonitor<FleetOptions> fleetOptions,
+    // [J8] L'orologio cumulato dell'osservazione: vive QUI, nell'unico punto che assembla lo stato
+    // delle corsie, così Decide e la sua spiegazione (Explain, il pannello) leggono lo STESSO
+    // numero — due orologi darebbero un pannello che spiega un ritiro diverso da quello vero.
+    ILaneObservationLedger observationLedger,
     ILogger<FleetStateReader> logger) : IFleetStateReader
 {
     // Soglia F5 (GreyDsrFloor): trasferita in GreyZone.DsrFloor insieme al giudice — vedi IsGrey.
@@ -76,10 +80,19 @@ public sealed class FleetStateReader(
                     running = status.IsRunning;
                     mode = status.Mode.ToString();
                     emergency = status.IsEmergencyStopped;
-                    if (running && status.StartedAtUtc is DateTime started)
+
+                    // [J8] L'osservazione viene dal REGISTRO CUMULATO, non da now − StartedAtUtc:
+                    // quella finestra riparte da zero a ogni riavvio del motore, e con
+                    // RetireMinWeeks=3 il massimo continuo mai raggiunto in tutta la vita della
+                    // flotta è stato 20g 3h contro i 21 richiesti — il criterio di ritiro non ha
+                    // mai potuto esprimersi. Trade e Sharpe si ancorano allo stesso primo
+                    // avvistamento dell'identità: numeratore e denominatore dalla stessa storia.
+                    var identity = LaneObservationLedger.BuildIdentity(s.Symbol, s.Timeframe, s.ActiveStrategyIds);
+                    var (observed, firstSeen) = await observationLedger.AccumulateAsync(s.Id, identity, running, now, ct);
+                    observation = observed;
+                    if (running)
                     {
-                        observation = now - started;
-                        var perf = await engine.GetPerformanceAsync(from: started, ct);
+                        var perf = await engine.GetPerformanceAsync(from: firstSeen, ct);
                         sharpe = perf.SharpeRatio;
                         trades = perf.TotalTrades;
                     }
@@ -120,7 +133,9 @@ public sealed class FleetStateReader(
                 // [I12] Il ritmo atteso arriva dalla directory, che gia' deserializza la config
                 // della corsia: una seconda lettura qui sarebbe una seconda regola su cosa conta
                 // come "gamba attiva". [I12-rev] ...e vale null se il motore sta eseguendo altro.
-                expected));
+                expected,
+                // [J14] Provenienza delle gambe, per il tetto MaxGreyLanes (stessa fonte: la directory).
+                GreySourced: s.HasGreyLegs));
         }
 
         // --- Candidati --------------------------------------------------------------------------
@@ -142,8 +157,22 @@ public sealed class FleetStateReader(
         var minCompleted = now.AddDays(-Math.Max(1, opt.CandidateMaxAgeDays));
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        // [J4] I run a universo MISTO non producono candidati di flotta: PBO e DSR di quei run
+        // erano calcolati su un pannello che mescola due ppy (per questo dal 2026-08-20 lo stage
+        // li rifiuta), quindi né la banda «pass» né la grigia sono verdetti confrontabili. Si
+        // esclude DICHIARANDO il conteggio: uno scarto silenzioso si legge come «non c'era nulla».
+        var mixedExcluded = await db.PipelineRuns.AsNoTracking()
+            .CountAsync(r => r.Status == "Completed" && r.CompletedAt >= minCompleted
+                && r.MixedTimeframeUniverse
+                && !string.IsNullOrEmpty(r.RecommendationJson) && r.RecommendationJson != "{}", ct);
+        if (mixedExcluded > 0)
+        {
+            logger.LogInformation(
+                "Coda candidati: esclusi {N} run a universo misto (verdetti non confrontabili, J4).", mixedExcluded);
+        }
         var runs = await db.PipelineRuns.AsNoTracking()
             .Where(r => r.Status == "Completed" && r.CompletedAt >= minCompleted)
+            .Where(r => !r.MixedTimeframeUniverse)
             .Where(r => !string.IsNullOrEmpty(r.RecommendationJson) && r.RecommendationJson != "{}")
             .Select(r => new { r.Id, r.CompletedAt, r.ConfigurationId, r.RecommendationJson })
             .ToListAsync(ct);
@@ -271,7 +300,11 @@ public sealed class FleetStateReader(
             return new CandidateVerdict("pass",
                 TradeFrequency.PerMonth(minTrades, months) ?? 0m,
                 recommendation.EnsembleLegs[0].Timeframe,
-                $"{recommendation.BestCandidate} ({survivors} sopravvissuti su {recommendation.CandidatesEvaluated})");
+                $"{recommendation.BestCandidate} ({survivors} sopravvissuti su {recommendation.CandidatesEvaluated})",
+                // [J13] L'identità del candidato SOLO quando la raccomandazione è a gamba singola:
+                // è il caso che il braccio di assegnazione sa eseguire (una corsia = un simbolo).
+                // Un ensemble multi-gamba resta senza chiave, e il worker lo dichiara ineseguibile.
+                Identity: recommendation.EnsembleLegs.Count == 1 ? recommendation.EnsembleLegs[0].Key : null);
         }
 
         var grey = validated

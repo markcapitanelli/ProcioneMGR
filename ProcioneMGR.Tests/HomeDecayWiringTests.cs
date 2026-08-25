@@ -102,6 +102,10 @@ public sealed class HomeDecayWiringTests : BunitContext
         Services.AddSingleton<ProcioneMGR.Services.Alpha.FactorDriftSnapshot>();
         Services.AddSingleton<ProcioneMGR.Services.Monitoring.Drift.FeatureDriftSnapshot>();
         Services.AddSingleton<ProcioneMGR.Services.Sentiment.SentimentHeritageSnapshot>();
+        // [J3] La Home inietta la sonda «la ricerca è viva»: sul DB di test vuoto degrada da sola
+        // al verdetto FERMA («nessun run completato»), che per questi test è solo sfondo.
+        Services.AddSingleton(new ProcioneMGR.Services.Pipeline.CampaignOptions().AsMonitor());
+        Services.AddSingleton<ProcioneMGR.Services.Health.ResearchLivenessProbe>();
 
         var managers = new Dictionary<int, FakeEnsembleManager>();
         foreach (var lane in lanes)

@@ -160,6 +160,7 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         IsRunning = true,
         ExchangeName = "Binance",
         Symbol = "ETH/USDT",
+        Timeframe = "1h", // [J19] una corsia in corsa senza timeframe è ora una violazione a sé
         TotalCapital = 10_000m,
         AvailableCapital = -1_807_925.81m,
         RealizedPnl = -1_817_925.81m,
@@ -171,6 +172,9 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         LaneId = laneId,
         Mode = TradingMode.Paper,
         IsRunning = true,
+        // [J19] Una corsia sana in corsa ha simbolo e timeframe (vedi LaneInvariantChecker).
+        Symbol = "BTC/USDT",
+        Timeframe = "1h",
         Leverage = 1,
         TotalCapital = 10_000m,
         AvailableCapital = 9_500m,

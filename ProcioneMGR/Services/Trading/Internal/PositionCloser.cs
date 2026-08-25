@@ -236,8 +236,12 @@ internal sealed class PositionCloser(
             Pnl = pnl,
             PnlPercent = entry > 0m ? pnl / (qty * entry) * 100m : 0m,
             OpenedAtUtc = pos.OpenedAtUtc,
-            ClosedAtUtc = ts,
-            Duration = ts - pos.OpenedAtUtc,
+            // [J21] Il tempo non torna indietro: se il ts di chiusura precede l'apertura (candela
+            // storica sfuggita alla guardia del motore, o orologio degradato), si blocca al
+            // momento dell'apertura e lo si DICHIARA — una Duration negativa persistita inquina
+            // ogni statistica di durata, e 5 righe reali l'hanno già fatto (scarti di 18-29 gg).
+            ClosedAtUtc = ClampCloseTimestamp(pos.OpenedAtUtc, ts, logger),
+            Duration = ts >= pos.OpenedAtUtc ? ts - pos.OpenedAtUtc : TimeSpan.Zero,
             ExitReason = reason,
             Mode = state.Mode,
         };
@@ -400,8 +404,12 @@ internal sealed class PositionCloser(
             Pnl = pnl,
             PnlPercent = pos.MarginBalance > 0m ? pnl / pos.MarginBalance * 100m : 0m,
             OpenedAtUtc = pos.OpenedAtUtc,
-            ClosedAtUtc = ts,
-            Duration = ts - pos.OpenedAtUtc,
+            // [J21] Il tempo non torna indietro: se il ts di chiusura precede l'apertura (candela
+            // storica sfuggita alla guardia del motore, o orologio degradato), si blocca al
+            // momento dell'apertura e lo si DICHIARA — una Duration negativa persistita inquina
+            // ogni statistica di durata, e 5 righe reali l'hanno già fatto (scarti di 18-29 gg).
+            ClosedAtUtc = ClampCloseTimestamp(pos.OpenedAtUtc, ts, logger),
+            Duration = ts >= pos.OpenedAtUtc ? ts - pos.OpenedAtUtc : TimeSpan.Zero,
             ExitReason = reason,
             Mode = state.Mode,
             MarketType = MarketType.Futures,
@@ -416,4 +424,19 @@ internal sealed class PositionCloser(
         await persistence.PersistTradeAsync(trade, ct);
         await persistence.AuditAsync("ClosePosition", new { pos.PositionId, pnl, reason, wasLiquidated }, state.Mode, ts, ct);
     }
+    /// <summary>
+    /// [J21] La cintura sotto la guardia del motore: un timestamp di chiusura precedente
+    /// all'apertura non si persiste mai — si blocca all'apertura, con un warning che dice quale
+    /// posizione e di quanto. Statica e pura per essere collaudabile senza il motore.
+    /// </summary>
+    internal static DateTime ClampCloseTimestamp(DateTime openedAtUtc, DateTime ts, ILogger? log = null)
+    {
+        if (ts >= openedAtUtc) return ts;
+        log?.LogWarning(
+            "Chiusura con ts {Ts:u} PRECEDENTE all'apertura {Opened:u} ({Giorni:F1} giorni indietro): "
+            + "timestamp bloccato all'apertura. Probabile candela storica riconsegnata da un recupero dati.",
+            ts, openedAtUtc, (openedAtUtc - ts).TotalDays);
+        return openedAtUtc;
+    }
+
 }

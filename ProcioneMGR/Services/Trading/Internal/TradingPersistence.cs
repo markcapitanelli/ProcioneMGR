@@ -100,6 +100,17 @@ internal sealed class TradingPersistence(IDbContextFactory<ApplicationDbContext>
         row.EntryPrice = pos.EntryPrice;
         row.MarginBalance = pos.MarginBalance;
         row.CurrentPrice = pos.CurrentPrice;
+        // [J20, PRD autonomia-operativa 2026-08-25] CurrentPrice e UnrealizedPnl viaggiano INSIEME
+        // o la riga mente. Qui si copiava il prezzo e non il PnL: la riga persisteva CurrentPrice
+        // aggiornato con l'UnrealizedPnl fermo al valore dell'apertura (zero) — misurato sul DB
+        // reale (corsia 1, DOT/USDT Sell: entry 0,916, corrente 0,894, PnL dichiarato 0), cioè
+        // internamente incoerente con la formula di MarkToMarket applicata agli stessi numeri
+        // della stessa riga. Conta perché il watchdog degli invarianti somma i PnL DALLE RIGHE:
+        // un PnL congelato a zero rende invisibile proprio ciò che il tetto |PnL| esiste per
+        // vedere. La verità è l'oggetto in memoria (MarkToMarket lo aggiorna a ogni candela):
+        // la riga ne copia i tre campi insieme, sempre.
+        row.UnrealizedPnl = pos.UnrealizedPnl;
+        row.UnrealizedPnlPercent = pos.UnrealizedPnlPercent;
         // [2026-08-17] Il cricchetto del trailing deve sopravvivere al riavvio. Prima questa
         // colonna la scriveva solo la creazione della posizione (col valore = EntryPrice) e la
         // modifica manuale di SL/TP: dopo un riavvio EnsureLoadedAsync ricaricava il valore di

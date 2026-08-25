@@ -9,10 +9,12 @@ namespace ProcioneMGR.Services.Fleet;
 
 /// <summary>
 /// [AF2] Il braccio della Queen Bee: ogni tick legge lo stato (reader), decide (core puro),
-/// applica l'ISTERESI sui ritiri e scrive il journal. In questo incremento (AF2a) NON esegue
-/// nulla — nemmeno con <c>Fleet:DryRun=false</c>: l'esecuzione arriva con AF2b, e un flag girato
-/// in anticipo deve produrre un avviso, non un'azione non collaudata. Vive nel SOLO monolite
-/// (è il cervello: scheduler, planner e promozioni stanno già qui).
+/// applica l'ISTERESI sui ritiri e scrive il journal. L'esecuzione è arrivata per incrementi,
+/// nell'ordine deciso dal proprietario: prima il RITIRO (AF2b/I12, 2026-08-19), poi l'AVVIO a
+/// candidato singolo (J13/J14, 2026-08-25) — sempre gattata da dry-run, <c>ExecutionLanes</c> e
+/// budget per tick, coi due gate <see cref="WhyNotExecuted"/> e
+/// <see cref="WhyNotExecutedAssignment"/> che dicono il perché di ogni rifiuto. Vive nel SOLO
+/// monolite (è il cervello: scheduler, planner e promozioni stanno già qui).
 /// </summary>
 public sealed class FleetOrchestratorWorker(
     IFleetStateReader reader,
@@ -23,7 +25,10 @@ public sealed class FleetOrchestratorWorker(
     ILogger<FleetOrchestratorWorker> logger,
     INotifier? notifier = null,
     Llm.Committee.IAiCommittee? committee = null,
-    Llm.Narration.IPostMortemService? postMortems = null) : BackgroundService
+    Llm.Narration.IPostMortemService? postMortems = null,
+    // [J13] Il braccio che AVVIA: lo stesso deployer del click umano F5, con Source="fleet".
+    // Opzionale come il resto dei collaboratori: assente = il braccio si dichiara assente.
+    IGreyDeployer? greyDeployer = null) : BackgroundService
 {
     /// <summary>Verdetti di ritiro CONSECUTIVI per corsia (isteresi: si agisce solo alla conferma).</summary>
     private readonly Dictionary<int, int> _retireStreak = new();
@@ -43,20 +48,24 @@ public sealed class FleetOrchestratorWorker(
     public const bool RetirementArmImplemented = true;
 
     /// <summary>
-    /// [AF2b] <b>Il braccio che AVVIA una corsia non esiste ancora.</b> Le assegnazioni restano di
-    /// solo journal anche con <c>Fleet:DryRun=false</c> e la corsia in lista.
+    /// [J13, PRD autonomia-operativa 2026-08-25] <b>Il braccio che AVVIA una corsia esiste</b>, per
+    /// schieramenti a CANDIDATO SINGOLO: banda «pass» a gamba singola e — dietro
+    /// <c>Fleet:GreyAutoDeploy</c> (J14) — fascia grigia. Un ensemble multi-gamba resta di solo
+    /// journal col motivo dichiarato: una corsia ha UN simbolo, e lo schieramento di un ensemble
+    /// che ne attraversa più d'uno su una corsia sola non è definito — quello resta il territorio
+    /// dell'applicatore dell'impronta.
     ///
-    /// <para>È l'ordine deciso dal proprietario il 2026-08-19: prima il ritiro, poi l'avvio.
-    /// Fermare libera una corsia e non impegna capitale; avviare mette in corsa una strategia
-    /// scelta da una macchina. Il primo si disfa con un click, il secondo ha già operato.</para>
+    /// <para>L'esecuzione passa dallo STESSO deployer del click umano F5 (<see cref="IGreyDeployer"/>,
+    /// con <c>Source="fleet"</c> a journal): bracket automatico, frequenza attesa scritta sulla
+    /// gamba, rilettura fail-closed della corsia al momento dell'azione. Un secondo percorso di
+    /// schieramento sarebbe una seconda verità su come si schiera.</para>
     ///
-    /// <para>Entrambe le costanti sono dichiarate QUI, accanto ai rami che le implementano, e non
-    /// dedotte altrove da <c>Fleet:DryRun</c>: quel flag dice che cosa è stato <i>chiesto</i>, non
-    /// che cosa il codice sa <i>fare</i>. Una sonda che leggesse il flag direbbe «esecuzione attiva»
-    /// di un braccio inesistente — il difetto della classe «controllo che rassicura», trovato
-    /// proprio così in <c>AgentStateProbe</c> dalla revisione avversaria del 2026-08-18.</para>
+    /// <para>Era l'ordine deciso dal proprietario il 2026-08-19: prima il ritiro (2026-08-19), poi
+    /// l'avvio (oggi). Le costanti restano dichiarate QUI, accanto ai rami che le implementano, e
+    /// non dedotte da <c>Fleet:DryRun</c>: quel flag dice che cosa è stato <i>chiesto</i>, non che
+    /// cosa il codice sa <i>fare</i>.</para>
     /// </summary>
-    public const bool AssignmentArmImplemented = false;
+    public const bool AssignmentArmImplemented = true;
 
     /// <summary>
     /// [AF2b] <b>Questo ritiro si esegue davvero, e se no perché.</b> Puro e statico: la decisione e
@@ -84,6 +93,25 @@ public sealed class FleetOrchestratorWorker(
     /// <summary>Vero se in questo assetto l'orchestratore può eseguire qualcosa su qualche corsia.</summary>
     internal static bool CanExecute(FleetOptions opt) =>
         RetirementArmImplemented && !opt.DryRun && opt.ExecutionLanes.Count > 0;
+
+    /// <summary>
+    /// [J13] Il gate dell'ASSEGNAZIONE, gemello di <see cref="WhyNotExecuted"/> ma coi suoi
+    /// prerequisiti in più: il deployer deve esistere nell'host, l'azione deve portare una CHIAVE
+    /// (un ensemble multi-gamba non si schiera su una corsia sola), e per i grigi il flag J14 deve
+    /// essere acceso ANCHE al momento dell'esecuzione (hot-reload: il piano può essere nato con un
+    /// assetto diverso). Stesso contratto: null = si esegue, altrimenti il motivo in italiano.
+    /// </summary>
+    internal static string? WhyNotExecutedAssignment(
+        FleetOptions opt, int laneId, int budgetLeft, bool hasKey, bool hasDeployer, bool isGrey) =>
+        !AssignmentArmImplemented ? "braccio di assegnazione assente"
+        : !hasDeployer ? "deployer non disponibile in questo host"
+        : isGrey && !opt.GreyAutoDeploy ? "Fleet:GreyAutoDeploy spento"
+        : !hasKey ? "ensemble multi-gamba: lo schieramento su una corsia sola non è definito"
+        : opt.DryRun ? "dry-run"
+        : opt.ExecutionLanes.Count == 0 ? "nessuna corsia autorizzata"
+        : !opt.ExecutionLanes.Contains(laneId) ? $"corsia {laneId} non autorizzata"
+        : budgetLeft <= 0 ? "budget di esecuzione del tick esaurito"
+        : null;
 
     /// <summary>Ultimo piano deciso, per il pannello (/admin/autonomy).</summary>
     public FleetPlan? LastPlan { get; private set; }
@@ -198,11 +226,22 @@ public sealed class FleetOrchestratorWorker(
                     // qui si sostituisce solo l'azione corrispondente, mai altro.
                     plan = plan with
                     {
-                        Actions = plan.Actions.Select(a => a is AssignCandidateToLane assign && assign.LaneId == menu.LaneId
-                            ? new AssignCandidateToLane(elected.RunId, menu.LaneId,
-                                $"Scelto dal comitato fra {menu.Eligible.Count} candidati: {elected.Summary} " +
-                                $"(~{elected.TradesPerMonth:F1} trade/mese, {elected.Timeframe}).")
-                            : a).ToList(),
+                        Actions = plan.Actions.Select(a => a switch
+                        {
+                            // [J13] La CHIAVE dell'eletto viaggia con la sostituzione: senza, il
+                            // comitato che sceglie renderebbe l'azione ineseguibile (key null).
+                            AssignCandidateToLane assign when assign.LaneId == menu.LaneId
+                                => new AssignCandidateToLane(elected.RunId, menu.LaneId,
+                                    $"Scelto dal comitato fra {menu.Eligible.Count} candidati: {elected.Summary} " +
+                                    $"(~{elected.TradesPerMonth:F1} trade/mese, {elected.Timeframe}).",
+                                    CandidateKey: elected.Identity),
+                            // [J14] Il menù può essere dei GRIGI: stessa sostituzione, stessa azione.
+                            AssignGreyCandidateToLane greyAssign when greyAssign.LaneId == menu.LaneId && elected.Identity is not null
+                                => new AssignGreyCandidateToLane(elected.RunId, elected.Identity, menu.LaneId,
+                                    $"[J14] Scelto dal comitato fra {menu.Eligible.Count} candidati grigi: {elected.Summary} " +
+                                    $"(~{elected.TradesPerMonth:F1} trade/mese, {elected.Timeframe})."),
+                            _ => a,
+                        }).ToList(),
                     };
                 }
             }
@@ -236,14 +275,45 @@ public sealed class FleetOrchestratorWorker(
             switch (action)
             {
                 case AssignCandidateToLane assign:
-                    await JournalAsync(new OrchestratorDecision
+                    if (WhyNotExecutedAssignment(opt, assign.LaneId, executionBudget,
+                        hasKey: assign.CandidateKey is not null, hasDeployer: greyDeployer is not null, isGrey: false) is { } percheAssign)
                     {
-                        AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = assign.LaneId, RunId = assign.RunId,
-                        Source = assignSource, VotesJson = votesJson,
-                        Reason = assign.Reason, DryRun = true, Applied = false,
-                    }, ct);
-                    logger.LogInformation("[DRY-RUN] Assegnerei il run {Run} alla corsia {Lane}: {Reason}",
-                        assign.RunId, assign.LaneId, assign.Reason);
+                        await JournalAsync(new OrchestratorDecision
+                        {
+                            AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = assign.LaneId, RunId = assign.RunId,
+                            Source = assignSource, VotesJson = votesJson,
+                            Reason = $"[{percheAssign}] {assign.Reason}", DryRun = true, Applied = false,
+                        }, ct);
+                        logger.LogInformation("[{Perche}] Assegnerei il run {Run} alla corsia {Lane}: {Reason}",
+                            percheAssign, assign.RunId, assign.LaneId, assign.Reason);
+                    }
+                    else
+                    {
+                        executionBudget--;
+                        await ExecuteAssignAsync(assign.RunId, assign.CandidateKey!, assign.LaneId,
+                            isGrey: false, assign.Reason, assignSource, votesJson, ct);
+                    }
+                    break;
+
+                case AssignGreyCandidateToLane greyAssign:
+                    if (WhyNotExecutedAssignment(opt, greyAssign.LaneId, executionBudget,
+                        hasKey: true, hasDeployer: greyDeployer is not null, isGrey: true) is { } percheGrey)
+                    {
+                        await JournalAsync(new OrchestratorDecision
+                        {
+                            AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = greyAssign.LaneId, RunId = greyAssign.RunId,
+                            Source = assignSource, VotesJson = votesJson,
+                            Reason = $"[{percheGrey}] {greyAssign.Reason}", DryRun = true, Applied = false,
+                        }, ct);
+                        logger.LogInformation("[{Perche}] Schiererei il grigio {Run} sulla corsia {Lane}: {Reason}",
+                            percheGrey, greyAssign.RunId, greyAssign.LaneId, greyAssign.Reason);
+                    }
+                    else
+                    {
+                        executionBudget--;
+                        await ExecuteAssignAsync(greyAssign.RunId, greyAssign.CandidateKey, greyAssign.LaneId,
+                            isGrey: true, greyAssign.Reason, assignSource, votesJson, ct);
+                    }
                     break;
 
                 case StopAndFreeLane retire when confirmedRetires.Contains(retire.LaneId):
@@ -305,6 +375,64 @@ public sealed class FleetOrchestratorWorker(
         }
 
         await WatchCarryAsync(ct);
+    }
+
+    /// <summary>
+    /// [J13/J14] L'esecuzione di un'assegnazione: lo STESSO deployer del click umano F5
+    /// (bracket automatico, frequenza attesa, rilettura fail-closed della corsia), con
+    /// <c>Source="fleet"</c>. Il journal lo scrive QUI il worker — non il deployer — perché la
+    /// riga deve portare i voti del comitato e la fonte della scelta, che il deployer non conosce:
+    /// due righe per la stessa azione sarebbero rumore nel posto dove si va a cercare cosa è
+    /// successo.
+    /// </summary>
+    private async Task ExecuteAssignAsync(
+        Guid runId, string candidateKey, int laneId, bool isGrey,
+        string reason, string assignSource, string votesJson, CancellationToken ct)
+    {
+        string? error = null;
+        var message = string.Empty;
+        try
+        {
+            // allowSurvivor: il braccio «pass» schiera sopravvissuti; quello grigio solo grigi.
+            var result = await greyDeployer!.DeployAsync(runId, candidateKey, laneId,
+                startPaper: true, ct, source: "fleet", allowSurvivor: !isGrey, journal: false);
+            message = result.Message;
+            if (!result.Success) error = result.Message;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            message = ex.Message;
+        }
+
+        await JournalAsync(new OrchestratorDecision
+        {
+            AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = laneId, RunId = runId,
+            Source = assignSource == "rules" ? "fleet" : assignSource, VotesJson = votesJson,
+            Reason = $"{reason} Esito: {message}", DryRun = false, Applied = error is null, Error = error,
+        }, ct);
+
+        if (error is null)
+        {
+            logger.LogWarning("Corsia {Lane}: candidato {Tipo} SCHIERATO dall'orchestratore ({Key}).",
+                laneId, isGrey ? "GRIGIO" : "validato", candidateKey);
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(NotificationSeverity.Warning,
+                    isGrey ? $"Flotta: candidato GRIGIO schierato sulla corsia {laneId}" : $"Flotta: candidato schierato sulla corsia {laneId}",
+                    $"{reason}\n{message}\nAzione AUTONOMA dell'orchestratore (J13/J14): la corsia si ferma con un click da /trading.", ct);
+            }
+        }
+        else
+        {
+            logger.LogWarning("Corsia {Lane}: schieramento automatico NON riuscito ({Errore}).", laneId, error);
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(NotificationSeverity.Warning,
+                    $"Flotta: schieramento sulla corsia {laneId} non riuscito", error, ct);
+            }
+        }
     }
 
     /// <summary>
@@ -400,6 +528,9 @@ public sealed class FleetOrchestratorWorker(
     /// ma non decide da troppo, qualcosa è rotto e va detto. Lo stato vivo è in-process: in
     /// topologia remota da questo host non si vede, e si dichiara il limite invece di fingere.
     /// </summary>
+    /// <summary>Dichiarazione una-tantum per processo dell'inapplicabilità del guardiano del carry (J18).</summary>
+    private bool _carryWatchInapplicabilityDeclared;
+
     private async Task WatchCarryAsync(CancellationToken ct)
     {
         var opt = options.CurrentValue;
@@ -408,7 +539,28 @@ public sealed class FleetOrchestratorWorker(
         var carry = serviceProvider.GetService<CarryWorker>();
         if (carry is null)
         {
-            logger.LogDebug("Carry abilitato ma il worker vive nell'host del motore: sorveglianza non disponibile da qui.");
+            // [J18, PRD autonomia-operativa 2026-08-25] IL GUARDIANO ERA MUTO PER COSTRUZIONE, e
+            // nella topologia in cui la piattaforma GIRA. Con Trading:UseRemoteTrading=true il
+            // CarryWorker è registrato solo nel pod del motore: qui GetService restituisce SEMPRE
+            // null, e il LogDebug (invisibile ai livelli di default) faceva sì che
+            // Fleet:CarrySilenceAlertHours — presente e amministrabile in UI — non potesse
+            // scattare MAI. Se il carry nel pod muore, nessuno lo apprende: controllo che
+            // rassicura, in forma pura. Peggio: il Carry:Enabled letto qui è quello del GUSCIO,
+            // che non comanda il carry (il pod legge la SUA configurazione).
+            //
+            // Da qui non si può sorvegliare senza dati che il motore non persiste (lo stato del
+            // carry vive nei log del pod, ritenzione ~10h): il rimedio VERO è un heartbeat del
+            // carry scritto dal motore — lavoro pod-side, in passi operativi del PRD. Intanto:
+            // l'inapplicabilità si DICHIARA, una volta per processo, a un livello che si vede.
+            if (!_carryWatchInapplicabilityDeclared)
+            {
+                _carryWatchInapplicabilityDeclared = true;
+                logger.LogWarning(
+                    "Guardiano del carry INAPPLICABILE in questo assetto: il worker vive nell'host del motore "
+                    + "(Trading:UseRemoteTrading) e da qui non è osservabile. Fleet:CarrySilenceAlertHours={Ore}h "
+                    + "non può scattare: un silenzio del carry nel pod NON produrrà alcun allarme finché il motore "
+                    + "non ne persiste un heartbeat.", opt.CarrySilenceAlertHours);
+            }
             return;
         }
 

@@ -18,7 +18,11 @@ public sealed record LaneSummary(
     // [I12-rev] Gli StrategyId delle gambe ATTIVE IN CONFIGURAZIONE. Servono a confrontarli con
     // quelle che il motore sta davvero eseguendo: se le due fotografie divergono, il ritmo atteso
     // qui sopra non descrive cio' che sta operando. Vedi FleetStateReader.
-    IReadOnlyList<string>? ActiveStrategyIds = null)
+    IReadOnlyList<string>? ActiveStrategyIds = null,
+    // [J14] La corsia esegue gambe GRIGIE? true = almeno una gamba attiva con SourceVerdict
+    // "Grey"; false = tutte dichiarate "Survived"; null = provenienza ignota (gambe senza
+    // etichetta, pre-T1). Serve al tetto MaxGreyLanes, dove l'ignoto conta come grigio.
+    bool? HasGreyLegs = null)
 {
     public bool IsConfigured => !string.IsNullOrEmpty(Symbol);
 }
@@ -70,6 +74,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
             var timeframe = string.Empty;
             decimal? expected = null;
             IReadOnlyList<string>? activeIds = null;
+            bool? greyLegs = null;
             if (configs.TryGetValue(lane, out var json) && !string.IsNullOrWhiteSpace(json))
             {
                 // Una configurazione illeggibile non deve far sparire la corsia dal selettore: senza
@@ -81,6 +86,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
                     timeframe = cfg?.Timeframe ?? string.Empty;
                     expected = ExpectedTradesPerMonth(cfg);
                     activeIds = cfg?.Strategies.Where(x => x.IsActive).Select(x => x.StrategyId).ToList();
+                    greyLegs = HasGreyLegs(cfg);
                 }
                 catch (JsonException) { /* corsia mostrata come non configurata */ }
             }
@@ -90,7 +96,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
                 lane, symbol, timeframe,
                 state?.Mode.ToString() ?? TradingMode.Paper.ToString(),
                 state?.IsRunning ?? false,
-                expected, activeIds));
+                expected, activeIds, greyLegs));
         }
         return result;
     }
@@ -115,5 +121,19 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
         if (active is null or { Count: 0 }) return null;
         if (active.Any(s => s.ExpectedTradesPerMonth is null)) return null;
         return active.Sum(s => s.ExpectedTradesPerMonth!.Value);
+    }
+
+    /// <summary>
+    /// [J14] La provenienza delle gambe attive: true = almeno una grigia; false = TUTTE dichiarate
+    /// «Survived»; null = almeno una senza etichetta (pre-T1) e nessuna grigia — cioè non si sa, e
+    /// il consumatore del tetto tratta l'ignoto come grigio (fail-closed). Confronto Ordinal:
+    /// l'etichetta la scrive il nostro codice.
+    /// </summary>
+    internal static bool? HasGreyLegs(EnsembleConfiguration? cfg)
+    {
+        var active = cfg?.Strategies.Where(s => s.IsActive).ToList();
+        if (active is null or { Count: 0 }) return null;
+        if (active.Any(s => string.Equals(s.SourceVerdict, "Grey", StringComparison.Ordinal))) return true;
+        return active.All(s => string.Equals(s.SourceVerdict, "Survived", StringComparison.Ordinal)) ? false : null;
     }
 }

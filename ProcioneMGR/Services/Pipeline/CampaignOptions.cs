@@ -27,6 +27,34 @@ public sealed class CampaignOptions
     public int CancelPauseMinutes { get; set; } = 60;
 
     /// <summary>
+    /// [J1, PRD autonomia-operativa 2026-08-25] Ore di silenzio (dall'ultimo run della campagna)
+    /// dopo cui una campagna in <c>WaitingForTrigger</c> torna in rotazione DA SOLA.
+    /// <c>0</c> = mai (comportamento storico: si esce solo con un trigger contestuale o a mano).
+    ///
+    /// <para>Perché esiste: da <c>WaitingForTrigger</c> il planner non usciva a tempo — l'unica
+    /// uscita era un cambio di regime rilevato da <c>RegimeChangeDetector</c>, o l'operatore. Il
+    /// 2026-08-23 la rotazione si è esaurita e la ricerca è rimasta FERMA 43+ ore senza che nessuna
+    /// superficie lo dicesse; e il detector era stato per un mese la sorgente di sveglie spurie
+    /// (bug di unità del log-HAR, corretto il 2026-08-20), quindi un detector guasto può sia
+    /// svegliare a vuoto sia non svegliare mai. Il riarmo a tempo è la sorgente INDIPENDENTE dal
+    /// trigger: un guasto del detector non può più fermare la ricerca per sempre.</para>
+    ///
+    /// <para>La fermata originale restava un'idea giusta («non macinare la stessa rotazione in un
+    /// regime invariato») ed è per questo che il default non è zero ore ma UN GIORNO: più lungo del
+    /// backoff per-config (12h), così la pausa contemplativa c'è comunque — solo, non è più
+    /// eterna.</para>
+    /// </summary>
+    public int RearmHours { get; set; } = 24;
+
+    /// <summary>
+    /// [J3] Ore senza un run completato (e senza run in corso) oltre cui la sonda della ricerca in
+    /// Home dichiara la macchina FERMA. È una soglia di LETTURA, non un gate: non ferma e non avvia
+    /// nulla. Più corta di <see cref="RearmHours"/> di proposito: prima si vede il fermo, poi (se
+    /// il riarmo è acceso) la piattaforma riparte da sola — la card racconta entrambe le cose.
+    /// </summary>
+    public int StallAlertHours { get; set; } = 12;
+
+    /// <summary>
     /// [I7] Il percorso campagna rispetta <c>AutoReapply:Enabled</c>. Default <c>true</c>.
     ///
     /// <para>Prima il planner chiamava l'applier senza consultare quel gate, che è letto solo dallo

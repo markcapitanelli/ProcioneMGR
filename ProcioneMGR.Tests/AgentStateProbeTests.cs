@@ -276,7 +276,10 @@ public class AgentStateProbeTests
         var a = Agent(r, "Orchestratore di flotta");
         Assert.Contains("ESECUZIONE ATTIVA", a.Detail, StringComparison.Ordinal);
         Assert.Contains("2 corsie autorizzate", a.Detail, StringComparison.Ordinal);
-        Assert.Contains("l'avvio automatico non è implementato", a.Detail, StringComparison.Ordinal);
+        // [J13] Dal 2026-08-25 il braccio sa anche AVVIARE: la riga deve dichiarare il potere
+        // VERO, compreso il vincolo che i grigi richiedono il flag J14.
+        Assert.Contains("SCHIERARE", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("GreyAutoDeploy", a.Detail, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -302,14 +305,16 @@ public class AgentStateProbeTests
 
     /// <summary>
     /// I fatti vengono dalle costanti dichiarate nel worker, non da numeri riscritti a mano qui.
-    /// Le DUE metà del braccio sono separate perché lo sono davvero: dal 2026-08-19 l'orchestratore
-    /// sa fermare una corsia, e continua a NON saperla avviare — l'ordine deciso dal proprietario.
+    /// Le DUE metà del braccio restano separate perché lo sono state davvero, nell'ordine deciso
+    /// dal proprietario: il ritiro dal 2026-08-19, l'avvio dal 2026-08-25 (J13 — candidato singolo,
+    /// e per i grigi dietro il flag J14). Le costanti dicono cosa il codice SA FARE; a trattenere
+    /// l'esecuzione restano dry-run, ExecutionLanes, budget e (per i grigi) GreyAutoDeploy.
     /// </summary>
     [Fact]
     public void Fleet_LeDueMetaDelBraccioSonoDichiarateDalWorker()
     {
         Assert.True(ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.RetirementArmImplemented);
-        Assert.False(ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.AssignmentArmImplemented);
+        Assert.True(ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.AssignmentArmImplemented);
     }
 
     // ---------------------------------------------------------- Comitato AI
@@ -495,5 +500,59 @@ public class AgentStateProbeTests
             AllOff() with { DriftEnabled = true, DriftRetireChampionOnAlert = true, ChampionCount = 2 }, Now);
 
         Assert.Contains("su 2 Champion in carica", Agent(r, "Drift feature ML").Detail, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------ [J11] capacità di ritiro
+
+    /// <summary>
+    /// [J11] Il caso che motiva la modifica: «ACCESO E OPERANTE … non esegue» leggeva IDENTICO su
+    /// una flotta i cui due criteri di ritiro erano entrambi strutturalmente irraggiungibili
+    /// (atteso null ovunque, osservazione azzerata a ogni riavvio). La riga ora porta i numeri che
+    /// distinguono «non ha nulla da ritirare» da «non potrebbe ritirare nulla comunque».
+    /// </summary>
+    [Fact]
+    public void Fleet_RitiroStrutturalmenteIrraggiungibile_LoGrida()
+    {
+        var r = AgentStateProbe.Describe(AllOff() with
+        {
+            FleetEnabled = true,
+            FleetLanesWithExpected = 0,
+            FleetLanesMatureForSharpe = 0,
+            FleetLanesMatureForStarvation = 0,
+        }, Now);
+
+        var a = Agent(r, "Orchestratore di flotta");
+        Assert.Contains("0/5 corsie con atteso dichiarato", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("NESSUN ritiro può ancora maturare", a.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Fleet_RitiroMaturabile_PortaINumeri()
+    {
+        var r = AgentStateProbe.Describe(AllOff() with
+        {
+            FleetEnabled = true,
+            FleetLanesWithExpected = 4,
+            FleetLanesMatureForSharpe = 1,
+            FleetLanesMatureForStarvation = 3,
+        }, Now);
+
+        var a = Agent(r, "Orchestratore di flotta");
+        Assert.Contains("4/5 corsie con atteso dichiarato", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("1 per il giudizio Sharpe e 3 per l'inedia", a.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("NESSUN ritiro", a.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Fleet_FontiNonInterrogabili_NonFingeZero()
+    {
+        // Null = fonte non interrogabile: dichiararlo, non trasformarlo in «0 corsie» — un
+        // verdetto costruito sull'ignoranza è peggio di nessun verdetto.
+        var r = AgentStateProbe.Describe(AllOff() with { FleetEnabled = true }, Now);
+
+        var a = Agent(r, "Orchestratore di flotta");
+        Assert.Contains("atteso dichiarato non determinabile", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("maturità dell'osservazione non determinabile", a.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("0/5", a.Detail, StringComparison.Ordinal);
     }
 }

@@ -21,12 +21,32 @@ public sealed class AutoReapplyOptions
 
     /// <summary>Massimo numero di run valutati per tick (limita il fan-out).</summary>
     public int MaxPerTick { get; set; } = 3;
+
+    /// <summary>
+    /// [J12, PRD autonomia-operativa 2026-08-25] Gambe NON sopravvissute (fascia grigia, o
+    /// provenienza ignota) tollerate in un'applica AUTOMATICA. <b>Default 0 = nessuna</b>: F5
+    /// stabilisce che il grigio si propone al click umano e non si schiera da solo, e prima di
+    /// questa guardia il percorso campagna poteva schierare e avviare sulle corsie 0-2 un ensemble
+    /// di sole gambe grigie (misurato: run del 2026-08-21, config 19, Survivors=0 ed
+    /// EnsembleLegs=3, tutte grigie) — senza comitato, senza guardia di esposizione, senza lista
+    /// esplicita. L'applica MANUALE da /pipeline non passa da qui e resta libera.
+    /// </summary>
+    public int MaxGreyLegs { get; set; }
 }
 
 /// <summary>Kind dell'artifact che registra la decisione di ri-applica automatica di un run.</summary>
 public static class AutoReapplyArtifactKinds
 {
     public const string Decision = "AutoReapplyDecision";
+
+    /// <summary>
+    /// [J12] Applica automatica RIFIUTATA dalla guardia sulle gambe grigie. È un kind SEPARATO da
+    /// <see cref="Decision"/> di proposito: il lettore di flotta marca «già gestito» i run con una
+    /// Decision (<c>FleetStateReader.ReadCandidatesAsync</c>), e un run bloccato-perché-grigio
+    /// deve invece restare proponibile al click umano — è esattamente il percorso F5 che il blocco
+    /// esiste per preservare. Usare lo stesso kind avrebbe spento le proposte grigie in silenzio.
+    /// </summary>
+    public const string GreyBlocked = "AutoReapplyGreyBlocked";
 }
 
 /// <summary>Kind degli artifact dell'auto-resume (Fase 3-C1, PRD Autonomia): marker idempotenti per-run.</summary>
@@ -336,7 +356,11 @@ public sealed class PipelineSchedulerWorker(
             // messo in automazione, non sui run manuali (quelli si applicano a mano da /pipeline).
             pending = await db.PipelineRuns
                 .Where(r => r.Status == "Completed" && r.Trigger == "Scheduled" && r.CompletedAt != null && r.CompletedAt >= since)
-                .Where(r => !db.PipelineArtifacts.Any(a => a.RunId == r.Id && a.Kind == AutoReapplyArtifactKinds.Decision))
+                // [J12] Anche i run bloccati dalla guardia grigia sono "già decisi": senza questo
+                // secondo kind nel filtro, lo scheduler riproverebbe gli stessi run a ogni tick
+                // (il blocco non scrive mai una Decision, apposta — vedi GreyBlocked).
+                .Where(r => !db.PipelineArtifacts.Any(a => a.RunId == r.Id
+                    && (a.Kind == AutoReapplyArtifactKinds.Decision || a.Kind == AutoReapplyArtifactKinds.GreyBlocked)))
                 .OrderBy(r => r.CompletedAt)
                 .Select(r => r.Id)
                 .Take(Math.Max(1, opt.MaxPerTick))

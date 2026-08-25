@@ -126,10 +126,56 @@ public sealed class CampaignPlanner(
             }
             await TryStartNextConfigAsync(db, campaign, ct);
         }
+        else if (campaign.Status == CampaignStatus.WaitingForTrigger)
+        {
+            await TryTimedRearmAsync(db, campaign, ct);
+        }
         else if (campaign.Status == CampaignStatus.Observing)
         {
             await RealignObservedLanesOnceAsync(campaign, ct);
         }
+    }
+
+    /// <summary>
+    /// [J1] Il riarmo A TEMPO da <c>WaitingForTrigger</c>: la sorgente di ripartenza INDIPENDENTE
+    /// dal trigger di regime (vedi <see cref="CampaignOptions.RearmHours"/> per il perché).
+    ///
+    /// <para>Due condizioni, entrambe necessarie: (1) il silenzio — misurato dall'ULTIMO run della
+    /// campagna, il riferimento osservabile che non dipende da stato in memoria — ha superato
+    /// <c>RearmHours</c>; (2) almeno una config della rotazione è davvero eleggibile (il suo
+    /// backoff è scaduto). Senza la seconda, con un riarmo più corto del backoff la campagna
+    /// rimbalzerebbe Rotating→WaitingForTrigger a ogni tick, sporcando l'esito a ogni giro.</para>
+    ///
+    /// <para>Il riarmo NON imposta <c>PendingWakeReason</c>: non è un wake. Un wake bypassa il
+    /// backoff per-config e marca il run «Event»; il riarmo rimette solo in moto la rotazione
+    /// ordinaria, che rispetta i suoi backoff e marca «Campaign». La pausa dopo un annullamento
+    /// umano è già rispettata a monte (il check di <c>PausedUntilUtc</c> esce prima di arrivare
+    /// qui): chi ha annullato non si vede ripartire nulla.</para>
+    /// </summary>
+    private async Task TryTimedRearmAsync(ApplicationDbContext db, VettingCampaign campaign, CancellationToken ct)
+    {
+        var rearmHours = options.CurrentValue.RearmHours;
+        if (rearmHours <= 0) return; // spento: comportamento storico, si esce solo per trigger o mano umana
+
+        var states = ParseConfigStates(campaign.ConfigStatesJson);
+        if (states.Count == 0) return;
+
+        var now = DateTime.UtcNow;
+        var lastRun = states.Max(s => s.LastRunAtUtc);
+        var silence = lastRun is DateTime t ? now - t : TimeSpan.MaxValue;
+        if (silence < TimeSpan.FromHours(rearmHours)) return;
+
+        var backoff = TimeSpan.FromHours(Math.Max(1, campaign.BackoffHours));
+        var anyEligible = states.Any(s => s.LastRunAtUtc is null || s.LastRunAtUtc + backoff <= now);
+        if (!anyEligible) return;
+
+        campaign.Status = CampaignStatus.Rotating;
+        campaign.UpdatedAtUtc = now;
+        SetOutcome(campaign,
+            $"Riarmo a tempo: {(silence == TimeSpan.MaxValue ? "nessun run registrato" : $"{silence.TotalHours:F0}h senza run")} "
+            + $"(Campaign:RearmHours={rearmHours}) — la rotazione riparte da sola, senza aspettare un trigger di regime.");
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Campagna {Id} '{Name}': {Outcome}", campaign.Id, campaign.Name, campaign.LastOutcome);
     }
 
     // ------------------------------------------------------------ riallineamento post-riavvio (Fase 3-C3)

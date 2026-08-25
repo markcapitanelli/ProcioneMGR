@@ -234,24 +234,53 @@
                 </div>
             }
 
-            <div class="row g-3 mb-2">
-                <div class="col-md-3">
-                    <label class="form-label small">Selezione da</label>
-                    <input type="date" class="form-control form-control-sm" @bind="_editRanges.SelectionFrom" />
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label small">Selezione a</label>
-                    <input type="date" class="form-control form-control-sm" @bind="_editRanges.SelectionTo" />
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label small">Holdout da</label>
-                    <input type="date" class="form-control form-control-sm" @bind="_editRanges.HoldoutFrom" />
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label small">Holdout a</label>
-                    <input type="date" class="form-control form-control-sm" @bind="_editRanges.HoldoutTo" />
-                </div>
+            @* [J2] Finestra scorrevole: ancorata ad «adesso» e risolta in date assolute all'avvio
+               di OGNI run (le date risolte restano nello snapshot del run: ogni run dichiara su che
+               finestra ha girato). Senza, DateRangesJson è statico e nessun meccanismo lo fa
+               avanzare: le config 17/18 sono rimaste con l'holdout fermo per 18 giorni e 90
+               esecuzioni — lo stesso backtest deterministico rifatto novanta volte. *@
+            <div class="form-check form-switch mb-2">
+                <input class="form-check-input" type="checkbox" id="cfg_rolling" checked="@EditIsRolling"
+                       @onchange="e => ToggleRolling((bool)e.Value!)" />
+                <label class="form-check-label" for="cfg_rolling"
+                       title="La finestra si ancora ad «adesso» e scorre da sola a ogni run: holdout = ultimi N giorni, selezione = M giorni prima dell'holdout, mai sovrapposti (stessa invariante delle date fisse). La disciplina anti-overfitting non cambia: i gate, l'embargo e il conteggio tentativi restano identici — scorre solo l'ancora.">
+                    Finestra scorrevole (ancorata ad adesso)
+                </label>
             </div>
+            @if (EditIsRolling)
+            {
+                <div class="row g-3 mb-2">
+                    <div class="col-md-3">
+                        <label class="form-label small">Holdout: ultimi (giorni)</label>
+                        <input type="number" class="form-control form-control-sm" min="7" @bind="_editRanges.RollingHoldoutDays" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Selezione: giorni prima dell'holdout</label>
+                        <input type="number" class="form-control form-control-sm" min="1" @bind="_editRanges.RollingSelectionDays" />
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="row g-3 mb-2">
+                    <div class="col-md-3">
+                        <label class="form-label small">Selezione da</label>
+                        <input type="date" class="form-control form-control-sm" @bind="_editRanges.SelectionFrom" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Selezione a</label>
+                        <input type="date" class="form-control form-control-sm" @bind="_editRanges.SelectionTo" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Holdout da</label>
+                        <input type="date" class="form-control form-control-sm" @bind="_editRanges.HoldoutFrom" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Holdout a</label>
+                        <input type="date" class="form-control form-control-sm" @bind="_editRanges.HoldoutTo" />
+                    </div>
+                </div>
+            }
 
             <label class="form-label fw-semibold mt-2">Universo</label>
             <table class="table table-sm align-middle" style="max-width: 480px;">
@@ -542,6 +571,37 @@
     private List<SeriesSpec> _editUniverse => _draft?.Universe ?? [];
     private PipelineDateRanges _editRanges => _draft?.Ranges ?? new PipelineDateRanges();
     private List<StageConfig> _editStages => _draft?.Stages ?? [];
+
+    // [J2] Lo stato del toggle è il fatto (i campi relativi sono valorizzati), non un flag a parte:
+    // due verità sulla stessa domanda divergerebbero.
+    private bool EditIsRolling => _editRanges.RollingHoldoutDays is not null || _editRanges.RollingSelectionDays is not null;
+
+    private void ToggleRolling(bool rolling)
+    {
+        if (rolling)
+        {
+            // Default sensati per l'orizzonte dichiarato del progetto (intraday/swing breve):
+            // 4 mesi di holdout, 12 di selezione — la geometria delle config vive.
+            _editRanges.RollingHoldoutDays ??= 120;
+            _editRanges.RollingSelectionDays ??= 365;
+        }
+        else
+        {
+            // Tornando alle date fisse si parte dalla finestra che la scorrevole produrrebbe ORA:
+            // un form con date al default (anno 1) non è un punto di partenza, è un errore da
+            // digitare via.
+            if (_editRanges.IsRolling())
+            {
+                var resolved = _editRanges.Resolve(DateTime.UtcNow);
+                _editRanges.SelectionFrom = resolved.SelectionFrom;
+                _editRanges.SelectionTo = resolved.SelectionTo;
+                _editRanges.HoldoutFrom = resolved.HoldoutFrom;
+                _editRanges.HoldoutTo = resolved.HoldoutTo;
+            }
+            _editRanges.RollingHoldoutDays = null;
+            _editRanges.RollingSelectionDays = null;
+        }
+    }
     private string? _expandedStage;
     private List<string> _editProblems = new();
 
@@ -700,6 +760,8 @@
     private static string FinestraText(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
     {
         if (PipelinePageService.DateRangesOf(c) is not { } r) return "—";
+        // [J2] Una finestra scorrevole non ha un'età: si risolve contro «adesso» a ogni run.
+        if (r.IsRolling()) return $"scorrevole: ultimi {r.RollingHoldoutDays} gg";
         var giorni = r.HoldoutAgeDays(DateTime.UtcNow);
         var fino = r.HoldoutTo.ToString("dd/MM");
         if (giorni < 0) return $"fino al {fino} (in corso)";
@@ -718,6 +780,17 @@
     private static string FinestraTooltip(ProcioneMGR.Services.Pipeline.PipelineConfiguration c)
     {
         if (PipelinePageService.DateRangesOf(c) is not { } r) return "Finestra non leggibile.";
+        // [J2] Il tooltip delle finestre FISSE («la finestra NON si sposta da sola: fissarla è la
+        // disciplina anti-overfitting») resta vero per quelle; la scorrevole rivede quella
+        // decisione APPOSTA, e lo dichiara: la protezione anti-overfitting sta nei gate (DSR,
+        // embargo, gemello nullo), non nella staleness della finestra.
+        if (r.IsRolling())
+        {
+            return $"Finestra SCORREVOLE: holdout = ultimi {r.RollingHoldoutDays} giorni, selezione = "
+                 + $"{r.RollingSelectionDays} giorni prima dell'holdout (mai sovrapposti). Si risolve in date "
+                 + "assolute all'avvio di ogni run e le date risolte restano nello snapshot del run: ogni run "
+                 + "dichiara su che finestra ha davvero girato. I gate anti-overfitting non cambiano.";
+        }
         var giorni = r.HoldoutAgeDays(DateTime.UtcNow);
         var ampiezza = r.HoldoutMonths() is decimal m ? $"{m:0.#} mesi" : "meno di una settimana";
         var eta = giorni < 0

@@ -2496,3 +2496,121 @@ qualunque pagina di iniettare di nuovo il fallback non-keyed.
       costruire uno strumento che nessuno legge.
 - [ ] `Drift:Enabled` va portato a `true` nel repo principale dopo il merge (passo (c) di [I6], mai
       eseguito): ora è sicuro, perché la Home non può più dire verde a copertura zero.
+## Filone J — Dall'aritmetica all'operatività (2026-08-25, diciassettesima ondata)
+
+*Dettaglio, verifiche e decisioni aperte nel
+[PRD-AUTONOMIA-OPERATIVA](PRD-AUTONOMIA-OPERATIVA-2026-08.md). Nasce da un ragionamento del
+proprietario: automatizzare la validazione invece di abbassare la barra, accendendo i sottosistemi di
+autonomia già presenti. La tesi è adottata; le quattro azioni proposte sono state verificate contro il
+codice vivo, la configurazione viva e il database reale, e **tre su quattro non fanno quello che si
+crede**.*
+
+### La scoperta che cambia la diagnosi
+
+**La piattaforma non è trattenuta da un interruttore: la macchina della ricerca si è fermata e nessuno
+se n'è accorto.** Ultimo run completato **2026-08-23 04:25**, oltre 43 ore di silenzio. La campagna 2 è
+in `WaitingForTrigger` e da lì **il planner non esce a tempo** (`TryStartNextConfigAsync` è chiamata solo
+se `Status == Rotating`): l'unica uscita è un cambio di regime, o l'operatore. E non c'è una seconda
+sorgente — **tutte e 13 le `PipelineConfigurations` hanno `ScheduleEnabled = false`**, compresa la 8 che
+porta ancora un cron `0 3 * * *` morto.
+
+Quattro premesse corrette dai fatti:
+
+| Il ragionamento dice | Il fatto verificato |
+|---|---|
+| «attivare `Campaign:Enabled = true`» | **già `true`** da prima del 2026-08-18. Acceso ha prodotto 94 run/30 giorni, 9.723 candidati, **zero sopravvissuti** — ma sono **4 esperimenti rieseguiti 90 volte**: `DateRangesJson` è statico (holdout fermo a 2026-07-27 per 18 giorni) e l'89% delle sveglie era spurio (bug di unità del log-HAR, corretto il 2026-08-20). Costo: **20,9 ore di pipeline/mese** per rifare lo stesso conto |
+| «togliendo `DryRun` la flotta schiera» | **nessun effetto**, per tre ragioni indipendenti: `AssignmentArmImplemented = false` (il braccio che *avvia* non è mai stato scritto — esiste solo quello che *ferma*, dal 2026-08-19); `Fleet:ExecutionLanes` assente dal file vivo ⇒ lista vuota ⇒ `CanExecute` falso comunque; e le 5 corsie di flotta sono tutte occupate |
+| «schierare sistematicamente i grigi» | la fascia **esiste**: 73 grigi distinti su 788 chiavi (14.855 righe — rapporto 18,9×, il conteggio per righe è un artefatto), **49 freschi**. Ma **67 dei 73 sono passati dalla finestra corta e 6 dalla banda DSR**, tutti prima del 2026-08-09: dopo la correzione della deflazione il DSR massimo è **0,6737**, zero in banda. E lo schieramento automatico non è configurazione: è il **rovesciamento di F5** (`AssignmentQueue` filtra `Band == "pass"`) |
+| «nuovi terreni: microstruttura, pairs, LLM» | nessuno è nuovo. Microstruttura **chiusa il 2026-07-28** (il book informa, p 0,005, ma è 6-34× sotto il costo del giro). Pairs: il monitoraggio permanente è **già costruito e spento**, e siede su **174 artefatti `PairScreen` mai indicizzati** (`PairCandidates` a 0 righe). G3 non viola la regola 6, ma alza SR\*, cioè peggiora l'unico vincolo misurato |
+
+### Il percorso automatico esiste già, ed è quello sbagliato
+
+Non passa dalla flotta: passa dalla **campagna**. `DecisionStages` riempie i posti liberi con gambe
+grigie (`includeGreyZone`) → `RunApplyEvaluator` applica qualunque raccomandazione con
+`EnsembleLegs.Count > 0` e **non guarda i sopravvissuti** → `CampaignPlanner.StartPaperLanesAsync`
+**avvia le corsie 0…LanesUsed-1**, cioè l'**impronta**, senza comitato, senza guardia di esposizione e
+senza lista esplicita. Le tre condizioni di configurazione sono già tutte vere (`Campaign:Enabled`,
+`AutoReapply:Enabled`, `AutoStartPaperLanes`), e un run reale lo dimostra: config 19 (5m), 2026-08-21,
+**`Survivors = 0`, `EnsembleLegs = 3`**, tutte grigie. Non ha sparato solo perché `includeGreyZone` è
+`false` di default e le uniche due config che lo accendono (19 e 20, 5m e 15m) **non sono in rotazione**:
+salvezza per coincidenza, non per progetto.
+
+### E sui gate: il DSR blocca, ma «è il DSR che blocca tutto» è un controllo che rassicura
+
+Il DSR è insuperabile per aritmetica — SR\* 2,65-2,86, servirebbe Sharpe ≈ 5,2-5,5, il massimo prodotto
+dal 2026-08-09 è 1,901. Ma `OverfittingGate` **salta i non sopravvissuti**: il DSR esiste per ~4%
+dell'archivio, e il massimo Sharpe holdout 4h (**3,1949**, Supertrend ADA/USDT, 17 trade) **non ha DSR**
+perché 17 < 20. Il cancello che uccide di più fra i candidati **in guadagno** è il conteggio trade
+assoluto (67 chiavi distinte, Sharpe medio 1,12). Renderlo relativo va fatto — ma **sposta le righe al
+DSR e riduce la fascia grigia**, e va misurato prima e dopo.
+
+### Il piano
+
+| Fase | # | Cosa | Stato |
+|---|---|---|---|
+| **0 — rimettere in moto** | J1 | Uscita a tempo da `WaitingForTrigger` (`Campaign:RearmHours`, default 24; riarmo ≠ wake: niente bypass dei backoff, rispetta la pausa da annullamento, anti flip-flop) | **fatto (2026-08-25)** |
+| | J2 | Finestre RELATIVE risolte contro «adesso» all'avvio del run; le date risolte nello snapshot (provenienza), il resume rilegge lo snapshot; editor in `/pipeline` | **fatto (2026-08-25)** |
+| | J3 | `ResearchLivenessProbe` in Home: verdetto a TRE stati (viva/ferma/non misurabile), chiavi DISTINTE mai righe, run in corso = vita, `Campaign:StallAlertHours` | **fatto (2026-08-25)** |
+| | J4 | `PipelineRuns.MixedTimeframeUniverse` + backfill dallo snapshot in migrazione; esclusi da flotta e `/research` DICHIARANDO il conteggio | **fatto (2026-08-25)** |
+| **1 — spostare il terreno** | J5 | 5m e 15m in rotazione (oggi **0%** contro 100% su 1h/4h, con 75 serie intraday fresche) | **operativo** — dopo il deploy: config 5m/15m in rotazione (con J12 in vigore la porta grigia è guardata) |
+| | J6 | `minHoldoutTradesFraction`: richiesti = max(pavimento, frazione × attesi dal ritmo di selezione); il pavimento non si scavalca mai; saldo dichiarato nel log | **fatto (2026-08-25)** — accensione della frazione = scelta operativa per config |
+| | J7 | `PairIndexSyncWorker`: l'indice si aziona da solo (primo giro ~90s = backfill dei 174, poi ogni ora); `PairsWatch` resta da accendere | **fatto (2026-08-25)** — accensione PairsWatch operativa |
+| **2 — ritiro esigibile** | J8 | `FleetLaneObservations` + `LaneObservationLedger`: osservazione CUMULATA che sopravvive ai riavvii, azzerata solo al cambio di identità; trade/Sharpe ancorati al primo avvistamento; solo sottostima, mai gonfiaggio | **fatto (2026-08-25)** — cold-start: il ritiro per Sharpe matura 21g dopo il deploy |
+| | J9 | `ExpectedFrequencyBackfill` (pannello flotta, con Anteprima): ricostruzione per identità canonica con la STESSA aritmetica dello schieramento; non trovato = null dichiarato | **fatto (2026-08-25)** — esecuzione dal pannello = passo operativo |
+| | J10 | Armare il ritiro su **una** corsia: `ExecutionLanes = [7]`, `DryRun = false` | **operativo** — dopo il deploy e J9 eseguito |
+| | J11 | La sonda dichiara la capacità di RITIRO: corsie con atteso, osservazione matura per criterio, «NESSUN ritiro può ancora maturare» gridato | **fatto (2026-08-25)** |
+| **3 — il braccio mancante** | J12 | Guardia sulle gambe grigie in `RunApplyEvaluator` (`AutoReapply:MaxGreyLegs`, default 0; fail-closed su provenienza ignota; kind separato `GreyBlocked` che NON spegne le proposte F5; prima del supervisore = zero costo LLM) | **fatto (2026-08-25)** |
+| | J13 | `AssignmentArmImplemented = true`: candidato SINGOLO via lo stesso deployer del click F5 (`Source="fleet"`), multi-gamba = journal-only dichiarato; gate `WhyNotExecutedAssignment` | **fatto (2026-08-25)** |
+| | J14 | `Fleet:GreyAutoDeploy` (default **false**) + `MaxGreyLanes` (default 3/5): pass ha precedenza, ignoto conta grigio, guardia AF4b, menù AF3 anche sui grigi, il non-assegnato resta proposta | **fatto (2026-08-25)** — l'accensione del flag è LA decisione del proprietario |
+| **4 — onestà degli strumenti** | J15-J21 | GreyZone «chiusa DAL 2026-08-09» coi numeri veri · il log DSR dichiara la censura (~4% misurati) e il miglior Sharpe non misurato · PowerCheck per gruppo con POTENZA PARZIALE · guardiano del carry: inapplicabilità DICHIARATA (heartbeat pod-side nei passi operativi) · corsia in corsa non alimentabile = violazione + `/regimes` fail-closed sulla corsia 0 · `CurrentPrice`+`UnrealizedPnl` viaggiano insieme (effetto pieno al redeploy del pod) · guardia anti candele-storiche + `scripts/fix-traderecords-timestamps.sql` (operativo) | **fatti (2026-08-25)** |
+
+**Contesto operativo da tenere presente:** i 69 trade dal 19/08 valgono **−779,81 in Paper**, con 6 corsie
+su 7 negative e durata mediana fra 2,6 e 14 ore. Con `RetireSharpeThreshold = 0` sono esattamente i
+candidati che il criterio condannerebbe — se l'orologio non fosse azzerato (J8).
+
+**Due letture da rettificare, per non finanziare interventi inutili:** `Committee:Providers: []` **non**
+significa «nessun votante» (`EffectiveProviders()` ricade su `[Nvidia, Groq, Gemini]`, e la sonda conferma
+3/3 con quorum 2) — il comitato tace perché **non gli è mai stata posta una domanda**. E il `Carry` del
+file vivo del guscio **non comanda il carry**: con `Trading:UseRemoteTrading = true` il worker gira nel
+pod, e il ConfigMap montato porta la sola chiave `Trading__LaneCount`.
+
+### Non-obiettivi
+
+Non si abbassano DSR, PBO o la soglia del gemello nullo (il problema è aritmetico, non di severità) · non
+si costruisce raccolta permanente di microstruttura (verdetto 2026-07-28: informa, non paga i costi) ·
+non si apre G3 finché il DSR è murato (più tentativi alzano SR\*) · non si tocca `SafetyChecker` e non si
+automatizza nulla verso Live · **non si aggiunge `includeGreyZone` alle config in rotazione finché J12
+non ha chiuso il percorso campagna → impronta**.
+
+### Esecuzione (2026-08-25) e passi operativi al deploy
+
+Tutti gli item di CODICE sono stati implementati lo stesso giorno, un commit per item (o blocco), con
+test scritti insieme al codice — il dettaglio vive nei messaggi di commit del branch. **Due migrazioni
+additive** (`MarkMixedUniverseRuns` col backfill dallo snapshot, `AddFleetLaneObservations`), che il
+migrate-on-startup applica al primo avvio. Sblocco manuale già eseguito durante l'ondata: la campagna
+2, ferma da 43 ore, è stata rimessa in rotazione da `/campaign` (run `ea3ff2ff` config 18 e successivo
+config 17 completati — ed è ricaduta in `WaitingForTrigger`, confermando dal vivo la necessità di J1).
+
+**In ordine, dopo il merge:**
+
+1. `dotnet build ProcioneMGR.Migrations.Postgres -c Release` nel repo principale (la DLL delle
+   migrazioni NON si ricostruisce col build dell'app — trappola già pagata), poi riavvio del guscio:
+   le due migrazioni si applicano da sole, `PairIndexSyncWorker` indicizza i 174 artefatti arretrati
+   entro ~2 minuti, la sonda J3 compare in Home, il ledger J8 comincia ad accumulare (cold-start:
+   il ritiro per Sharpe può maturare al più presto 21 giorni dopo, l'inedia 10).
+2. **J9**: dal pannello flotta di `/admin/autonomy`, «Anteprima» e poi «Ricostruisci e salva» le
+   frequenze attese. Senza, l'inedia resta senza denominatore.
+3. **J21**: eseguire `scripts/fix-traderecords-timestamps.sql` (transazione, idempotente, quarantena
+   inclusa) sul DB reale.
+4. **J5**: creare le config di caccia 5m/15m (a timeframe singolo) e metterle nella rotazione della
+   campagna. Con J12 in vigore l'`includeGreyZone` è guardato: il non-obiettivo di cui sopra è
+   superato DA J12, non ignorato.
+5. **J10**: quando J9 è eseguito e l'osservazione matura, `Fleet:ExecutionLanes = [7]` e
+   `DryRun = false` dal pannello. Una corsia, poi si allarga.
+6. **J14**: l'accensione di `Fleet:GreyAutoDeploy` è LA decisione del proprietario (default false).
+7. **Redeploy del pod motore** quando si vuole l'effetto pieno di J20 (PnL persistito coi prezzi),
+   della guardia anti candele-storiche di J21 e del rifiuto J19 lato engine: sono codice condiviso
+   che il guscio non esercita. Fino ad allora valgono le protezioni lato guscio.
+8. **Aperto (pod-side, non in questa ondata)**: l'heartbeat del carry persistito dal motore — il
+   guardiano J18 oggi dichiara l'inapplicabilità invece di tacere, ma vedere il carry morto richiede
+   che il motore scriva un battito leggibile dal guscio.

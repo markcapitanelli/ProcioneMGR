@@ -155,6 +155,65 @@ public class MinTrackRecordTests
     }
 
     [Fact]
+    public async Task Stage_MixedUniverse_DeclaresPartialPower_InsteadOfContradictingItself()
+    {
+        // [J17] Il difetto riprodotto: giudizio con All (tutte le serie sotto potenza) ma riepilogo
+        // col Max (il peggiore). Su un universo 1h+4h con holdout lungo e pochi tentativi, l'1h ha
+        // potere e il 4h no: prima usciva «Potenza OK: minimo rilevabile 8,91» — una frase che si
+        // contraddice da sola. Ora il caso misto è uno stato dichiarato, coi timeframe deboli nominati.
+        var log = new List<string>();
+        var to = new DateTime(2026, 7, 31, 0, 0, 0, DateTimeKind.Utc);
+        var ctx = new PipelineContext
+        {
+            Universe =
+            [
+                new SeriesSpec { Symbol = "BTC/USDT", Timeframe = "1h" },
+                new SeriesSpec { Symbol = "BTC/USDT", Timeframe = "1d" },
+                new SeriesSpec { Symbol = "ETH/USDT", Timeframe = "1d" },
+            ],
+            Ranges = new PipelineDateRanges
+            {
+                SelectionFrom = to.AddMonths(-12),
+                SelectionTo = to.AddMonths(-6),
+                HoldoutFrom = to.AddMonths(-6),
+                HoldoutTo = to,
+            },
+            Log = log.Add,
+        };
+        var stage = new PowerCheckStage();
+
+        // Primo passaggio: si leggono i minimi rilevabili VERI dei due gruppi. L'annualizzazione
+        // rende i minimi quasi indipendenti dal timeframe (entrambi ~ z·sqrt(365/giorni)): la
+        // differenza fra 1h e 1d viene solo dall'inflazione a T piccolo, quindi il tetto del caso
+        // misto va messo NEL MEZZO dei due numeri reali, non scelto a occhio.
+        await stage.ExecuteAsync(ctx, Config(("expectedTrials", "100")), CancellationToken.None);
+        var min1h = ctx.Power!.Series.Where(s => s.Timeframe == "1h").Min(s => s.MinDetectableAnnualizedSharpe);
+        var min1d = ctx.Power!.Series.Where(s => s.Timeframe == "1d").Min(s => s.MinDetectableAnnualizedSharpe);
+        Assert.True(min1d > min1h, "il gruppo a T piccolo (1d) deve avere il minimo rilevabile più alto");
+        var cap = (min1h + min1d) / 2.0;
+
+        // Secondo passaggio, col tetto fra i due: 1h ha potere, 1d no — il caso misto vero.
+        log.Clear();
+        await stage.ExecuteAsync(ctx, Config(
+            ("expectedTrials", "100"),
+            ("maxPlausibleSharpe", cap.ToString("F4", System.Globalization.CultureInfo.InvariantCulture))), CancellationToken.None);
+
+        Assert.False(ctx.Power!.Underpowered, "il verdetto complessivo non è SOTTO POTENZA: un gruppo ha potere");
+        Assert.Contains("1d", ctx.Power.UnderpoweredTimeframes());
+        Assert.DoesNotContain("1h", ctx.Power.UnderpoweredTimeframes());
+
+        var summary = stage.Summarize(ctx);
+        Assert.Contains("POTENZA PARZIALE", summary.Text);
+        Assert.Contains("1d", summary.Text);
+        Assert.DoesNotContain("Potenza OK", summary.Text);
+        Assert.Contains(log, l => l.Contains("POTENZA PARZIALE"));
+
+        // Il log è per GRUPPO, non per serie: le due serie 1d producono UNA riga di misura, non due
+        // righe identiche che sembrano due misure indipendenti.
+        Assert.Single(log.Where(l => l.Contains("1d (2 serie")));
+    }
+
+    [Fact]
     public void Stage_Summary_CarriesTheHeadlineNumbers()
     {
         var stage = new PowerCheckStage();

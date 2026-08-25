@@ -586,6 +586,10 @@ builder.Services.AddHostedService<ProcioneMGR.Services.Notifications.DailyDigest
 // acceso parte in DryRun: in AF2a non esiste il braccio esecutivo (arriva con AF2b). Non tocca
 // MAI l'impronta storica (corsie 0..2), le corsie Live/Testnet, le quarantene o le campagne.
 builder.Services.Configure<ProcioneMGR.Services.Fleet.FleetOptions>(builder.Configuration.GetSection("Fleet"));
+// [J8] Il registro dell'osservazione cumulata: dichiarato PRIMA del reader che lo consuma.
+builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneObservationLedger, ProcioneMGR.Services.Fleet.LaneObservationLedger>();
+// [J9] La ricostruzione delle frequenze attese mancanti (azione amministrativa, /admin/autonomy).
+builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IFleetStateReader, ProcioneMGR.Services.Fleet.FleetStateReader>();
 // [F5] Il click umano sui candidati grigi: scrive la config su una corsia di flotta libera e
 // (se richiesto) la avvia in Paper. Solo grigi, solo flotta, solo Paper: non è una porta di servizio.
@@ -602,6 +606,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Servic
 // Singleton risolvibile oltre che hosted: la card di /admin/autonomy rilegge la stessa istanza.
 builder.Services.AddSingleton<ProcioneMGR.Services.Health.AgentStateProbe>();
 builder.Services.AddHostedService<ProcioneMGR.Services.Health.AgentStateProbeWorker>();
+// [J3] La sonda «la ricerca è viva»: letta dalla Home a ogni caricamento (query leggere), nessun worker.
+builder.Services.AddSingleton<ProcioneMGR.Services.Health.ResearchLivenessProbe>();
 
 // --- Autonomia: auto-promozione Paper→Testnet (MAI a Live) ---
 // L'evaluator decide (logica pura, testabile), il promoter agisce (stop→restart della corsia),
@@ -650,6 +656,9 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Research.IResearchCandidateIn
 // database dal 2026-07 e nessuna query li aveva mai riletti. Singleton come il gemello: porta un
 // semaforo interno, e due indicizzazioni concorrenti nello stesso processo non hanno senso.
 builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.IPairCandidateIndexer, ProcioneMGR.Services.PairsTrading.PairCandidateIndexer>();
+// [J7] L'indicizzazione AUTOMATICA: l'indice era costruito e mai azionato (0 righe contro 174
+// artefatti) — il braccio che lo aziona da solo, coi pulsanti della pagina per il manuale.
+builder.Services.AddHostedService<ProcioneMGR.Services.PairsTrading.PairIndexSyncWorker>();
 // [I14c] La storia dello spread delle coppie sorvegliate. Lo STORE e' sempre registrato — la pagina
 // deve poter leggere una storia gia' scritta anche col worker spento, che e' lo stato di fabbrica.
 builder.Services.Configure<ProcioneMGR.Services.PairsTrading.PairsWatchOptions>(builder.Configuration.GetSection("PairsWatch"));

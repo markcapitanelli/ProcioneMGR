@@ -68,7 +68,10 @@
     "CandidateMaxAgeDays": 14,
     "MaxLanesWithoutExposureGuard": 3,
     "CarrySilenceAlertHours": 24,
-    "UseCommittee": false
+    "UseCommittee": false,
+    "_comment_J14": "[J14] GreyAutoDeploy: il ROVESCIAMENTO di F5, per decisione del proprietario (PRD autonomia-operativa 2026-08-25) — l'orchestratore puo' schierare DA SOLO un candidato grigio su una corsia libera e AUTORIZZATA (ExecutionLanes), solo Paper, stesso deployer del click umano. Default false: e' il cambio di natura della fascia grigia e si accende apposta. MaxGreyLanes: tetto di corsie occupabili da grigi contemporaneamente (le altre restano alla banda pass); una corsia dalla provenienza ignota conta come grigia.",
+    "GreyAutoDeploy": false,
+    "MaxGreyLanes": 3
   },
   "Heartbeat": {
     "_comment": "[AF5.1] Heartbeat incrociato guscio/motore (tabella HostHeartbeats): ogni host scrive il PROPRIO battito e sorveglia quello altrui; stantio oltre StaleMinutes => Telegram Warning una volta per transizione. Default OFF. Il pannello in /admin/autonomy salva su ENTRAMBI gli host.",
@@ -86,10 +89,11 @@
     "MinSharpeSignificanceZ": 0.35
   },
   "AutoReapply": {
-    "_comment": "Ri-applica automatica dell'ensemble migliore trovato dai run schedulati. Enabled=true: lo scheduler, dopo ogni run schedulato completato, se il nuovo ensemble batte il corrente (comparatore con hysteresis) E il supervisore non pone veto, lo schiera da solo sulle corsie in Paper. Scrive solo configurazione: mai avvia trading, mai Live.",
+    "_comment": "Ri-applica automatica dell'ensemble migliore trovato dai run schedulati. Enabled=true: lo scheduler, dopo ogni run schedulato completato, se il nuovo ensemble batte il corrente (comparatore con hysteresis) E il supervisore non pone veto, lo schiera da solo sulle corsie in Paper. Scrive solo configurazione: mai avvia trading, mai Live. MaxGreyLegs [J12]: gambe di fascia grigia (o a provenienza ignota) tollerate in un'applica AUTOMATICA; 0 = solo sopravvissuti pieni (F5: il grigio si propone al click umano, mai si schiera da solo); l'applica manuale da /pipeline non passa dalla guardia.",
     "Enabled": true,
     "LookbackDays": 7,
-    "MaxPerTick": 3
+    "MaxPerTick": 3,
+    "MaxGreyLegs": 0
   },
   "PipelineSupervisor": {
     "_comment": "Supervisore AI del ciclo di ri-applica. Provider 'Claude' usa ILlmClient + ANTHROPIC_API_KEY (stesso breaker del layer advisory) ed e' hot-reload: il cambio Logging<->Claude vale dalla prossima valutazione, senza riavvio (/admin/autonomy). Se la key manca, il breaker e' aperto o la chiamata fallisce, degrada in automatico ad 'approva' (decidono le metriche), SUBITO e senza errori. Il supervisore puo' solo porre un VETO a una sostituzione, mai forzarla, mai avviare trading; un veto genera una notifica Warning. La API key NON va qui: solo env ANTHROPIC_API_KEY.",
@@ -179,6 +183,9 @@
     "TickSeconds": 60,
     "_comment_I7": "[I7] CancelPauseMinutes: un run annullato A MANO mette la campagna in pausa invece di far ripartire la rotazione entro un tick (prima l'annullamento finiva nello stesso ramo di un fallimento: chi annullava otteneva il contrario di cio' che voleva). 0 = comportamento storico. RespectAutoReapplyGate: con AutoReapply:Enabled=false la campagna NON schiera piu' da sola — i sopravvissuti restano registrati e notificati per un click umano.",
     "CancelPauseMinutes": 60,
+    "_comment_J1": "[J1] RearmHours: ore di silenzio (dall'ultimo run) dopo cui una campagna in WaitingForTrigger torna in rotazione DA SOLA — la sorgente di ripartenza indipendente dal trigger di regime (il 2026-08-23 la ricerca e' rimasta ferma 43+ ore perche' l'unica uscita era un wake del detector, e il detector puo' guastarsi nei due sensi). Il riarmo rispetta i backoff per-config e la pausa dopo annullamento. 0 = mai (comportamento storico). [J3] StallAlertHours: ore senza run oltre cui la card in Home dichiara la ricerca FERMA — soglia di lettura, non un gate.",
+    "RearmHours": 24,
+    "StallAlertHours": 12,
     "RespectAutoReapplyGate": true
   },
   "RegimeTrigger": {

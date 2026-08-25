@@ -43,6 +43,7 @@
 @inject IOptionsMonitor<ProcioneMGR.Services.PairsTrading.PairsWatchOptions> PairsWatchMonitor
 @inject ProcioneMGR.Services.Fleet.FleetOrchestratorWorker FleetWorker
 @inject ProcioneMGR.Services.Fleet.IGreyDeployer GreyDeployer
+@inject ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill FrequencyBackfill
 @inject ILaneDirectory LaneDirectory
 @inject IPipelineApplier PipelineApplier
 @inject IOptionsMonitor<ProcioneMGR.Services.Health.HeartbeatOptions> HeartbeatMonitor
@@ -269,6 +270,12 @@
             <div class="col-auto">
                 <label class="form-label">Max run per tick @Hot()</label>
                 <input type="number" class="form-control" @bind="_autoReapply.MaxPerTick" min="1" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Gambe di fascia grigia (o a provenienza ignota) tollerate in un'applica automatica. 0 = solo sopravvissuti pieni: il grigio si propone al click umano, mai si schiera da solo (F5). L'applica manuale da /pipeline non passa da questa guardia.">
+                    Gambe grigie max (auto) @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_autoReapply.MaxGreyLegs" min="0" style="width: 8rem;" />
             </div>
             <div class="col-auto">
                 <button class="btn btn-primary" @onclick='() => SaveAsync("AutoReapply", _autoReapply, "Ri-applica automatica")' disabled="@_busy">Salva</button>
@@ -532,6 +539,21 @@
                             <label class="form-label mb-1" for="fl_exmax">Azioni max/tick @Hot()</label>
                             <input type="number" class="form-control" id="fl_exmax" @bind="_fleet.MaxExecutionsPerTick" min="1" style="width: 7rem;" />
                         </div>
+                        @* [J14] Il rovesciamento di F5, per decisione del proprietario: dentro la
+                           cornice dell'esecuzione perché fa succedere qualcosa nel mondo. *@
+                        <div class="form-check form-switch align-self-end mb-1">
+                            <input class="form-check-input" type="checkbox" id="fl_greyauto" @bind="_fleet.GreyAutoDeploy" />
+                            <label class="form-check-label" for="fl_greyauto"
+                                   title="Rovescia F5: l'orchestratore può schierare DA SOLO un candidato grigio su una corsia libera e autorizzata (solo Paper, stesso deployer del click umano, bracket automatico). Freni: tetto di corsie grigie, corsie solo in lista, budget per tick, guardia di esposizione, comitato sui pareggi. Il forward test Paper è l'unico giudice immune al multiple testing: riempirlo in automatico lo consuma — serve il ritiro (J8-J10) che libera le corsie.">
+                                Schiera i GRIGI da solo (J14) @Hot()
+                            </label>
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_greymax" title="Corsie di flotta occupabili da candidati grigi contemporaneamente. Le altre restano alla banda «pass». Una corsia dalla provenienza ignota conta come grigia: non sapere non allarga il permesso.">
+                                Corsie grigie max @Hot()
+                            </label>
+                            <input type="number" class="form-control" id="fl_greymax" @bind="_fleet.MaxGreyLanes" min="0" style="width: 7rem;" />
+                        </div>
                         <div class="small text-muted flex-fill" style="min-width: 22rem;">
                             Elenco di numeri di corsia separati da virgola. <strong>Vuoto = nessuna esecuzione</strong>,
                             anche con il dry-run spento: il permesso è per corsia, non globale.
@@ -554,6 +576,33 @@
             <div class="col-auto align-self-end">
                 <button class="btn btn-primary" @onclick="SaveFleetAsync" disabled="@_busy">Salva</button>
             </div>
+        </div>
+        @* [J9] La circolarità dell'inedia: l'atteso è scritto solo da un nuovo schieramento, e le
+           corsie schierate prima di I11 hanno null su ogni gamba — quindi l'inedia non giudica mai
+           e nessuna corsia si libera mai. La ricostruzione usa la STESSA aritmetica dello
+           schieramento nuovo, dall'archivio candidati. *@
+        <div class="border rounded p-2 mb-3">
+            <strong class="small">Frequenze attese mancanti (J9)</strong>
+            <div class="small text-muted mb-2">
+                Ricostruisce <code>ExpectedTradesPerMonth</code> per le gambe che non lo dichiarano,
+                ritrovando il candidato di provenienza nell'archivio per identità canonica. Dove il
+                candidato non si trova, la gamba resta com'è e il perché viene mostrato: un
+                denominatore inventato è peggio di nessun verdetto.
+            </div>
+            <button class="btn btn-outline-secondary btn-sm me-2" @onclick="() => RunBackfillAsync(dryRun: true)" disabled="@_busy">Anteprima (non scrive)</button>
+            <button class="btn btn-warning btn-sm" @onclick="() => RunBackfillAsync(dryRun: false)" disabled="@_busy">Ricostruisci e salva</button>
+            @if (_backfillReport is { } rep)
+            {
+                <div class="small mt-2">
+                    <strong>@(rep.DryRun ? "Anteprima" : "Eseguito"):</strong> @rep.Updated gambe ricostruibili su @rep.Legs.Count esaminate.
+                    <ul class="mb-0">
+                        @foreach (var l in rep.Legs.Take(12))
+                        {
+                            <li class="@(l.Updated ? "" : "text-muted")">corsia @l.LaneId — @l.Leg: @l.Detail</li>
+                        }
+                    </ul>
+                </div>
+            }
         </div>
         @* [F5] IL CLICK UMANO: schiera un candidato grigio proposto su una corsia di flotta libera. *@
         @if (_greyRuns.Count > 0)
@@ -1522,6 +1571,22 @@
                 <label class="form-label">Pausa dopo annullamento (min) @Hot()</label>
                 <input type="number" class="form-control" @bind="_campaign.CancelPauseMinutes" min="0" style="width: 10rem;" />
             </div>
+            @* [J1] La sorgente di ripartenza INDIPENDENTE dal trigger di regime: da
+               WaitingForTrigger il planner non usciva a tempo, e il 2026-08-23 la ricerca è rimasta
+               ferma 43+ ore senza che nulla lo dicesse. 0 = mai (comportamento storico). *@
+            <div class="col-auto">
+                <label class="form-label" title="Ore di silenzio (dall'ultimo run) dopo cui una campagna in attesa di trigger torna in rotazione da sola. Il riarmo rispetta i backoff per-config e la pausa dopo annullamento; non bypassa nulla, rimette solo in moto. 0 = mai: si esce solo con un trigger contestuale o a mano.">
+                    Riarmo a tempo (ore) @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_campaign.RearmHours" min="0" style="width: 8rem;" />
+            </div>
+            @* [J3] Soglia di LETTURA della card «ricerca» in Home: non ferma e non avvia nulla. *@
+            <div class="col-auto">
+                <label class="form-label" title="Ore senza un run completato (e senza run in corso) oltre cui la card in Home dichiara la ricerca FERMA. Soglia di lettura, non un gate.">
+                    Allarme fermo ricerca (ore) @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_campaign.StallAlertHours" min="1" style="width: 8rem;" />
+            </div>
             <div class="col-auto form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="cp_gate" @bind="_campaign.RespectAutoReapplyGate" />
                 <label class="form-check-label" for="cp_gate">Rispetta il gate della ri-applica @Hot()</label>
@@ -2293,6 +2358,24 @@
     }
 
     // ---- [F5] Il click umano sui candidati grigi ----
+    // [J9] L'ultimo report del backfill delle frequenze attese (null = mai eseguito in questa vista).
+    private ProcioneMGR.Services.Fleet.BackfillReport? _backfillReport;
+
+    private async Task RunBackfillAsync(bool dryRun)
+    {
+        _busy = true;
+        try
+        {
+            _backfillReport = await FrequencyBackfill.RunAsync(dryRun);
+        }
+        catch (Exception ex)
+        {
+            _status = $"Backfill frequenze fallito: {ex.Message}";
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
     private List<Guid> _greyRuns = [];
     private Guid? _greyRunId;
     private List<ProcioneMGR.Services.Fleet.GreyChoice> _greyChoices = [];
