@@ -137,7 +137,13 @@ public static class AdminConfigRules
             (o.PersistenceThreshold is > 0 and <= 1,
                 "La soglia di persistenza sta fra 0 (escluso) e 1: a 0 anche il puro rumore risulterebbe una relazione persistente."),
             (o.RecentWindows >= 1, "Serve almeno 1 finestra recente per poter giudicare una rottura."),
-            (o.Estimator is "Kalman" or "RollingOls", "L'estimatore e' \"Kalman\" o \"RollingOls\".")),
+            (o.Estimator is "Kalman" or "RollingOls", "L'estimatore e' \"Kalman\" o \"RollingOls\"."),
+            // [2026-08-25] Le manopole dell'alimentazione automatica. MinScreens e' quella che puo'
+            // fare danno restando "valida": a 1 il criterio degenera nel test singolo, cioe' nella
+            // fabbrica di candidati che questo pannello dichiara da sempre.
+            (o.AutoWatchMinScreens >= 2, "La replicazione richiede almeno 2 screen distinti: con 1 e' il test singolo, la fabbrica di candidati."),
+            (o.AutoWatchMinSpanDays >= 1, "L'arco minimo fra primo e ultimo screen dev'essere almeno 1 giorno."),
+            (o.AutoWatchMaxPairs >= 1, "Il tetto delle coppie sorvegliate dev'essere almeno 1.")),
 
         AutoReapplyOptions o => Check(
             (o.LookbackDays >= 1, "Il lookback dev'essere almeno 1 giorno."),

@@ -4,10 +4,17 @@
 # dual-read verso ml. Nessuno dei due è un requisito duro per l'avvio, ma partire in ordine evita
 # rumore diagnostico inutile al primo bring-up.
 #
-# ⚠ Sync SEMPRE MANUALE, senza eccezioni e senza ripensamenti futuri: è il servizio che muove
-# denaro. Un `automated: {selfHeal: true}` qui significherebbe che un controller decide da solo di
-# riavviare o riconfigurare il motore mentre ha posizioni aperte. È la stessa ragione per cui non
-# esiste una promozione automatica a Live.
+# ⚠ Sync manuale IN ARGOCD — e la storia di questa riga va detta intera. La versione originale
+# diceva «SEMPRE MANUALE, senza eccezioni e senza ripensamenti futuri»; il 2026-08-25 il
+# proprietario ha deciso il ripensamento: «il sync del trading da ora in poi deve diventare
+# automatico». L'automazione però NON vive qui: ArgoCD non raggiunge il repo privato dal
+# 2026-08-05 («authentication required»), e la piattaforma è volutamente indipendente da GitHub a
+# runtime. Vive nella plancia (lavoro `deploy`, scripts/deploy-trading.ps1): agisce SOLO quando
+# master è avanzato — cioè dopo una merge, un atto umano — e si limita a eseguire quella
+# promozione. Il timore originale (un controller che riavvia il motore DI SUA INIZIATIVA, con
+# selfHeal/prune) resta fondato e resta escluso: nessun selfHeal, nessun prune, nessuna azione a
+# parità di commit. La ragione per cui non esiste una promozione automatica a LIVE è un'altra
+# cosa e non cambia.
 #
 # ⚠ Prima del sync, verificare che il monolite sia in modalità remota (Trading:UseRemoteTrading=true,
 # che nel ConfigMap di ui è già così): con il toggle a false, questo Deployment sarebbe un SECONDO

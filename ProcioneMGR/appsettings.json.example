@@ -1,4 +1,4 @@
-﻿{
+{
   "ConnectionStrings": {
     "_comment_PostgresConnection": "Unico provider supportato: PostgreSQL. Lo schema si applica con `dotnet ef database update --project ProcioneMGR.Migrations.Postgres` (vedi docs/POSTGRES_MIGRATION.md).",
     "PostgresConnection": "Host=localhost;Port=5432;Database=procionemgr;Username=procione;Password=__CHANGE_ME__"
@@ -168,7 +168,12 @@
   },
   "PairsWatch": {
     "_comment": "[I14c] Sorveglianza dello SPREAD delle coppie scelte a mano: ogni IntervalHours registra finestre NON SOVRAPPOSTE (ADF, hedge ratio, z-score) e la pagina /pairs-trading ne mostra la storia. SOLA LETTURA: non apre, non chiude, non tocca corsie. DEFAULT SPENTO e non e' la solita prudenza — e' l'unico worker dell'ondata di integrazione che SCRIVE IN PERMANENZA sul Postgres condiviso con motore e ingestion, quindi accenderlo e' una decisione sul carico. Il conto: per coppia il primo giro scrive MaxCandles/WindowSize righe (20 coi default), dal secondo in poi UNA sola perche' l'upsert e' idempotente; con 5 coppie ogni 12h fanno ~10 righe/giorno. Pairs vuota = nessuna sorveglianza anche da acceso. Le coppie si scelgono A MANO nella forma 'ETH/USDT|BTC/USDT 1h': alimentarle da cio' che lo screening marca operabile sceglierebbe fra centinaia di test ADF senza correzione per test multipli, cioe' fabbricherebbe candidati per costruzione. Il VERDETTO guarda la frazione di finestre stazionarie sulla SERIE, mai la singola finestra: al 5% il 5% delle finestre di puro rumore risulta stazionario per costruzione.",
+    "_comment_autowatch": "[2026-08-25, decisione del proprietario] AutoWatch: alimentazione AUTOMATICA per REPLICAZIONE — una coppia entra solo se operabile in almeno AutoWatchMinScreens screen DISTINTI che coprono almeno AutoWatchMinSpanDays giorni (il rumore non replica su richiesta; il top-N su un test singolo resta la trappola dichiarata sopra). Le manuali in Pairs restano sempre e hanno la precedenza sul tetto AutoWatchMaxPairs (totale, manuali+auto). La selezione di ogni giro e' dichiarata nei log.",
     "Enabled": false,
+    "AutoWatch": false,
+    "AutoWatchMinScreens": 3,
+    "AutoWatchMinSpanDays": 14,
+    "AutoWatchMaxPairs": 5,
     "Pairs": [],
     "IntervalHours": 12,
     "WindowSize": 250,
