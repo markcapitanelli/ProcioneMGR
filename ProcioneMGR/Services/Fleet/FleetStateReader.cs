@@ -28,6 +28,10 @@ public sealed class FleetStateReader(
     IPipelineApplier applier,
     IOptionsMonitor<Risk.CorrelatedExposureOptions> exposureOptions,
     IOptionsMonitor<FleetOptions> fleetOptions,
+    // [J8] L'orologio cumulato dell'osservazione: vive QUI, nell'unico punto che assembla lo stato
+    // delle corsie, così Decide e la sua spiegazione (Explain, il pannello) leggono lo STESSO
+    // numero — due orologi darebbero un pannello che spiega un ritiro diverso da quello vero.
+    ILaneObservationLedger observationLedger,
     ILogger<FleetStateReader> logger) : IFleetStateReader
 {
     // Soglia F5 (GreyDsrFloor): trasferita in GreyZone.DsrFloor insieme al giudice — vedi IsGrey.
@@ -76,10 +80,19 @@ public sealed class FleetStateReader(
                     running = status.IsRunning;
                     mode = status.Mode.ToString();
                     emergency = status.IsEmergencyStopped;
-                    if (running && status.StartedAtUtc is DateTime started)
+
+                    // [J8] L'osservazione viene dal REGISTRO CUMULATO, non da now − StartedAtUtc:
+                    // quella finestra riparte da zero a ogni riavvio del motore, e con
+                    // RetireMinWeeks=3 il massimo continuo mai raggiunto in tutta la vita della
+                    // flotta è stato 20g 3h contro i 21 richiesti — il criterio di ritiro non ha
+                    // mai potuto esprimersi. Trade e Sharpe si ancorano allo stesso primo
+                    // avvistamento dell'identità: numeratore e denominatore dalla stessa storia.
+                    var identity = LaneObservationLedger.BuildIdentity(s.Symbol, s.Timeframe, s.ActiveStrategyIds);
+                    var (observed, firstSeen) = await observationLedger.AccumulateAsync(s.Id, identity, running, now, ct);
+                    observation = observed;
+                    if (running)
                     {
-                        observation = now - started;
-                        var perf = await engine.GetPerformanceAsync(from: started, ct);
+                        var perf = await engine.GetPerformanceAsync(from: firstSeen, ct);
                         sharpe = perf.SharpeRatio;
                         trades = perf.TotalTrades;
                     }

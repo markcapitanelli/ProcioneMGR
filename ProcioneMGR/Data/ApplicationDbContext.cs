@@ -105,6 +105,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[AF2] Journal delle decisioni dell'orchestratore di flotta.</summary>
     public DbSet<OrchestratorDecision> OrchestratorDecisions => Set<OrchestratorDecision>();
 
+    /// <summary>[J8] L'orologio dell'osservazione per corsia di flotta (non si azzera al riavvio).</summary>
+    public DbSet<FleetLaneObservation> FleetLaneObservations => Set<FleetLaneObservation>();
+
     /// <summary>[G4] Post-mortem delle operazioni chiuse in perdita: testo e classificazione, mai un parametro.</summary>
     public DbSet<TradePostMortem> TradePostMortems => Set<TradePostMortem>();
 
@@ -188,6 +191,16 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.HasKey(e => e.Host);
             entity.Property(e => e.Host).HasMaxLength(16);
             entity.Property(e => e.Version).HasMaxLength(64);
+        });
+
+        // [J8] Una riga per corsia, aggiornata coi tick e protetta da concorrenza ottimistica sul
+        // LastTickUtc (due lettori simultanei non devono accreditare due volte lo stesso delta).
+        builder.Entity<FleetLaneObservation>(entity =>
+        {
+            entity.ToTable("FleetLaneObservations");
+            entity.HasKey(e => e.LaneId);
+            entity.Property(e => e.Identity).HasMaxLength(512).IsRequired();
+            entity.Property(e => e.LastTickUtc).IsConcurrencyToken();
         });
 
         // [AF2] Journal della flotta: append-only, letto per data discendente dal pannello e per
