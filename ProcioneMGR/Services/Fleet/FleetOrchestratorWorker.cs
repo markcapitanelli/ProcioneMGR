@@ -9,10 +9,12 @@ namespace ProcioneMGR.Services.Fleet;
 
 /// <summary>
 /// [AF2] Il braccio della Queen Bee: ogni tick legge lo stato (reader), decide (core puro),
-/// applica l'ISTERESI sui ritiri e scrive il journal. In questo incremento (AF2a) NON esegue
-/// nulla — nemmeno con <c>Fleet:DryRun=false</c>: l'esecuzione arriva con AF2b, e un flag girato
-/// in anticipo deve produrre un avviso, non un'azione non collaudata. Vive nel SOLO monolite
-/// (è il cervello: scheduler, planner e promozioni stanno già qui).
+/// applica l'ISTERESI sui ritiri e scrive il journal. L'esecuzione è arrivata per incrementi,
+/// nell'ordine deciso dal proprietario: prima il RITIRO (AF2b/I12, 2026-08-19), poi l'AVVIO a
+/// candidato singolo (J13/J14, 2026-08-25) — sempre gattata da dry-run, <c>ExecutionLanes</c> e
+/// budget per tick, coi due gate <see cref="WhyNotExecuted"/> e
+/// <see cref="WhyNotExecutedAssignment"/> che dicono il perché di ogni rifiuto. Vive nel SOLO
+/// monolite (è il cervello: scheduler, planner e promozioni stanno già qui).
 /// </summary>
 public sealed class FleetOrchestratorWorker(
     IFleetStateReader reader,
@@ -376,21 +378,6 @@ public sealed class FleetOrchestratorWorker(
     }
 
     /// <summary>
-    /// [AF2b] <b>Ferma davvero una corsia.</b> L'unica azione che questo worker esegue.
-    ///
-    /// <para><b>La modalità si rilegge ADESSO, dal motore.</b> Il piano è stato deciso su una
-    /// fotografia che può avere minuti: se nel frattempo la corsia è passata a Testnet o Live —
-    /// per una promozione, o per una mano umana — fermarla sarebbe l'orchestratore che tocca una
-    /// corsia che non gli appartiene. Fail-closed: modalità non leggibile ⇒ non si tocca. È la
-    /// stessa disciplina del lettore di stato, che marca intoccabile ciò che non riesce a leggere,
-    /// applicata nel punto dove le conseguenze sono reali.</para>
-    ///
-    /// <para>Il journal riceve l'esito VERO: <c>Applied=true</c> solo se lo stop è andato a buon
-    /// fine, altrimenti la riga porta l'errore. Un journal che dichiara applicato ciò che è fallito
-    /// è la classe di difetto «controllo che rassicura» nel posto peggiore — quello dove qualcuno
-    /// andrà a cercare cosa è successo.</para>
-    /// </summary>
-    /// <summary>
     /// [J13/J14] L'esecuzione di un'assegnazione: lo STESSO deployer del click umano F5
     /// (bracket automatico, frequenza attesa, rilettura fail-closed della corsia), con
     /// <c>Source="fleet"</c>. Il journal lo scrive QUI il worker — non il deployer — perché la
@@ -448,6 +435,21 @@ public sealed class FleetOrchestratorWorker(
         }
     }
 
+    /// <summary>
+    /// [AF2b] <b>Ferma davvero una corsia.</b> L'unica azione che questo worker esegue.
+    ///
+    /// <para><b>La modalità si rilegge ADESSO, dal motore.</b> Il piano è stato deciso su una
+    /// fotografia che può avere minuti: se nel frattempo la corsia è passata a Testnet o Live —
+    /// per una promozione, o per una mano umana — fermarla sarebbe l'orchestratore che tocca una
+    /// corsia che non gli appartiene. Fail-closed: modalità non leggibile ⇒ non si tocca. È la
+    /// stessa disciplina del lettore di stato, che marca intoccabile ciò che non riesce a leggere,
+    /// applicata nel punto dove le conseguenze sono reali.</para>
+    ///
+    /// <para>Il journal riceve l'esito VERO: <c>Applied=true</c> solo se lo stop è andato a buon
+    /// fine, altrimenti la riga porta l'errore. Un journal che dichiara applicato ciò che è fallito
+    /// è la classe di difetto «controllo che rassicura» nel posto peggiore — quello dove qualcuno
+    /// andrà a cercare cosa è successo.</para>
+    /// </summary>
     private async Task ExecuteRetireAsync(StopAndFreeLane retire, CancellationToken ct)
     {
         string? error = null;
@@ -526,6 +528,9 @@ public sealed class FleetOrchestratorWorker(
     /// ma non decide da troppo, qualcosa è rotto e va detto. Lo stato vivo è in-process: in
     /// topologia remota da questo host non si vede, e si dichiara il limite invece di fingere.
     /// </summary>
+    /// <summary>Dichiarazione una-tantum per processo dell'inapplicabilità del guardiano del carry (J18).</summary>
+    private bool _carryWatchInapplicabilityDeclared;
+
     private async Task WatchCarryAsync(CancellationToken ct)
     {
         var opt = options.CurrentValue;
@@ -534,7 +539,28 @@ public sealed class FleetOrchestratorWorker(
         var carry = serviceProvider.GetService<CarryWorker>();
         if (carry is null)
         {
-            logger.LogDebug("Carry abilitato ma il worker vive nell'host del motore: sorveglianza non disponibile da qui.");
+            // [J18, PRD autonomia-operativa 2026-08-25] IL GUARDIANO ERA MUTO PER COSTRUZIONE, e
+            // nella topologia in cui la piattaforma GIRA. Con Trading:UseRemoteTrading=true il
+            // CarryWorker è registrato solo nel pod del motore: qui GetService restituisce SEMPRE
+            // null, e il LogDebug (invisibile ai livelli di default) faceva sì che
+            // Fleet:CarrySilenceAlertHours — presente e amministrabile in UI — non potesse
+            // scattare MAI. Se il carry nel pod muore, nessuno lo apprende: controllo che
+            // rassicura, in forma pura. Peggio: il Carry:Enabled letto qui è quello del GUSCIO,
+            // che non comanda il carry (il pod legge la SUA configurazione).
+            //
+            // Da qui non si può sorvegliare senza dati che il motore non persiste (lo stato del
+            // carry vive nei log del pod, ritenzione ~10h): il rimedio VERO è un heartbeat del
+            // carry scritto dal motore — lavoro pod-side, in passi operativi del PRD. Intanto:
+            // l'inapplicabilità si DICHIARA, una volta per processo, a un livello che si vede.
+            if (!_carryWatchInapplicabilityDeclared)
+            {
+                _carryWatchInapplicabilityDeclared = true;
+                logger.LogWarning(
+                    "Guardiano del carry INAPPLICABILE in questo assetto: il worker vive nell'host del motore "
+                    + "(Trading:UseRemoteTrading) e da qui non è osservabile. Fleet:CarrySilenceAlertHours={Ore}h "
+                    + "non può scattare: un silenzio del carry nel pod NON produrrà alcun allarme finché il motore "
+                    + "non ne persiste un heartbeat.", opt.CarrySilenceAlertHours);
+            }
             return;
         }
 

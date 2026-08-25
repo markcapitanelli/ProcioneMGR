@@ -877,6 +877,14 @@ public sealed class TradingEngine(
 
         foreach (var pos in _positions.ToList())
         {
+            // [J21, PRD autonomia-operativa 2026-08-25] UNA CANDELA PIÙ VECCHIA DELL'APERTURA NON
+            // RIGUARDA QUESTA POSIZIONE. Durante un recupero dati il router può riconsegnare
+            // candele storiche: valutarci sopra le uscite protettive ha prodotto 5 TradeRecords
+            // con ClosedAtUtc PRIMA di OpenedAtUtc (scarti di 18-29 giorni, tutte chiusure
+            // TakeProfit/StopLoss datate con la candela vecchia) — trade chiusi su un mercato che
+            // precede la loro stessa esistenza, e Duration negativa che inquina ogni statistica.
+            if (ts < pos.OpenedAtUtc) continue;
+
             MarkToMarket(pos, markPrice);
 
             var liquidation = ProtectiveExitEvaluator.EvaluateLiquidation(pos, high, low, isFutures);
