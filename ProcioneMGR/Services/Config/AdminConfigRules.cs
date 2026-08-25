@@ -261,7 +261,9 @@ public static class AdminConfigRules
             (o.TickSeconds >= 10, "Il tick del planner dev'essere almeno 10 secondi."),
             // [I7] Zero è legittimo (comportamento storico), negativo no: una pausa negativa
             // scadrebbe nel passato, cioè sarebbe una pausa che non mette in pausa.
-            (o.CancelPauseMinutes >= 0, "La pausa dopo un annullamento non può essere negativa (0 = nessuna pausa).")),
+            (o.CancelPauseMinutes >= 0, "La pausa dopo un annullamento non può essere negativa (0 = nessuna pausa)."),
+            // [J1] Nessun massimo: un riarmo lunghissimo è una scelta legittima; negativo no.
+            (o.RearmHours >= 0, "Il riarmo a tempo non può essere negativo (0 = mai: si esce solo per trigger o a mano).")),
 
         RegimeTriggerOptions o => Check(
             (o.CheckIntervalMinutes >= 1, "L'intervallo di controllo dev'essere almeno 1 minuto."),

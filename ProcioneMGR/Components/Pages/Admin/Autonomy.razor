@@ -1528,6 +1528,15 @@
                 <label class="form-label">Pausa dopo annullamento (min) @Hot()</label>
                 <input type="number" class="form-control" @bind="_campaign.CancelPauseMinutes" min="0" style="width: 10rem;" />
             </div>
+            @* [J1] La sorgente di ripartenza INDIPENDENTE dal trigger di regime: da
+               WaitingForTrigger il planner non usciva a tempo, e il 2026-08-23 la ricerca è rimasta
+               ferma 43+ ore senza che nulla lo dicesse. 0 = mai (comportamento storico). *@
+            <div class="col-auto">
+                <label class="form-label" title="Ore di silenzio (dall'ultimo run) dopo cui una campagna in attesa di trigger torna in rotazione da sola. Il riarmo rispetta i backoff per-config e la pausa dopo annullamento; non bypassa nulla, rimette solo in moto. 0 = mai: si esce solo con un trigger contestuale o a mano.">
+                    Riarmo a tempo (ore) @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_campaign.RearmHours" min="0" style="width: 8rem;" />
+            </div>
             <div class="col-auto form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="cp_gate" @bind="_campaign.RespectAutoReapplyGate" />
                 <label class="form-check-label" for="cp_gate">Rispetta il gate della ri-applica @Hot()</label>

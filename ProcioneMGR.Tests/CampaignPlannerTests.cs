@@ -696,4 +696,105 @@ public sealed class CampaignPlannerTests : IAsyncDisposable
         var started = Assert.Single(engine.Started);
         Assert.Equal(config2, started.ConfigId); // la config Live non parte MAI da un automatismo
     }
+
+    // --- [J1] Riarmo a tempo da WaitingForTrigger --------------------------------------------
+
+    /// <summary>Porta la campagna in WaitingForTrigger con gli ultimi run a N ore fa.</summary>
+    private static async Task ForceWaitingAsync(
+        IDbContextFactory<ApplicationDbContext> dbFactory, int campaignId, double hoursAgo, DateTime? pausedUntil = null)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var campaign = await db.VettingCampaigns.SingleAsync(c => c.Id == campaignId);
+        var states = CampaignPlanner.ParseConfigStates(campaign.ConfigStatesJson);
+        foreach (var s in states)
+        {
+            s.Attempts = 1;
+            s.LastRunAtUtc = DateTime.UtcNow.AddHours(-hoursAgo);
+        }
+        campaign.ConfigStatesJson = CampaignPlanner.SerializeConfigStates(states);
+        campaign.Status = CampaignStatus.WaitingForTrigger;
+        campaign.PausedUntilUtc = pausedUntil;
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task WaitingForTrigger_RearmsAfterSilence_WithoutBypassingBackoff()
+    {
+        // Il caso reale del 2026-08-23: rotazione esaurita, detector muto, ricerca ferma 43+ ore.
+        var (planner, engine, _, dbFactory, _) = await BuildAsync();
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+        await ForceWaitingAsync(dbFactory, campaignId, hoursAgo: 25); // > RearmHours=24, > backoff 12h
+
+        await planner.TickAsync();
+
+        var rearmed = await LoadAsync(dbFactory, campaignId);
+        Assert.Equal(CampaignStatus.Rotating, rearmed.Status);
+        Assert.Contains("Riarmo a tempo", rearmed.LastOutcome);
+        Assert.Empty(engine.Started); // il riarmo rimette in moto, il run parte al tick DOPO (una decisione per tick)
+
+        await planner.TickAsync();
+        var started = Assert.Single(engine.Started);
+        Assert.Equal("Campaign", started.Trigger); // rotazione ORDINARIA: non è un wake, non marca "Event"
+    }
+
+    [Fact]
+    public async Task WaitingForTrigger_NoRearm_BeforeThreshold()
+    {
+        var (planner, engine, _, dbFactory, _) = await BuildAsync();
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+        await ForceWaitingAsync(dbFactory, campaignId, hoursAgo: 5); // silenzio sotto le 24h
+
+        await planner.TickAsync();
+
+        Assert.Equal(CampaignStatus.WaitingForTrigger, (await LoadAsync(dbFactory, campaignId)).Status);
+        Assert.Empty(engine.Started);
+    }
+
+    [Fact]
+    public async Task WaitingForTrigger_RearmZero_KeepsHistoricBehaviour()
+    {
+        var (planner, engine, _, dbFactory, _) = await BuildAsync(
+            campaignOptions: new CampaignOptions { Enabled = true, RearmHours = 0 });
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+        await ForceWaitingAsync(dbFactory, campaignId, hoursAgo: 100);
+
+        await planner.TickAsync();
+
+        // 0 = mai: si esce solo con un trigger contestuale o a mano, come prima di J1.
+        Assert.Equal(CampaignStatus.WaitingForTrigger, (await LoadAsync(dbFactory, campaignId)).Status);
+        Assert.Empty(engine.Started);
+    }
+
+    [Fact]
+    public async Task WaitingForTrigger_RespectsCancelPause()
+    {
+        var (planner, engine, _, dbFactory, _) = await BuildAsync();
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory);
+        await ForceWaitingAsync(dbFactory, campaignId, hoursAgo: 48,
+            pausedUntil: DateTime.UtcNow.AddMinutes(30)); // un umano ha annullato: la pausa vince
+
+        await planner.TickAsync();
+
+        // Chi ha annullato non deve vedersi ripartire nulla: il caso già pagato in I7.
+        Assert.Equal(CampaignStatus.WaitingForTrigger, (await LoadAsync(dbFactory, campaignId)).Status);
+        Assert.Empty(engine.Started);
+    }
+
+    [Fact]
+    public async Task WaitingForTrigger_NoRearm_WhileEveryConfigStillInBackoff()
+    {
+        // Riarmo più corto del backoff: senza la seconda condizione la campagna rimbalzerebbe
+        // Rotating→WaitingForTrigger a ogni tick, sporcando l'esito a ogni giro.
+        var (planner, engine, _, dbFactory, _) = await BuildAsync(
+            campaignOptions: new CampaignOptions { Enabled = true, RearmHours = 2 });
+        var (campaignId, _, _) = await SeedCampaignAsync(dbFactory, backoffHours: 48);
+        await ForceWaitingAsync(dbFactory, campaignId, hoursAgo: 3); // silenzio > 2h ma backoff 48h vivo
+
+        await planner.TickAsync();
+
+        var campaign = await LoadAsync(dbFactory, campaignId);
+        Assert.Equal(CampaignStatus.WaitingForTrigger, campaign.Status);
+        Assert.Empty(engine.Started);
+        Assert.DoesNotContain("Riarmo", campaign.LastOutcome ?? string.Empty);
+    }
 }
