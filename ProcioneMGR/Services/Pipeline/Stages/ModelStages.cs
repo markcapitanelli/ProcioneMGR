@@ -1068,8 +1068,22 @@ public static class OverfittingGate
             // risk-free zero ha mosso il DSR: SR* dipende dalla varianza degli Sharpe dei
             // tentativi, che cambia convenzione, mentre l'osservato era gia' a rf = 0. Il segno
             // dello spostamento non si deduce per inversione algebrica: si legge qui.
-            log?.Invoke($"DSR massimo del run: {dsrMax:F3} su {dsrMisurati.Count} candidati misurati "
-                      + $"(pavimento fascia grigia {GreyZone.DsrFloor:F2}, gate {minDeflatedSharpe:F2}).");
+            //
+            // [J16, 2026-08-25] LA RIGA DEVE DICHIARARE LA CENSURA. Il DSR si calcola SOLO per chi
+            // ha gia' passato Sharpe e conteggio trade (il continue su !Survived qui sopra): sui
+            // dati veri e' ~4% dell'archivio, e il candidato con lo Sharpe holdout piu' alto
+            // (3,19, 17 trade) non ha MAI ricevuto un DSR perche' fermato dal gate del conteggio.
+            // Senza il denominatore vero, «DSR massimo 0,674» si leggeva come «e' il DSR che
+            // blocca tutto» — un controllo che rassicura sul cancello sbagliato.
+            var sharpeMaxSenzaDsr = validated
+                .Where(v => v.DeflatedSharpe is null && v.HoldoutSharpe > 0m)
+                .Select(v => (decimal?)v.HoldoutSharpe)
+                .DefaultIfEmpty(null)
+                .Max();
+            log?.Invoke($"DSR massimo del run: {dsrMax:F3} su {dsrMisurati.Count} candidati misurati di {validated.Count} totali "
+                      + "(il DSR si calcola solo DOPO i gate di Sharpe e conteggio trade: i bocciati a monte non sono misurati"
+                      + (sharpeMaxSenzaDsr is decimal sm ? $"; il miglior Sharpe holdout senza DSR è {sm:F2}" : "")
+                      + $") — pavimento fascia grigia {GreyZone.DsrFloor:F2}, gate {minDeflatedSharpe:F2}.");
             if (dsrMax < GreyZone.DsrFloor)
             {
                 log?.Invoke(

@@ -304,6 +304,24 @@ public sealed class PowerCheckOutput
     public double WorstMinDetectableAnnualizedSharpe { get; set; }
     /// <summary>True se il check ritiene il run sotto potenza rispetto al tetto plausibile configurato.</summary>
     public bool Underpowered { get; set; }
+
+    /// <summary>
+    /// [J17] Il tetto plausibile usato dal giudizio, persistito perché il riepilogo possa dire
+    /// QUALI timeframe sono sotto potenza con lo stesso metro del verdetto — una seconda soglia
+    /// nel riepilogo sarebbe la doppia regola già pagata in D2.b.
+    /// </summary>
+    public double MaxPlausibleSharpe { get; set; } = double.PositiveInfinity;
+
+    /// <summary>
+    /// [J17] I timeframe (deduplicati) il cui minimo rilevabile supera il tetto plausibile.
+    /// Metodo e non proprietà calcolata: questo POCO finisce serializzato, e una get-only
+    /// diventerebbe una chiave inventata (guardiano ConfigPocoComputedPropertyTests, 2026-08-24).
+    /// </summary>
+    public IReadOnlyList<string> UnderpoweredTimeframes() => Series
+        .GroupBy(s => s.Timeframe)
+        .Where(g => g.Min(s => s.MinDetectableAnnualizedSharpe) > MaxPlausibleSharpe)
+        .Select(g => g.Key)
+        .ToList();
 }
 
 public sealed class DataIngestionOutput

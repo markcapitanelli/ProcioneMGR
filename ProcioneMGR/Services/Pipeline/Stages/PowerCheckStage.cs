@@ -51,12 +51,15 @@ public sealed class PowerCheckStage : IPipelineStage
         var enforce = config.GetBool("enforce", false);
 
         var holdoutDays = (ctx.Ranges.HoldoutTo - ctx.Ranges.HoldoutFrom).TotalDays;
-        var output = new PowerCheckOutput { TrialsAssumed = trials, Confidence = confidence };
+        var output = new PowerCheckOutput { TrialsAssumed = trials, Confidence = confidence, MaxPlausibleSharpe = maxPlausible };
 
-        foreach (var series in ctx.Universe)
+        // [J17, 2026-08-25] Il calcolo dipende SOLO da timeframe e finestra di holdout: farlo per
+        // serie produceva 34 righe di log identiche che sembravano 34 misure indipendenti. Si
+        // calcola una volta per timeframe e si dichiara a quante serie si applica.
+        foreach (var group in ctx.Universe.GroupBy(s => s.Timeframe))
         {
             ct.ThrowIfCancellationRequested();
-            var ppy = Statistics.PeriodsPerYear(series.Timeframe);
+            var ppy = Statistics.PeriodsPerYear(group.Key);
             var observations = (int)Math.Floor(holdoutDays / 365.25 * ppy);
 
             // SR* = fin dove arriva il puro caso con N tentativi su T osservazioni: è il benchmark
@@ -65,17 +68,21 @@ public sealed class PowerCheckStage : IPipelineStage
             var minPerPeriod = MinTrackRecord.MinDetectableSharpe(observations, nullBenchmark, confidence);
             var minAnnualized = MinTrackRecord.PerPeriodToAnnualized(minPerPeriod, ppy);
 
-            output.Series.Add(new PowerSeriesEntry
+            foreach (var series in group)
             {
-                Symbol = series.Symbol,
-                Timeframe = series.Timeframe,
-                HoldoutObservations = observations,
-                NullBenchmarkSharpe = nullBenchmark,
-                MinDetectableAnnualizedSharpe = minAnnualized,
-            });
+                output.Series.Add(new PowerSeriesEntry
+                {
+                    Symbol = series.Symbol,
+                    Timeframe = series.Timeframe,
+                    HoldoutObservations = observations,
+                    NullBenchmarkSharpe = nullBenchmark,
+                    MinDetectableAnnualizedSharpe = minAnnualized,
+                });
+            }
 
-            ctx.LogLine($"[{Name}] {series.Symbol} {series.Timeframe}: holdout {observations} oss., " +
-                        $"con {trials} tentativi il caso arriva a SR*={MinTrackRecord.PerPeriodToAnnualized(nullBenchmark, ppy):F2} ann. " +
+            ctx.LogLine($"[{Name}] {group.Key} ({group.Count()} serie — il numero dipende solo dal timeframe): " +
+                        $"holdout {observations} oss., con {trials} tentativi il caso arriva a " +
+                        $"SR*={MinTrackRecord.PerPeriodToAnnualized(nullBenchmark, ppy):F2} ann. " +
                         $"⇒ per passare serve Sharpe ≥ {minAnnualized:F2} annualizzato.");
         }
 
@@ -85,6 +92,19 @@ public sealed class PowerCheckStage : IPipelineStage
         output.Underpowered = output.Series.Count == 0
             || output.Series.All(s => s.MinDetectableAnnualizedSharpe > maxPlausible);
         ctx.Power = output;
+
+        // [J17] Il caso MISTO era il difetto: giudizio con All (tutte sotto potenza) ma riepilogo
+        // col Max (il peggiore) — su un universo 1h+4h usciva «Potenza OK: minimo rilevabile 8,91»,
+        // una frase che si contraddice da sola. Ora il caso parziale è uno stato dichiarato.
+        var deboli = output.UnderpoweredTimeframes();
+        if (!output.Underpowered && deboli.Count > 0)
+        {
+            var forti = output.Series.Select(s => s.Timeframe).Distinct().Except(deboli).ToList();
+            ctx.LogLine(
+                $"[{Name}] POTENZA PARZIALE: {string.Join(", ", deboli)} sotto potenza (minimo rilevabile oltre il " +
+                $"tetto plausibile {maxPlausible:F1}); {string.Join(", ", forti)} può produrre sopravvissuti. " +
+                "I candidati dei timeframe deboli hanno l'esito «0 promossi» scritto nell'aritmetica.");
+        }
 
         if (output.Underpowered)
         {
@@ -106,6 +126,10 @@ public sealed class PowerCheckStage : IPipelineStage
     public StageSummary Summarize(PipelineContext ctx)
     {
         var p = ctx.Power;
+        // [J17] Tre stati, con lo STESSO metro del giudizio (UnderpoweredTimeframes legge il tetto
+        // persistito nell'output): «Potenza OK» col numero del peggiore era una frase che su un
+        // universo misto si contraddiceva da sola.
+        var deboli = p?.UnderpoweredTimeframes() ?? [];
         return new StageSummary
         {
             StageName = Name,
@@ -114,7 +138,9 @@ public sealed class PowerCheckStage : IPipelineStage
                 ? "Nessun esito."
                 : p.Underpowered
                     ? $"SOTTO POTENZA: minimo rilevabile {p.WorstMinDetectableAnnualizedSharpe:F2} ann. (peggiore) con {p.TrialsAssumed} tentativi."
-                    : $"Potenza OK: minimo rilevabile {p.WorstMinDetectableAnnualizedSharpe:F2} ann. (peggiore) con {p.TrialsAssumed} tentativi.",
+                    : deboli.Count > 0
+                        ? $"POTENZA PARZIALE: {string.Join(", ", deboli)} sotto potenza (peggiore {p.WorstMinDetectableAnnualizedSharpe:F2} ann.); gli altri timeframe possono produrre sopravvissuti. {p.TrialsAssumed} tentativi."
+                        : $"Potenza OK: minimo rilevabile {p.WorstMinDetectableAnnualizedSharpe:F2} ann. (peggiore) con {p.TrialsAssumed} tentativi.",
             Metrics = p is null ? new() : new Dictionary<string, decimal>
             {
                 ["SharpeMinRilevabileAnn"] = (decimal)Math.Round(Math.Min(p.WorstMinDetectableAnnualizedSharpe, 999), 2),

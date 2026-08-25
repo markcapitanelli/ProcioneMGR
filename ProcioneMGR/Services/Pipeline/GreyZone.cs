@@ -11,9 +11,13 @@ namespace ProcioneMGR.Services.Pipeline;
 /// [<see cref="DsrFloor"/>–<see cref="DsrCeiling"/>)) CON Sharpe holdout positivo e almeno un
 /// trade: un grigio che perde non è grigio, è bocciato nel merito.
 ///
-/// <para>Le due porte non sono equivalenti in pratica: <b>quella del DSR non si è mai aperta</b>
-/// (misurato il 2026-08-21, vedi <see cref="DsrFloor"/>). Ogni grigio esistente è passato dalla
-/// finestra corta.</para>
+/// <para>Le due porte non sono equivalenti in pratica: <b>quella del DSR è chiusa DAL
+/// 2026-08-09</b> (data della correzione del conteggio tentativi della deflazione). Prima di quel
+/// giorno l'hanno attraversata <b>6 CandidateKey distinti</b> in tutta la storia dell'archivio;
+/// dopo, il DSR massimo mai osservato è <b>0,6737</b> e nessun candidato raggiunge la banda
+/// [J15, 2026-08-25: questo sommario diceva «mai aperta» e si contraddiceva con la RETTIFICA
+/// qui sotto, che i sei distinti li ammette — corretto perché è la prima riga che un lettore
+/// incontra]. Il dettaglio e la misura stanno su <see cref="DsrFloor"/>.</para>
 /// </summary>
 public static class GreyZone
 {
