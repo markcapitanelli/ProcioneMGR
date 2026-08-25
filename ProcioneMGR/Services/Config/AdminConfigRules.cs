@@ -138,7 +138,11 @@ public static class AdminConfigRules
 
         AutoReapplyOptions o => Check(
             (o.LookbackDays >= 1, "Il lookback dev'essere almeno 1 giorno."),
-            (o.MaxPerTick >= 1, "Serve almeno un run per tick.")),
+            (o.MaxPerTick >= 1, "Serve almeno un run per tick."),
+            // [J12] Il tetto ha un massimo deliberatamente basso: oltre una manciata di gambe
+            // grigie non e' piu' un'eccezione dichiarata, e' l'F5 rovesciato da una casella.
+            (o.MaxGreyLegs is >= 0 and <= 5,
+                "Le gambe grigie tollerate in auto-applica stanno fra 0 (solo sopravvissuti, il default F5) e 5.")),
 
         PromotionEvaluatorOptions o => Check(
             (o.MinTradeCount >= 1, "Servono almeno 1 trade per valutare una promozione."),

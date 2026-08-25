@@ -271,6 +271,12 @@
                 <input type="number" class="form-control" @bind="_autoReapply.MaxPerTick" min="1" style="width: 8rem;" />
             </div>
             <div class="col-auto">
+                <label class="form-label" title="Gambe di fascia grigia (o a provenienza ignota) tollerate in un'applica automatica. 0 = solo sopravvissuti pieni: il grigio si propone al click umano, mai si schiera da solo (F5). L'applica manuale da /pipeline non passa da questa guardia.">
+                    Gambe grigie max (auto) @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_autoReapply.MaxGreyLegs" min="0" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
                 <button class="btn btn-primary" @onclick='() => SaveAsync("AutoReapply", _autoReapply, "Ri-applica automatica")' disabled="@_busy">Salva</button>
             </div>
         </div>

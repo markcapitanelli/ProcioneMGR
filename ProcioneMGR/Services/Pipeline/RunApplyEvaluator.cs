@@ -50,7 +50,10 @@ public sealed class RunApplyEvaluator(
     IPipelineSupervisorAgent supervisor,
     ILogger<RunApplyEvaluator> logger,
     ProcioneMetrics? metrics = null,
-    INotifier? notifier = null) : IRunApplyEvaluator
+    INotifier? notifier = null,
+    // [J12] Opzionale per compatibilità coi costruttori esistenti nei test; assente = guardia al
+    // suo default più severo (MaxGreyLegs 0), MAI più permissiva: fail-closed anche sul wiring.
+    Microsoft.Extensions.Options.IOptionsMonitor<AutoReapplyOptions>? autoReapply = null) : IRunApplyEvaluator
 {
     /// <summary>
     /// Serializza l'applicazione dell'ensemble sulle corsie: atomicità globale tra chiamanti
@@ -73,6 +76,30 @@ public sealed class RunApplyEvaluator(
             const string noCandidate = "Run senza ensemble applicabile: nessuna azione.";
             await RecordDecisionAsync(runId, applied: false, noCandidate, null, null, ct);
             return new RunApplyOutcome { Message = noCandidate };
+        }
+
+        // [J12, PRD autonomia-operativa 2026-08-25] LA GUARDIA SULLE GAMBE GRIGIE, prima di tutto
+        // il resto (e in particolare prima del supervisore AI: un blocco deterministico non deve
+        // costare una chiamata LLM). Questo è l'imbuto comune di TUTTI i percorsi automatici
+        // (scheduler e CampaignPlanner): prima della guardia, la catena campagna→applica→avvio
+        // poteva schierare sulle corsie 0-2 un ensemble di sole gambe grigie, perché qui si
+        // guardava solo EnsembleLegs.Count > 0 e mai la provenienza dei verdetti.
+        //
+        // Provenienza ignota (SourceVerdict null, JSON precedenti a T1 2026-08-14) = trattata da
+        // grigia: una guardia che si fida di ciò che non conosce non è una guardia.
+        var nonSurvivors = CountNonSurvivorLegs(candidate);
+        var maxGrey = Math.Max(0, autoReapply?.CurrentValue.MaxGreyLegs ?? 0);
+        if (nonSurvivors.Total > maxGrey)
+        {
+            var greyMsg =
+                $"{nonSurvivors.Total} gambe su {candidate.EnsembleLegs.Count} non sono sopravvissuti pieni " +
+                $"({nonSurvivors.Grey} di fascia grigia" +
+                (nonSurvivors.Unknown > 0 ? $", {nonSurvivors.Unknown} a provenienza ignota, trattate da grigie per prudenza" : "") +
+                $"): l'applica AUTOMATICA è riservata ai sopravvissuti (F5: il grigio si propone al click, " +
+                $"non si schiera da solo; AutoReapply:MaxGreyLegs={maxGrey}). L'applica manuale da /pipeline resta possibile.";
+            await RecordDecisionAsync(runId, applied: false, greyMsg, null, null, ct, kind: AutoReapplyArtifactKinds.GreyBlocked);
+            logger.LogInformation("Applica automatica BLOCCATA dalla guardia grigia per il run {RunId}: {Motivo}", runId, greyMsg);
+            return new RunApplyOutcome { HadCandidate = true, Applied = false, Message = greyMsg };
         }
 
         var candidateSummary = applier.SummarizeRecommendation(candidate);
@@ -136,7 +163,8 @@ public sealed class RunApplyEvaluator(
     /// Persiste la decisione come <see cref="PipelineArtifact"/> (marker idempotente + fonte per la
     /// UI). Nessuna nuova tabella. Restituisce false quando la decisione esisteva già.
     /// </summary>
-    private async Task<bool> RecordDecisionAsync(Guid runId, bool applied, string message, EnsembleComparison? comparison, SupervisorJudgment? judgment, CancellationToken ct)
+    private async Task<bool> RecordDecisionAsync(Guid runId, bool applied, string message, EnsembleComparison? comparison, SupervisorJudgment? judgment, CancellationToken ct,
+        string kind = AutoReapplyArtifactKinds.Decision)
     {
         var payload = new AutoReapplyDecisionArtifact
         {
@@ -148,18 +176,34 @@ public sealed class RunApplyEvaluator(
         };
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var exists = await db.PipelineArtifacts.AnyAsync(a => a.RunId == runId && a.Kind == AutoReapplyArtifactKinds.Decision, ct);
+        var exists = await db.PipelineArtifacts.AnyAsync(a => a.RunId == runId && a.Kind == kind, ct);
         if (exists) return false; // idempotente
         db.PipelineArtifacts.Add(new PipelineArtifact
         {
             RunId = runId,
             StageName = "AutoReapply",
-            Kind = AutoReapplyArtifactKinds.Decision,
+            Kind = kind,
             PayloadJson = JsonSerializer.Serialize(payload),
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync(ct);
         return true;
+    }
+
+    /// <summary>
+    /// [J12] Le gambe che NON sono sopravvissuti pieni: "Grey" dichiarate, più le ignote
+    /// (<c>SourceVerdict</c> null — JSON precedenti a T1 2026-08-14, o comunque senza provenienza).
+    /// Confronto Ordinal deliberato: l'etichetta la scrive il nostro codice (DecisionStages:290),
+    /// non input libero. Internal per i test.
+    /// </summary>
+    internal static (int Total, int Grey, int Unknown) CountNonSurvivorLegs(PipelineRecommendation recommendation)
+    {
+        var grey = recommendation.EnsembleLegs.Count(l => string.Equals(l.SourceVerdict, "Grey", StringComparison.Ordinal));
+        var unknown = recommendation.EnsembleLegs.Count(l =>
+            l.SourceVerdict is null
+            || (!string.Equals(l.SourceVerdict, "Grey", StringComparison.Ordinal)
+                && !string.Equals(l.SourceVerdict, "Survived", StringComparison.Ordinal)));
+        return (grey + unknown, grey, unknown);
     }
 
     internal static PipelineRecommendation? DeserializeRecommendation(string? json)
