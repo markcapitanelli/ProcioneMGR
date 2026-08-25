@@ -52,7 +52,7 @@ try {
     $pinnedSha = if ($pinLine) { $pinLine.Matches[0].Groups[1].Value } else { '' }
 
     if ($IfNewCommit -and $pinnedSha -eq $remoteSha) {
-        Write-Host "Già allineato: il pin local-$pinnedSha è l'HEAD di origin/master. Nessun deploy."
+        Write-Host "Gia' allineato: il pin local-$pinnedSha e' l'HEAD di origin/master. Nessun deploy."
         exit 0
     }
 
@@ -70,10 +70,10 @@ try {
         Set-Content $kustomization -NoNewline
 
     kubectl apply -k (Join-Path $repoRoot 'infra/k8s/trading')
-    if ($LASTEXITCODE -ne 0) { throw "kubectl apply fallito (exit $LASTEXITCODE): il pin locale resta, il cluster no — rilanciare." }
+    if ($LASTEXITCODE -ne 0) { throw "kubectl apply fallito (exit $LASTEXITCODE): il pin locale resta, il cluster no. Rilanciare." }
 
     kubectl rollout status deployment/procionemgr-trading -n procionemgr-trading --timeout=240s
-    if ($LASTEXITCODE -ne 0) { throw "rollout NON completato: il pod nuovo non è diventato Ready. Guardare i log del pod, il vecchio ReplicaSet regge." }
+    if ($LASTEXITCODE -ne 0) { throw "rollout NON completato: il pod nuovo non e' diventato Ready. Guardare i log del pod, il vecchio ReplicaSet regge." }
 
     # --- 5. Il pin in git: la promozione dichiarata dove tutti la leggono ---------------------
     git add $kustomization
@@ -85,7 +85,7 @@ try {
             $env:GIT_TERMINAL_PROMPT = '0'
             git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --quiet origin master
             if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Push del pin FALLITO (auth?): il commit resta locale. git e GitHub divergono finché non si pusha."
+                Write-Warning "Push del pin FALLITO (auth?): il commit resta locale. git e GitHub divergono finche' non si pusha."
             }
         }
     }
