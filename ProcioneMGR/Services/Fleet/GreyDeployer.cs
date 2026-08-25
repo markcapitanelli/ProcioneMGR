@@ -58,9 +58,23 @@ public interface IGreyDeployer
     /// (<see cref="PipelineCandidateKey"/>), <b>mai per terna</b>. Simbolo e timeframe si LEGGONO
     /// dal candidato risolto: non sono più parametri, così non possono divergere da lui.
     /// </summary>
+    /// <param name="source">
+    /// [J14] Chi sta schierando: "human" (il click F5) o "fleet" (il braccio dell'orchestratore).
+    /// Finisce nel journal: la provenienza di uno schieramento non si deve dedurre dal testo.
+    /// </param>
+    /// <param name="allowSurvivor">
+    /// [J13] Ammette anche i candidati SOPRAVVISSUTI del run (per il braccio di assegnazione della
+    /// banda «pass» a gamba singola). Default false: il click umano F5 resta il braccio della
+    /// PROPOSTA grigia, non una porta di servizio.
+    /// </param>
+    /// <param name="journal">
+    /// [J14] false = il journal lo scrive il CHIAMANTE (il worker della flotta, che vi aggiunge i
+    /// voti del comitato): due righe per la stessa azione sarebbero rumore nel journal.
+    /// </param>
     Task<GreyDeployResult> DeployAsync(
         Guid runId, string candidateKey,
-        int laneId, bool startPaper, CancellationToken ct = default);
+        int laneId, bool startPaper, CancellationToken ct = default,
+        string source = "human", bool allowSurvivor = false, bool journal = true);
 }
 
 public sealed class GreyDeployer(
@@ -94,7 +108,8 @@ public sealed class GreyDeployer(
 
     public async Task<GreyDeployResult> DeployAsync(
         Guid runId, string candidateKey,
-        int laneId, bool startPaper, CancellationToken ct = default)
+        int laneId, bool startPaper, CancellationToken ct = default,
+        string source = "human", bool allowSurvivor = false, bool journal = true)
     {
         // --- La corsia: di flotta, libera, senza vincoli. Si RILEGGE lo stato adesso, non ci si
         // fida della lista mostrata al momento del render (l'operatore può aver cliccato tardi).
@@ -120,7 +135,7 @@ public sealed class GreyDeployer(
 
         // --- Il candidato: deve esistere nel run ED essere grigio per il filtro del lettore.
         // Risolto per IDENTITÀ, non per terna, e fail-closed su entrambi i lati. Vedi ResolveGrey.
-        var (candidate, resolveError) = ResolveGrey(await LoadGreyCandidatesAsync(runId, ct), candidateKey);
+        var (candidate, resolveError) = ResolveGrey(await LoadDeployableCandidatesAsync(runId, allowSurvivor, ct), candidateKey);
         if (candidate is null)
         {
             return new(false, resolveError!);
@@ -162,7 +177,10 @@ public sealed class GreyDeployer(
                 ExpectedSharpeAtUtc = DateTime.UtcNow,   // [RF0] convenzione del numero, vedi MetricsConvention
                 ExpectedProfitFactor = candidate.HoldoutProfitFactor != 0m ? candidate.HoldoutProfitFactor : null,
                 ExpectedMaxDrawdown = candidate.HoldoutMaxDrawdown != 0m ? candidate.HoldoutMaxDrawdown : null,
-                SourceVerdict = "Grey", // [T1] stessa etichetta della pipeline: il badge non dipende dal percorso di schieramento
+                // [T1] stessa etichetta della pipeline: il badge non dipende dal percorso di
+                // schieramento. [J13] E la provenienza VERA del candidato: un sopravvissuto
+                // schierato dal braccio non deve portare l'etichetta grigia, né viceversa.
+                SourceVerdict = candidate.Survived ? "Survived" : "Grey",
                 // [I11] Il denominatore, e la sua provenienza in chiaro: una derivazione dichiarata,
                 // non una misura. null = non derivabile, e in quel caso nessun consumatore agisce.
                 ExpectedTradesPerMonth = attesiAlMese,
@@ -187,6 +205,7 @@ public sealed class GreyDeployer(
             }
         }
 
+        if (journal)
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
             db.OrchestratorDecisions.Add(new OrchestratorDecision
@@ -195,7 +214,7 @@ public sealed class GreyDeployer(
                 Kind = "Assign",
                 LaneId = laneId,
                 RunId = runId,
-                Source = "human",
+                Source = source, // [J14] "human" (click F5) o "fleet" (braccio dell'orchestratore)
                 Applied = error is null,
                 DryRun = false,
                 Error = error,
@@ -203,7 +222,7 @@ public sealed class GreyDeployer(
                 // schierata il 2026-08-03 su corsia 6 (Composite LTC/USDT 15m, terna ambigua) si
                 // può ancora ricostruire, ma solo dai Parameters della corsia e solo finché quella
                 // corsia non viene riassegnata. Il journal, da solo, non bastava.
-                Reason = $"[F5, click umano] {candidate.Key} → corsia {laneId}, {startedText}. " +
+                Reason = $"[{(source == "fleet" ? "J14, flotta" : "F5, click umano")}] {candidate.Key} → corsia {laneId}, {startedText}. " +
                          $"Sharpe holdout {candidate.HoldoutSharpe:F2} su {candidate.HoldoutTrades} trade; SL {sl:F2}% / TP {tp:F2}%.",
             });
             await db.SaveChangesAsync(ct);
@@ -267,7 +286,16 @@ public sealed class GreyDeployer(
     }
 
     /// <summary>I candidati GRIGI del run, con lo STESSO filtro del lettore della flotta (nessuna doppia verità).</summary>
-    private async Task<List<ValidatedCandidate>> LoadGreyCandidatesAsync(Guid runId, CancellationToken ct)
+    private Task<List<ValidatedCandidate>> LoadGreyCandidatesAsync(Guid runId, CancellationToken ct)
+        => LoadDeployableCandidatesAsync(runId, allowSurvivor: false, ct);
+
+    /// <summary>
+    /// [J13] I candidati schierabili del run: i grigi (filtro condiviso <see cref="FleetStateReader.IsGrey"/>)
+    /// più, se richiesto, i SOPRAVVISSUTI — il braccio della banda «pass» schiera candidati che
+    /// hanno superato la validazione piena, e rifiutarli qui sarebbe un filtro che contraddice il
+    /// verdetto della pipeline.
+    /// </summary>
+    private async Task<List<ValidatedCandidate>> LoadDeployableCandidatesAsync(Guid runId, bool allowSurvivor, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var payload = await db.PipelineArtifacts.AsNoTracking()
@@ -287,6 +315,6 @@ public sealed class GreyDeployer(
         try { validated = JsonSerializer.Deserialize<List<ValidatedCandidate>>(payload) ?? []; }
         catch (JsonException) { return []; }
 
-        return validated.Where(FleetStateReader.IsGrey).ToList();
+        return validated.Where(c => FleetStateReader.IsGrey(c) || (allowSurvivor && c.Survived)).ToList();
     }
 }

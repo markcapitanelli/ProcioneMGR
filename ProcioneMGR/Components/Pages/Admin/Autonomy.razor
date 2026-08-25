@@ -539,6 +539,21 @@
                             <label class="form-label mb-1" for="fl_exmax">Azioni max/tick @Hot()</label>
                             <input type="number" class="form-control" id="fl_exmax" @bind="_fleet.MaxExecutionsPerTick" min="1" style="width: 7rem;" />
                         </div>
+                        @* [J14] Il rovesciamento di F5, per decisione del proprietario: dentro la
+                           cornice dell'esecuzione perché fa succedere qualcosa nel mondo. *@
+                        <div class="form-check form-switch align-self-end mb-1">
+                            <input class="form-check-input" type="checkbox" id="fl_greyauto" @bind="_fleet.GreyAutoDeploy" />
+                            <label class="form-check-label" for="fl_greyauto"
+                                   title="Rovescia F5: l'orchestratore può schierare DA SOLO un candidato grigio su una corsia libera e autorizzata (solo Paper, stesso deployer del click umano, bracket automatico). Freni: tetto di corsie grigie, corsie solo in lista, budget per tick, guardia di esposizione, comitato sui pareggi. Il forward test Paper è l'unico giudice immune al multiple testing: riempirlo in automatico lo consuma — serve il ritiro (J8-J10) che libera le corsie.">
+                                Schiera i GRIGI da solo (J14) @Hot()
+                            </label>
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_greymax" title="Corsie di flotta occupabili da candidati grigi contemporaneamente. Le altre restano alla banda «pass». Una corsia dalla provenienza ignota conta come grigia: non sapere non allarga il permesso.">
+                                Corsie grigie max @Hot()
+                            </label>
+                            <input type="number" class="form-control" id="fl_greymax" @bind="_fleet.MaxGreyLanes" min="0" style="width: 7rem;" />
+                        </div>
                         <div class="small text-muted flex-fill" style="min-width: 22rem;">
                             Elenco di numeri di corsia separati da virgola. <strong>Vuoto = nessuna esecuzione</strong>,
                             anche con il dry-run spento: il permesso è per corsia, non globale.

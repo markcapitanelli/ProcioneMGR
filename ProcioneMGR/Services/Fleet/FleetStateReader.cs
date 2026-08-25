@@ -133,7 +133,9 @@ public sealed class FleetStateReader(
                 // [I12] Il ritmo atteso arriva dalla directory, che gia' deserializza la config
                 // della corsia: una seconda lettura qui sarebbe una seconda regola su cosa conta
                 // come "gamba attiva". [I12-rev] ...e vale null se il motore sta eseguendo altro.
-                expected));
+                expected,
+                // [J14] Provenienza delle gambe, per il tetto MaxGreyLanes (stessa fonte: la directory).
+                GreySourced: s.HasGreyLegs));
         }
 
         // --- Candidati --------------------------------------------------------------------------
@@ -298,7 +300,11 @@ public sealed class FleetStateReader(
             return new CandidateVerdict("pass",
                 TradeFrequency.PerMonth(minTrades, months) ?? 0m,
                 recommendation.EnsembleLegs[0].Timeframe,
-                $"{recommendation.BestCandidate} ({survivors} sopravvissuti su {recommendation.CandidatesEvaluated})");
+                $"{recommendation.BestCandidate} ({survivors} sopravvissuti su {recommendation.CandidatesEvaluated})",
+                // [J13] L'identità del candidato SOLO quando la raccomandazione è a gamba singola:
+                // è il caso che il braccio di assegnazione sa eseguire (una corsia = un simbolo).
+                // Un ensemble multi-gamba resta senza chiave, e il worker lo dichiara ineseguibile.
+                Identity: recommendation.EnsembleLegs.Count == 1 ? recommendation.EnsembleLegs[0].Key : null);
         }
 
         var grey = validated

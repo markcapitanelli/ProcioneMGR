@@ -68,7 +68,10 @@
     "CandidateMaxAgeDays": 14,
     "MaxLanesWithoutExposureGuard": 3,
     "CarrySilenceAlertHours": 24,
-    "UseCommittee": false
+    "UseCommittee": false,
+    "_comment_J14": "[J14] GreyAutoDeploy: il ROVESCIAMENTO di F5, per decisione del proprietario (PRD autonomia-operativa 2026-08-25) — l'orchestratore puo' schierare DA SOLO un candidato grigio su una corsia libera e AUTORIZZATA (ExecutionLanes), solo Paper, stesso deployer del click umano. Default false: e' il cambio di natura della fascia grigia e si accende apposta. MaxGreyLanes: tetto di corsie occupabili da grigi contemporaneamente (le altre restano alla banda pass); una corsia dalla provenienza ignota conta come grigia.",
+    "GreyAutoDeploy": false,
+    "MaxGreyLanes": 3
   },
   "Heartbeat": {
     "_comment": "[AF5.1] Heartbeat incrociato guscio/motore (tabella HostHeartbeats): ogni host scrive il PROPRIO battito e sorveglia quello altrui; stantio oltre StaleMinutes => Telegram Warning una volta per transizione. Default OFF. Il pannello in /admin/autonomy salva su ENTRAMBI gli host.",

@@ -118,7 +118,10 @@ public static class AdminConfigRules
             (o.StarvationMinDays >= 1, "L'osservazione minima per l'inedia dev'essere almeno 1 giorno: a 0 si giudicherebbe una corsia appena avviata."),
             (o.MaxExecutionsPerTick >= 1, "Serve almeno 1 azione possibile per tick."),
             (o.ExecutionLanes.All(l => l >= 0),
-                "Le corsie autorizzate all'esecuzione sono numeri di corsia: nessuno puo' essere negativo.")),
+                "Le corsie autorizzate all'esecuzione sono numeri di corsia: nessuno puo' essere negativo."),
+            // [J14] Zero e' ammesso ed e' un modo legittimo di dire «niente grigi automatici»
+            // tenendo il flag acceso per il futuro; negativo no.
+            (o.MaxGreyLanes >= 0, "Il tetto delle corsie grigie non puo' essere negativo (0 = nessuno schieramento grigio automatico).")),
 
         // [I14c] La sorveglianza dello spread. La soglia di persistenza e' quella che puo' fare
         // danno restando "valida" per il binder: a 0 ogni coppia risulta persistente (anche il puro

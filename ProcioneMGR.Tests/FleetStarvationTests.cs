@@ -432,15 +432,22 @@ public sealed class FleetStarvationTests
     }
 
     /// <summary>
-    /// <b>Solo il ritiro.</b> L'avvio automatico resta non implementato: è l'ordine deciso dal
-    /// proprietario — fermare libera una corsia e si disfa con un click, avviare mette in corsa una
-    /// strategia scelta da una macchina e ha già operato quando te ne accorgi.
+    /// <b>Entrambi i bracci esistono</b> — nell'ordine deciso dal proprietario: prima il ritiro
+    /// (2026-08-19: fermare libera una corsia e si disfa con un click), poi l'avvio
+    /// (J13, 2026-08-25: candidato SINGOLO, stesso deployer del click F5, e per i grigi dietro il
+    /// flag J14 che rovescia F5 per decisione esplicita). L'esecuzione resta comunque gattata da
+    /// dry-run, ExecutionLanes e budget: le costanti dicono cosa il codice SA FARE, i flag cosa è
+    /// stato CHIESTO — e i default di fabbrica non eseguono nulla (test sopra).
     /// </summary>
     [Fact]
-    public void Braccio_SoloIlRitiro_LAvvioNo()
+    public void Braccio_RitiroEAvvio_EntrambiImplementati_MaSpentiDiFabbrica()
     {
         Assert.True(FleetOrchestratorWorker.RetirementArmImplemented);
-        Assert.False(FleetOrchestratorWorker.AssignmentArmImplemented);
+        Assert.True(FleetOrchestratorWorker.AssignmentArmImplemented);
+        // I default di fabbrica NON eseguono: dry-run acceso, nessuna corsia autorizzata, J14 spento.
+        var fabbrica = new FleetOptions();
+        Assert.NotNull(FleetOrchestratorWorker.WhyNotExecutedAssignment(fabbrica, 5, 1, hasKey: true, hasDeployer: true, isGrey: false));
+        Assert.False(fabbrica.GreyAutoDeploy);
     }
 
     /// <summary>

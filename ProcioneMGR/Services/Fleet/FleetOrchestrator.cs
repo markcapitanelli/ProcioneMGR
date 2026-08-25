@@ -63,32 +63,25 @@ public static class FleetOrchestrator
             }
         }
 
-        // --- 2. Fascia grigia: proposte al click umano (mai auto), UNA per identità -------------
-        foreach (var (grey, duplicati) in GreyProposals(state))
-        {
-            actions.Add(new ProposeGreyCandidate(grey.RunId,
-                $"Fascia grigia (bocciato solo per finestra corta): {grey.Summary} — ~{grey.TradesPerMonth:F1} trade/mese, " +
-                "candidato al forward test Paper con click umano (F5)."
-                + (duplicati > 0
-                    // [I12] Il numero non si perde: che la stessa cosa sia stata ritrovata da altri
-                    // dodici run è un'informazione (è riproducibile), ma è UNA riga, non tredici.
-                    ? $" Ritrovato da altri {duplicati} run con parametri identici."
-                    : "")));
-        }
-
-        // --- 3. Assegnazioni automatiche: solo candidati "pass" --------------------------------
+        // --- 2. Assegnazioni automatiche: PRIMA la banda «pass» --------------------------------
+        //
+        // [J14] L'ordine è una scelta: i sopravvissuti pieni hanno la precedenza sui grigi per
+        // corsie e budget — la fascia grigia riempie lo spazio che la banda «pass» lascia, mai il
+        // contrario.
         var queue = AssignmentQueue(state, opt);
+        var freeLanes = FreeFleetLanes(fleetLanes);
+        var assignBudget = Math.Max(1, opt.MaxAssignmentsPerTick);
+        var exposureBlocked = !state.ExposureGuardEnabled && CountActive(state) >= Math.Max(1, opt.MaxLanesWithoutExposureGuard);
+        var passAssigned = 0;
 
         if (queue.Count > 0)
         {
-            var freeLanes = FreeFleetLanes(fleetLanes);
-
             if (freeLanes.Count == 0)
             {
                 actions.Add(new FleetNoOp(
                     $"{queue.Count} candidati in coda ma nessuna corsia di flotta libera: attendo un ritiro o una corsia nuova."));
             }
-            else if (!state.ExposureGuardEnabled && CountActive(state) >= Math.Max(1, opt.MaxLanesWithoutExposureGuard))
+            else if (exposureBlocked)
             {
                 // [AF4b] La flotta non si allarga senza la guardia trasversale.
                 actions.Add(new FleetNoOp(
@@ -97,15 +90,19 @@ public static class FleetOrchestrator
             }
             else
             {
-                var assignments = queue.Zip(freeLanes).Take(Math.Max(1, opt.MaxAssignmentsPerTick)).ToList();
+                var assignments = queue.Zip(freeLanes).Take(assignBudget).ToList();
                 foreach (var (candidate, lane) in assignments)
                 {
                     actions.Add(new AssignCandidateToLane(candidate.RunId, lane.LaneId,
                         $"Candidato validato del {candidate.CompletedAtUtc:yyyy-MM-dd} → corsia {lane.LaneId} in Paper: " +
-                        $"{candidate.Summary} (~{candidate.TradesPerMonth:F1} trade/mese, {candidate.Timeframe})."));
+                        $"{candidate.Summary} (~{candidate.TradesPerMonth:F1} trade/mese, {candidate.Timeframe}).",
+                        // [J13] La chiave viaggia sull'azione quando il candidato è a gamba
+                        // singola: è ciò che il braccio sa eseguire. Null = multi-gamba, journal-only.
+                        CandidateKey: candidate.Identity));
                 }
+                passAssigned = assignments.Count;
 
-                // [AF3] Il PAREGGIO: più candidati idonei della prima assegnazione. Il core non
+                // [AF3] Il PAREGGIO: più candidati idonei della stessa assegnazione. Il core non
                 // sceglie "per il comitato": sceglie da regola (il più vecchio) e ESPONE il menù —
                 // il worker, se il comitato è attivo, può sostituire la scelta dentro il recinto.
                 if (assignments.Count == 1 && queue.Count > 1)
@@ -116,6 +113,69 @@ public static class FleetOrchestrator
                         assignments[0].First.RunId);
                 }
             }
+        }
+
+        // --- 3. Fascia grigia: assegnazione AUTOMATICA dietro flag (J14), altrimenti proposta ---
+        var greyPairs = GreyProposals(state);
+        var greyAssignedRuns = new HashSet<Guid>();
+        if (opt.GreyAutoDeploy && greyPairs.Count > 0)
+        {
+            // Il tetto: le corsie grigie IN CORSA più quelle assegnate in questo giro. L'ignoto
+            // (GreySourced null) conta come grigio — non sapere non allarga il permesso.
+            var greyRunning = fleetLanes.Count(l => l.IsRunning && l.GreySourced != false);
+            var greySlots = Math.Max(0, opt.MaxGreyLanes) - greyRunning;
+            var lanesLeft = freeLanes.Skip(passAssigned).ToList();
+            var budgetLeft = assignBudget - passAssigned;
+
+            var eligible = greyPairs
+                .Select(p => p.Candidate)
+                .Where(c => !string.IsNullOrEmpty(c.Identity))
+                .Where(c => c.TradesPerMonth >= opt.MinTradesPerMonth)
+                .ToList();
+
+            if (eligible.Count > 0 && exposureBlocked)
+            {
+                actions.Add(new FleetNoOp(
+                    $"{eligible.Count} candidati grigi schierabili ma Trading:CorrelatedExposure SPENTO con " +
+                    $"{CountActive(state)} corsie attive: nessuna assegnazione grigia senza la guardia (AF4b)."));
+            }
+            else
+            {
+                foreach (var (candidate, lane) in eligible.Zip(lanesLeft))
+                {
+                    if (budgetLeft <= 0 || greySlots <= 0) break;
+                    actions.Add(new AssignGreyCandidateToLane(candidate.RunId, candidate.Identity!, lane.LaneId,
+                        $"[J14] Fascia grigia → corsia {lane.LaneId} in Paper: {candidate.Summary} " +
+                        $"(~{candidate.TradesPerMonth:F1} trade/mese, {candidate.Timeframe}). " +
+                        $"Corsie grigie dopo questa: {greyRunning + greyAssignedRuns.Count + 1}/{opt.MaxGreyLanes}."));
+                    greyAssignedRuns.Add(candidate.RunId);
+                    budgetLeft--;
+                    greySlots--;
+                }
+
+                // [AF3] Anche i grigi possono pareggiare: il menù nasce solo se la banda «pass»
+                // non ne ha già esposto uno (un tick, una domanda al comitato).
+                if (menu is null && greyAssignedRuns.Count == 1 && eligible.Count > 1)
+                {
+                    var scelto = actions.OfType<AssignGreyCandidateToLane>().First();
+                    menu = new FleetAssignmentMenu(scelto.LaneId, eligible.Take(5).ToList(), scelto.RunId);
+                }
+            }
+        }
+
+        // Le proposte al click umano restano per tutto ciò che NON è stato assegnato: flag spento
+        // (F5 pieno, comportamento storico), tetto raggiunto, corsie finite, identità assente.
+        foreach (var (grey, duplicati) in greyPairs)
+        {
+            if (greyAssignedRuns.Contains(grey.RunId)) continue;
+            actions.Add(new ProposeGreyCandidate(grey.RunId,
+                $"Fascia grigia (bocciato solo per finestra corta): {grey.Summary} — ~{grey.TradesPerMonth:F1} trade/mese, " +
+                "candidato al forward test Paper con click umano (F5)."
+                + (duplicati > 0
+                    // [I12] Il numero non si perde: che la stessa cosa sia stata ritrovata da altri
+                    // dodici run è un'informazione (è riproducibile), ma è UNA riga, non tredici.
+                    ? $" Ritrovato da altri {duplicati} run con parametri identici."
+                    : "")));
         }
 
         return actions.Count == 0 ? FleetPlan.Empty : new FleetPlan(actions, menu);

@@ -326,7 +326,9 @@ public sealed class AgentStateProbe(
             (true, _, _) => $"{f.FleetGovernedLanes} corsie sotto governo, in DRY-RUN: decide, journalizza e propone, non esegue",
             (false, false, _) => $"{f.FleetGovernedLanes} corsie sotto governo, DryRun spento ma il braccio esecutivo (AF2b) NON è implementato: il tick resta di solo journal, con un warning a ogni giro",
             (false, true, false) => $"{f.FleetGovernedLanes} corsie sotto governo, DryRun spento ma Fleet:ExecutionLanes è VUOTA: nessuna corsia autorizzata, resta di solo journal",
-            (false, true, true) => $"{f.FleetGovernedLanes} corsie sotto governo, ESECUZIONE ATTIVA su {f.FleetAuthorizedLanes} corsie autorizzate: può FERMARLE da solo (l'avvio automatico non è implementato)",
+            // [J13] Dal 2026-08-25 il braccio sa anche AVVIARE (candidato singolo; grigi solo con
+            // Fleet:GreyAutoDeploy): la riga lo dice, perché «può fermarle» non copre più il potere vero.
+            (false, true, true) => $"{f.FleetGovernedLanes} corsie sotto governo, ESECUZIONE ATTIVA su {f.FleetAuthorizedLanes} corsie autorizzate: può FERMARLE e SCHIERARE candidati singoli da solo (J13; grigi solo con GreyAutoDeploy)",
         };
         // [J11] La riga sopra leggeva IDENTICA su una flotta i cui due criteri di ritiro erano
         // entrambi strutturalmente irraggiungibili. Il ritiro «può» solo se i criteri POSSONO

@@ -276,7 +276,10 @@ public class AgentStateProbeTests
         var a = Agent(r, "Orchestratore di flotta");
         Assert.Contains("ESECUZIONE ATTIVA", a.Detail, StringComparison.Ordinal);
         Assert.Contains("2 corsie autorizzate", a.Detail, StringComparison.Ordinal);
-        Assert.Contains("l'avvio automatico non è implementato", a.Detail, StringComparison.Ordinal);
+        // [J13] Dal 2026-08-25 il braccio sa anche AVVIARE: la riga deve dichiarare il potere
+        // VERO, compreso il vincolo che i grigi richiedono il flag J14.
+        Assert.Contains("SCHIERARE", a.Detail, StringComparison.Ordinal);
+        Assert.Contains("GreyAutoDeploy", a.Detail, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -302,14 +305,16 @@ public class AgentStateProbeTests
 
     /// <summary>
     /// I fatti vengono dalle costanti dichiarate nel worker, non da numeri riscritti a mano qui.
-    /// Le DUE metà del braccio sono separate perché lo sono davvero: dal 2026-08-19 l'orchestratore
-    /// sa fermare una corsia, e continua a NON saperla avviare — l'ordine deciso dal proprietario.
+    /// Le DUE metà del braccio restano separate perché lo sono state davvero, nell'ordine deciso
+    /// dal proprietario: il ritiro dal 2026-08-19, l'avvio dal 2026-08-25 (J13 — candidato singolo,
+    /// e per i grigi dietro il flag J14). Le costanti dicono cosa il codice SA FARE; a trattenere
+    /// l'esecuzione restano dry-run, ExecutionLanes, budget e (per i grigi) GreyAutoDeploy.
     /// </summary>
     [Fact]
     public void Fleet_LeDueMetaDelBraccioSonoDichiarateDalWorker()
     {
         Assert.True(ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.RetirementArmImplemented);
-        Assert.False(ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.AssignmentArmImplemented);
+        Assert.True(ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.AssignmentArmImplemented);
     }
 
     // ---------------------------------------------------------- Comitato AI
