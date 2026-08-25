@@ -28,6 +28,61 @@ public sealed class PipelineDateRanges
     public DateTime HoldoutFrom { get; set; }
     public DateTime HoldoutTo { get; set; }
 
+    // ------------------------------------------------------------------ [J2] finestre RELATIVE
+    //
+    // [J2, PRD autonomia-operativa 2026-08-25] DateRangesJson era una colonna statica e NESSUN
+    // meccanismo la faceva avanzare: le config 17/18 sono rimaste con HoldoutTo=2026-07-27 per 18
+    // giorni e 90 esecuzioni — stesso universo, stesso seed, stesso backtest deterministico
+    // rifatto novanta volte (20,9 ore di pipeline/mese per zero informazione nuova). Con i campi
+    // relativi la finestra si ancora ad «adesso» e viene RISOLTA in date assolute all'avvio del
+    // run (PipelineEngine.BuildContext): le date risolte finiscono nel ContextSnapshotJson del
+    // run, quindi ogni run dichiara su che finestra ha davvero girato, e il resume rilegge lo
+    // snapshot — la finestra di un run non cambia mai a metà corsa.
+    //
+    // Retrocompatibilità: campi assenti/null ⇒ le date assolute valgono identiche a prima.
+    // La semantica dei gate NON cambia: stessa geometria selezione→holdout, stessa validazione,
+    // stesso conteggio tentativi — scorre solo l'ancora.
+
+    /// <summary>
+    /// [J2] Giorni di holdout ancorati ad «adesso»: alla risoluzione, HoldoutTo = adesso e
+    /// HoldoutFrom = adesso − N giorni. Null = date assolute (comportamento storico).
+    /// </summary>
+    public int? RollingHoldoutDays { get; set; }
+
+    /// <summary>
+    /// [J2] Giorni di selezione PRIMA dell'holdout: SelectionTo = HoldoutFrom (mai sovrapposti,
+    /// stessa invariante D-03) e SelectionFrom = SelectionTo − N giorni. Ha senso solo insieme a
+    /// <see cref="RollingHoldoutDays"/>.
+    /// </summary>
+    public int? RollingSelectionDays { get; set; }
+
+    /// <summary>[J2] Metodo e non proprietà calcolata: questo POCO è serializzato (regola ConfigPocoComputedPropertyTests).</summary>
+    public bool IsRolling() => RollingHoldoutDays is > 0 && RollingSelectionDays is > 0;
+
+    /// <summary>
+    /// [J2] Risolve i campi relativi in date assolute contro <paramref name="nowUtc"/>. Su un
+    /// oggetto non-rolling restituisce sé stesso invariato. La risoluzione tronca al MINUTO: due
+    /// risoluzioni nello stesso minuto producono la stessa finestra (idempotenza utile ai test e
+    /// ai retry), e i secondi non sono una risoluzione a cui questi dati abbiano senso.
+    /// </summary>
+    public PipelineDateRanges Resolve(DateTime nowUtc)
+    {
+        if (!IsRolling()) return this;
+        var anchor = new DateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, nowUtc.Hour, nowUtc.Minute, 0, DateTimeKind.Utc);
+        var holdoutFrom = anchor.AddDays(-RollingHoldoutDays!.Value);
+        return new PipelineDateRanges
+        {
+            HoldoutTo = anchor,
+            HoldoutFrom = holdoutFrom,
+            SelectionTo = holdoutFrom,
+            SelectionFrom = holdoutFrom.AddDays(-RollingSelectionDays!.Value),
+            // I campi relativi restano nell'istanza risolta: lo snapshot del run documenta sia la
+            // finestra vera sia l'intento («ultimi N giorni»), e HoldoutMonths resta coerente.
+            RollingHoldoutDays = RollingHoldoutDays,
+            RollingSelectionDays = RollingSelectionDays,
+        };
+    }
+
     /// <summary>
     /// [D-03, Fase 1 PRD-RISANAMENTO] L'invariante selezione/holdout in UN SOLO posto (lezione
     /// NullTwinJudge: una politica, una sola implementazione). Prima viveva solo nel salvataggio
@@ -37,7 +92,17 @@ public sealed class PipelineDateRanges
     /// <c>PipelineEngine.BuildContext</c> (il run NON parte). Null = valido.
     /// </summary>
     public string? Validate() =>
-        SelectionTo <= SelectionFrom || HoldoutTo <= HoldoutFrom
+        // [J2] Una config RELATIVA non risolta ha le assolute ai default: si validano i campi
+        // relativi (la geometria assoluta è corretta PER COSTRUZIONE dopo Resolve, che il motore
+        // chiama prima di questo controllo). Metà relativa e metà no è un errore, non un default.
+        RollingHoldoutDays is not null || RollingSelectionDays is not null
+            ? !IsRolling()
+                ? "Finestra relativa incompleta: servono ENTRAMBI RollingHoldoutDays e RollingSelectionDays (> 0), " +
+                  "o nessuno dei due (date assolute)."
+                : RollingHoldoutDays < 7
+                    ? "L'holdout relativo dev'essere di almeno 7 giorni: sotto, la frequenza attesa non è un numero ma un aneddoto."
+                    : null
+        : SelectionTo <= SelectionFrom || HoldoutTo <= HoldoutFrom
             ? $"Range di date non validi: selezione [{SelectionFrom:yyyy-MM-dd} → {SelectionTo:yyyy-MM-dd}], " +
               $"holdout [{HoldoutFrom:yyyy-MM-dd} → {HoldoutTo:yyyy-MM-dd}]."
         : HoldoutFrom < SelectionTo
@@ -58,7 +123,11 @@ public sealed class PipelineDateRanges
     /// </summary>
     public decimal? HoldoutMonths()
     {
-        var days = (HoldoutTo - HoldoutFrom).TotalDays;
+        // [J2] Su una config relativa l'ampiezza è dichiarata nei giorni rolling — le assolute di
+        // una config NON risolta sono ai default, e (default − default) leggerebbe «zero giorni»
+        // escludendo il run dalla coda dei candidati in silenzio. Sull'istanza RISOLTA i due
+        // calcoli coincidono per costruzione.
+        var days = IsRolling() ? RollingHoldoutDays!.Value : (HoldoutTo - HoldoutFrom).TotalDays;
         // [I14-rev] La stessa costante che riproporziona l'atteso nel confronto di inedia: era
         // 30,44 qui e 30,0 di là, ai due lati della stessa disuguaglianza.
         return days < 7 ? null : (decimal)days / Fleet.TradeFrequency.DaysPerMonth;
@@ -84,7 +153,11 @@ public sealed class PipelineDateRanges
     /// <para>Negativo se la finestra si chiude nel futuro (configurazione appena creata): si
     /// restituisce comunque il numero, perché anche quello è un fatto da vedere.</para>
     /// </summary>
-    public double HoldoutAgeDays(DateTime nowUtc) => (nowUtc - HoldoutTo).TotalDays;
+    public double HoldoutAgeDays(DateTime nowUtc) =>
+        // [J2] Una finestra relativa si risolve contro «adesso» a ogni run: la sua età è zero per
+        // costruzione. Le assolute di una config relativa non risolta sono ai default, e
+        // (adesso − default) direbbe «vecchia di duemila anni».
+        IsRolling() ? 0 : (nowUtc - HoldoutTo).TotalDays;
 }
 
 /// <summary>Per-stage configuration inside a pipeline configuration (JSON column).</summary>

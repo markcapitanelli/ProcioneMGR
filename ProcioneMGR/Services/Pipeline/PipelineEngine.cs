@@ -217,6 +217,12 @@ public sealed class PipelineEngine(
     {
         var ranges = JsonSerializer.Deserialize<PipelineDateRanges>(config.DateRangesJson) ?? new PipelineDateRanges();
 
+        // [J2] Le finestre RELATIVE si risolvono QUI, all'avvio del run, contro «adesso»: le date
+        // assolute risolte finiscono nel ContextSnapshotJson (riga sotto, nel chiamante) e il
+        // resume rilegge lo snapshot — la finestra di un run non cambia mai a metà corsa. Su una
+        // config assoluta Resolve è l'identità.
+        ranges = ranges.Resolve(DateTime.UtcNow);
+
         // [D-03, Fase 1 PRD-RISANAMENTO] L'invariante selezione/holdout sta sul percorso OBBLIGATO
         // (l'avvio del run), non solo nel salvataggio UI. La politica vive in
         // PipelineDateRanges.Validate — una politica, una sola implementazione.
