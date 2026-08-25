@@ -237,10 +237,18 @@ public sealed class FactorIcHistoryStore(IDbContextFactory<ApplicationDbContext>
 
             if (reports.Count == 0) continue;
 
+            // [2026-08-24] La STESSA correzione per molteplicità del calcolo fresco. I fattori di
+            // una serie sono giudicati insieme, quindi sono test simultanei anche quando il
+            // verdetto arriva dalla storia registrata: applicarla su una strada sola darebbe due
+            // verdetti diversi sullo stesso fattore a seconda di chi lo guarda — l'errore che
+            // questa cartella ha già pagato con le due regole di SuggestWindowSize.
+            var corretti = FactorDriftAnalyzer.ApplyMultiplicityCorrection(
+                reports, (config ?? new FactorDriftConfig()).NoiseFloorZ);
+
             var computedAt = series.Max(w => w.ComputedAtUtc);
             snapshots.Add(new FactorDriftSeriesSnapshot(
                 series.Key.Symbol, series.Key.Timeframe, computedAt,
-                reports
+                corretti
                     .OrderByDescending(r => (int)r.Status)
                     .ThenByDescending(r => Math.Abs(r.ReferenceIc - r.RecentIc))
                     .ToList()));

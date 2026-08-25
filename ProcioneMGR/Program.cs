@@ -341,6 +341,10 @@ builder.Services.TryAddSingleton<ProcioneMGR.Services.MarketData.IWebSocketTrans
 // ricevuti dalla STESSA istanza del hosted service (pattern MetricsCollector/SentimentSyncWorker).
 builder.Services.AddSingleton<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>());
+// [2026-08-24] Lo STESSO singleton visto come diagnostica: il guardiano delle serie-patrimonio deve
+// poter LEGGERE perche' la serie liquidazioni e' vuota, invece di asserirne la causa a commento.
+builder.Services.AddSingleton<ProcioneMGR.Services.MarketData.ILiquidationFeedDiagnostics>(
+    sp => sp.GetRequiredService<ProcioneMGR.Services.MarketData.LiquidationSyncWorker>());
 
 // --- Portfolio optimization (Mean-Variance, Risk Parity, HRP) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Portfolio.MeanVarianceOptimizer>();
@@ -431,7 +435,13 @@ if (!string.IsNullOrWhiteSpace(mlRemoteUrl))
     builder.Services.AddSingleton<ProcioneMGR.Services.ML.IMlComparisonClient, ProcioneMGR.Services.ML.MlComparisonClient>();
 }
 
-// --- Backup DB (pagina /admin/backup): pg_dump/pg_restore del database Postgres + cartella backup/ ---
+// --- Backup DB (pagina /admin/backup): pg_dump/pg_restore del database Postgres ---
+// La sezione Backup e' la FONTE UNICA della destinazione notturna: la legge questo servizio e la
+// legge scripts/db-backup.ps1 dall'appsettings.json del repo principale. Prima del 2026-08-23 la
+// pagina conosceva solo backup/ sotto la content root e mostrava l'ultimo file del 2026-07-09
+// mentre il dump di stanotte stava sano in %USERPROFILE%\ProcioneMGR-Backup.
+builder.Services.Configure<ProcioneMGR.Services.Admin.BackupOptions>(
+    builder.Configuration.GetSection(ProcioneMGR.Services.Admin.BackupOptions.SectionName));
 builder.Services.AddSingleton<ProcioneMGR.Services.Admin.DatabaseBackupService>();
 
 // --- Multi-strategy ensemble + trading: corsie isolate (LaneId 0..LaneCount-1) ---

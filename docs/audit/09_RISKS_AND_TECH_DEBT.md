@@ -107,6 +107,24 @@ troncamento incondizionato prima dell'invio come rete finale; un test con `Symbo
 
 ### R16 — Nessun backup del database esiste {#r16}
 
+> ✅ **CHIUSO.** Il backup notturno esiste da **2026-08-05** (`scripts/db-backup.ps1` + operazione
+> pianificata alle 03:30, `pg_dump -Fc` + verifica `pg_restore --list` + notifica Telegram sui
+> fallimenti). Al 2026-08-23: 10 dump, 3,2 GB, l'ultimo di 8 ore prima, esito del task `0`.
+>
+> **La coda velenosa, chiusa il 2026-08-23.** La frase citata qui sotto — «Nessun backup presente
+> in …\ProcioneMGR\backup» — ha continuato a comparire in pagina per **diciotto giorni dopo** che
+> il backup notturno aveva cominciato a funzionare, perché `/admin/backup` conosceva una sola
+> cartella e non era quella. È il difetto che questo progetto tratta come grave: un controllo che
+> risponde **a prescindere dalla realtà**. Il costo non è teorico — è la riga stessa che si sta
+> leggendo: un rilievo 🔴 ALTA formulato citando testualmente un pannello che guardava altrove.
+> Ora la pagina elenca entrambe le cartelle con la sorgente dichiarata, interroga l'operazione
+> pianificata per stato ed esito, e segnala quando configurazione e task divergono invece di
+> scegliere in silenzio uno dei due. Cartella e soglia hanno **una sola fonte** (sezione `Backup`
+> di `appsettings.json`), letta da pagina, script notturno e watchdog.
+>
+> Resta aperto ciò che nessuno dei tre copre: il **drill di restore su server vergine**, l'ultimo
+> il 2026-07-26. `pg_restore --list` legge la TOC, non i blocchi di dati.
+
 `/admin/backup` riporta: **«Nessun backup presente in …\ProcioneMGR\backup»**.
 
 Il database contiene ≈12,18 milioni di candele (anni di ingestione), 196 run di esperimenti con i
@@ -359,7 +377,7 @@ dotnet list package --vulnerable --include-transitive
 |---|---|---|
 | R1 | Segreti reali su repo pubblico (3 credenziali exchange reali a rischio) | 🔴 **ALTA — agire subito** |
 | R15 | Quantità ordine non arrotondata → ordini rifiutati dall'exchange | 🔴 ALTA |
-| R16 | **Nessun backup del database esiste** | 🔴 ALTA |
+| R16 | ~~Nessun backup del database esiste~~ | ✅ CHIUSO (notturno dal 2026-08-05; pagina resa veritiera il 2026-08-23) |
 | R2 | `run-postgres.ps1` muore col cluster giù | 🔴 ALTA |
 | R3 | Conteggio test errato nel README | 🔴 ALTA |
 | R17 | 38% di fallimenti nelle chiamate al supervisore AI | 🟡 MEDIA |

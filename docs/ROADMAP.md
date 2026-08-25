@@ -2281,6 +2281,221 @@ millisecondo, **una volta al logon**, al posto di una finestra ogni cinque minut
 
 ---
 
+## La pagina che non sapeva dove fosse il backup (2026-08-23)
+
+`/admin/backup` riportava **«Nessun backup presente in …\ProcioneMGR\backup»**. Nella cartella dei
+backup notturni, nello stesso momento: **10 dump, 3,2 GB, il più recente di 8 ore prima**, esito
+dell'operazione pianificata `0`. Il backup notturno funzionava dal **2026-08-05**; la pagina non lo
+sapeva perché guardava una cartella sola, e non era quella.
+
+Non è una vista parziale: è la classe di difetto del Filone E — un controllo che **dà una risposta
+a prescindere dalla realtà**. Qui ha risposto per diciotto giorni, e il costo non è teorico:
+il rilievo **R16 «Nessun backup del database esiste» 🔴 ALTA** in `docs/audit/09` cita testualmente
+quella frase. Un pannello che guarda nel posto sbagliato non inganna solo l'occhio: entra negli
+audit, e da lì nelle priorità.
+
+### Perché era successo
+
+La destinazione viveva **solo dentro `db-backup.ps1`**, come default del parametro `-Destination`.
+Un valore parametrico che nessun altro poteva leggere. Ricopiarlo in C# avrebbe prodotto due verità
+destinate a divergere al primo cambio — la pagina sarebbe tornata a mentire, solo con un'altra data.
+
+### Fatto
+
+- Sezione **`Backup`** in `appsettings.json` (`NightlyDirectory`, `RetentionDays`,
+  `StaleAfterHours`, `ScheduledTaskName`): **fonte unica**, letta da tre lettori che prima ne
+  avevano una propria — la pagina, `db-backup.ps1` e `watchdog.ps1` (che aveva cartella e soglia
+  48h scritte a mano: una terza verità pronta a divergere, e la più rumorosa, perché grida su
+  Telegram ogni cinque minuti).
+- `db-backup.ps1 -Register` **non congela più** `-Destination`/`-KeepDays` negli argomenti del task:
+  un argomento congelato è la stessa doppia verità, spostata di un metro. Chi li passa a mano
+  ottiene comunque un task fisso, ma lo script lo dice.
+- La pagina elenca **entrambe** le cartelle con la **sorgente dichiarata** per riga (manuale /
+  notturno, oppure `manuale/notturno` quando coincidono: i nomi hanno la stessa forma e attribuirli
+  sarebbe indovinare).
+- **Interroga l'operazione pianificata** (`ScheduledTaskProbe`): stato, ultima esecuzione, esito
+  decodificato, prossima esecuzione. Senza, un task cancellato o fallito resterebbe invisibile
+  finché i dump non invecchiano — cioè fino al giorno dopo il guasto.
+- **Dice le divergenze** invece di risolverle in silenzio: task che scrive altrove, task assente,
+  script dentro un worktree (il guasto del 2026-08-17), ultima esecuzione con codice ≠ 0, task
+  disabilitato. E quando la domanda non è ponibile (non siamo su Windows) lo dichiara: il silenzio
+  non è una conferma.
+- Il pannello di configurazione soddisfa il mandato «tutto amministrabile da UI»; `AdminConfigRules`
+  rifiuta un percorso **relativo** — si risolverebbe contro la directory di lavoro, che per l'app e
+  per il Task Scheduler non è la stessa.
+- `pg_restore`/`Restore` accettano solo file dentro le due cartelle note.
+
+**Verifica.** 131 test nella famiglia backup+config (24 nuovi sul servizio e sugli script, 7 di
+rendering bUnit della pagina reale, fra cui la regressione: un manuale vecchio di 45 giorni non deve
+più nascondere un notturno di stanotte). Dal vivo su `localhost:5199` con i dati veri: verdetto
+`SANO`, esito del task `0 (riuscita)`, 10 righe marcate `notturno`; portata la soglia a 1 ora il
+verdetto è passato a `FERMO`; puntata la destinazione altrove è comparso l'avviso di divergenza col
+task. Console e log senza errori.
+
+### Aperto
+
+- [ ] Il **drill di restore su server vergine** — l'ultimo il 2026-07-26. `pg_restore --list` legge
+      la TOC, non i blocchi di dati: è l'unica prova che nessuno dei tre strumenti può dare.
+- [ ] Il task registrato oggi porta ancora `-Destination`/`-KeepDays` congelati (registrato prima di
+      questa modifica). Coincidono con la configurazione, quindi non c'è divergenza — ma finché non
+      si ri-registra, cambiare la cartella dalla UI la farebbe comparire.
+
+## Le quattro schede della Home, misurate una per una (2026-08-24)
+
+Il proprietario ha chiesto di spiegare tre schede di allarme in Home e di risolverle se possibile.
+Quattro lenti indipendenti più un critico di completezza le hanno esaminate contro il database vivo.
+Nessuna delle tre era ciò che sembrava, e il critico ne ha trovata una quarta — non richiesta, e la
+più grave.
+
+### Scheda 1 — «Liquidazioni Binance: serie ASSENTE»
+
+Il fatto è vero: `SentimentMetricPoints` non ha una riga di liquidazioni. Verificato dal vivo:
+`wss://fstream.binance.com` completa l'handshake (`101`) e consegna **0 frame in 75 s**, mentre lo
+spot ne consegna 987 nella stessa finestra. La descrizione corrente era però imprecisa e va corretta
+anche nei commenti: **il REST futures funziona** (`fapi/v1/ping` 200, `fundingRate` con dati reali) —
+è muta solo la famiglia **WebSocket**, ed è per questo che il funding continua ad arrivare mentre le
+liquidazioni no.
+
+Tre difetti attorno a un fatto vero:
+
+1. **L'allarme era inesigibile.** `LiquidationsMinStartUtc = 2026-08-01`, una data assoluta già
+   passata, su un feed che esiste solo al presente. Anche se il blocco sparisse domani, il punto più
+   vecchio sarebbe di domani: la riga passerebbe da «serie ASSENTE» a «profondità persa» e resterebbe
+   rossa **per sempre**. Un allarme che non può rientrare smette di essere letto e si porta dietro
+   anche quelli veri — è la stessa ragione, scritta nel codice, per cui `NewsEnforced` nasce spento.
+2. **Il testo dichiarava un danno inesistente.** Home e notifica dicevano «Carry e backtest a leva
+   leggono queste serie». Nessuno le legge: `SentimentCompositeCalculator` somma solo metriche
+   nominate e le liquidazioni non ci sono. La ricerca globale su `BinanceLiquidations` trova
+   scrittore, esenzione dalla purge, guardiano, UI e test — **zero lettori**.
+3. **La causa non era nominata**, e la frase usata era la stessa della perdita di patrimonio del
+   funding: mandava a cercare un incidente che non c'era.
+
+**Nessun backfill esiste**, e la memoria «Dump storici Binance» va corretta: su
+`data.binance.vision` il dataset `liquidationSnapshot` per USDS-M **non è mai esistito** (listing S3
+del prefisso a zero chiavi, mentre `metrics/` e `trades/` rispondono 200 nella stessa sessione:
+assenza, non geo-blocco). I due endpoint REST di liquidazione sono stati ritirati. Esiste
+`futures/cm/.../liquidationSnapshot` (COIN-M) ma è un vicolo cieco doppio: contratti inverse, e serie
+congelata al 2024-10-14.
+
+**Fatto.** `LiquidationsMinStartUtc` sostituita da `LiquidationsStaleAfterHours` (default 12): una
+serie che si può solo accumulare si giudica su «ha abbastanza punti **e** ne sta ancora ricevendo», e
+tutte e tre le uscite (vuota / appena partita / ferma) sono **rientrabili**. La causa del vuoto si
+legge dallo stato reale del feed (`ILiquidationFeedDiagnostics`) e produce **quattro frasi diverse**
+per quattro stati che mandano a fare quattro cose diverse. In Home due blocchi separati — «serie
+ACCORCIATE» in rosso, «fonti mai partite» in giallo — e la frase sul carry vive solo nel primo.
+Stessa separazione nella notifica, con gravità diversa. In `/sentiment` il badge non dice più «OK»
+ignorando le righe non sorvegliate.
+
+`NeverStarted` richiede `Accumulating`, non basta il conteggio a zero: **il funding a zero righe non
+è «una fonte da collegare»**, è la perdita che questo guardiano esiste per vedere.
+
+### Scheda 2 — «39 fattori in deriva»
+
+La soglia era aritmeticamente esatta (0,051 / 0,044 / 0,124 sono 1,96/√1500, √2000, √250). Il
+verdetto no.
+
+`Judge` confrontava un «recente» che è la media di **2** finestre con un «riferimento» che è la media
+di **~8**, misurandoli entrambi contro l'errore standard di **una** finestra sola: ~5,5 sigma chiesti
+al riferimento, ~2,8 al recente. Il riferimento veniva selezionato verso l'alto e il recente, tre
+volte più rumoroso, ci ricadeva sotto **per costruzione**. Era un rilevatore di regressione verso la
+media travestito da rilevatore di deriva.
+
+La prova è il nullo che conserva il meccanismo di selezione: applicando la stessa regola alle due
+finestre **più vecchie** invece delle due più recenti si ottenevano **85 allarmi su 165** contro i
+**39 su 131** del reale. Il nullo gridava più forte del segnale.
+
+Secondo difetto, indipendente: le finestre si costruivano **in avanti dalla candela più vecchia**,
+quindi il resto cadeva sulla coda **recente**. Misurato: fra l'ultima finestra e l'ultima candela
+c'erano in media **120 giorni** sulle serie 1d (fino a 211), 84 sulle 1h, 46 sulle 4h — con le
+candele fresche di poche ore, e la pagina che scriveva accanto «Ultimo calcolo» di stamattina.
+
+**Fatto.** Finestre costruite a ritroso dall'ultima barra (il resto cade sulla coda vecchia). Il calo
+si giudica contro il **proprio errore standard**, con varianza **pooled within-group** — stimarla
+sull'intera serie la gonfiava col calo stesso, e il controllo a edge piantato l'ha trovato subito.
+Finestre orientate sul segno del riferimento, così «spento» e «invertito» sono lo stesso continuo.
+Quantile della **t** e non della normale (con 6+2 finestre, 1,96 è anticonservativo del 25%).
+Correzione **Benjamini-Hochberg** dentro la serie, con denominatore = i test **eseguiti** — usare i
+soli candidati significava non correggere affatto, ed è il secondo difetto che il controllo sul
+rumore ha trovato dentro la correzione stessa.
+
+Verificato ai livelli 1 e 2: edge piantato al confine → t > 5, p < 0,001; **40 semi di puro rumore**
+→ ≤ 4 allarmi (soglia dichiarata 5%); nullo a ritroso → tace dove il verso giusto grida.
+
+Limite dichiarato e non nascosto: un decadimento **vecchio** (a metà serie) non scatta più, perché il
+periodo di riferimento diventa incoerente con sé stesso e non può fare da metro. Il test lo afferma
+esplicitamente, e la serie di finestre continua a portare il crollo per intero.
+
+### Scheda 3 — «156 modelli ML con feature in deriva»
+
+Non era una misura: era la fotografia del **2026-08-19 08:16** che `FeatureDriftHydrationWorker` —
+registrato **senza condizioni** — rimetteva in Home 10 secondi dopo ogni avvio, mentre il worker che
+l'avrebbe rifatta è chiuso dietro `Drift:Enabled=false`. E non era ferma: era **zombie**. L'unico
+evento che poteva azzerarla — un tick con zero modelli sorvegliati — usciva **prima** di scrivere
+righe, quindi non lasciava traccia, e il riavvio successivo la resuscitava identica. Il guscio si
+riavvia più volte al giorno: non poteva convergere.
+
+Il soggetto non esisteva più: 176 modelli, **tutti in Staging**, contro stage sorvegliati
+Champion+Challenger da [I6c]. E «Copertura: 158 modelli, tutti giudicati» contava le righe del tick,
+non il registro: 18 modelli salvati dopo il 19/8 non erano nella fotografia, e lo scarto cresceva.
+
+Difetto simmetrico, allora ancora invisibile: accendendo `Enabled` la scheda non guariva, cambiava
+segno — la Home cadeva nel ramo guardato da `LastRunUtc is not null` (il gemello D2 guarda
+`_factorDriftSeries > 0`) e stampava «nessun allarme» mentre la riga di copertura usciva subito con
+`if (total == 0) return`. **Verde su zero modelli guardati**, nel caso che [I6c] ha reso normale.
+
+**Fatto.** Un tick senza soggetto persiste una riga **sentinella** (`ModelId = 0`, nessuna
+migrazione): l'idratazione trova un tick nuovo, la fotografia del 19/8 smette di resuscitare, e il
+prune — unico `DELETE` su quella tabella, e vivo solo dentro il ramo che scrive righe — torna a
+girare. La guardia della Home passa a `All.Count > 0`, la copertura dichiara **l'età e lo stato di
+`Drift:Enabled` prima del numero** (la frase «non ancora ricalcolata da questo avvio» prometteva un
+aggiornamento che non poteva arrivare), e il denominatore diventa il registro vero. L'idratazione
+scarta i modelli spariti o fuori dagli stage sorvegliati, **dichiarando quante righe ha tolto**.
+
+### Scheda 4 — quella che nessuno aveva chiesto, ed è la peggiore
+
+`Home.razor` iniettava `IEnsembleManager` **non keyed**. Quella registrazione è un fallback
+dichiarato «per i consumer non ancora aggiornati» e risolve **sempre la corsia 0**. Dal 2026-08-05 la
+corsia 0 ha configurazione vuota e le otto gambe Paper vive stanno sulle corsie 1-7: il ciclo sulle
+gambe non eseguiva mai e il conteggio era **zero per costruzione**.
+
+È passato inosservato per diciannove giorni perché quel blocco — solo — **non aveva il ramo «nessun
+allarme»** che entrambe le derive hanno: la Home non stampava nulla, e uno schermo vuoto è
+indistinguibile da «nessuna gamba sta decadendo». Era **l'unico allarme della pagina che parla di
+capitale in movimento**, e due gambe erano già misurabili (corsia 1 DOT/USDT 39 trade chiusi, corsia
+2 ADA/USDT 26, contro una soglia di 20).
+
+Nello stesso file: la stat card «Trading» faceva `TradingEngineStates.FirstOrDefaultAsync()` —
+l'unica delle dieci letture di quella tabella senza filtro su `LaneId` e senza `OrderBy`. Postgres
+non garantisce un ordine: mostrava lo stato di **una corsia a caso** spacciandolo per «il Trading», e
+poteva cambiare da sola a ogni `UPDATE` che riscriveva la tupla.
+
+**Fatto.** Risoluzione per chiave con `ILaneDirectory` + `GetKeyedService`, su tutte le corsie
+configurate e in parallelo; ramo «nessun allarme» con la dichiarazione di misurabilità; ramo
+esplicito quando la lettura fallisce; stat card che conta le corsie. Un test-guardiano impedisce a
+qualunque pagina di iniettare di nuovo il fallback non-keyed.
+
+### Aperto
+
+- [ ] **`/regimes` ha lo stesso difetto, ed è un percorso di SCRITTURA.** Inietta `IEnsembleManager`
+      non keyed e la manopola «Regime-Aware Weighting» legge e **scrive** `UpdateConfigurationAsync`
+      sulla corsia 0 — vuota — senza alcun selettore, mentre l'operatore crede di configurare
+      l'ensemble. È elencato nell'inventario del guardiano come difetto dichiarato, non come
+      permesso: la correzione è dargli un selettore di corsia.
+- [ ] Le soglie di `DecayMonitorOptions` sono istanziate a mano in `EnsembleManager` e non hanno
+      alcun `Configure<>`: non sono amministrabili da UI, contro il mandato del 2026-08-09.
+- [ ] La correzione per molteplicità della deriva fattori è **dentro** la serie. Il conteggio in Home
+      aggrega 222 serie indipendenti e quella molteplicità resta non corretta: la pagina lo dichiara,
+      ma resta una scelta da rivedere se il pannello tornerà a riempirsi.
+- [ ] `FactorDrift:MaxSeries` resta a 5 (giro completo ~22 giorni). Da rivalutare ORA che il verdetto
+      è valido: alzare la frequenza di un giudizio non valido moltiplicava il rumore. Attenzione al
+      controintuitivo: alzare `MaxCandles` **abbassa** la soglia (1,96/√n) e fa crescere il numero di
+      allarmi — la manopola più ovvia peggiora la scheda.
+- [ ] Liquidazioni: tre venue alternative verificate raggiungibili e keyless da questa postazione
+      (Bitget mix, OKX `liquidation-orders`, Bybit `allLiquidation`). Decisione presa: **non
+      collegarne nessuna finché non esiste anche un LETTORE** — collegare una fonte senza consumo è
+      costruire uno strumento che nessuno legge.
+- [ ] `Drift:Enabled` va portato a `true` nel repo principale dopo il merge (passo (c) di [I6], mai
+      eseguito): ora è sicuro, perché la Home non può più dire verde a copertura zero.
 ## Filone J — Dall'aritmetica all'operatività (2026-08-25, diciassettesima ondata)
 
 *Dettaglio, verifiche e decisioni aperte nel

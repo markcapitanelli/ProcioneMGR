@@ -3,67 +3,257 @@
 @using Microsoft.AspNetCore.Authorization
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Admin
+@using ProcioneMGR.Services.Config
 @attribute [Authorize(Roles = AppRoles.Admin)]
 
 @inject DatabaseBackupService BackupService
+@inject IAppConfigWriter ConfigWriter
 
 <PageTitle>Backup Database</PageTitle>
 
-<h1>Backup Database</h1>
+<h1>Backup Database <span class="badge bg-secondary">Admin</span></h1>
 
-<GuidaPanel Title="Backup Database — mettere al sicuro il database prima di ogni operazione rischiosa">
+<GuidaPanel Title="Backup Database — le due copie che esistono, e quale delle due ti sta salvando">
     <p>
         Il database PostgreSQL (<code>@BackupService.TargetDatabase</code>) contiene tutto lo stato della
         piattaforma: strategie salvate, modelli ML, posizioni di trading, run della pipeline, credenziali
-        cifrate. Questa pagina crea una <strong>copia verificata</strong> del database usando gli strumenti
-        nativi <code>pg_dump</code>/<code>pg_restore</code> (devono essere installati e nel <code>PATH</code>).
+        cifrate. Di copie ne esistono <strong>due</strong>, prodotte da due meccanismi diversi, e questa
+        pagina le mostra entrambe con la <strong>sorgente dichiarata</strong>:
     </p>
-    <p>
-        Il backup è un <strong>archivio custom compresso</strong> (<code>pg_dump -Fc</code>): uno snapshot
-        transazionalmente consistente prodotto dal server, quindi non serve fermare l'app per un backup a
-        caldo. Subito dopo la creazione, l'archivio viene verificato con <code>pg_restore --list</code>: se
-        non risulta leggibile viene <strong>eliminato</strong> e segnalato l'errore — non viene mai
-        conservato un backup corrotto.
-    </p>
-    <div class="alert alert-info mb-3">
-        <strong>Questa pagina non è l'unico posto in cui esistono backup, e non li vede tutti.</strong>
-        L'elenco qui sotto mostra <em>solo</em> i backup fatti a mano da questo pulsante, che finiscono
-        in <code>@BackupService.BackupDirectory</code>. Il <strong>backup notturno</strong> è un'altra
-        cosa: lo esegue <code>scripts/db-backup.ps1</code> da un'operazione pianificata di Windows
-        («ProcioneMGR Backup DB», ogni notte alle 03:30) e scrive in
-        <code>%USERPROFILE%\ProcioneMGR-Backup</code>. Quei file <strong>non compaiono qui</strong>:
-        una data vecchia in questo elenco non vuol dire che il backup notturno non stia girando, e
-        una data recente non dimostra che stia girando. Per lo stato del notturno:
-        <code>.\scripts\db-backup.ps1 -Verify</code>.
-        <div class="small mt-1">
-            Il CronJob <code>dbbackup-nightly</code> nel cluster è sospeso <em>di proposito</em>: con
-            un <code>emptyDir</code> i backup verrebbero creati e persi alla terminazione del pod.
-            E il notturno è già morto una volta per sei notti di fila in silenzio (2026-08-17),
-            perché il task puntava a un worktree con la sua configurazione stantia — motivo per cui
-            oggi lo script risolve da sé il repo principale.
+    <dl class="row mb-2">
+        <dt class="col-sm-3"><span class="badge bg-info text-dark">notturno</span></dt>
+        <dd class="col-sm-9">
+            <code>scripts/db-backup.ps1</code>, lanciato ogni notte alle 03:30 da un'operazione
+            pianificata di Windows. <strong>È il backup che conta</strong>: gira da solo, scrive fuori
+            dal repository, ruota i file vecchi e avvisa su Telegram se fallisce.
+        </dd>
+        <dt class="col-sm-3"><span class="badge bg-secondary">manuale</span></dt>
+        <dd class="col-sm-9">
+            Il pulsante «Crea backup ora» qui sotto, in <code>@BackupService.ManualDirectory</code>.
+            Serve <em>prima di un'operazione rischiosa</em>, non come copia di sicurezza ordinaria.
+        </dd>
+    </dl>
+    <div class="alert alert-secondary py-2 small">
+        <strong>Perché la distinzione è scritta così in grande (2026-08-23).</strong> Fino a oggi questa
+        pagina elencava solo la cartella manuale, dove l'ultimo file era del <strong>2026-07-09</strong>.
+        Il backup notturno funzionava — un dump al giorno, sano — ma stava altrove, e la pagina non lo
+        sapeva. Il risultato era un controllo che dava una risposta <em>a prescindere dalla realtà</em>:
+        allarmante quando tutto andava bene, e capace di rassicurare allo stesso modo se il notturno si
+        fosse fermato davvero. La destinazione dello script è parametrica, quindi non è ricopiata qui:
+        la sezione <code>Backup</code> è l'unica fonte, e la legge sia l'app sia lo script.
+        <div class="mt-1">
+            @* Recuperato dalla Guida precedente, che descriveva il difetto invece di risolverlo: questi
+               due fatti restano veri e non si leggono da nessun'altra parte in pagina. *@
+            Il CronJob <code>dbbackup-nightly</code> nel cluster è sospeso <em>di proposito</em>: con un
+            <code>emptyDir</code> i backup verrebbero creati e persi alla terminazione del pod — per
+            questo il notturno passa dall'host. E il notturno è già morto una volta per sei notti di
+            fila in silenzio (2026-08-17), perché il task puntava a un worktree con la sua
+            configurazione stantia: è il caso che la scheda qui sotto ora riconosce e nomina da sola.
         </div>
     </div>
     <dl class="row mb-0">
         <dt class="col-sm-3">Crea backup ora</dt>
-        <dd class="col-sm-9">Esegue <code>pg_dump -Fc</code> + verifica leggibilità. Il file <code>.dump</code> finisce in <code>backup/</code>.</dd>
+        <dd class="col-sm-9">Esegue <code>pg_dump -Fc</code> + verifica leggibilità con <code>pg_restore --list</code>: se l'archivio non è leggibile viene <strong>eliminato</strong> e segnalato — non si conserva mai un backup corrotto.</dd>
         <dt class="col-sm-3">Verifica</dt>
-        <dd class="col-sm-9">Riesegue <code>pg_restore --list</code> su un backup esistente.</dd>
+        <dd class="col-sm-9">Riesegue <code>pg_restore --list</code> su un backup esistente, di qualunque sorgente. Legge l'indice dell'archivio, <strong>non i blocchi di dati</strong>: prova che il formato è valido, non che ogni byte lo sia. La prova piena resta il drill di restore su server vergine.</dd>
         <dt class="col-sm-3">Ripristina</dt>
         <dd class="col-sm-9">
             <strong>Sovrascrive il database attivo</strong> con il backup scelto
             (<code>pg_restore --clean --if-exists</code>: droppa gli oggetti esistenti e li ricrea).
-            Operazione da usare solo dopo aver fermato l'app / il trading, altrimenti i dati appena
-            scritti andrebbero persi.
+            Da usare solo dopo aver fermato l'app / il trading, altrimenti i dati appena scritti
+            andrebbero persi.
         </dd>
     </dl>
 </GuidaPanel>
 
+@* ======================= Stato del backup notturno ======================= *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-moon-stars me-1"></i>Backup notturno</span>
+        @if (_nightly is not null)
+        {
+            @VerdictBadge(_nightly.Verdict)
+        }
+    </div>
+    <div class="card-body">
+        @if (_nightly is null)
+        {
+            <p class="mb-0"><em>Lettura dello stato…</em></p>
+        }
+        else
+        {
+            <dl class="row mb-0">
+                <dt class="col-sm-3">Destinazione</dt>
+                <dd class="col-sm-9">
+                    @if (string.IsNullOrEmpty(_nightly.Directory))
+                    {
+                        <span class="text-danger">
+                            non determinabile su questo host — nessun profilo utente. Scrivila a mano
+                            nel pannello qui sotto.
+                        </span>
+                    }
+                    else
+                    {
+                        <code>@_nightly.Directory</code>
+                        @if (!_nightly.DirectoryExists)
+                        {
+                            <span class="badge bg-warning text-dark ms-2">cartella assente</span>
+                        }
+                        @if (_nightly.SameAsManual)
+                        {
+                            <div class="small text-muted">
+                                Coincide con la cartella manuale: i nomi dei file hanno la stessa forma,
+                                quindi la provenienza delle righe non è distinguibile e sono marcate
+                                <span class="badge bg-light text-dark">manuale/notturno</span>.
+                            </div>
+                        }
+                    }
+                </dd>
+
+                <dt class="col-sm-3">Ultimo backup</dt>
+                <dd class="col-sm-9">
+                    @if (_nightly.Latest is null)
+                    {
+                        <span class="text-danger">nessuno.</span>
+                        <span class="text-muted">
+                            @(_nightly.Verdict == NightlyVerdict.DirectoryMissing
+                                ? "La cartella non esiste: o il notturno non ha mai girato, o scrive altrove."
+                                : "La cartella c'è ma è vuota.")
+                        </span>
+                    }
+                    else
+                    {
+                        <code>@_nightly.Latest.FileName</code>
+                        <span class="text-muted">
+                            — @_nightly.Latest.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+                            @FormatSize(_nightly.Latest.SizeBytes), @FormatAge(_nightly.AgeHours) fa
+                        </span>
+                        @if (_nightly.Verdict == NightlyVerdict.Stale)
+                        {
+                            <div class="text-danger">
+                                Oltre la soglia di @Plural(_nightly.StaleAfterHours, "ora", "ore"): il backup
+                                notturno <strong>non sta girando</strong>.
+                            </div>
+                        }
+                    }
+                </dd>
+
+                <dt class="col-sm-3">Archivio</dt>
+                <dd class="col-sm-9">
+                    @_nightly.FileCount file, @FormatSize(_nightly.TotalBytes) in totale
+                    <span class="text-muted">(conservazione: @BackupService.CurrentOptions.RetentionDays giorni)</span>
+                </dd>
+
+                <dt class="col-sm-3">Operazione pianificata</dt>
+                <dd class="col-sm-9">
+                    <code>@BackupService.CurrentOptions.ScheduledTaskName</code>
+                    @if (!_nightly.Task.Queryable)
+                    {
+                        <span class="badge bg-secondary ms-2">non interrogabile</span>
+                        <div class="small text-muted">@_nightly.Task.Message</div>
+                    }
+                    else if (!_nightly.Task.Exists)
+                    {
+                        <span class="badge bg-danger ms-2">NON REGISTRATA</span>
+                    }
+                    else
+                    {
+                        <span class="badge @(_nightly.Task.LastResult == 0 ? "bg-success" : "bg-warning text-dark") ms-2">
+                            @(_nightly.Task.State ?? "?")
+                        </span>
+                        <div class="small text-muted">
+                            Ultima esecuzione:
+                            @(_nightly.Task.LastRunLocal?.ToString("yyyy-MM-dd HH:mm:ss") ?? "mai")
+                            @if (_nightly.Task.LastResult is { } code)
+                            {
+                                <text> — esito @DatabaseBackupService.DescribeResult(code)</text>
+                            }
+                            @if (_nightly.Task.NextRunLocal is { } next)
+                            {
+                                <text> · prossima: @next.ToString("yyyy-MM-dd HH:mm")</text>
+                            }
+                        </div>
+                        @if (!string.IsNullOrEmpty(_nightly.Task.ScriptPath))
+                        {
+                            <div class="small text-muted">Esegue: <code>@_nightly.Task.ScriptPath</code></div>
+                        }
+                    }
+                </dd>
+            </dl>
+
+            @foreach (var warning in _nightly.Warnings)
+            {
+                <div class="alert alert-warning py-2 small mt-3 mb-0">@warning</div>
+            }
+        }
+    </div>
+</div>
+
+@* ======================= Configurazione ======================= *@
+<div class="card mb-3">
+    <div class="card-header">
+        <i class="bi bi-sliders me-1"></i>Configurazione del backup notturno
+        <span class="text-muted small ms-2">sezione <code>Backup</code></span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Questi valori sono la <strong>fonte unica</strong>: li legge questa pagina e li legge
+            <code>scripts/db-backup.ps1</code> dall'<code>appsettings.json</code> del repo principale.
+            I parametri da riga di comando dello script restano solo come override per un'esecuzione
+            una tantum, e <code>-Register</code> non li congela più dentro l'operazione pianificata —
+            un argomento congelato sarebbe la stessa doppia verità, spostata di un metro.
+        </p>
+        <div class="row g-3">
+            <div class="col-md-8">
+                <label class="form-label" for="bk_dir">Cartella dei backup notturni @Hot() @NextRun()</label>
+                <input id="bk_dir" class="form-control" @bind="_form.NightlyDirectory"
+                       placeholder="vuoto = %USERPROFILE%\ProcioneMGR-Backup" />
+                <div class="form-text">
+                    Percorso <strong>assoluto</strong>, e <strong>fuori dal repository</strong>: un dump
+                    contiene la master key cifrata, le credenziali exchange e tutto lo storico. Vuoto =
+                    il default storico dello script. Risolta adesso in
+                    <code>@DatabaseBackupService.ResolveNightlyDirectory(_form)</code>.
+                    Questa pagina la applica subito; lo script e il watchdog la rileggono alla loro
+                    prossima esecuzione — finché non lo fanno, i dump già prodotti restano dove sono.
+                </div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="bk_task">Nome dell'operazione pianificata @Hot()</label>
+                <input id="bk_task" class="form-control" @bind="_form.ScheduledTaskName" />
+                <div class="form-text">Serve a leggerne l'esito, non a crearla.</div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="bk_stale">Soglia di stantiezza (ore) @Hot() @NextRun()</label>
+                <input id="bk_stale" class="form-control" type="number" min="1" @bind="_form.StaleAfterHours" />
+                <div class="form-text">
+                    Oltre questa età il backup è dichiarato fermo: qui, in
+                    <code>db-backup.ps1 -Verify</code> e nel watchdog esterno che avvisa su Telegram.
+                    48 e non 24: una notte saltata per un host spento non è un guasto, due lo sono.
+                </div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="bk_keep">Conservazione (giorni) @NextRun()</label>
+                <input id="bk_keep" class="form-control" type="number" min="1" @bind="_form.RetentionDays" />
+                <div class="form-text">
+                    La usa <strong>lo script</strong>, non questa app: cancella solo dopo un backup
+                    riuscito e non tocca mai l'ultimo file rimasto.
+                </div>
+            </div>
+            <div class="col-12">
+                <button class="btn btn-primary" @onclick="SaveOptionsAsync" disabled="@_busy">Salva configurazione</button>
+                <button class="btn btn-link" @onclick="ResetForm" disabled="@_busy">Annulla modifiche</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ======================= Azioni + elenco ======================= *@
 <div class="mb-3">
     <button class="btn btn-primary" @onclick="CreateBackupAsync" disabled="@_busy">
         @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
         Crea backup ora
     </button>
-    <button class="btn btn-outline-secondary ms-2" @onclick="Refresh" disabled="@_busy">Aggiorna elenco</button>
+    <button class="btn btn-outline-secondary ms-2" @onclick="RefreshAsync" disabled="@_busy">Aggiorna elenco</button>
     <span class="text-muted ms-3">DB attivo: <code>@BackupService.TargetDatabase</code></span>
 </div>
 
@@ -78,14 +268,27 @@
 }
 else if (_backups.Count == 0)
 {
-    <p><em>Nessun backup presente in <code>@BackupService.BackupDirectory</code>.</em></p>
+    <p>
+        <em>
+            Nessun backup, né in <code>@BackupService.ManualDirectory</code> né
+            @if (string.IsNullOrEmpty(BackupService.NightlyDirectory))
+            {
+                <text>in una destinazione notturna determinabile.</text>
+            }
+            else
+            {
+                <text>in <code>@BackupService.NightlyDirectory</code>.</text>
+            }
+        </em>
+    </p>
 }
 else
 {
-    <table class="table table-striped align-middle" style="max-width: 920px;">
+    <table class="table table-striped align-middle" style="max-width: 1080px;">
         <thead>
             <tr>
                 <th>File</th>
+                <th>Sorgente</th>
                 <th>Creato</th>
                 <th class="text-end">Dimensione</th>
                 <th class="text-end">Azioni</th>
@@ -95,7 +298,8 @@ else
             @foreach (var b in _backups)
             {
                 <tr>
-                    <td><code>@b.FileName</code></td>
+                    <td><code title="@b.FullPath">@b.FileName</code></td>
+                    <td>@SourceBadge(b.Source)</td>
                     <td>@b.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
                     <td class="text-end">@FormatSize(b.SizeBytes)</td>
                     <td class="text-end">
@@ -118,14 +322,105 @@ else
 
 @code {
     private IReadOnlyList<BackupInfo>? _backups;
+    private NightlyBackupStatus? _nightly;
+    private BackupOptions _form = new();
     private string? _message;
     private bool _isError;
     private bool _busy;
     private string? _confirmRestore;
 
-    protected override void OnInitialized() => Refresh();
+    protected override async Task OnInitializedAsync()
+    {
+        ResetForm();
+        await RefreshAsync();
+    }
 
-    private void Refresh() => _backups = BackupService.ListBackups();
+    /// <summary>Ricarica copia locale del form dalla configurazione in vigore.</summary>
+    private void ResetForm()
+    {
+        var current = BackupService.CurrentOptions;
+        _form = new BackupOptions
+        {
+            NightlyDirectory = current.NightlyDirectory,
+            RetentionDays = current.RetentionDays,
+            StaleAfterHours = current.StaleAfterHours,
+            ScheduledTaskName = current.ScheduledTaskName,
+        };
+    }
+
+    /// <summary>
+    /// Elenco + stato notturno. Fuori dal thread di render: lo stato notturno avvia PowerShell per
+    /// interrogare il Task Scheduler, e su un host carico può prendersi qualche secondo.
+    /// </summary>
+    private async Task RefreshAsync()
+    {
+        _backups = await Task.Run(() => BackupService.ListBackups());
+        _nightly = await Task.Run(() => BackupService.ReadNightlyStatus());
+    }
+
+    private async Task SaveOptionsAsync()
+    {
+        _busy = true;
+        _message = null;
+        try
+        {
+            // Validazione lato server prima di toccare il file: l'attributo min= dell'HTML non
+            // vincola @bind, quindi senza questo controllo una soglia a 0 (ogni backup dichiarato
+            // fermo appena creato) o un percorso relativo finirebbero dritti in appsettings.json.
+            var error = AdminConfigRules.Validate(_form);
+            if (error is not null)
+            {
+                _isError = true;
+                _message = error;
+                return;
+            }
+
+            await ConfigWriter.SaveSectionAsync(BackupOptions.SectionName, _form);
+
+            // Il monitor rilegge il file da solo, ma con un ritardo: si ASPETTA che il valore in
+            // vigore sia quello salvato invece di ridisegnare la pagina con il precedente. Mostrare
+            // il vecchio percorso dopo un salvataggio riuscito sarebbe di nuovo un controllo che
+            // dice una cosa mentre ne vale un'altra.
+            var applied = await WaitForReloadAsync();
+
+            _isError = !applied;
+            _message = applied
+                ? "Configurazione del backup salvata in appsettings.json e in vigore."
+                : "Configurazione salvata in appsettings.json, ma il valore in vigore in questo processo è ancora "
+                  + "il precedente: premi «Aggiorna elenco» fra qualche secondo per vedere lo stato aggiornato.";
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"Salvataggio fallito: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            await RefreshAsync();
+        }
+    }
+
+    /// <summary>
+    /// Attende che <c>IOptionsMonitor</c> abbia recepito il file (reloadOnChange, ~1s). Ritorna
+    /// false se dopo l'attesa il valore in vigore è ancora diverso da quello salvato.
+    /// </summary>
+    private async Task<bool> WaitForReloadAsync()
+    {
+        for (var i = 0; i < 15; i++)
+        {
+            var current = BackupService.CurrentOptions;
+            if (current.NightlyDirectory == _form.NightlyDirectory
+                && current.StaleAfterHours == _form.StaleAfterHours
+                && current.RetentionDays == _form.RetentionDays
+                && current.ScheduledTaskName == _form.ScheduledTaskName)
+            {
+                return true;
+            }
+            await Task.Delay(200);
+        }
+        return false;
+    }
 
     private async Task CreateBackupAsync()
     {
@@ -140,7 +435,7 @@ else
             if (result.Success)
             {
                 _isError = false;
-                _message = $"Backup creato: {Path.GetFileName(result.BackupPath)} ({FormatSize(result.SizeBytes)}, verifica OK).";
+                _message = $"Backup manuale creato: {Path.GetFileName(result.BackupPath)} ({FormatSize(result.SizeBytes)}, verifica OK).";
             }
             else
             {
@@ -156,7 +451,7 @@ else
         finally
         {
             _busy = false;
-            Refresh();
+            await RefreshAsync();
         }
     }
 
@@ -169,7 +464,7 @@ else
             var integrity = await Task.Run(() => BackupService.VerifyBackup(b.FullPath));
             _isError = !integrity.Ok;
             _message = integrity.Ok
-                ? $"{b.FileName}: leggibile OK."
+                ? $"{b.FileName}: leggibile OK (indice dell'archivio, non i blocchi di dati)."
                 : $"{b.FileName}: NON leggibile — {integrity.Message}";
         }
         catch (Exception ex)
@@ -202,7 +497,7 @@ else
         finally
         {
             _busy = false;
-            Refresh();
+            await RefreshAsync();
         }
     }
 
@@ -214,4 +509,43 @@ else
         while (size >= 1024 && u < units.Length - 1) { size /= 1024; u++; }
         return $"{size:0.#} {units[u]}";
     }
+
+    private static string FormatAge(double? hours) => hours switch
+    {
+        null => "—",
+        < 1 => Plural(Math.Round(hours.Value * 60), "minuto", "minuti"),
+        < 48 => Plural(Math.Round(hours.Value, 1), "ora", "ore"),
+        _ => Plural(Math.Round(hours.Value / 24, 1), "giorno", "giorni"),
+    };
+
+    /// <summary>«1 ora», «48 ore». Un pannello che scrive «1 ore» fa dubitare anche dei numeri.</summary>
+    private static string Plural(double value, string singular, string plural) =>
+        $"{value:0.#} {(value == 1d ? singular : plural)}";
+
+    private static RenderFragment VerdictBadge(NightlyVerdict verdict) => b => b.AddMarkupContent(0, verdict switch
+    {
+        NightlyVerdict.Healthy => "<span class='badge bg-success'>SANO</span>",
+        NightlyVerdict.Stale => "<span class='badge bg-danger'>FERMO</span>",
+        NightlyVerdict.NeverRun => "<span class='badge bg-warning text-dark'>MAI ESEGUITO</span>",
+        NightlyVerdict.DirectoryMissing => "<span class='badge bg-warning text-dark'>CARTELLA ASSENTE</span>",
+        _ => "<span class='badge bg-secondary'>NON DETERMINABILE</span>",
+    });
+
+    private static RenderFragment SourceBadge(BackupSource source) => b => b.AddMarkupContent(0, source switch
+    {
+        BackupSource.Nightly => "<span class='badge bg-info text-dark' title='Prodotto da scripts/db-backup.ps1'>notturno</span>",
+        BackupSource.Shared => "<span class='badge bg-light text-dark' title='Le due cartelle coincidono: la provenienza non e distinguibile'>manuale/notturno</span>",
+        _ => "<span class='badge bg-secondary' title='Creato da questa pagina'>manuale</span>",
+    });
+
+    // Due badge e non uno: alcune di queste chiavi le legge QUESTA pagina (effetto immediato) e
+    // altre le legge solo lo script notturno (effetto alla prossima esecuzione), e due di esse
+    // entrambe le cose. Un badge solo avrebbe dovuto mentire su metà dei campi.
+    private static RenderFragment Hot() => b => b.AddMarkupContent(0,
+        "<span class='badge bg-success' title='Questa pagina lo applica entro ~1 secondo, senza riavvio'>✅</span>");
+
+    // Nessun apostrofo nel title: l'attributo è delimitato da apici singoli, e un escape in stile C#
+    // non significa nulla per il parser HTML — chiuderebbe l'attributo a metà frase.
+    private static RenderFragment NextRun() => b => b.AddMarkupContent(0,
+        "<span class='badge bg-warning text-dark' title='Lo script notturno e il watchdog lo rileggono alla loro prossima esecuzione'>⟳</span>");
 }

@@ -74,6 +74,13 @@ public sealed class ConfigurationUiCoverageTests
         ["Trading:RegimeRouting"] = "Components/Pages/Admin/Protections.razor",
         ["Trading:LaneInvariants"] = "Components/Pages/Admin/Protections.razor",
 
+        // --- /admin/backup: dove finiscono le copie del database ---
+        // [2026-08-23] La destinazione del backup notturno viveva SOLO dentro db-backup.ps1, come
+        // default di un parametro. La pagina non la conosceva, elencava la cartella dell'app (ferma
+        // al 2026-07-09) e dichiarava quello «il backup»: allarme falso su un backup sano, e lo
+        // stesso silenzio se si fosse fermato davvero.
+        ["Backup"] = "Components/Pages/Admin/Backup.razor",
+
         // --- pagine operative ---
         ["Trading:Safety"] = "Components/Pages/Trading.razor",
         ["Execution"] = "Components/Pages/ExecutionLab.razor",

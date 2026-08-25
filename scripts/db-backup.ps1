@@ -13,9 +13,18 @@
 #  per una che non ne aveva bisogno. Da qui pg_dump parla direttamente col server, e il file
 #  finisce su un disco che sopravvive alla distruzione del cluster.
 #
-#  DOVE FINISCONO: %USERPROFILE%\ProcioneMGR-Backup (sovrascrivibile con -Destination). Fuori dal
-#  repo, che e' PUBBLICO: un dump contiene la master key cifrata, le credenziali exchange e tutto
-#  lo storico.
+#  DOVE FINISCONO: la sezione "Backup" di ProcioneMGR\appsettings.json (default:
+#  %USERPROFILE%\ProcioneMGR-Backup). Fuori dal repo: un dump contiene la master key cifrata, le
+#  credenziali exchange e tutto lo storico.
+#
+#  PERCHE' LA DESTINAZIONE STA IN appsettings.json E NON PIU' SOLO QUI (2026-08-23): la pagina
+#  /admin/backup elencava solo la cartella backup/ dell'app, dove l'ultimo file era del
+#  2026-07-09, mentre qui i dump erano giornalieri e sani. Mostrava quindi un allarme falso su un
+#  backup funzionante — e avrebbe taciuto allo stesso modo se il backup si fosse fermato davvero.
+#  Perche' la pagina possa dire la verita' deve conoscere QUESTA destinazione, e ricopiarla in C#
+#  avrebbe creato due verita' che divergono al primo cambio (-Destination e' parametrico). Quindi
+#  la fonte e' una sola, l'appsettings del repo principale, e la leggono entrambi. I parametri qui
+#  sotto restano come override esplicito per un'esecuzione una tantum.
 #
 #  USO
 #    .\scripts\db-backup.ps1                 esegue un backup adesso
@@ -28,13 +37,11 @@
 param(
     [switch]$Register,
     [switch]$Verify,
-    [string]$Destination = (Join-Path $env:USERPROFILE 'ProcioneMGR-Backup'),
-    [int]$KeepDays = 14
+    [string]$Destination,
+    [int]$KeepDays
 )
 
 $ErrorActionPreference = 'Continue'
-
-$taskName = 'ProcioneMGR Backup DB'
 
 # ---------------------------------------------------------------------------------------------
 #  Radice del repo PRINCIPALE, anche quando questa copia dello script vive in un worktree.
@@ -56,6 +63,47 @@ function Get-MainRepoRoot([string]$start) {
 }
 
 $mainRepoRoot = Get-MainRepoRoot (Split-Path -Parent $PSScriptRoot)
+$appSettings = Join-Path $mainRepoRoot 'ProcioneMGR\appsettings.json'
+
+# ---------------------------------------------------------------------------------------------
+#  La sezione "Backup" di appsettings.json: destinazione, conservazione, soglia di stantiezza e
+#  nome del task. Stessa fonte che legge /admin/backup, cosi' la pagina e lo script non possono
+#  raccontare due storie diverse sullo stesso backup.
+#
+#  NON FALLISCE MAI. Un appsettings assente, illeggibile o senza la sezione lascia i default
+#  storici: un backup che si rifiuta di partire perche' manca una chiave FACOLTATIVA sarebbe un
+#  guasto peggiore di quello che la chiave risolve. Quel che e' obbligatorio (la connection
+#  string) si controlla piu' avanti, dove il fallimento e' rumoroso e notificato.
+function Get-BackupConfig([string]$settingsPath) {
+    $cfg = @{
+        NightlyDirectory  = (Join-Path $env:USERPROFILE 'ProcioneMGR-Backup')
+        RetentionDays     = 14
+        StaleAfterHours   = 48
+        ScheduledTaskName = 'ProcioneMGR Backup DB'
+    }
+    if (-not (Test-Path $settingsPath)) { return $cfg }
+
+    try { $section = (Get-Content $settingsPath -Raw | ConvertFrom-Json).Backup } catch { return $cfg }
+    if (-not $section) { return $cfg }
+
+    if (-not [string]::IsNullOrWhiteSpace($section.NightlyDirectory))  { $cfg.NightlyDirectory  = $section.NightlyDirectory.Trim() }
+    if (-not [string]::IsNullOrWhiteSpace($section.ScheduledTaskName)) { $cfg.ScheduledTaskName = $section.ScheduledTaskName.Trim() }
+    if ($section.RetentionDays -ge 1)   { $cfg.RetentionDays   = [int]$section.RetentionDays }
+    if ($section.StaleAfterHours -ge 1) { $cfg.StaleAfterHours = [int]$section.StaleAfterHours }
+    return $cfg
+}
+
+$backupCfg = Get-BackupConfig $appSettings
+
+# Precedenza: parametro esplicito > configurazione > default. Il test e' su ContainsKey e non sul
+# valore, perche' "-Destination ''" e' una richiesta sbagliata da ignorare, non una destinazione.
+$destinationExplicit = $PSBoundParameters.ContainsKey('Destination') -and -not [string]::IsNullOrWhiteSpace($Destination)
+$keepDaysExplicit    = $PSBoundParameters.ContainsKey('KeepDays') -and $KeepDays -ge 1
+if (-not $destinationExplicit) { $Destination = $backupCfg.NightlyDirectory }
+if (-not $keepDaysExplicit)    { $KeepDays    = $backupCfg.RetentionDays }
+
+$taskName   = $backupCfg.ScheduledTaskName
+$staleHours = $backupCfg.StaleAfterHours
 
 if ($Register) {
     # Stesso pattern di watchdog.ps1: il verdetto e' la VERIFICA, non l'assenza di eccezioni.
@@ -71,9 +119,22 @@ if ($Register) {
     if ($scriptPath -ne $MyInvocation.MyCommand.Path) {
         Write-Host "Backup   : registro la copia del repo principale ($scriptPath), non questa in worktree." -ForegroundColor Yellow
     }
+    # Gli argomenti NON congelano piu' destinazione e conservazione (2026-08-23): un valore scritto
+    # dentro il task e' una seconda verita' che il primo cambio in /admin/backup fa divergere — la
+    # pagina guarderebbe la cartella configurata e il task ne riempirebbe un'altra, gridando
+    # "backup fermo" su un backup sano. Senza quegli argomenti lo script rilegge appsettings.json a
+    # ogni notte, e la fonte resta una sola. Chi passa -Destination/-KeepDays a mano sta chiedendo
+    # esplicitamente un task fuori configurazione: glielo si da', ma dicendoglielo.
+    $argument = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+    if ($destinationExplicit) { $argument += " -Destination `"$Destination`"" }
+    if ($keepDaysExplicit)    { $argument += " -KeepDays $KeepDays" }
+    if ($destinationExplicit -or $keepDaysExplicit) {
+        Write-Host "Backup   : ATTENZIONE - il task viene registrato con argomenti FISSI, che vincono sulla sezione Backup di appsettings.json." -ForegroundColor Yellow
+        Write-Host "           /admin/backup lo segnalera' come divergenza finche' non lo ri-registri senza parametri." -ForegroundColor Yellow
+    }
+
     try {
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-            -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Destination `"$Destination`" -KeepDays $KeepDays"
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
         # 03:30 e non 03:00: il CronJob del cluster, se un giorno verra' acceso, sta alle 03:00.
         # Due dump insieme sullo stesso server sono solo due volte il carico.
         $trigger = New-ScheduledTaskTrigger -Daily -At '03:30'
@@ -87,7 +148,9 @@ if ($Register) {
         exit 1
     }
     if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-        Write-Host "Backup   : task '$taskName' registrato e VERIFICATO (ogni notte alle 03:30, destinazione $Destination)." -ForegroundColor Green
+        $origine = if ($destinationExplicit) { 'FISSATA nel task' } else { 'letta da appsettings.json a ogni esecuzione' }
+        Write-Host "Backup   : task '$taskName' registrato e VERIFICATO (ogni notte alle 03:30)." -ForegroundColor Green
+        Write-Host "           Destinazione: $Destination ($origine)."
         exit 0
     }
     Write-Host "Backup   : Register-ScheduledTask non ha lanciato ma il task NON esiste - registrazione fallita." -ForegroundColor Red
@@ -111,9 +174,11 @@ if ($Verify) {
     $totalMb  = [math]::Round((($files | Measure-Object Length -Sum).Sum / 1MB), 0)
     Write-Host "Backup   : $($files.Count) backup, $totalMb MB in totale." -ForegroundColor Green
     Write-Host "           Piu' recente: $($latest.Name) ($([math]::Round($latest.Length/1MB,0)) MB, $ageHours ore fa)."
-    # Oltre le 48h il backup notturno non sta girando: e' un guasto, e va detto.
-    if ($ageHours -gt 48) {
-        Write-Host "           ATTENZIONE: piu' vecchio di 48 ore - il task notturno non sta girando." -ForegroundColor Red
+    # Oltre la soglia il backup notturno non sta girando: e' un guasto, e va detto. La soglia e' la
+    # STESSA che usa /admin/backup (sezione Backup di appsettings.json): due soglie diverse sullo
+    # stesso fatto sono due verdetti che prima o poi si contraddicono davanti all'operatore.
+    if ($ageHours -gt $staleHours) {
+        Write-Host "           ATTENZIONE: piu' vecchio di $staleHours ore - il task notturno non sta girando." -ForegroundColor Red
         exit 1
     }
     exit 0
@@ -153,7 +218,8 @@ function Stop-WithFailure([string]$message) {
 }
 
 # --- Backup ---------------------------------------------------------------------------------
-$appSettings = Join-Path $mainRepoRoot 'ProcioneMGR\appsettings.json'
+# $appSettings e' gia' risolto in cima (lo legge anche Get-BackupConfig). Qui la sua assenza NON e'
+# tollerabile: senza connection string non c'e' backup, e il fallimento dev'essere rumoroso.
 if (-not (Test-Path $appSettings)) {
     Stop-WithFailure "$appSettings non trovato - impossibile leggere la connessione."
 }

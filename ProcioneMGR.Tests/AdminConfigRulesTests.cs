@@ -53,6 +53,7 @@ public class AdminConfigRulesTests
         new CarryOptions(),
         new LiquidationsOptions(),
         new ExecutionParameters(),
+        new ProcioneMGR.Services.Admin.BackupOptions(),
     ];
 
     [Theory]
