@@ -47,6 +47,14 @@ public sealed class CampaignOptions
     public int RearmHours { get; set; } = 24;
 
     /// <summary>
+    /// [J3] Ore senza un run completato (e senza run in corso) oltre cui la sonda della ricerca in
+    /// Home dichiara la macchina FERMA. È una soglia di LETTURA, non un gate: non ferma e non avvia
+    /// nulla. Più corta di <see cref="RearmHours"/> di proposito: prima si vede il fermo, poi (se
+    /// il riarmo è acceso) la piattaforma riparte da sola — la card racconta entrambe le cose.
+    /// </summary>
+    public int StallAlertHours { get; set; } = 12;
+
+    /// <summary>
     /// [I7] Il percorso campagna rispetta <c>AutoReapply:Enabled</c>. Default <c>true</c>.
     ///
     /// <para>Prima il planner chiamava l'applier senza consultare quel gate, che è letto solo dallo

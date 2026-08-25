@@ -263,7 +263,8 @@ public static class AdminConfigRules
             // scadrebbe nel passato, cioè sarebbe una pausa che non mette in pausa.
             (o.CancelPauseMinutes >= 0, "La pausa dopo un annullamento non può essere negativa (0 = nessuna pausa)."),
             // [J1] Nessun massimo: un riarmo lunghissimo è una scelta legittima; negativo no.
-            (o.RearmHours >= 0, "Il riarmo a tempo non può essere negativo (0 = mai: si esce solo per trigger o a mano).")),
+            (o.RearmHours >= 0, "Il riarmo a tempo non può essere negativo (0 = mai: si esce solo per trigger o a mano)."),
+            (o.StallAlertHours >= 1, "La soglia di fermo della ricerca dev'essere almeno 1 ora.")),
 
         RegimeTriggerOptions o => Check(
             (o.CheckIntervalMinutes >= 1, "L'intervallo di controllo dev'essere almeno 1 minuto."),

@@ -602,6 +602,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Servic
 // Singleton risolvibile oltre che hosted: la card di /admin/autonomy rilegge la stessa istanza.
 builder.Services.AddSingleton<ProcioneMGR.Services.Health.AgentStateProbe>();
 builder.Services.AddHostedService<ProcioneMGR.Services.Health.AgentStateProbeWorker>();
+// [J3] La sonda «la ricerca è viva»: letta dalla Home a ogni caricamento (query leggere), nessun worker.
+builder.Services.AddSingleton<ProcioneMGR.Services.Health.ResearchLivenessProbe>();
 
 // --- Autonomia: auto-promozione Paper→Testnet (MAI a Live) ---
 // L'evaluator decide (logica pura, testabile), il promoter agisce (stop→restart della corsia),

@@ -1537,6 +1537,13 @@
                 </label>
                 <input type="number" class="form-control" @bind="_campaign.RearmHours" min="0" style="width: 8rem;" />
             </div>
+            @* [J3] Soglia di LETTURA della card «ricerca» in Home: non ferma e non avvia nulla. *@
+            <div class="col-auto">
+                <label class="form-label" title="Ore senza un run completato (e senza run in corso) oltre cui la card in Home dichiara la ricerca FERMA. Soglia di lettura, non un gate.">
+                    Allarme fermo ricerca (ore) @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_campaign.StallAlertHours" min="1" style="width: 8rem;" />
+            </div>
             <div class="col-auto form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="cp_gate" @bind="_campaign.RespectAutoReapplyGate" />
                 <label class="form-check-label" for="cp_gate">Rispetta il gate della ri-applica @Hot()</label>
