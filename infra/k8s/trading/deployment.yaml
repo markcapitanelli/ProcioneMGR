@@ -124,14 +124,22 @@ spec:
               port: health   # 8081, HTTP/1.1: le probe non parlano HTTP/2
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 10
+          # [2026-08-26] La LIVENESS deve reggere i picchi di pressione del nodo, che dal
+          # 2026-08-25 sono di routine: il sync automatico (lavoro `deploy` della plancia)
+          # costruisce l'immagine sullo STESSO demone Docker che ospita kind, e al primo giro
+          # vero la build ha affamato il nodo quanto bastava perché 3 timeout da 5s in ~90s
+          # riavviassero il motore A META' BUILD — il cugino della «probe 1s» che uccideva
+          # l'ingestion a metà recupero (2026-08-13). Con 10s × 6 fallimenti servono ~3 minuti
+          # di sordità TOTALE: un processo morto davvero li raggiunge, un nodo sotto build no.
           livenessProbe:
             httpGet:
               path: /health
               port: health
             initialDelaySeconds: 15
             periodSeconds: 30
-            timeoutSeconds: 5
+            timeoutSeconds: 10
+            failureThreshold: 6
           resources:
             requests:
               cpu: "100m"
