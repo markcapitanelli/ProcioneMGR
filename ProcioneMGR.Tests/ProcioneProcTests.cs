@@ -68,8 +68,15 @@ public class ProcioneProcTests
 
         // Prima del 2026-08-28 il timeout buttava via tutto quello che il processo aveva detto:
         // «cosa stava dicendo quando l'ho ucciso» e' spesso l'unica diagnosi disponibile.
+        //
+        // Il sonno e' LUNGO (600s) apposta: sotto il carico della suite piena il thread-pool puo'
+        // affamare le continuazioni per decine di secondi, e con un sonno corto il figlio muore
+        // da solo PRIMA che la cancellazione venga osservata — a quel punto tornare il suo exit
+        // code vero e' il comportamento giusto, ma il test diventerebbe una moneta lanciata
+        // (successo il 2026-08-28: 3308 test in parallelo, figlio da 30s, verde da solo e rosso
+        // in suite). Con 600s l'unica uscita possibile e' il timeout.
         var r = await Proc.CaptureAsync("powershell",
-            ["-NoProfile", "-Command", "Write-Output 'passo uno fatto'; Start-Sleep 30"],
+            ["-NoProfile", "-Command", "Write-Output 'passo uno fatto'; Start-Sleep 600"],
             timeoutMs: 6000);
 
         Assert.Equal(Proc.TimedOut, r.Code);
