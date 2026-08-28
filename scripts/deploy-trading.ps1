@@ -58,6 +58,20 @@ try {
         # domanda giusta e': da quando abbiamo promosso, e' cambiato QUALCOSA OLTRE al pin?
         git diff --quiet $pinnedSha origin/master -- . ':(exclude)infra/k8s/trading/kustomization.yaml'
         if ($LASTEXITCODE -eq 0) {
+            # Un giro PRECEDENTE puo' essere morto fra il bump del pin e il commit (successo il
+            # 2026-08-26: apply fallito sotto la pressione della build). Il pin sporco va raccolto
+            # QUI, o resta orfano: il prossimo pull --ff-only che tocca il kustomization
+            # fallirebbe, e il sync si fermerebbe per un residuo che nessuno vede.
+            git diff --quiet -- $kustomization
+            if ($LASTEXITCODE -ne 0) {
+                git add $kustomization
+                git commit --quiet -m "deploy(trading): pin local-$pinnedSha [raccolto da un giro interrotto]"
+                if (-not $NoPush) {
+                    $env:GIT_TERMINAL_PROMPT = '0'
+                    git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push --quiet origin master
+                    if ($LASTEXITCODE -ne 0) { Write-Warning "Push del pin raccolto FALLITO: il commit resta locale." }
+                }
+            }
             Write-Host "Gia' allineato: da local-$pinnedSha a origin/master cambia solo il pin. Nessun deploy."
             exit 0
         }
