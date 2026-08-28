@@ -63,23 +63,51 @@ internal static class Proc
             using var p = Process.Start(psi);
             if (p is null) return new ExecResult(NotStarted, "", $"impossibile avviare '{file}'");
 
-            // Lettura ASINCRONA dei due flussi: leggerli in sequenza dopo WaitForExit puo' bloccare
-            // per sempre se il figlio riempie il buffer dell'altro flusso.
-            var so = p.StandardOutput.ReadToEndAsync();
-            var se = p.StandardError.ReadToEndAsync();
+            // Lettura a EVENTI, mai ReadToEnd: l'EOF di un pipe arriva solo quando si chiude
+            // l'ULTIMO handle — e un nipote DETACHED che lo eredita puo' tenerlo aperto per
+            // giorni dopo la morte del figlio. E' successo il 2026-08-28: bringup.ps1 avvia il
+            // guscio con Start-Process -RedirectStandardOutput (=> UseShellExecute=false, handle
+            // ereditati), bringup esce, il guscio vive — e l'attesa dell'EOF ha appeso il
+            // supervisore INTERO oltre il suo timeout, che copriva solo WaitForExitAsync: lavori
+            // fermi, plancia che diceva «morto senza chiudere». L'esito di un processo e' il suo
+            // exit code, non la chiusura del suo pipe.
+            var sbOut = new System.Text.StringBuilder();
+            var sbErr = new System.Text.StringBuilder();
+            p.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (sbOut) sbOut.AppendLine(e.Data); };
+            p.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (sbErr) sbErr.AppendLine(e.Data); };
+            p.BeginOutputReadLine();
+            p.BeginErrorReadLine();
 
+            // NIENTE WaitForExitAsync: con la lettura a eventi attiva aspetta ANCHE l'EOF dei
+            // flussi rediretti (dotnet/runtime#51277) — cioe' esattamente l'attesa che qui si
+            // vuole evitare. Si guarda HasExited e basta: e' l'uscita del processo il verdetto.
             using var cts = new CancellationTokenSource(timeoutMs);
             try
             {
-                await p.WaitForExitAsync(cts.Token);
+                while (!p.HasExited) await Task.Delay(100, cts.Token);
             }
             catch (OperationCanceledException)
             {
                 try { p.Kill(entireProcessTree: true); } catch { }
-                return new ExecResult(TimedOut, "", $"nessuna risposta entro {timeoutMs / 1000}s");
+                // L'output parziale si restituisce: «cosa stava dicendo quando l'ho ucciso» e'
+                // spesso l'unica diagnosi. Il motivo resta l'ULTIMA riga di stderr, dove la
+                // Sintesi del supervisore va a leggerlo.
+                string oT, eT;
+                lock (sbOut) oT = sbOut.ToString();
+                lock (sbErr) eT = sbErr.ToString();
+                var motivo = $"nessuna risposta entro {timeoutMs / 1000}s";
+                return new ExecResult(TimedOut, oT.Trim(),
+                    eT.Trim().Length > 0 ? eT.Trim() + "\n" + motivo : motivo);
             }
 
-            return new ExecResult(p.ExitCode, (await so).Trim(), (await se).Trim());
+            // Grazia breve per gli eventi gia' in volo; poi si prende quel che c'e', SENZA
+            // aspettare un EOF che i detached possono negare per sempre (vedi sopra).
+            await Task.Delay(150);
+            try { p.CancelOutputRead(); p.CancelErrorRead(); } catch { }
+            string o, err;
+            lock (sbOut) o = sbOut.ToString();
+            lock (sbErr) err = sbErr.ToString();
+            return new ExecResult(p.ExitCode, o.Trim(), err.Trim());
         }
         catch (Exception ex)
         {

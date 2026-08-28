@@ -139,12 +139,17 @@ public sealed class DailyDigestWorker(
 {
     private DateOnly? _lastSentDate;
 
+    // [2026-08-28] Distanziatore dei RITENTATIVI su recapito fallito: senza, il giro al minuto
+    // brucerebbe il budget condiviso del rate-limit (20/h) in venti minuti di canale rotto.
+    private DateTimeOffset _nextAttemptUtc = DateTimeOffset.MinValue;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
             var opt = options.CurrentValue;
             if (opt.Enabled && notifier is not null
+                && DateTimeOffset.UtcNow >= _nextAttemptUtc
                 && DigestSchedule.IsDue(DateTime.Now, opt.Hour, opt.Minute, _lastSentDate))
             {
                 try
@@ -162,9 +167,26 @@ public sealed class DailyDigestWorker(
                     }
 
                     var body = DailyDigestComposer.Compose(data, DateTime.Now, narrative);
-                    await notifier.NotifyAsync(NotificationSeverity.Info, "Digest giornaliero", body, stoppingToken);
-                    _lastSentDate = DateOnly.FromDateTime(DateTime.Now.Date);
-                    logger.LogInformation("Digest giornaliero inviato.");
+
+                    // [2026-08-28] Il recapito si VERIFICA, non si assume: NotifyAsync assorbe
+                    // l'esito per contratto, e marcare «inviato» su un invio fallito disinnesca
+                    // il dead-man switch — due mattine senza digest, canale rotto, nessuna
+                    // traccia. Si marca SOLO su consegna; su tutto il resto si riprova fra 15′
+                    // (l'assenza del digest è l'allarme solo quando la piattaforma è morta,
+                    // non quando può ancora riprovare).
+                    var esito = await notifier.SendDiagnosticAsync(
+                        NotificationSeverity.Info, "Digest giornaliero", body, stoppingToken);
+                    if (esito.IsDelivered)
+                    {
+                        _lastSentDate = DateOnly.FromDateTime(DateTime.Now.Date);
+                        logger.LogInformation("Digest giornaliero inviato.");
+                    }
+                    else
+                    {
+                        _nextAttemptUtc = DateTimeOffset.UtcNow.AddMinutes(15);
+                        logger.LogWarning("Digest NON recapitato ({Outcome}): {Detail} — riprovo fra 15 minuti.",
+                            esito.Outcome, esito.Detail ?? "nessun dettaglio");
+                    }
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
                 catch (Exception ex)

@@ -207,11 +207,18 @@ if ($shellOk) {
     #
     # Non si perde niente: quel testo non lo leggeva nessuno, e adesso e' un file — `procione log
     # guscio`. Il verdetto sulla salute resta /health, non «la finestra c'e'».
+    #
+    # ANCHE stderr va rediretto (2026-08-28): -RedirectStandardOutput forza UseShellExecute=false,
+    # e con quello il guscio EREDITA gli handle standard non rediretti di questo script. Quando
+    # bringup gira come lavoro del supervisore, quello stderr E' il pipe del supervisore: il
+    # guscio, che vive giorni, lo teneva aperto — e il supervisore, in attesa dell'EOF, e' rimasto
+    # appeso con tutti i lavori fermi. Due file distinti perche' Start-Process lo pretende.
     $guscioLog = Join-Path $env:TEMP 'procionemgr-guscio.log'
+    $guscioErr = Join-Path $env:TEMP 'procionemgr-guscio.err.log'
     $argomenti = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$runScript`"")
     try {
         Start-Process -WindowStyle Hidden powershell -RedirectStandardOutput $guscioLog `
-            -ArgumentList $argomenti -ErrorAction Stop
+            -RedirectStandardError $guscioErr -ArgumentList $argomenti -ErrorAction Stop
         Log "Guscio   : avviato con run-postgres.ps1 (nessuna finestra; log in $guscioLog)." 'Green'
     } catch {
         # Il log e' un di piu', il guscio no. Se il file e' occupato (un'istanza precedente che non

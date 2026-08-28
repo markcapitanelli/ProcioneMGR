@@ -134,8 +134,12 @@ public sealed class ResearchLivenessProbe(
             .Where(r => r.Status == "Completed" && r.CompletedAt != null)
             .MaxAsync(r => r.CompletedAt, ct);
 
+        // SOLO Running: la pausa è un atto dell'operatore, non attività della macchina. Contare
+        // i Paused ha tenuto la card su «un run è in corso adesso» grazie a TRE run in pausa da
+        // luglio, mentre nessuno cercava (2026-08-28) — la sonda nata contro i controlli che
+        // rassicurano ne era diventata uno.
         var inProgress = await db.PipelineRuns.AsNoTracking()
-            .CountAsync(r => r.Status == "Running" || r.Status == "Paused", ct);
+            .CountAsync(r => r.Status == "Running", ct);
 
         var completed24h = await db.PipelineRuns.AsNoTracking()
             .CountAsync(r => r.Status == "Completed" && r.CompletedAt >= da24h, ct);
