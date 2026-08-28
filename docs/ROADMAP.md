@@ -2689,3 +2689,55 @@ perché le cacce del giorno su finestre scorrevoli hanno già aggiunto candidati
 distinti sono passati da 73 a 100). La sonda J3 in Home, che l'incidente aveva reso l'unica
 superficie a dirlo («Ricerca: non verificabile — PostgresException»), è tornata verde: ha fatto
 esattamente il suo lavoro.
+
+## Il supervisore appeso a un pipe e il canale muto (2026-08-28)
+
+Il proprietario torna dopo due giorni fuori: «credo che alcuni servizi siano crashati, dopo poco
+non ho ricevuto più segnali su Telegram». La piattaforma sotto era SANA — rotazioni di ricerca
+regolari (8 run/24h), Regina che journalizzava proposte grigie nuove (AAVE 4h, LINK 15m, STX 4h),
+backup tutte le notti — ma due guasti veri c'erano, uno vecchio e uno nuovo, e la diagnosi ha
+trovato per strada tre difetti che li rendevano invisibili o li avrebbero ripetuti.
+
+**Il guasto nuovo: il supervisore appeso a un pipe.** Al primo riavvio della macchina con le
+automazioni dentro la plancia (riavvio UMANO, dal menu Start, 12:07), la veglia parte, trova il
+guscio giù, avvia `bringup.ps1` — e il supervisore resta appeso lì per 1h50m, con veglia, backup e
+deploy fermi e la plancia che dice «morto senza chiudere» mentre il processo è vivo. La catena:
+`Start-Process -RedirectStandardOutput` (il modo in cui bringup avvia il guscio dal 2026-08-23)
+forza `UseShellExecute=false`, e con quello il guscio EREDITA lo stderr non rediretto di bringup —
+che, quando bringup gira come lavoro del supervisore, È il pipe del supervisore. Bringup esce, il
+guscio vive giorni, l'EOF non arriva mai; e `Proc.CaptureAsync` aspettava l'EOF DOPO
+`WaitForExitAsync`, fuori dal timeout, che copriva solo l'attesa del processo. Tre fix, con un
+test che riproduce l'incastro con un nipote detached vero (25s di vita → risposta in ~2s):
+
+- `Proc.CaptureAsync` legge a EVENTI e il verdetto è `HasExited`, mai l'EOF — attenzione alla
+  trappola dentro la trappola: anche `WaitForExitAsync` con la lettura a eventi attiva aspetta
+  l'EOF dei flussi (dotnet/runtime#51277), quindi si guarda `HasExited` e basta. Bonus: il
+  timeout ora restituisce l'output PARZIALE («cosa stava dicendo quando l'ho ucciso»).
+- `bringup.ps1` redirige ANCHE stderr su file: nessun handle del supervisore arriva più al guscio.
+- Il lavoro `avvio`, che risultava «mai eseguito» dalla nascita, ha il suo primo «riuscito» (5m).
+
+**Il guasto vecchio: il canale Telegram dell'app.** Token del bot valido (`getMe` OK), chat
+raggiungibile (messaggio di prova consegnato), watchdog e backup capaci di notificare (l'alert
+«guscio giù» delle 12:11 è partito) — ma il TelegramNotifier del guscio leggeva il token SOLO
+dalla variabile d'ambiente, cioè dipendeva dalla catena che AVVIA il processo; il dispatcher
+assorbe l'errore per contratto e la spia `ChannelStatus` vive in memoria: un guscio partito da una
+catena senza la variabile resta muto per giorni con la piattaforma sana, e la storia esatta del
+processo morto col riavvio non è più ricostruibile (il suo console log è perso). Tre fix:
+
+- `TelegramNotifier` ora ha il fallback su `~/.procione/telegram.token` — lo STESSO file e lo
+  stesso patto della plancia (`Supervisor.Ambiente`), con l'ambiente che vince e l'errore che
+  nomina entrambe le fonti. `ResolveToken` è puro e provato.
+- Il digest giornaliero non si marca più «inviato» su un recapito fallito: `NotifyAsync` assorbe
+  l'esito per contratto (giusto per i producer), e il dead-man switch si disinnescava da solo.
+  Ora usa `SendDiagnosticAsync` (promosso a membro di `INotifier` con default per i doppi di
+  test), marca SOLO su consegna e riprova ogni 15′ — senza bruciare il budget del rate-limit.
+- La sonda J3 contava i run `Paused` come «in corso»: tre run in pausa da LUGLIO tenevano la card
+  su «un run è in corso adesso» a macchina ferma — la sonda nata contro i controlli che
+  rassicurano ne era diventata uno. Ora conta solo `Running`.
+
+Rimasti a posto e verificati nel giro: motore 1/1 (un riavvio col boot, ledger J8 intatto),
+tunnel, Postgres, 13 dump di backup, PairsWatch, rotazione campagne (riarmo a 13h). Aperti e
+DICHIARATI: la gamba grigia della corsia 4 (GridMeanReversion XRP/USDT 4h) perde forte
+(Sharpe −21 su 20 trade) ma il ritiro non può maturare prima del 2026-09-15 per costruzione del
+ledger; le liquidazioni Binance restano una fonte-patrimonio mai consegnata (scheda del 24/08);
+i tre run `Paused` di luglio sono da chiudere a mano da /pipeline, se si vuole il quadro pulito.

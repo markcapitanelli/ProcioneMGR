@@ -18,6 +18,20 @@ public enum NotificationSeverity
 public interface INotifier
 {
     Task NotifyAsync(NotificationSeverity severity, string title, string body, CancellationToken ct = default);
+
+    /// <summary>
+    /// Come <see cref="NotifyAsync"/>, ma con l'esito restituito: per chi deve DECIDERE sul
+    /// recapito (il digest che non deve marcarsi «inviato» su un invio fallito, i pulsanti di
+    /// prova). Il default esiste per i doppi di test e DICHIARA consegnato senza saperlo:
+    /// l'implementazione vera (<see cref="NotificationDispatcher"/>) lo sostituisce con l'esito
+    /// reale — è lei l'unica registrata in DI.
+    /// </summary>
+    async Task<NotificationResult> SendDiagnosticAsync(
+        NotificationSeverity severity, string title, string body, CancellationToken ct = default)
+    {
+        await NotifyAsync(severity, title, body, ct);
+        return new NotificationResult(NotificationOutcome.Delivered);
+    }
 }
 
 /// <summary>Provider concreto di recapito (Logging, Telegram, …), selezionato da <see cref="NotificationOptions.Provider"/>.</summary>
