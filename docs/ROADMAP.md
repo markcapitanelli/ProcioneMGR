@@ -2741,3 +2741,91 @@ DICHIARATI: la gamba grigia della corsia 4 (GridMeanReversion XRP/USDT 4h) perde
 (Sharpe −21 su 20 trade) ma il ritiro non può maturare prima del 2026-09-15 per costruzione del
 ledger; le liquidazioni Binance restano una fonte-patrimonio mai consegnata (scheda del 24/08);
 i tre run `Paused` di luglio sono da chiudere a mano da /pipeline, se si vuole il quadro pulito.
+
+## Filone K — La Regina che governa (2026-08-31, diciottesima ondata)
+
+*Dettaglio, prove e decisioni aperte in [PRD-AUTONOMIA-PIENA](PRD-AUTONOMIA-PIENA-2026-08.md).
+Nasce dalla richiesta del proprietario: «voglio che faccia tutto da solo … TUTTO deve essere fatto
+in autonomia, ancora meglio se controllato dalla queen bee o da delle AI dove è possibile». Sei
+lenti indipendenti contro codice, configurazione e database vivi, più sei avversari: **un rilievo su
+quattro non è sopravvissuto alla confutazione**.*
+
+### La diagnosi
+
+**Non manca l'autonomia: manca il governo.** La piattaforma esegue quasi tutto da sola, non decide
+nulla, non si mantiene e non sa in che stato è. In trenta giorni: 138 run completati, **0 in banda
+«pass»**, 115 decisioni di flotta **tutte** `ProposeGrey`, **zero** schieramenti, **zero** ritiri.
+
+### Le tre scoperte che cambiano il piano
+
+**1. Il braccio è già armato e scatta il 4-5 settembre.** La premessa di ogni analisi precedente —
+«manca `ExpectedTradesPerMonth`» — è **falsa**: J9 è stato eseguito il 25/08 e le corsie 3-7 hanno
+l'atteso (2,47 / 2,88 / 3,70 / 2,17 / 3,50 trade/mese). *Le chiavi del `ConfigurationJson` sono
+camelCase: la stessa query in PascalCase restituisce zero righe, ed è così che il fatto è stato dato
+per accertato al contrario.* L'unico gate rimasto è `StarvationMinDays = 10` (default del POCO,
+chiave assente dal file vivo) contro 5,12 giorni di osservazione: **il 2026-09-04 verso le 19:15 UTC
+la flotta fermerà da sola le corsie 3, 4, 6 e 7**, una per tick, nell'arco di un'ora. Il ritiro non è
+irreversibile — solo `StopAsync`, la corsia resta configurata.
+
+**2. E subito dopo non schiererà nessuno.** Tre cause indipendenti: il tetto grigio è saturo
+(`greySlots = 3 − 5 = −2`, e torna positivo solo dopo il terzo ritiro); la coda grigia è **vuota per
+costruzione** (18 identità su 18 sono `AlreadyHandled` — il miglior candidato di oggi, MacdTrend
+AAVE/USDT 4h a **Sharpe 3,66 su 55 trade**, è soppresso perché la stessa chiave era stata *proposta a
+un umano* il 28/08: **proporre e schierare sono due azioni diverse, e la prima consuma la seconda**);
+e il ramo grigio non ha alcun `FleetNoOp`, quindi non dichiara mai perché tace (zero righe `Blocked`
+in 115 decisioni).
+
+**3. Due piani su tre girano codice vecchio, e nessuna superficie lo dice.** Il motore si sincronizza
+da solo ogni 30′; guscio e plancia no. La notte del 30/08 la plancia è ripartita da un binario del
+25/08 — **13 commit indietro**, privo del fix `6fee9f7` — e il supervisore si è appeso sullo stesso
+pipe ereditato dell'incidente del 28/08, fermando veglia, deploy e il backup delle 03:30. Il guscio
+si è allineato **per incidente** (il riavvio della macchina fa ricompilare `dotnet run`), non per
+progetto. Il commit è già nei binari (`AssemblyInformationalVersion`): nessuno lo legge.
+
+### Il ritiro è un conteggio travestito da giudizio
+
+Il criterio Sharpe **non può esprimersi**: pretende 20 trade, che a 2,17-3,70 al mese arrivano fra 5
+e 9 mesi — e il suo Sharpe non è ancorato alla finestra dei trade (`from` filtra solo i trade,
+l'equity no). Il criterio inedia **condanna sul rumore**: a 10 giorni l'atteso è 0,71-1,15 trade, e
+P(0 trade | corsia sana) vale **32-49%** di Poisson. Il controesempio: la corsia 5 si salva per **un
+solo trade**, in perdita di 51,89, che le compra 36 giorni di immunità. Nessun criterio di **danno
+conclamato** esiste: una corsia che perdesse il 19% non verrebbe né ritirata né fermata, e sopra il
+20% l'emergency stop la esclude da `FleetLanes` — congelata fuori dalla flotta.
+
+### La manopola ovvia peggiora la scheda
+
+Il pavimento assoluto di 20 trade ferma **94 chiavi distinte in guadagno** (69% delle 136), fra cui
+il massimo d'archivio (Supertrend ADA/USDT 4h, **3,19 su 17 trade**). Ma abbassarlo non schiera
+nessuno: il DSR non ha **mai** raggiunto 0,95 (0 righe su 15.149; massimo 0,7729, post-09/08 0,6737),
+e — peggio — **riduce la fascia grigia**, perché `GreyZone.IsGrey` guarda il prefisso «Solo N trade»
+e chi cade sul DSR non è grigio. `minHoldoutTradesFraction` (J6) non è la leva: per costruzione può
+solo **alzare** il pavimento. Il costo, invece, è sottostimato davvero, ma di **2-14×** e non di
+5-40×: il round-trip modellato vale ~0,30% (fee 0,1% + slippage 0,05% + funding **costante**, perché
+`FundingHistory` non è popolata e `IFundingHistoryProvider` è collegato solo a `/backtest`).
+
+### Il piano
+
+| Fase | # | Cosa |
+|---|---|---|
+| **0 — sapere in che stato si è** | K1-K10 | sonda revisione-viva vs `HEAD` sui tre piani · plancia e guscio che si ricompilano da soli in finestra di quiete (3m36s, non tocca posizioni né lease) · `deploy` che pretende la CI verde · tetto di `avvio` a 30′ · corsia preferenziale per i `Critical` (oggi scartati, non accodati) · heartbeat incrociato acceso · battito persistito del carry · sonda ricerca con soglia > riarmo e non cieca ai candidati · indicizzatore a fine run |
+| **1 — decidere prima del 4/9** | K11-K15 | la decisione sui quattro ritiri · `FleetNoOp` per tetto e corsie · etichetta `Grey` sulle cinque gambe · «già proposto» smette di consumare il braccio automatico · budget separato fra ritiro e assegnazione |
+| **2 — il ritiro come giudizio** | K16-K20 | inedia con potenza statistica (col suo nullo) · criterio di danno conclamato · Sharpe ancorato · `RetireMinTrades` tarato sull'orizzonte reale · isteresi persistita |
+| **3 — riempire il serbatoio** | K21-K27 | `MaxGreyLegs` deciso (1 non fa nulla, 2 sblocca 3 run su 18, 3 tutti) · sbloccare il fail-closed RF0 ri-aggiungendo le gambe di 1-2 · `IsRunning` sulla scrittura dell'impronta · dichiarare la porta `/bot` · funding reale nella pipeline · DSR anche ai bocciati «Solo N trade», come misura · potatura dell'universo con `CoversHoldout` |
+| **4 — qualcuno che sceglie** | K28-K32 | pianificatore adattivo (17/18 hanno prodotto **0 gambe su 119 run**) · tuner dei parametri di caccia · l'AI dal veto alla proposta, su una domanda che esiste · il post-mortem che rientra nella caccia · generatore di candidati solo se K26 mostra un terreno dove il gate respira |
+
+**Gate della Fase 1:** entro sette giorni dal deploy devono esistere almeno una riga `Retire` e una
+`Assign` con `Source != 'human'`. Altrimenti la fase non è finita.
+
+### Non-obiettivi
+
+Nessun automatismo verso Live (ri-verificato su quattro livelli: `GreyDeployer` passa
+`TradingMode.Paper` come letterale, e il journal porta 330 Paper + 1 Testnet + **0 Live**) · non si
+abbassano DSR/PBO/gemello nullo · non si abbassa `minHoldoutTrades` per far passare qualcuno · non si
+accende `DriveProtectiveExits`, che il file vivo porta a `true` contro la regola 7 (inerte finché il
+realtime è spento, **da rimettere a `false`**) · niente microstruttura permanente, niente RL · il
+comitato propone, le metriche decidono.
+
+### Rettifica a una riga del 2026-08-28
+
+«il ritiro non può maturare prima del 2026-09-15 per costruzione del ledger» vale per il criterio
+**Sharpe**. Il criterio **inedia** matura il **4-5 settembre**, e riguarda quattro corsie, non una.
