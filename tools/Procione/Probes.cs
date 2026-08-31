@@ -100,9 +100,16 @@ internal static class Probes
             ? Proc.KubectlAsync(["get", "pods", "-A", "-o", PodJsonPath], 15000)
             : Task.FromResult(new ExecResult(Proc.NotStarted, "", "cluster non in esecuzione"));
         var tTasks = ScheduledTasksAsync();
+        // [K1] L'immagine del pod IN ESECUZIONE, non quella della spec del Deployment: durante un
+        // rollout le due divergono, ed e' esattamente il momento in cui la domanda «da che codice
+        // gira il motore?» conta di piu'.
+        var tImmagineMotore = kindUp
+            ? Proc.KubectlAsync(["-n", Platform.TradingNamespace, "get", "pods",
+                                 "-o", "jsonpath={range .items[*]}{.status.containerStatuses[*].image}{'\\n'}{end}"])
+            : Task.FromResult(new ExecResult(Proc.NotStarted, "", "cluster non in esecuzione"));
 
         await Task.WhenAll(tProxy, tShell, tEngine, tIngest, tGrafana, tPostgres,
-                           tKubeconfig, tNodes, tPods, tTasks);
+                           tKubeconfig, tNodes, tPods, tTasks, tImmagineMotore);
 
         var proxy = await tProxy;
 
@@ -397,6 +404,11 @@ internal static class Probes
 
         checks.Add(BackupCheck(adesso));
 
+        // =========================================================================================
+        //  Revisioni [K1]
+        // =========================================================================================
+        checks.AddRange(await RevisioniAsync(shell.Body, await tImmagineMotore));
+
         return new Snapshot
         {
             Taken = DateTimeOffset.Now,
@@ -404,6 +416,98 @@ internal static class Probes
             Checks = checks,
         };
     }
+
+    /// <summary>
+    /// [K1] Le tre revisioni vive, confrontate col codice che sta nel repository.
+    ///
+    /// <para>Qui si RACCOGLIE soltanto: il giudizio sta in <see cref="Verdicts.Revisione"/>, dove si
+    /// puo' provare senza un git e senza un cluster. Le tre sorgenti sono necessariamente diverse —
+    /// il guscio lo dichiara su <c>/health</c> (l'unico dato che descrive il processo VIVO), la
+    /// plancia legge il proprio attributo di assembly, il motore lo porta nel tag dell'immagine del
+    /// pod IN ESECUZIONE (non nella spec del Deployment: durante un rollout le due divergono, ed e'
+    /// proprio il momento in cui la domanda conta).</para>
+    /// </summary>
+    private static async Task<List<Check>> RevisioniAsync(string corpoHealthGuscio, ExecResult immagineMotore)
+    {
+        var repo = Platform.MainRepoRoot;
+
+        var head = await GitAsync(repo, ["rev-parse", "HEAD"]);
+        if (!head.Ok || head.Out.Length < 7)
+        {
+            // Senza HEAD non c'e' metro. Si dichiara una riga sola invece di tre righe che
+            // ripeterebbero lo stesso «non deducibile»: il guasto e' uno.
+            return [new Check("revisioni", "Repository", Level.Warn,
+                $"HEAD non leggibile in {repo} ({Explain(head)}): nessuna revisione e' confrontabile",
+                "verifica che `git` sia nel PATH e che quella cartella sia un repository")];
+        }
+
+        var immagini = immagineMotore.Ok
+            ? immagineMotore.Out.Split([' ', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries).Distinct().ToArray()
+            : [];
+
+        var piani = new[]
+        {
+            new Piano("guscio", Revisions.DaCorpoHealth(corpoHealthGuscio), "/health del processo vivo",
+                string.IsNullOrWhiteSpace(corpoHealthGuscio)
+                    ? "il guscio non risponde"
+                    : "/health non porta il campo, quindi il guscio e' precedente a K1"),
+            new Piano("plancia", Revisions.Propria, "attributo di assembly di questo eseguibile",
+                "l'eseguibile non porta il timbro del SDK"),
+            new Piano("motore", immagini.Length == 1 ? Revisions.DaTagImmagine(immagini[0]) : null,
+                "tag dell'immagine del pod in esecuzione",
+                immagini.Length == 0
+                    ? "nessun pod nel namespace del motore, o kubectl non risponde"
+                    : immagini.Length > 1
+                        ? $"{immagini.Length} immagini diverse insieme: rollout in corso"
+                        : "il tag non e' nella forma local-<sha>"),
+        };
+
+        var righe = await Task.WhenAll(piani.Select(async p =>
+        {
+            if (p.Sha is null) return Verdicts.Revisione(p, null, null, null);
+
+            // Due domande distinte, e la seconda e' quella che decide. Il conteggio dei commit e'
+            // contesto; il verdetto guarda se HEAD differisce nel CONTENUTO, escluso il file del pin
+            // che il lavoro `deploy` scrive da solo — senza quell'esclusione ogni deploy riuscito
+            // lascerebbe la riga rossa per sempre.
+            //
+            // `--left-right` perche' le due direzioni sono guasti diversi: a sinistra i commit che
+            // la revisione viva ha e HEAD no (ramo non mergiato), a destra quelli che le mancano.
+            var conteggio = await GitAsync(repo, ["rev-list", "--count", "--left-right", $"{p.Sha}...HEAD"]);
+            var pezzi = conteggio.Out.Split(['\t', ' '], StringSplitOptions.RemoveEmptyEntries);
+            int? avanti = null, indietro = null;
+            if (conteggio.Ok && pezzi.Length == 2
+                && int.TryParse(pezzi[0], out var a) && int.TryParse(pezzi[1], out var d))
+            {
+                avanti = a;
+                indietro = d;
+            }
+
+            bool? diverso = null;
+            if (indietro is not null)
+            {
+                var diff = await GitAsync(repo, ["diff", "--quiet", p.Sha, "HEAD", "--", ".", $":(exclude){Revisions.FilePin}"]);
+                // git diff --quiet: 0 = identico, 1 = differisce, altro = errore. Un errore NON e'
+                // «identico»: resta null e la riga lo dichiara.
+                diverso = diff.Code switch { 0 => false, 1 => true, _ => null };
+            }
+
+            var fix = p.Nome switch
+            {
+                "guscio" => "`procione riavvia guscio` (ricompila: `dotnet run` rifa' il binario dall'albero di lavoro)",
+                "plancia" => "`procione servizio ferma`, `dotnet build tools/Procione -c Release`, poi riavvia l'attivita' pianificata",
+                _ => "`procione esegui deploy-trading.ps1` (build locale + import nel nodo + rollout)",
+            };
+            return Verdicts.Revisione(p, avanti, indietro, diverso, fix);
+        }));
+
+        return [.. righe];
+    }
+
+    /// <summary>git su una cartella precisa: <c>-C</c> invece della directory di lavoro, che questo
+    /// processo non cambia mai (la plancia puo' essere lanciata da qualunque parte).</summary>
+    private static Task<ExecResult> GitAsync(string repo, IEnumerable<string> args) =>
+        Proc.CaptureAsync("git", new[] { "-C", repo }.Concat(args), 15000);
 
     // =============================================================================================
     //  Sonde singole

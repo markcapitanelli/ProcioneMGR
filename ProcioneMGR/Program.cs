@@ -743,7 +743,17 @@ app.MapAdditionalIdentityEndpoints();
 // ingestion/ml/trading — il monolite era l'unico dei quattro a non averlo. Le probe non possono
 // puntare a "/" (redirect di login, negoziazione del circuito Blazor): serve un endpoint che
 // risponda 200 e basta. Nessun dato esposto, nessuna autorizzazione richiesta di proposito.
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+// [K1 2026-08-31] Insieme allo stato viaggia la REVISIONE con cui questo processo è stato
+// compilato. È l'unico modo perché un sorvegliante esterno (la plancia) sappia quale codice sta
+// davvero girando: leggere il binario su disco direbbe cosa è stato compilato per ultimo, non cosa
+// è vivo, e i due hanno divergito per giorni. Non è un segreto — è un identificatore di build, non
+// una credenziale — e l'endpoint resta anonimo per la stessa ragione per cui lo era: le probe di
+// Kubernetes non possono autenticarsi. Null quando il timbro manca: mai una stringa inventata.
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "ok",
+    revision = ProcioneMGR.Services.Health.BuildRevision.Sha,
+}));
 
 // Crea i ruoli applicativi (Admin/Manager/User) all'avvio. NON applica le migrazioni, nonostante
 // quanto diceva questo commento fino alla Fase 3: lo schema si applica come passo separato
