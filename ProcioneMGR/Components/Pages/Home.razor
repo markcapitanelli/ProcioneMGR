@@ -147,6 +147,27 @@
                         <a href="campaign" class="alert-link">Rimetti in rotazione da Campagne →</a>
                     </div>
                 }
+                else if (ric.State == ProcioneMGR.Services.Health.ResearchLivenessState.VivaSenzaDeposito)
+                {
+                    @* [K9] Il ramo che mancava. Prima questo caso cadeva nell'else e usciva come
+                       «Ricerca viva» in grigio, con «0 candidati distinti/24h» stampato di fianco:
+                       il numero che smentisce il badge, accanto al badge. Il 2026-08-30 è durato
+                       cinque giorni, con 34 run non indicizzati dietro. *@
+                    <div class="alert alert-warning">
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <i class="bi bi-binoculars fs-5"></i>
+                            <strong>La ricerca gira ma NON deposita</strong>
+                        </div>
+                        <div class="small mb-2">@ric.Reason.</div>
+                        @if (ric.Facts is { } rf)
+                        {
+                            <div class="small text-body-secondary">
+                                @RicercaNumeri(rf)
+                            </div>
+                        }
+                        <a href="research" class="alert-link">Guarda l'archivio della ricerca →</a>
+                    </div>
+                }
                 else if (ric.State == ProcioneMGR.Services.Health.ResearchLivenessState.NonMisurabile)
                 {
                     @* Regola 4: fail-open sulla diagnostica, ma DICENDOLO — «non misurabile» non è «viva». *@

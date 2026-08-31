@@ -14,6 +14,12 @@ public enum ResearchLivenessState
     /// <summary>Nessun run da più della soglia: la macchina NON sta cercando, e va detto.</summary>
     Ferma,
 
+    /// <summary>
+    /// [K9] La macchina gira e NON deposita: run completati nelle 24h, zero candidati distinti
+    /// nell'archivio. Non è «viva» — è il caso in cui l'attività c'è e il prodotto no.
+    /// </summary>
+    VivaSenzaDeposito,
+
     /// <summary>La lettura è fallita. NON è «viva»: è ignoranza, e si dichiara.</summary>
     NonMisurabile,
 }
@@ -89,13 +95,59 @@ public sealed class ResearchLivenessProbe(
                 $"lettura fallita ({ex.GetType().Name}): non si può dire se la ricerca giri", null, now);
         }
 
-        var stallHours = Math.Max(1, campaign.CurrentValue.StallAlertHours);
-        return Judge(facts, TimeSpan.FromHours(stallHours), now);
+        var opt = campaign.CurrentValue;
+        return Judge(facts, SogliaEffettiva(opt.StallAlertHours, opt.RearmHours), now);
     }
+
+    /// <summary>
+    /// [K9, 2026-08-31] <b>La soglia di fermo non può stare sotto il ciclo di riarmo.</b>
+    ///
+    /// <para>Configurazione viva del 2026-08-30: <c>StallAlertHours = 12</c> (default) contro
+    /// <c>RearmHours = 13</c>. Le due manopole vivono nella stessa sezione e nessuno le lega, ma
+    /// insieme descrivono la stessa cosa: quanto è normale che la ricerca stia zitta. A regime
+    /// SANO — campagna che esaurisce la rotazione, entra in attesa e riparte dopo 13 ore — la
+    /// sonda passava un'ora piena a gridare «FERMA» a ogni giro, senza che nulla fosse rotto. Un
+    /// allarme che suona quando tutto funziona è il modo più rapido di insegnare a ignorarlo.</para>
+    ///
+    /// <para>Il margine di due ore copre la durata di un run: la config 19 ne impiega 50 minuti in
+    /// media, e la campagna riparte DOPO il riarmo, non nell'istante esatto. Si tiene comunque il
+    /// valore configurato quando è già più largo — l'operatore può allargare, mai stringere sotto
+    /// il ciclo, e la ragione va detta perché altrimenti sembra che la manopola non funzioni.</para>
+    /// </summary>
+    internal static TimeSpan SogliaEffettiva(int stallAlertHours, int rearmHours)
+    {
+        var configurata = Math.Max(1, stallAlertHours);
+        var pavimento = Math.Max(1, rearmHours) + MargineSulRiarmoOre;
+        return TimeSpan.FromHours(Math.Max(configurata, pavimento));
+    }
+
+    /// <summary>Quanto si concede oltre il riarmo prima di gridare: la durata di un run lungo.</summary>
+    internal const int MargineSulRiarmoOre = 2;
 
     /// <summary>[J3] Il giudizio, PURO: stesso stato ⇒ stesso verdetto, provabile senza DB.</summary>
     internal static ResearchLivenessReport Judge(ResearchLivenessFacts facts, TimeSpan stallThreshold, DateTime nowUtc)
     {
+        // [K9] «Gira» e «produce» sono due domande, e finora il verdetto rispondeva solo alla
+        // prima. DistinctCandidates24h veniva raccolto e MAI consultato: la Home mostrava
+        // «Ricerca viva» in verde accanto a «0 candidati distinti/24h», che è la stessa forma dei
+        // controlli che rassicurano — il numero che smentisce il badge, stampato accanto al badge.
+        //
+        // Va prima del ramo «un run è in corso»: una caccia in corso non riscatta 24 ore di
+        // depositi a zero, e mettere questo controllo dopo lo avrebbe reso invisibile proprio nei
+        // momenti di attività.
+        //
+        // Il verdetto NON attribuisce la causa, perché da qui non è distinguibile: o
+        // l'indicizzazione è ferma (era il caso il 2026-08-30: 34 run non indicizzati, chiuso da
+        // K10) o le cacce non stanno depositando nulla. Nominarle entrambe manda a guardare i due
+        // posti giusti; sceglierne una manderebbe nel posto sbagliato metà delle volte.
+        if (facts.RunsCompleted24h > 0 && facts.DistinctCandidates24h == 0)
+        {
+            return new ResearchLivenessReport(ResearchLivenessState.VivaSenzaDeposito,
+                $"{facts.RunsCompleted24h} run completati nelle 24h e ZERO candidati distinti nell'archivio: "
+                + "la macchina gira e non deposita (indicizzazione ferma, o cacce che non producono)",
+                facts, nowUtc);
+        }
+
         if (facts.RunsInProgress > 0)
         {
             return new ResearchLivenessReport(ResearchLivenessState.Viva,
