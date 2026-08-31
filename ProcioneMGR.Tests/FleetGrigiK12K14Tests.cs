@@ -138,6 +138,33 @@ public sealed class FleetGrigiK12K14Tests
         Assert.Contains(piano.Actions.OfType<FleetNoOp>(), n => n.Reason.Contains("tutti gia'"));
     }
 
+    // =============================================================================================
+    //  K15 — due budget di esecuzione, non uno
+    // =============================================================================================
+
+    [Fact]
+    public void IlBudgetDiEsecuzione_e_SEPARATO_fra_ritiro_e_assegnazione()
+    {
+        // Guardiano di sorgente, e non e' pigrizia: la proprieta' che difende vive nel ciclo di
+        // esecuzione del worker, che non ha una cucitura pura, e un refactoring potrebbe
+        // riunificare i due contatori senza che nessun test se ne accorga.
+        //
+        // Il difetto che chiude: con un contatore solo e il default a 1, il tick che LIBERA una
+        // corsia non poteva anche assegnarla — quindici minuti di corsia ferma per un dettaglio
+        // contabile — e a decidere chi prendeva l'unico posto era l'ORDINE di plan.Actions, cioe'
+        // una priorita' che nessuno ha mai scelto ne' scritto.
+        var sorgente = File.ReadAllText(Path.Combine(
+            Procione.Platform.RepoRoot, "ProcioneMGR", "Services", "Fleet", "FleetOrchestratorWorker.cs"));
+
+        Assert.DoesNotContain("executionBudget", sorgente);
+        Assert.Contains("var budgetRitiri = Math.Max(1, opt.MaxExecutionsPerTick);", sorgente);
+        Assert.Contains("var budgetAssegnazioni = Math.Max(1, opt.MaxAssignmentsPerTick);", sorgente);
+        // Il ritiro consuma il SUO, le assegnazioni il LORO: se i decrementi si incrociassero, i
+        // due tetti esisterebbero solo di nome.
+        Assert.Contains("budgetRitiri--", sorgente);
+        Assert.Contains("budgetAssegnazioni--", sorgente);
+    }
+
     [Fact]
     public void NessunGrigioAffatto_NON_produce_rumore()
     {

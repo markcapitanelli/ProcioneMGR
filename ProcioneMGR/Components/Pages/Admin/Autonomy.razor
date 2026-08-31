@@ -44,6 +44,7 @@
 @inject ProcioneMGR.Services.Fleet.FleetOrchestratorWorker FleetWorker
 @inject ProcioneMGR.Services.Fleet.IGreyDeployer GreyDeployer
 @inject ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill FrequencyBackfill
+@inject ProcioneMGR.Services.Fleet.SourceVerdictBackfill ProvenanceBackfill
 @inject ILaneDirectory LaneDirectory
 @inject IPipelineApplier PipelineApplier
 @inject IOptionsMonitor<ProcioneMGR.Services.Health.HeartbeatOptions> HeartbeatMonitor
@@ -597,6 +598,34 @@
                     <strong>@(rep.DryRun ? "Anteprima" : "Eseguito"):</strong> @rep.Updated gambe ricostruibili su @rep.Legs.Count esaminate.
                     <ul class="mb-0">
                         @foreach (var l in rep.Legs.Take(12))
+                        {
+                            <li class="@(l.Updated ? "" : "text-muted")">corsia @l.LaneId — @l.Leg: @l.Detail</li>
+                        }
+                    </ul>
+                </div>
+            }
+        </div>
+        @* [K13] La provenienza mancante: le gambe schierate prima dell'etichetta T1 non dicono da
+           dove vengono, e LaneDirectory.HasGreyLegs restituisce «ignoto». Il tetto grigio tratta
+           l'ignoto come grigio — verso prudente e giusto — ma nessuna superficie poteva spiegare
+           perché contasse cinque corsie grigie. Si deriva dall'archivio, non si assume. *@
+        <div class="border rounded p-2 mb-3">
+            <strong class="small">Provenienza delle gambe mancante (K13)</strong>
+            <div class="small text-muted mb-2">
+                Ricostruisce <code>SourceVerdict</code> (<em>Grey</em> / <em>Survived</em>) per le gambe che
+                non lo dichiarano, ritrovando il candidato di provenienza nell'archivio per identità
+                canonica. Dove non si trova, la gamba resta SENZA etichetta: su un campo che governa
+                il tetto grigio, un'etichetta inventata è peggio dell'ignoranza — che almeno è
+                fail-closed.
+            </div>
+            <button class="btn btn-outline-secondary btn-sm me-2" @onclick="() => RunProvenanceBackfillAsync(dryRun: true)" disabled="@_busy">Anteprima (non scrive)</button>
+            <button class="btn btn-warning btn-sm" @onclick="() => RunProvenanceBackfillAsync(dryRun: false)" disabled="@_busy">Ricostruisci e salva</button>
+            @if (_provenanceReport is { } prep)
+            {
+                <div class="small mt-2">
+                    <strong>@(prep.DryRun ? "Anteprima" : "Eseguito"):</strong> @prep.Updated gambe etichettabili su @prep.Legs.Count esaminate.
+                    <ul class="mb-0">
+                        @foreach (var l in prep.Legs.Take(12))
                         {
                             <li class="@(l.Updated ? "" : "text-muted")">corsia @l.LaneId — @l.Leg: @l.Detail</li>
                         }
@@ -2389,6 +2418,23 @@
     // ---- [F5] Il click umano sui candidati grigi ----
     // [J9] L'ultimo report del backfill delle frequenze attese (null = mai eseguito in questa vista).
     private ProcioneMGR.Services.Fleet.BackfillReport? _backfillReport;
+
+    private ProcioneMGR.Services.Fleet.ProvenanceReport? _provenanceReport;
+
+    private async Task RunProvenanceBackfillAsync(bool dryRun)
+    {
+        _busy = true;
+        try
+        {
+            _provenanceReport = await ProvenanceBackfill.RunAsync(dryRun);
+        }
+        catch (Exception ex)
+        {
+            _status = $"Backfill provenienza fallito: {ex.Message}";
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
 
     private async Task RunBackfillAsync(bool dryRun)
     {

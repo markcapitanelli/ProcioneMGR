@@ -33,7 +33,15 @@ public sealed class FleetOrchestratorWorker(
     /// <summary>Verdetti di ritiro CONSECUTIVI per corsia (isteresi: si agisce solo alla conferma).</summary>
     private readonly Dictionary<int, int> _retireStreak = new();
 
-    private string? _lastBlockedReason;
+    /// <summary>
+    /// [K12, 2026-08-31] Le cause di blocco gia' journalizzate, un INSIEME e non una sola.
+    ///
+    /// <para>Con una stringa sola bastavano due FleetNoOp nello stesso piano — ora possibile, il
+    /// ramo grigio ne ha quattro — perche' si alternassero: A scrive, B sovrascrive il ricordo, al
+    /// tick dopo A sembra nuovo e riscrive. Novantasei righe al giorno per due cause che non
+    /// cambiano mai, cioe' esattamente il rumore che la deduplica esisteva per togliere.</para>
+    /// </summary>
+    private HashSet<string> _lastBlockedReasons = new(StringComparer.Ordinal);
     private DateTime? _lastCarryAlertUtc;
 
     /// <summary>
@@ -268,14 +276,29 @@ public sealed class FleetOrchestratorWorker(
 
         // [AF2b] Il budget di esecuzione del giro: una corsia per volta, per poter distinguere una
         // decisione giusta da un guasto del lettore di stato.
-        var executionBudget = Math.Max(1, opt.MaxExecutionsPerTick);
+        //
+        // [K15, PRD autonomia-piena 2026-08-31] DUE budget, non uno. Fino a oggi ritiri e
+        // assegnazioni pescavano dallo stesso contatore, e con il default a 1 questo significava
+        // due cose, entrambe indesiderate:
+        //  - il tick che LIBERA una corsia non poteva anche assegnarla: bisognava aspettare il
+        //    giro dopo, quindici minuti in cui la corsia resta ferma per un dettaglio contabile;
+        //  - a decidere chi prendeva l'unico posto era l'ORDINE di plan.Actions, cioe' una
+        //    priorita' che nessuno ha mai scelto ne' scritto.
+        // I due gesti hanno ragioni diverse per essere limitati — «non fermare quattro corsie
+        // insieme» e «non schierare quattro candidati insieme» — e quindi due tetti. Nessuna
+        // manopola nuova: MaxAssignmentsPerTick esiste gia', ha il suo pannello, e governa gia' il
+        // numero di assegnazioni che il PIANO contiene: qui governa anche la loro esecuzione.
+        var budgetRitiri = Math.Max(1, opt.MaxExecutionsPerTick);
+        var budgetAssegnazioni = Math.Max(1, opt.MaxAssignmentsPerTick);
+
+        var bloccatiInQuestoGiro = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var action in plan.Actions)
         {
             switch (action)
             {
                 case AssignCandidateToLane assign:
-                    if (WhyNotExecutedAssignment(opt, assign.LaneId, executionBudget,
+                    if (WhyNotExecutedAssignment(opt, assign.LaneId, budgetAssegnazioni,
                         hasKey: assign.CandidateKey is not null, hasDeployer: greyDeployer is not null, isGrey: false) is { } percheAssign)
                     {
                         await JournalAsync(new OrchestratorDecision
@@ -289,14 +312,14 @@ public sealed class FleetOrchestratorWorker(
                     }
                     else
                     {
-                        executionBudget--;
+                        budgetAssegnazioni--;
                         await ExecuteAssignAsync(assign.RunId, assign.CandidateKey!, assign.LaneId,
                             isGrey: false, assign.Reason, assignSource, votesJson, ct);
                     }
                     break;
 
                 case AssignGreyCandidateToLane greyAssign:
-                    if (WhyNotExecutedAssignment(opt, greyAssign.LaneId, executionBudget,
+                    if (WhyNotExecutedAssignment(opt, greyAssign.LaneId, budgetAssegnazioni,
                         hasKey: true, hasDeployer: greyDeployer is not null, isGrey: true) is { } percheGrey)
                     {
                         await JournalAsync(new OrchestratorDecision
@@ -310,14 +333,14 @@ public sealed class FleetOrchestratorWorker(
                     }
                     else
                     {
-                        executionBudget--;
+                        budgetAssegnazioni--;
                         await ExecuteAssignAsync(greyAssign.RunId, greyAssign.CandidateKey, greyAssign.LaneId,
                             isGrey: true, greyAssign.Reason, assignSource, votesJson, ct);
                     }
                     break;
 
                 case StopAndFreeLane retire when confirmedRetires.Contains(retire.LaneId):
-                    if (WhyNotExecuted(opt, retire.LaneId, executionBudget) is { } perche)
+                    if (WhyNotExecuted(opt, retire.LaneId, budgetRitiri) is { } perche)
                     {
                         await JournalAsync(new OrchestratorDecision
                         {
@@ -328,7 +351,7 @@ public sealed class FleetOrchestratorWorker(
                     }
                     else
                     {
-                        executionBudget--;
+                        budgetRitiri--;
                         await ExecuteRetireAsync(retire, ct);
                     }
                     break;
@@ -355,9 +378,9 @@ public sealed class FleetOrchestratorWorker(
 
                 case FleetNoOp blocked:
                     // Un blocco porta informazione, ma una volta per CAUSA, non 96 volte al giorno.
-                    if (!string.Equals(blocked.Reason, _lastBlockedReason, StringComparison.Ordinal))
+                    bloccatiInQuestoGiro.Add(blocked.Reason);
+                    if (!_lastBlockedReasons.Contains(blocked.Reason))
                     {
-                        _lastBlockedReason = blocked.Reason;
                         await JournalAsync(new OrchestratorDecision
                         {
                             AtUtc = DateTime.UtcNow, Kind = "Blocked", Reason = blocked.Reason,
@@ -369,10 +392,8 @@ public sealed class FleetOrchestratorWorker(
             }
         }
 
-        if (!plan.Actions.OfType<FleetNoOp>().Any())
-        {
-            _lastBlockedReason = null; // il blocco è rientrato: il prossimo si journalizza di nuovo
-        }
+        // Le cause rientrate escono dal ricordo: se tornano, tornano a essere una notizia.
+        _lastBlockedReasons = bloccatiInQuestoGiro;
 
         await WatchCarryAsync(ct);
     }

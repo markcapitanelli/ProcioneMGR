@@ -590,6 +590,9 @@ builder.Services.Configure<ProcioneMGR.Services.Fleet.FleetOptions>(builder.Conf
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneObservationLedger, ProcioneMGR.Services.Fleet.LaneObservationLedger>();
 // [J9] La ricostruzione delle frequenze attese mancanti (azione amministrativa, /admin/autonomy).
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill>();
+// [K13] Il gemello di J9 per la PROVENIENZA: le gambe schierate prima dell'etichetta T1 non dicono
+// da dove vengono, e l'ignoto conta come grigio senza che nessuna superficie possa spiegarlo.
+builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.SourceVerdictBackfill>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IFleetStateReader, ProcioneMGR.Services.Fleet.FleetStateReader>();
 // [F5] Il click umano sui candidati grigi: scrive la config su una corsia di flotta libera e
 // (se richiesto) la avvia in Paper. Solo grigi, solo flotta, solo Paper: non è una porta di servizio.
