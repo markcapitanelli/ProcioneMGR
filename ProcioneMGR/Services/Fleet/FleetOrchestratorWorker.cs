@@ -33,7 +33,15 @@ public sealed class FleetOrchestratorWorker(
     /// <summary>Verdetti di ritiro CONSECUTIVI per corsia (isteresi: si agisce solo alla conferma).</summary>
     private readonly Dictionary<int, int> _retireStreak = new();
 
-    private string? _lastBlockedReason;
+    /// <summary>
+    /// [K12, 2026-08-31] Le cause di blocco gia' journalizzate, un INSIEME e non una sola.
+    ///
+    /// <para>Con una stringa sola bastavano due FleetNoOp nello stesso piano — ora possibile, il
+    /// ramo grigio ne ha quattro — perche' si alternassero: A scrive, B sovrascrive il ricordo, al
+    /// tick dopo A sembra nuovo e riscrive. Novantasei righe al giorno per due cause che non
+    /// cambiano mai, cioe' esattamente il rumore che la deduplica esisteva per togliere.</para>
+    /// </summary>
+    private HashSet<string> _lastBlockedReasons = new(StringComparer.Ordinal);
     private DateTime? _lastCarryAlertUtc;
 
     /// <summary>
@@ -283,6 +291,8 @@ public sealed class FleetOrchestratorWorker(
         var budgetRitiri = Math.Max(1, opt.MaxExecutionsPerTick);
         var budgetAssegnazioni = Math.Max(1, opt.MaxAssignmentsPerTick);
 
+        var bloccatiInQuestoGiro = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var action in plan.Actions)
         {
             switch (action)
@@ -368,9 +378,9 @@ public sealed class FleetOrchestratorWorker(
 
                 case FleetNoOp blocked:
                     // Un blocco porta informazione, ma una volta per CAUSA, non 96 volte al giorno.
-                    if (!string.Equals(blocked.Reason, _lastBlockedReason, StringComparison.Ordinal))
+                    bloccatiInQuestoGiro.Add(blocked.Reason);
+                    if (!_lastBlockedReasons.Contains(blocked.Reason))
                     {
-                        _lastBlockedReason = blocked.Reason;
                         await JournalAsync(new OrchestratorDecision
                         {
                             AtUtc = DateTime.UtcNow, Kind = "Blocked", Reason = blocked.Reason,
@@ -382,10 +392,8 @@ public sealed class FleetOrchestratorWorker(
             }
         }
 
-        if (!plan.Actions.OfType<FleetNoOp>().Any())
-        {
-            _lastBlockedReason = null; // il blocco è rientrato: il prossimo si journalizza di nuovo
-        }
+        // Le cause rientrate escono dal ricordo: se tornano, tornano a essere una notizia.
+        _lastBlockedReasons = bloccatiInQuestoGiro;
 
         await WatchCarryAsync(ct);
     }
