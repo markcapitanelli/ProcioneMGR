@@ -118,11 +118,19 @@ internal static class Jobs
             TimeSpan.FromMinutes(60),
             SeedFromBackupDir: true),
 
+        // [K5 2026-08-31] Il tetto passa da 15 a 30 minuti. Non e' generosita': e' il margine
+        // misurato. Nella notte del 30/08 il bring-up ha impiegato 10m29s, di cui 7m15s nel passo
+        // che si dichiara «fino a 5 minuti» (+45% sul proprio budget); il 31/08, dopo un riavvio
+        // della macchina, 7m30s. Bastavano quattro minuti di lentezza in piu' — Docker che parte
+        // piano, il cluster che fatica — perche' il tetto uccidesse il bring-up PRIMA del passo
+        // che avvia il guscio. In quel caso il guscio non parte affatto e nulla lo rilancia: il
+        // watchdog manda un messaggio e si ferma li'. Un tetto tarato sul caso buono trasforma una
+        // lentezza in un'indisponibilita'.
         new("avvio",
             "bring-up completo della piattaforma all'accensione del supervisore",
             Schedule.SoloAllAvvio(),
             "bringup.ps1", [],
-            TimeSpan.FromMinutes(15),
+            TimeSpan.FromMinutes(30),
             EnabledByDefault: false),
 
         // [2026-08-25, sera] L'ECCEZIONE DICHIARATA alla regola scritta in testa a questo file

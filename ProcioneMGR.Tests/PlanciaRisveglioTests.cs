@@ -75,6 +75,20 @@ public class PlanciaRisveglioTests
     }
 
     [Fact]
+    public void Avvio_HaMargineSulTempoMisurato()
+    {
+        // [K5] Il tetto è tarato sul caso CATTIVO, non su quello buono. Misure reali del bring-up:
+        // 10m29s (30/08 notte, col passo «fino a 5 minuti» che ne ha presi 7m15s) e 7m30s (31/08,
+        // dopo un riavvio della macchina). A 15 minuti bastavano quattro minuti di lentezza in più
+        // perché il tetto uccidesse il bring-up PRIMA del passo che avvia il guscio — e in quel
+        // caso il guscio non parte affatto e nulla lo rilancia.
+        var avvio = Jobs.All.Single(j => j.Name == "avvio");
+
+        Assert.True(avvio.Timeout >= TimeSpan.FromMinutes(30),
+            $"il tetto di 'avvio' è {avvio.Timeout}: sotto i 30 minuti non c'è margine sul bring-up più lento misurato (10m29s)");
+    }
+
+    [Fact]
     public void Script_EsintatticamenteValido_secondoPowerShellStesso()
     {
         if (!OperatingSystem.IsWindows()) return; // il Task Scheduler e' la piattaforma della plancia
