@@ -26,6 +26,18 @@ public class HostHeartbeat
     /// </summary>
     public const string IngestionSyncRole = "ingestion-sync";
 
+    /// <summary>
+    /// [K8, 2026-08-31] Timbro del CICLO del carry, scritto da <c>CarryWorker</c> a fine
+    /// valutazione. Come <see cref="IngestionSyncRole"/> non è un host ma un LAVORO, e per la
+    /// stessa ragione: il carry vive nel pod del motore e il suo guardiano nel guscio, quindi il
+    /// testimone in-process (<c>CarryWorker.LastEvaluationUtc</c>) non era osservabile da chi
+    /// doveva giudicarlo — <c>Fleet:CarrySilenceAlertHours</c> era una manopola amministrabile che
+    /// non poteva scattare mai, sull'unica classe con edge positivo misurato.
+    /// <c>HeartbeatMonitorWorker</c> NON sorveglia questo ruolo: il giudice è il guardiano della
+    /// flotta, che ha la sua soglia e il suo anti-raffica.
+    /// </summary>
+    public const string CarryRole = "carry";
+
     /// <summary>Chiave: il ruolo dell'host ("shell" | "engine") o del lavoro ("ingestion-sync").</summary>
     public string Host { get; set; } = string.Empty;
 

@@ -672,6 +672,8 @@ builder.Services.AddScoped<ProcioneMGR.Services.Research.ResearchPageService>();
 // iniettato SOLO in ResearchPageService: l'indice cresceva quando un umano apriva /research, e il
 // 2026-08-30 si era fermato al 25/08 con 34 run completati e non indicizzati dietro.
 builder.Services.AddHostedService<ProcioneMGR.Services.Research.ResearchIndexSyncWorker>();
+// [K3] La sonda di quiete: risponde a «posso fermarti adesso?» sull'endpoint /health/quiet.
+builder.Services.AddSingleton<ProcioneMGR.Services.Health.ShellQuietProbe>();
 
 // [2026-08-15, revisione post-incidente 122 serie ferme] Orchestrazione di Watchlist.razor:
 // timbro del ciclo di sync, freschezza per-serie sull'indice, verifica stato simboli su exchange.
@@ -758,6 +760,18 @@ app.MapGet("/health", () => Results.Ok(new
     status = "ok",
     revision = ProcioneMGR.Services.Health.BuildRevision.Sha,
 }));
+
+// [K3 2026-08-31] «È un buon momento per fermarmi?» — la domanda che l'aggiornamento automatico
+// del guscio deve poter fare. Endpoint SEPARATO da /health di proposito: questo interroga il
+// database, e la liveness non deve mai dipendere dal database — se Postgres cade, /health deve
+// continuare a rispondere 200, altrimenti Kubernetes riavvia un processo sano per un guasto che sta
+// altrove e il watchdog dichiara giù un guscio che sta benissimo. Anonimo per la stessa ragione di
+// /health: chi lo interroga è la plancia, che non ha una sessione.
+app.MapGet("/health/quiet", async (ProcioneMGR.Services.Health.ShellQuietProbe probe, CancellationToken ct) =>
+{
+    var v = await probe.ProbeAsync(ct);
+    return Results.Ok(new { quiet = v.Quiet, reason = v.Reason });
+});
 
 // Crea i ruoli applicativi (Admin/Manager/User) all'avvio. NON applica le migrazioni, nonostante
 // quanto diceva questo commento fino alla Fase 3: lo schema si applica come passo separato

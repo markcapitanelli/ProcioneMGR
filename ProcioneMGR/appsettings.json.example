@@ -74,8 +74,9 @@
     "MaxGreyLanes": 3
   },
   "Heartbeat": {
-    "_comment": "[AF5.1] Heartbeat incrociato guscio/motore (tabella HostHeartbeats): ogni host scrive il PROPRIO battito e sorveglia quello altrui; stantio oltre StaleMinutes => Telegram Warning una volta per transizione. Default OFF. Il pannello in /admin/autonomy salva su ENTRAMBI gli host.",
-    "Enabled": false,
+    "_comment": "[AF5.1] Heartbeat incrociato guscio/motore (tabella HostHeartbeats): ogni host scrive il PROPRIO battito e sorveglia quello altrui; stantio oltre StaleMinutes => Telegram Warning una volta per transizione. Il pannello in /admin/autonomy salva su ENTRAMBI gli host.",
+    "_comment_k7": "[K7 2026-08-31] ACCESO. Restando spento per default la sezione era ASSENTE da entrambi gli host e HostHeartbeats aveva UNA riga (ingestion-sync): nessuna 'shell', nessuna 'engine', e l'allarme «l'altro host e' muto» non poteva scattare MAI. La degradazione era silenziosa: a flag spento il worker dorme e basta, e nessuna sonda dichiarava che la sorveglianza incrociata non esisteva. Va acceso anche nel pod: infra/k8s/trading/trading-config.env.",
+    "Enabled": true,
     "WriteSeconds": 60,
     "StaleMinutes": 10
   },
@@ -106,6 +107,8 @@
     "Provider": "Logging",
     "ChatId": "",
     "MaxPerHour": 20,
+    "_comment_k6": "[K6 2026-08-31] MaxCriticalPerHour e' la corsia RISERVATA ai Critical: il tetto qui sopra non li governa. Il rate-limit era cieco alla gravita' e a budget pieno SCARTAVA l'allarme (non lo accodava): venti messaggi informativi nell'ora scorrevole zittivano l'invariante di corsia e la master key. Non illimitata: una corsia senza tetto e' un canale senza rate-limit.",
+    "MaxCriticalPerHour": 10,
     "_comment_Digest": "[AF5.4] Riassunto quotidiano all'ora LOCALE indicata: corsie, decisioni della flotta (24h), consumo AI, carry, heartbeat. Default OFF. La sua ASSENZA all'ora attesa e' il dead-man's-switch percepibile da un umano: il messaggio stesso lo dichiara.",
     "Digest": {
       "Enabled": false,

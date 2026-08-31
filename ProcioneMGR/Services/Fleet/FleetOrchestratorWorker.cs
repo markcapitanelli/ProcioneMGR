@@ -536,8 +536,32 @@ public sealed class FleetOrchestratorWorker(
         var opt = options.CurrentValue;
         if (!carryOptions.CurrentValue.Enabled) return;
 
+        // [K8, 2026-08-31] Prima si guarda il BATTITO PERSISTITO, poi il worker in-process.
+        //
+        // È l'inversione che rende il guardiano applicabile nella topologia in cui la piattaforma
+        // gira davvero: il carry vive nel pod, il guardiano qui, e l'unico canale fra i due è il
+        // database. Il worker in-process resta come sorgente per l'assetto monolitico (carry e
+        // guardiano nello stesso processo), dove il battito potrebbe non essere ancora arrivato.
+        DateTime? battito = null;
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            battito = await db.HostHeartbeats.AsNoTracking()
+                .Where(h => h.Host == Data.HostHeartbeat.CarryRole)
+                .Select(h => (DateTime?)h.LastUtc)
+                .FirstOrDefaultAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            // Non poter leggere il battito NON è «il carry è morto»: è ignoranza, e si tace
+            // l'allarme invece di inventarlo (fail-open sulla diagnostica, regola 4).
+            logger.LogWarning(ex, "Guardiano del carry: battito non leggibile, salto questo giro.");
+            return;
+        }
+
         var carry = serviceProvider.GetService<CarryWorker>();
-        if (carry is null)
+        if (battito is null && carry is null)
         {
             // [J18, PRD autonomia-operativa 2026-08-25] IL GUARDIANO ERA MUTO PER COSTRUZIONE, e
             // nella topologia in cui la piattaforma GIRA. Con Trading:UseRemoteTrading=true il
@@ -556,16 +580,19 @@ public sealed class FleetOrchestratorWorker(
             {
                 _carryWatchInapplicabilityDeclared = true;
                 logger.LogWarning(
-                    "Guardiano del carry INAPPLICABILE in questo assetto: il worker vive nell'host del motore "
-                    + "(Trading:UseRemoteTrading) e da qui non è osservabile. Fleet:CarrySilenceAlertHours={Ore}h "
-                    + "non può scattare: un silenzio del carry nel pod NON produrrà alcun allarme finché il motore "
-                    + "non ne persiste un heartbeat.", opt.CarrySilenceAlertHours);
+                    "Guardiano del carry NON ANCORA APPLICABILE: il worker vive nell'host del motore "
+                    + "(Trading:UseRemoteTrading) e non ha ancora scritto un battito su HostHeartbeats['{Ruolo}']. "
+                    + "Fleet:CarrySilenceAlertHours={Ore}h non può scattare finché quella riga non compare — "
+                    + "il motore in esecuzione è precedente a K8, oppure il carry non ha mai valutato.",
+                    Data.HostHeartbeat.CarryRole, opt.CarrySilenceAlertHours);
             }
             return;
         }
 
         var silence = TimeSpan.FromHours(Math.Max(1, opt.CarrySilenceAlertHours));
-        var last = carry.LastEvaluationUtc;
+        // Il battito persistito VINCE sul testimone in-process: nell'assetto remoto è l'unico che
+        // parli del processo che decide davvero.
+        var last = battito ?? carry?.LastEvaluationUtc;
         var mute = last is null || DateTime.UtcNow - last > silence;
         var alreadyAlertedRecently = _lastCarryAlertUtc is DateTime prev && DateTime.UtcNow - prev < silence;
 
