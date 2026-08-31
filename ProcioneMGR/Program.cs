@@ -668,6 +668,10 @@ builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.IPairSpreadHisto
 builder.Services.AddSingleton<ProcioneMGR.Services.PairsTrading.PairSpreadWatchWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.PairsTrading.PairSpreadWatchWorker>());
 builder.Services.AddScoped<ProcioneMGR.Services.Research.ResearchPageService>();
+// [K10 2026-08-31] Il gemello di J7 per l'archivio della ricerca. Fino a oggi l'indicizzatore era
+// iniettato SOLO in ResearchPageService: l'indice cresceva quando un umano apriva /research, e il
+// 2026-08-30 si era fermato al 25/08 con 34 run completati e non indicizzati dietro.
+builder.Services.AddHostedService<ProcioneMGR.Services.Research.ResearchIndexSyncWorker>();
 
 // [2026-08-15, revisione post-incidente 122 serie ferme] Orchestrazione di Watchlist.razor:
 // timbro del ciclo di sync, freschezza per-serie sull'indice, verifica stato simboli su exchange.
