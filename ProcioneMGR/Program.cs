@@ -674,6 +674,9 @@ builder.Services.AddScoped<ProcioneMGR.Services.Research.ResearchPageService>();
 builder.Services.AddHostedService<ProcioneMGR.Services.Research.ResearchIndexSyncWorker>();
 // [K3] La sonda di quiete: risponde a «posso fermarti adesso?» sull'endpoint /health/quiet.
 builder.Services.AddSingleton<ProcioneMGR.Services.Health.ShellQuietProbe>();
+// [K7/K8 — superficie UI] Il quadro dei battiti in Home: erano quattro righe che non si vedevano
+// da nessuna parte in app.
+builder.Services.AddSingleton<ProcioneMGR.Services.Health.HeartbeatBoardProbe>();
 
 // [2026-08-15, revisione post-incidente 122 serie ferme] Orchestrazione di Watchlist.razor:
 // timbro del ciclo di sync, freschezza per-serie sull'indice, verifica stato simboli su exchange.

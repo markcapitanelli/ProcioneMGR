@@ -27,6 +27,7 @@
 @inject Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Monitoring.Drift.DriftMonitorOptions> DriftOptions
 @inject ProcioneMGR.Services.Sentiment.SentimentHeritageSnapshot HeritageSnapshot
 @inject ProcioneMGR.Services.Health.ResearchLivenessProbe ResearchProbe
+@inject ProcioneMGR.Services.Health.HeartbeatBoardProbe BattitiProbe
 
 <PageTitle>ProcioneMGR</PageTitle>
 
@@ -186,6 +187,65 @@
                             @RicercaNumeri(rf)
                         }
                     </div>
+                }
+            }
+
+            @* [K7/K8 — superficie UI, 2026-08-31] I BATTITI, dove li guarda il proprietario.
+               Nasce da un audit della copertura UI della Fase 0: le manopole nuove avevano tutte
+               il loro pannello, ma quello che i battiti DICONO non si vedeva da nessuna parte in
+               app — solo in `procione stato`, cioè in una console che si apre quando si sospetta
+               già qualcosa. Ed è il dato che il 2026-08-31 è passato da UNA riga a quattro: prima
+               HostHeartbeats conteneva solo ingestion-sync, e l'allarme «l'altro host è muto» non
+               poteva scattare.
+               Il confronto delle revisioni con master resta in `procione stato`: ha bisogno di git
+               e kubectl, che il guscio di proposito non ha. *@
+            @if (_battiti is { } bb)
+            {
+                @if (bb.Errore is { Length: > 0 } errB)
+                {
+                    <div class="text-body-secondary small mb-3">
+                        <i class="bi bi-heart-pulse me-1"></i> Battiti: <strong>non verificabili</strong> — @errB
+                    </div>
+                }
+                else
+                {
+                    var muti = bb.Righe.Where(r => r.Muto && r.Atteso).ToList();
+                    @if (muti.Count > 0)
+                    {
+                        <div class="alert alert-warning">
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <i class="bi bi-heart-pulse fs-5"></i>
+                                <strong>@muti.Count process@(muti.Count == 1 ? "o" : "i") non batt@(muti.Count == 1 ? "e" : "ono")</strong>
+                            </div>
+                            <ul class="mb-2 small">
+                                @foreach (var r in muti)
+                                {
+                                    <li>
+                                        <strong>@r.Ruolo</strong> —
+                                        @(r.UltimoUtc is { } u
+                                            ? $"ultimo battito {(DateTime.UtcNow - u).TotalMinutes:F0}′ fa (soglia {bb.Soglia.TotalMinutes:F0}′)"
+                                            : "non ha MAI battuto")
+                                    </li>
+                                }
+                            </ul>
+                            <div class="form-text">
+                                Se tace il motore le corsie non elaborano candele; se tace il guscio non
+                                girano pipeline né sorveglianza. Il quadro completo: <code>procione stato</code>.
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-body-secondary small mb-3">
+                            <i class="bi bi-heart-pulse me-1"></i>
+                            Battiti: <strong>@bb.Righe.Count(r => !r.Muto) attiv@(bb.Righe.Count(r => !r.Muto) == 1 ? "o" : "i")</strong>
+                            (@string.Join(", ", bb.Righe.Where(r => !r.Muto).Select(r => r.Ruolo)))
+                            @if (bb.RevisioneGuscio is { Length: >= 8 } rg)
+                            {
+                                <text> · guscio su <code>@rg[..8]</code></text>
+                            }
+                        </div>
+                    }
                 }
             }
 
@@ -420,6 +480,7 @@
     // calcolo sul caricamento della Home, che deve restare veloce.
     // [J3] Il verdetto della sonda «la ricerca è viva» (null = non ancora letto).
     private ProcioneMGR.Services.Health.ResearchLivenessReport? _research;
+    private ProcioneMGR.Services.Health.BattitoBoard? _battiti;
 
     /// <summary>[J3] I numeri della card, in una riga: chiavi DISTINTE, mai righe (artefatto 19×).</summary>
     private static string RicercaNumeri(ProcioneMGR.Services.Health.ResearchLivenessFacts rf) =>
@@ -608,6 +669,13 @@
         {
             // [J3] La sonda fa da sé il proprio try/catch e degrada a NON MISURABILE dichiarato.
             _research = await ResearchProbe.ProbeAsync();
+        }
+        catch { /* stesso principio del widget sopra */ }
+
+        try
+        {
+            // [K7/K8 — superficie UI] Anche questa degrada da sé, dichiarando l'errore.
+            _battiti = await BattitiProbe.ProbeAsync();
         }
         catch { /* stesso principio del widget sopra */ }
 

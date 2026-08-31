@@ -106,6 +106,10 @@ public sealed class HomeDecayWiringTests : BunitContext
         // al verdetto FERMA («nessun run completato»), che per questi test è solo sfondo.
         Services.AddSingleton(new ProcioneMGR.Services.Pipeline.CampaignOptions().AsMonitor());
         Services.AddSingleton<ProcioneMGR.Services.Health.ResearchLivenessProbe>();
+        // [K7/K8 — superficie UI] Stesso passo già fatto per la sonda J3: una sonda nuova iniettata
+        // nella Home e non registrata qui fa cadere OGNI render test con un errore di DI, che è
+        // rumore — non il difetto che questi test sorvegliano.
+        Services.AddSingleton<ProcioneMGR.Services.Health.HeartbeatBoardProbe>();
 
         var managers = new Dictionary<int, FakeEnsembleManager>();
         foreach (var lane in lanes)
