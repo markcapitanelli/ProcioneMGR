@@ -112,18 +112,29 @@ if ($composeUi) {
 # (socat->.2, nodo su .3) — un'ora di "TLS handshake timeout" con proxy e nodo entrambi "sani".
 # Il verdetto e' quindi la RISPOSTA dell'API server ATTRAVERSO il proxy; e il proxy si (ri)crea
 # puntando al NOME del container sulla rete kind (DNS interno di Docker, stabile), mai all'IP.
-$proxyAnswers = $false
-try {
-    # /livez del kube-apiserver risponde anche anonimo; il certificato e' self-signed, quindi
-    # per questa sola sonda si sospende la validazione (PS 5.1 non ha -SkipCertificateCheck).
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-    $resp = Invoke-WebRequest -Uri "https://127.0.0.1:$proxyPort/livez" -UseBasicParsing -TimeoutSec 8
-    $proxyAnswers = ($resp.StatusCode -eq 200)
-} catch { }
-finally {
-    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $null
+# kubectl deve puntare al proxy PRIMA di interrogarlo: set-cluster e' idempotente e sopravvive ai
+# riavvii, ma se il kubeconfig e' stato rigenerato (kind ricreato) il server torna alla porta
+# riservata morta.
+kubectl config set-cluster $context --server="https://127.0.0.1:$proxyPort" *> $null
+
+# [K5c 2026-08-31] La sonda e' KUBECTL, non Invoke-WebRequest.
+#
+# La versione precedente chiedeva /livez con Invoke-WebRequest forzando TLS 1.2, e su questa
+# macchina FALLIVA SEMPRE — «Connessione sottostante chiusa» — mentre kubectl attraversava lo
+# stesso proxy senza un intoppo: e' lo stack TLS di PowerShell 5.1, non il proxy. Conseguenza
+# misurata: `$proxyAnswers` era falso a ogni giro, quindi il socat veniva DISTRUTTO E RICREATO
+# a ogni bring-up, anche quando funzionava perfettamente. Una sonda che non sa dire di si'
+# trasforma una diagnosi in un intervento, ogni volta.
+#
+# kubectl e' gia' un prerequisito, parla lo stesso TLS del cluster e usa lo stesso kubeconfig che
+# useranno tutti i passi successivi: se risponde lui, la domanda «l'API server risponde ATTRAVERSO
+# il proxy?» ha la risposta che serve davvero.
+function Test-ApiThroughProxy {
+    kubectl get --raw /livez --context $context --request-timeout=8s *> $null
+    return ($LASTEXITCODE -eq 0)
 }
+
+$proxyAnswers = Test-ApiThroughProxy
 
 if ($proxyAnswers) {
     Log "Proxy    : kind-apiproxy attivo e l'API server RISPONDE attraverso il proxy." 'Green'
@@ -139,18 +150,37 @@ if ($proxyAnswers) {
             -p "127.0.0.1:${proxyPort}:6443" alpine/socat `
             'tcp-listen:6443,fork,reuseaddr' 'tcp-connect:procionemgr-dev-control-plane:6443' *> $null
         Log "Proxy    : kind-apiproxy ricreato verso procionemgr-dev-control-plane:6443 (porta $proxyPort)." 'Green'
+
+        # [K5c] Aspettare che il proxy APPENA CREATO risponda, prima di interrogare il cluster
+        # attraverso di lui. Senza questa attesa lo script passava dritto al ciclo del nodo e ne
+        # consumava tutti e cinque i minuti bussando a una porta non ancora aperta, per poi
+        # concludere «nodo NON Ready» — incolpando il cluster di un ritardo del proxy.
+        for ($p = 0; $p -lt 30; $p++) {
+            Start-Sleep -Seconds 2
+            if (Test-ApiThroughProxy) { $proxyAnswers = $true; break }
+        }
+
+        if ($proxyAnswers) { Log "Proxy    : risponde dopo la ricreazione." 'Green' }
+        else { Log "Proxy    : ricreato ma NON risponde dopo 60s - il cluster restera' irraggiungibile." 'Red' }
     }
 }
 
-# kubectl deve puntare al proxy: set-cluster e' idempotente e sopravvive ai riavvii, ma se il
-# kubeconfig e' stato rigenerato (kind ricreato) il server torna alla porta riservata morta.
-kubectl config set-cluster $context --server="https://127.0.0.1:$proxyPort" *> $null
-
 # --- 3. Cluster e pod di trading -------------------------------------------------------------
+# [K5c] Si tiene l'ULTIMO errore di kubectl, non lo si butta. «Nodo NON Ready» e «non sono
+# riuscito a chiederlo» sono due guasti diversi che mandano a cercare in due posti diversi, e
+# confonderli e' costato tre bring-up: il messaggio accusava il nodo mentre il nodo era Ready.
 $nodeReady = $false
+$nodeErr = ''
 for ($i = 0; $i -lt 30; $i++) {
-    $status = kubectl get nodes --context $context -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>$null
-    if ("$status" -eq 'True') { $nodeReady = $true; break }
+    # APICI SINGOLI dentro la jsonpath, doppi fuori. PowerShell 5.1 rimuove le virgolette doppie
+    # annidate quando passa gli argomenti a un eseguibile nativo: kubectl riceveva
+    # `@.type==Ready` e rispondeva «unrecognized identifier Ready», exit 1, per TUTTI e trenta i
+    # giri. Il ciclo non ha mai potuto riuscire, e con lo stderr buttato via (`2>$null`) lo script
+    # concludeva «nodo NON Ready» — accusando il cluster di un difetto di quoting. Cinque minuti
+    # bruciati a ogni singolo bring-up da quando la riga esiste.
+    $status = kubectl get nodes --context $context -o jsonpath="{.items[0].status.conditions[?(@.type=='Ready')].status}" 2>&1
+    if ($LASTEXITCODE -eq 0 -and "$status" -eq 'True') { $nodeReady = $true; break }
+    if ($LASTEXITCODE -ne 0) { $nodeErr = ("$status" -split "`n")[0] } else { $nodeErr = '' }
     if ($i -eq 0) { Log "Cluster  : attendo il nodo Ready (fino a 5 minuti)..." 'Yellow' }
     Start-Sleep -Seconds 10
 }
@@ -167,6 +197,10 @@ if ($nodeReady) {
     }
     if ($podReady) { Log "Motore   : pod di trading Running." 'Green' }
     else { Log "Motore   : pod di trading NON Running dopo 5 minuti - proseguo, il watchdog avvisera'." 'Red' }
+} elseif ($nodeErr) {
+    # La distinzione che mancava: qui il nodo non ha risposto NO, e' che non gli si e' potuto
+    # chiedere. Il rimedio sta sul proxy, non sul cluster.
+    Log "Cluster  : kubectl non risponde attraverso il proxy - proseguo col possibile. ($nodeErr)" 'Red'
 } else {
     Log "Cluster  : nodo NON Ready dopo 5 minuti - proseguo col possibile." 'Red'
 }

@@ -89,9 +89,14 @@ public class NotificationRateLimitPressureTests
     {
         var (d, _) = Build(maxPerHour: 1);
 
+        // [K6, 2026-08-31] Le due soppresse erano CRITICAL, ed è precisamente il comportamento che
+        // questo test certificava e che K6 ha rovesciato: da oggi un Critical non viene zittito dal
+        // budget condiviso, ha la sua corsia. Il test aveva ragione a cadere. Non è stato
+        // addomesticato: il fatto che sorveglia — «la spia dichiara che il canale sta perdendo
+        // messaggi» — non ha mai riguardato la gravità, e continua a valere sulla corsia ordinaria.
         await d.NotifyAsync(NotificationSeverity.Info, "1", "b");
-        await d.NotifyAsync(NotificationSeverity.Critical, "2", "b"); // soppressa
-        await d.NotifyAsync(NotificationSeverity.Critical, "3", "b"); // soppressa
+        await d.NotifyAsync(NotificationSeverity.Warning, "2", "b"); // soppressa
+        await d.NotifyAsync(NotificationSeverity.Warning, "3", "b"); // soppressa
 
         var p = d.RateLimitPressure;
         Assert.True(p.IsLosingNow);

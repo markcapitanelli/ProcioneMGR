@@ -263,6 +263,9 @@ public static class AdminConfigRules
         NotificationOptions o => Check(
             (o.Provider is "Logging" or "Telegram", "Provider ammessi: Logging oppure Telegram."),
             (o.MaxPerHour >= 1, "Il rate-limit dev'essere almeno 1 messaggio all'ora."),
+            // [K6] Almeno 1: a zero la corsia riservata diventerebbe una sbarra chiusa, cioè il
+            // contrario di ciò per cui esiste — i critici passerebbero MENO di prima.
+            (o.MaxCriticalPerHour >= 1, "La corsia dei critici dev'essere almeno 1 messaggio all'ora: a 0 gli allarmi gravi non passerebbero mai."),
             (!o.Enabled || o.Provider != "Telegram" || !string.IsNullOrWhiteSpace(o.ChatId),
                 "Con provider Telegram serve il ChatId di destinazione (il TOKEN del bot no: solo env TELEGRAM_BOT_TOKEN).")),
 

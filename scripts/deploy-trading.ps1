@@ -14,6 +14,9 @@
 #    1. git fetch: c'è un commit nuovo su origin/master rispetto al pin del kustomization?
 #       (-IfNewCommit: se no, esce dicendo «già allineato» — è la modalità del lavoro
 #       schedulato nella plancia, che gira spesso e deve costare nulla quando non c'è nulla);
+#    1-bis. [K4] la CI su quel commit è VERDE? Se è in corso o non consultabile si salta il giro
+#       (si riprova fra mezz'ora); se è rossa non si promuove. Il cancello era «master è
+#       cambiato», non «master è sano»: un test rotto arrivava nel cluster in 30 minuti;
 #    2. git pull --ff-only (un albero sporco o divergente ferma tutto, a voce alta);
 #    3. build + import nel nodo kind via build-images-local.ps1 (con la sua verifica crictl);
 #    4. bump del pin newTag nel kustomization + kubectl apply -k + rollout status atteso;
@@ -33,7 +36,10 @@
 
 param(
     [switch]$IfNewCommit,
-    [switch]$NoPush
+    [switch]$NoPush,
+    # [K4] Scavalca il cancello della CI. Esiste per il percorso umano — «so io cosa sto facendo,
+    # promuovi» — mai per il lavoro schedulato, che non deve poter scavalcare niente.
+    [switch]$SkipCiCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,6 +82,48 @@ try {
             exit 0
         }
         if ($LASTEXITCODE -ne 1) { throw "git diff fallito (exit $LASTEXITCODE): il pin local-$pinnedSha non e' un commit noto? Serve un occhio umano." }
+    }
+
+    # --- 1-bis. La CI su quel commit è verde? [K4, 2026-08-31] --------------------------------
+    # Il cancello d'ingresso di questo script era «origin/master è cambiato», non «origin/master è
+    # sano». La rete di sicurezza dichiarata in testa al file — «agisce solo dopo una merge, un
+    # atto umano» — presuppone che la merge implichi la CI verde, ma non lo verificava: un push su
+    # master che rompe i TEST veniva comunque compilato e applicato al cluster entro 30 minuti. La
+    # build locale ferma solo ciò che non COMPILA; un test rosso passava indisturbato, e il
+    # rollout andava a buon fine su un motore che la CI aveva già bocciato.
+    #
+    # Si guarda il workflow «CI» (build + test + audit), non tutti: «Docker build» pubblica su un
+    # registry che questa piattaforma non usa a runtime, e farlo pesare qui significherebbe legare
+    # il deploy locale a un servizio esterno di cui è dichiaratamente indipendente.
+    if (-not $SkipCiCheck) {
+        $shaPieno = (git rev-parse origin/master).Trim()
+        $ci = $null
+        try {
+            $env:GIT_TERMINAL_PROMPT = '0'
+            $ci = gh run list --branch master --commit $shaPieno --workflow CI --limit 5 --json status,conclusion 2>$null | ConvertFrom-Json
+        } catch { $ci = $null }
+
+        if ($null -eq $ci -or $ci.Count -eq 0) {
+            # Non consultabile NON è verde. Ma non è nemmeno un guasto da gridare: si salta il giro
+            # e si riprova fra mezz'ora. Fail-closed sull'AZIONE, senza bloccarsi per sempre —
+            # la CI potrebbe non essere ancora partita, o gh non essere autenticato.
+            Write-Host "CI non consultabile per $shaPieno (gh assente, non autenticato, o nessun run ancora): salto il giro."
+            exit 0
+        }
+
+        $inCorso = @($ci | Where-Object { $_.status -ne 'completed' })
+        if ($inCorso.Count -gt 0) {
+            Write-Host "CI ancora in corso su $shaPieno ($($inCorso.Count) run): salto il giro, si riprova al prossimo."
+            exit 0
+        }
+
+        $rotti = @($ci | Where-Object { $_.conclusion -ne 'success' })
+        if ($rotti.Count -gt 0) {
+            # L'esito si estrae PRIMA: una sottoespressione con indice dentro una stringa a doppi
+            # apici, seguita da un apostrofo, manda in confusione il parser di PowerShell 5.1.
+            $esito = $rotti[0].conclusion
+            throw "CI NON verde su origin/master (esito: $esito): non promuovo. E' il cancello che mancava, un test rosso arrivava nel cluster in 30 minuti. Per forzare: -SkipCiCheck."
+        }
     }
 
     # --- 2. Allineamento del repo (ff-only: una divergenza è un problema, non un dettaglio) ---

@@ -309,4 +309,56 @@ internal static class Verdicts
             ? new Check("automazioni", "Backup", Level.Warn, dettaglio + " — un giro notturno e' saltato", "`procione backup`")
             : new Check("automazioni", "Backup", Level.Ok, dettaglio);
     }
+
+    /// <summary>
+    /// [K1] <b>Quanto e' indietro un piano rispetto al codice che hai in mano.</b>
+    ///
+    /// <para>Tre stati, e nessuno dei tre e' il silenzio. Il piu' importante e' il terzo: quando la
+    /// revisione non si legge, la riga NON dice «allineato». E' la forma di difetto che questo
+    /// progetto ha gia' pagato piu' volte — un controllo che da' la risposta rassicurante a
+    /// prescindere dalla realta' — e qui sarebbe particolarmente insidiosa, perche' un guscio troppo
+    /// vecchio per dichiarare la propria revisione e' precisamente un guscio molto indietro.</para>
+    ///
+    /// <para>Il metro e' il CONTENUTO, non il conteggio: <paramref name="contenutoDiverso"/> arriva
+    /// da un <c>git diff</c> che esclude il file del pin, lo stesso cancello di
+    /// <c>deploy-trading.ps1</c>. Senza quell'esclusione ogni deploy riuscito lascerebbe la riga a
+    /// «1 indietro» per sempre, e un allarme che non puo' rientrare smette di essere letto.</para>
+    /// </summary>
+    /// <param name="avanti">Commit che la revisione viva ha e HEAD no (ramo non mergiato).</param>
+    /// <param name="indietro">Commit che HEAD ha e la revisione viva no. null = sha sconosciuto al repo.</param>
+    /// <param name="contenutoDiverso">HEAD differisce nel contenuto (pin escluso)? null = non deducibile.</param>
+    public static Check Revisione(Piano piano, int? avanti, int? indietro, bool? contenutoDiverso, string? fix = null)
+    {
+        if (piano.Sha is null)
+            return new Check("revisioni", piano.Nome, Level.Warn,
+                $"revisione NON dichiarata — {piano.Perche ?? "sorgente muta"} ({piano.Fonte})",
+                fix ?? "un piano che non dice da che codice gira non e' allineato: e' non misurato");
+
+        var corta = piano.Sha.Length >= 8 ? piano.Sha[..8] : piano.Sha;
+
+        if (avanti is null || indietro is null || contenutoDiverso is null)
+            return new Check("revisioni", piano.Nome, Level.Warn,
+                $"{corta} sconosciuta al repository: build da un ramo non mergiato, o storia riscritta ({piano.Fonte})",
+                fix ?? "verifica da quale ramo e' stato compilato questo piano");
+
+        if (contenutoDiverso == false)
+            return new Check("revisioni", piano.Nome, Level.Ok, indietro > 0
+                ? $"{corta} — allineata nel contenuto ({indietro} commit di scarto, solo il pin del deploy)"
+                : $"{corta} — allineata a HEAD");
+
+        // Le due direzioni sono guasti DIVERSI e la prima stesura le confondeva: la prova dal vivo
+        // del 2026-08-31 ha stampato «INDIETRO di 0 commit» su una plancia compilata da un ramo che
+        // era AVANTI a master. Un numero che dice zero accanto alla parola sbagliata insegna a non
+        // leggere la riga.
+        if (indietro > 0)
+            return new Check("revisioni", piano.Nome, Level.Warn,
+                $"{corta} INDIETRO di {indietro} commit: sta girando codice che non e' quello del repository",
+                fix);
+
+        // Il rimedio ricevuto parla di ricompilare, e per un piano AVANTI sarebbe il consiglio
+        // sbagliato: qui non manca niente, c'e' in piu'.
+        return new Check("revisioni", piano.Nome, Level.Warn,
+            $"{corta} AVANTI di {avanti} commit su HEAD: gira codice che il repository non ha ancora (ramo non mergiato)",
+            "normale mentre si lavora da un worktree; non deve restare cosi' su una macchina che opera");
+    }
 }

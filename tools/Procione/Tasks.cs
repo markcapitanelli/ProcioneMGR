@@ -25,6 +25,16 @@ namespace Procione;
 internal static class Tasks
 {
     /// <summary>
+    /// [K5b] Ogni quanto il Task Scheduler riprova ad avviare il supervisore, per sempre.
+    ///
+    /// <para>Dieci minuti e' scelto contro la cadenza della veglia (5′): al peggio si perde un giro
+    /// e mezzo di sorveglianza, che e' l'ordine di grandezza giusto per una resurrezione — non
+    /// tanto stretto da moltiplicare gli avvii scartati, non tanto largo da lasciare la piattaforma
+    /// giu' per mezz'ora.</para>
+    /// </summary>
+    public const int RisveglioMinuti = 10;
+
+    /// <summary>
     /// Stato ed esito delle attivita' che ci interessano, e — separatamente — se la lettura e'
     /// RIUSCITA.
     ///
@@ -136,29 +146,13 @@ internal static class Tasks
         Ui.Info($"eseguibile : {exe}");
         Ui.Info($"repository : {Platform.MainRepoRoot}");
 
-        // $$""" e non $""": lo script PowerShell contiene graffe sue (`{ exit 0 }`), e con una sola
-        // il compilatore le leggerebbe come interpolazioni. Qui le interpolazioni sono {{...}}.
-        var script = $$"""
-        $ErrorActionPreference = 'Stop'
-        $azione = New-ScheduledTaskAction -Execute '{{Escape(exe)}}' -Argument 'servizio --muto' -WorkingDirectory '{{Escape(Platform.MainRepoRoot)}}'
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User '{{Escape(Utente)}}'
-        # ExecutionTimeLimit a ZERO significa "nessun tetto": senza, Windows ucciderebbe il
-        # supervisore dopo 72 ore, e lo farebbe in silenzio.
-        $impostazioni = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -StartWhenAvailable -MultipleInstances IgnoreNew `
-            -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
-            -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)
-        Register-ScheduledTask -TaskName '{{Escape(Platform.SupervisorTask)}}' -Action $azione -Trigger $trigger `
-            -Settings $impostazioni -Force `
-            -Description 'Supervisore della plancia ProcioneMGR: veglia ogni 5 minuti e backup notturno, dentro un solo programma e senza finestre.' | Out-Null
-        if (Get-ScheduledTask -TaskName '{{Escape(Platform.SupervisorTask)}}' -ErrorAction SilentlyContinue) { exit 0 }
-        exit 1
-        """;
+        var script = BuildRegisterScript(exe);
 
         var esito = RunPs(script, "registrazione dell'attivita'");
         if (esito == 0)
         {
-            Ui.Good($"attivita' «{Platform.SupervisorTask}» registrata e VERIFICATA (al logon).");
+            Ui.Good($"attivita' «{Platform.SupervisorTask}» registrata e VERIFICATA " +
+                    $"(al logon, piu' risveglio ogni {RisveglioMinuti}′).");
             return 0;
         }
 
@@ -166,6 +160,48 @@ internal static class Tasks
         // ottiene lo stesso effetto e non chiede niente a nessuno.
         Ui.Warn("registrazione non riuscita (di norma: serve una shell elevata). Ripiego su Esecuzione automatica.");
         return WriteStartupShortcut(exe);
+    }
+
+    /// <summary>
+    /// Lo script di registrazione, come TESTO. Separato dall'esecuzione perche' e' l'unica parte
+    /// che si puo' provare senza toccare il Task Scheduler della macchina: un errore di sintassi in
+    /// PowerShell generato si scopre altrimenti solo il giorno in cui qualcuno ri-registra, cioe'
+    /// nel momento peggiore.
+    /// </summary>
+    internal static string BuildRegisterScript(string exe)
+    {
+        // $$""" e non $""": lo script PowerShell contiene graffe sue (`{ exit 0 }`), e con una sola
+        // il compilatore le leggerebbe come interpolazioni. Qui le interpolazioni sono {{...}}.
+        return $$"""
+        $ErrorActionPreference = 'Stop'
+        $azione = New-ScheduledTaskAction -Execute '{{Escape(exe)}}' -Argument 'servizio --muto' -WorkingDirectory '{{Escape(Platform.MainRepoRoot)}}'
+        $alLogon = New-ScheduledTaskTrigger -AtLogOn -User '{{Escape(Utente)}}'
+        # [K5b, 2026-08-31] Un SECONDO trigger che riprova ogni {{RisveglioMinuti}} minuti, per
+        # sempre. Non e' ridondanza: e' l'unica cosa che rimette in piedi il supervisore quando
+        # muore per una causa che il Task Scheduler non considera un fallimento. Misurato quel
+        # giorno: alle 14:38 un installer Microsoft ha usato il Restart Manager per chiudere le
+        # applicazioni e liberare i file; ha ucciso la plancia a meta' bring-up (esito 1, nessun
+        # log, nessuna eccezione) e -RestartCount 3 NON e' intervenuto. La piattaforma e' rimasta
+        # giu' venti minuti, e sarebbe rimasta giu' fino al logon successivo — cioe' fino a quando
+        # se ne fosse accorto un umano.
+        # Il risveglio e' idempotente per costruzione: -MultipleInstances IgnoreNew fa scartare
+        # l'avvio quando il supervisore e' gia' vivo, quindi il caso normale e' un no-op.
+        $risveglio = New-ScheduledTaskTrigger -Daily -At '00:00'
+        $risveglio.Repetition = (New-ScheduledTaskTrigger -Once -At '00:00' `
+            -RepetitionInterval (New-TimeSpan -Minutes {{RisveglioMinuti}}) `
+            -RepetitionDuration (New-TimeSpan -Days 1)).Repetition
+        # ExecutionTimeLimit a ZERO significa "nessun tetto": senza, Windows ucciderebbe il
+        # supervisore dopo 72 ore, e lo farebbe in silenzio.
+        $impostazioni = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable -MultipleInstances IgnoreNew `
+            -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+            -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)
+        Register-ScheduledTask -TaskName '{{Escape(Platform.SupervisorTask)}}' -Action $azione -Trigger @($alLogon, $risveglio) `
+            -Settings $impostazioni -Force `
+            -Description 'Supervisore della plancia ProcioneMGR: veglia ogni 5 minuti e backup notturno, dentro un solo programma e senza finestre. Si rialza da solo ogni {{RisveglioMinuti}} minuti se qualcuno lo uccide.' | Out-Null
+        if (Get-ScheduledTask -TaskName '{{Escape(Platform.SupervisorTask)}}' -ErrorAction SilentlyContinue) { exit 0 }
+        exit 1
+        """;
     }
 
     private static int WriteStartupShortcut(string exe)

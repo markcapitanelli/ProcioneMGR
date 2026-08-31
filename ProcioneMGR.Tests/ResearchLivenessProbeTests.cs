@@ -69,6 +69,90 @@ public class ResearchLivenessJudgeTests
         var report = ResearchLivenessProbe.Judge(facts, Soglia, Now);
         Assert.Contains("WaitingForTrigger", report.Reason);
     }
+
+    // =============================================================================================
+    //  [K9, 2026-08-31] La soglia sotto il riarmo, e il verdetto cieco ai candidati
+    // =============================================================================================
+
+    [Fact]
+    public void Soglia_NonPuoStareSottoIlCicloDiRiarmo()
+    {
+        // Il caso REALE della configurazione viva del 2026-08-30: soglia 12 (default) contro
+        // riarmo 13. A regime sano — rotazione esaurita, attesa, ripartenza dopo 13 ore — la sonda
+        // passava un'ora piena a gridare «FERMA» a ogni giro, senza che nulla fosse rotto.
+        var soglia = ResearchLivenessProbe.SogliaEffettiva(stallAlertHours: 12, rearmHours: 13);
+
+        Assert.True(soglia > TimeSpan.FromHours(13),
+            $"soglia {soglia} sotto il riarmo di 13h: un allarme che suona a macchina sana insegna a ignorarlo");
+        Assert.Equal(TimeSpan.FromHours(13 + ResearchLivenessProbe.MargineSulRiarmoOre), soglia);
+    }
+
+    [Fact]
+    public void Soglia_UnValoreConfiguratoPiuLARGO_SiRispetta()
+    {
+        // L'operatore può allargare, mai stringere sotto il ciclo: la manopola non è finta.
+        var soglia = ResearchLivenessProbe.SogliaEffettiva(stallAlertHours: 48, rearmHours: 13);
+        Assert.Equal(TimeSpan.FromHours(48), soglia);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]      // valori assurdi non devono produrre una soglia a zero
+    [InlineData(-5, -5)]
+    public void Soglia_NonEmaiNulla(int stall, int rearm) =>
+        Assert.True(ResearchLivenessProbe.SogliaEffettiva(stall, rearm) >= TimeSpan.FromHours(1));
+
+    [Fact]
+    public void RunCompletatiMaZeroCandidati_NON_ediceViva()
+    {
+        // Il difetto misurato: la Home stampava «Ricerca viva» accanto a «0 candidati
+        // distinti/24h» — il numero che smentisce il badge, di fianco al badge. È durato cinque
+        // giorni con 34 run non indicizzati dietro.
+        var facts = Facts(lastRun: Now.AddHours(-2), completed24h: 4);
+
+        var report = ResearchLivenessProbe.Judge(facts, Soglia, Now);
+
+        Assert.Equal(ResearchLivenessState.VivaSenzaDeposito, report.State);
+        Assert.Contains("ZERO candidati", report.Reason);
+        // Non attribuisce la causa: da qui le due sono indistinguibili, e sceglierne una
+        // manderebbe a guardare nel posto sbagliato metà delle volte.
+        Assert.Contains("indicizzazione ferma", report.Reason);
+        Assert.Contains("cacce che non producono", report.Reason);
+    }
+
+    [Fact]
+    public void RunCompletatiConCandidati_Viva()
+    {
+        var facts = Facts(lastRun: Now.AddHours(-2), completed24h: 4) with { DistinctCandidates24h = 37 };
+
+        var report = ResearchLivenessProbe.Judge(facts, Soglia, Now);
+
+        Assert.Equal(ResearchLivenessState.Viva, report.State);
+    }
+
+    [Fact]
+    public void UnRunInCorso_NON_riscattaVentiquattroOreDiDepositiAZero()
+    {
+        // Il controllo sui depositi viene PRIMA del ramo «un run è in corso»: metterlo dopo lo
+        // renderebbe invisibile proprio nei momenti di attività, che sono la maggioranza.
+        var facts = Facts(lastRun: Now.AddHours(-2), inProgress: 1, completed24h: 4);
+
+        var report = ResearchLivenessProbe.Judge(facts, Soglia, Now);
+
+        Assert.Equal(ResearchLivenessState.VivaSenzaDeposito, report.State);
+    }
+
+    [Fact]
+    public void NessunRunNelleVentiquattroOre_NonEUnProblemaDiDEPOSITO()
+    {
+        // Il controllo sul deposito non deve rubare il verdetto al fermo: con zero run completati
+        // lo zero candidati è una conseguenza, non un guasto a sé. Confonderli manderebbe a
+        // cercare l'indicizzatore mentre il guasto è che la macchina non cerca.
+        var facts = Facts(lastRun: Now.AddHours(-43), completed24h: 0);
+
+        var report = ResearchLivenessProbe.Judge(facts, Soglia, Now);
+
+        Assert.Equal(ResearchLivenessState.Ferma, report.State);
+    }
 }
 
 [Collection("Postgres")]
