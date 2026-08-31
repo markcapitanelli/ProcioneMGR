@@ -133,6 +133,27 @@ internal static class Jobs
             TimeSpan.FromMinutes(30),
             EnabledByDefault: false),
 
+        // [K2+K3, PRD autonomia-piena 2026-08-31] I due piani che non si aggiornavano da soli.
+        //
+        // Il motore aveva gia' il suo lavoro (`deploy`); il guscio e la plancia no, e una
+        // correzione mergiata con la CI verde restava fuori da entrambi per GIORNI — finche'
+        // qualcuno non riavviava il PC. Misura del 2026-08-30: guscio indietro di 7 commit,
+        // plancia di 13, e la plancia stantia si e' appesa sullo stesso pipe dell'incidente del
+        // 28/08 con dentro il binario il fix che lo impediva.
+        //
+        // Cadenza 20', sfalsata dai 30' del deploy: i due lavori toccano lo stesso repository con
+        // `git pull --ff-only`, e sovrapporli a ogni giro sarebbe cercarsi una gara. Se capita
+        // comunque, il pull fallisce, il giro salta e si riprova — nessuno dei due forza niente.
+        //
+        // Il tetto e' generoso come quello di `avvio` perche' il caso peggiore CONTIENE un
+        // bring-up completo: fermare il guscio, ricompilarlo (~3m36s misurati) e rimettere i
+        // port-forward.
+        new("piani",
+            "guscio e plancia allineati a master: aggiorna in finestra di quiete",
+            Schedule.Ogni(TimeSpan.FromMinutes(20)),
+            "sync-piani.ps1", [],
+            TimeSpan.FromMinutes(30)),
+
         // [2026-08-25, sera] L'ECCEZIONE DICHIARATA alla regola scritta in testa a questo file
         // («nessuna automazione nuova qui dentro»): questa E' un'automazione nuova, e c'e' per
         // decisione esplicita del proprietario — «il sync del trading da ora in poi deve

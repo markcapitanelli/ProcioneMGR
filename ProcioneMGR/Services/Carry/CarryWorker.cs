@@ -147,6 +147,45 @@ public sealed class CarryWorker(
 
         SymbolsWithoutData = missing;
         LastEvaluationUtc = DateTime.UtcNow;
+
+        // [K8, PRD autonomia-piena 2026-08-31] Il battito PERSISTITO del carry.
+        //
+        // Fino a oggi il testimone di vitalità era questo campo in-process, e il guardiano che lo
+        // legge (FleetOrchestratorWorker.WatchCarryAsync) vive nel GUSCIO mentre questo worker vive
+        // nel POD: con Trading:UseRemoteTrading=true quel guardiano faceva GetService<CarryWorker>()
+        // e otteneva SEMPRE null. Risultato: Fleet:CarrySilenceAlertHours era una manopola
+        // amministrabile che non poteva scattare mai, sull'unica classe con edge positivo MISURATO
+        // (5-12% netto annuo) — cioè la sorveglianza mancava esattamente dove serviva di più. Se il
+        // carry nel pod smetteva di decidere lo si scopriva solo nei log del pod, ritenzione ~10h.
+        //
+        // Il battito passa dalla tabella che esiste già per questo (HostHeartbeats, AF5.1): una
+        // riga per ruolo, upsert, nessuna migrazione. Un guasto qui NON deve fermare il carry: la
+        // valutazione è già avvenuta, e perdere il battito è perdere la spia, non il lavoro.
+        try
+        {
+            var row = await db.HostHeartbeats.FirstOrDefaultAsync(h => h.Host == HostHeartbeat.CarryRole, ct);
+            if (row is null)
+            {
+                db.HostHeartbeats.Add(new HostHeartbeat
+                {
+                    Host = HostHeartbeat.CarryRole,
+                    LastUtc = LastEvaluationUtc.Value,
+                    Version = $"{mode} · {evaluated}/{symbols.Count} simboli",
+                });
+            }
+            else
+            {
+                row.LastUtc = LastEvaluationUtc.Value;
+                row.Version = $"{mode} · {evaluated}/{symbols.Count} simboli";
+            }
+            await db.SaveChangesAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Carry: battito non persistito (il guardiano lo leggerà come silenzio).");
+        }
+
         logger.LogDebug("Carry [{Mode}]: valutati {N}/{Tot} simboli.", mode, evaluated, symbols.Count);
         return evaluated;
     }

@@ -89,8 +89,22 @@ public sealed class HostHeartbeatWorker(
     IOptionsMonitor<HeartbeatOptions> options,
     ILogger<HostHeartbeatWorker> logger) : BackgroundService
 {
+    /// <summary>
+    /// [K7, 2026-08-31] La REVISIONE, non «1.0.0.0».
+    ///
+    /// <para>Fino a oggi questa colonna portava <c>Assembly.GetName().Version</c>, che su questo
+    /// repository vale costantemente <c>1.0.0.0</c>: un campo chiamato «versione» che non distingue
+    /// nessuna versione da nessun'altra. Chi lo avesse confrontato con qualcosa avrebbe ottenuto un
+    /// controllo che dice sempre la stessa cosa — e infatti l'audit lo ha classificato come canale
+    /// occupato e inutilizzabile.</para>
+    ///
+    /// <para>Ora porta lo sha di build (K1). Il valore: il battito del MOTORE diventa la sua
+    /// dichiarazione di revisione letta dal database, cioè una seconda sorgente indipendente dal
+    /// tag dell'immagine — utile esattamente quando le due divergono (immagine ri-taggata a mano,
+    /// rollout a metà). Ripiego dichiarato quando il timbro manca.</para>
+    /// </summary>
     private static readonly string AssemblyVersion =
-        typeof(HostHeartbeatWorker).Assembly.GetName().Version?.ToString() ?? "sconosciuta";
+        BuildRevision.Short ?? $"senza timbro ({typeof(HostHeartbeatWorker).Assembly.GetName().Version})";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

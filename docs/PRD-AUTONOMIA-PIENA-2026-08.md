@@ -244,24 +244,24 @@ caccia gira su una costante inventata.
 ### Fase 0 — La macchina sa in che stato è, e non muore in silenzio
 *Precondizione di tutto: ogni automazione costruita sopra un piano stantio è lavoro sprecato.*
 
-> **Stato al 2026-08-31 (sera).** Fatti: **K1, K4, K5, K5b, K5c, K6, K9, K10** — otto item su dodici.
-> Restano **K2** (la plancia si ricompila da sola), **K3** (il guscio si aggiorna in finestra di
-> quiete), **K7** (heartbeat incrociato acceso in guscio *e* pod) e **K8** (battito persistito del
-> carry). Due item, K5b e K5c, non erano nel piano: li ha scoperti la macchina vera mentre ci
-> lavoravo sopra — è il motivo per cui la Fase 0 viene prima.
+> **Stato al 2026-08-31 (sera): Fase 0 CHIUSA.** Tutti e dodici gli item, K5b e K5c compresi —
+> che nel piano non c'erano: li ha scoperti la macchina vera mentre ci lavoravo sopra, ed è il
+> motivo per cui questa fase viene prima. Da oggi i tre piani si allineano da soli: il motore col
+> lavoro `deploy` (30′), il guscio e la plancia col lavoro `piani` (20′), e il guscio solo quando
+> lo dichiara lui stesso su `/health/quiet`.
 
 | # | Cosa | Come si misura che è fatto |
 |---|---|---|
 | K1 ✅ | Sonda **«revisione viva vs HEAD»** per i tre piani. Il dato c'è già a costo zero: il SDK .NET 10 timbra `AssemblyInformationalVersion` con lo sha completo (guscio e plancia), e il pod porta `newTag: local-<sha8>`. Riga in `procione stato` + scheda in Home | oggi la scheda deve dire «guscio 0 · plancia 13 · pod 0», e i tre numeri devono muoversi da soli dopo una merge. **Non** riusare `HostHeartbeats.Version`: ospita già una stringa di stato, e il confronto direbbe sempre sì |
-| K2 | **La plancia si ricompila da sola.** Oggi nemmeno il suo riavvio la aggiorna: `procione.exe` avviato stanotte da un binario del 25/08 | dopo una merge, entro 30′, la revisione della plancia coincide con `origin/master` |
-| K3 | **Il guscio si aggiorna come il motore**, in finestra di quiete. Costo misurato: **3m36s**; non tocca posizioni né lease (stanno nel pod). Quiete = nessun run non terminale, campagna fuori finestra d'innesco, pod `Ready`, fascia oraria dichiarata | una merge alle 15:00 trova il guscio allineato entro la finestra successiva, e `PipelineRuns` non guadagna righe `Paused` |
+| K2 ✅ | **La plancia si ricompila da sola.** Oggi nemmeno il suo riavvio la aggiorna: `procione.exe` avviato stanotte da un binario del 25/08 | dopo una merge, entro 30′, la revisione della plancia coincide con `origin/master` |
+| K3 ✅ | **Il guscio si aggiorna come il motore**, in finestra di quiete. Costo misurato: **3m36s**; non tocca posizioni né lease (stanno nel pod). Quiete = nessun run non terminale, campagna fuori finestra d'innesco, pod `Ready`, fascia oraria dichiarata | una merge alle 15:00 trova il guscio allineato entro la finestra successiva, e `PipelineRuns` non guadagna righe `Paused` |
 | K4 ✅ | Il lavoro `deploy` **verifica la CI verde** prima di promuovere (`gh run list --commit <sha> --json conclusion`). Oggi il cancello è «master è cambiato», non «master è sano»: un test rosso arriva nel cluster in 30 minuti | un commit con CI rossa non produce rollout, e il rifiuto compare nel log del supervisore |
 | K5 ✅ | Tetto del lavoro `avvio` da 15′ a 30′. Stanotte: 10m29s, col passo dichiarato «fino a 5 minuti» che ne ha presi **7m15s** (+45%). Altri 4-5 minuti di lentezza e il bring-up viene ucciso **prima** di avviare il guscio, e nulla lo rilancia | un bring-up da 20 minuti completa invece di essere ucciso |
 | **K5b** ✅ | **Trigger di risveglio periodico** sull'attività pianificata. *Aggiunto il 2026-08-31 da un incidente misurato*: alle 14:38 un installer Microsoft ha usato il **Restart Manager** e ha terminato la plancia a metà bring-up (esito 1, nessun log, nessuna eccezione). `-RestartCount 3` era già configurato e **non è intervenuto**: il Task Scheduler non conta quella morte come un fallimento. La piattaforma è rimasta giù venti minuti e sarebbe rimasta giù fino al logon successivo | il supervisore ucciso da fuori torna su entro 10′ da solo. Idempotente per costruzione: con `IgnoreNew` il caso normale è un no-op deciso da Windows |
 | **K5c** ✅ | **Il bring-up sprecava 6m25s a ogni giro per due difetti sovrapposti, entrambi nascosti da uno `2>$null`.** (a) La jsonpath del nodo perde le virgolette interne passando da PowerShell 5.1 a kubectl: arrivava `@.type==Ready` e kubectl rispondeva `unrecognized identifier Ready`, exit 1, per **tutti e trenta i giri** — il ciclo non poteva riuscire, e lo script concludeva «nodo NON Ready» accusando il cluster di un difetto di quoting. (b) La sonda `/livez` con `Invoke-WebRequest` falliva **sempre** sullo stack TLS di PS 5.1 mentre kubectl passava dallo stesso proxy: il socat veniva distrutto e ricreato a ogni bring-up, anche quando funzionava. *Corollario*: l'attesa del pod del motore era codice morto, perché stava dentro il ramo che non veniva mai preso | **fatto (2026-08-31)** — misurato: da **6m25s a 5 secondi** |
 | K6 ✅ | **Corsia preferenziale per i `Critical`** + deduplica centrale per chiave nel dispatcher. Oggi 20 Info nell'ora scorrevole zittiscono l'allarme di invariante di corsia o di master key, e il messaggio è **perso**, non accodato | un test che satura il budget con Info e verifica che un `Critical` passi comunque |
-| K7 | Accendere l'**heartbeat incrociato** (`Heartbeat:Enabled=true` in guscio **e** pod) | `HostHeartbeats` mostra le righe `shell` e `engine` accanto a `ingestion-sync` |
-| K8 | Il **carry scrive un battito persistito** e il guardiano legge quello invece di `GetService` | `Fleet:CarrySilenceAlertHours` diventa una manopola che può scattare: spegnere il carry nel pod produce l'allarme |
+| K7 ✅ | Accendere l'**heartbeat incrociato** (`Heartbeat:Enabled=true` in guscio **e** pod) | `HostHeartbeats` mostra le righe `shell` e `engine` accanto a `ingestion-sync` |
+| K8 ✅ | Il **carry scrive un battito persistito** e il guardiano legge quello invece di `GetService` | `Fleet:CarrySilenceAlertHours` diventa una manopola che può scattare: spegnere il carry nel pod produce l'allarme |
 | K9 ✅ | La **sonda della ricerca**, due correzioni: `StallAlertHours = 12` contro `RearmHours = 13` produce ~1h di falso allarme a **ogni** giro sano; e il verdetto è cieco ai candidati. Separare le due domande — «la ricerca gira» e «l'archivio cresce» sono guasti diversi | soglia > riarmo; e la card distingue «gira ma non deposita» da «ferma» |
 | K10 ✅ | `IResearchCandidateIndexer` come **hosted worker a fine run** | l'archivio contiene i run delle ultime 24h senza che nessuno abbia aperto `/research` |
 
