@@ -268,20 +268,20 @@ caccia gira su una costante inventata.
 ### Fase 1 — Decidere prima del 4 settembre
 *Quattro corsie verranno fermate da sole. Questa fase esiste perché la decisione sia presa, non subita.*
 
-> **Stato al 2026-08-31 (sera).** **K11 eseguito**: il proprietario ha fermato a mano le corsie 3,
-> 4, 6 e 7 — verificate ferme da 7-10 giorni e senza posizioni aperte, configurazione conservata.
-> Il ritiro automatico del 4 settembre non ha più nulla da fare su quelle quattro; resta la corsia
-> 5, immune fino a inizio ottobre per via del suo unico trade. **K12 e K14 fatti.** Restano **K13**
-> (etichettare `Grey` le gambe di flotta) e **K15** (budget di esecuzione separato fra ritiro e
-> assegnazione).
+> **Stato al 2026-08-31 (sera): Fase 1 CHIUSA.** **K11 eseguito** dal proprietario: corsie 3, 4, 6
+> e 7 fermate a mano — verificate ferme da 7-10 giorni e senza posizioni aperte, configurazione
+> conservata. Il ritiro automatico del 4 settembre non ha più nulla da fare su quelle quattro;
+> resta la corsia 5, immune fino a inizio ottobre per via del suo unico trade. **K12, K13, K14 e
+> K15 fatti.** La Regina ora ha corsie libere, una coda che non si svuota da sé, un ramo che
+> dichiara perché tace, e due budget che non si rubano il posto a vicenda.
 
 | # | Cosa |
 |---|---|
 | K11 ✅ | **La decisione del proprietario**: lasciar fare, alzare `StarvationMinDays`, o togliere corsie da `ExecutionLanes`. Il ritiro **non è irreversibile** (solo `StopAsync`; la corsia resta configurata) |
 | K12 ✅ | Il ramo grigio **dichiara perché non schiera**: un `FleetNoOp` per «nessuna corsia libera» e uno per «tetto grigio saturo», coi numeri dentro. Stessa forma di quello già presente per la banda «pass» |
-| K13 | **Etichettare `Grey` le cinque gambe di flotta** (lo sono: cinque click F5 documentati a journal). Il risultato non cambia, cambia che una superficie lo spiega |
+| K13 ✅ | **Etichettare `Grey` le cinque gambe di flotta** (lo sono: cinque click F5 documentati a journal). Il risultato non cambia, cambia che una superficie lo spiega |
 | K14 ✅ | **«Già proposto al click umano» smette di consumare il braccio automatico.** È una riga di codice e una decisione di prodotto: oggi il candidato migliore dell'archivio è invisibile all'automatismo perché un umano l'ha visto due giorni fa |
-| K15 | **Budget di esecuzione separato** fra ritiro e assegnazione: oggi `MaxExecutionsPerTick=1` fa sì che il tick che libera la terza corsia non possa anche assegnarla |
+| K15 ✅ | **Budget di esecuzione separato** fra ritiro e assegnazione: oggi `MaxExecutionsPerTick=1` fa sì che il tick che libera la terza corsia non possa anche assegnarla |
 
 ### Fase 2 — Il ritiro come giudizio, non come conteggio
 
