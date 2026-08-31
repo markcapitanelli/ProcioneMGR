@@ -289,6 +289,20 @@ caccia gira su una costante inventata.
 > quattro **decisioni di politica**, non solo codice: cambiano *quando* una corsia viene ritirata,
 > cioè quando la piattaforma smette di dare capitale a un'ipotesi. Vanno prese guardando i numeri,
 > non di notte.
+>
+> **Aggiornamento 2026-09-01 — i numeri ci sono.**
+> → **[`docs/audit/36_RITIRO_CORSIA_NUMERI_2026-09-01.md`](audit/36_RITIRO_CORSIA_NUMERI_2026-09-01.md)**
+> (4 misure + 4 avversari indipendenti; le tre affermazioni portanti ri-verificate a mano sul DB).
+> Tre risultati cambiano la forma del problema:
+> 1. **La vita mediana di un'identità di corsia è ~27 giorni di calendario, ~23,8 osservati.**
+>    Alzare `StarvationMinDays` a 27 o 41 non rende il criterio severo: lo **spegne** (0 identità su
+>    4 sarebbero arrivate al cancello).
+> 2. **Il falso allarme va letto sull'orizzonte, non al primo sguardo**: la regola gira ogni 15′.
+>    A `MinDays=10` è 31,7-34,4% cumulato a 180 giorni, non 28,7%.
+> 3. **K17 non è tarabile oggi**: 66 righe di `TradeRecords` sono replay dello stesso trade logico
+>    (367 righe = 301 entità), e col nullo corretto nessuna soglia di danno è distinguibile dal caso.
+>
+> Otto decisioni aperte (D1-D8) nel § 7 di quel documento. **Nessuna presa.**
 
 | # | Cosa |
 |---|---|
