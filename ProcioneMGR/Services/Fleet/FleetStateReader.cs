@@ -193,9 +193,16 @@ public sealed class FleetStateReader(
                 .Select(a => a.RunId)
                 .ToListAsync(ct))
             .ToHashSet();
-        var handledByFleet = (await db.OrchestratorDecisions.AsNoTracking()
-                .Where(d => d.RunId != null && runIds.Contains(d.RunId.Value)
-                            && (d.Kind == "Assign" || d.Kind == "ProposeGrey"))
+        // [K14 2026-08-31] DUE insiemi, non uno. Prima "Assign" e "ProposeGrey" finivano insieme in
+        // «gia' gestito», e con l'ereditarieta' per identita' una NOTIFICA a un umano toglieva il
+        // candidato al braccio automatico — per sempre, dentro la finestra dei 30 giorni.
+        var assignedByFleet = (await db.OrchestratorDecisions.AsNoTracking()
+                .Where(d => d.RunId != null && runIds.Contains(d.RunId.Value) && d.Kind == "Assign")
+                .Select(d => d.RunId!.Value)
+                .ToListAsync(ct))
+            .ToHashSet();
+        var proposedByFleet = (await db.OrchestratorDecisions.AsNoTracking()
+                .Where(d => d.RunId != null && runIds.Contains(d.RunId.Value) && d.Kind == "ProposeGrey")
                 .Select(d => d.RunId!.Value)
                 .ToListAsync(ct))
             .ToHashSet();
@@ -228,7 +235,8 @@ public sealed class FleetStateReader(
 
                 list.Add(new FleetCandidate(
                     run.Id, run.CompletedAt ?? now, v.Band, v.TradesPerMonth, v.Timeframe, v.Summary,
-                    AlreadyHandled: handledByReapply.Contains(run.Id) || handledByFleet.Contains(run.Id),
+                    AlreadyHandled: handledByReapply.Contains(run.Id) || assignedByFleet.Contains(run.Id),
+                    AlreadyProposed: proposedByFleet.Contains(run.Id),
                     Identity: v.Identity));
             }
             catch (Exception ex)
@@ -250,20 +258,27 @@ public sealed class FleetStateReader(
         // gestito, lo sono tutti. La finestra e' quella dei candidati (CandidateMaxAgeDays), quindi
         // oltre quella un'identita' puo' ripresentarsi — ed e' giusto: dopo un mese e' una proposta
         // nuova, non la stessa che ritorna.
-        var identitaGiaGestite = list
+        // [K14] L'eredita' vale per ENTRAMBI gli stati, ma SEPARATAMENTE: «schierato» si eredita
+        // perche' non si schiera due volte la stessa cosa; «proposto» si eredita perche' non si
+        // notifica due volte la stessa cosa. Fonderli era il difetto.
+        var identitaSchierate = list
             .Where(c => c.AlreadyHandled && !string.IsNullOrEmpty(c.Identity))
             .Select(c => c.Identity!)
             .ToHashSet(StringComparer.Ordinal);
+        var identitaProposte = list
+            .Where(c => c.AlreadyProposed && !string.IsNullOrEmpty(c.Identity))
+            .Select(c => c.Identity!)
+            .ToHashSet(StringComparer.Ordinal);
 
-        if (identitaGiaGestite.Count > 0)
+        for (var i = 0; i < list.Count; i++)
         {
-            for (var i = 0; i < list.Count; i++)
+            var c = list[i];
+            if (string.IsNullOrEmpty(c.Identity)) continue;
+            var schierata = c.AlreadyHandled || identitaSchierate.Contains(c.Identity);
+            var proposta = c.AlreadyProposed || identitaProposte.Contains(c.Identity);
+            if (schierata != c.AlreadyHandled || proposta != c.AlreadyProposed)
             {
-                var c = list[i];
-                if (!c.AlreadyHandled && !string.IsNullOrEmpty(c.Identity) && identitaGiaGestite.Contains(c.Identity))
-                {
-                    list[i] = c with { AlreadyHandled = true };
-                }
+                list[i] = c with { AlreadyHandled = schierata, AlreadyProposed = proposta };
             }
         }
 
