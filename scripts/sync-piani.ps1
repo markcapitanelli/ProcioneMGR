@@ -54,11 +54,32 @@ function Test-Allineato([string]$sha) {
     }
 }
 
+# AVANTI non e' INDIETRO, e non si "aggiorna" tornando indietro. Un piano compilato da un ramo non
+# ancora mergiato CONTIENE master: ricompilarlo lo riporterebbe a master, cioe' cancellerebbe il
+# lavoro che qualcuno sta provando. E' lo stesso difetto che la prova sul vivo ha trovato nel
+# verdetto C# di K1, che stampava «INDIETRO di 0 commit» su un piano che era avanti.
+function Test-Avanti([string]$sha) {
+    if ([string]::IsNullOrWhiteSpace($sha)) { return $false }
+    # --left-right, come Verdicts.Revisione: a destra i commit che a questo piano MANCANO. Se non
+    # gliene manca nessuno non e' indietro, comunque sia messo il resto della storia — e un ramo
+    # divergente ma piu' recente non va "aggiornato" tornando a master.
+    $c = git -C $repoRoot rev-list --count --left-right "$sha...origin/master" 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    $p = "$c" -split '\s+' | Where-Object { $_ -ne '' }
+    if ($p.Count -ne 2) { return $false }
+    return ([int]$p[1] -eq 0)
+}
+
 # La revisione dichiarata dal guscio VIVO. Il binario su disco direbbe cosa e' stato compilato per
 # ultimo, che non e' la stessa cosa: i due hanno divergito per giorni.
 function Get-RevisioneGuscio {
+    # 60 secondi, non 10. Misurato il 2026-08-31 con una caccia di config 19 in corso (5m,
+    # 139.000 osservazioni per fattore): /health ha impiegato prima 13,3 secondi e poi PIU' DI 30.
+    # Un timeout tarato sulla macchina a riposo trasforma il carico in un guasto, e questo script
+    # concluderebbe «guscio giu'» proprio mentre il guscio lavora di piu' — cioe' quasi sempre,
+    # visto che le cacce girano 4-8 volte al giorno con stage da venti minuti.
     try {
-        $r = Invoke-RestMethod -Uri "$shellUrl/health" -TimeoutSec 10
+        $r = Invoke-RestMethod -Uri "$shellUrl/health" -TimeoutSec 60
         if ($r.revision) { return "$($r.revision)" }
         return ''      # guscio precedente a K1: e' esso stesso il sintomo
     } catch { return $null }   # guscio giu': non e' compito di questo script rialzarlo
@@ -79,12 +100,15 @@ if (-not $SoloPlancia) {
         if ($allineato -eq $true) {
             Log "Guscio   : allineato ($($rev.Substring(0,8)))." 'Green'
         }
+        elseif (Test-Avanti $rev) {
+            Log "Guscio   : AVANTI a master ($($rev.Substring(0,8))): ramo non mergiato, non lo tocco." 'Yellow'
+        }
         else {
             $quale = if ($rev) { $rev.Substring(0, 8) } else { 'precedente a K1 (nessuna revisione dichiarata)' }
             Log "Guscio   : STANTIO ($quale)." 'Yellow'
 
             $quiete = $null
-            try { $quiete = Invoke-RestMethod -Uri "$shellUrl/health/quiet" -TimeoutSec 20 } catch { }
+            try { $quiete = Invoke-RestMethod -Uri "$shellUrl/health/quiet" -TimeoutSec 60 } catch { }
 
             if ($null -eq $quiete) {
                 # Un guscio troppo vecchio per avere l'endpoint e' proprio quello da aggiornare, ma
@@ -132,6 +156,9 @@ if (-not $SoloGuscio) {
     $allineataP = if ($revP) { Test-Allineato $revP } else { $null }
     if ($allineataP -eq $true) {
         Log "Plancia  : allineata ($($revP.Substring(0,8)))." 'Green'
+    }
+    elseif (Test-Avanti $revP) {
+        Log "Plancia  : AVANTI a master ($($revP.Substring(0,8))): ramo non mergiato, non la tocco." 'Yellow'
     }
     elseif ($DryRun) {
         Log "Plancia  : [DryRun] la ricompilerei e riavvierei." 'Cyan'

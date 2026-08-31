@@ -29,6 +29,8 @@ internal static class Probes
     {
         var handler = new SocketsHttpHandler
         {
+            // La CONNESSIONE resta breve: una porta chiusa si scopre subito, ed e' il caso
+            // «il guscio non c'e'» che deve costare poco.
             ConnectTimeout = TimeSpan.FromSeconds(4),
             PooledConnectionLifetime = TimeSpan.FromMinutes(1),
         };
@@ -37,7 +39,16 @@ internal static class Probes
             {
                 RemoteCertificateValidationCallback = (_, _, _, _) => true,
             };
-        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(6) };
+        // [K1 2026-08-31] La RISPOSTA no: 6 secondi erano tarati su una macchina a riposo.
+        // Misurato quel giorno con una caccia di config 19 in corso (5m, 139.000 osservazioni per
+        // fattore): /health del guscio ha impiegato 13,3 secondi. A 6s la sonda concludeva «il
+        // guscio non risponde» su un guscio perfettamente vivo, e la riga delle revisioni diceva
+        // «non dichiarata» proprio quando la macchina stava lavorando di piu'. E' la stessa lezione
+        // della tolleranza aggiunta alla liveness del motore il 2026-08-28: un timeout tarato sul
+        // caso a riposo trasforma il carico in un guasto.
+        // Il quadro resta rapido perche' le sonde girano TUTTE IN PARALLELO: il caso peggiore e'
+        // 20 secondi in tutto, non 20 per sonda.
+        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
     }
 
     // =============================================================================================
