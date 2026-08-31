@@ -285,11 +285,16 @@ caccia gira su una costante inventata.
 
 ### Fase 2 — Il ritiro come giudizio, non come conteggio
 
+> **Stato al 2026-08-31 (notte).** **K18 fatto.** Restano K16, K17, K19 e K20 — e sono tutti e
+> quattro **decisioni di politica**, non solo codice: cambiano *quando* una corsia viene ritirata,
+> cioè quando la piattaforma smette di dare capitale a un'ipotesi. Vanno prese guardando i numeri,
+> non di notte.
+
 | # | Cosa |
 |---|---|
 | K16 | **L'inedia con potenza statistica.** O `StarvationMinDays` sale finché l'atteso nel periodo supera ~3 trade (≥42 giorni a f≈2,2), o il criterio passa a un quantile di Poisson. Con il suo nullo, come pretende il livello 2 |
 | K17 | **Criterio di danno conclamato**, senza vincolo di settimane: drawdown e PnL cumulato sono già in `TradingEngineStates`, `FleetLaneState` non li porta. E una corsia in emergency dev'essere **dichiarata**, non sparire da `FleetLanes` |
-| K18 | Lo **Sharpe del ritiro ancorato** alla finestra dei trade: o `from` filtra anche l'equity, o si calcola dai `TradeRecords` della finestra |
+| K18 ✅ | Lo **Sharpe del ritiro ancorato** alla finestra dei trade: o `from` filtra anche l'equity, o si calcola dai `TradeRecords` della finestra |
 | K19 | `RetireMinTrades = 20` **tarato sull'orizzonte reale**: a 2,17-3,70 trade/mese un forward test da tre settimane non può produrne venti. In alternativa, PnL cumulato con banda di confidenza |
 | K20 | **Persistere `_retireStreak`** (colonna su `FleetLaneObservations` o riga di journal `RetirePending`) ed esporlo. Oggi ogni riavvio azzera la conferma, e non si vede |
 

@@ -1664,7 +1664,20 @@ public sealed class TradingEngine(
             // per una metrica di promozione la storia recente è quella che conta. Il MaxDrawdown
             // invece è il PEGGIORE tra ricalcolo locale e valore di sessione persistito — un
             // riavvio (curva vuota) o il trim non possono più "amnesiare" un drawdown già subito.
-            SharpeRatio = Statistics.SharpeRatio(equity, ppy),
+            // [K18, PRD autonomia-piena — Fase 2, 2026-08-31] Lo Sharpe rispetta `from`, come i
+            // trade. Prima il parametro filtrava SOLO la lista dei trade e lo Sharpe restava quello
+            // della curva intera: chi chiedeva «come e' andata questa gamba da quando la guardo»
+            // otteneva un numeratore ancorato e un denominatore no — due storie diverse nello
+            // stesso verdetto. Il ritiro di flotta e' esattamente quel chiamante
+            // (FleetStateReader ancora al primo avvistamento dell'identita'), e il commento a
+            // FleetStateReader prometteva l'ancoraggio che qui non avveniva.
+            //
+            // Limite che resta, e va detto: la curva vive in memoria e riparte a ogni riavvio del
+            // processo, quindi puo' COPRIRE MENO della finestra chiesta. Lo Sharpe descrive allora
+            // il sottoinsieme che si ha, mai piu' di quello — ed e' comunque dentro la finestra,
+            // che era il difetto.
+            SharpeRatio = Statistics.SharpeRatio(
+                from is DateTime ancora ? equity.Where(e => e.Timestamp >= ancora).ToList() : equity, ppy),
             MaxDrawdown = Math.Max(sessionMaxDrawdown, MaxDrawdown(equity)),
             TotalTrades = trades.Count,
             WinRate = trades.Count > 0 ? (decimal)wins.Count / trades.Count * 100m : 0m,
