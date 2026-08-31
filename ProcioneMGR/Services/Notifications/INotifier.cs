@@ -58,4 +58,22 @@ public sealed class NotificationOptions
 
     /// <summary>Rate-limit: massimo di messaggi recapitati per ora (finestra scorrevole); l'eccesso viene coalizzato.</summary>
     public int MaxPerHour { get; set; } = 20;
+
+    /// <summary>
+    /// [K6, 2026-08-31] <b>Corsia riservata ai <c>Critical</c>.</b> Il tetto condiviso non li
+    /// governa: hanno questo, e solo questo.
+    ///
+    /// <para>Perché serve. Fino a oggi il rate-limit era cieco alla gravità — la severità compariva
+    /// nel messaggio di log e non entrava mai nella decisione — e a budget pieno un
+    /// <c>Critical</c> veniva <b>scartato</b>, non accodato: sopravviveva solo il contatore, e il
+    /// testo si perdeva. Nel guscio confluiscono nello stesso budget la guardia di freschezza delle
+    /// serie, il guardiano del patrimonio, l'orchestratore di flotta e il digest: bastavano venti
+    /// messaggi informativi nell'ora scorrevole per zittire l'allarme di invariante di corsia o
+    /// quello della master key — cioè i due che non si possono perdere.</para>
+    ///
+    /// <para>Dieci all'ora, non illimitati: una corsia preferenziale senza tetto è un canale senza
+    /// rate-limit, e un allarme critico ripetuto sessanta volte in un'ora smette di essere letto
+    /// come tutti gli altri. Chi produce <c>Critical</c> nel guscio sono otto punti in tutto.</para>
+    /// </summary>
+    public int MaxCriticalPerHour { get; set; } = 10;
 }

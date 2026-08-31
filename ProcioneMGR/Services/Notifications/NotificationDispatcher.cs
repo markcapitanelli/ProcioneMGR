@@ -109,6 +109,10 @@ public sealed class NotificationDispatcher(
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly object _gate = new();
     private readonly Queue<DateTimeOffset> _sentInWindow = new();
+
+    /// <summary>[K6] La finestra della sola corsia critica: sottoinsieme di <see cref="_sentInWindow"/>.</summary>
+    private readonly Queue<DateTimeOffset> _criticalInWindow = new();
+
     private int _suppressed;
 
     // [I4] Il totale NON si azzera col messaggio successivo, a differenza di _suppressed: quello
@@ -165,6 +169,14 @@ public sealed class NotificationDispatcher(
         {
             _sentInWindow.Dequeue();
         }
+        // [K6] Anche la corsia critica scorre. Dimenticarla qui la renderebbe un budget che si
+        // esaurisce e non si ricarica mai: dopo dieci allarmi veri il canale critico resterebbe
+        // chiuso per sempre — cioe' il difetto che questa corsia esiste per impedire, spostato di
+        // un metro.
+        while (_criticalInWindow.Count > 0 && now - _criticalInWindow.Peek() > TimeSpan.FromHours(1))
+        {
+            _criticalInWindow.Dequeue();
+        }
     }
 
     private void RecordDelivered()
@@ -218,16 +230,40 @@ public sealed class NotificationDispatcher(
         {
             var now = _time.GetUtcNow();
             TrimWindow(now);
-            if (_sentInWindow.Count >= Math.Max(1, opt.MaxPerHour))
+
+            // [K6 2026-08-31] La gravità entra nella DECISIONE, non solo nel messaggio di log.
+            //
+            // Prima il tetto era uno solo per tutti: venti messaggi informativi nell'ora scorrevole
+            // zittivano l'allarme di invariante di corsia e quello della master key, e li
+            // zittivano SCARTANDOLI — non accodandoli. Nel guscio confluiscono in questo budget la
+            // guardia di freschezza, il guardiano del patrimonio, l'orchestratore di flotta e il
+            // digest: il primo produttore che sbaglia soglia spegneva gli altri.
+            //
+            // I Critical hanno la loro corsia, con un tetto proprio: una corsia preferenziale
+            // senza tetto sarebbe un canale senza rate-limit, e un critico ripetuto sessanta volte
+            // in un'ora smette di essere letto come tutti gli altri.
+            var critico = severity == NotificationSeverity.Critical;
+            var tetto = critico ? Math.Max(1, opt.MaxCriticalPerHour) : Math.Max(1, opt.MaxPerHour);
+            var usati = critico ? _criticalInWindow.Count : _sentInWindow.Count;
+
+            if (usati >= tetto)
             {
                 _suppressed++;
                 _suppressedTotal++;
                 _lastSuppressedUtc = now.UtcDateTime;
-                logger.LogWarning("Notifica SOPPRESSA dal rate-limit ({Max}/h): [{Severity}] {Title}", opt.MaxPerHour, severity, title);
+                logger.LogWarning("Notifica SOPPRESSA dal rate-limit ({Max}/h, corsia {Corsia}): [{Severity}] {Title}",
+                    tetto, critico ? "critici" : "ordinaria", severity, title);
                 return new NotificationResult(NotificationOutcome.RateLimited,
-                    $"Raggiunto il tetto di {opt.MaxPerHour} messaggi/ora: questa verrà conteggiata nel primo messaggio successivo.");
+                    $"Raggiunto il tetto di {tetto} messaggi/ora sulla corsia {(critico ? "dei CRITICI" : "ordinaria")}: "
+                    + "questa verrà conteggiata nel primo messaggio successivo.");
             }
+
+            // Il recapito consuma banda vera in entrambi i casi: un critico entra ANCHE nella
+            // finestra condivisa, così il pannello della pressione continua a dire il vero. Ciò
+            // che cambia è solo il cancello, non la contabilità.
             _sentInWindow.Enqueue(now);
+            if (critico) _criticalInWindow.Enqueue(now);
+
             suppressedToReport = _suppressed;
             _suppressed = 0;
         }

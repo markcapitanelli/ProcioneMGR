@@ -1976,6 +1976,13 @@
                 <label class="form-label">Max messaggi/ora @Hot()</label>
                 <input type="number" class="form-control" @bind="_notifications.MaxPerHour" min="1" style="width: 8rem;" />
             </div>
+            <div class="col-auto">
+                @* [K6] Il rischio, accanto alla manopola, come vuole il mandato del 2026-08-09. *@
+                <label class="form-label" title="Corsia riservata: il tetto qui sopra non governa i Critical. Fino al 2026-08-31 la gravità non entrava nella decisione e venti messaggi informativi nell'ora zittivano l'allarme di invariante di corsia e quello della master key — SCARTANDOLI, non accodandoli. Non illimitata: una corsia senza tetto è un canale senza rate-limit.">
+                    Max CRITICI/ora @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_notifications.MaxCriticalPerHour" min="1" style="width: 8rem;" />
+            </div>
             <div class="col-auto form-check form-switch align-self-end">
                 @* [AF5.4] Sezione PROPRIA Notifications:Digest (mai dentro il POCO Notifications:
                    il writer preserva le sottosezioni-oggetto che il POCO non nomina). *@
