@@ -117,8 +117,19 @@ public static class FleetOrchestrator
 
         // --- 3. Fascia grigia: assegnazione AUTOMATICA dietro flag (J14), altrimenti proposta ---
         var greyPairs = GreyProposals(state);
+        var greyDeployables = GreyDeployables(state);
         var greyAssignedRuns = new HashSet<Guid>();
-        if (opt.GreyAutoDeploy && greyPairs.Count > 0)
+        if (opt.GreyAutoDeploy && greyDeployables.Count == 0 && greyPairs.Count == 0
+            && state.Candidates.Any(c => c.Band == "grey"))
+        {
+            // [K12] La coda e' vuota ma i grigi ci SONO: sono tutti gia' schierati. E' il caso che
+            // non si distingueva da «non ci sono grigi», e i due mandano a guardare posti diversi.
+            var grigiTotali = state.Candidates.Count(c => c.Band == "grey");
+            actions.Add(new FleetNoOp(
+                $"{grigiTotali} candidati grigi nella finestra, tutti gia' schierati in passato: la coda e' vuota " +
+                "perche' non c'e' nulla di NUOVO, non perche' non si cerca."));
+        }
+        if (opt.GreyAutoDeploy && greyDeployables.Count > 0)
         {
             // Il tetto: le corsie grigie IN CORSA più quelle assegnate in questo giro. L'ignoto
             // (GreySourced null) conta come grigio — non sapere non allarga il permesso.
@@ -127,7 +138,7 @@ public static class FleetOrchestrator
             var lanesLeft = freeLanes.Skip(passAssigned).ToList();
             var budgetLeft = assignBudget - passAssigned;
 
-            var eligible = greyPairs
+            var eligible = greyDeployables
                 .Select(p => p.Candidate)
                 .Where(c => !string.IsNullOrEmpty(c.Identity))
                 .Where(c => c.TradesPerMonth >= opt.MinTradesPerMonth)
@@ -138,6 +149,32 @@ public static class FleetOrchestrator
                 actions.Add(new FleetNoOp(
                     $"{eligible.Count} candidati grigi schierabili ma Trading:CorrelatedExposure SPENTO con " +
                     $"{CountActive(state)} corsie attive: nessuna assegnazione grigia senza la guardia (AF4b)."));
+            }
+            // [K12, 2026-08-31] IL RAMO GRIGIO DICHIARA PERCHE' NON SCHIERA.
+            //
+            // Il ramo «pass» aveva il suo FleetNoOp; questo no. Conseguenza misurata: in 115
+            // decisioni ZERO righe Blocked, e chi guardava /admin/autonomy vedeva solo proposte
+            // senza poter distinguere fra «il tetto grigio e' saturo», «non ci sono corsie libere»
+            // e «la coda e' vuota» — tre vincoli diversi con tre rimedi diversi. Un ramo che tace
+            // per tre ragioni e non ne nomina nessuna e' indistinguibile da un ramo spento.
+            else if (lanesLeft.Count == 0)
+            {
+                actions.Add(new FleetNoOp(
+                    $"{eligible.Count} candidati grigi schierabili ma NESSUNA corsia di flotta libera " +
+                    $"({CountActive(state)} attive): il vincolo sono le corsie, non i candidati."));
+            }
+            else if (greySlots <= 0)
+            {
+                actions.Add(new FleetNoOp(
+                    $"{eligible.Count} candidati grigi schierabili e {lanesLeft.Count} corsie libere, ma il tetto " +
+                    $"grigio e' saturo: {greyRunning} corsie grigie in corsa su un massimo di {opt.MaxGreyLanes} " +
+                    "(l'ignoto conta come grigio: non sapere non allarga il permesso)."));
+            }
+            else if (eligible.Count == 0)
+            {
+                actions.Add(new FleetNoOp(
+                    $"{greyDeployables.Count} candidati grigi nella finestra ma NESSUNO schierabile: " +
+                    $"identita' assente, o sotto Fleet:MinTradesPerMonth ({opt.MinTradesPerMonth:F1} trade/mese)."));
             }
             else
             {
@@ -237,9 +274,23 @@ public static class FleetOrchestrator
     /// <para>I candidati SENZA identità non si accorpano mai: accorpare per ignoranza nasconderebbe
     /// proposte diverse, che è l'errore peggiore dei due.</para>
     /// </summary>
-    internal static List<(FleetCandidate Candidate, int Duplicates)> GreyProposals(FleetState state)
+    internal static List<(FleetCandidate Candidate, int Duplicates)> GreyProposals(FleetState state) =>
+        GreyAccorpati(state, perSchieramento: false);
+
+    /// <summary>
+    /// [K14, 2026-08-31] I grigi SCHIERABILI: stesso accorpamento delle proposte, ma il filtro
+    /// guarda solo «gia' schierato». Un candidato gia' PROPOSTO a un umano resta schierabile — sono
+    /// due azioni diverse, e fino a oggi la prima consumava la seconda.
+    /// </summary>
+    internal static List<(FleetCandidate Candidate, int Duplicates)> GreyDeployables(FleetState state) =>
+        GreyAccorpati(state, perSchieramento: true);
+
+    private static List<(FleetCandidate Candidate, int Duplicates)> GreyAccorpati(FleetState state, bool perSchieramento)
     {
-        var grey = state.Candidates.Where(c => !c.AlreadyHandled && c.Band == "grey").ToList();
+        var grey = state.Candidates
+            .Where(c => c.Band == "grey")
+            .Where(c => perSchieramento ? !c.AlreadyHandled : !c.AlreadyHandled && !c.AlreadyProposed)
+            .ToList();
 
         var senzaIdentita = grey
             .Where(c => string.IsNullOrEmpty(c.Identity))

@@ -344,8 +344,8 @@ public sealed class FleetStarvationTests
         FleetState Stato(params FleetCandidate[] c)
             => new() { Lanes = [], Candidates = c, FootprintLanes = 3, ExposureGuardEnabled = true, NowUtc = DateTime.UtcNow };
 
-        var uno = new FleetCandidate(a, stessaData, "grey", 5m, "4h", "x", false, "k");
-        var due = new FleetCandidate(b, stessaData, "grey", 5m, "4h", "x", false, "k");
+        var uno = new FleetCandidate(a, stessaData, "grey", 5m, "4h", "x", false, Identity: "k");
+        var due = new FleetCandidate(b, stessaData, "grey", 5m, "4h", "x", false, Identity: "k");
 
         Assert.Equal(
             Assert.Single(FleetOrchestrator.Decide(Stato(uno, due), Options()).Actions.OfType<ProposeGreyCandidate>()).RunId,

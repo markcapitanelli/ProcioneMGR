@@ -198,7 +198,24 @@ public sealed record FleetCandidate(
     decimal TradesPerMonth,
     string Timeframe,
     string Summary,
+    /// <summary>
+    /// <b>SCHIERATO</b>, non «visto»: esiste un Assign di flotta o una decisione di auto-reapply
+    /// per questa identità. [K14, 2026-08-31] Fino a quel giorno qui dentro finivano anche le
+    /// ProposeGrey — cioè le proposte al click UMANO — e con l'ereditarietà per identità bastava
+    /// una notifica perché il braccio AUTOMATICO considerasse il candidato gestito per sempre.
+    /// Misura: 18 identità su 18 della finestra a 30 giorni risultavano gestite, e il migliore
+    /// disponibile (MacdTrend AAVE/USDT 4h, Sharpe holdout 3,66 su 55 trade) era soppresso perché
+    /// la stessa chiave era stata PROPOSTA due giorni prima. Proporre a un umano e schierare in
+    /// automatico sono due azioni diverse, e la prima consumava la seconda.
+    /// </summary>
     bool AlreadyHandled,
+
+    /// <summary>
+    /// [K14] <b>Già proposto al click umano.</b> Serve all'anti-raffica delle notifiche — non si
+    /// ripropone quaranta volte la stessa cosa — e a NIENT'ALTRO: non toglie un candidato al
+    /// braccio automatico.
+    /// </summary>
+    bool AlreadyProposed = false,
     /// <summary>
     /// [I12] Identità canonica del candidato (<c>PipelineCandidateKey</c>: strategia + coppia +
     /// timeframe + impronta dei parametri), per NON riproporre quaranta volte la stessa cosa.
