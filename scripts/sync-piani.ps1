@@ -164,18 +164,56 @@ if (-not $SoloGuscio) {
         Log "Plancia  : [DryRun] la ricompilerei e riavvierei." 'Cyan'
     }
     else {
-        Log "Plancia  : STANTIA - delego a un aggiornatore detached." 'Yellow'
-        git -C $repoRoot pull --ff-only --quiet origin master
-        if ($LASTEXITCODE -ne 0) {
-            Log "Plancia  : git pull --ff-only fallito: non tocco nulla." 'Red'
+        # [2026-08-31, sera] LA PRIMA STESURA NON FUNZIONAVA, e il modo in cui ha fallito vale piu'
+        # della correzione. Spawnavo l'aggiornatore con Start-Process passando lo script come
+        # -Command multiriga, poi chiedevo al supervisore di uscire. Risultato osservato due volte
+        # dal vivo: il supervisore usciva, l'aggiornatore NON girava (nessun log, binario
+        # invariato), e la plancia restava giu' finche' il trigger di risveglio (K5b) non la
+        # rianimava dieci minuti dopo — con lo stesso binario vecchio. Cioe' un CICLO: uscita ogni
+        # venti minuti, resurrezione dieci minuti dopo, mai un aggiornamento, e il dead-man switch
+        # fermo per un terzo del tempo. Un'automazione che non puo' riuscire e continua a provarci
+        # al prezzo della disponibilita' e' peggio di nessuna automazione.
+        #
+        # Due cause, entrambe reali:
+        #  1. uno script multiriga passato come -Command dentro -ArgumentList viene appiattito e
+        #     smette di essere PowerShell valido. Ora si scrive su FILE e si lancia con -File.
+        #  2. il figlio di Start-Process resta nell'albero dei processi del lavoro, e quando il
+        #     supervisore esce quell'albero viene ucciso — insieme all'aggiornatore. Win32_Process
+        #     .Create crea un processo figlio di WmiPrvSE, non nostro: sopravvive per costruzione.
+        #     (E, come prima, NESSUNA redirezione: sarebbe la catena di handle ereditati del
+        #     2026-08-28. L'aggiornatore apre da se' il file su cui scrive.)
+        Log "Plancia  : STANTIA - preparo l'aggiornatore." 'Yellow'
+
+        # Terza guardia, la piu' importante: non si ritenta lo STESSO sha a ripetizione. Se la
+        # build fallisce, riprovarci ogni venti minuti costa solo indisponibilita'.
+        $shaMaster = (git -C $repoRoot rev-parse origin/master 2>$null).Trim()
+        $marcatore = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.procione\aggiorna-plancia.ultimo'
+        $gia = if (Test-Path $marcatore) { (Get-Content $marcatore -Raw).Trim() } else { '' }
+        if ($gia -eq $shaMaster) {
+            Log "Plancia  : aggiornamento a $($shaMaster.Substring(0,8)) GIA' TENTATO e non riuscito: non ritento." 'Red'
+            Log "           a mano: procione servizio ferma; dotnet build tools/Procione -c Release; riavvia l'attivita'"
         }
         else {
-            # NESSUNA redirezione qui. Start-Process con -RedirectStandard* forza
-            # UseShellExecute=false e fa EREDITARE gli handle: e' esattamente la catena che il
-            # 2026-08-28 ha appeso il supervisore per un'ora e cinquanta. L'aggiornatore scrive il
-            # proprio log da se', su un file che apre lui.
-            $agg = @"
-`$log = Join-Path `$env:TEMP 'procionemgr-aggiorna-plancia.log'
+            git -C $repoRoot pull --ff-only --quiet origin master
+            if ($LASTEXITCODE -ne 0) {
+                Log "Plancia  : git pull --ff-only fallito: non tocco nulla." 'Red'
+            }
+            else {
+                $logAgg = Join-Path $env:TEMP 'procionemgr-aggiorna-plancia.log'
+                $fileAgg = Join-Path $env:TEMP 'procionemgr-aggiorna-plancia.ps1'
+                $csproj = Join-Path $repoRoot 'tools\Procione\Procione.csproj'
+
+                # -p:SourceRevisionId ESPLICITO. Misurato il 2026-08-31: il timbro dello sha e'
+                # APPICCICOSO fra una build e l'altra — l'aggiornatore ha ricompilato davvero
+                # (7,58s, zero errori) e il binario ha continuato a dichiarare la revisione
+                # PRECEDENTE, perche' l'AssemblyInfo generato in obj/ conserva il valore calcolato
+                # al primo giro. Conseguenza: `piani` avrebbe visto la plancia ancora stantia e
+                # avrebbe chiesto un'altra uscita, all'infinito. Passandolo a mano il timbro non
+                # dipende piu' da nessuna cache. (Il guscio non ha il problema: `dotnet run` lo
+                # ricalcola, e infatti dichiara master correttamente.)
+
+                $corpo = @"
+`$log = '$logAgg'
 function L(`$m) { "`$(Get-Date -Format 'HH:mm:ss') `$m" | Out-File -FilePath `$log -Append -Encoding utf8 }
 L '--- aggiornatore della plancia ---'
 for (`$i = 0; `$i -lt 60; `$i++) {
@@ -184,18 +222,28 @@ for (`$i = 0; `$i -lt 60; `$i++) {
 }
 if (Get-Process -Name procione -ErrorAction SilentlyContinue) { L 'la plancia non e uscita in 2 minuti: non ricompilo'; exit 1 }
 L 'ricompilo'
-& dotnet build '$($repoRoot -replace "'", "''")\tools\Procione\Procione.csproj' -c Release --nologo -v q 2>&1 | Out-File -FilePath `$log -Append -Encoding utf8
-if (`$LASTEXITCODE -ne 0) { L "build FALLITA (`$LASTEXITCODE): il trigger di risveglio rimettera su la versione vecchia" }
-else { L 'build ok' }
+& dotnet build '$csproj' -c Release --nologo -v q -p:SourceRevisionId=$shaMaster 2>&1 | Out-File -FilePath `$log -Append -Encoding utf8
+if (`$LASTEXITCODE -ne 0) { L "build FALLITA (`$LASTEXITCODE)" } else { L 'build ok' }
 Start-ScheduledTask -TaskName 'ProcioneMGR Plancia'
 L 'attivita rilanciata'
 "@
-            Start-Process powershell -WindowStyle Hidden -ArgumentList @(
-                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $agg
-            ) | Out-Null
+                Set-Content -Path $fileAgg -Value $corpo -Encoding UTF8
 
-            Log "Plancia  : aggiornatore avviato; chiedo al supervisore di uscire." 'Yellow'
-            & (Join-Path $repoRoot 'tools\Procione\bin\Release\net10.0\procione.exe') servizio ferma
+                $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$fileAgg`""
+                $esito = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
+
+                if ($esito.ReturnValue -ne 0 -or -not $esito.ProcessId) {
+                    # Non si chiede al supervisore di uscire se non c'e' nessuno che lo rimettera'
+                    # su con un binario nuovo: sarebbe indisponibilita' senza contropartita.
+                    Log "Plancia  : aggiornatore NON avviato (Win32_Process.Create -> $($esito.ReturnValue)): resto viva." 'Red'
+                }
+                else {
+                    New-Item -ItemType Directory -Force -Path (Split-Path $marcatore) | Out-Null
+                    Set-Content -Path $marcatore -Value $shaMaster -Encoding ascii
+                    Log "Plancia  : aggiornatore avviato (pid $($esito.ProcessId)); chiedo al supervisore di uscire." 'Yellow'
+                    & (Join-Path $repoRoot 'tools\Procione\bin\Release\net10.0\procione.exe') servizio ferma
+                }
+            }
         }
     }
 }
