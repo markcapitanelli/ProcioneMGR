@@ -93,7 +93,30 @@ if ($LASTEXITCODE -ne 0) { Log "git fetch fallito: senza il remoto non si sa cos
 if (-not $SoloPlancia) {
     $rev = Get-RevisioneGuscio
     if ($null -eq $rev) {
-        Log "Guscio   : non risponde su $shellUrl - lo rialza il bring-up, non questo script."
+        # [2026-08-31, sera] «Lo rialza il bring-up» era falso in pratica, ed e' costato un guscio
+        # morto per ore. Il lavoro `avvio` gira UNA volta per sessione; il watchdog manda un
+        # messaggio e si ferma li'; questo script si limitava a dirlo. Quindi un guscio che muore a
+        # meta' sessione restava morto fino al logon successivo — cioe' finche' non se ne accorgeva
+        # un umano, che e' la definizione di non autonoma. Con lui restano ferme campagne, flotta,
+        # pipeline e promozioni: 22 hosted service.
+        #
+        # MA MAI DUE GUSCII. Un processo che c'e' e non risponde sta COMPILANDO (`dotnet run` ci
+        # mette minuti): rilanciare il bring-up ne accenderebbe un secondo, ed e' l'incidente del
+        # 2026-07-20 — un'istanza di troppo che intercetta l'utente. Si guarda quindi il PROCESSO,
+        # non solo la porta, e si agisce solo quando non c'e' nessuno.
+        $vivi = @(Get-Process -Name ProcioneMGR, dotnet -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Path -and $_.Path -like '*ProgettoP*' })
+        if ($vivi.Count -gt 0) {
+            Log "Guscio   : non risponde ma $($vivi.Count) processi suoi sono vivi: sta partendo, non tocco nulla."
+        }
+        elseif ($DryRun) {
+            Log "Guscio   : [DryRun] e' GIU' e nessun processo vivo: lancerei il bring-up." 'Cyan'
+        }
+        else {
+            Log "Guscio   : e' GIU' e nessun processo lo sta avviando - lancio il bring-up." 'Yellow'
+            & (Join-Path $PSScriptRoot 'bringup.ps1')
+            Log "Guscio   : bring-up eseguito." 'Green'
+        }
     }
     else {
         $allineato = if ($rev) { Test-Allineato $rev } else { $false }
