@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Ensemble;
+using ProcioneMGR.Services.Pipeline;
 
 namespace ProcioneMGR.Services.Trading;
 
@@ -22,7 +23,18 @@ public sealed record LaneSummary(
     // [J14] La corsia esegue gambe GRIGIE? true = almeno una gamba attiva con SourceVerdict
     // "Grey"; false = tutte dichiarate "Survived"; null = provenienza ignota (gambe senza
     // etichetta, pre-T1). Serve al tetto MaxGreyLanes, dove l'ignoto conta come grigio.
-    bool? HasGreyLegs = null)
+    bool? HasGreyLegs = null,
+    // [K22, 2026-09-01] L'IDENTITA' CANONICA delle gambe attive (PipelineCandidateKey: strategia +
+    // coppia + timeframe + impronta dei parametri). Serve alla guardia che impedisce alla stessa
+    // ipotesi di occupare due corsie.
+    //
+    // Vive qui e non in una seconda lettura perche' questa classe deserializza gia' la
+    // configurazione di tutte le corsie in una query: una seconda deserializzazione altrove sarebbe
+    // una seconda definizione di «gamba attiva», che e' il difetto gia' pagato con SeriesFreshness.
+    //
+    // Lista vuota = configurazione assente o illeggibile. NON e' «nessun duplicato»: e' «non lo so»,
+    // e chi consuma deve trattarla come tale.
+    IReadOnlyList<string>? ActiveCandidateKeys = null)
 {
     public bool IsConfigured => !string.IsNullOrEmpty(Symbol);
 }
@@ -75,6 +87,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
             decimal? expected = null;
             IReadOnlyList<string>? activeIds = null;
             bool? greyLegs = null;
+            IReadOnlyList<string>? candidateKeys = null;
             if (configs.TryGetValue(lane, out var json) && !string.IsNullOrWhiteSpace(json))
             {
                 // Una configurazione illeggibile non deve far sparire la corsia dal selettore: senza
@@ -87,6 +100,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
                     expected = ExpectedTradesPerMonth(cfg);
                     activeIds = cfg?.Strategies.Where(x => x.IsActive).Select(x => x.StrategyId).ToList();
                     greyLegs = HasGreyLegs(cfg);
+                    candidateKeys = ActiveCandidateKeys(cfg);
                 }
                 catch (JsonException) { /* corsia mostrata come non configurata */ }
             }
@@ -96,7 +110,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
                 lane, symbol, timeframe,
                 state?.Mode.ToString() ?? TradingMode.Paper.ToString(),
                 state?.IsRunning ?? false,
-                expected, activeIds, greyLegs));
+                expected, activeIds, greyLegs, candidateKeys));
         }
         return result;
     }
@@ -135,5 +149,29 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
         if (active is null or { Count: 0 }) return null;
         if (active.Any(s => string.Equals(s.SourceVerdict, "Grey", StringComparison.Ordinal))) return true;
         return active.All(s => string.Equals(s.SourceVerdict, "Survived", StringComparison.Ordinal)) ? false : null;
+    }
+
+    /// <summary>
+    /// [K22, 2026-09-01] L'identità canonica di ogni gamba ATTIVA, con la stessa funzione che la
+    /// pipeline usa per identificare un candidato (<see cref="PipelineCandidateKey.Build"/>): la
+    /// guardia contro l'ipotesi doppia deve confrontare le corsie con la stessa chiave con cui la
+    /// ricerca le produce, altrimenti confronterebbe due cose diverse chiamandole con lo stesso nome.
+    ///
+    /// <para><b>Perché lo <c>StrategyId</c> non serve.</b> <c>EnsembleModels</c> conia un
+    /// <c>Guid.NewGuid()</c> a ogni costruzione della gamba: due schieramenti della STESSA ipotesi
+    /// hanno due <c>StrategyId</c> diversi. È esattamente così che, il 2026-08-31, GridMeanReversion
+    /// DOGE/USDT 15m con parametri identici e <c>ExpectedSharpe</c> uguale a ventotto cifre è finita
+    /// su due corsie e due dotazioni da 10.000 senza che nulla se ne accorgesse.</para>
+    ///
+    /// <para>Le gambe disattivate non contano: non operano, quindi non sono un'ipotesi in corso.</para>
+    /// </summary>
+    internal static IReadOnlyList<string>? ActiveCandidateKeys(EnsembleConfiguration? cfg)
+    {
+        var active = cfg?.Strategies.Where(s => s.IsActive).ToList();
+        if (active is null or { Count: 0 }) return null;
+        return active
+            .Select(s => PipelineCandidateKey.Build(
+                s.StrategyName, cfg!.Symbol, cfg.Timeframe, s.Parameters))
+            .ToList();
     }
 }

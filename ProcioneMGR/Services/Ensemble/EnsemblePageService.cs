@@ -40,7 +40,11 @@ public sealed class EnsemblePageService(
     IModelRegistry registry,
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IBacktestEngine backtestEngine,
-    ProcioneMGR.Services.Analysis.ExcursionAnalyzer excursionAnalyzer)
+    ProcioneMGR.Services.Analysis.ExcursionAnalyzer excursionAnalyzer,
+    // [K22] La TERZA porta di schieramento ha bisogno della stessa guardia delle altre due: senza,
+    // basta aggiungere qui la gamba che gira su un'altra corsia e salvare.
+    ILaneDirectory laneDirectory,
+    Microsoft.Extensions.Options.IOptionsMonitor<Fleet.FleetOptions> fleetOptions)
 {
     /// <summary>
     /// Finestra "recente" per la valutazione drift, in candele — <b>ripiego</b> quando la
@@ -375,7 +379,7 @@ public sealed class EnsemblePageService(
     /// <c>SourceVerdict="Grey"</c> perché il badge non dipenda dal percorso. Il messaggio dichiara
     /// il bracket applicato o la sua assenza; i fallimenti tornano con IsError=true.
     /// </summary>
-    public async Task<ActionOutcome> AddFromGreyAsync(long researchCandidateId, CancellationToken ct = default)
+    public async Task<ActionOutcome> AddFromGreyAsync(long researchCandidateId, int laneId, CancellationToken ct = default)
     {
         if (Config is null) return new("Nessuna configurazione caricata.", IsError: true);
         var c = GreyCandidates.FirstOrDefault(x => x.Id == researchCandidateId);
@@ -394,6 +398,17 @@ public sealed class EnsemblePageService(
         bool AlreadyPresent() => Config.Strategies.Any(s =>
             Pipeline.PipelineCandidateKey.Build(s.StrategyName, Config.Symbol, Config.Timeframe, s.Parameters) == c.CandidateKey);
         if (AlreadyPresent()) return new("Questa gamba grigia è già nella corsia.", IsError: true);
+
+        // [K22, 2026-09-01] E la stessa ipotesi non deve stare su DUE corsie. Il controllo qui sopra
+        // guarda dentro questa corsia — è l'unico che esistesse in tutta la piattaforma, ed è il
+        // motivo per cui il 31/08 GridMeanReversion DOGE/USDT 15m con parametri identici ha potuto
+        // occupare le corsie 4 e 6 senza che nulla fiatasse. Questa è la terza porta di
+        // schieramento: deve portare la stessa guardia delle altre due, altrimenti resta la
+        // scorciatoia che aggira il governo (lo stesso difetto della porta /bot).
+        var duplicato = Fleet.HypothesisGuard.Check(
+            await laneDirectory.ListAsync(ct), laneId, c.CandidateKey,
+            fleetOptions.CurrentValue.BlockDuplicateTriple);
+        if (duplicato.Blocked) return new(duplicato.Reason!, IsError: true);
 
         var (sl, tp) = await Pipeline.AutoBracket.ComputeAsync(dbFactory, excursionAnalyzer, c.Symbol, c.Timeframe, ct);
         // [I11] Il ritmo atteso, dallo stesso holdout delle attese qui sotto: senza, questa terza

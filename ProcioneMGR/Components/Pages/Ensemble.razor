@@ -25,16 +25,56 @@
 
 <PageTitle>Ensemble</PageTitle>
 
+@*
+    [K23, 2026-09-01] IL BADGE DICEVA LA COSA SBAGLIATA, ED ERA LA PIU' IMPORTANTE.
+
+    Fino a oggi qui c'era «RUNNING/STOPPED» guidato da `_status.IsRunning`, che vale
+    `EnsembleConfiguration.IsEnabled` — un flag che NON governa l'esecuzione. Chi governa e'
+    `TradingEngineStates.IsRunning`, e le due fonti divergevano su tre corsie su otto: al
+    2026-09-01 le corsie 4, 5 e 6 avevano `isEnabled=false` con il motore in corsa, che riceveva
+    candele, e la 6 teneva aperta una short DOGE/USDT da 800 USDT di nozionale.
+
+    La pagina scriveva STOPPED sopra una corsia che stava operando. E lo faceva a dieci centimetri
+    dal LaneSelector, che disegnava il pallino verde leggendo la fonte VERA: due verdetti opposti
+    sullo stesso oggetto, nella stessa schermata.
+
+    Da oggi il badge grande e' il MOTORE (chi decide), il flag dell'ensemble e' un badge suo con il
+    suo nome (governa solo il ribilanciamento programmato), e quando le due fonti divergono la
+    pagina lo DICE invece di scegliere una delle due in silenzio.
+*@
 <h1>Multi-Strategy Ensemble
-    @if (_status?.IsRunning == true)
+    @if (Svc.EngineIsRunning == true)
     {
-        <span class="badge bg-success">RUNNING</span>
+        <span class="badge bg-success" title="Il motore della corsia sta girando (TradingEngineStates.IsRunning): riceve candele, valuta ingressi e uscite protettive.">MOTORE IN CORSA</span>
+    }
+    else if (Svc.EngineIsRunning == false)
+    {
+        <span class="badge bg-secondary" title="Il motore della corsia e' fermo: nessuna candela lavorata, e le uscite protettive delle eventuali posizioni aperte NON vengono valutate.">MOTORE FERMO</span>
     }
     else
     {
-        <span class="badge bg-secondary">STOPPED</span>
+        <span class="badge bg-warning text-dark" title="Stato del motore non leggibile: non e' «fermo», e' «non lo so».">MOTORE NON LEGGIBILE</span>
+    }
+    @if (_status is not null)
+    {
+        <span class="badge @(_status.IsRunning ? "bg-info text-dark" : "bg-light text-dark border") ms-2"
+              title="Interruttore dell'ensemble (EnsembleConfiguration.IsEnabled): governa SOLO il ribilanciamento programmato dei pesi, non l'esecuzione.">
+            ribilanciamento @(_status.IsRunning ? "attivo" : "spento")
+        </span>
     }
 </h1>
+
+@if (Svc.EngineIsRunning == true && _status?.IsRunning == false)
+{
+    <div class="alert alert-warning py-2 mb-3">
+        <strong>Le due fonti non concordano.</strong> Il motore di questa corsia sta girando, ma
+        l'interruttore dell'ensemble è spento. Non è un guasto: <code>GreyDeployer</code> scrive la
+        configurazione e avvia il motore <em>senza toccare</em> <code>IsEnabled</code>, quindi ogni
+        corsia schierata dalla flotta o dal click F5 nasce così. La conseguenza da conoscere è una
+        sola: <strong>il ribilanciamento programmato dei pesi non gira</strong> su questa corsia —
+        irrilevante con una gamba sola al 100%, non appena ce ne sono due.
+    </div>
+}
 
 <LaneSelector Lanes="_lanes" Selected="_laneId" SelectedChanged="OnLaneSelectedAsync"
               Hint="Ogni corsia è un ensemble/trading indipendente e isolato (stesso database, dati separati)." />
@@ -900,7 +940,7 @@ else
         _busy = true;
         try
         {
-            var outcome = await Svc.AddFromGreyAsync(_addGreyId);
+            var outcome = await Svc.AddFromGreyAsync(_addGreyId, _laneId);
             _addGreyId = 0;
             SetMsg(outcome.Message, outcome.IsError);
         }

@@ -885,6 +885,9 @@ public sealed class TradingEngine(
             // precede la loro stessa esistenza, e Duration negativa che inquina ogni statistica.
             if (ts < pos.OpenedAtUtc) continue;
 
+            // [K24] Il prezzo con cui la RIGA a database è coerente in questo istante: serve a
+            // capire se la marcatura si è mossa e va persistita. Va letto PRIMA del mark.
+            var markPrimaDelMark = pos.CurrentPrice;
             MarkToMarket(pos, markPrice);
 
             var liquidation = ProtectiveExitEvaluator.EvaluateLiquidation(pos, high, low, isFutures);
@@ -907,10 +910,27 @@ public sealed class TradingEngine(
 
                 // [2026-08-17] Il cricchetto avanzato va scritto, o un riavvio riporta lo stop
                 // effettivo al livello di apertura e il profitto già bloccato sparisce senza che
-                // nulla lo dica. La guardia "solo se è cambiato" è la parte che conta: senza
-                // trailing UpdateBestSinceEntry è inerte, quindi il valore non cambia e nessuna
-                // UPDATE parte — il costo è una scrittura per NUOVO massimo, non per candela.
-                if (pos.BestPriceSinceEntry != bestPrima)
+                // nulla lo dica.
+                //
+                // [K24, 2026-09-01] ...MA LA GUARDIA «solo se il cricchetto è cambiato» RENDEVA IL
+                // TETTO |PnL| CIECO, e la misura è questa: senza trailing
+                // `UpdateBestSinceEntry` è inerte per costruzione, quindi il valore non cambia MAI e
+                // nessuna UPDATE parte — la riga resta con `CurrentPrice = EntryPrice` e
+                // `UnrealizedPnl = 0` dal momento dell'apertura, per sempre. Misurato al
+                // 2026-09-01: delle tre posizioni aperte in piattaforma, DUE (corsia 3 AAVE/USDT
+                // Sell da 812 USDT, corsia 6 DOGE/USDT Sell da 799) non hanno trailing e portavano
+                // a database `UnrealizedPnl = 0` contro un mark reale di −12,09 e +1,16.
+                //
+                // Conta perché `LaneInvariantChecker` somma i PnL DALLE RIGHE: una perdita non
+                // realizzata su una posizione senza trailing è invisibile al tetto che esiste
+                // apposta per vederla. È la stessa classe di difetto che J20 dichiarava chiusa —
+                // J20 ha corretto il ramo del fill fuso (quando la riga SI scrive, prezzo e PnL
+                // viaggiano insieme), non quello della marcatura (quando la riga NON si scrive).
+                //
+                // Il costo è una UPDATE per candela per posizione aperta, e solo se il mark si è
+                // davvero mosso: con otto corsie e una o due posizioni ciascuna sono decine di
+                // scritture all'ora, contro un tetto di sicurezza che altrimenti legge zero.
+                if (pos.BestPriceSinceEntry != bestPrima || pos.CurrentPrice != markPrimaDelMark)
                 {
                     await Persistence.UpdatePositionRowAsync(pos, ct);
                 }

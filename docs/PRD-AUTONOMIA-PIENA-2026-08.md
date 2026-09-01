@@ -312,6 +312,29 @@ caccia gira su una costante inventata.
 | K19 | `RetireMinTrades = 20` **tarato sull'orizzonte reale**: a 2,17-3,70 trade/mese un forward test da tre settimane non può produrne venti. In alternativa, PnL cumulato con banda di confidenza |
 | K20 | **Persistere `_retireStreak`** (colonna su `FleetLaneObservations` o riga di journal `RetirePending`) ed esporlo. Oggi ogni riavvio azzera la conferma, e non si vede |
 
+#### Fase 2 — esito, 2026-09-01
+
+> **Le tarature non si toccano, e non per prudenza.** La seconda ondata di misure (6 + 3 avversari)
+> ha mostrato che i timestamp di `TradeRecords` sono **tempi di candela scritti in differita**: 35
+> righe precedono la creazione delle gambe a cui appartengono, e i trade di *forward test* sulle
+> identità in corsa sono **0 · 0 · 1 · 0 · 0** contro 27 righe di replay sulla sola corsia 4.
+> Tarare l'inedia oggi sarebbe tarare contro un fantasma.
+>
+> Sotto la taratura c'erano **cinque difetti più gravi**, tutti chiusi. Decisioni, motivi e ciò che
+> resta al proprietario: **[`docs/audit/37_DECISIONI_RITIRO_2026-09-01.md`](audit/37_DECISIONI_RITIRO_2026-09-01.md)**.
+
+| # | Cosa | esito |
+|---|---|---|
+| K16 · K19 | Taratura di inedia e Sharpe | **rimandata con criterio dichiarato**: servono ~30 trade *vivi* cumulati (≈2,2 mesi su 4 corsie) perché il rapporto fra ritmo reale e atteso abbia un errore del 18%. Prima di allora nessuna taratura è una misura |
+| K17 | Criterio di danno | **non tarabile**: col nullo corretto (permutare l'ordine dentro la gamba) nessuna soglia è distinguibile dal caso, p = 0,335 |
+| K20 | Isteresi persistita | **teorico all'attuale taratura**: il costo di un riavvio è 0,2 minuti a `RetireConfirmTicks=2` contro un cancello di 10 giorni. Il valore è l'osservabilità, e va con D1 |
+| K22 ✅ | **La stessa ipotesi non occupa due corsie**: `HypothesisGuard`, predicato a due gradini (identità esatta → rifiuto; stessa terna → `Fleet:BlockDuplicateTriple`), su tutte e tre le porte di schieramento |
+| K23 ✅ | **`/ensemble` diceva STOPPED sopra una corsia che operava** (badge su `IsEnabled`, che non governa l'esecuzione): 3 corsie su 8 divergenti, una con una short da 799 USDT aperta |
+| K24 ✅ | **Il tetto \|PnL\| era cieco alle perdite non realizzate**: senza trailing la riga di `OpenPositions` non veniva mai riscritta, `UnrealizedPnl` restava 0 dall'apertura. Due posizioni su tre |
+| K25 ✅ | **Posizione aperta su corsia ferma**: nessuna superficie la nominava, stop e target non valutati, e al prossimo `StartAsync` la riga sparisce senza `TradeRecord` |
+| K26 ✅ | **Provenienza dal run di schieramento, e tre stati d'archivio non due**: 71 chiavi su 1.028 cambiano `IsGrey` fra run, e un candidato bocciato in pieno veniva promosso a «Grey» |
+| K27 ✅ | **Il tetto grigio perdeva il proprio denominatore**: una corsia illeggibile usciva dal conteggio e il tetto si allargava da solo — il varco da cui è passata la seconda gemella |
+
 ### Fase 3 — Riempire il serbatoio senza abbassare la barra
 
 | # | Cosa |

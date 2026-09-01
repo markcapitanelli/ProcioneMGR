@@ -133,7 +133,7 @@ public static class FleetOrchestrator
         {
             // Il tetto: le corsie grigie IN CORSA più quelle assegnate in questo giro. L'ignoto
             // (GreySourced null) conta come grigio — non sapere non allarga il permesso.
-            var greyRunning = fleetLanes.Count(l => l.IsRunning && l.GreySourced != false);
+            var greyRunning = GreyOccupied(state).Count;
             var greySlots = Math.Max(0, opt.MaxGreyLanes) - greyRunning;
             var lanesLeft = freeLanes.Skip(passAssigned).ToList();
             var budgetLeft = assignBudget - passAssigned;
@@ -165,10 +165,19 @@ public static class FleetOrchestrator
             }
             else if (greySlots <= 0)
             {
+                // [K22] Se fra le grigie ce n'è una che l'orchestratore non può toccare, va DETTO:
+                // il rimedio è diverso (liberarla richiede un umano), e un operatore che legge
+                // «il tetto è saturo» senza sapere che una delle corsie è intoccabile cerca il
+                // rimedio sbagliato.
+                var intoccabili = greyRunning - fleetLanes.Count(l => l.IsRunning && l.GreySourced != false);
                 actions.Add(new FleetNoOp(
                     $"{eligible.Count} candidati grigi schierabili e {lanesLeft.Count} corsie libere, ma il tetto " +
                     $"grigio e' saturo: {greyRunning} corsie grigie in corsa su un massimo di {opt.MaxGreyLanes} " +
-                    "(l'ignoto conta come grigio: non sapere non allarga il permesso)."));
+                    "(l'ignoto conta come grigio: non sapere non allarga il permesso)"
+                    + (intoccabili > 0
+                        ? $"; di queste {intoccabili} sono INTOCCABILI per l'orchestratore (quarantena, emergency, "
+                          + "stato non leggibile o modalita' protetta): occupano il tetto e solo un umano puo' liberarle."
+                        : ".")));
             }
             else if (eligible.Count == 0)
             {
@@ -233,6 +242,36 @@ public static class FleetOrchestrator
         .Where(l => l.LaneId >= state.FootprintLanes)
         .Where(l => !l.Quarantined && !l.CampaignOwned && !l.EmergencyStopped)
         .Where(l => !IsProtectedMode(l.Mode))
+        .ToList();
+
+    /// <summary>
+    /// [K22, 2026-09-01] <b>Le corsie che stanno occupando il tetto grigio</b> — e sono di più di
+    /// quelle su cui l'orchestratore può agire.
+    ///
+    /// <para><b>Il varco che questa funzione chiude, misurato.</b> Fino a oggi il tetto contava
+    /// dentro <see cref="FleetLanes"/>, che esclude le corsie intoccabili — quarantena, campagna,
+    /// emergency, e <i>soprattutto</i> quelle che <c>FleetStateReader</c> marca <c>EmergencyStopped</c>
+    /// quando non riesce a leggerne lo stato. Conseguenza: <b>una corsia che diventa illeggibile
+    /// esce dal denominatore</b>, il tetto si allarga da solo, e nessuno lo dichiara. È il
+    /// meccanismo — l'unico compatibile con i due fatti persistiti — per cui il 2026-08-31 alle
+    /// 21:12 la seconda copia di <c>GridMeanReversion DOGE/USDT 15m</c> ha trovato uno slot che
+    /// secondo la configurazione non c'era: con la corsia 4 contata, <c>greyRunning</c> valeva 3 e
+    /// <c>greySlots</c> zero.</para>
+    ///
+    /// <para><b>Perché il verso giusto è questo.</b> «Intoccabile» e «non conta» sono due cose
+    /// diverse e vanno tenute separate: una corsia in quarantena, ferma per emergenza o illeggibile
+    /// <i>sta comunque tenendo capitale su un'ipotesi non validata</i>. Non poterla fermare è un
+    /// motivo in più per non aggiungerne un'altra, non un motivo per contarne una di meno. È la
+    /// stessa politica di <c>GreySourced == null</c> un piano più su: non sapere non allarga il
+    /// permesso.</para>
+    ///
+    /// <para>Le corsie in Live o Testnet <b>contano</b> anche loro: un'ipotesi grigia promossa resta
+    /// un'ipotesi grigia con del capitale sopra, e la manopola che governa il rischio dev'essere
+    /// consapevole della sua vera larghezza. Le azioni restano quelle di <see cref="FleetLanes"/>.</para>
+    /// </summary>
+    internal static List<FleetLaneState> GreyOccupied(FleetState state) => state.Lanes
+        .Where(l => l.LaneId >= state.FootprintLanes)
+        .Where(l => l.IsRunning && l.GreySourced != false)
         .ToList();
 
     /// <summary>La coda di assegnazione: candidati «pass» non ancora gestiti e abbastanza frequenti.</summary>

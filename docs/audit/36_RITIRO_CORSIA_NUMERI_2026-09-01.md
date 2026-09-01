@@ -1,5 +1,36 @@
 # Quando ritirare una corsia — i numeri per decidere (K16, K17, K19, K20)
 
+> ## ⚠️ RETTIFICHE del 2026-09-01 (seconda tornata di misure)
+>
+> Una seconda ondata di sei misure e tre avversari ha **demolito tre affermazioni di questo
+> documento**. Restano scritte sotto, con la correzione accanto, perché sono state usate per
+> decidere. La sintesi delle decisioni prese sta in
+> [`37_DECISIONI_RITIRO_2026-09-01.md`](37_DECISIONI_RITIRO_2026-09-01.md).
+>
+> 1. **§ 6 — «per la 5 e la 7 il backfill non ha trovato il candidato»: FALSO.** Era una deduzione
+>    dallo stato osservato, non una misura. Il backfill K13 **non è mai stato eseguito**: l'assembly
+>    che lo contiene è del 2026-09-01 00:33, *posteriore* alle etichette. Le chiavi combaciano
+>    carattere per carattere (SHA-256 ricalcolata fuori da .NET, più sei deformazioni di controllo,
+>    tutte assenti dall'archivio). Le etichette `Grey` delle corsie 3, 4 e 6 le ha scritte
+>    `GreyDeployer` all'atto dello schieramento. **E le corsie 5 e 7 erano grigie**: `Survived=false`,
+>    `IsGrey=true`, motivo «Solo 18 trade in holdout (< 20)», su 94 righe d'archivio su 94.
+>
+> 2. **§ 6 — «o si ritrova la provenienza di 5 e 7, o si alza `MaxGreyLanes`» non è un'alternativa:
+>    il primo corno è un NO-OP.** L'etichetta vera della corsia 5 è `Grey`, e l'ignoto già contava
+>    come grigio: `greyRunning` resta 4. Le uniche mosse che aprono uno slot sono `MaxGreyLanes = 5`
+>    da sola, oppure **ritirare un doppione + `MaxGreyLanes = 4`** (stesso slot, una corsia grigia in
+>    meno).
+>
+> 3. **§ 3 — «recuperare i 65 trade fuori dalla finestra di giudizio»: da NON fare.** Almeno 27 di
+>    quei 65 sono **righe di replay**: la corsia 4 porta 27 trade con `OpenedAtUtc` dall'11 al 27
+>    agosto mentre fino al 31/08 20:22 era configurata su XRP/USDT. `TradeRecords` non ha alcuna
+>    colonna che distingua una riga scritta da un recupero di candele storiche da una vera. I trade
+>    di **forward test** sulle identità in corsa sono **0 / 0 / 1 / 0 / 0**.
+>
+> Correzioni minori: la corsia 7 **non occupa** una corsia (è *la* corsia libera, e non consuma
+> nemmeno uno slot grigio); il duty non è 0,88 uniforme ma va da **0,754 a 0,999** per corsia; le
+> «vite osservate» della § 0 sono calendario × 0,88, cioè **dedotte**, non misurate.
+
 > **Data:** 2026-09-01 · **Filone K, Fase 2** · Riferimento: `docs/PRD-AUTONOMIA-PIENA-2026-08.md`
 >
 > Questo documento **non decide**. Prepara i numeri per una decisione di politica: *quando la
