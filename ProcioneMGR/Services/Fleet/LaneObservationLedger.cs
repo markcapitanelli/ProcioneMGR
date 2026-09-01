@@ -62,6 +62,35 @@ public sealed class LaneObservationLedger(
             logger.LogInformation(
                 "Corsia {Lane}: identità cambiata ({Da} → {A}) — l'osservazione cumulata riparte da zero.",
                 laneId, row.Identity, identity);
+
+            // [K47, PRD autonomia-piena — Fase 3, 2026-09-02] PRIMA di azzerare, si ARCHIVIA.
+            //
+            // Questo è il punto esatto in cui, da J8 a oggi, la storia veniva persa: una riga per
+            // corsia, sovrascritta. Ogni criterio di ritiro è ancorato a `FirstSeenUtc`, quindi
+            // ogni soglia è denominata in una grandezza — la vita di un'identità — di cui non
+            // esisteva la distribuzione. Sette avversari indipendenti, su due ondate di misure,
+            // hanno chiesto tutti e sette lo STESSO numero mancante.
+            //
+            // Ricostruito a mano dal journal dava 27,0 giorni di mediana su quattro episodi, e con
+            // quel numero si è visto che alzare le soglie a 27 o 41 giorni non le rende severe: le
+            // SPEGNE, perché nessuna identità realmente vissuta ci sarebbe arrivata. Un numero che
+            // decide così tanto non può stare in una ricostruzione manuale.
+            //
+            // Si archivia solo se l'episodio è ANCORATO (FirstSeenUtc valorizzato): una riga appena
+            // creata in questo stesso metodo non è un esperimento vissuto.
+            if (row.FirstSeenUtc != default && nowUtc > row.FirstSeenUtc)
+            {
+                db.FleetLaneIdentityEpisodes.Add(new FleetLaneIdentityEpisode
+                {
+                    LaneId = laneId,
+                    Identity = row.Identity,
+                    FirstSeenUtc = row.FirstSeenUtc,
+                    ClosedUtc = nowUtc,
+                    ObservedSeconds = row.ObservedSeconds,
+                    NextIdentity = identity,
+                });
+            }
+
             row.Identity = identity;
             row.FirstSeenUtc = nowUtc;
             row.ObservedSeconds = 0;

@@ -144,6 +144,60 @@ public sealed class FleetOrchestratorWorker(
     /// </summary>
     public IReadOnlyDictionary<int, int> RetireStreaks => new Dictionary<int, int>(_retireStreak);
 
+    /// <summary>
+    /// [K46, PRD autonomia-piena — Fase 3, 2026-09-02] <b>Perché l'ultimo tick è fallito</b>, o
+    /// <c>null</c> se è andato. Il pannello lo mostra: un orchestratore che non riesce a girare non
+    /// deve poter sembrare un orchestratore che non ha niente da fare.
+    ///
+    /// <para><b>Il fatto che l'ha resa necessaria.</b> Dal 2026-09-01 sera la flotta ha smesso di
+    /// scrivere qualunque riga di journal: il tick decideva un'azione e falliva sull'INSERT, perché
+    /// <c>Source</c> era <c>varchar(16)</c> e <c>DescribeAssignSource</c> produce
+    /// <c>default:quorum-mancato</c> (22 caratteri). L'eccezione finiva in un <c>LogError</c>, e da
+    /// fuori il sintomo era «il pannello dice un'azione, il journal è muto» — indistinguibile da
+    /// «non c'è niente da fare» per chiunque non andasse a leggere i log del processo.</para>
+    ///
+    /// <para><b>Il difetto strutturale non era la colonna, era il silenzio.</b> Un guasto che si
+    /// annuncia solo in un log che nessuno rilegge è, per il sistema che si sorveglia da solo, un
+    /// guasto che non esiste. Questo è lo stesso principio della regola 5 — degradare dicendolo — e
+    /// il posto dove mancava era proprio il governo.</para>
+    /// </summary>
+    public string? LastTickError { get; private set; }
+
+    /// <summary>Da quando fallisce senza interruzioni: un giro storto è rumore, dieci sono un guasto.</summary>
+    public int ConsecutiveTickFailures => _tickConsecutiveFailures;
+
+    private int _tickConsecutiveFailures;
+    private bool _tickFailureNotified;
+
+    /// <summary>
+    /// [K46] Dichiara il fallimento del tick: log, stato leggibile dal pannello, e <b>una</b>
+    /// notifica critica per episodio — non una ogni quindici minuti, che consumerebbe il budget
+    /// degli allarmi veri (lezione già pagata con la staleness a 60s su STX).
+    /// </summary>
+    private async Task DeclareTickFailureAsync(Exception ex, CancellationToken ct)
+    {
+        _tickConsecutiveFailures++;
+        LastTickError = $"{ex.GetType().Name}: {ex.Message}";
+        logger.LogError(ex, "Tick dell'orchestratore di flotta fallito ({Falliti} di fila); ritento al prossimo.",
+            _tickConsecutiveFailures);
+
+        if (_tickFailureNotified || notifier is null) return;
+        _tickFailureNotified = true;
+        try
+        {
+            await notifier.NotifyAsync(NotificationSeverity.Critical,
+                "L'orchestratore di flotta non riesce a completare un tick",
+                "La Regina sta decidendo ma non riesce a portare a termine il giro, quindi non schiera, non ritira e "
+                + $"non scrive il proprio journal. Ultimo errore: {LastTickError}. "
+                + "Finché dura, il pannello di /admin/autonomy mostra numeri di un giro che non è arrivato in fondo.", ct);
+        }
+        catch (Exception notifyEx)
+        {
+            // Un notificatore rotto non deve nascondere il guasto che stava annunciando.
+            logger.LogError(notifyEx, "Anche la notifica del tick fallito è fallita.");
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try { await Task.Delay(TimeSpan.FromSeconds(45), stoppingToken); }
@@ -154,9 +208,22 @@ public sealed class FleetOrchestratorWorker(
             var opt = options.CurrentValue;
             if (opt.Enabled)
             {
-                try { await TickAsync(stoppingToken); }
+                try
+                {
+                    await TickAsync(stoppingToken);
+                    // [K46] Il giro è andato: se prima era rotto, la guarigione è una notizia
+                    // quanto il guasto — altrimenti il pannello resta rosso per sempre.
+                    if (LastTickError is not null)
+                    {
+                        logger.LogInformation("Orchestratore di flotta: il tick è tornato a funzionare dopo {Falliti} giri falliti.",
+                            _tickConsecutiveFailures);
+                        LastTickError = null;
+                        _tickConsecutiveFailures = 0;
+                        _tickFailureNotified = false;
+                    }
+                }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
-                catch (Exception ex) { logger.LogError(ex, "Tick dell'orchestratore di flotta fallito; ritento al prossimo."); }
+                catch (Exception ex) { await DeclareTickFailureAsync(ex, stoppingToken); }
             }
 
             var delay = TimeSpan.FromMinutes(Math.Clamp(opt.TickMinutes, 1, 720));

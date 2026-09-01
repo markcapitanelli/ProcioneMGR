@@ -108,6 +108,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[J8] L'orologio dell'osservazione per corsia di flotta (non si azzera al riavvio).</summary>
     public DbSet<FleetLaneObservation> FleetLaneObservations => Set<FleetLaneObservation>();
 
+    /// <summary>[K47] La storia degli esperimenti CHIUSI in corsia: append-only, mai sovrascritta.</summary>
+    public DbSet<FleetLaneIdentityEpisode> FleetLaneIdentityEpisodes => Set<FleetLaneIdentityEpisode>();
+
     /// <summary>[G4] Post-mortem delle operazioni chiuse in perdita: testo e classificazione, mai un parametro.</summary>
     public DbSet<TradePostMortem> TradePostMortems => Set<TradePostMortem>();
 
@@ -201,6 +204,18 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.HasKey(e => e.LaneId);
             entity.Property(e => e.Identity).HasMaxLength(512).IsRequired();
             entity.Property(e => e.LastTickUtc).IsConcurrencyToken();
+        });
+
+        // [K47] La storia degli esperimenti chiusi: append-only. L'indice è su (LaneId, FirstSeenUtc)
+        // perché le due domande sono «come è andata questa corsia nel tempo» e «quanto vivono le
+        // identità»: la prima scorre una corsia in ordine, la seconda le legge tutte.
+        builder.Entity<FleetLaneIdentityEpisode>(entity =>
+        {
+            entity.ToTable("FleetLaneIdentityEpisodes");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Identity).HasMaxLength(512).IsRequired();
+            entity.Property(e => e.NextIdentity).HasMaxLength(512).IsRequired();
+            entity.HasIndex(e => new { e.LaneId, e.FirstSeenUtc });
         });
 
         // [AF2] Journal della flotta: append-only, letto per data discendente dal pannello e per
