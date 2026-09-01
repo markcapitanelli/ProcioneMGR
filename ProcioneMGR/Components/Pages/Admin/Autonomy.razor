@@ -428,7 +428,23 @@
            silenzio. *@
         @if (FleetWorker.LastSilence is { } silence)
         {
-            <div class="alert @(silence.CommitteeCouldBeAsked ? "alert-info" : "alert-secondary") py-2 small mb-3">
+            @* [K40, 2026-09-01] L'illeggibilità va sopra tutto il resto, e cambia il colore della
+               scheda: sopra zero, ogni altro numero qui dentro è costruito su un denominatore
+               incompleto. Il 2026-09-01 alle 11:30 UTC tutte e cinque le corsie erano mute e il
+               journal ha scritto «il vincolo sono le corsie, non i candidati» — che manda a
+               liberare una corsia mentre il problema è che il motore non risponde. *@
+            @if (silence.UnreadableLanes > 0)
+            {
+                <div class="alert alert-danger py-2 small mb-2">
+                    <strong>@silence.UnreadableLanes corsie di flotta non sono leggibili in questo giro.</strong>
+                    Il motore non ha risposto. I numeri qui sotto <em>non le contano</em>: non risultano libere, non
+                    risultano sotto governo, e non possono essere né in inedia né ritirate — quindi «nessuna corsia
+                    libera» qui sotto non significa che siano impegnate. Restano intoccabili per prudenza e
+                    <strong>occupano il tetto grigio</strong>. Il rimedio non è liberare una corsia: è
+                    <code>procione stato</code>, e i tunnel 18092/18093.
+                </div>
+            }
+            <div class="alert @(silence.UnreadableLanes > 0 ? "alert-warning" : silence.CommitteeCouldBeAsked ? "alert-info" : "alert-secondary") py-2 small mb-3">
                 <div class="d-flex flex-wrap gap-3 mb-1">
                     <span><strong>@silence.PassCandidatesQueued</strong> candidati «pass» in coda</span>
                     <span title="Proposte DISTINTE per identità (strategia + coppia + timeframe + parametri), non numero di run: la caccia ritrova spesso gli stessi parametri, e quaranta righe che sono una cosa sola non sono un elenco.">

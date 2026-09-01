@@ -64,6 +64,7 @@ public sealed class FleetStateReader(
             var running = s.IsRunning;
             var mode = s.Mode;
             var emergency = false;
+            var unreadable = false;
             var sharpe = 0m;
             var trades = 0;
             var observation = TimeSpan.Zero;
@@ -124,6 +125,9 @@ public sealed class FleetStateReader(
                     // Corsia illeggibile = corsia INTOCCABILE, mai "libera per errore".
                     logger.LogWarning(ex, "Stato corsia {Lane} non leggibile: la marco intoccabile per questo tick.", s.Id);
                     emergency = true;
+                    // [K40] ...e SEPARATAMENTE illeggibile, perché «fermata per emergenza» e «non
+                    // risponde» hanno rimedi opposti e finora producevano la stessa frase.
+                    unreadable = true;
                 }
             }
 
@@ -135,7 +139,9 @@ public sealed class FleetStateReader(
                 // come "gamba attiva". [I12-rev] ...e vale null se il motore sta eseguendo altro.
                 expected,
                 // [J14] Provenienza delle gambe, per il tetto MaxGreyLanes (stessa fonte: la directory).
-                GreySourced: s.HasGreyLegs));
+                GreySourced: s.HasGreyLegs,
+                // [K40] «Non risponde» separato da «fermata per emergenza»: rimedi opposti.
+                Unreadable: unreadable));
         }
 
         // --- Candidati --------------------------------------------------------------------------

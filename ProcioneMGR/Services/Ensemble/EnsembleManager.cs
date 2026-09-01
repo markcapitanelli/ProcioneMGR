@@ -185,7 +185,36 @@ public sealed class EnsembleManager(
                 ? legTrades.Where(t => t.PnlPercent > -tetto && t.PnlPercent < tetto)
                 : legTrades;
 
-            var recentTrades = await plausibili
+            // [K39, PRD autonomia-piena — Fase 3, 2026-09-01] IL TERZO FILTRO, CHE MANCAVA:
+            // LA GAMBA NON PUO' ESSERE GIUDICATA DA TRADE PIU' VECCHI DI SE STESSA.
+            //
+            // Simbolo e fill rotti non bastano. `TradeRecords` porta i tempi della CANDELA, e al
+            // riavvio del motore il feed rigioca fino a trenta giorni di storia: le righe di replay
+            // hanno lo StrategyId e il simbolo ATTUALI, quindi passano entrambi i filtri esistenti.
+            //
+            // Misurato il 2026-09-01 sulle cinque corsie di flotta: delle 66 righe che questo
+            // metodo leggeva, **65 erano precedenti alla creazione della gamba che dicevano di
+            // descrivere**. La corsia 4 era l'unica gamba «misurabile» della piattaforma
+            // (20 trade su 20 richiesti) e la sua finestra era di venti righe di replay su venti.
+            // La pagina scriveva «Sharpe realizzato · trade analizzati: 20» e, a un link di
+            // distanza, /trading diceva «operazioni chiuse: 0». Venti contro zero, stessa gamba.
+            //
+            // L'ancora e' ExpectedSharpeAtUtc, timbrato alla CREAZIONE della gamba (RF0, e lo
+            // scrive ogni percorso di schieramento): e' l'istante di nascita di questa ipotesi su
+            // questa corsia. E' la stessa correzione che K18 ha fatto al ritiro — numeratore e
+            // denominatore dalla stessa storia — applicata al monitor, che non l'aveva avuta.
+            //
+            // Gamba SENZA timbro: non si misura. E' fail-closed voluto — misurare su una finestra
+            // che non si sa dove cominci e' peggio che dire «non lo so», ed e' esattamente cio' che
+            // questo metodo faceva finora. Le gambe senza timbro sono quelle delle corsie
+            // d'impronta (RF0, item K22 della Fase 3), e questo rende quel lavoro visibile invece
+            // di mascherarlo con un numero.
+            var ancora = s.ExpectedSharpeAtUtc;
+            var ancorati = ancora is DateTime nascita
+                ? plausibili.Where(t => t.ClosedAtUtc >= nascita)
+                : plausibili.Where(t => false);
+
+            var recentTrades = await ancorati
                 .Where(t => t.Symbol == cfg.Symbol)
                 .OrderByDescending(t => t.ClosedAtUtc)
                 .Take(options.WindowTradeCount)
@@ -194,6 +223,13 @@ public sealed class EnsembleManager(
             // Quanti ne sono stati scartati: un conteggio piu' basso senza spiegazione si legge
             // come un guasto, e la spiegazione qui e' "quella corsia faceva un altro mestiere".
             var excluded = await plausibili.CountAsync(t => t.Symbol != cfg.Symbol, ct);
+            // [K39] E quanti sono stati scartati perche' PRECEDENTI alla gamba: e' il numero che
+            // spiega perche' una corsia con decine di righe in tabella risulta non misurabile, e
+            // senza di esso la pagina direbbe «0 trade» dove la verita' e' «0 trade DI QUESTA
+            // gamba, 27 di quelle prima».
+            var primaDellaGamba = ancora is DateTime n2
+                ? await plausibili.CountAsync(t => t.Symbol == cfg.Symbol && t.ClosedAtUtc < n2, ct)
+                : await plausibili.CountAsync(t => t.Symbol == cfg.Symbol, ct);
             var rotti = tetto > 0m
                 ? await legTrades.CountAsync(t => t.PnlPercent <= -tetto || t.PnlPercent >= tetto, ct)
                 : 0;
@@ -204,6 +240,8 @@ public sealed class EnsembleManager(
             report.Symbol = cfg.Symbol;
             report.TradesExcludedOtherSymbol = excluded;
             report.TradesExcludedImplausible = rotti;
+            report.TradesExcludedBeforeLeg = primaDellaGamba;
+            report.LegHasNoBirthStamp = ancora is null;
             reports.Add(report);
 
             if (rotti > 0)

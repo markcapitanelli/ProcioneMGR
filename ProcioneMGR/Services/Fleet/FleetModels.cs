@@ -202,7 +202,24 @@ public sealed record FleetLaneState(
     /// provenienza ignota — e ai fini del tetto MaxGreyLanes l'ignoto conta come grigio
     /// (fail-closed: non sapere non allarga il permesso).
     /// </summary>
-    bool? GreySourced = null);
+    bool? GreySourced = null,
+    /// <summary>
+    /// [K40, 2026-09-01] Lo stato di questa corsia <b>non è stato leggibile</b> in questo giro: il
+    /// motore non ha risposto. È un sottoinsieme di <see cref="EmergencyStopped"/> — il lettore
+    /// marca entrambi con la stessa bandiera — ma le due cose hanno rimedi opposti, e confonderle
+    /// produce la frase sbagliata nel posto peggiore.
+    ///
+    /// <para><b>Il fatto misurato.</b> Al tick delle 2026-09-01 11:30 UTC il journal ha scritto
+    /// «16 candidati grigi schierabili ma NESSUNA corsia di flotta libera (6 attive): il vincolo
+    /// sono le corsie, non i candidati» — mentre <i>nessuna</i> delle cinque corsie aveva risposto
+    /// (il ledger dell'osservazione non è stato toccato per nessuna di esse). Una corsia illeggibile
+    /// esce da <see cref="FleetOrchestrator.FleetLanes"/>, quindi non è «libera»; e il conteggio
+    /// «attive» viene dal database, che invece risponde sempre. Il risultato è una singola frase che
+    /// mescola un numero preso dal DB con una libertà presa dal motore, e trasforma
+    /// <b>«non riesco a leggere niente»</b> in <b>«le corsie sono impegnate»</b> — che ha un rimedio
+    /// completamente diverso: guardare perché il pod non risponde, non liberare una corsia.</para>
+    /// </summary>
+    bool Unreadable = false);
 
 /// <summary>
 /// Un run candidato al forward test. <paramref name="Band"/>: "pass" = sopravvissuti alla

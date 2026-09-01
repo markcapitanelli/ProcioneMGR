@@ -694,6 +694,38 @@ else
                                                 }
                                             </dd>
                                         }
+                                        @* [K39, 2026-09-01] PERCHÉ IL CONTEGGIO È BASSO.
+                                           Senza questa riga, una gamba con decine di righe in
+                                           tabella risulta «0 trade» e si legge come un guasto —
+                                           mentre la verità è «0 trade DI QUESTA gamba». Misurato:
+                                           delle 66 righe che il monitor leggeva, 65 erano
+                                           precedenti alla creazione della gamba. *@
+                                        @if (r.LegHasNoBirthStamp)
+                                        {
+                                            <dt class="col-6 text-warning-emphasis">Nascita della gamba</dt>
+                                            <dd class="col-6 text-warning-emphasis">
+                                                non dichiarata
+                                                <span class="text-muted d-block">
+                                                    Senza <code>ExpectedSharpeAtUtc</code> non si sa da quando questa
+                                                    gamba esiste, quindi non si sa quali trade siano suoi: il monitor
+                                                    <strong>non misura</strong> invece di misurare su una finestra
+                                                    che comincia chissà dove. Si ripara ri-aggiungendo la gamba.
+                                                </span>
+                                            </dd>
+                                        }
+                                        else if (r.TradesExcludedBeforeLeg > 0)
+                                        {
+                                            <dt class="col-6">Esclusi perché precedenti</dt>
+                                            <dd class="col-6">
+                                                @r.TradesExcludedBeforeLeg
+                                                <span class="text-muted d-block">
+                                                    Trade sullo stesso simbolo chiusi <strong>prima</strong> che questa
+                                                    gamba esistesse: appartengono a una configurazione precedente della
+                                                    corsia, oppure sono righe scritte da un recupero di candele
+                                                    storiche. Non descrivono questa ipotesi.
+                                                </span>
+                                            </dd>
+                                        }
                                     </dl>
                                     <p class="small mb-0 @(r.IsAlert ? "text-danger" : "text-muted")">@r.StatusMessage</p>
                                     <a href="trading" class="small">Vedi i trade in Trading →</a>
