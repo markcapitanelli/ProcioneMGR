@@ -132,6 +132,18 @@ public sealed class FleetOrchestratorWorker(
     /// </summary>
     public FleetSilence? LastSilence { get; private set; }
 
+    /// <summary>
+    /// [K42, 2026-09-01] <b>Le condanne al ritiro in corso</b>: corsia → conferme accumulate.
+    ///
+    /// <para>È lo stato che K20 chiedeva di rendere visibile. Vive in memoria e muore col guscio —
+    /// il costo misurato di un riavvio è 0,2 minuti a <c>RetireConfirmTicks = 2</c>, contro un
+    /// cancello di dieci giorni — ma finché esiste dev'essere <b>leggibile</b>: fino a oggi una
+    /// corsia poteva essere a un tick dall'essere fermata e nessuna superficie lo diceva.</para>
+    ///
+    /// <para>Copia, non la mappa viva: la legge un circuito Blazor mentre il worker la muta.</para>
+    /// </summary>
+    public IReadOnlyDictionary<int, int> RetireStreaks => new Dictionary<int, int>(_retireStreak);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try { await Task.Delay(TimeSpan.FromSeconds(45), stoppingToken); }
@@ -272,7 +284,29 @@ public sealed class FleetOrchestratorWorker(
             logger.LogWarning("Fleet:DryRun=false ma Fleet:ExecutionLanes è VUOTA: nessuna corsia autorizzata, il tick resta di solo journal.");
         }
 
-        var confirmedRetires = ApplyRetireHysteresis(plan, Math.Max(1, opt.RetireConfirmTicks));
+        var (confirmedRetires, cambiIsteresi) = ApplyRetireHysteresis(plan, Math.Max(1, opt.RetireConfirmTicks));
+
+        // [K42] La condanna a metà strada si SCRIVE. Prima di ogni altra cosa del giro, perché è la
+        // sola riga che dice cosa la flotta sta per fare — e perché finora non esisteva: il ramo
+        // «verdetto non ancora confermato» si annotava solo nel log, e l'unica traccia di un'azione
+        // ogni quindici minuti era un contatore in una pagina.
+        foreach (var cambio in cambiIsteresi)
+        {
+            await JournalAsync(new OrchestratorDecision
+            {
+                AtUtc = DateTime.UtcNow,
+                Kind = "RetirePending",
+                LaneId = cambio.LaneId,
+                Source = "rules",
+                Reason = cambio.Reason,
+                DryRun = opt.DryRun,
+                // Non è un'azione applicata: è lo stato di una decisione in corso. Applied=true
+                // qui significherebbe «la corsia è stata fermata», che è falso.
+                Applied = false,
+            }, ct);
+            logger.LogInformation("Ritiro corsia {Lane}: serie {Da} → {A}. {Reason}",
+                cambio.LaneId, cambio.Da, cambio.A, cambio.Reason);
+        }
 
         // [AF2b] Il budget di esecuzione del giro: una corsia per volta, per poter distinguere una
         // decisione giusta da un guasto del lettore di stato.
@@ -357,8 +391,12 @@ public sealed class FleetOrchestratorWorker(
                     break;
 
                 case StopAndFreeLane pending:
-                    // Verdetto non ancora confermato dall'isteresi: si annota solo nel log.
-                    logger.LogInformation("Ritiro corsia {Lane} in attesa di conferma ({Streak}/{Needed}): {Reason}",
+                    // [K42] Verdetto non ancora confermato dall'isteresi. La riga di journal l'ha
+                    // GIÀ scritta il blocco dei cambi di serie, qui sopra, e solo se la serie si è
+                    // MOSSA: questo ramo si ripete a ogni tick finché la condanna dura, quindi
+                    // journalizzare qui darebbe 96 righe al giorno per una decisione ferma. Resta il
+                    // log, che è per chi sta guardando adesso.
+                    logger.LogDebug("Ritiro corsia {Lane} in attesa di conferma ({Streak}/{Needed}): {Reason}",
                         pending.LaneId, _retireStreak.GetValueOrDefault(pending.LaneId), Math.Max(1, opt.RetireConfirmTicks), pending.Reason);
                     break;
 
@@ -525,23 +563,72 @@ public sealed class FleetOrchestratorWorker(
     /// Le corsie che questo tick NON condanna azzerano la propria serie — uno Sharpe che oscilla
     /// attorno alla soglia non accumula mai la conferma.
     /// </summary>
-    private HashSet<int> ApplyRetireHysteresis(FleetPlan plan, int confirmTicks)
-    {
-        var votedNow = plan.Actions.OfType<StopAndFreeLane>().Select(a => a.LaneId).ToHashSet();
+    /// <summary>
+    /// [K42, PRD autonomia-piena — Fase 3, 2026-09-01] Un <b>cambio</b> della serie di conferme:
+    /// da quante ne aveva a quante ne ha. <c>A = 0</c> significa <b>assolta</b> — il verdetto non si
+    /// è ripetuto e la corsia esce dall'isteresi.
+    /// </summary>
+    internal readonly record struct RetireStreakChange(int LaneId, int Da, int A, string Reason);
 
-        foreach (var lane in _retireStreak.Keys.Where(l => !votedNow.Contains(l)).ToList())
+    /// <summary>
+    /// L'isteresi del ritiro, e da [K42] anche <b>le sue transizioni</b>.
+    ///
+    /// <para><b>Perché servono.</b> Fino a oggi il ramo <c>StopAndFreeLane</c> non ancora confermato
+    /// «si annotava solo nel log»: una condanna a metà strada esisteva, contava fra le azioni del
+    /// piano, e non era leggibile da nessuna parte. Osservato in esercizio il 2026-09-01: il
+    /// pannello diceva «azioni ultimo piano: 1» e il journal non aveva una riga da sei ore, anche
+    /// dopo un riavvio del guscio che azzera la deduplica dei motivi — un'azione ogni quindici
+    /// minuti che non lasciava traccia.</para>
+    ///
+    /// <para><b>Perché i CAMBI e non lo stato.</b> Journalizzare a ogni tick darebbe 96 righe al
+    /// giorno per una condanna che non si muove: è lo stesso rumore che la deduplica dei
+    /// <c>Blocked</c> esiste per togliere. E per la stessa ragione la serie <b>si ferma alla
+    /// conferma</b> invece di crescere all'infinito: oltre <paramref name="confirmTicks"/> non c'è
+    /// più niente di nuovo da dire, e da lì in poi parla il ramo del ritiro vero.</para>
+    ///
+    /// <para><b>La serie vive in memoria e muore col guscio</b>, ed è una scelta: il costo misurato
+    /// di un riavvio è <b>0,2 minuti</b> di ritardo a <c>RetireConfirmTicks = 2</c>, contro un
+    /// cancello di dieci giorni. Quello che serviva non era persistere il contatore, era vedere che
+    /// esiste — e dopo un riavvio il primo tick scrive una serie nuova, che è la verità.</para>
+    /// </summary>
+    private (HashSet<int> Confirmed, List<RetireStreakChange> Cambi) ApplyRetireHysteresis(
+        FleetPlan plan, int confirmTicks)
+    {
+        var votati = plan.Actions.OfType<StopAndFreeLane>().ToDictionary(a => a.LaneId, a => a.Reason);
+        var cambi = new List<RetireStreakChange>();
+
+        foreach (var lane in _retireStreak.Keys.Where(l => !votati.ContainsKey(l)).ToList())
         {
+            // Assolta: il verdetto non si è ripetuto. Va detto, perché una condanna che sparisce in
+            // silenzio è indistinguibile da una condanna che non c'è mai stata.
+            var prima = _retireStreak[lane];
             _retireStreak.Remove(lane);
+            if (prima > 0)
+            {
+                cambi.Add(new RetireStreakChange(lane, prima, 0,
+                    $"Corsia {lane}: il verdetto di ritiro NON si è ripetuto ({prima}/{confirmTicks} conferme), "
+                    + "la serie si azzera e la corsia resta in corsa."));
+            }
         }
 
         var confirmed = new HashSet<int>();
-        foreach (var lane in votedNow)
+        foreach (var (lane, motivo) in votati)
         {
-            var streak = _retireStreak.GetValueOrDefault(lane) + 1;
-            _retireStreak[lane] = streak;
-            if (streak >= confirmTicks) confirmed.Add(lane);
+            var prima = _retireStreak.GetValueOrDefault(lane);
+            // Ferma alla conferma: oltre non c'è nulla di nuovo da dire, e continuare a contare
+            // produrrebbe una riga ogni quindici minuti finché qualcuno non interviene.
+            var dopo = Math.Min(prima + 1, confirmTicks);
+            _retireStreak[lane] = dopo;
+            if (dopo >= confirmTicks) confirmed.Add(lane);
+            if (dopo != prima)
+            {
+                cambi.Add(new RetireStreakChange(lane, prima, dopo,
+                    $"Corsia {lane}: condanna al ritiro, conferma {dopo}/{confirmTicks}"
+                    + (dopo >= confirmTicks ? " — CONFERMATA, il ritiro può essere eseguito." : " (in attesa del prossimo tick).")
+                    + $" {motivo}"));
+            }
         }
-        return confirmed;
+        return (confirmed, cambi);
     }
 
     /// <summary>

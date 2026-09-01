@@ -296,6 +296,23 @@ message GetPerformanceResponse {
   // metriche aggregate), ma ITradingEngine lo promette: ometterlo del tutto renderebbe il client
   // remoto silenziosamente diverso da quello locale, un troncamento bounded no.
   repeated TradeRecord trades = 10;
+
+  // [K44, 2026-09-01] SHARPE PER TRADE: media diviso deviazione standard dei rendimenti PER
+  // OPERAZIONE, senza annualizzazione.
+  //
+  // Perche' esiste accanto a sharpe_ratio: quello e' annualizzato sui rendimenti di BARRA, quindi
+  // moltiplicato per la radice di PeriodsPerYear — 2190 a 4h, 35040 a 15m. La radice vale 46,8
+  // contro 187,2: **un fattore 4,0**. La stessa soglia di ritiro significa quattro cose diverse su
+  // corsie con timeframe diversi, e nessuna superficie lo dice. Questo campo non dipende dal
+  // timeframe: e' il numero su cui una soglia unica e' davvero unica.
+  procionemgr.common.v1.DecimalValue sharpe_per_trade = 11;
+
+  // Quanti trade hanno prodotto il campo qui sopra. **Serve a distinguere ASSENTE da ZERO**: in
+  // proto3 un campo non impostato si deserializza al default, quindi un motore con un'immagine
+  // precedente a questo campo restituirebbe 0 — e uno Sharpe per trade di 0 e' un verdetto, non
+  // un'assenza. Con samples == 0 il valore va letto come NON DISPONIBILE e il criterio si astiene.
+  // E' la stessa trappola gia' pagata con running_strategy_ids (I13a-rev).
+  int32 sharpe_per_trade_samples = 12;
 }
 
 message EquityPoint {

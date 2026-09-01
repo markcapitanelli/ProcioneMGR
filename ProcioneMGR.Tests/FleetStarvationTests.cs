@@ -18,8 +18,15 @@ public sealed class FleetStarvationTests
     private static FleetLaneState Lane(int id, bool running = true, string mode = "Paper",
         bool quarantined = false, bool campaign = false, bool emergency = false,
         decimal sharpe = 0.5m, int trades = 0, int observationDays = 14, decimal? expectedPerMonth = null)
+        // [K44, 2026-09-01] Il criterio per Sharpe legge ora il numero PER OPERAZIONE, non quello
+        // annualizzato: la stessa soglia sul secondo valeva quattro cose diverse a seconda del
+        // timeframe (√2190 = 46,8 contro √35040 = 187,2). Queste prove parlano di inedia, non di
+        // unità, quindi la gamba dichiara lo stesso valore su entrambi — e la parte che conta è che
+        // lo DICHIARI: senza, il criterio si astiene (l'ignoranza non condanna) e le prove
+        // proverebbero il contrario di ciò che credono.
         => new(id, running, mode, IsConfigured: true, quarantined, campaign, emergency,
-            sharpe, trades, TimeSpan.FromDays(observationDays), "ADA/USDT", "4h", expectedPerMonth);
+            sharpe, trades, TimeSpan.FromDays(observationDays), "ADA/USDT", "4h", expectedPerMonth,
+            GreySourced: null, Unreadable: false, RealizedSharpePerTrade: sharpe);
 
     private static FleetState State(IReadOnlyList<FleetLaneState> lanes, int footprint = 3)
         => new() { Lanes = lanes, Candidates = [], FootprintLanes = footprint, ExposureGuardEnabled = true, NowUtc = DateTime.UtcNow };

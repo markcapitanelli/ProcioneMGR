@@ -215,6 +215,11 @@ public static class TradingContractMapper
             AverageWin = DecimalValueMapper.ToProto(p.AverageWin),
             AverageLoss = DecimalValueMapper.ToProto(p.AverageLoss),
             ProfitFactor = DecimalValueMapper.ToProto(p.ProfitFactor),
+            // [K44] Il numero senza annualizzazione, col suo conteggio di campioni: zero campioni
+            // significa NON DISPONIBILE, e serve perché in proto3 «assente» e «zero» sono la stessa
+            // cosa sul filo.
+            SharpePerTrade = DecimalValueMapper.ToProto(p.SharpePerTrade),
+            SharpePerTradeSamples = p.SharpePerTradeSamples,
         };
         r.EquityCurve.AddRange(p.EquityCurve.Select(e => new Proto.EquityPoint
         {
@@ -241,6 +246,11 @@ public static class TradingContractMapper
         AverageLoss = DecimalValueMapper.FromProtoOrZero(r.AverageLoss),
         ProfitFactor = DecimalValueMapper.FromProtoOrZero(r.ProfitFactor),
         Trades = r.Trades.Select(FromProto).ToList(),
+        // [K44] Un motore con un'immagine precedente a questo campo risponde 0 su ENTRAMBI, e con
+        // i campioni a zero il valore va letto come non disponibile — mai come «Sharpe zero», che
+        // sarebbe un verdetto emesso da un'assenza.
+        SharpePerTrade = DecimalValueMapper.FromProtoOrZero(r.SharpePerTrade),
+        SharpePerTradeSamples = r.SharpePerTradeSamples,
     };
 
     public static Proto.TradeRecord ToProto(TradeRecord t) => new()

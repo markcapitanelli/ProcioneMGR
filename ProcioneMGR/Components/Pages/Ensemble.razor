@@ -26,7 +26,7 @@
 <PageTitle>Ensemble</PageTitle>
 
 @*
-    [K23, 2026-09-01] IL BADGE DICEVA LA COSA SBAGLIATA, ED ERA LA PIU' IMPORTANTE.
+    [K34, 2026-09-01] IL BADGE DICEVA LA COSA SBAGLIATA, ED ERA LA PIU' IMPORTANTE.
 
     Fino a oggi qui c'era «RUNNING/STOPPED» guidato da `_status.IsRunning`, che vale
     `EnsembleConfiguration.IsEnabled` — un flag che NON governa l'esecuzione. Chi governa e'
@@ -692,6 +692,54 @@ else
                                                 {
                                                     <span class="text-muted" title="Trade di questa gamba su altri simboli, esclusi dal confronto: il criterio è il simbolo ATTUALE della corsia.">(@r.TradesExcludedOtherSymbol esclusi)</span>
                                                 }
+                                            </dd>
+                                        }
+                                        @* [K39, 2026-09-01] PERCHÉ IL CONTEGGIO È BASSO.
+                                           Senza questa riga, una gamba con decine di righe in
+                                           tabella risulta «0 trade» e si legge come un guasto —
+                                           mentre la verità è «0 trade DI QUESTA gamba». Misurato:
+                                           delle 66 righe che il monitor leggeva, 65 erano
+                                           precedenti alla creazione della gamba. *@
+                                        @if (r.LegHasNoBirthStamp)
+                                        {
+                                            <dt class="col-6 text-warning-emphasis">Nascita della gamba</dt>
+                                            <dd class="col-6 text-warning-emphasis">
+                                                non dichiarata
+                                                <span class="text-muted d-block">
+                                                    Senza <code>ExpectedSharpeAtUtc</code> non si sa da quando questa
+                                                    gamba esiste, quindi non si sa quali trade siano suoi: il monitor
+                                                    <strong>non misura</strong> invece di misurare su una finestra
+                                                    che comincia chissà dove. Si ripara ri-aggiungendo la gamba.
+                                                </span>
+                                            </dd>
+                                        }
+                                        @if (r.TradesExcludedDuplicate > 0)
+                                        {
+                                            @* [K43] Le repliche di replay: stesso trade, contato più
+                                               volte. Il controllo che c'era (COUNT DISTINCT
+                                               PositionId) non poteva vederle, perché il PositionId
+                                               nasce a ogni esecuzione. *@
+                                            <dt class="col-6">Esclusi perché repliche</dt>
+                                            <dd class="col-6">
+                                                @r.TradesExcludedDuplicate
+                                                <span class="text-muted d-block">
+                                                    Righe che descrivono lo <strong>stesso</strong> trade (stessa gamba,
+                                                    stessa apertura, stessa chiusura) scritte più di una volta da run
+                                                    ripetuti o dal recupero di candele storiche. Vale la prima scritta.
+                                                </span>
+                                            </dd>
+                                        }
+                                        @if (r.TradesExcludedBeforeLeg > 0 && !r.LegHasNoBirthStamp)
+                                        {
+                                            <dt class="col-6">Esclusi perché precedenti</dt>
+                                            <dd class="col-6">
+                                                @r.TradesExcludedBeforeLeg
+                                                <span class="text-muted d-block">
+                                                    Trade sullo stesso simbolo chiusi <strong>prima</strong> che questa
+                                                    gamba esistesse: appartengono a una configurazione precedente della
+                                                    corsia, oppure sono righe scritte da un recupero di candele
+                                                    storiche. Non descrivono questa ipotesi.
+                                                </span>
                                             </dd>
                                         }
                                     </dl>

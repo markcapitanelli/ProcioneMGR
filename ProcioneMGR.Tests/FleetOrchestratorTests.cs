@@ -13,8 +13,13 @@ public sealed class FleetOrchestratorTests
     private static FleetLaneState Lane(int id, bool running = false, string mode = "Paper",
         bool configured = false, bool quarantined = false, bool campaign = false, bool emergency = false,
         decimal sharpe = 0m, int trades = 0, int observationDays = 0)
+        // [K44, 2026-09-01] Il giudizio legge lo Sharpe PER OPERAZIONE, non quello annualizzato:
+        // la stessa soglia sul secondo valeva quattro cose diverse a seconda del timeframe. Qui la
+        // gamba dichiara lo stesso valore su entrambi — queste prove parlano dei CANCELLI del
+        // ritiro, non dell'unità — ma deve dichiararlo: senza, il criterio si astiene.
         => new(id, running, mode, configured, quarantined, campaign, emergency,
-            sharpe, trades, TimeSpan.FromDays(observationDays), configured ? "BTC/USDT" : "", configured ? "1h" : "");
+            sharpe, trades, TimeSpan.FromDays(observationDays), configured ? "BTC/USDT" : "", configured ? "1h" : "",
+            ExpectedTradesPerMonth: null, GreySourced: null, Unreadable: false, RealizedSharpePerTrade: sharpe);
 
     private static FleetCandidate Pass(Guid? id = null, decimal tpm = 8m, int ageDays = 1, bool handled = false)
         => new(id ?? Guid.NewGuid(), DateTime.UtcNow.AddDays(-ageDays), "pass", tpm, "1h", "test-candidate", handled);

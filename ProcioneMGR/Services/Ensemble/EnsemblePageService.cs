@@ -41,7 +41,7 @@ public sealed class EnsemblePageService(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     IBacktestEngine backtestEngine,
     ProcioneMGR.Services.Analysis.ExcursionAnalyzer excursionAnalyzer,
-    // [K22] La TERZA porta di schieramento ha bisogno della stessa guardia delle altre due: senza,
+    // [K33] La TERZA porta di schieramento ha bisogno della stessa guardia delle altre due: senza,
     // basta aggiungere qui la gamba che gira su un'altra corsia e salvare.
     ILaneDirectory laneDirectory,
     Microsoft.Extensions.Options.IOptionsMonitor<Fleet.FleetOptions> fleetOptions)
@@ -399,7 +399,7 @@ public sealed class EnsemblePageService(
             Pipeline.PipelineCandidateKey.Build(s.StrategyName, Config.Symbol, Config.Timeframe, s.Parameters) == c.CandidateKey);
         if (AlreadyPresent()) return new("Questa gamba grigia è già nella corsia.", IsError: true);
 
-        // [K22, 2026-09-01] E la stessa ipotesi non deve stare su DUE corsie. Il controllo qui sopra
+        // [K33, 2026-09-01] E la stessa ipotesi non deve stare su DUE corsie. Il controllo qui sopra
         // guarda dentro questa corsia — è l'unico che esistesse in tutta la piattaforma, ed è il
         // motivo per cui il 31/08 GridMeanReversion DOGE/USDT 15m con parametri identici ha potuto
         // occupare le corsie 4 e 6 senza che nulla fiatasse. Questa è la terza porta di

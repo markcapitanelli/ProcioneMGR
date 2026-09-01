@@ -96,7 +96,7 @@ public sealed class LaneInvariantWatchdog(
     }
 
     /// <summary>
-    /// [K25, PRD autonomia-piena 2026-09-01] Posizioni aperte su corsie che ESISTONO ma sono FERME.
+    /// [K36, PRD autonomia-piena 2026-09-01] Posizioni aperte su corsie che ESISTONO ma sono FERME.
     ///
     /// <para><b>Il buco fra i due controlli.</b> Il ciclo qui sopra salta le corsie ferme
     /// («uno stato corrotto a corsia ferma non può peggiorare, e verrà comunque azzerato dal

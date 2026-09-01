@@ -3,7 +3,7 @@ using ProcioneMGR.Services.Trading;
 namespace ProcioneMGR.Services.Fleet;
 
 /// <summary>
-/// [K22, PRD autonomia-piena — Fase 2, 2026-09-01] <b>La stessa ipotesi non occupa due corsie.</b>
+/// [K33, PRD autonomia-piena — Fase 2, 2026-09-01] <b>La stessa ipotesi non occupa due corsie.</b>
 ///
 /// <para><b>Il fatto che l'ha resa necessaria.</b> Il 2026-08-31, alle 20:22:19 e alle 21:12:53 UTC,
 /// <c>GridMeanReversion DOGE/USDT 15m</c> con parametri identici

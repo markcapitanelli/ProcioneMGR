@@ -154,10 +154,10 @@ public sealed class FleetOptions
     /// </summary>
     public int MaxGreyLanes { get; set; } = 3;
 
-    // --- [K22] La stessa ipotesi non occupa due corsie ---
+    // --- [K33] La stessa ipotesi non occupa due corsie ---
 
     /// <summary>
-    /// [K22, 2026-09-01] Rifiutare uno schieramento quando un'altra corsia porta la stessa
+    /// [K33, 2026-09-01] Rifiutare uno schieramento quando un'altra corsia porta la stessa
     /// <b>terna</b> (strategia, coppia, timeframe) con parametri diversi. La replica <i>esatta</i>
     /// (stessa <c>PipelineCandidateKey</c>) è sempre rifiutata e non ha manopola: non ha lettura
     /// alternativa.
@@ -202,7 +202,34 @@ public sealed record FleetLaneState(
     /// provenienza ignota — e ai fini del tetto MaxGreyLanes l'ignoto conta come grigio
     /// (fail-closed: non sapere non allarga il permesso).
     /// </summary>
-    bool? GreySourced = null);
+    bool? GreySourced = null,
+    /// <summary>
+    /// [K40, 2026-09-01] Lo stato di questa corsia <b>non è stato leggibile</b> in questo giro: il
+    /// motore non ha risposto. È un sottoinsieme di <see cref="EmergencyStopped"/> — il lettore
+    /// marca entrambi con la stessa bandiera — ma le due cose hanno rimedi opposti, e confonderle
+    /// produce la frase sbagliata nel posto peggiore.
+    ///
+    /// <para><b>Il fatto misurato.</b> Al tick delle 2026-09-01 11:30 UTC il journal ha scritto
+    /// «16 candidati grigi schierabili ma NESSUNA corsia di flotta libera (6 attive): il vincolo
+    /// sono le corsie, non i candidati» — mentre <i>nessuna</i> delle cinque corsie aveva risposto
+    /// (il ledger dell'osservazione non è stato toccato per nessuna di esse). Una corsia illeggibile
+    /// esce da <see cref="FleetOrchestrator.FleetLanes"/>, quindi non è «libera»; e il conteggio
+    /// «attive» viene dal database, che invece risponde sempre. Il risultato è una singola frase che
+    /// mescola un numero preso dal DB con una libertà presa dal motore, e trasforma
+    /// <b>«non riesco a leggere niente»</b> in <b>«le corsie sono impegnate»</b> — che ha un rimedio
+    /// completamente diverso: guardare perché il pod non risponde, non liberare una corsia.</para>
+    /// </summary>
+    bool Unreadable = false,
+    /// <summary>
+    /// [K44, 2026-09-01] Sharpe <b>per operazione</b> della finestra ancorata, senza
+    /// annualizzazione. <c>null</c> = non disponibile (meno di due trade, o un motore con
+    /// un'immagine precedente al campo): in quel caso il criterio per Sharpe <b>si astiene</b>.
+    ///
+    /// <para><see cref="RealizedSharpe"/> resta, ma non è più ciò su cui si giudica: è annualizzato
+    /// sui rendimenti di barra, quindi porta un fattore <c>√PeriodsPerYear</c> che vale 46,8 a 4h e
+    /// 187,2 a 15m. Una soglia sola su quel numero è <b>quattro soglie diverse</b>.</para>
+    /// </summary>
+    decimal? RealizedSharpePerTrade = null);
 
 /// <summary>
 /// Un run candidato al forward test. <paramref name="Band"/>: "pass" = sopravvissuti alla

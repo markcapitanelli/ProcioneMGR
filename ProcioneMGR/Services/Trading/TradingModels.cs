@@ -272,6 +272,31 @@ public class TradingPerformance
     public decimal AverageLoss { get; set; }
     public decimal ProfitFactor { get; set; }
     public List<TradeRecord> Trades { get; set; } = new();
+
+    /// <summary>
+    /// [K44, 2026-09-01] Sharpe <b>per operazione</b>: media diviso deviazione standard dei
+    /// rendimenti per trade, <b>senza annualizzazione</b>.
+    ///
+    /// <para><b>Perché esiste accanto a <see cref="SharpeRatio"/>.</b> Quello è annualizzato sui
+    /// rendimenti di BARRA, quindi moltiplicato per <c>√PeriodsPerYear</c>: 2190 a 4h e 35040 a
+    /// 15m, cioè <b>46,8 contro 187,2 — un fattore 4,0</b>. La stessa soglia di ritiro significa
+    /// quattro cose diverse su corsie con timeframe diversi, e nessuna superficie lo dice. Questo
+    /// numero non dipende dal timeframe: è quello su cui una soglia unica è davvero unica.</para>
+    ///
+    /// <para>È anche <i>lo stesso test</i>: <c>t = SharpePerTrade × √N</c>, identità algebrica —
+    /// quindi cambiare unità non cambia il verdetto, toglie l'ambiguità su cosa il verdetto voglia
+    /// dire.</para>
+    /// </summary>
+    public decimal SharpePerTrade { get; set; }
+
+    /// <summary>
+    /// [K44] Quanti trade hanno prodotto <see cref="SharpePerTrade"/>. <b>Zero significa NON
+    /// DISPONIBILE</b>, non «Sharpe zero»: serve a distinguere l'assenza dal default, perché in
+    /// proto3 un campo non impostato si deserializza a zero e un motore con un'immagine precedente
+    /// risponderebbe 0 — che è un verdetto, non un'assenza. Stessa trappola di
+    /// <c>running_strategy_ids</c> (I13a-rev). Sotto due trade la deviazione standard non esiste.
+    /// </summary>
+    public int SharpePerTradeSamples { get; set; }
 }
 
 public class TradeRecord
@@ -302,4 +327,35 @@ public class TradeRecord
 
     /// <summary>True se la chiusura è stata una liquidazione (forzata o rilevata per riconciliazione).</summary>
     public bool WasLiquidated { get; set; }
+
+    /// <summary>
+    /// [K41, PRD autonomia-piena — Fase 3, 2026-09-01] <b>Quando questa riga è stata SCRITTA</b>, a
+    /// orologio di parete. Tutte le altre date di questa tabella sono <b>tempi di CANDELA</b>.
+    ///
+    /// <para><b>Il difetto che chiude.</b> <c>OpenedAtUtc</c> e <c>ClosedAtUtc</c> vengono da
+    /// <c>candle.TimestampUtc</c>, cioè dall'apertura della barra. Al riavvio del motore
+    /// <c>LastCandleUtc</c> è nullo e <c>TradingWorker</c> rigioca fino a <b>trenta giorni</b> di
+    /// storia: le righe che ne nascono hanno lo <c>StrategyId</c> e il simbolo attuali, quindi
+    /// superano ogni filtro esistente. Misurato il 2026-09-01: <b>35 righe precedevano la creazione
+    /// della gamba a cui appartenevano</b>, la corsia 4 portava 27 trade su DOGE/USDT mentre fino al
+    /// 31/08 20:22 era configurata su XRP/USDT, e i trade di <i>forward test</i> veri sulle cinque
+    /// corsie erano <b>0 · 0 · 1 · 0 · 0</b>.</para>
+    ///
+    /// <para><b>Perché una data e non un booleano <c>IsReplay</c>.</b> La data è un <b>fatto</b>: la
+    /// scrive Postgres (<c>now() at time zone 'utc'</c> come default, <c>ValueGeneratedOnAdd</c>),
+    /// quindi non dipende dal chiamante e vale per ogni scrittore presente e futuro — compreso
+    /// dell'SQL scritto a mano, che è il caso in cui i difetti nascono davvero. Un booleano è invece
+    /// un'<i>opinione</i> di chi scrive, e può mentire. E la data dà un numero, non solo
+    /// un'etichetta: <c>RecordedAtUtc − ClosedAtUtc</c> è il <b>ritardo di scrittura</b>, e chi legge
+    /// decide la propria soglia invece di ereditare la nostra.</para>
+    ///
+    /// <para><b>Il margine è enorme, quindi la soglia non è delicata.</b> Misurato: una barra a 15m
+    /// viene scritta <b>8,97 secondi</b> dopo la propria chiusura; un recupero a trenta giorni dà
+    /// ritardi di trenta giorni. Fra i due regimi ci sono oltre due ordini di grandezza.</para>
+    ///
+    /// <para><b>Le righe storiche restano <c>null</c>, e non si retro-riempiono</b>: un fatto che non
+    /// è stato osservato non si inventa. <c>null</c> significa «scritta prima che esistesse questa
+    /// colonna», e chi legge deve trattarlo come <i>non so</i>, non come <i>viva</i>.</para>
+    /// </summary>
+    public DateTime? RecordedAtUtc { get; set; }
 }

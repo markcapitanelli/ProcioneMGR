@@ -147,7 +147,7 @@ public sealed class GreyDeployer(
         var symbol = candidate.Symbol;
         var timeframe = candidate.Timeframe;
 
-        // --- [K22, 2026-09-01] LA STESSA IPOTESI NON OCCUPA DUE CORSIE.
+        // --- [K33, 2026-09-01] LA STESSA IPOTESI NON OCCUPA DUE CORSIE.
         //
         // Il 31/08 GridMeanReversion DOGE/USDT 15m con parametri identici e ExpectedSharpe uguale a
         // ventotto cifre è finita sulle corsie 4 E 6: 20.000 USDT nominali su una stima da 14 trade,
@@ -246,7 +246,7 @@ public sealed class GreyDeployer(
                 // corsia non viene riassegnata. Il journal, da solo, non bastava.
                 Reason = $"[{(source == "fleet" ? "J14, flotta" : "F5, click umano")}] {candidate.Key} → corsia {laneId}, {startedText}. " +
                          $"Sharpe holdout {candidate.HoldoutSharpe:F2} su {candidate.HoldoutTrades} trade; SL {sl:F2}% / TP {tp:F2}%." +
-                         // [K22] L'avviso della guardia che NON ha bloccato finisce a journal: una
+                         // [K33] L'avviso della guardia che NON ha bloccato finisce a journal: una
                          // terna gia' in corsa schierata comunque e' una scelta, e una scelta senza
                          // traccia e' indistinguibile da un incidente — che e' esattamente cio' che
                          // e' successo il 31/08.

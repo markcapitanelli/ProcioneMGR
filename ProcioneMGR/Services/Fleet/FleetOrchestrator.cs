@@ -44,11 +44,26 @@ public static class FleetOrchestrator
         {
             var enoughHistory = lane.TradeCount >= Math.Max(1, opt.RetireMinTrades)
                                 && lane.Observation >= TimeSpan.FromDays(7 * Math.Max(1, opt.RetireMinWeeks));
-            if (enoughHistory && lane.RealizedSharpe < opt.RetireSharpeThreshold)
+            // [K44, 2026-09-01] SI GIUDICA SULLO SHARPE PER OPERAZIONE, non su quello annualizzato.
+            //
+            // `RealizedSharpe` è annualizzato sui rendimenti di BARRA, quindi porta un fattore
+            // √PeriodsPerYear che vale 46,8 a 4h e 187,2 a 15m: la STESSA soglia era quattro soglie
+            // diverse a seconda del timeframe della corsia, e nessuna superficie lo diceva. Lo
+            // Sharpe per trade non ha quell'annualizzazione, ed è lo STESSO test
+            // (t = Sharpe × √N è un'identità algebrica): non cambia il verdetto, toglie l'ambiguità
+            // su cosa il verdetto significhi.
+            //
+            // `null` = non disponibile (meno di due trade, o un motore con un'immagine precedente
+            // al campo). In quel caso NON si giudica: l'ignoranza non condanna, ed è la stessa
+            // politica del ritmo atteso e della provenienza.
+            if (enoughHistory && lane.RealizedSharpePerTrade is decimal sharpeTrade
+                && sharpeTrade < opt.RetireSharpeThreshold)
             {
                 actions.Add(new StopAndFreeLane(lane.LaneId,
-                    $"Forward test perdente: Sharpe {lane.RealizedSharpe:F2} < {opt.RetireSharpeThreshold:F2} " +
-                    $"su {lane.TradeCount} trade in {lane.Observation.TotalDays:F0}gg ({lane.Symbol} {lane.Timeframe})."));
+                    $"Forward test perdente: Sharpe per trade {sharpeTrade:F3} < {opt.RetireSharpeThreshold:F2} " +
+                    $"su {lane.TradeCount} trade in {lane.Observation.TotalDays:F0}gg ({lane.Symbol} {lane.Timeframe}). " +
+                    $"Sharpe annualizzato per riferimento: {lane.RealizedSharpe:F2} — non è su quello che si giudica, " +
+                    "perché dipende dal timeframe."));
                 continue;
             }
 
@@ -144,7 +159,29 @@ public static class FleetOrchestrator
                 .Where(c => c.TradesPerMonth >= opt.MinTradesPerMonth)
                 .ToList();
 
-            if (eligible.Count > 0 && exposureBlocked)
+            // [K40, 2026-09-01] L'ILLEGGIBILITA' SI DICHIARA PER PRIMA, PERCHE' IL RIMEDIO E' UN ALTRO.
+            //
+            // Una corsia che non risponde esce da FleetLanes, quindi non risulta «libera»; e il
+            // conteggio delle attive viene dal database, che risponde sempre. Il risultato,
+            // misurato al tick del 2026-09-01 11:30 UTC con TUTTE e cinque le corsie mute, era
+            // «NESSUNA corsia di flotta libera (6 attive): il vincolo sono le corsie» — una frase
+            // che manda a liberare una corsia mentre il problema e' che il motore non risponde.
+            //
+            // E' l'ironia esatta di K38: li' si e' reso fail-closed il DENOMINATORE del tetto, ma il
+            // ramo che sceglie QUALE spiegazione stampare era rimasto fail-open e viene prima nella
+            // catena — quindi il messaggio buono di K38 non poteva nemmeno essere raggiunto proprio
+            // quando serviva di piu'.
+            var illeggibili = state.Lanes.Count(l => l.LaneId >= state.FootprintLanes && l.Unreadable);
+            if (eligible.Count > 0 && illeggibili > 0 && lanesLeft.Count == 0)
+            {
+                actions.Add(new FleetNoOp(
+                    $"{eligible.Count} candidati grigi schierabili, ma {illeggibili} corsie di flotta NON SONO " +
+                    "LEGGIBILI in questo giro (il motore non ha risposto): non e' «le corsie sono impegnate», e' " +
+                    "«non so in che stato sono». Una corsia illeggibile resta INTOCCABILE per prudenza e occupa il " +
+                    "tetto grigio. Il rimedio non e' liberare una corsia: e' guardare perche' il motore non risponde " +
+                    "(`procione stato`, e i tunnel 18092/18093)."));
+            }
+            else if (eligible.Count > 0 && exposureBlocked)
             {
                 actions.Add(new FleetNoOp(
                     $"{eligible.Count} candidati grigi schierabili ma Trading:CorrelatedExposure SPENTO con " +
@@ -165,7 +202,7 @@ public static class FleetOrchestrator
             }
             else if (greySlots <= 0)
             {
-                // [K22] Se fra le grigie ce n'è una che l'orchestratore non può toccare, va DETTO:
+                // [K33] Se fra le grigie ce n'è una che l'orchestratore non può toccare, va DETTO:
                 // il rimedio è diverso (liberarla richiede un umano), e un operatore che legge
                 // «il tetto è saturo» senza sapere che una delle corsie è intoccabile cerca il
                 // rimedio sbagliato.
@@ -245,7 +282,7 @@ public static class FleetOrchestrator
         .ToList();
 
     /// <summary>
-    /// [K22, 2026-09-01] <b>Le corsie che stanno occupando il tetto grigio</b> — e sono di più di
+    /// [K33, 2026-09-01] <b>Le corsie che stanno occupando il tetto grigio</b> — e sono di più di
     /// quelle su cui l'orchestratore può agire.
     ///
     /// <para><b>Il varco che questa funzione chiude, misurato.</b> Fino a oggi il tetto contava
@@ -380,7 +417,15 @@ public static class FleetOrchestrator
 
         // La ragione si dà nell'ordine in cui morde: il primo vincolo che chiude la strada è quello
         // che l'operatore deve conoscere, e dirli tutti insieme non aiuterebbe a decidere.
-        var reason = fleetLanes.Count == 0
+        // [K40] L'illeggibilità viene PRIMA di tutto: finché non si sa in che stato sono le corsie,
+        // ogni altra spiegazione è costruita su un denominatore che non c'è.
+        var illeggibili = state.Lanes.Count(l => l.LaneId >= state.FootprintLanes && l.Unreadable);
+
+        var reason = illeggibili > 0
+            ? $"{illeggibili} corsie di flotta NON SONO LEGGIBILI (il motore non ha risposto in questo giro): "
+              + "restano intoccabili per prudenza e occupano il tetto grigio. Prima di leggere gli altri numeri, "
+              + "guarda perché il motore non risponde — non liberare una corsia"
+            : fleetLanes.Count == 0
             ? "nessuna corsia oltre l'impronta dell'auto-apply: l'orchestratore non ha corsie da governare"
             : queue.Count == 0
                 ? $"nessun candidato in banda «pass» in coda ({grey} grigi, che sono solo proposte al click umano): senza candidati non c'è nulla da assegnare"
@@ -406,7 +451,7 @@ public static class FleetOrchestrator
                         ? "un solo candidato idoneo: l'assegnazione è determinata, non c'è pareggio da arbitrare"
                         : "ci sono le condizioni per un'assegnazione e per un pareggio da arbitrare";
 
-        return new FleetSilence(queue.Count, grey, free.Count, fleetLanes.Count, reason, starving);
+        return new FleetSilence(queue.Count, grey, free.Count, fleetLanes.Count, reason, starving, illeggibili);
     }
 }
 
@@ -429,7 +474,14 @@ public sealed record FleetSilence(
     int FreeFleetLanes,
     int LanesUnderGovernance,
     string Reason,
-    int StarvingLanes = 0)
+    int StarvingLanes = 0,
+    /// <summary>
+    /// [K40] Corsie di flotta di cui NON si è potuto leggere lo stato in questo giro. Sopra zero,
+    /// <b>ogni altro numero di questa scheda è costruito su un denominatore incompleto</b>: le
+    /// corsie illeggibili non compaiono fra le libere, non compaiono fra quelle sotto governo, e
+    /// non possono essere né in inedia né ritirate. È il numero da leggere per primo.
+    /// </summary>
+    int UnreadableLanes = 0)
 {
     /// <summary>Vero quando esistono le condizioni perché il comitato riceva una domanda.</summary>
     public bool CommitteeCouldBeAsked => PassCandidatesQueued >= 2 && FreeFleetLanes > 0;

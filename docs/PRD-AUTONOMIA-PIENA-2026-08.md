@@ -328,14 +328,50 @@ caccia gira su una costante inventata.
 | K16 · K19 | Taratura di inedia e Sharpe | **rimandata con criterio dichiarato**: servono ~30 trade *vivi* cumulati (≈2,2 mesi su 4 corsie) perché il rapporto fra ritmo reale e atteso abbia un errore del 18%. Prima di allora nessuna taratura è una misura |
 | K17 | Criterio di danno | **non tarabile**: col nullo corretto (permutare l'ordine dentro la gamba) nessuna soglia è distinguibile dal caso, p = 0,335 |
 | K20 | Isteresi persistita | **teorico all'attuale taratura**: il costo di un riavvio è 0,2 minuti a `RetireConfirmTicks=2` contro un cancello di 10 giorni. Il valore è l'osservabilità, e va con D1 |
-| K22 ✅ | **La stessa ipotesi non occupa due corsie**: `HypothesisGuard`, predicato a due gradini (identità esatta → rifiuto; stessa terna → `Fleet:BlockDuplicateTriple`), su tutte e tre le porte di schieramento |
-| K23 ✅ | **`/ensemble` diceva STOPPED sopra una corsia che operava** (badge su `IsEnabled`, che non governa l'esecuzione): 3 corsie su 8 divergenti, una con una short da 799 USDT aperta |
-| K24 ✅ | **Il tetto \|PnL\| era cieco alle perdite non realizzate**: senza trailing la riga di `OpenPositions` non veniva mai riscritta, `UnrealizedPnl` restava 0 dall'apertura. Due posizioni su tre |
-| K25 ✅ | **Posizione aperta su corsia ferma**: nessuna superficie la nominava, stop e target non valutati, e al prossimo `StartAsync` la riga sparisce senza `TradeRecord` |
-| K26 ✅ | **Provenienza dal run di schieramento, e tre stati d'archivio non due**: 71 chiavi su 1.028 cambiano `IsGrey` fra run, e un candidato bocciato in pieno veniva promosso a «Grey» |
-| K27 ✅ | **Il tetto grigio perdeva il proprio denominatore**: una corsia illeggibile usciva dal conteggio e il tetto si allargava da solo — il varco da cui è passata la seconda gemella |
+| K33 ✅ | **La stessa ipotesi non occupa due corsie**: `HypothesisGuard`, predicato a due gradini (identità esatta → rifiuto; stessa terna → `Fleet:BlockDuplicateTriple`), su tutte e tre le porte di schieramento |
+| K34 ✅ | **`/ensemble` diceva STOPPED sopra una corsia che operava** (badge su `IsEnabled`, che non governa l'esecuzione): 3 corsie su 8 divergenti, una con una short da 799 USDT aperta |
+| K35 ✅ | **Il tetto \|PnL\| era cieco alle perdite non realizzate**: senza trailing la riga di `OpenPositions` non veniva mai riscritta, `UnrealizedPnl` restava 0 dall'apertura. Due posizioni su tre |
+| K36 ✅ | **Posizione aperta su corsia ferma**: nessuna superficie la nominava, stop e target non valutati, e al prossimo `StartAsync` la riga sparisce senza `TradeRecord` |
+| K37 ✅ | **Provenienza dal run di schieramento, e tre stati d'archivio non due**: 71 chiavi su 1.028 cambiano `IsGrey` fra run, e un candidato bocciato in pieno veniva promosso a «Grey» |
+| K38 ✅ | **Il tetto grigio perdeva il proprio denominatore**: una corsia illeggibile usciva dal conteggio e il tetto si allargava da solo — il varco da cui è passata la seconda gemella |
+| K39 ✅ | **Il monitor di decadimento giudicava su trade di replay**: 65 righe su 66 precedevano la gamba che dicevano di descrivere. Ancorato a `ExpectedSharpeAtUtc`; senza timbro non si misura |
+| K40 ✅ | **«Non so leggere niente» diventava «le corsie sono impegnate»**: l'illeggibilità è ora uno stato suo e si dichiara per prima |
+| K41 ✅ | **`RecordedAtUtc`**: l'ora di parete accanto all'ora di candela, messa dal database e inforgiabile. Migrazione a due passi perché le 371 righe storiche restino `NULL` |
+| K42 ✅ | **La condanna a metà strada si scrive** (K20/D8): riga a journal sui cambi di serie, «N condanne in corso» nel pannello |
+| K43 ✅ | **Una riga non è un trade**: deduplica per chiave d'entità nel ritiro e nel monitor, repliche dichiarate. 367 righe = 301 trade |
+| K44 ✅ | **La soglia di ritiro ha una sola unità**: Sharpe per operazione, col conteggio di campioni per distinguere assente da zero |
+
+> **Fase 2 CHIUSA il 2026-09-01.** Le quattro decisioni del proprietario (tetto grigio a 4 col
+> ritiro del doppione, corsia 7 liberata, `AutoPromoteToTestnet` spento, taglio sulle gambe lente
+> rimandato) sono applicate: **[`docs/audit/37_DECISIONI_RITIRO_2026-09-01.md`](audit/37_DECISIONI_RITIRO_2026-09-01.md) § 2-bis**.
+> Nota operativa: **K44 resta inerte finché il motore non è ridispiegato** — il campo arriva dal pod,
+> e un'immagine precedente risponde zero campioni, quindi il criterio si astiene (verso prudente).
 
 ### Fase 3 — Riempire il serbatoio senza abbassare la barra
+
+> **Misurata prima di essere fatta (2026-09-01): 8 lenti + 4 avversari.**
+> → **[`docs/audit/38_FASE3_MISURE_2026-09-01.md`](audit/38_FASE3_MISURE_2026-09-01.md)**
+>
+> Quattro item cambiano di natura, e vale la pena leggerlo prima di iniziare:
+> - **K25 non vale la pena oggi**: effetto massimo 0,102 di Sharpe contro 0,130 di rumore run-a-run
+>   della stessa grandezza; zero candidati cambiano banda. E `FundingHistory` **non è una tabella**:
+>   il dato c'è, 42.878 righe dal 2019 in `SentimentMetricPoints`. Manca il cablaggio.
+> - **K26 è una trappola**: `GreyZone.IsGrey` giudica sul prefisso `"Solo "` di `RejectReason`, che
+>   il calcolo del DSR riscriverebbe. Fatto nel modo ovvio, **la fascia grigia passa da 114 chiavi a
+>   7 (−94%)** — e con `GreyAutoDeploy=true` quello è un predicato di *schieramento*. Va su un campo
+>   che nessun verdetto legge, e dopo il gemello nullo. *(Il conteggio dei tentativi non è più
+>   sbagliato: quel difetto è stato corretto.)*
+> - **K27 va fatto, e non allenta il gate: lo stringe** (SR\* +0,0017 / +0,0182). Recupera 53 minuti
+>   di CPU ogni 30 giorni. `MKR/USDT` è **sospeso (BREAK)**, non delistato.
+> - **K22: il rimedio proposto è distruttivo.** Rimuovere e ri-aggiungere una gamba conia un nuovo
+>   `StrategyId`, quindi azzera l'identità e l'orologio dell'osservazione — la cosa che tiene il
+>   ritiro per Sharpe irraggiungibile. L'alternativa è un backfill del timbro, dove la fonte esiste.
+> - **K24 è più urgente**: se `/bot` non passa da `HypothesisGuard` (K33), l'ipotesi doppia rientra
+>   da lì e la guardia protegge solo le porte che già si comportavano bene.
+>
+> **Prima di tutti e sette** restano i due prerequisiti della Fase 2 — marcare il replay e il
+> journal come registro — e l'archivio degli episodi di identità, che **esiste già in embrione** dal
+> 13/08 in `TradingAuditLogs`.
 
 | # | Cosa |
 |---|---|

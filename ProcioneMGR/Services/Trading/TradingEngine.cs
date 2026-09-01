@@ -885,7 +885,7 @@ public sealed class TradingEngine(
             // precede la loro stessa esistenza, e Duration negativa che inquina ogni statistica.
             if (ts < pos.OpenedAtUtc) continue;
 
-            // [K24] Il prezzo con cui la RIGA a database è coerente in questo istante: serve a
+            // [K35] Il prezzo con cui la RIGA a database è coerente in questo istante: serve a
             // capire se la marcatura si è mossa e va persistita. Va letto PRIMA del mark.
             var markPrimaDelMark = pos.CurrentPrice;
             MarkToMarket(pos, markPrice);
@@ -912,7 +912,7 @@ public sealed class TradingEngine(
                 // effettivo al livello di apertura e il profitto già bloccato sparisce senza che
                 // nulla lo dica.
                 //
-                // [K24, 2026-09-01] ...MA LA GUARDIA «solo se il cricchetto è cambiato» RENDEVA IL
+                // [K35, 2026-09-01] ...MA LA GUARDIA «solo se il cricchetto è cambiato» RENDEVA IL
                 // TETTO |PnL| CIECO, e la misura è questa: senza trailing
                 // `UpdateBestSinceEntry` è inerte per costruzione, quindi il valore non cambia MAI e
                 // nessuna UPDATE parte — la riga resta con `CurrentPrice = EntryPrice` e
@@ -1643,7 +1643,13 @@ public sealed class TradingEngine(
         {
             var q = db.TradeRecords.Where(t => t.LaneId == laneId);
             if (from is DateTime f) q = q.Where(t => t.ClosedAtUtc >= f);
-            trades = await q.OrderBy(t => t.ClosedAtUtc).ToListAsync(ct);
+            // [K43] UNA RIGA NON È UN TRADE. Al 2026-09-01 le 367 righe Paper erano 301 trade
+            // logici: 66 re-inserimenti dello stesso trade, prodotti dai run ripetuti e dal
+            // recupero di candele storiche che il motore rigioca a ogni avvio. Il controllo che
+            // c'era — COUNT(DISTINCT PositionId) — non poteva vederlo, perché il PositionId nasce a
+            // ogni esecuzione. Questo metodo alimenta il RITIRO di flotta: contare due volte lo
+            // stesso trade gonfia il numeratore del giudizio.
+            trades = TradeDeduplication.Distinti(await q.ToListAsync(ct));
         }
 
         var wins = trades.Where(t => t.Pnl > 0m).ToList();
@@ -1676,9 +1682,32 @@ public sealed class TradingEngine(
 
         var ppy = Statistics.PeriodsPerYear(timeframe);
 
+        // [K44, 2026-09-01] SHARPE PER OPERAZIONE, che è l'unico su cui una soglia unica è unica.
+        //
+        // `SharpeRatio` qui sotto è annualizzato sui rendimenti di BARRA, cioè moltiplicato per
+        // √PeriodsPerYear: 46,8 a 4h contro 187,2 a 15m, un fattore 4,0. La stessa
+        // `Fleet:RetireSharpeThreshold` significa quattro cose diverse su corsie con timeframe
+        // diversi. Questo numero non ha annualizzazione, quindi non ha quel fattore — ed è lo
+        // STESSO test (t = Sharpe_per_trade × √N è un'identità algebrica): non cambia il verdetto,
+        // toglie l'ambiguità su cosa il verdetto significhi.
+        //
+        // Sotto due trade la deviazione standard non esiste: si restituisce 0 campioni, e chi legge
+        // deve trattarlo come «non lo so» — mai come «Sharpe zero», che è un verdetto.
+        var rendimenti = trades.Select(t => t.PnlPercent).ToList();
+        decimal sharpePerTrade = 0m;
+        if (rendimenti.Count >= 2)
+        {
+            var media = rendimenti.Average();
+            var varianza = rendimenti.Sum(r => (r - media) * (r - media)) / (rendimenti.Count - 1);
+            var sigma = varianza > 0m ? (decimal)Math.Sqrt((double)varianza) : 0m;
+            sharpePerTrade = sigma > 0m ? media / sigma : 0m;
+        }
+
         return new TradingPerformance
         {
             EquityCurve = equity,
+            SharpePerTrade = sharpePerTrade,
+            SharpePerTradeSamples = rendimenti.Count >= 2 ? rendimenti.Count : 0,
             TotalReturn = totalCapital > 0m ? realizedPnl / totalCapital * 100m : 0m,
             // Sharpe calcolato sulla FINESTRA ritenuta della curva (bounded, vedi TrimEquity):
             // per una metrica di promozione la storia recente è quella che conta. Il MaxDrawdown

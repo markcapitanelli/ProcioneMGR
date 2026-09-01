@@ -152,6 +152,39 @@ public sealed class DecayReport
     public int TradesExcludedImplausible { get; set; }
 
     /// <summary>
+    /// [K39, 2026-09-01] Trade sul simbolo attuale <b>scartati perché più vecchi della gamba</b>,
+    /// cioè chiusi prima del suo <c>ExpectedSharpeAtUtc</c>.
+    ///
+    /// <para><b>Perché esiste.</b> <c>TradeRecords</c> porta i tempi della CANDELA, e al riavvio del
+    /// motore il feed rigioca fino a trenta giorni di storia: quelle righe hanno lo
+    /// <c>StrategyId</c> e il simbolo <i>attuali</i>, quindi superano gli altri due filtri. Misurato
+    /// il 2026-09-01: delle 66 righe lette per le cinque corsie di flotta, <b>65 erano precedenti
+    /// alla creazione della gamba</b>, e l'unica gamba dichiarata «misurabile» aveva una finestra di
+    /// venti righe di replay su venti.</para>
+    ///
+    /// <para>Va dichiarato per la stessa ragione degli altri due scarti, e con più forza: senza,
+    /// una corsia con decine di righe in tabella risulterebbe «0 trade» e si leggerebbe come un
+    /// guasto, mentre la verità è «0 trade <i>di questa gamba</i>, 27 di quelle prima».</para>
+    /// </summary>
+    public int TradesExcludedBeforeLeg { get; set; }
+
+    /// <summary>
+    /// [K39] La gamba <b>non dichiara quando è nata</b> (<c>ExpectedSharpeAtUtc</c> nullo), quindi
+    /// non si misura affatto. Fail-closed voluto: misurare su una finestra di cui non si conosce
+    /// l'inizio è peggio che dire «non lo so». Riguarda le gambe delle corsie d'impronta, e rende
+    /// visibile il lavoro RF0 invece di mascherarlo con un numero.
+    /// </summary>
+    public bool LegHasNoBirthStamp { get; set; }
+
+    /// <summary>
+    /// [K43, 2026-09-01] Righe <b>scartate perché repliche</b> dello stesso trade logico. Al
+    /// 2026-09-01 le 367 righe Paper della tabella erano 301 trade distinti: 66 re-inserimenti
+    /// prodotti dai run ripetuti e dal recupero di candele storiche. Va dichiarato come gli altri
+    /// due scarti — un conteggio più basso senza spiegazione si legge come un guasto.
+    /// </summary>
+    public int TradesExcludedDuplicate { get; set; }
+
+    /// <summary>
     /// [I13b] <b>Questa gamba è misurabile?</b> Vero quando i trade sul simbolo attuale bastano
     /// perché il confronto realizzato-vs-atteso significhi qualcosa.
     ///

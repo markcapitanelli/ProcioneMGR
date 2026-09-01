@@ -24,7 +24,7 @@ public sealed record LaneSummary(
     // "Grey"; false = tutte dichiarate "Survived"; null = provenienza ignota (gambe senza
     // etichetta, pre-T1). Serve al tetto MaxGreyLanes, dove l'ignoto conta come grigio.
     bool? HasGreyLegs = null,
-    // [K22, 2026-09-01] L'IDENTITA' CANONICA delle gambe attive (PipelineCandidateKey: strategia +
+    // [K33, 2026-09-01] L'IDENTITA' CANONICA delle gambe attive (PipelineCandidateKey: strategia +
     // coppia + timeframe + impronta dei parametri). Serve alla guardia che impedisce alla stessa
     // ipotesi di occupare due corsie.
     //
@@ -152,7 +152,7 @@ public sealed class LaneDirectory(IDbContextFactory<ApplicationDbContext> dbFact
     }
 
     /// <summary>
-    /// [K22, 2026-09-01] L'identità canonica di ogni gamba ATTIVA, con la stessa funzione che la
+    /// [K33, 2026-09-01] L'identità canonica di ogni gamba ATTIVA, con la stessa funzione che la
     /// pipeline usa per identificare un candidato (<see cref="PipelineCandidateKey.Build"/>): la
     /// guardia contro l'ipotesi doppia deve confrontare le corsie con la stessa chiave con cui la
     /// ricerca le produce, altrimenti confronterebbe due cose diverse chiamandole con lo stesso nome.
