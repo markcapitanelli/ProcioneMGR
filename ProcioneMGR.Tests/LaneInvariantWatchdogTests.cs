@@ -633,4 +633,114 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         Assert.True(grazia > TimeSpan.Zero, "una grazia nulla riaprirebbe l'allarme falso a ogni riavvio");
         Assert.Equal(TimeSpan.FromHours(1), grazia);
     }
+
+    // --- [K36] Posizioni aperte su una corsia FERMA ------------------------------------------
+
+    /// <summary>Una corsia ferma, in Paper, con una posizione aperta: lo stato del 2026-08-31.</summary>
+    private static TradingEngineState StoppedState(int laneId) => new()
+    {
+        LaneId = laneId,
+        Mode = TradingMode.Paper,
+        IsRunning = false,
+        Symbol = "DOGE/USDT",
+        Timeframe = "15m",
+        Leverage = 1,
+        TotalCapital = 10_000m,
+        AvailableCapital = 10_814m,
+        RealizedPnl = 15.11m,
+        UpdatedAtUtc = DateTime.UtcNow,
+    };
+
+    private static OpenPosition ShortDoge(int laneId) => new()
+    {
+        LaneId = laneId, Symbol = "DOGE/USDT", Side = OrderSide.Sell,
+        Quantity = 9_630.43m, EntryPrice = 0.08307m, CurrentPrice = 0.08295m,
+        OpenedInMode = TradingMode.Paper, OpenedAtUtc = DateTime.UtcNow.AddHours(-6),
+    };
+
+    [Fact]
+    public async Task Tick_CorsiaFERMAconPosizioneAperta_NOTIFICA_eNONtoccaNulla()
+    {
+        // [K36] IL BUCO FRA I DUE CONTROLLI. Il ciclo del watchdog salta le corsie ferme; il
+        // rapporto sugli orfani guarda solo LaneId >= TradingLanes.Count. Una posizione viva su una
+        // corsia ESISTENTE MA FERMA cadeva esattamente in mezzo, e nessuna superficie la nominava.
+        //
+        // È lo stato reale del 2026-08-31: la corsia 6 lasciata con una short DOGE/USDT da 799 USDT
+        // di nozionale mentre /ensemble la dichiarava STOPPED. Stop e target non venivano più
+        // valutati (le uscite protettive vivono dietro `if (!IsRunning) return;`) e al primo
+        // StartAsync in Paper la riga sarebbe stata cancellata senza TradeRecord né PnL.
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, store, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0), StoppedState(2));
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            db.OpenPositions.Add(ShortDoge(2));
+            await db.SaveChangesAsync();
+        }
+
+        await watchdog.TickAsync(CancellationToken.None);
+
+        var avviso = Assert.Single(notifier.Sent, s => s.Title.Contains("ferma con posizioni aperte"));
+        Assert.Equal(ProcioneMGR.Services.Notifications.NotificationSeverity.Critical, avviso.Severity);
+
+        // Nessuna azione automatica: chiudere d'ufficio è il gesto irreversibile, quindi quello
+        // sbagliato. Stessa filosofia della quarantena e degli orfani — si dice, e decide un umano.
+        Assert.Equal(0, engines[2].StopCalls);
+        await using var check = await dbFactory.CreateDbContextAsync();
+        Assert.Single(await check.OpenPositions.AsNoTracking().ToListAsync());
+        Assert.Empty(await check.LaneQuarantines.AsNoTracking().ToListAsync());
+        Assert.Null(await store.GetAsync(2, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task IlNULLO_diK36_corsiaFERMAsenzaPosizioni_NONnotificaNULLA()
+    {
+        // Senza questo, un rapporto che notifica ogni corsia ferma passerebbe il test qui sopra e
+        // sarebbe rumore puro: al 2026-09-01 le corsie ferme in piattaforma sono due, e una sola ha
+        // posizioni. Il budget degli allarmi è la lezione già pagata con la staleness a 60s su STX.
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, _) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0), StoppedState(2));
+
+        await watchdog.TickAsync(CancellationToken.None);
+
+        Assert.DoesNotContain(notifier.Sent, s => s.Title.Contains("ferma con posizioni aperte"));
+    }
+
+    [Fact]
+    public async Task K36_notificaUNAvoltaPERepisodio_eSiRIARMAquandoLaCorsiaTornaPulita()
+    {
+        // Una notifica critica per giro sarebbe una ogni cinque minuti finché l'operatore non
+        // interviene. Ma la de-duplica deve RI-ARMARSI, altrimenti la seconda volta che succede
+        // resta muta — che è il difetto opposto e peggiore.
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, _) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0), StoppedState(2));
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            db.OpenPositions.Add(ShortDoge(2));
+            await db.SaveChangesAsync();
+        }
+
+        await watchdog.TickAsync(CancellationToken.None);
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Single(notifier.Sent, s => s.Title.Contains("ferma con posizioni aperte"));
+
+        // La corsia viene ripulita a mano...
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            await db.OpenPositions.Where(p => p.LaneId == 2).ExecuteDeleteAsync();
+        }
+        await watchdog.TickAsync(CancellationToken.None);
+
+        // ...e succede di nuovo: l'allarme deve tornare a parlare.
+        await using (var db = await dbFactory.CreateDbContextAsync())
+        {
+            db.OpenPositions.Add(ShortDoge(2));
+            await db.SaveChangesAsync();
+        }
+        await watchdog.TickAsync(CancellationToken.None);
+
+        Assert.Equal(2, notifier.Sent.Count(s => s.Title.Contains("ferma con posizioni aperte")));
+    }
 }
