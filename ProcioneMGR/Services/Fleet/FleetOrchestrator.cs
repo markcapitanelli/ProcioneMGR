@@ -165,7 +165,7 @@ public static class FleetOrchestrator
             }
             else if (greySlots <= 0)
             {
-                // [K22] Se fra le grigie ce n'è una che l'orchestratore non può toccare, va DETTO:
+                // [K33] Se fra le grigie ce n'è una che l'orchestratore non può toccare, va DETTO:
                 // il rimedio è diverso (liberarla richiede un umano), e un operatore che legge
                 // «il tetto è saturo» senza sapere che una delle corsie è intoccabile cerca il
                 // rimedio sbagliato.
@@ -245,7 +245,7 @@ public static class FleetOrchestrator
         .ToList();
 
     /// <summary>
-    /// [K22, 2026-09-01] <b>Le corsie che stanno occupando il tetto grigio</b> — e sono di più di
+    /// [K33, 2026-09-01] <b>Le corsie che stanno occupando il tetto grigio</b> — e sono di più di
     /// quelle su cui l'orchestratore può agire.
     ///
     /// <para><b>Il varco che questa funzione chiude, misurato.</b> Fino a oggi il tetto contava

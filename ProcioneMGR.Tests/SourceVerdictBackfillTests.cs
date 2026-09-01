@@ -182,7 +182,7 @@ public class SourceVerdictBackfillTests : IAsyncDisposable
     [Fact]
     public async Task CandidatoBOCCIATO_INPIENO_nonDiventaGrey()
     {
-        // [K26] Il terzo stato. L'archivio ne tiene TRE — sopravvissuto, grigio, bocciato in pieno —
+        // [K37] Il terzo stato. L'archivio ne tiene TRE — sopravvissuto, grigio, bocciato in pieno —
         // e `Survived ? "Survived" : "Grey"` ne schiacciava due in uno, promuovendo il peggiore.
         //
         // Non è un caso di scuola: al 2026-09-01 il candidato della corsia 7
@@ -204,7 +204,7 @@ public class SourceVerdictBackfillTests : IAsyncDisposable
     [Fact]
     public async Task LEtichettaVieneDalRunDiSCHIERAMENTO_nonDallUltimoGiudizio()
     {
-        // [K26] Il cuore della correzione. La stessa ipotesi viene rivalutata a ogni giro di caccia,
+        // [K37] Il cuore della correzione. La stessa ipotesi viene rivalutata a ogni giro di caccia,
         // e il verdetto CAMBIA: misurato sull'archivio vero, 71 chiavi su 1.028 cambiano `IsGrey`
         // fra un run e l'altro. Leggere «l'ultimo run che ricapita sulla chiave» significa
         // etichettare una gamba schierata con il giudizio di un esperimento che non è il suo.
@@ -243,7 +243,7 @@ public class SourceVerdictBackfillTests : IAsyncDisposable
     [Fact]
     public async Task JournalCheDICEunAltroRun_nonEtichetta()
     {
-        // [K26] Il verso fail-closed della stessa regola, e il caso REALE: le corsie 4 e 6 sono
+        // [K37] Il verso fail-closed della stessa regola, e il caso REALE: le corsie 4 e 6 sono
         // state riassegnate il 2026-08-31 senza lasciare riga a journal, quindi il loro ultimo
         // `Assign` applicato descrive un'identità RITIRATA (corsia 4: GridMeanReversion XRP/USDT 4h
         // del 3 agosto). Vincolare la ricerca a quel run non trova nulla — ed è giusto così: la

@@ -40,7 +40,7 @@ già misura, non il rischio che la regola corre in esercizio.
 
 Sono tutti **difetti**, non tarature. Nessuno di questi cambia una soglia di rischio.
 
-### K22 — La stessa ipotesi non occupa due corsie
+### K33 — La stessa ipotesi non occupa due corsie
 
 `ProcioneMGR/Services/Fleet/HypothesisGuard.cs` (nuovo), innestata in `GreyDeployer.DeployAsync` e in
 `EnsemblePageService.AddFromGreyAsync` — cioè in **tutte e tre** le porte che schierano un grigio.
@@ -57,7 +57,7 @@ stesso segnale sullo stesso strumento con una manopola spostata.
   passa **e il motivo finisce a journal**: una scelta senza traccia è indistinguibile da un
   incidente, che è precisamente ciò che è successo il 31/08.
 
-### K27 — Il tetto grigio non perde più pezzi del proprio denominatore
+### K38 — Il tetto grigio non perde più pezzi del proprio denominatore
 
 `greyRunning` contava dentro `FleetLanes`, che esclude le corsie intoccabili — e `FleetStateReader`
 marca `EmergencyStopped` **ogni corsia di cui non riesce a leggere lo stato**. Una corsia illeggibile
@@ -74,7 +74,7 @@ dimostrata — quarantena, emergency, illeggibile e modalità protetta **compres
 su `FleetLanes`: *intoccabile* e *non conta* sono due cose diverse. E quando il tetto è saturo, il
 journal dice **quante** delle grigie sono intoccabili, perché il rimedio è diverso.
 
-### K23 — `/ensemble` diceva STOPPED sopra una corsia che stava operando
+### K34 — `/ensemble` diceva STOPPED sopra una corsia che stava operando
 
 Il badge era guidato da `EnsembleConfiguration.IsEnabled`, **che non governa l'esecuzione**. Chi
 governa è `TradingEngineStates.IsRunning`, e le due fonti divergevano su **tre corsie su otto**: al
@@ -88,7 +88,7 @@ Ora il badge grande è il **motore**; l'interruttore dell'ensemble è un badge s
 («ribilanciamento attivo/spento», perché è ciò che governa davvero); e quando le due divergono la
 pagina **lo dice** invece di scegliere una delle due in silenzio.
 
-### K24 — Il tetto |PnL| non è più cieco alle perdite non realizzate
+### K35 — Il tetto |PnL| non è più cieco alle perdite non realizzate
 
 La riga di `OpenPositions` veniva riscritta **solo** quando avanzava `BestPriceSinceEntry`, e
 `UpdateBestSinceEntry` esce subito senza trailing stop: su una posizione senza trailing la riga
@@ -103,7 +103,7 @@ invisibile al tetto che esiste apposta per vederla.
 (quando la riga *si* scrive, prezzo e PnL viaggiano insieme), non quello della marcatura (quando la
 riga *non* si scrive). Ora la riga si scrive anche quando il mark si muove.
 
-### K25 — Una posizione su una corsia ferma non è più invisibile
+### K36 — Una posizione su una corsia ferma non è più invisibile
 
 Il ciclo del watchdog salta le corsie ferme («uno stato corrotto a corsia ferma non può peggiorare, e
 verrà comunque azzerato dal prossimo `StartAsync`») e `ReportOrphanPositionsAsync` guarda solo
@@ -120,7 +120,7 @@ Nuovo `ReportStoppedLanePositionsAsync`: nessuna azione automatica (chiudere d'u
 irreversibile, quindi quello sbagliato), notifica critica una volta per episodio, e si ri-arma quando
 la corsia torna pulita.
 
-### K26 — La provenienza viene dal run di schieramento, e gli stati sono tre
+### K37 — La provenienza viene dal run di schieramento, e gli stati sono tre
 
 Due difetti nello stesso rigo di `SourceVerdictBackfill`:
 
@@ -224,7 +224,7 @@ Contesto per decidere: **nessuna gamba attiva, in tutta la piattaforma, porta l'
 `Survived`**. Il capitale non-grigio-per-certezza è zero.
 
 E la testa della coda è `e0cec50f`, cioè **una terza copia** dell'ipotesi già sulle corsie 4 e 6.
-Con K22 attivo non può più passare — ma senza K22 il primo slot che si apre sarebbe andato lì.
+Con K33 attivo non può più passare — ma senza K33 il primo slot che si apre sarebbe andato lì.
 
 ### R2 — Il doppione: quale fermare, e a che condizione
 
@@ -233,7 +233,7 @@ Fermarne una non compra uno slot da sola (vedi R1), ma toglie l'unica ridondanza
 
 > **Se si ferma, si ferma la 4, non la 6.** La 4 è **piatta**; la **6 tiene una posizione aperta**
 > (short DOGE/USDT, 799 USDT di nozionale). `StopAsync` lascia la posizione aperta, le uscite
-> protettive smettono di essere valutate, nessun watchdog la copriva fino a K25, e al prossimo
+> protettive smettono di essere valutate, nessun watchdog la copriva fino a K36, e al prossimo
 > `StartAsync` in Paper la riga viene **cancellata senza `TradeRecord` né PnL**.
 > Il criterio «fermare la più giovane» non discrimina: la differenza di osservazione fra le due è di
 > **16 minuti su ~5 ore**, il 5%.

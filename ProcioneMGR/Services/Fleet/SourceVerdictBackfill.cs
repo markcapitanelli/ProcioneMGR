@@ -45,7 +45,7 @@ public sealed record ProvenanceReport(bool DryRun, IReadOnlyList<ProvenanceLegOu
 /// comodo e sarebbe un'invenzione, e su un campo che governa un tetto un'invenzione è peggio
 /// dell'ignoranza — che almeno è fail-closed.</para>
 ///
-/// <para><b>[K26, 2026-09-01] Tre stati d'archivio, non due — e il run giusto.</b> Il verdetto era
+/// <para><b>[K37, 2026-09-01] Tre stati d'archivio, non due — e il run giusto.</b> Il verdetto era
 /// <c>Survived ? "Survived" : "Grey"</c>, che schiaccia in due gli stati che l'archivio tiene in
 /// tre: un candidato <b>bocciato in pieno</b> (né sopravvissuto né grigio) veniva etichettato
 /// «Grey», cioè <i>meglio</i> di come l'archivio lo giudica. Non è ipotetico: è ciò che sarebbe
@@ -117,7 +117,7 @@ public sealed class SourceVerdictBackfill(
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
-        // [K26] Il run DA CUI la gamba è stata schierata, se il journal lo sa. Vincolare la ricerca
+        // [K37] Il run DA CUI la gamba è stata schierata, se il journal lo sa. Vincolare la ricerca
         // a quel run è ciò che rende l'etichetta la provenienza e non «l'ultimo giudizio disponibile
         // su un'ipotesi simile»: 71 chiavi su 1.028 cambiano IsGrey fra un run e l'altro.
         var runSchieramento = await db.OrchestratorDecisions.AsNoTracking()
@@ -151,7 +151,7 @@ public sealed class SourceVerdictBackfill(
                   + "(e l'ignoto conta come grigio, che è il verso prudente)");
         }
 
-        // [K26] TRE stati, non due. «Né sopravvissuto né grigio» = bocciato in pieno, e scrivergli
+        // [K37] TRE stati, non due. «Né sopravvissuto né grigio» = bocciato in pieno, e scrivergli
         // «Grey» sarebbe promuoverlo: l'archivio lo giudica peggio di così.
         var etichetta = candidate.Survived ? "Survived" : candidate.IsGrey ? "Grey" : null;
         var origine = runSchieramento is not null ? "run di schieramento" : "run più recente sulla chiave";

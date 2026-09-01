@@ -5,7 +5,7 @@ using ProcioneMGR.Services.Trading;
 namespace ProcioneMGR.Tests;
 
 /// <summary>
-/// [K22 + K27, PRD autonomia-piena — Fase 2, 2026-09-01] <b>Due difetti che si sono presi per mano.</b>
+/// [K33 + K38, PRD autonomia-piena — Fase 2, 2026-09-01] <b>Due difetti che si sono presi per mano.</b>
 ///
 /// <para>Il 2026-08-31 <c>GridMeanReversion DOGE/USDT 15m</c>, stessi parametri, stesso
 /// <c>ExpectedSharpe</c> a ventotto cifre, stesso <c>ExpectedTradesSource</c>, è finita sulle corsie
@@ -30,7 +30,7 @@ namespace ProcioneMGR.Tests;
 /// il livello 2 dello standard di verifica: una guardia che blocca sempre e un tetto che conta
 /// sempre passerebbero i casi positivi ed sarebbero sbagliati.</para>
 /// </summary>
-public class FleetIpotesiDoppiaK22Tests
+public class FleetIpotesiDoppiaK33Tests
 {
     private static readonly Dictionary<string, decimal> Grid =
         new() { ["Direction"] = 1m, ["EntryRungs"] = 1m, ["StepPercent"] = 2m, ["AnchorPeriod"] = 20m };
@@ -46,7 +46,7 @@ public class FleetIpotesiDoppiaK22Tests
         HasGreyLegs: true,
         ActiveCandidateKeys: chiave is null ? null : [chiave]);
 
-    // ---------------------------------------------------------------- K22: la guardia
+    // ---------------------------------------------------------------- K33: la guardia
 
     [Fact]
     public void ReplicaESATTA_suUnAltraCorsia_vieneRIFIUTATA()
@@ -145,7 +145,7 @@ public class FleetIpotesiDoppiaK22Tests
         Assert.Equal("X A/B 1h", HypothesisGuard.Triple("X A/B 1h"));
     }
 
-    // ---------------------------------------------------------------- K27: il denominatore
+    // ---------------------------------------------------------------- K38: il denominatore
 
     private static FleetLaneState CorsiaFlotta(
         int id, bool inCorsa = true, bool? grigia = true, bool emergency = false,

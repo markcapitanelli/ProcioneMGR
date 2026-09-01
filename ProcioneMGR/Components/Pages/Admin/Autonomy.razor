@@ -555,14 +555,14 @@
                             </label>
                             <input type="number" class="form-control" id="fl_greymax" @bind="_fleet.MaxGreyLanes" min="0" style="width: 7rem;" />
                         </div>
-                        @* [K22, 2026-09-01] La guardia contro l'ipotesi doppia. Sta qui, accanto al
+                        @* [K33, 2026-09-01] La guardia contro l'ipotesi doppia. Sta qui, accanto al
                            tetto grigio, perché è la stessa domanda vista da un'altra angolazione:
                            quante SCOMMESSE DISTINTE sta correndo la flotta, non quante corsie. *@
                         <div class="form-check form-switch align-self-end mb-1">
                             <input class="form-check-input" type="checkbox" id="fl_dupterna" @bind="_fleet.BlockDuplicateTriple" />
                             <label class="form-check-label" for="fl_dupterna"
                                    title="La replica ESATTA (stessa PipelineCandidateKey su un'altra corsia in corsa) è sempre rifiutata e non ha manopola. Questo interruttore governa il secondo gradino: la stessa TERNA (strategia, coppia, timeframe) con parametri diversi. Spento, lo schieramento passa e il motivo resta scritto nel journal.">
-                                Rifiuta anche la stessa TERNA (K22) @Hot()
+                                Rifiuta anche la stessa TERNA (K33) @Hot()
                             </label>
                         </div>
                         <div class="small text-muted flex-fill" style="min-width: 22rem;">

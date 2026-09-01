@@ -154,10 +154,10 @@ public sealed class FleetOptions
     /// </summary>
     public int MaxGreyLanes { get; set; } = 3;
 
-    // --- [K22] La stessa ipotesi non occupa due corsie ---
+    // --- [K33] La stessa ipotesi non occupa due corsie ---
 
     /// <summary>
-    /// [K22, 2026-09-01] Rifiutare uno schieramento quando un'altra corsia porta la stessa
+    /// [K33, 2026-09-01] Rifiutare uno schieramento quando un'altra corsia porta la stessa
     /// <b>terna</b> (strategia, coppia, timeframe) con parametri diversi. La replica <i>esatta</i>
     /// (stessa <c>PipelineCandidateKey</c>) è sempre rifiutata e non ha manopola: non ha lettura
     /// alternativa.
