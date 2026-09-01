@@ -25,6 +25,17 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
 
     public EnsembleManagerDecayTests(PostgresFixture pg) => _connString = pg.CreateDatabase();
 
+    /// <summary>
+    /// [K39, 2026-09-01] Il timbro di nascita della gamba, che da oggi il monitor pretende.
+    ///
+    /// <para>Il monitor scarta i trade chiusi PRIMA che la gamba esistesse: erano 65 righe su 66
+    /// sulle corsie di flotta vere, e producevano uno «Sharpe realizzato» calcolato su replay. Le
+    /// prove qui sotto seminano trade recenti, quindi il timbro va messo abbastanza indietro da non
+    /// escluderli — ma <b>deve esserci</b>, perché una gamba che non dichiara quando è nata da oggi
+    /// non si misura affatto (vedi <c>LegHasNoBirthStamp</c>, e la prova dedicata in fondo).</para>
+    /// </summary>
+    private static readonly DateTime TimbroDiNascita = new(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
     private sealed class PassthroughEncryption : IEncryptionService
     {
         public string Encrypt(string plaintext) => plaintext;
@@ -91,8 +102,8 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var cfg = await manager.GetConfigurationAsync();
         cfg.Strategies =
         [
-            new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m },
-            new EnsembleStrategy { StrategyId = "leg-b", StrategyName = "Momentum", DisplayName = "Gamba B", IsActive = true, ExpectedSharpe = null },
+            new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita },
+            new EnsembleStrategy { StrategyId = "leg-b", StrategyName = "Momentum", DisplayName = "Gamba B", IsActive = true, ExpectedSharpe = null, ExpectedSharpeAtUtc = TimbroDiNascita },
         ];
         await manager.UpdateConfigurationAsync(cfg);
 
@@ -137,7 +148,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var manager = await BuildAsync();
         var cfg = await manager.GetConfigurationAsync();
         cfg.Symbol = "BTC/USDT";                       // la vita ATTUALE della corsia
-        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m }];
+        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
         await manager.UpdateConfigurationAsync(cfg);
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
@@ -177,7 +188,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var manager = await BuildAsync();
         var cfg = await manager.GetConfigurationAsync();
         cfg.Symbol = "ADA/USDT";
-        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m }];
+        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
         await manager.UpdateConfigurationAsync(cfg);
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
@@ -206,7 +217,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var manager = await BuildAsync();
         var cfg = await manager.GetConfigurationAsync();
         cfg.Symbol = "BTC/USDT";
-        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m }];
+        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
         await manager.UpdateConfigurationAsync(cfg);
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
@@ -241,7 +252,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var manager = await BuildAsync();
         var cfg = await manager.GetConfigurationAsync();
         cfg.Symbol = "BTC/USDT";
-        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m }];
+        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
         await manager.UpdateConfigurationAsync(cfg);
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
@@ -265,7 +276,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
     {
         var manager = await BuildAsync();
         var cfg = await manager.GetConfigurationAsync();
-        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m }];
+        cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
         await manager.UpdateConfigurationAsync(cfg);
 
         var reports = await manager.GetDecayReportsAsync();
@@ -278,5 +289,123 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_provider is not null) await _provider.DisposeAsync();
+    }
+
+    // --- [K39] Il terzo filtro: la gamba non si giudica da trade più vecchi di sé --------------
+
+    /// <summary>
+    /// [K39, 2026-09-01] <b>I trade chiusi PRIMA che la gamba esistesse non la descrivono.</b>
+    ///
+    /// <para>Simbolo e fill rotti non bastano: <c>TradeRecords</c> porta i tempi della CANDELA, e al
+    /// riavvio del motore il feed rigioca fino a trenta giorni di storia. Quelle righe hanno lo
+    /// <c>StrategyId</c> e il simbolo <i>attuali</i>, quindi superano entrambi i filtri esistenti.
+    /// Misurato sulle corsie di flotta vere il 2026-09-01: delle 66 righe lette, <b>65 erano
+    /// precedenti alla creazione della gamba</b>, e l'unica gamba «misurabile» della piattaforma
+    /// aveva una finestra di venti righe di replay su venti.</para>
+    /// </summary>
+    [Fact]
+    public async Task TradeCHIUSIprimaDellaGamba_NONlaGiudicano_eSiDICHIARANO()
+    {
+        var nascita = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var manager = await BuildAsync();
+        var cfg = await manager.GetConfigurationAsync();
+        cfg.Symbol = "BTC/USDT";
+        cfg.Strategies =
+        [
+            new EnsembleStrategy
+            {
+                StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A",
+                IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = nascita,
+            },
+        ];
+        await manager.UpdateConfigurationAsync(cfg);
+
+        await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
+        {
+            // 25 righe di REPLAY: stesso StrategyId, stesso simbolo, plausibili — passano i due
+            // filtri precedenti — ma chiuse prima che la gamba nascesse.
+            for (var i = 0; i < 25; i++) db.TradeRecords.Add(Trade("leg-a", 1.2m, nascita.AddDays(-60 + i)));
+            // e 3 trade VERI, dopo la nascita.
+            for (var i = 0; i < 3; i++) db.TradeRecords.Add(Trade("leg-a", 0.9m, nascita.AddDays(1 + i)));
+            await db.SaveChangesAsync();
+        }
+
+        var report = Assert.Single(await manager.GetDecayReportsAsync());
+
+        Assert.Equal(3, report.TradeCount);                  // solo i suoi
+        Assert.Equal(25, report.TradesExcludedBeforeLeg);     // e il perché è dichiarato
+        Assert.False(report.LegHasNoBirthStamp);
+        Assert.False(report.IsMeasurable);                    // 3 < 20: onesto, non ottimista
+    }
+
+    /// <summary>
+    /// [K39] Il NULLO del filtro: senza, un monitor che scarta tutto passerebbe la prova qui sopra.
+    /// I trade successivi alla nascita della gamba devono entrare tutti.
+    /// </summary>
+    [Fact]
+    public async Task IlNULLO_diK39_iTradeDOPOlaNascita_entranoTUTTI()
+    {
+        var nascita = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var manager = await BuildAsync();
+        var cfg = await manager.GetConfigurationAsync();
+        cfg.Symbol = "BTC/USDT";
+        cfg.Strategies =
+        [
+            new EnsembleStrategy
+            {
+                StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A",
+                IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = nascita,
+            },
+        ];
+        await manager.UpdateConfigurationAsync(cfg);
+
+        await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
+        {
+            for (var i = 0; i < 20; i++) db.TradeRecords.Add(Trade("leg-a", i % 2 == 0 ? 1.2m : 0.8m, nascita.AddDays(1 + i * 5)));
+            await db.SaveChangesAsync();
+        }
+
+        var report = Assert.Single(await manager.GetDecayReportsAsync());
+
+        Assert.Equal(20, report.TradeCount);
+        Assert.Equal(0, report.TradesExcludedBeforeLeg);
+        Assert.True(report.IsMeasurable);
+    }
+
+    /// <summary>
+    /// [K39] Una gamba che non dichiara quando è nata <b>non si misura affatto</b>. Fail-closed
+    /// voluto: misurare su una finestra di cui non si conosce l'inizio è peggio che dire «non lo
+    /// so», ed è esattamente ciò che il monitor faceva finora. Riguarda le gambe delle corsie
+    /// d'impronta (RF0), e questo rende quel lavoro visibile invece di mascherarlo con un numero.
+    /// </summary>
+    [Fact]
+    public async Task GambaSENZAtimbroDiNascita_NONsiMISURA_eLoDICE()
+    {
+        var manager = await BuildAsync();
+        var cfg = await manager.GetConfigurationAsync();
+        cfg.Symbol = "BTC/USDT";
+        cfg.Strategies =
+        [
+            new EnsembleStrategy
+            {
+                StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A",
+                IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = null,
+            },
+        ];
+        await manager.UpdateConfigurationAsync(cfg);
+
+        await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
+        {
+            var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            for (var i = 0; i < 30; i++) db.TradeRecords.Add(Trade("leg-a", 1.2m, start.AddDays(i)));
+            await db.SaveChangesAsync();
+        }
+
+        var report = Assert.Single(await manager.GetDecayReportsAsync());
+
+        Assert.True(report.LegHasNoBirthStamp);
+        Assert.Equal(0, report.TradeCount);
+        Assert.Equal(30, report.TradesExcludedBeforeLeg);   // dice quante ce n'erano, e non le usa
+        Assert.False(report.IsMeasurable);
     }
 }
