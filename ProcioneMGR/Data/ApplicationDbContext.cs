@@ -210,7 +210,28 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.ToTable("OrchestratorDecisions");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Kind).HasMaxLength(32).IsRequired();
-            entity.Property(e => e.Source).HasMaxLength(16).IsRequired();
+            // [K45, 2026-09-02] 16 → 32, e non è cosmetica: era il difetto che TENEVA FERMA LA
+            // FLOTTA.
+            //
+            // I8 ha raffinato la fonte dell'assegnazione per distinguere tre cause diverse che
+            // prima collassavano nella parola «default» — `default:non-interrogato` (23 caratteri),
+            // `default:tutti-astenuti` e `default:quorum-mancato` (22) — senza guardare la
+            // larghezza della colonna, che era 16. Da allora ogni tick in cui il comitato viene
+            // interrogato e NON raggiunge il quorum falliva con
+            // «22001: il valore è troppo lungo per il tipo character varying(16)», e l'eccezione
+            // veniva inghiottita dal catch di `ExecuteAsync` («Tick fallito; ritento al prossimo»).
+            //
+            // Il difetto è rimasto invisibile finché la coda era bloccata: senza corsie libere non
+            // nasce nessun menù, quindi il comitato non veniva mai interrogato e `Source` restava
+            // «rules». È bastato liberare uno slot il 2026-09-01 perché il primo pareggio
+            // producesse un `default:...` e la flotta smettesse di scrivere qualunque riga — piano
+            // con un'azione, journal muto, ogni quindici minuti.
+            //
+            // Il verso della correzione è allargare la colonna, non accorciare la stringa: quelle
+            // tre parole sono la differenza fra «il comitato ha scelto la regola» e «il comitato
+            // non ha funzionato», ed è esattamente ciò che I8 esisteva per dire. Il guardiano che
+            // lega le due cose è in `FleetSourceLunghezzaK45Tests`.
+            entity.Property(e => e.Source).HasMaxLength(32).IsRequired();
             entity.HasIndex(e => e.AtUtc);
             entity.HasIndex(e => new { e.RunId, e.Kind });
         });
