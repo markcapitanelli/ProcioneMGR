@@ -445,6 +445,22 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.HasIndex(x => x.ClosedAtUtc);
             // Copre la query del monitor di decadimento (ultimi N trade per gamba, ORDER BY ClosedAtUtc DESC).
             e.HasIndex(x => new { x.StrategyId, x.ClosedAtUtc });
+            // [K41] L'ora di PARETE della scrittura, messa dal DATABASE e non dal chiamante: tutte
+            // le altre date di questa tabella sono tempi di CANDELA. ValueGeneratedOnAdd fa sì che
+            // EF ometta la colonna nell'INSERT e la rilegga: il valore lo mette Postgres, quindi
+            // vale per ogni scrittore — compreso dell'SQL scritto a mano, che è il caso in cui i
+            // difetti nascono davvero. Le righe storiche restano null e non si retro-riempiono.
+            e.Property(x => x.RecordedAtUtc)
+                .HasDefaultValueSql("(now() at time zone 'utc')")
+                .ValueGeneratedOnAdd()
+                // [K41] E soprattutto QUESTO. `ValueGeneratedOnAdd` da solo NON basta: EF manda
+                // comunque il valore se il chiamante lo assegna, e un test l'ha dimostrato scrivendo
+                // 2020-01-01 su una riga nuova. Una colonna che chiunque può scrivere non è un
+                // fatto, è un'opinione — cioè esattamente il `IsReplay` booleano che questa forma
+                // esiste per evitare. Con BeforeSaveBehavior.Ignore la proprietà non entra mai
+                // nell'INSERT: il valore lo mette Postgres, sempre, e nessuno può fabbricare un
+                // «questa riga è viva».
+                .Metadata.SetBeforeSaveBehavior(Microsoft.EntityFrameworkCore.Metadata.PropertySaveBehavior.Ignore);
         });
 
         builder.Entity<ProcioneMGR.Services.Trading.TradingEngineState>(e =>
