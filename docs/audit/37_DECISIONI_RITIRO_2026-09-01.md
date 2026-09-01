@@ -201,6 +201,52 @@ Va dopo la marcatura del replay.
 
 ---
 
+## 2-bis. CHIUSURA — 2026-09-01 sera
+
+Il proprietario ha deciso, e le quattro voci del § 3 sono state applicate. Con esse si chiudono le
+quattro cose che restavano in sospeso della Fase 2.
+
+### Le decisioni, applicate
+
+| decisione | scelta | fatto |
+|---|---|---|
+| **R1** tetto grigio | ritirare il doppione **+** `MaxGreyLanes = 4` | corsia 4 fermata dalla UI (audit Id 2249); tetto a 4 nel file vivo, col motivo scritto accanto |
+| **R2** quale gemella | la **4**, non la 6 | la 4 era piatta; la 6 aveva una posizione aperta, che ha poi chiuso da sola alle 18:30 con un trade vero |
+| **R3** `AutoPromoteToTestnet` | **spento** | la valutazione resta e la UI mostra «pronta», ma il passaggio torna a essere un click |
+| **R4** corsia 7 | **liberata** | gambe rimosse (0), corsia disponibile per il prossimo grigio |
+
+### I quattro interventi che chiudono la fase
+
+- **K42 — la condanna a metà strada si vede.** Il ramo del verdetto non confermato dall'isteresi
+  «si annotava solo nel log». La riga di journal ora si scrive sui **cambi di serie** (0→1, 1→2,
+  condanna→assoluzione), la serie si **ferma alla conferma**, e il pannello mostra «N condanne in
+  corso» con corsia e conferme. È K20/D8, e la conferma del difetto è arrivata dall'esercizio: un
+  piano con un'azione ogni quindici minuti e zero righe per sei ore.
+- **K43 — il trade si conta una volta.** Deduplica per chiave d'entità nel ritiro di flotta e nel
+  monitor di decadimento, con le repliche **dichiarate** in pagina. Vince la **prima scritta**, e va
+  detto perché non è neutro: 25 gruppi su 301 hanno repliche con `Pnl` diverso.
+- **K44 — la soglia ha una sola unità.** Si giudica sullo **Sharpe per operazione**, che non porta
+  il fattore `√PeriodsPerYear` (46,8 a 4h contro 187,2 a 15m). Attraversa il filo col suo
+  **conteggio di campioni**, perché in proto3 assente e zero coincidono e uno Sharpe zero è un
+  verdetto: a zero campioni il criterio **si astiene**.
+- **K41 — l'ora di parete** accanto all'ora di candela (§ 4 del documento 38), che è il prerequisito
+  di ogni taratura futura.
+
+### Cosa resta inerte finché il motore non è aggiornato
+
+`SharpePerTradeSamples` arriva dal pod. Finché il motore gira un'immagine precedente al campo,
+risponde **zero campioni** e il criterio per Sharpe **si astiene su ogni corsia** — che è il verso
+prudente, ma va saputo: **K44 è attivo solo dopo il redeploy del motore.**
+
+### Cosa NON è stato deciso, e resta con il suo criterio
+
+`MinTradesPerMonth` resta a **0,5**, in attesa della marcatura del replay: `f` è un numero di
+backtest e il suo rapporto col ritmo vivo è ignoto. Il criterio di sufficienza è dichiarato — **~30
+trade vivi cumulati, circa due mesi su quattro corsie** — e ora è misurabile, perché da K41 ogni
+riga nuova porta la sua ora di parete.
+
+---
+
 ## 3. Ciò che resta al proprietario
 
 Sono decisioni di **rischio** e di **capitale**: non le prendo io.

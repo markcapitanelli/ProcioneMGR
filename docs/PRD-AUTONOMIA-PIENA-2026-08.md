@@ -334,6 +334,18 @@ caccia gira su una costante inventata.
 | K36 ✅ | **Posizione aperta su corsia ferma**: nessuna superficie la nominava, stop e target non valutati, e al prossimo `StartAsync` la riga sparisce senza `TradeRecord` |
 | K37 ✅ | **Provenienza dal run di schieramento, e tre stati d'archivio non due**: 71 chiavi su 1.028 cambiano `IsGrey` fra run, e un candidato bocciato in pieno veniva promosso a «Grey» |
 | K38 ✅ | **Il tetto grigio perdeva il proprio denominatore**: una corsia illeggibile usciva dal conteggio e il tetto si allargava da solo — il varco da cui è passata la seconda gemella |
+| K39 ✅ | **Il monitor di decadimento giudicava su trade di replay**: 65 righe su 66 precedevano la gamba che dicevano di descrivere. Ancorato a `ExpectedSharpeAtUtc`; senza timbro non si misura |
+| K40 ✅ | **«Non so leggere niente» diventava «le corsie sono impegnate»**: l'illeggibilità è ora uno stato suo e si dichiara per prima |
+| K41 ✅ | **`RecordedAtUtc`**: l'ora di parete accanto all'ora di candela, messa dal database e inforgiabile. Migrazione a due passi perché le 371 righe storiche restino `NULL` |
+| K42 ✅ | **La condanna a metà strada si scrive** (K20/D8): riga a journal sui cambi di serie, «N condanne in corso» nel pannello |
+| K43 ✅ | **Una riga non è un trade**: deduplica per chiave d'entità nel ritiro e nel monitor, repliche dichiarate. 367 righe = 301 trade |
+| K44 ✅ | **La soglia di ritiro ha una sola unità**: Sharpe per operazione, col conteggio di campioni per distinguere assente da zero |
+
+> **Fase 2 CHIUSA il 2026-09-01.** Le quattro decisioni del proprietario (tetto grigio a 4 col
+> ritiro del doppione, corsia 7 liberata, `AutoPromoteToTestnet` spento, taglio sulle gambe lente
+> rimandato) sono applicate: **[`docs/audit/37_DECISIONI_RITIRO_2026-09-01.md`](audit/37_DECISIONI_RITIRO_2026-09-01.md) § 2-bis**.
+> Nota operativa: **K44 resta inerte finché il motore non è ridispiegato** — il campo arriva dal pod,
+> e un'immagine precedente risponde zero campioni, quindi il criterio si astiene (verso prudente).
 
 ### Fase 3 — Riempire il serbatoio senza abbassare la barra
 
