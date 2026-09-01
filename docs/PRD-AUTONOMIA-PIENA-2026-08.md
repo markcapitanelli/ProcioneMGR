@@ -337,6 +337,30 @@ caccia gira su una costante inventata.
 
 ### Fase 3 — Riempire il serbatoio senza abbassare la barra
 
+> **Misurata prima di essere fatta (2026-09-01): 8 lenti + 4 avversari.**
+> → **[`docs/audit/38_FASE3_MISURE_2026-09-01.md`](audit/38_FASE3_MISURE_2026-09-01.md)**
+>
+> Quattro item cambiano di natura, e vale la pena leggerlo prima di iniziare:
+> - **K25 non vale la pena oggi**: effetto massimo 0,102 di Sharpe contro 0,130 di rumore run-a-run
+>   della stessa grandezza; zero candidati cambiano banda. E `FundingHistory` **non è una tabella**:
+>   il dato c'è, 42.878 righe dal 2019 in `SentimentMetricPoints`. Manca il cablaggio.
+> - **K26 è una trappola**: `GreyZone.IsGrey` giudica sul prefisso `"Solo "` di `RejectReason`, che
+>   il calcolo del DSR riscriverebbe. Fatto nel modo ovvio, **la fascia grigia passa da 114 chiavi a
+>   7 (−94%)** — e con `GreyAutoDeploy=true` quello è un predicato di *schieramento*. Va su un campo
+>   che nessun verdetto legge, e dopo il gemello nullo. *(Il conteggio dei tentativi non è più
+>   sbagliato: quel difetto è stato corretto.)*
+> - **K27 va fatto, e non allenta il gate: lo stringe** (SR\* +0,0017 / +0,0182). Recupera 53 minuti
+>   di CPU ogni 30 giorni. `MKR/USDT` è **sospeso (BREAK)**, non delistato.
+> - **K22: il rimedio proposto è distruttivo.** Rimuovere e ri-aggiungere una gamba conia un nuovo
+>   `StrategyId`, quindi azzera l'identità e l'orologio dell'osservazione — la cosa che tiene il
+>   ritiro per Sharpe irraggiungibile. L'alternativa è un backfill del timbro, dove la fonte esiste.
+> - **K24 è più urgente**: se `/bot` non passa da `HypothesisGuard` (K33), l'ipotesi doppia rientra
+>   da lì e la guardia protegge solo le porte che già si comportavano bene.
+>
+> **Prima di tutti e sette** restano i due prerequisiti della Fase 2 — marcare il replay e il
+> journal come registro — e l'archivio degli episodi di identità, che **esiste già in embrione** dal
+> 13/08 in `TradingAuditLogs`.
+
 | # | Cosa |
 |---|---|
 | K21 | **`AutoReapply:MaxGreyLegs`, scritto esplicitamente.** Sapendo che 1 non fa nulla, 2 sblocca 3 run su 18, 3 li sblocca tutti — e che subito dopo c'è K22 |
