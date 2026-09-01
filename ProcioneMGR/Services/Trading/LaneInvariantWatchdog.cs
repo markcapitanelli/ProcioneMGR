@@ -92,7 +92,78 @@ public sealed class LaneInvariantWatchdog(
         }
 
         await ReportOrphanPositionsAsync(db, ct);
+        await ReportStoppedLanePositionsAsync(db, ct);
     }
+
+    /// <summary>
+    /// [K25, PRD autonomia-piena 2026-09-01] Posizioni aperte su corsie che ESISTONO ma sono FERME.
+    ///
+    /// <para><b>Il buco fra i due controlli.</b> Il ciclo qui sopra salta le corsie ferme
+    /// («uno stato corrotto a corsia ferma non può peggiorare, e verrà comunque azzerato dal
+    /// prossimo StartAsync») e <see cref="ReportOrphanPositionsAsync"/> guarda solo
+    /// <c>LaneId &gt;= TradingLanes.Count</c>. Una posizione viva su una corsia esistente ma ferma
+    /// cade esattamente in mezzo: <b>nessuna superficie la nomina</b>.</para>
+    ///
+    /// <para><b>E il ragionamento del ciclo si rovescia proprio qui.</b> «Verrà azzerato dal
+    /// prossimo StartAsync» non è la rassicurazione: è il danno. <c>TradingEngine.StartAsync</c>, in
+    /// Paper, esegue <c>db.OpenPositions.Where(p =&gt; p.LaneId == laneId).ExecuteDeleteAsync()</c> —
+    /// la riga sparisce <b>senza TradeRecord, senza PnL, senza audit</b>. E nel frattempo le uscite
+    /// protettive vivono dietro <c>if (!_state.IsRunning) return;</c>: stop e target smettono di
+    /// essere valutati dall'istante dello stop.</para>
+    ///
+    /// <para>Misurato il 2026-08-31: quattro corsie fermate in 1,83 secondi da un percorso che non
+    /// scrive né journal né motivo, e la corsia 6 lasciata con una short DOGE/USDT da 799 USDT di
+    /// nozionale mentre <c>/ensemble</c> la dichiarava STOPPED e nessun pannello diceva altro.</para>
+    ///
+    /// <para>Nessuna azione automatica, stessa filosofia della quarantena e degli orfani: chiudere
+    /// d'ufficio è il gesto irreversibile, quindi quello sbagliato. Si dice, e decide un umano.</para>
+    /// </summary>
+    private async Task ReportStoppedLanePositionsAsync(ApplicationDbContext db, CancellationToken ct)
+    {
+        var laneCount = TradingLanes.Count;
+        var ferme = await db.TradingEngineStates.AsNoTracking()
+            .Where(s => s.LaneId < laneCount && !s.IsRunning)
+            .Select(s => new { s.LaneId, s.Mode })
+            .ToListAsync(ct);
+
+        foreach (var lane in ferme)
+        {
+            var aperte = await db.OpenPositions.AsNoTracking()
+                .Where(p => p.LaneId == lane.LaneId && p.OpenedInMode == lane.Mode)
+                .ToListAsync(ct);
+
+            if (aperte.Count == 0)
+            {
+                // La corsia è tornata pulita (riavviata, o le posizioni chiuse a mano): l'allarme
+                // si ri-arma, altrimenti la seconda volta resterebbe muto.
+                _stoppedWithPositionsAlerted.Remove(lane.LaneId);
+                continue;
+            }
+            if (!_stoppedWithPositionsAlerted.Add(lane.LaneId)) continue;
+
+            var nozionale = aperte.Sum(p => Math.Abs(p.Quantity * (p.CurrentPrice > 0m ? p.CurrentPrice : p.EntryPrice)));
+            var detail = string.Join(", ", aperte.Select(p =>
+                $"{p.Symbol} {p.Side} {p.Quantity:0.####} @ {p.EntryPrice:0.####} dal {p.OpenedAtUtc:u}"));
+
+            logger.LogCritical(
+                "POSIZIONI APERTE su corsia FERMA {Lane} ({Nozionale:0.##} di nozionale): {Detail}. "
+                + "Stop e target non vengono più valutati, e al prossimo avvio in Paper le righe verranno "
+                + "cancellate senza TradeRecord né PnL. Nessuna azione automatica: chiudile da /trading.",
+                lane.LaneId, nozionale, detail);
+
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(Notifications.NotificationSeverity.Critical,
+                    $"Corsia {lane.LaneId} ferma con posizioni aperte",
+                    $"La corsia è ferma ma tiene {aperte.Count} posizione/i aperte per {nozionale:0.##} di nozionale, "
+                    + $"che nessun motore sorveglia: {detail}. Al prossimo avvio in Paper spariranno senza lasciare "
+                    + "traccia contabile: chiudile da /trading con l'uscita d'emergenza, che le registra.", ct);
+            }
+        }
+    }
+
+    /// <summary>Corsie ferme con posizioni già segnalate: una segnalazione per episodio, non una per giro.</summary>
+    private readonly HashSet<int> _stoppedWithPositionsAlerted = [];
 
     // --- [E6] Inedia di valutazione ------------------------------------------------------------
 

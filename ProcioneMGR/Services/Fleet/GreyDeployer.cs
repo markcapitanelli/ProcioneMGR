@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Analysis;
 using ProcioneMGR.Services.Ensemble;
@@ -83,6 +84,8 @@ public sealed class GreyDeployer(
     IPipelineApplier applier,
     ILaneQuarantineStore quarantineStore,
     ExcursionAnalyzer excursion,
+    ILaneDirectory laneDirectory,
+    IOptionsMonitor<FleetOptions> options,
     ILogger<GreyDeployer> logger) : IGreyDeployer
 {
     public async Task<IReadOnlyList<GreyChoice>> ListGreyAsync(Guid runId, CancellationToken ct = default)
@@ -143,6 +146,25 @@ public sealed class GreyDeployer(
         // Simbolo e timeframe vengono dal candidato risolto: unica fonte di verità.
         var symbol = candidate.Symbol;
         var timeframe = candidate.Timeframe;
+
+        // --- [K22, 2026-09-01] LA STESSA IPOTESI NON OCCUPA DUE CORSIE.
+        //
+        // Il 31/08 GridMeanReversion DOGE/USDT 15m con parametri identici e ExpectedSharpe uguale a
+        // ventotto cifre è finita sulle corsie 4 E 6: 20.000 USDT nominali su una stima da 14 trade,
+        // due slot del tetto grigio, e una flotta che sembrava larga cinque ipotesi mentre ne
+        // portava quattro. Nessun controllo, in nessuno degli otto scrittori di corsia, confrontava
+        // una corsia con le altre — l'unico che esisteva (EnsemblePageService.AddFromGreyAsync)
+        // guarda DENTRO la stessa corsia.
+        //
+        // La guardia sta QUI e non nel chiamante perché questa è la strozzatura di entrambe le porte
+        // che schierano un grigio: il click F5 e il braccio della flotta. Il giudizio è puro
+        // (HypothesisGuard) e collaudabile senza il circuito.
+        var duplicato = HypothesisGuard.Check(
+            await laneDirectory.ListAsync(ct), laneId, candidate.Key, options.CurrentValue.BlockDuplicateTriple);
+        if (duplicato.Blocked)
+        {
+            return new(false, duplicato.Reason!);
+        }
 
         // --- Il bracket: stesso calcolo dell'applica. Senza protezioni derivabili non si parte.
         var (sl, tp) = await AutoBracket.ComputeAsync(dbFactory, excursion, symbol, timeframe, ct);
@@ -223,7 +245,12 @@ public sealed class GreyDeployer(
                 // può ancora ricostruire, ma solo dai Parameters della corsia e solo finché quella
                 // corsia non viene riassegnata. Il journal, da solo, non bastava.
                 Reason = $"[{(source == "fleet" ? "J14, flotta" : "F5, click umano")}] {candidate.Key} → corsia {laneId}, {startedText}. " +
-                         $"Sharpe holdout {candidate.HoldoutSharpe:F2} su {candidate.HoldoutTrades} trade; SL {sl:F2}% / TP {tp:F2}%.",
+                         $"Sharpe holdout {candidate.HoldoutSharpe:F2} su {candidate.HoldoutTrades} trade; SL {sl:F2}% / TP {tp:F2}%." +
+                         // [K22] L'avviso della guardia che NON ha bloccato finisce a journal: una
+                         // terna gia' in corsa schierata comunque e' una scelta, e una scelta senza
+                         // traccia e' indistinguibile da un incidente — che e' esattamente cio' che
+                         // e' successo il 31/08.
+                         (duplicato.Reason is { } avviso ? $" ⚠ {avviso}" : string.Empty),
             });
             await db.SaveChangesAsync(ct);
         }

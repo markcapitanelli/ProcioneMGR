@@ -153,6 +153,27 @@ public sealed class FleetOptions
     /// grigia ai fini del tetto: non sapere non allarga il permesso.
     /// </summary>
     public int MaxGreyLanes { get; set; } = 3;
+
+    // --- [K22] La stessa ipotesi non occupa due corsie ---
+
+    /// <summary>
+    /// [K22, 2026-09-01] Rifiutare uno schieramento quando un'altra corsia porta la stessa
+    /// <b>terna</b> (strategia, coppia, timeframe) con parametri diversi. La replica <i>esatta</i>
+    /// (stessa <c>PipelineCandidateKey</c>) è sempre rifiutata e non ha manopola: non ha lettura
+    /// alternativa.
+    ///
+    /// <para><b>Default acceso, e il motivo è misurato.</b> Delle 16 proposte grigie schierabili al
+    /// 2026-09-01, una sola collide per identità esatta ma <b>tre</b> collidono per terna: due sono
+    /// <c>MacdTrend AAVE/USDT 4h</c> con <c>FastPeriod</c> uguale e <c>SlowPeriod</c> 26 e 31 contro
+    /// il 21 già in corsa sulla corsia 3. Con la sola guardia sull'identità esatta, il primo slot
+    /// che si apre andrebbe a una taratura vicina di ciò che gira già — cioè il difetto del
+    /// 2026-08-31 ripetuto un gradino più in là.</para>
+    ///
+    /// <para>Spegnerlo è legittimo se si vuole <i>deliberatamente</i> mettere in corsa due tarature
+    /// dello stesso segnale come esperimento: in quel caso lo schieramento passa e il motivo resta
+    /// scritto nel journal, che è la differenza fra una scelta e un incidente.</para>
+    /// </summary>
+    public bool BlockDuplicateTriple { get; set; } = true;
 }
 
 /// <summary>Fotografia di una corsia come la vede l'orchestratore (sola lettura).</summary>

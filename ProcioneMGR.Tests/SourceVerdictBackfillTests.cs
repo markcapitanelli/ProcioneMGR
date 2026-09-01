@@ -110,13 +110,15 @@ public class SourceVerdictBackfillTests : IAsyncDisposable
         ],
     };
 
-    private async Task SeminaCandidatoAsync(IDbContextFactory<ApplicationDbContext> db, string strategia, bool survived)
+    private async Task<Guid> SeminaCandidatoAsync(
+        IDbContextFactory<ApplicationDbContext> db, string strategia, bool survived, bool isGrey = true)
     {
         var key = PipelineCandidateKey.Build(strategia, "ETC/USDT", "4h", Parametri);
+        var runId = Guid.NewGuid();
         await using var c = await db.CreateDbContextAsync();
         c.ResearchCandidates.Add(new ResearchCandidate
         {
-            RunId = Guid.NewGuid(),
+            RunId = runId,
             RunCompletedUtc = DateTime.UtcNow.AddDays(-2),
             StrategyName = strategia,
             Symbol = "ETC/USDT",
@@ -125,6 +127,28 @@ public class SourceVerdictBackfillTests : IAsyncDisposable
             ParametersJson = "{}",
             BestStopVariant = "base",
             Survived = survived,
+            IsGrey = isGrey,
+            RejectReason = survived ? null : "Solo 18 trade in holdout (< 20)",
+        });
+        await c.SaveChangesAsync();
+        return runId;
+    }
+
+    /// <summary>Una riga di journal che dichiara da quale run la corsia è stata schierata.</summary>
+    private static async Task SeminaAssignAsync(IDbContextFactory<ApplicationDbContext> db, int laneId, Guid runId)
+    {
+        await using var c = await db.CreateDbContextAsync();
+        c.OrchestratorDecisions.Add(new OrchestratorDecision
+        {
+            AtUtc = DateTime.UtcNow.AddDays(-2),
+            Kind = "Assign",
+            LaneId = laneId,
+            RunId = runId,
+            Source = "human",
+            Applied = true,
+            DryRun = false,
+            Reason = "seme di prova",
+            VotesJson = string.Empty,
         });
         await c.SaveChangesAsync();
     }
@@ -148,11 +172,92 @@ public class SourceVerdictBackfillTests : IAsyncDisposable
         // Il complemento indispensabile: se la ricostruzione scrivesse «Grey» sempre, il test
         // precedente passerebbe e la funzione sarebbe sbagliata.
         var (backfill, managers, db) = await BuildAsync(Corsia());
-        await SeminaCandidatoAsync(db, "RsiOversold", survived: true);
+        await SeminaCandidatoAsync(db, "RsiOversold", survived: true, isGrey: false);
 
         await backfill.RunAsync(dryRun: false);
 
         Assert.Equal("Survived", managers[0].Config.Strategies[0].SourceVerdict);
+    }
+
+    [Fact]
+    public async Task CandidatoBOCCIATO_INPIENO_nonDiventaGrey()
+    {
+        // [K26] Il terzo stato. L'archivio ne tiene TRE — sopravvissuto, grigio, bocciato in pieno —
+        // e `Survived ? "Survived" : "Grey"` ne schiacciava due in uno, promuovendo il peggiore.
+        //
+        // Non è un caso di scuola: al 2026-09-01 il candidato della corsia 7
+        // (BollingerMeanReversion STX/USDT 4h) era stato retrocesso il 21/08 con «Sharpe holdout
+        // 0,11 < 0,5», quindi né sopravvissuto né grigio. La prima esecuzione del backfill gli
+        // avrebbe scritto «Grey» — cioè un giudizio MIGLIORE di quello d'archivio, su un campo che
+        // governa un tetto di rischio.
+        var (backfill, managers, db) = await BuildAsync(Corsia());
+        await SeminaCandidatoAsync(db, "RsiOversold", survived: false, isGrey: false);
+
+        var rep = await backfill.RunAsync(dryRun: false);
+
+        Assert.Equal(0, rep.Updated);
+        Assert.Null(managers[0].Config.Strategies[0].SourceVerdict);
+        Assert.Equal(0, managers[0].Saves);
+        Assert.Contains(rep.Legs, l => l.Detail.Contains("BOCCIATO IN PIENO"));
+    }
+
+    [Fact]
+    public async Task LEtichettaVieneDalRunDiSCHIERAMENTO_nonDallUltimoGiudizio()
+    {
+        // [K26] Il cuore della correzione. La stessa ipotesi viene rivalutata a ogni giro di caccia,
+        // e il verdetto CAMBIA: misurato sull'archivio vero, 71 chiavi su 1.028 cambiano `IsGrey`
+        // fra un run e l'altro. Leggere «l'ultimo run che ricapita sulla chiave» significa
+        // etichettare una gamba schierata con il giudizio di un esperimento che non è il suo.
+        //
+        // Qui: la gamba è stata schierata da un run che la giudicava GRIGIA; un run successivo la
+        // promuove a sopravvissuta. L'etichetta deve restare quella della sua provenienza.
+        var (backfill, managers, db) = await BuildAsync(Corsia());
+        var runSchieramento = await SeminaCandidatoAsync(db, "RsiOversold", survived: false, isGrey: true);
+        await SeminaAssignAsync(db, laneId: 0, runSchieramento);
+
+        // Un run PIÙ RECENTE sulla stessa chiave, con verdetto opposto.
+        var key = PipelineCandidateKey.Build("RsiOversold", "ETC/USDT", "4h", Parametri);
+        await using (var c = await db.CreateDbContextAsync())
+        {
+            c.ResearchCandidates.Add(new ResearchCandidate
+            {
+                RunId = Guid.NewGuid(),
+                RunCompletedUtc = DateTime.UtcNow,   // più recente del run di schieramento
+                StrategyName = "RsiOversold",
+                Symbol = "ETC/USDT",
+                Timeframe = "4h",
+                CandidateKey = key,
+                ParametersJson = "{}",
+                BestStopVariant = "base",
+                Survived = true,
+                IsGrey = false,
+            });
+            await c.SaveChangesAsync();
+        }
+
+        await backfill.RunAsync(dryRun: false);
+
+        Assert.Equal("Grey", managers[0].Config.Strategies[0].SourceVerdict);
+    }
+
+    [Fact]
+    public async Task JournalCheDICEunAltroRun_nonEtichetta()
+    {
+        // [K26] Il verso fail-closed della stessa regola, e il caso REALE: le corsie 4 e 6 sono
+        // state riassegnate il 2026-08-31 senza lasciare riga a journal, quindi il loro ultimo
+        // `Assign` applicato descrive un'identità RITIRATA (corsia 4: GridMeanReversion XRP/USDT 4h
+        // del 3 agosto). Vincolare la ricerca a quel run non trova nulla — ed è giusto così: la
+        // provenienza non è accertabile, e su un campo che governa un tetto l'ignoto è meglio di
+        // un'etichetta plausibile.
+        var (backfill, managers, db) = await BuildAsync(Corsia());
+        await SeminaCandidatoAsync(db, "RsiOversold", survived: false, isGrey: true);
+        await SeminaAssignAsync(db, laneId: 0, Guid.NewGuid());   // un run che non ha mai visto questa chiave
+
+        var rep = await backfill.RunAsync(dryRun: false);
+
+        Assert.Equal(0, rep.Updated);
+        Assert.Null(managers[0].Config.Strategies[0].SourceVerdict);
+        Assert.Contains(rep.Legs, l => l.Detail.Contains("riassegnata senza"));
     }
 
     [Fact]

@@ -124,10 +124,14 @@ public sealed class EnsemblePageServiceTests : IAsyncDisposable
         // pagina usa le STESSE del worker periodico, e tenerne di proprie farebbe divergere i due
         // verdetti sullo stesso modello. Nei test la finestra è ridotta a 50 per non dover seminare
         // 200 candele in ogni prova; il comportamento esercitato è identico.
+        // [K22] La directory delle corsie serve alla guardia contro l'ipotesi doppia: qui è quella
+        // vera, che legge lo stesso database del test — le prove esistenti non hanno altre corsie
+        // configurate, quindi la guardia non morde e il comportamento esercitato resta identico.
         var svc = new EnsemblePageService(_provider, new StrategyFactory(), _drift,
             (driftOptions ?? new DriftMonitorOptions { RecentCandles = 50 }).AsMonitor(),
             _registry, dbFactory,
-            new UnusedBacktestEngine(), new ProcioneMGR.Services.Analysis.ExcursionAnalyzer());
+            new UnusedBacktestEngine(), new ProcioneMGR.Services.Analysis.ExcursionAnalyzer(),
+            new LaneDirectory(dbFactory), new ProcioneMGR.Services.Fleet.FleetOptions().AsMonitor());
         return (svc, dbFactory);
     }
 

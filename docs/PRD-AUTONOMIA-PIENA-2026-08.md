@@ -285,13 +285,55 @@ caccia gira su una costante inventata.
 
 ### Fase 2 — Il ritiro come giudizio, non come conteggio
 
+> **Stato al 2026-08-31 (notte).** **K18 fatto.** Restano K16, K17, K19 e K20 — e sono tutti e
+> quattro **decisioni di politica**, non solo codice: cambiano *quando* una corsia viene ritirata,
+> cioè quando la piattaforma smette di dare capitale a un'ipotesi. Vanno prese guardando i numeri,
+> non di notte.
+>
+> **Aggiornamento 2026-09-01 — i numeri ci sono.**
+> → **[`docs/audit/36_RITIRO_CORSIA_NUMERI_2026-09-01.md`](audit/36_RITIRO_CORSIA_NUMERI_2026-09-01.md)**
+> (4 misure + 4 avversari indipendenti; le tre affermazioni portanti ri-verificate a mano sul DB).
+> Tre risultati cambiano la forma del problema:
+> 1. **La vita mediana di un'identità di corsia è ~27 giorni di calendario, ~23,8 osservati.**
+>    Alzare `StarvationMinDays` a 27 o 41 non rende il criterio severo: lo **spegne** (0 identità su
+>    4 sarebbero arrivate al cancello).
+> 2. **Il falso allarme va letto sull'orizzonte, non al primo sguardo**: la regola gira ogni 15′.
+>    A `MinDays=10` è 31,7-34,4% cumulato a 180 giorni, non 28,7%.
+> 3. **K17 non è tarabile oggi**: 66 righe di `TradeRecords` sono replay dello stesso trade logico
+>    (367 righe = 301 entità), e col nullo corretto nessuna soglia di danno è distinguibile dal caso.
+>
+> Otto decisioni aperte (D1-D8) nel § 7 di quel documento. **Nessuna presa.**
+
 | # | Cosa |
 |---|---|
 | K16 | **L'inedia con potenza statistica.** O `StarvationMinDays` sale finché l'atteso nel periodo supera ~3 trade (≥42 giorni a f≈2,2), o il criterio passa a un quantile di Poisson. Con il suo nullo, come pretende il livello 2 |
 | K17 | **Criterio di danno conclamato**, senza vincolo di settimane: drawdown e PnL cumulato sono già in `TradingEngineStates`, `FleetLaneState` non li porta. E una corsia in emergency dev'essere **dichiarata**, non sparire da `FleetLanes` |
-| K18 | Lo **Sharpe del ritiro ancorato** alla finestra dei trade: o `from` filtra anche l'equity, o si calcola dai `TradeRecords` della finestra |
+| K18 ✅ | Lo **Sharpe del ritiro ancorato** alla finestra dei trade: o `from` filtra anche l'equity, o si calcola dai `TradeRecords` della finestra |
 | K19 | `RetireMinTrades = 20` **tarato sull'orizzonte reale**: a 2,17-3,70 trade/mese un forward test da tre settimane non può produrne venti. In alternativa, PnL cumulato con banda di confidenza |
 | K20 | **Persistere `_retireStreak`** (colonna su `FleetLaneObservations` o riga di journal `RetirePending`) ed esporlo. Oggi ogni riavvio azzera la conferma, e non si vede |
+
+#### Fase 2 — esito, 2026-09-01
+
+> **Le tarature non si toccano, e non per prudenza.** La seconda ondata di misure (6 + 3 avversari)
+> ha mostrato che i timestamp di `TradeRecords` sono **tempi di candela scritti in differita**: 35
+> righe precedono la creazione delle gambe a cui appartengono, e i trade di *forward test* sulle
+> identità in corsa sono **0 · 0 · 1 · 0 · 0** contro 27 righe di replay sulla sola corsia 4.
+> Tarare l'inedia oggi sarebbe tarare contro un fantasma.
+>
+> Sotto la taratura c'erano **cinque difetti più gravi**, tutti chiusi. Decisioni, motivi e ciò che
+> resta al proprietario: **[`docs/audit/37_DECISIONI_RITIRO_2026-09-01.md`](audit/37_DECISIONI_RITIRO_2026-09-01.md)**.
+
+| # | Cosa | esito |
+|---|---|---|
+| K16 · K19 | Taratura di inedia e Sharpe | **rimandata con criterio dichiarato**: servono ~30 trade *vivi* cumulati (≈2,2 mesi su 4 corsie) perché il rapporto fra ritmo reale e atteso abbia un errore del 18%. Prima di allora nessuna taratura è una misura |
+| K17 | Criterio di danno | **non tarabile**: col nullo corretto (permutare l'ordine dentro la gamba) nessuna soglia è distinguibile dal caso, p = 0,335 |
+| K20 | Isteresi persistita | **teorico all'attuale taratura**: il costo di un riavvio è 0,2 minuti a `RetireConfirmTicks=2` contro un cancello di 10 giorni. Il valore è l'osservabilità, e va con D1 |
+| K22 ✅ | **La stessa ipotesi non occupa due corsie**: `HypothesisGuard`, predicato a due gradini (identità esatta → rifiuto; stessa terna → `Fleet:BlockDuplicateTriple`), su tutte e tre le porte di schieramento |
+| K23 ✅ | **`/ensemble` diceva STOPPED sopra una corsia che operava** (badge su `IsEnabled`, che non governa l'esecuzione): 3 corsie su 8 divergenti, una con una short da 799 USDT aperta |
+| K24 ✅ | **Il tetto \|PnL\| era cieco alle perdite non realizzate**: senza trailing la riga di `OpenPositions` non veniva mai riscritta, `UnrealizedPnl` restava 0 dall'apertura. Due posizioni su tre |
+| K25 ✅ | **Posizione aperta su corsia ferma**: nessuna superficie la nominava, stop e target non valutati, e al prossimo `StartAsync` la riga sparisce senza `TradeRecord` |
+| K26 ✅ | **Provenienza dal run di schieramento, e tre stati d'archivio non due**: 71 chiavi su 1.028 cambiano `IsGrey` fra run, e un candidato bocciato in pieno veniva promosso a «Grey» |
+| K27 ✅ | **Il tetto grigio perdeva il proprio denominatore**: una corsia illeggibile usciva dal conteggio e il tetto si allargava da solo — il varco da cui è passata la seconda gemella |
 
 ### Fase 3 — Riempire il serbatoio senza abbassare la barra
 

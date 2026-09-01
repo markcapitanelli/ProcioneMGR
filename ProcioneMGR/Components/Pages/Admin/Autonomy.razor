@@ -555,6 +555,30 @@
                             </label>
                             <input type="number" class="form-control" id="fl_greymax" @bind="_fleet.MaxGreyLanes" min="0" style="width: 7rem;" />
                         </div>
+                        @* [K22, 2026-09-01] La guardia contro l'ipotesi doppia. Sta qui, accanto al
+                           tetto grigio, perché è la stessa domanda vista da un'altra angolazione:
+                           quante SCOMMESSE DISTINTE sta correndo la flotta, non quante corsie. *@
+                        <div class="form-check form-switch align-self-end mb-1">
+                            <input class="form-check-input" type="checkbox" id="fl_dupterna" @bind="_fleet.BlockDuplicateTriple" />
+                            <label class="form-check-label" for="fl_dupterna"
+                                   title="La replica ESATTA (stessa PipelineCandidateKey su un'altra corsia in corsa) è sempre rifiutata e non ha manopola. Questo interruttore governa il secondo gradino: la stessa TERNA (strategia, coppia, timeframe) con parametri diversi. Spento, lo schieramento passa e il motivo resta scritto nel journal.">
+                                Rifiuta anche la stessa TERNA (K22) @Hot()
+                            </label>
+                        </div>
+                        <div class="small text-muted flex-fill" style="min-width: 22rem;">
+                            <strong>Perché esiste.</strong> Il 2026-08-31 <code>GridMeanReversion DOGE/USDT 15m</code>
+                            con parametri identici è finita su <strong>due corsie</strong>: 20.000 USDT nominali su
+                            una stima da 14 trade di holdout, e due slot di questo tetto consumati da una prova sola.
+                            Nessuno confrontava una corsia con le altre, e lo <code>StrategyId</code> è un GUID
+                            coniato a ogni schieramento — due identità diverse per un'ipotesi sola.
+                            <br />
+                            Il secondo gradino è misurato, non prudenziale: delle 16 proposte grigie schierabili,
+                            <strong>una</strong> collide per identità esatta ma <strong>tre</strong> per terna — due
+                            sono tarature vicine di ciò che gira già sulla corsia 3.
+                            <strong>Spegnerlo è legittimo</strong> se si vogliono deliberatamente due tarature dello
+                            stesso segnale come esperimento: in quel caso passa, e il motivo finisce a journal — che
+                            è la differenza fra una scelta e un incidente.
+                        </div>
                         <div class="small text-muted flex-fill" style="min-width: 22rem;">
                             Elenco di numeri di corsia separati da virgola. <strong>Vuoto = nessuna esecuzione</strong>,
                             anche con il dry-run spento: il permesso è per corsia, non globale.

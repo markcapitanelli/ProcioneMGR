@@ -2829,3 +2829,22 @@ comitato propone, le metriche decidono.
 
 «il ritiro non può maturare prima del 2026-09-15 per costruzione del ledger» vale per il criterio
 **Sharpe**. Il criterio **inedia** matura il **4-5 settembre**, e riguarda quattro corsie, non una.
+
+### Rettifica alla rettifica (2026-09-01) — anche il 4-5 settembre era sbagliato
+
+Misurato e verificato sul database vivo: **il 4-5 settembre non succede niente.**
+
+- La **corsia 7** ha `IsRunning = false` e il ciclo di ritiro itera su `.Where(l => l.IsRunning)`:
+  non accredita tempo e **non viene nemmeno esaminata**.
+- La **corsia 5** ha 1 trade dall'ancora contro una soglia di **0,243** — `1 < 0,243` è falso. Non
+  è affamata, e non lo diventa prima del giorno di osservazione **41,13** (~10/10).
+- Le corsie realmente al cancello sono **3, 4 e 6**, verso il **10-12/09**, e **solo se restano
+  mute**: per la corsia 4 su DOGE la probabilità di zero trade in dieci giorni è ≈ 3·10⁻⁸.
+
+L'errore di origine era contare giorni di **calendario** mentre il criterio conta osservazione
+accreditata, che il ledger cumula solo `if (isRunning)` e con un tetto di 45′ per interruzione
+(duty misurato: **89,8%** e **86,0%**).
+
+I numeri completi per decidere le tarature — con quattro avversari che hanno demolito sette
+affermazioni su ventuno — stanno in
+[`docs/audit/36_RITIRO_CORSIA_NUMERI_2026-09-01.md`](audit/36_RITIRO_CORSIA_NUMERI_2026-09-01.md).
