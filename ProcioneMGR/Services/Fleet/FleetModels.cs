@@ -219,7 +219,17 @@ public sealed record FleetLaneState(
     /// <b>«non riesco a leggere niente»</b> in <b>«le corsie sono impegnate»</b> — che ha un rimedio
     /// completamente diverso: guardare perché il pod non risponde, non liberare una corsia.</para>
     /// </summary>
-    bool Unreadable = false);
+    bool Unreadable = false,
+    /// <summary>
+    /// [K44, 2026-09-01] Sharpe <b>per operazione</b> della finestra ancorata, senza
+    /// annualizzazione. <c>null</c> = non disponibile (meno di due trade, o un motore con
+    /// un'immagine precedente al campo): in quel caso il criterio per Sharpe <b>si astiene</b>.
+    ///
+    /// <para><see cref="RealizedSharpe"/> resta, ma non è più ciò su cui si giudica: è annualizzato
+    /// sui rendimenti di barra, quindi porta un fattore <c>√PeriodsPerYear</c> che vale 46,8 a 4h e
+    /// 187,2 a 15m. Una soglia sola su quel numero è <b>quattro soglie diverse</b>.</para>
+    /// </summary>
+    decimal? RealizedSharpePerTrade = null);
 
 /// <summary>
 /// Un run candidato al forward test. <paramref name="Band"/>: "pass" = sopravvissuti alla

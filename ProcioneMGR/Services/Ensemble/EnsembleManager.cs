@@ -214,11 +214,17 @@ public sealed class EnsembleManager(
                 ? plausibili.Where(t => t.ClosedAtUtc >= nascita)
                 : plausibili.Where(t => false);
 
-            var recentTrades = await ancorati
-                .Where(t => t.Symbol == cfg.Symbol)
+            // [K43] E la deduplica, PRIMA del Take: le repliche di replay hanno la stessa gamba,
+            // lo stesso simbolo e — se posteriori all'ancora — passano anche il filtro di K39.
+            // Deduplicare dopo aver preso le ultime venti darebbe una finestra piu' corta di
+            // quella richiesta senza dirlo; deduplicare prima la riempie di trade veri.
+            var candidateTrades = await ancorati.Where(t => t.Symbol == cfg.Symbol).ToListAsync(ct);
+            var senzaRepliche = Trading.TradeDeduplication.Distinti(candidateTrades);
+            var repliche = Trading.TradeDeduplication.Repliche(candidateTrades, senzaRepliche);
+            var recentTrades = senzaRepliche
                 .OrderByDescending(t => t.ClosedAtUtc)
                 .Take(options.WindowTradeCount)
-                .ToListAsync(ct);
+                .ToList();
 
             // Quanti ne sono stati scartati: un conteggio piu' basso senza spiegazione si legge
             // come un guasto, e la spiegazione qui e' "quella corsia faceva un altro mestiere".
@@ -242,6 +248,7 @@ public sealed class EnsembleManager(
             report.TradesExcludedImplausible = rotti;
             report.TradesExcludedBeforeLeg = primaDellaGamba;
             report.LegHasNoBirthStamp = ancora is null;
+            report.TradesExcludedDuplicate = repliche;
             reports.Add(report);
 
             if (rotti > 0)

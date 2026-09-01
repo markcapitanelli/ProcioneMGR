@@ -44,11 +44,26 @@ public static class FleetOrchestrator
         {
             var enoughHistory = lane.TradeCount >= Math.Max(1, opt.RetireMinTrades)
                                 && lane.Observation >= TimeSpan.FromDays(7 * Math.Max(1, opt.RetireMinWeeks));
-            if (enoughHistory && lane.RealizedSharpe < opt.RetireSharpeThreshold)
+            // [K44, 2026-09-01] SI GIUDICA SULLO SHARPE PER OPERAZIONE, non su quello annualizzato.
+            //
+            // `RealizedSharpe` è annualizzato sui rendimenti di BARRA, quindi porta un fattore
+            // √PeriodsPerYear che vale 46,8 a 4h e 187,2 a 15m: la STESSA soglia era quattro soglie
+            // diverse a seconda del timeframe della corsia, e nessuna superficie lo diceva. Lo
+            // Sharpe per trade non ha quell'annualizzazione, ed è lo STESSO test
+            // (t = Sharpe × √N è un'identità algebrica): non cambia il verdetto, toglie l'ambiguità
+            // su cosa il verdetto significhi.
+            //
+            // `null` = non disponibile (meno di due trade, o un motore con un'immagine precedente
+            // al campo). In quel caso NON si giudica: l'ignoranza non condanna, ed è la stessa
+            // politica del ritmo atteso e della provenienza.
+            if (enoughHistory && lane.RealizedSharpePerTrade is decimal sharpeTrade
+                && sharpeTrade < opt.RetireSharpeThreshold)
             {
                 actions.Add(new StopAndFreeLane(lane.LaneId,
-                    $"Forward test perdente: Sharpe {lane.RealizedSharpe:F2} < {opt.RetireSharpeThreshold:F2} " +
-                    $"su {lane.TradeCount} trade in {lane.Observation.TotalDays:F0}gg ({lane.Symbol} {lane.Timeframe})."));
+                    $"Forward test perdente: Sharpe per trade {sharpeTrade:F3} < {opt.RetireSharpeThreshold:F2} " +
+                    $"su {lane.TradeCount} trade in {lane.Observation.TotalDays:F0}gg ({lane.Symbol} {lane.Timeframe}). " +
+                    $"Sharpe annualizzato per riferimento: {lane.RealizedSharpe:F2} — non è su quello che si giudica, " +
+                    "perché dipende dal timeframe."));
                 continue;
             }
 

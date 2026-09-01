@@ -66,6 +66,7 @@ public sealed class FleetStateReader(
             var emergency = false;
             var unreadable = false;
             var sharpe = 0m;
+            decimal? sharpePerTrade = null;
             var trades = 0;
             var observation = TimeSpan.Zero;
             var expected = s.ExpectedTradesPerMonth;
@@ -96,6 +97,11 @@ public sealed class FleetStateReader(
                         var perf = await engine.GetPerformanceAsync(from: firstSeen, ct);
                         sharpe = perf.SharpeRatio;
                         trades = perf.TotalTrades;
+                        // [K44] Zero campioni = NON DISPONIBILE, non «Sharpe zero». Un motore con
+                        // un'immagine precedente al campo risponde 0 su entrambi, e uno zero letto
+                        // come verdetto contro una soglia a zero sarebbe una condanna emessa da
+                        // un'assenza.
+                        sharpePerTrade = perf.SharpePerTradeSamples >= 2 ? perf.SharpePerTrade : null;
                     }
 
                     // [I12-rev] IL NUMERATORE E IL DENOMINATORE DEVONO VENIRE DALLA STESSA
@@ -141,7 +147,9 @@ public sealed class FleetStateReader(
                 // [J14] Provenienza delle gambe, per il tetto MaxGreyLanes (stessa fonte: la directory).
                 GreySourced: s.HasGreyLegs,
                 // [K40] «Non risponde» separato da «fermata per emergenza»: rimedi opposti.
-                Unreadable: unreadable));
+                Unreadable: unreadable,
+                // [K44] Il numero su cui una soglia unica e' davvero unica.
+                RealizedSharpePerTrade: sharpePerTrade));
         }
 
         // --- Candidati --------------------------------------------------------------------------

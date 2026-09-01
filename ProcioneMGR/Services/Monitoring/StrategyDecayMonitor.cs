@@ -177,6 +177,14 @@ public sealed class DecayReport
     public bool LegHasNoBirthStamp { get; set; }
 
     /// <summary>
+    /// [K43, 2026-09-01] Righe <b>scartate perché repliche</b> dello stesso trade logico. Al
+    /// 2026-09-01 le 367 righe Paper della tabella erano 301 trade distinti: 66 re-inserimenti
+    /// prodotti dai run ripetuti e dal recupero di candele storiche. Va dichiarato come gli altri
+    /// due scarti — un conteggio più basso senza spiegazione si legge come un guasto.
+    /// </summary>
+    public int TradesExcludedDuplicate { get; set; }
+
+    /// <summary>
     /// [I13b] <b>Questa gamba è misurabile?</b> Vero quando i trade sul simbolo attuale bastano
     /// perché il confronto realizzato-vs-atteso significhi qualcosa.
     ///

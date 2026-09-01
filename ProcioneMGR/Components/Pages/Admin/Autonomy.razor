@@ -457,6 +457,19 @@
                           title="Corsie in corsa che stanno producendo meno della frazione dichiarata dei trade attesi: il prossimo tick le ritira e libera il posto. Zero non vuol dire «tutte in salute», vuol dire «nessuna condannabile» — e comprende quelle di cui il ritmo atteso non è noto.">
                         <strong>@silence.StarvingLanes</strong> in inedia
                     </span>
+                    @* [K42, 2026-09-01] LE CONDANNE A METÀ STRADA. Era lo stato che K20 chiedeva di
+                       rendere visibile: una corsia poteva essere a un tick dall'essere fermata e
+                       nessuna superficie lo diceva. Il verdetto non confermato «si annotava solo
+                       nel log», e in esercizio questo significava un'azione ogni quindici minuti
+                       senza nessuna traccia. *@
+                    @if (FleetWorker.RetireStreaks is { Count: > 0 } serie)
+                    {
+                        <span class="text-danger-emphasis fw-semibold"
+                              title="Corsie che hanno gia' ricevuto almeno un verdetto di ritiro e stanno aspettando la conferma dell'isteresi. Alla conferma il ritiro puo' essere eseguito (se la corsia e' autorizzata e il dry-run e' spento). Un verdetto che non si ripete azzera la serie, e anche quello finisce a journal.">
+                            <strong>@serie.Count</strong> condanne in corso
+                            (@string.Join(", ", serie.OrderBy(s => s.Key).Select(s => $"corsia {s.Key}: {s.Value}/{_fleet?.RetireConfirmTicks ?? 2}")))
+                        </span>
+                    }
                 </div>
                 <div>@silence.Reason.</div>
                 @if (!silence.CommitteeCouldBeAsked)
@@ -491,8 +504,17 @@
                 <input type="number" class="form-control" @bind="_fleet.TickMinutes" min="1" style="width: 7rem;" />
             </div>
             <div class="col-auto">
-                <label class="form-label">Sharpe ritiro @Hot()</label>
-                <input type="number" step="0.1" class="form-control" @bind="_fleet.RetireSharpeThreshold" style="width: 7rem;" />
+                @* [K44, 2026-09-01] L'UNITÀ, che prima non era dichiarata e non era una sola.
+                   Il criterio confrontava questa soglia con lo Sharpe ANNUALIZZATO sui rendimenti
+                   di barra, cioè moltiplicato per √PeriodsPerYear: 46,8 a 4h contro 187,2 a 15m.
+                   Lo stesso numero significava quattro cose diverse a seconda del timeframe della
+                   corsia. Da oggi si giudica sullo Sharpe PER OPERAZIONE, che non ha
+                   annualizzazione — ed è lo stesso test, non un test nuovo. *@
+                <label class="form-label" for="fl_sharpe"
+                       title="Sharpe PER OPERAZIONE (media diviso deviazione standard dei rendimenti per trade, SENZA annualizzazione). Sotto questa soglia un forward test con storia sufficiente viene ritirato. Prima si confrontava con lo Sharpe annualizzato di barra, che porta un fattore √PeriodsPerYear: 46,8 a 4h contro 187,2 a 15m — la stessa soglia valeva quattro cose diverse. Con meno di due trade il numero non esiste e il criterio si astiene.">
+                    Sharpe ritiro (per trade) @Hot()
+                </label>
+                <input type="number" step="0.05" class="form-control" id="fl_sharpe" @bind="_fleet.RetireSharpeThreshold" style="width: 7rem;" />
             </div>
             <div class="col-auto">
                 <label class="form-label">Settimane min @Hot()</label>

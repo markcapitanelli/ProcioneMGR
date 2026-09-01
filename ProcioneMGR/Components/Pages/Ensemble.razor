@@ -713,7 +713,23 @@ else
                                                 </span>
                                             </dd>
                                         }
-                                        else if (r.TradesExcludedBeforeLeg > 0)
+                                        @if (r.TradesExcludedDuplicate > 0)
+                                        {
+                                            @* [K43] Le repliche di replay: stesso trade, contato più
+                                               volte. Il controllo che c'era (COUNT DISTINCT
+                                               PositionId) non poteva vederle, perché il PositionId
+                                               nasce a ogni esecuzione. *@
+                                            <dt class="col-6">Esclusi perché repliche</dt>
+                                            <dd class="col-6">
+                                                @r.TradesExcludedDuplicate
+                                                <span class="text-muted d-block">
+                                                    Righe che descrivono lo <strong>stesso</strong> trade (stessa gamba,
+                                                    stessa apertura, stessa chiusura) scritte più di una volta da run
+                                                    ripetuti o dal recupero di candele storiche. Vale la prima scritta.
+                                                </span>
+                                            </dd>
+                                        }
+                                        @if (r.TradesExcludedBeforeLeg > 0 && !r.LegHasNoBirthStamp)
                                         {
                                             <dt class="col-6">Esclusi perché precedenti</dt>
                                             <dd class="col-6">

@@ -272,6 +272,31 @@ public class TradingPerformance
     public decimal AverageLoss { get; set; }
     public decimal ProfitFactor { get; set; }
     public List<TradeRecord> Trades { get; set; } = new();
+
+    /// <summary>
+    /// [K44, 2026-09-01] Sharpe <b>per operazione</b>: media diviso deviazione standard dei
+    /// rendimenti per trade, <b>senza annualizzazione</b>.
+    ///
+    /// <para><b>Perché esiste accanto a <see cref="SharpeRatio"/>.</b> Quello è annualizzato sui
+    /// rendimenti di BARRA, quindi moltiplicato per <c>√PeriodsPerYear</c>: 2190 a 4h e 35040 a
+    /// 15m, cioè <b>46,8 contro 187,2 — un fattore 4,0</b>. La stessa soglia di ritiro significa
+    /// quattro cose diverse su corsie con timeframe diversi, e nessuna superficie lo dice. Questo
+    /// numero non dipende dal timeframe: è quello su cui una soglia unica è davvero unica.</para>
+    ///
+    /// <para>È anche <i>lo stesso test</i>: <c>t = SharpePerTrade × √N</c>, identità algebrica —
+    /// quindi cambiare unità non cambia il verdetto, toglie l'ambiguità su cosa il verdetto voglia
+    /// dire.</para>
+    /// </summary>
+    public decimal SharpePerTrade { get; set; }
+
+    /// <summary>
+    /// [K44] Quanti trade hanno prodotto <see cref="SharpePerTrade"/>. <b>Zero significa NON
+    /// DISPONIBILE</b>, non «Sharpe zero»: serve a distinguere l'assenza dal default, perché in
+    /// proto3 un campo non impostato si deserializza a zero e un motore con un'immagine precedente
+    /// risponderebbe 0 — che è un verdetto, non un'assenza. Stessa trappola di
+    /// <c>running_strategy_ids</c> (I13a-rev). Sotto due trade la deviazione standard non esiste.
+    /// </summary>
+    public int SharpePerTradeSamples { get; set; }
 }
 
 public class TradeRecord
