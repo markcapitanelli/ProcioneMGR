@@ -429,6 +429,36 @@ con il loro numero: 0,102 contro 0,130 di rumore, e la trappola del `RejectReaso
 > **Nessuna azione automatica.** Si misura e si mostra dove si sceglie cosa eseguire: mettere in
 > sonno una caccia è una decisione del proprietario, e questo numero non era mai esistito prima.
 
+> ### ⚠️ RETTIFICA (2026-09-02, stesso giorno): la metrica di K50 non regge il confronto fra config
+>
+> Il proprietario ha chiesto il quadro della config 8 prima di deciderne il sonno. Il quadro ha
+> demolito la metrica con cui l'avevo condannata. **Quattro obiezioni, tutte con il loro numero:**
+>
+> 1. **Dipende dal denominatore.** Stessa config, stesso motore, stesso universo: cfg 17 fino al
+>    20/08 → resa **0,477**; cfg 17 nei soli 21-22/08 → resa **7,250**. Il *tasso* di grigi resta
+>    piatto (14,6 % → 13,3 %): a muoversi è solo il numero di run al denominatore. **×15,2.**
+> 2. **Dipende dall'ampiezza del paniere.** L'**86,6 %** delle chiavi grigie di cfg 17 (71 su 82) sta
+>    su simboli che la config 8 **non caccia**. Sulle 10 majors condivise cfg 17 scende a 11.
+> 3. **Dipende da quale motore ha eseguito.** Il walk-forward è stato **sostituito il 2026-08-23**.
+>    Copertura post-fix: cfg 20 = 92 % · cfg 19 = 90 % · cfg 18 = 30 % · cfg 17 = 23 % · **cfg 8 = 0 %**.
+> 4. **Premia ciò che dovrebbe punire.** La resa è correlata **ρ = 0,90** col PBO medio dei candidati
+>    che premia, e le due config con la resa più alta hanno PBO medio **sopra `maxPbo = 0,5`**
+>    (cfg 20 = 0,726, cfg 17 = 0,603) contro cfg 8 = 0,319.
+>
+> A motore uguale le rese diventano `17 = 0,476 · 20 = 0,200 · 18 = 0,115 · 8 = 0,034`: il divario
+> passa da 22× a **3,4×**. E sull'1h, terreno comune, **cfg 18 non ha prodotto un solo candidato con
+> Sharpe holdout ≥ 0,5 in 639 righe; cfg 8 ne ha prodotti 28 su 838.**
+>
+> **Il numero resta utile per una cosa sola: dire che una caccia non produce nulla in assoluto.** Come
+> criterio di *confronto* fra configurazioni va normalizzato per motore, paniere e numero di run — e
+> finché non lo è, non deve guidare una decisione di sonno. La versione mostrata in `/pipeline` va
+> letta così.
+>
+> E la config 8 non andava comunque giudicata: **è ferma dal 2026-08-20**, spenta non da un verdetto
+> ma da un gate introdotto con un commento falso (`932eb21`: «le campagne reali sono già tutte a
+> timeframe singolo» — 28 run su 29 della config 8 sono misti). Il consumo vero è la **config 19**:
+> 62 % del budget, **zero** gambe schierate.
+
 > **K52 — 2026-09-02: aprendo K30 si è scoperto che il comitato non poteva votare, e da sedici giorni.**
 >
 > I voti stanno nel journal (righe 129 e 130) e non c'era niente da dedurre: NVIDIA rispondeva
@@ -464,6 +494,8 @@ con il loro numero: 0,102 contro 0,130 di rumore, e la trappola del `RejectReaso
 | # | Cosa |
 |---|---|
 | K52 ✅ | **Un votante morto non è un'astensione.** Classificatore, journal, notifica, tre superfici e la configurazione riparata. Il prerequisito di K30 |
+| K53 ✅ | **Un 404 non è una diagnosi** (misurato: 4 su 10 su NVIDIA, con successo nelle altre 6) → isteresi a 3 giri. Più: la migrazione di K51 applicata al DB vivo prima del merge ha tenuto ferma la Regina 5h30 — una colonna obbligatoria dev'essere scrivibile anche dal binario che non la conosce. E il selettore automatico dei modelli riportava NVIDIA sul modello morto: ora la prova (`LlmUsageRecords`) precede l'euristica sul nome |
+| **K54** 🔴 | **Le corsie portano il MASSIMO di misure ripetute.** Cinque gambe su sette: `expectedSharpe` = massimo esatto delle misure della *stessa* ipotesi (parametri compresi). Peggiore la corsia 6 — 12 misure, **12 valori diversi**, atteso 1,875 contro mediana 0,498 (**3,8×**). La fascia grigia si ordina per Sharpe, quindi fra misure rumorose viene proposta per costruzione la notte più fortunata. **Il ritiro confronta lo Sharpe vivo con `expectedSharpe`**: appena diventasse raggiungibile, condannerebbe corsie per non aver riprodotto un numero che non era mai stato reale. Non universale — la corsia 3 porta il minimo, la 5 è deterministica |
 | K28 | **Pianificatore adattivo**: resa per configurazione (chiavi distinte in fascia utile per ora di CPU), budget spostato verso i terreni che rendono, config sterili in sonno dichiarata. Oggi 42,4 ore/mese, e 17/18 hanno prodotto zero gambe su 119 run |
 | K29 | **Tuner dei parametri di caccia** — non delle strategie: universo, `topN`, ampiezza finestre, `confirmTopN`, timeframe. Una proposta per giro, A/B dichiarato, gate a valle **invariato**, registro di cosa ha cambiato e perché |
 | K30 | **L'AI dal veto alla proposta motivata.** Spostare il comitato su una domanda che esiste davvero (la scelta fra grigi quando una corsia si libera) invece di un pareggio che questa pipeline non produce. E spostare il supervisore **dopo** il comparatore: oggi paga una chiamata LLM per un verdetto già scritto |
