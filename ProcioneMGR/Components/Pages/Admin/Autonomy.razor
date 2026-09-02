@@ -538,6 +538,34 @@
                     }
                 </div>
             }
+            @* [K55, 2026-09-02] I DUE TETTI SCOLLEGATI SULLO STESSO RISCHIO.
+
+               Dal 2026-09-02 AutoReapply:MaxGreyLegs vale 2, quindi l'auto-apply puo' mettere gambe
+               di fascia grigia sulle corsie d'IMPRONTA. Quelle gambe NON entrano nel conteggio di
+               Fleet:MaxGreyLanes, che governa solo le corsie di flotta: «ipotesi non promosse in
+               forward test» si accumula su due percorsi contati separatamente, e fino a questa
+               riga nessuna superficie sommava i due.
+
+               Il totale non e' un vincolo — trasformarlo in tetto in silenzio bloccherebbe
+               schieramenti per una ragione che nessuno ha scelto. E' il numero che serve per
+               decidere se debba diventarlo. *@
+            @if (silence.GreyFootprintLanes > 0)
+            {
+                <div class="alert alert-warning py-2 small mb-2">
+                    <strong>Esposizione grigia su due percorsi: @silence.GreyLanesTotal corsie in totale.</strong>
+                    <div class="d-flex flex-wrap gap-3 mt-1">
+                        <span><strong>@silence.GreyFleetLanes</strong> di flotta — dentro il tetto <code>MaxGreyLanes</code></span>
+                        <span class="text-danger"><strong>@silence.GreyFootprintLanes</strong> d'impronta — <strong>fuori da ogni tetto</strong></span>
+                    </div>
+                    <div class="mt-1">
+                        Le gambe grigie che l'auto-apply mette sulle corsie 0-@(silence.LanesUnderGovernance > 0 ? "2" : "2")
+                        non sono contate da <code>Fleet:MaxGreyLanes</code>, che governa solo la flotta. È lo stesso
+                        rischio — un'ipotesi bocciata per finestra corta messa in forward test — su un percorso che
+                        nessun tetto limita. Si regola con <code>AutoReapply:MaxGreyLegs</code> (card «Ri-applica
+                        automatica» qui sopra), oggi a un valore che lo consente.
+                    </div>
+                </div>
+            }
             @if (silence.UnreadableLanes > 0)
             {
                 <div class="alert alert-danger py-2 small mb-2">

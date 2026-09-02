@@ -268,6 +268,19 @@
                                    per cento — l'opposto di ciò che il numero grida. *@
                                 @(a.Report.ExpectedSharpe?.ToString("F2")) (@(a.Report.SharpeRatio is decimal sr ? $"{sr * 100:0}%" : ""))
                                 su @a.Report.TradeCount trade
+                                @* [K54, 2026-09-02] Se la ricerca ha rivalutato la stessa ipotesi dopo
+                                   che l'aspettativa e' stata scritta, il verdetto e' su QUELLA — e va
+                                   detto qui, perche' e' questa la scheda che si guarda per prima. *@
+                                @if (a.Report.Evidence is { Contraddetta: true } ev)
+                                {
+                                    <br />
+                                    <span class="text-warning small">
+                                        ⚠ l'atteso è del @ev.Ancora.ToLocalTime().ToString("dd/MM"): da allora
+                                        <strong>@ev.MisureDopo rivalutazioni</strong> della stessa ipotesi danno mediana
+                                        <strong>@ev.MedianaDopo?.ToString("F2")</strong> — il verdetto è su quella
+                                        (@(a.Report.SharpeRatioVsEvidence is decimal rv ? $"{rv * 100:0}%" : "—"))
+                                    </span>
+                                }
                             </li>
                         }
                     </ul>

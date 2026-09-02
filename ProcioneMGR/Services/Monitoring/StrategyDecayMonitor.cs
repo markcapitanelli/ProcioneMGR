@@ -23,7 +23,11 @@ public interface IStrategyDecayMonitor
     /// [M5] Timeframe della corsia (es. "1h"): serve a portare lo Sharpe realizzato sulla STESSA
     /// base per-candela dello Sharpe atteso, altrimenti il confronto non è interpretabile.
     /// </param>
-    DecayReport Analyze(EnsembleStrategy strategy, IReadOnlyList<TradeRecord> allClosedTrades, string timeframe, DecayMonitorOptions? options = null);
+    /// <param name="evidence">
+    /// [K54] Che cosa ha detto la ricerca DOPO che l'aspettativa e' stata scritta. Opzionale: i
+    /// chiamanti che non hanno accesso all'archivio passano null e il verdetto resta quello storico.
+    /// </param>
+    DecayReport Analyze(EnsembleStrategy strategy, IReadOnlyList<TradeRecord> allClosedTrades, string timeframe, DecayMonitorOptions? options = null, Fleet.ExpectationEvidence? evidence = null);
 }
 
 /// <summary>Soglie del monitor di decadimento. Stessa finestra funge da minimo di trade richiesti e da ampiezza del rolling.</summary>
@@ -127,6 +131,35 @@ public sealed class DecayReport
     public bool IsAlert { get; set; }
 
     /// <summary>
+    /// [K54, 2026-09-02] Che cosa ha detto la ricerca <b>dopo</b> che l'aspettativa è stata scritta.
+    /// <c>null</c> = non è stato interrogato (chiamanti che non hanno accesso all'archivio), che è
+    /// diverso da «l'evidenza conferma».
+    ///
+    /// <para><b>Perché il rapporto da solo non basta.</b> <see cref="ExpectedSharpe"/> si scrive una
+    /// volta, allo schieramento, e non si ricontrolla mai più — mentre la caccia continua a
+    /// rivalutare la stessa ipotesi ogni notte su finestre che scorrono. Misurato il 2026-09-02: la
+    /// corsia 6 porta <b>1,8754</b>, scritto il 21 agosto; le <b>undici</b> rivalutazioni successive
+    /// della stessa identica ipotesi hanno mediana <b>0,479</b>. Il numero portato viene per giunta
+    /// da due giorni <i>prima</i> che il motore walk-forward venisse sostituito.</para>
+    ///
+    /// <para>Un <c>IsAlert</c> calcolato contro 1,875 non misura il decadimento della gamba: misura
+    /// quanto era ottimistica la notte in cui è stata proposta. Con l'evidenza accanto, il verdetto
+    /// torna a voler dire qualcosa.</para>
+    /// </summary>
+    public Fleet.ExpectationEvidence? Evidence { get; set; }
+
+    /// <summary>
+    /// [K54] Il rapporto contro la <b>stima corrente</b> (mediana delle rivalutazioni successive)
+    /// invece che contro il numero d'origine. <c>null</c> quando non c'è evidenza sufficiente, ed è
+    /// il caso in cui <see cref="SharpeRatio"/> resta l'unica lettura possibile.
+    ///
+    /// <para>Si affianca, non sostituisce: il numero d'origine è ciò che il proprietario si aspettava
+    /// quando ha schierato, e cancellarlo toglierebbe la storia. Su quattro gambe su sette (misurato)
+    /// l'evidenza successiva <i>conferma</i> il valore portato, e lì i due rapporti coincidono.</para>
+    /// </summary>
+    public decimal? SharpeRatioVsEvidence { get; set; }
+
+    /// <summary>
     /// [I13b] Il simbolo su cui il realizzato è stato misurato — cioè quello ATTUALE della corsia.
     /// Vuoto nei report costruiti da chiamanti che non lo dichiarano.
     /// </summary>
@@ -203,7 +236,7 @@ public sealed class DecayReport
 
 public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
 {
-    public DecayReport Analyze(EnsembleStrategy strategy, IReadOnlyList<TradeRecord> allClosedTrades, string timeframe, DecayMonitorOptions? options = null)
+    public DecayReport Analyze(EnsembleStrategy strategy, IReadOnlyList<TradeRecord> allClosedTrades, string timeframe, DecayMonitorOptions? options = null, Fleet.ExpectationEvidence? evidence = null)
     {
         ArgumentNullException.ThrowIfNull(strategy);
         allClosedTrades ??= [];
@@ -217,6 +250,7 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
             ExpectedSharpe = strategy.ExpectedSharpe,
             ExpectedProfitFactor = strategy.ExpectedProfitFactor,
             AnalyzedAtUtc = DateTime.UtcNow,
+            Evidence = evidence,
         };
 
         // Ultime N chiuse (piu' recenti prima per il Take, poi rimesse in ordine cronologico:
@@ -276,7 +310,26 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
 
         var ratio = realizedSharpe / expected;
         report.SharpeRatio = ratio;
-        report.IsAlert = ratio < options.AlertThresholdRatio;
+
+        // [K54, 2026-09-02] Se la ricerca ha rivalutato questa stessa ipotesi dopo che l'aspettativa
+        // è stata scritta, è QUELLA la stima corrente, e il verdetto si dà su di essa. Il rapporto
+        // storico resta accanto: serve a vedere quanto ci si era sbagliati, non a giudicare la
+        // gamba di oggi.
+        //
+        // Senza evidenza sufficiente non cambia niente: il ramo qui sotto non tocca IsAlert, e il
+        // comportamento resta quello di prima. È il verso voluto — l'evidenza aggiunge, non
+        // sottrae, e una gamba appena schierata (che non ha ancora rivalutazioni) non deve
+        // comportarsi diversamente da com'era ieri.
+        if (report.Evidence is { Giudicabile: true } prova && prova.Corrente > 0m)
+        {
+            var ratioCorrente = realizedSharpe / prova.Corrente;
+            report.SharpeRatioVsEvidence = ratioCorrente;
+            report.IsAlert = ratioCorrente < options.AlertThresholdRatio;
+        }
+        else
+        {
+            report.IsAlert = ratio < options.AlertThresholdRatio;
+        }
         // [M5b] Il divario di risk-free viaggia col verdetto: il realizzato è LORDO, l'atteso è
         // netto, e il rapporto è quindi generoso di quella quantità. Dirlo qui è ciò che impedisce
         // di leggere «in linea» come una misura pulita — regola 5, degradare dicendolo.

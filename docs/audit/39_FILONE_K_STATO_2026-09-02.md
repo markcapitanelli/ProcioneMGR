@@ -404,39 +404,72 @@ si decida sulla 8 non sposta il budget; la 19 sì.
 
 ---
 
-## 4-quinquies. K54 — le corsie portano il MASSIMO di misure ripetute
+## 4-quinquies. K54 — un'aspettativa che nessuno ricontrolla
 
-Il rilievo è emerso dall'analisi della caccia 8 e l'ho verificato da solo, **confrontando l'ipotesi
-esatta** (strategia + simbolo + timeframe + *parametri*), non la sola terna — la scorciatoia che oggi
-mi aveva già ingannato.
+> ### ⚠️ Rettifica alla mia prima versione, scritta un'ora prima
+>
+> Avevo scritto: «**cinque gambe su sette portano il massimo** delle misure ripetute». È
+> aritmeticamente vero e **fuorviante**, perché in quattro di quei cinque casi il massimo **coincide
+> con la mediana**: la misura è stabile su decine di run, e ciò che sta in basso è l'anomalia. Il
+> numero portato è quello giusto.
+>
+> Il criterio corretto non è «massimo o mediana», è **«che cosa dicono le misure venute DOPO»**.
 
-| corsia | ipotesi | `expectedSharpe` | misure | mediana | massimo | valori distinti |
+Per ogni gamba schierata: il valore che porta, quando è stato misurato, e la mediana di tutte le
+misure della **stessa identica ipotesi** (parametri compresi) completate **dopo** quella data.
+
+| corsia | ipotesi | porta | misurato il | misure dopo | mediana dopo | divergenza |
 |---|---|---|---|---|---|---|
-| 6 | GridMeanReversion DOGE 15m | **1,875** | 12 | 0,498 | **1,875** | **12 su 12** |
-| 2 | Supertrend ADA 4h | **3,195** | 45 | 3,195 | **3,195** | 4 |
-| 2 | Composite ADA 4h | **1,062** | 15 | −2,482 | **1,062** | 3 |
-| 4 | Composite XLM 4h | **1,291** | 48 | 1,243 | **1,291** | 2 |
-| 7 | Supertrend TRX 4h | **3,053** | 5 | 2,734 | **3,053** | **5 su 5** |
-| 3 | MacdTrend AAVE 4h | 3,961 | 3 | 4,123 | 4,137 | 3 — *porta il **minimo*** |
-| 5 | GridMeanReversion UNI 4h | 1,187 | 44 | 1,187 | 1,187 | 1 — *deterministica* |
+| **6** | GridMeanReversion DOGE 15m | **1,875** | **08-21** | **11** | **0,479** | **3,9×** 🔴 |
+| 7 | Supertrend TRX 4h | 3,053 | 08-25 | 4 | 2,734 | 1,12× |
+| 3 | MacdTrend AAVE 4h | 3,961 | 08-31 | 2 | 4,130 | 0,96× (porta il *minimo*) |
+| 2 | Supertrend ADA 4h | 3,195 | 07-24 | **28** | 3,195 | **nessuna** |
+| 5 | GridMeanReversion UNI 4h | 1,187 | 07-27 | **43** | 1,187 | **nessuna** |
+| 2 | Composite ADA 4h | 1,062 | 07-24 | 1 | 1,062 | nessuna |
+| 4 | Composite XLM 4h | 1,291 | 08-21 | 1 | 1,291 | nessuna |
 
-**Cinque gambe su sette portano esattamente il massimo** delle misure ripetute della stessa ipotesi.
-Il caso peggiore è la corsia 6: dodici misure, **dodici valori diversi**, e la gamba porta 1,875
-contro una mediana di 0,498 — **3,8 volte**.
+**La divergenza vera è una sola, ed è grave.** Le dodici misure della corsia 6:
 
-**Perché succede, e perché non è un dettaglio.** La fascia grigia si ordina per Sharpe: fra molte
-misure rumorose della stessa ipotesi, quella che viene proposta è, per costruzione, la notte in cui
-il rumore ha spinto più in alto. È selezione del massimo, la trappola che questo progetto ha già
-pagato altrove.
+```
+08-21  1,8754  su 14 trade   ← il valore che la corsia porta ANCORA OGGI
+08-25  0,2329  su 13 trade
+08-26  0,4787  ·  08-26  0,4720  ·  08-27  0,3212  ·  08-28  0,3244
+08-28  0,4531  ·  08-29  0,6743  ·  08-31  0,5902  ·  08-31  0,5522
+08-31  0,5180  ·  09-01  0,5901  su 11 trade
+```
 
-**La conseguenza è sul ritiro.** Il criterio confronta lo Sharpe vivo con `expectedSharpe`: le corsie
-vengono giudicate contro un numero preso dalla cima di una distribuzione rumorosa, quindi
-«decadranno» anche se non è cambiato niente. Il ritiro per Sharpe, che oggi è irraggiungibile per
-altre ragioni, sarebbe **sistematicamente ingiusto** appena diventasse raggiungibile.
+Il valore portato è del **21 agosto — due giorni prima che il motore walk-forward venisse
+sostituito** (il confine software è il 2026-08-23). **Undici misure successive, tutte col motore
+nuovo, stanno fra 0,23 e 0,67.** La corsia porta un'aspettativa prodotta da un motore che la
+piattaforma stessa ha smesso di considerare valido, e nessuna superficie lo dice.
 
-> Da notare che **non è universale**: la corsia 3 porta il minimo e la corsia 5 è deterministica. La
-> non-determinismo delle misure non è la regola dappertutto — ma dove c'è, lo schieramento prende
-> sempre la cima.
+**Il difetto non è la selezione: è che nessuno ricontrolla.** L'aspettativa si scrive una volta, allo
+schieramento, e da lì in poi è immutabile — mentre la caccia continua a rivalutare la stessa ipotesi
+ogni notte, su finestre che scorrono, e a dire altro. Il conteggio dei trade lo mostra da solo:
+14 → 13 → 11, la finestra si è mossa.
+
+### Dove finisce davvero — e non è il ritiro
+
+> **Seconda rettifica, verificata nel codice prima di scriverla.** Avevo affermato che «il ritiro
+> confronta lo Sharpe vivo con `expectedSharpe`». **Falso.** `FleetOrchestrator` ritira su una
+> **soglia assoluta** (`RetireSharpeThreshold` sullo Sharpe per trade realizzato): l'aspettativa non
+> ci entra. Il ritiro di flotta **non è toccato da K54**.
+
+Chi usa `ExpectedSharpe` è il **monitor di decadimento**
+(`StrategyDecayMonitor`: `ratio = realizzato / atteso`, `IsAlert = ratio < soglia`), e i suoi
+verdetti compaiono su `/ensemble` e sulla **scheda della Home**.
+
+Quindi la conseguenza è **rovesciata rispetto a quel che avevo scritto**: non un'assoluzione
+mancata, ma un **falso allarme**. La corsia 6 verrà confrontata con 1,875 quando ogni evidenza
+recente dice 0,5, e mostrerà «decadimento» a prescindere da come sta andando davvero.
+
+Il monitor **non agisce**, solo logga e riporta — quindi non ritira nessuno per sbaglio. Ma è di
+nuovo la forma del filone E: **un controllo che dice qualcosa a prescindere dalla realtà**, stavolta
+gridando invece che tacendo.
+
+> **E il verso opposto esiste**: la corsia 3 porta 3,961 contro una mediana successiva di 4,130 —
+> confrontata con un'asticella più bassa del vero, quindi più indulgente. Il difetto non ha un
+> verso: ha un'**assenza di ricontrollo**.
 
 ---
 
@@ -465,22 +498,49 @@ altre ragioni, sarebbe **sistematicamente ingiusto** appena diventasse raggiungi
 | **`AutoReapply:MaxGreyLegs`** | 0 → **2** | ✅ sblocca 3 run su 18. ⚠️ resta vero, e non è coperto: quelle gambe grigie sulle corsie d'impronta **non entrano** nel tetto `MaxGreyLanes` della flotta — sono due tetti scollegati sullo stesso rischio, e la superficie che lo dichiara non esiste ancora |
 | **Config 8** | «prima guardiamola» | ✅ § 4-quater: **è già ferma da 13 giorni** e non è stata giudicata, è stata *dimenticata* da un gate introdotto con un commento falso. Metterla in sonno libera **0 ore su 48,7**. E la metrica con cui l'avevo condannata non regge |
 
-### Cosa resta aperto, in ordine di gravità
+### I quattro punti sul tavolo — affrontati il 2026-09-02, dopo il merge
 
-1. **K54 — le corsie portano il massimo di misure ripetute** (§ 4-quinquies). Cinque gambe su sette.
-   Il ritiro per Sharpe le giudicherebbe contro un numero preso dalla cima del rumore: sarebbe
-   sistematicamente ingiusto appena diventasse raggiungibile.
-2. **La config 19 consuma il 62 % del budget** (30,19 h/mese) e ha schierato **zero** gambe, dando
-   11,2 valori distinti alla stessa ipotesi. È la decisione che sposta il budget, non la 8.
-3. **Il doppio tetto scollegato** introdotto dalla decisione su `MaxGreyLegs`: il rischio «gambe di
-   fascia grigia in forward test» si accumula su due percorsi contati separatamente, e nessuna
-   superficie li somma.
-4. **Un gate introdotto con un commento falso** ha spento una configurazione senza che nessuno se ne
+| # | punto | esito |
+|---|---|---|
+| 1 | **K54** — l'aspettativa che nessuno ricontrolla | ✅ il monitor di decadimento ora giudica sulla **stima corrente** (mediana delle rivalutazioni successive) quando l'evidenza è sufficiente, e le due superfici lo dicono. Il numero d'origine resta accanto |
+| 2 | **Config 19** — 62 % del budget, zero gambe | ✅ il pannello `/pipeline` mostra ora **il costo accanto alla resa** (ore, minuti/run, chiavi per ora) e ordina per costo. Il verdetto di sterilità richiede un costo reale |
+| 3 | **Doppio tetto scollegato** | ✅ K55: le gambe grigie sulle corsie d'impronta si **contano e si dichiarano**, con il totale sui due percorsi. Non diventano un vincolo: quella è una scelta del proprietario |
+| 4 | ~~Snapshot delle migrazioni alla deriva~~ | ⚠️ **diagnosi mia sbagliata** — vedi sotto |
+
+#### Il punto 4 non era quello che avevo scritto
+
+**Lo snapshot è corretto e completo.** Contiene `OrchestratorDecisions.Outcome`, ed è
+**byte-identico** al Designer dell'ultima migrazione. Avevo letto male un `grep`, e da lì avevo
+costruito una diagnosi.
+
+Il problema vero è più grande e già dichiarato nel codice, in `Program.cs`:
+
+> «*Le migrazioni vivono nell'assembly `ProcioneMGR.Migrations.Postgres` e si applicano come passo
+> separato: **l'app NON referenzia quell'assembly** per evitare un ciclo di progetti.*»
+
+Da cui due conseguenze, entrambe misurate:
+
+1. **`dotnet ef migrations add` produce migrazioni sbagliate** — rigenera le ultime cinque, comprese
+   `CreateTable` di tabelle che esistono già. Applicarle al database vivo lo romperebbe. Verificato
+   sia dal worktree sia dal repo principale, con build pulita: **non è un artefatto del worktree.**
+   Finché non è risolto, **le migrazioni di questo repository si scrivono a mano.**
+2. **Nessun test della suite esercita le migrazioni**: `MigrateAsync()` dentro i test non trova
+   nulla, e ogni fixture costruisce lo schema dal modello con `EnsureCreated`. **È il motivo per cui
+   il guasto delle cinque ore e mezza non poteva essere preso da un test** — e la ragione per cui il
+   default di `Outcome` ora vive in due posti: nel modello (per i test) e in una migrazione scritta
+   a mano (per la produzione).
+
+Il guardiano è `ColonnaObbligatoriaScrivibileK53Tests`: prova che una INSERT che **non nomina**
+`Outcome` passa — la INSERT esatta che genera un binario che non conosce la colonna — ed elenca il
+debito noto delle altre colonne obbligatorie senza default, perché quella lista non deve crescere.
+
+### Cosa resta ancora aperto
+
+1. **Il tooling delle migrazioni**, sopra. È la cosa che può rompere di nuovo la produzione.
+2. **Un gate introdotto con un commento falso** ha spento la config 8 senza che nessuno se ne
    accorgesse (`932eb21`, § 4-quater). Non esiste una superficie che dica «questa caccia non gira
-   più»: il difetto di forma è lo stesso di K46, in un altro posto.
-5. **Lo snapshot delle migrazioni è alla deriva**: non contiene `OrchestratorDecisions.Outcome`, e un
-   `migrations add` rigenera migrazioni sbagliate (vuole ricreare `FleetLaneObservations` e
-   riaggiungere `MixedTimeframeUniverse`). Precede K51 e va riallineato prima della prossima
-   migrazione vera.
-6. **Gemini è il votante lento**: si astiene per timeout anche a 50 s, ed è quello che dà le
+   più» — stesso difetto di forma di K46, in un altro posto. Il verdetto `Dormiente` di K54b lo
+   rende visibile, ma non spiega *perché* si è fermata.
+3. **Gemini è il votante lento**: si astiene per timeout anche a 50 s, ed è quello che dà le
    motivazioni più argomentate. Alzare ancora il timeout allunga ogni tick della flotta.
+4. **La decisione sulla config 19** resta al proprietario: ora il numero c'è, la scelta no.
