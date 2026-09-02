@@ -273,40 +273,101 @@ public sealed class FleetOrchestratorWorker(
     public CommitteeFaultReport? LastCommitteeFault { get; private set; }
 
     /// <summary>
-    /// [K52] Quanti votanti ha il comitato, quanti ne ha persi <b>per sempre</b>, e se con quelli
-    /// che restano il quorum sia ancora aritmeticamente possibile.
+    /// [K52] Lo stato dei votanti: chi è caduto in QUESTO giro, chi lo fa da abbastanza giri da
+    /// poterlo chiamare guasto, e se con i superstiti il quorum sia ancora aritmeticamente
+    /// possibile.
     /// </summary>
     /// <param name="Votanti">Provider interrogati in questo giro.</param>
-    /// <param name="Guasti">Chi è caduto per una configurazione stantia, con la sua causa testuale.</param>
+    /// <param name="Sospetti">Caduti in questo giro con un errore di forma «configurazione», con la causa testuale.</param>
+    /// <param name="Confermati">Quelli fra i sospetti che cadono da <see cref="ConfermaGuastoGiri"/> giri di fila.</param>
+    /// <param name="Serie">Provider → giri consecutivi di caduta, per mostrare quanto manca alla conferma.</param>
     /// <param name="MinValidi">La soglia richiesta (<c>Committee:MinValidVotes</c>).</param>
-    /// <param name="QuorumIrraggiungibile">Vero = anche se i superstiti fossero unanimi, non basterebbero.</param>
+    /// <param name="QuorumIrraggiungibile">Vero = <b>coi soli confermati</b>, anche se i superstiti fossero unanimi non basterebbero.</param>
     public sealed record CommitteeFaultReport(
         int Votanti,
-        IReadOnlyList<(string Provider, string Causa)> Guasti,
+        IReadOnlyList<(string Provider, string Causa)> Sospetti,
+        IReadOnlyList<string> Confermati,
+        IReadOnlyDictionary<string, int> Serie,
         int MinValidi,
         bool QuorumIrraggiungibile);
 
     /// <summary>
-    /// [K52] Dichiara che il comitato ha perso dei votanti per un guasto <b>che non guarisce da
-    /// solo</b>. Una notifica per episodio, come K46, e la guarigione è una notizia quanto il
-    /// guasto — altrimenti resta acceso per sempre e smette di voler dire qualcosa.
+    /// [K52, corretto il 2026-09-02 dopo la misura] Giri consecutivi di caduta prima di chiamarlo
+    /// guasto.
     ///
-    /// <para>Il testo distingue esplicitamente il caso in cui il quorum è <b>aritmeticamente</b>
-    /// irraggiungibile: è la differenza fra «il comitato è più fragile» e «il comitato non esiste
-    /// più, e ogni decisione la sta prendendo il default deterministico».</para>
+    /// <para><b>Perché non basta una volta, e il numero che lo dimostra.</b> La prima versione di
+    /// K52 dichiarava il guasto alla prima risposta 404/410. Misurando NVIDIA dal vivo su un
+    /// campione controllato di 10 tentativi identici, stesso modello e stessa chiave:
+    /// <b>6 successi e 4 volte</b> <c>HTTP 404 «Function '…': Not found for account '…'»</c>, con il
+    /// 404 restituito in 753 ms — è il livello di instradamento che rifiuta, non il modello che
+    /// manca. Un 404 su quel provider <b>non prova affatto</b> che la configurazione sia stantia:
+    /// con la regola vecchia la piattaforma avrebbe emesso una notifica critica «il modello non
+    /// esiste più» ogni due giri, su un provider che funziona.</para>
+    ///
+    /// <para>La distinzione resta giusta — Groq era davvero morto per sedici giorni — ma la prova
+    /// non è la singola risposta: è la <b>ripetizione</b>. È la stessa isteresi di K42 sul ritiro e
+    /// di K46 sul tick: un giro storto è rumore, tre di fila sono un guasto. Con il tick a 15
+    /// minuti la conferma arriva in 45 minuti; il caso vero (sedici giorni) la supera di
+    /// millecinquecento volte.</para>
+    /// </summary>
+    public const int ConfermaGuastoGiri = 3;
+
+    /// <summary>Provider → giri consecutivi in cui è caduto con un errore di forma «configurazione».</summary>
+    private readonly Dictionary<string, int> _committeeFaultStreak = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// [K52] Dichiara che il comitato ha perso dei votanti per un guasto di configurazione — ma
+    /// <b>solo dopo</b> <see cref="ConfermaGuastoGiri"/> giri consecutivi, perché un 404 isolato è
+    /// rumore misurato e non una diagnosi. Una notifica per episodio, come K46, e la guarigione è
+    /// una notizia quanto il guasto.
+    ///
+    /// <para>Il testo distingue il caso in cui il quorum è <b>aritmeticamente</b> irraggiungibile:
+    /// è la differenza fra «il comitato è più fragile» e «il comitato non esiste più, e ogni
+    /// decisione la sta prendendo il default deterministico».</para>
     /// </summary>
     private async Task DeclareCommitteeFaultAsync(
         Llm.Committee.CommitteeVerdict verdict, int minValidVotes, CancellationToken ct)
     {
-        var guasti = Llm.Committee.CommitteeDiagnosis.VotantiGuasti(verdict.Votes);
-        var irraggiungibile = Llm.Committee.CommitteeDiagnosis.QuorumIrraggiungibile(verdict.Votes, minValidVotes);
+        var sospetti = Llm.Committee.CommitteeDiagnosis.VotantiGuasti(verdict.Votes);
+        var caduti = sospetti.Select(s => s.Provider).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var voto in verdict.Votes)
+        {
+            if (caduti.Contains(voto.Provider))
+            {
+                _committeeFaultStreak[voto.Provider] = _committeeFaultStreak.GetValueOrDefault(voto.Provider) + 1;
+            }
+            else if (voto.Valid)
+            {
+                // Un voto valido azzera: il provider ha appena dimostrato di funzionare.
+                _committeeFaultStreak.Remove(voto.Provider);
+            }
+            // Un'astensione per altra causa (timeout, scelta fuori menù) NON tocca la serie: non è
+            // prova a favore né contro un guasto di configurazione, e trattarla come una delle due
+            // sarebbe inventare un'informazione che quel voto non porta.
+        }
+
+        var confermati = _committeeFaultStreak
+            .Where(kv => kv.Value >= ConfermaGuastoGiri && caduti.Contains(kv.Key))
+            .Select(kv => kv.Key)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // L'irraggiungibilità si calcola SUI SOLI CONFERMATI: coi sospetti direbbe «il comitato non
+        // esiste più» a ogni 404 di passaggio.
+        var superstiti = verdict.Votes.Count - confermati.Count;
+        var irraggiungibile = verdict.Votes.Count > 0 && confermati.Count > 0
+                              && superstiti < Math.Max(1, minValidVotes);
+
         LastCommitteeFault = new CommitteeFaultReport(
             verdict.Votes.Count,
-            guasti.Select(g => (g.Provider, Causa: Troncato(g.Reason))).ToList(),
+            sospetti.Select(g => (g.Provider, Causa: Troncato(g.Reason))).ToList(),
+            confermati,
+            new Dictionary<string, int>(_committeeFaultStreak, StringComparer.OrdinalIgnoreCase),
             minValidVotes,
             irraggiungibile);
 
-        if (guasti.Count == 0)
+        if (confermati.Count == 0)
         {
             if (_committeeFaultNotified)
             {
@@ -317,24 +378,26 @@ public sealed class FleetOrchestratorWorker(
         }
 
         logger.LogWarning(
-            "Comitato di flotta: {Guasti} votanti su {Totale} hanno un guasto di configurazione ({Chi}). Quorum irraggiungibile: {Irr}.",
-            guasti.Count, verdict.Votes.Count, string.Join(", ", guasti.Select(g => g.Provider)), irraggiungibile);
+            "Comitato di flotta: {Guasti} votanti su {Totale} cadono da almeno {Giri} giri ({Chi}). Quorum irraggiungibile: {Irr}.",
+            confermati.Count, verdict.Votes.Count, ConfermaGuastoGiri, string.Join(", ", confermati), irraggiungibile);
 
         if (_committeeFaultNotified || notifier is null) return;
         _committeeFaultNotified = true;
         try
         {
-            var elenco = string.Join(" · ", guasti.Select(g => $"{g.Provider}: {Troncato(g.Reason)}"));
+            var elenco = string.Join(" · ", sospetti
+                .Where(s => confermati.Contains(s.Provider, StringComparer.OrdinalIgnoreCase))
+                .Select(g => $"{g.Provider}: {Troncato(g.Reason)}"));
             await notifier.NotifyAsync(NotificationSeverity.Critical,
                 irraggiungibile
                     ? "Il comitato AI non può più raggiungere il quorum"
                     : "Il comitato AI ha perso dei votanti per un guasto di configurazione",
                 (irraggiungibile
-                    ? $"Restano {verdict.Votes.Count - guasti.Count} votanti possibili contro i {minValidVotes} richiesti: "
+                    ? $"Restano {superstiti} votanti possibili contro i {minValidVotes} richiesti: "
                       + "ogni decisione della Regina la sta prendendo il default deterministico, e continuerà a prenderla "
                       + "finché la configurazione non cambia. "
                     : "Il comitato decide ancora, ma con meno voci di quante ne risultano configurate. ")
-                + $"Il guasto NON si risolve da solo — non è un rate-limit né un 503: il modello configurato non esiste più. {elenco}. "
+                + $"Non è un caso isolato: cadono da {ConfermaGuastoGiri} giri di fila con un errore che dice «il modello non esiste». {elenco}. "
                 + "Si corregge in /admin/ai-supervisor, con «Scarica modelli» per l'elenco vero della propria chiave.", ct);
         }
         catch (Exception notifyEx)
@@ -342,6 +405,10 @@ public sealed class FleetOrchestratorWorker(
             logger.LogError(notifyEx, "Anche la notifica del comitato guasto è fallita.");
         }
     }
+
+    /// <summary>[K52] Superficie di prova per l'isteresi: un giro di voti, senza toccare la flotta.</summary>
+    internal Task ValutaComitatoPerTestAsync(Llm.Committee.CommitteeVerdict verdict, int minValidVotes)
+        => DeclareCommitteeFaultAsync(verdict, minValidVotes, CancellationToken.None);
 
     private static string Troncato(string s) => s.Length <= 160 ? s : s[..160];
 

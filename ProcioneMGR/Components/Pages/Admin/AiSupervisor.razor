@@ -1070,12 +1070,22 @@ else
                     var current = _models.GetValueOrDefault(p, "");
                     if (string.IsNullOrWhiteSpace(current) || !models.Contains(current, StringComparer.OrdinalIgnoreCase))
                     {
-                        if (ModelAutoSelector.Pick(p, models) is { } picked)
+                        // [K53, 2026-09-02] Prima delle euristiche sul nome, i modelli di questo
+                        // provider che HANNO DAVVERO RISPOSTO. Senza, per NVIDIA la regola
+                        // «llama+instruct+70b» trovava un solo candidato in tutto il catalogo —
+                        // `nvidia/llama-3.1-nemotron-70b-instruct` — che risponde 404: il pilota
+                        // automatico riportava la configurazione sul modello morto a ogni apertura
+                        // della pagina.
+                        var provati = await ModelliGiaFunzionantiAsync(p);
+                        if (ModelAutoSelector.Pick(p, models, provati) is { } picked)
                         {
                             _models[p] = picked;
+                            var perche = provati.Contains(picked, StringComparer.OrdinalIgnoreCase)
+                                ? $"{picked} (ha già risposto con questa chiave)"
+                                : picked;
                             autoPicked.Add(string.IsNullOrWhiteSpace(current)
-                                ? $"{p}: scelto {picked}"
-                                : $"{p}: «{current}» non è più nell'elenco → scelto {picked}");
+                                ? $"{p}: scelto {perche}"
+                                : $"{p}: «{current}» non è più nell'elenco → scelto {perche}");
                         }
                     }
                 }
@@ -1554,6 +1564,32 @@ else
     private sealed record FreschezzaProvider(string Provider, string Model, DateTime UltimaUtc, int GiorniFa);
 
     private List<FreschezzaProvider> _freschezza = [];
+
+    /// <summary>
+    /// [K53] I modelli di un provider che hanno prodotto almeno una chiamata riuscita, dal più
+    /// recente. È l'unica prova non congetturale di che cosa quell'account può invocare:
+    /// <c>LlmUsageRecords</c> si scrive solo dopo una risposta valida.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> ModelliGiaFunzionantiAsync(string provider)
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            return await db.LlmUsageRecords.AsNoTracking()
+                .Where(r => r.Provider == provider.ToLowerInvariant())
+                .GroupBy(r => r.Model)
+                .Select(g => new { Model = g.Key, Ultimo = g.Max(r => r.DayUtc) })
+                .OrderByDescending(x => x.Ultimo)
+                .Select(x => x.Model)
+                .ToListAsync();
+        }
+        catch
+        {
+            // Fail-open sulla diagnostica: senza la prova si torna alle euristiche, che è il
+            // comportamento di prima — mai peggio.
+            return [];
+        }
+    }
 
     private async Task CaricaFreschezzaAsync()
     {

@@ -464,44 +464,78 @@
                Il difetto non era il modello ritirato: era che un'astensione permanente e una
                transitoria producevano la stessa riga. Un guasto che non si può distinguere dal
                rumore è, per chi guarda, un guasto che non esiste. *@
-            @if (FleetWorker.LastCommitteeFault is { Guasti.Count: > 0 } comitato)
+            @* [Rettifica del 2026-09-02, poche ore dopo K52.] La prima versione gridava al guasto
+               alla PRIMA risposta 404. Campione controllato su NVIDIA — dieci tentativi identici,
+               stesso modello, stessa chiave — 6 successi e 4 volte «404 Function not found for
+               account», col 404 tornato in 753 ms: e' l'instradamento che rifiuta, non il modello
+               che manca. Con la regola vecchia questo riquadro sarebbe diventato rosso ogni due
+               giri su un provider che funziona, cioe' esattamente un allarme che non vuol dire
+               niente. Ora il sospetto e la conferma sono due cose diverse, e si vede la serie. *@
+            @if (FleetWorker.LastCommitteeFault is { Sospetti.Count: > 0 } comitato)
             {
-                <div class="alert @(comitato.QuorumIrraggiungibile ? "alert-danger" : "alert-warning") py-2 small mb-2">
+                var confermato = comitato.Confermati.Count > 0;
+                <div class="alert @(comitato.QuorumIrraggiungibile ? "alert-danger" : confermato ? "alert-warning" : "alert-secondary") py-2 small mb-2">
                     <strong>
                         @if (comitato.QuorumIrraggiungibile)
                         {
                             @:Il comitato AI non può più raggiungere il quorum.
                         }
+                        else if (confermato)
+                        {
+                            @:Il comitato AI ha perso @comitato.Confermati.Count votanti su @comitato.Votanti.
+                        }
                         else
                         {
-                            @:Il comitato AI ha perso @comitato.Guasti.Count votanti su @comitato.Votanti.
+                            @:@comitato.Sospetti.Count votanti non hanno risposto in questo giro — non ancora un guasto.
                         }
                     </strong>
                     @if (comitato.QuorumIrraggiungibile)
                     {
                         <text>
-                            Restano <strong>@(comitato.Votanti - comitato.Guasti.Count)</strong> votanti possibili contro i
+                            Restano <strong>@(comitato.Votanti - comitato.Confermati.Count)</strong> votanti possibili contro i
                             <strong>@comitato.MinValidi</strong> richiesti: anche se fossero unanimi non basterebbero, quindi
                             <strong>ogni decisione la sta prendendo il default deterministico</strong> — e continuerà a
                             prenderla finché la configurazione non cambia.
                         </text>
                     }
-                    else
+                    else if (confermato)
                     {
                         <text>Decide ancora, ma con meno voci di quante ne risultano configurate.</text>
                     }
-                    <div class="mt-1">
-                        <em>Non è un rate-limit né un 503: quelli passano da soli. Il modello configurato non esiste più,
-                        e nessun retry, failover o cooldown lo riporta indietro.</em>
-                    </div>
+                    else
+                    {
+                        <text>
+                            Il provider ha risposto «il modello non esiste», ma <strong>una volta sola non è una
+                            diagnosi</strong>: misurato su NVIDIA, quello stesso errore arriva 4 volte su 10 tentativi
+                            identici su un modello che funziona. Serve che si ripeta per
+                            <strong>@ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.ConfermaGuastoGiri giri di fila</strong>
+                            prima di chiamarlo guasto — e a quel punto arriva anche la notifica.
+                        </text>
+                    }
                     <ul class="mb-1 mt-1">
-                        @foreach (var g in comitato.Guasti)
+                        @foreach (var g in comitato.Sospetti)
                         {
-                            <li><strong>@g.Provider</strong> — <code>@g.Causa</code></li>
+                            var giriDiFila = comitato.Serie.TryGetValue(g.Provider, out var n) ? n : 0;
+                            var ok = comitato.Confermati.Contains(g.Provider, StringComparer.OrdinalIgnoreCase);
+                            <li>
+                                <strong>@g.Provider</strong>
+                                @if (ok)
+                                {
+                                    <span class="badge bg-danger ms-1">guasto confermato — @giriDiFila giri di fila</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary ms-1">@giriDiFila di @ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.ConfermaGuastoGiri giri</span>
+                                }
+                                <br /><code>@g.Causa</code>
+                            </li>
                         }
                     </ul>
-                    <a href="/admin/ai-supervisor" class="btn btn-sm btn-outline-dark py-0">Correggi in /admin/ai-supervisor</a>
-                    <span class="text-muted">— «Scarica modelli» dà l'elenco vero della propria chiave.</span>
+                    @if (confermato)
+                    {
+                        <a href="/admin/ai-supervisor" class="btn btn-sm btn-outline-dark py-0">Correggi in /admin/ai-supervisor</a>
+                        <span class="text-muted">— «Scarica modelli» dà l'elenco vero della propria chiave.</span>
+                    }
                 </div>
             }
             @if (silence.UnreadableLanes > 0)

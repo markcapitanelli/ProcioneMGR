@@ -19,7 +19,13 @@ public static class ModelAutoSelector
     /// <summary>Frammenti che marcano un modello NON adatto alla chat testuale del layer.</summary>
     private static readonly string[] NonChatFragments =
     [
-        "embedding", "tts", "image", "audio", "live", "robotics", "imagen", "veo", "lyria",
+        // [K53, 2026-09-02] «embedding» → «embed». Il frammento lungo non prendeva NESSUNO dei nomi
+        // veri del catalogo NVIDIA: `nvidia/embed-qa-4`, `nvidia/nv-embedqa-mistral-7b-v2`,
+        // `nvidia/llama-3.2-nv-embedqa-1b-v1`, `nvidia/nemotron-3-embed-1b`,
+        // `snowflake/arctic-embed-l`. Un filtro scritto sulla parola del dominio invece che sui
+        // nomi che esistono davvero: sembrava coprire una categoria e non ne copriva un solo caso.
+        "embed", "retriever", "reward", "nemotron-parse", "detector",
+        "tts", "image", "audio", "live", "robotics", "imagen", "veo", "lyria",
         "aqa", "whisper", "guard", "moderation", "rerank", "ocr", "deep-research",
         "computer-use", "translate", "clip", "banana", "realtime", "-exp",
     ];
@@ -62,8 +68,28 @@ public static class ModelAutoSelector
         _ => [],
     };
 
-    /// <summary>Il modello scelto per il provider, o null solo se l'elenco è vuoto/tutto non-chat.</summary>
-    public static string? Pick(string provider, IReadOnlyList<string> models)
+    /// <summary>
+    /// Il modello scelto per il provider, o null solo se l'elenco è vuoto/tutto non-chat.
+    /// </summary>
+    /// <param name="giaFunzionanti">
+    /// [K53, 2026-09-02] I modelli di questo provider che <b>hanno davvero risposto</b>, dal
+    /// consumo persistito (<c>LlmUsageRecords</c>, che registra solo le chiamate riuscite), dal più
+    /// recente al meno recente. Se uno di essi è ancora in catalogo, vince su qualunque euristica.
+    ///
+    /// <para><b>Perché serve, con il caso che l'ha imposto.</b> Le preferenze qui sotto indovinano
+    /// dal NOME, e il nome non dice se l'account può invocare quel modello. Per NVIDIA la regola è
+    /// «llama + instruct + 70b», e nel catalogo del 2026-09-02 esiste <b>un solo</b> candidato che
+    /// la soddisfa: <c>nvidia/llama-3.1-nemotron-70b-instruct</c> — misurato, risponde
+    /// <c>404 Function not found for account</c>. Cioè il pilota automatico, lasciato fare,
+    /// riportava la configurazione esattamente sul modello morto, ogni volta che qualcuno apriva
+    /// il pannello. Un aiuto che aiuta a rompersi.</para>
+    ///
+    /// <para>Il consumo persistito è l'unica prova non congetturale in mano alla piattaforma: se un
+    /// modello ha prodotto token, quell'account può invocarlo. Vuoto o null = nessuna prova, e si
+    /// torna alle euristiche — che restano il ripiego, non la regola.</para>
+    /// </param>
+    public static string? Pick(
+        string provider, IReadOnlyList<string> models, IReadOnlyList<string>? giaFunzionanti = null)
     {
         var chat = models
             .Where(m => !NonChatFragments.Any(f => m.Contains(f, StringComparison.OrdinalIgnoreCase)))
@@ -71,6 +97,19 @@ public static class ModelAutoSelector
         if (chat.Count == 0)
         {
             return null;
+        }
+
+        // La prova batte l'indovinello: il primo che ha già risposto ED è ancora in catalogo.
+        // Si confronta contro `chat` e non contro `models`, perché un modello che ha risposto una
+        // volta ma è di forma non-chat (un vision, per dire) resta comunque la scelta sbagliata.
+        if (giaFunzionanti is { Count: > 0 })
+        {
+            var provato = giaFunzionanti.FirstOrDefault(
+                g => chat.Any(c => c.Equals(g, StringComparison.OrdinalIgnoreCase)));
+            if (provato is not null)
+            {
+                return chat.First(c => c.Equals(provato, StringComparison.OrdinalIgnoreCase));
+            }
         }
 
         foreach (var preference in PreferencesFor(provider))

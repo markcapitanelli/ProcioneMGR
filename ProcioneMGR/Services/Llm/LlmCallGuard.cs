@@ -290,26 +290,40 @@ public sealed class LlmCallGuard(
         402 => (true, "credito API"),
         429 => (true, "rate-limit"),
         401 or 403 => (true, "credenziali"),
-        // [K52, 2026-09-02] Il modello configurato NON ESISTE PIÙ. È una categoria a sé, e la
-        // separazione non è cosmetica: tutte le altre cause qui sopra guariscono da sole — il
-        // rate-limit passa, il credito si ricarica, il server torna su. Questa no. Nessun retry,
-        // nessun failover, nessun cooldown del breaker la risolve: la risolve un umano che cambia
-        // una stringa. Chiamarla «richiesta non valida», come si faceva fino a oggi, la metteva
-        // nello stesso mucchio degli errori che passano da soli.
+        // [K52, 2026-09-02] «Il modello configurato non c'è»: il provider risponde che la cosa che
+        // gli hai chiesto non esiste. Categoria a sé perché il RIMEDIO è diverso da tutte le altre
+        // qui sopra — quelle passano da sole (il rate-limit scade, il credito si ricarica, il
+        // server torna su), questa la risolve solo un umano che cambia una stringa.
         //
-        // Misurato: NVIDIA `meta/llama-3.3-70b-instruct` è andato in end-of-life il 2026-08-26
-        // (HTTP 410) e Groq `llama-3.3-70b-versatile` è sparito dal catalogo il 2026-08-17
-        // (HTTP 404). Ultima risposta valida in `LlmUsageRecords`: 25/08 e 17/08. Nessuna
-        // superficie della piattaforma lo diceva.
+        // Misurato: NVIDIA `meta/llama-3.3-70b-instruct` in end-of-life il 2026-08-26 (410) e Groq
+        // `llama-3.3-70b-versatile` sparito dal catalogo il 2026-08-17 (404). Ultima risposta
+        // valida in `LlmUsageRecords`: 25/08 e 17/08. Nessuna superficie lo diceva.
+        //
+        // ⚠ MA UNA SOLA RISPOSTA NON PROVA LA PERMANENZA, ed è una rettifica alla prima versione
+        // di K52 scritta poche ore prima. Campione controllato del 2026-09-02 su NVIDIA, dieci
+        // tentativi identici con stesso modello e stessa chiave:
+        //     6 successi · 4 volte «HTTP 404 Function '…': Not found for account '…'»
+        // e il 404 tornava in 753 ms — è l'instradamento che rifiuta, non il modello che manca.
+        // Il 410 «end of life» è inequivocabile; il 404 no.
+        //
+        // Perciò questa etichetta descrive LA RISPOSTA, non una diagnosi. Il giudizio «questa
+        // configurazione è stantia» richiede la RIPETIZIONE, e vive dove può contarla:
+        // `FleetOrchestratorWorker.ConfermaGuastoGiri` (tre giri consecutivi). Stessa isteresi di
+        // K42 e K46: un giro storto è rumore, tre di fila sono un guasto.
         404 or 410 => (false, ModelloAssente),
         >= 500 => (true, "server"),   // incl. il 503 "request limit reached" del free tier NVIDIA
         _ => (false, "richiesta non valida"),
     };
 
     /// <summary>
-    /// [K52] La causa che <b>non guarisce da sola</b>: il modello configurato non esiste più (404)
-    /// o è stato ritirato (410). Costante e non stringa sparsa perché il comitato e il pannello la
-    /// confrontano — e un refuso la renderebbe silenziosamente ineguagliabile.
+    /// [K52] Il provider dice che il modello chiesto non c'è: ritirato (410) o non trovato (404).
+    /// Costante e non stringa sparsa perché il comitato e il pannello la confrontano — un refuso la
+    /// renderebbe silenziosamente ineguagliabile.
+    ///
+    /// <para><b>È la classificazione di una risposta, non una diagnosi.</b> Misurato su NVIDIA il
+    /// 2026-09-02: 4 volte su 10 tentativi identici, con successo nelle altre 6. Chi deve
+    /// concludere «la configurazione è stantia» conta le ripetizioni —
+    /// <c>FleetOrchestratorWorker.ConfermaGuastoGiri</c>.</para>
     /// </summary>
     public const string ModelloAssente = "modello assente";
 

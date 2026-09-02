@@ -1,6 +1,13 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using ProcioneMGR.Data;
+using ProcioneMGR.Services.Carry;
 using ProcioneMGR.Services.Fleet;
 using ProcioneMGR.Services.Llm;
 using ProcioneMGR.Services.Llm.Committee;
+using ProcioneMGR.Services.Security;
+using ProcioneMGR.Tests.Infrastructure;
 
 namespace ProcioneMGR.Tests;
 
@@ -171,4 +178,160 @@ public class ComitatoVotantiMortiK52Tests
     [Fact]
     public void LETICHETTAnuova_STAnellaCOLONNA()
         => Assert.True("default:provider-guasti".Length <= 32);
+
+    // ------------------------------------------------------------------ l'isteresi (rettifica)
+
+    /// <summary>
+    /// <b>La soglia deve esistere ed essere maggiore di uno.</b> È la rettifica misurata: la prima
+    /// versione di K52 dichiarava il guasto alla prima risposta 404. Campione controllato su NVIDIA
+    /// del 2026-09-02 — dieci tentativi identici, stesso modello, stessa chiave — <b>6 successi e 4
+    /// volte 404 «Function not found for account»</b>, col 404 restituito in 753 ms. Su quel
+    /// provider un 404 isolato non prova niente, e con la regola vecchia la piattaforma avrebbe
+    /// emesso una notifica critica «il modello non esiste più» ogni due giri.
+    ///
+    /// <para>Se qualcuno riportasse la soglia a 1, questo test cade — ed è il suo unico scopo.</para>
+    /// </summary>
+    [Fact]
+    public void LaCONFERMA_richiedePIUdiUNgiro()
+        => Assert.True(FleetOrchestratorWorker.ConfermaGuastoGiri >= 2,
+            "Un 404 isolato è rumore misurato (4 su 10 su NVIDIA): la conferma deve richiedere ripetizione.");
+
+    /// <summary>
+    /// E non deve nemmeno essere così alta da non scattare mai: col tick a 15 minuti, tre giri sono
+    /// 45 minuti — contro i sedici giorni del caso vero. Una soglia a dieci giri sarebbe due ore e
+    /// mezza, ancora ragionevole; a cento sarebbe un giorno intero, cioè un allarme che arriva dopo
+    /// che il danno è fatto. È lo stesso ragionamento di K33 su <c>StarvationMinDays</c>: alzare una
+    /// soglia oltre la vita dell'oggetto misurato non rende severi, spegne.
+    /// </summary>
+    [Fact]
+    public void LaCONFERMA_nonEcosiALTAdaNONscattareMAI()
+        => Assert.True(FleetOrchestratorWorker.ConfermaGuastoGiri <= 12,
+            "Col tick a 15 minuti, oltre 12 giri l'allarme arriverebbe dopo tre ore di comitato muto.");
+
+    // ---------------------------------------------------------- l'isteresi, sul comportamento
+
+    private sealed class PassthroughEncryption : IEncryptionService
+    {
+        public string Encrypt(string plaintext) => plaintext;
+        public string Decrypt(string ciphertext) => ciphertext;
+    }
+
+    private sealed class UnusedReader : IFleetStateReader
+    {
+        public Task<FleetState> ReadAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Il worker senza database: <c>DeclareCommitteeFaultAsync</c> vive tutto in memoria, quindi la
+    /// stringa di connessione non viene mai aperta. Niente Testcontainers per una prova di logica.
+    /// </summary>
+    private static FleetOrchestratorWorker Worker()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IEncryptionService, PassthroughEncryption>();
+        services.AddDbContextFactory<ApplicationDbContext>(o =>
+            o.UseNpgsql("Host=127.0.0.1;Port=1;Database=mai-aperto;Username=x;Password=y"));
+        var provider = services.BuildServiceProvider();
+        return new FleetOrchestratorWorker(
+            new UnusedReader(),
+            provider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>(),
+            new FleetOptions { TickMinutes = 15 }.AsMonitor(),
+            new CarryOptions().AsMonitor(),
+            provider,
+            NullLogger<FleetOrchestratorWorker>.Instance);
+    }
+
+    private static CommitteeVerdict GiroConNvidiaGiu() => new("abc", ByQuorum: false,
+        [Guasto("Nvidia", 404), Valido("Groq", "abc"), Valido("Gemini", "abc")]);
+
+    [Fact]
+    public async Task ILNULLOcheCONTAdiPIU_unSOLO404_nonEunGUASTO()
+    {
+        var w = Worker();
+
+        await w.ValutaComitatoPerTestAsync(GiroConNvidiaGiu(), minValidVotes: 2);
+
+        var r = w.LastCommitteeFault!;
+        Assert.Single(r.Sospetti);                 // il giro storto si VEDE...
+        Assert.Empty(r.Confermati);                // ...ma non si chiama guasto
+        Assert.False(r.QuorumIrraggiungibile);
+        Assert.Equal(1, r.Serie["Nvidia"]);
+    }
+
+    [Fact]
+    public async Task DOPOtreGIRIdiFILA_diventaUNguastoCONFERMATO()
+    {
+        var w = Worker();
+
+        for (var i = 0; i < FleetOrchestratorWorker.ConfermaGuastoGiri; i++)
+        {
+            await w.ValutaComitatoPerTestAsync(GiroConNvidiaGiu(), minValidVotes: 2);
+        }
+
+        var r = w.LastCommitteeFault!;
+        Assert.Equal(["Nvidia"], r.Confermati);
+        Assert.Equal(FleetOrchestratorWorker.ConfermaGuastoGiri, r.Serie["Nvidia"]);
+        // Restano due votanti su tre contro una soglia di due: il quorum è ancora possibile.
+        Assert.False(r.QuorumIrraggiungibile);
+    }
+
+    /// <summary>
+    /// <b>La proprietà che rende l'isteresi utile e non solo prudente:</b> un voto valido AZZERA la
+    /// serie. È il caso misurato di NVIDIA — 6 successi su 10 — dove il guasto non si accumula mai
+    /// perché il provider continua a rispondere.
+    /// </summary>
+    [Fact]
+    public async Task UNvotoVALIDO_azzeraLaSERIE()
+    {
+        var w = Worker();
+        await w.ValutaComitatoPerTestAsync(GiroConNvidiaGiu(), minValidVotes: 2);
+        await w.ValutaComitatoPerTestAsync(GiroConNvidiaGiu(), minValidVotes: 2);
+        Assert.Equal(2, w.LastCommitteeFault!.Serie["Nvidia"]);
+
+        // NVIDIA risponde: due terzi dei suoi tentativi vanno a buon fine, ed è il caso normale.
+        await w.ValutaComitatoPerTestAsync(new CommitteeVerdict("abc", true,
+            [Valido("Nvidia", "abc"), Valido("Groq", "abc"), Valido("Gemini", "abc")]), minValidVotes: 2);
+
+        Assert.Empty(w.LastCommitteeFault!.Sospetti);
+        Assert.False(w.LastCommitteeFault!.Serie.ContainsKey("Nvidia"));
+    }
+
+    /// <summary>
+    /// Un'astensione per ALTRA causa (timeout, scelta fuori menù) non è prova né a favore né
+    /// contro un guasto di configurazione: non deve né far salire la serie né azzerarla. Contarla
+    /// in un verso o nell'altro sarebbe estrarre da quel voto un'informazione che non porta.
+    /// </summary>
+    [Fact]
+    public async Task UNtimeout_nonMUOVEnullaINunSENSOoNELLaltro()
+    {
+        var w = Worker();
+        await w.ValutaComitatoPerTestAsync(GiroConNvidiaGiu(), minValidVotes: 2);
+        Assert.Equal(1, w.LastCommitteeFault!.Serie["Nvidia"]);
+
+        await w.ValutaComitatoPerTestAsync(new CommitteeVerdict("abc", false,
+            [Guasto("Nvidia", 503), Valido("Groq", "abc"), Valido("Gemini", "abc")]), minValidVotes: 2);
+
+        Assert.Equal(1, w.LastCommitteeFault!.Serie["Nvidia"]);   // né 2, né sparita
+    }
+
+    /// <summary>
+    /// Il caso vero di Groq — morto per sedici giorni — deve comunque arrivare a
+    /// «quorum irraggiungibile»: l'isteresi doveva togliere i falsi allarmi, non l'allarme.
+    /// </summary>
+    [Fact]
+    public async Task ILCASOvero_dueVOTANTImortiAlungo_arrivaAirraggiungibile()
+    {
+        var w = Worker();
+        var giro = new CommitteeVerdict("abc", false,
+            [Guasto("Nvidia", 410), Guasto("Groq", 404), Valido("Gemini", "abc")]);
+
+        for (var i = 0; i < FleetOrchestratorWorker.ConfermaGuastoGiri; i++)
+        {
+            await w.ValutaComitatoPerTestAsync(giro, minValidVotes: 2);
+        }
+
+        var r = w.LastCommitteeFault!;
+        Assert.Equal(["Groq", "Nvidia"], r.Confermati);
+        Assert.True(r.QuorumIrraggiungibile);
+    }
 }
