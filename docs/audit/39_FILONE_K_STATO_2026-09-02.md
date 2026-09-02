@@ -29,7 +29,7 @@ falliva in silenzio (K46).
 
 ---
 
-## 1. Le cinque volte che mi sono sbagliato
+## 1. Le otto volte che mi sono sbagliato
 
 Le elenco per prime perché sono state usate per decidere, e perché il metodo del filone è che una
 misura smentita vale più di una confermata.
@@ -41,10 +41,19 @@ misura smentita vale più di una confermata.
 | 3 | «Il ritiro per inedia matura il 4-5 settembre» | Il 4-5 settembre **non succede niente**: la corsia 7 è ferma e non viene esaminata, la corsia 5 ha 1 trade contro una soglia di 0,243 |
 | 4 | «Il journal tace perché il ramo del ritiro non confermato non journalizza» | Il tick **non ci arrivava nemmeno**: falliva sull'INSERT per una colonna `varchar(16)` |
 | 5 | «Recuperare i 65 trade fuori dalla finestra di giudizio» | Almeno **27 sono righe di replay**: darebbero al criterio trade che quella corsia non ha mai fatto |
+| 6 | «Un 404 del provider AI prova che il modello non esiste più» (K52, scritto la mattina) | **Falso, e misurato lo stesso giorno**: 10 tentativi identici su NVIDIA → 6 successi e 4 volte lo stesso 404, restituito in 753 ms. Il 410 è inequivocabile, il 404 no |
+| 7 | «GET /v1/models funziona con quella chiave, quindi la chiave è sana» | Quell'endpoint è **pubblico**: risponde 200 con gli stessi 82 modelli anche con una chiave inventata. L'indizio era vero e **vuoto** |
+| 8 | «La chiave NVIDIA è rotta a livello di account» | È rotta **per-modello**: sono deployment ritirati che sopravvivono nel catalogo. Prova: 14 chiamate riuscite oggi su 3 modelli diversi con la stessa chiave |
 
 Più una correzione al documento 37 che è arrivata da un avversario: la forma degli arresti
 (`Details = {}`, `UserId = null`) **non discrimina il chiamante**, perché *tutte* le 36 righe
 `StopEngine` del database sono così.
+
+E un errore che non è di ragionamento ma di **operazione**, ed è costato di più di tutti gli altri:
+ho applicato la migrazione di K51 al database **vivo** mentre il codice di K51 stava in un ramo non
+fuso. Il guscio in esecuzione, compilato da master, non conosce la colonna `Outcome`; senza un
+default la sua INSERT prendeva NULL e il vincolo la respingeva. **Cinque ore e mezza di Regina
+ferma**, con la stessa forma di guasto di K45 presa dall'altro verso. Il § 4-ter la racconta.
 
 ---
 
@@ -259,6 +268,85 @@ chiamata del layer paga un 404 prima di arrivare a chi risponde.
 
 ---
 
+## 4-ter. K53 — le due rettifiche del pomeriggio, e il primo verdetto del comitato
+
+### Il 404 non è una diagnosi
+
+K52, scritto la mattina, dichiarava il guasto alla **prima** risposta 404/410. Campione controllato
+del pomeriggio su NVIDIA — dieci tentativi identici, stesso modello, stessa chiave:
+
+```
+6 successi · 4 volte «HTTP 404 Function '…': Not found for account '…'»
+il 404 tornava in 753 ms → è l'instradamento che rifiuta, non il modello che manca
+```
+
+Con la regola della mattina la piattaforma avrebbe emesso una notifica critica «il modello non esiste
+più» **ogni due giri, su un provider che funziona**. L'allarme che grida sempre è l'allarme che non
+si guarda: avrei sostituito il silenzio con il rumore, che è lo stesso difetto in un'altra forma.
+
+Il 410 «end of life» resta inequivocabile. Il 404 no. Quindi la classificazione descrive **la
+risposta**; il giudizio «configurazione stantia» richiede la **ripetizione** e vive dove può
+contarla: `ConfermaGuastoGiri = 3`, con la serie per provider azzerata da ogni voto valido e **non
+toccata** da un'astensione d'altra causa — un timeout non è prova né a favore né contro. Stessa
+isteresi di K42 e K46. Col tick a 15 minuti la conferma arriva in 45 minuti; il caso vero, Groq
+morto, durava **sedici giorni**.
+
+Il pannello ora distingue «2 di 3 giri» in grigio da «guasto confermato» in rosso, e il pulsante di
+rimedio compare solo alla conferma.
+
+### La migrazione che ha tenuto ferma la Regina
+
+`AddDecisionOutcome` applicata al database **vivo** mentre il codice di K51 stava in un ramo non
+fuso. Il guscio in esecuzione — compilato da master — non conosce la proprietà `Outcome`, quindi la
+sua INSERT non la elenca; senza default la colonna prende NULL:
+
+```
+23502: il valore nullo nella colonna "Outcome" viola il vincolo non nullo
+```
+
+Journal fermo alla riga **137 delle 07:46 UTC**, tick abortito, nessuno schieramento e nessun ritiro
+per **cinque ore e mezza**. È K45 preso dall'altro verso: là la colonna era troppo stretta per la
+stringa, qui troppo severa per il binario che scrive.
+
+> **La regola che ne discende, e vale per ogni migrazione futura.** Con le migrazioni applicate
+> all'avvio e un database condiviso, fra l'istante in cui lo schema cambia e quello in cui il codice
+> nuovo entra in servizio c'è **sempre** una finestra in cui il binario vecchio scrive sullo schema
+> nuovo. Una colonna che nasce obbligatoria dev'essere scrivibile **anche da chi non sa che esiste**
+> — cioè avere un default — oppure nascere annullabile e diventare obbligatoria in una seconda
+> migrazione, dopo il rilascio.
+
+### E poi, alle 14:04:48 UTC
+
+```
+Id 143 · Assign · corsia 7 · Source=committee · Applied=TRUE
+«[J14] Scelto dal comitato fra 5 candidati grigi: Supertrend TRX/USDT 4h»
+
+Groq        0,92  → «il più alto Sharpe (3,05), ~3,3 trade/mese, timeframe 4h»
+HuggingFace 0,80  → stesso candidato, stesso ragionamento nel merito
+Gemini      astenuto (timeout)
+```
+
+`Source = committee`, non `default:...`. **È la prima volta che il comitato AI decide davvero uno
+schieramento**: fino a ieri ogni riga diceva che aveva deciso la regola deterministica, e per sedici
+giorni non poteva essere altrimenti.
+
+### Il pilota automatico riportava NVIDIA sul modello morto
+
+`ModelAutoSelector` sceglie per euristica sul **nome**, e il nome non dice se l'account può invocare
+quel modello. Per NVIDIA la regola è «llama + instruct + 70b», e nel catalogo del 2026-09-02 esiste
+**un solo** candidato che la soddisfa: `nvidia/llama-3.1-nemotron-70b-instruct` — che risponde 404.
+Ogni apertura del pannello riproponeva il modello morto, **annunciandolo come una riparazione**.
+
+Ora la prova precede l'indovinello: `LlmUsageRecords` registra solo le chiamate riuscite, quindi un
+modello che ha prodotto token è la prova che quell'account può invocarlo. Senza storico si torna
+alle euristiche — mai peggio di prima.
+
+E il filtro di forma diceva `"embedding"`, mentre i nomi veri sono `embed-qa`, `nv-embedqa`,
+`arctic-embed`, `nemotron-3-embed`: **non ne prendeva uno**. Un filtro scritto sulla parola del
+dominio invece che sui nomi che esistono.
+
+---
+
 ### Cosa resta della Fase 4
 
 | # | Cosa | perché non è un pomeriggio |
@@ -275,18 +363,23 @@ chiamata del layer paga un 404 prima di arrivare a chi risponde.
 
 ---
 
-## 5. Le decisioni che restano al proprietario
+## 5. Le decisioni del proprietario — prese il 2026-09-02
 
-1. **La chiave NVIDIA.** Due modelli diversi, presi dal catalogo che l'API restituisce per quella
-   chiave, danno entrambi `404 — Function not found for account`. È l'account, non il modello, e si
-   verifica solo su build.nvidia.com. Finché resta così, NVIDIA è **ancora l'AI attiva**: ogni
-   chiamata del layer paga un 404 prima di arrivare a chi risponde. Spostarla in coda alla catena
-   (o toglierla) è una riga nel pannello, ma è una scelta.
-2. **`AutoReapply:MaxGreyLegs`** — ora scritto esplicitamente a **0** (il valore che aveva già). 1 non
-   sblocca nulla, **2 sblocca 3 run su 18**, 3 li sblocca tutti. Alzarlo mette gambe bocciate per
-   finestra corta sulle corsie d'impronta, che il tetto `MaxGreyLanes` della flotta **non copre**.
-3. **`Fleet:MaxGreyLanes`** — oggi 4, saturo. La coda ha 15 candidati e non si muove.
-4. **Mettere in sonno la config 8** (0,06 chiavi/run contro una mediana di 0,41): la misura c'è, la
-   decisione no.
-5. **La corsia 7**, liberata e ferma: aspetta il prossimo grigio, ma il tetto è saturo — quindi
-   resterà ferma finché non si decide il punto 3.
+| | decisione | esito |
+|---|---|---|
+| **NVIDIA** | chiave rigenerata dal proprietario | ✅ **funziona**. Il 404 era per-modello, non per-account: sono deployment ritirati che restano in catalogo. Modello attivo `nvidia/nemotron-3-super-120b-a12b`, 12 chiamate riuscite. Il 404 resta intermittente al ~40%, e ora l'isteresi lo assorbe invece di gridare |
+| **`Fleet:MaxGreyLanes`** | 4 → **6** | ✅ la corsia 7 è ripartita alle 14:04 UTC con un candidato scelto **dal comitato**, e resta uno slot di riserva |
+| **`AutoReapply:MaxGreyLegs`** | 0 → **2** | ✅ sblocca 3 run su 18. ⚠️ resta vero, e non è coperto: quelle gambe grigie sulle corsie d'impronta **non entrano** nel tetto `MaxGreyLanes` della flotta — sono due tetti scollegati sullo stesso rischio, e la superficie che lo dichiara non esiste ancora |
+| **Config 8** | «prima guardiamola» | quadro in preparazione: universo, costo in ore/mese, e se la sua unica ipotesi sia mai arrivata in forward test |
+
+### Cosa resta aperto
+
+1. **Il doppio tetto scollegato** introdotto dalla decisione su `MaxGreyLegs`: il rischio «gambe di
+   fascia grigia in forward test» ora si accumula su due percorsi che si contano separatamente.
+   Nessuna superficie somma i due. È il prossimo candidato naturale a diventare un item.
+2. **Lo snapshot delle migrazioni è alla deriva**: non contiene `OrchestratorDecisions.Outcome`, e un
+   `migrations add` rigenera migrazioni sbagliate (vuole ricreare `FleetLaneObservations` e
+   riaggiungere `MixedTimeframeUniverse`). Precede K51 e va riallineato prima della prossima
+   migrazione vera.
+3. **Gemini è il votante lento**: si astiene per timeout anche a 50 s, ed è quello che dà le
+   motivazioni più argomentate. Alzare ancora il timeout allunga ogni tick della flotta.
