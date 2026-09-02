@@ -311,6 +311,29 @@ public static class FleetOrchestrator
         .Where(l => l.IsRunning && l.GreySourced != false)
         .ToList();
 
+    /// <summary>
+    /// [K55, 2026-09-02] Le corsie <b>d'impronta</b> (0..FootprintLanes−1) che portano gambe di
+    /// provenienza grigia o ignota — cioè la stessa esposizione che <see cref="GreyOccupied"/>
+    /// governa sulle corsie di flotta, ma su un percorso che <c>MaxGreyLanes</c> <b>non copre</b>.
+    ///
+    /// <para><b>Perché esiste, e da quando.</b> Il 2026-09-02 il proprietario ha portato
+    /// <c>AutoReapply:MaxGreyLegs</c> da 0 a 2: da quel momento l'auto-apply può mettere gambe di
+    /// fascia grigia sulle corsie d'impronta. Sono <b>due tetti scollegati sullo stesso rischio</b>
+    /// — «ipotesi non promosse in forward test» si accumula su due percorsi contati separatamente,
+    /// e prima di questa riga <b>nessuna superficie sommava i due</b>.</para>
+    ///
+    /// <para>Non entra nel tetto: <c>MaxGreyLanes</c> significa «corsie di FLOTTA grigie», e
+    /// cambiarne il denominatore in silenzio bloccherebbe schieramenti per una ragione che nessuno
+    /// ha scelto. Qui si <b>conta e si dichiara</b>; se poi debba diventare un vincolo è una
+    /// decisione del proprietario, e va presa guardando questo numero.</para>
+    ///
+    /// <para>Stesso criterio fail-closed di K38: <c>GreySourced != false</c>, quindi l'ignoto conta
+    /// come grigio. Non sapere non allarga il permesso.</para>
+    /// </summary>
+    internal static int GreyOnFootprintLanes(FleetState state) => state.Lanes
+        .Where(l => l.LaneId < state.FootprintLanes)
+        .Count(l => l.IsRunning && l.GreySourced != false);
+
     /// <summary>La coda di assegnazione: candidati «pass» non ancora gestiti e abbastanza frequenti.</summary>
     internal static List<FleetCandidate> AssignmentQueue(FleetState state, FleetOptions opt) => state.Candidates
         .Where(c => !c.AlreadyHandled && c.Band == "pass")
@@ -451,7 +474,8 @@ public static class FleetOrchestrator
                         ? "un solo candidato idoneo: l'assegnazione è determinata, non c'è pareggio da arbitrare"
                         : "ci sono le condizioni per un'assegnazione e per un pareggio da arbitrare";
 
-        return new FleetSilence(queue.Count, grey, free.Count, fleetLanes.Count, reason, starving, illeggibili);
+        return new FleetSilence(queue.Count, grey, free.Count, fleetLanes.Count, reason, starving, illeggibili,
+            GreyOccupied(state).Count, GreyOnFootprintLanes(state));
     }
 }
 
@@ -481,8 +505,22 @@ public sealed record FleetSilence(
     /// corsie illeggibili non compaiono fra le libere, non compaiono fra quelle sotto governo, e
     /// non possono essere né in inedia né ritirate. È il numero da leggere per primo.
     /// </summary>
-    int UnreadableLanes = 0)
+    int UnreadableLanes = 0,
+    /// <summary>[K55] Corsie di FLOTTA che occupano il tetto grigio in questo giro.</summary>
+    int GreyFleetLanes = 0,
+    /// <summary>
+    /// [K55, 2026-09-02] Corsie d'IMPRONTA che portano gambe grigie (o di provenienza ignota).
+    /// <b>Non sono contate da <c>MaxGreyLanes</c></b>: sono lo stesso rischio su un secondo
+    /// percorso, aperto dal 2026-09-02 quando <c>AutoReapply:MaxGreyLegs</c> è passato da 0 a 2.
+    /// </summary>
+    int GreyFootprintLanes = 0)
 {
     /// <summary>Vero quando esistono le condizioni perché il comitato riceva una domanda.</summary>
     public bool CommitteeCouldBeAsked => PassCandidatesQueued >= 2 && FreeFleetLanes > 0;
+
+    /// <summary>
+    /// [K55] L'esposizione TOTALE a ipotesi non promosse, sui due percorsi sommati. È il numero che
+    /// nessuna superficie mostrava, ed è quello che descrive il rischio davvero corso.
+    /// </summary>
+    public int GreyLanesTotal => GreyFleetLanes + GreyFootprintLanes;
 }

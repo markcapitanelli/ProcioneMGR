@@ -10,7 +10,21 @@ namespace ProcioneMGR.Services.Pipeline;
 /// <param name="KeysPerRun">Resa: chiavi grigie per run. È il numero che si confronta.</param>
 /// <param name="Verdict">Il giudizio, o perché non se ne dà uno.</param>
 public sealed record HuntYieldRow(
-    int ConfigurationId, int Runs, int GreyKeys, double KeysPerRun, HuntYieldVerdict Verdict);
+    int ConfigurationId, int Runs, int GreyKeys, double KeysPerRun, HuntYieldVerdict Verdict,
+    double HoursSpent = 0, double MedianRunMinutes = 0)
+{
+    /// <summary>
+    /// [K54b, 2026-09-02] Chiavi grigie distinte per ORA di caccia. E' la lettura che regge meglio
+    /// il confronto: <see cref="KeysPerRun"/> ha il numero di run al denominatore, e quel numero e'
+    /// una scelta di pianificazione, non una proprieta' della caccia.
+    ///
+    /// <para><b>Il numero che lo dimostra:</b> stessa configurazione, stesso motore, stesso
+    /// universo — cfg 17 fino al 20/08 rende 0,477 per run, nei soli 21-22/08 rende 7,250. Il tasso
+    /// di grigi resta piatto (14,6% contro 13,3%): a muoversi e' solo quanti run stanno sotto la
+    /// frazione. Un fattore 15 dal nulla.</para>
+    /// </summary>
+    public double KeysPerHour => HoursSpent > 0 ? GreyKeys / HoursSpent : 0;
+};
 
 /// <summary>Il verdetto su una configurazione di caccia.</summary>
 public enum HuntYieldVerdict
@@ -21,8 +35,25 @@ public enum HuntYieldVerdict
     /// <summary>Resa in linea con le altre configurazioni attive.</summary>
     Produttiva,
 
-    /// <summary>Resa molto sotto la mediana delle attive: sta consumando budget di caccia per niente.</summary>
+    /// <summary>Resa molto sotto la mediana delle attive E costo non trascurabile: budget sprecato.</summary>
     Sterile,
+
+    /// <summary>
+    /// [K54b, 2026-09-02] Non gira piu': nessun run nella finestra, oppure un costo cosi' basso che
+    /// non c'e' niente da liberare.
+    ///
+    /// <para><b>Perche' e' un verdetto a se'.</b> La prima versione di K50 dichiarava «sterile» la
+    /// configurazione 8. Misurato il 2026-09-02: la config 8 e' ferma dal <b>20 agosto</b> e
+    /// consuma <b>0 ore su 48,7</b> al mese. Metterla in sonno non libera niente — non era una
+    /// decisione, era un'etichetta. E non l'aveva spenta un giudizio: l'aveva dimenticata un gate
+    /// (commit 932eb21) introdotto con il commento «le campagne reali sono gia' tutte a timeframe
+    /// singolo, quindi nessun run esistente cambia», che era falso — 28 run su 29 della config 8
+    /// sono a timeframe misti.</para>
+    ///
+    /// <para><b>Uno spreco e' resa bassa MOLTIPLICATA per costo reale.</b> Con la sola resa si
+    /// condanna chi non costa nulla e si assolve chi costa tutto: la configurazione 19 consuma la
+    /// mediana di 43,7 minuti a run — undici volte la 17 — e non ha schierato una gamba.</para>
+    Dormiente,
 }
 
 /// <summary>
@@ -80,13 +111,29 @@ public static class HuntYield
     /// <summary>
     /// Il giudizio, dato tutte le rese osservate. Puro: nessun database, nessun orologio.
     /// </summary>
+    /// <summary>
+    /// [K54b] Ore di caccia sotto cui non si condanna nessuno: una configurazione che consuma meno
+    /// di questo non e' uno spreco, qualunque sia la sua resa. Mezz'ora sulla finestra osservata e'
+    /// gia' generoso — la config 8, dichiarata «sterile» dalla prima versione di K50, ne consumava
+    /// ZERO perche' era ferma da tredici giorni.
+    /// </summary>
+    public const double MinHoursForWasteVerdict = 0.5;
+
     public static List<HuntYieldRow> Judge(IReadOnlyList<(int ConfigurationId, int Runs, int GreyKeys)> osservazioni)
+        => Judge([.. osservazioni.Select(o => (o.ConfigurationId, o.Runs, o.GreyKeys, 0.0, 0.0))]);
+
+    /// <summary>
+    /// Il giudizio, dato rese E costi. Puro: nessun database, nessun orologio.
+    /// </summary>
+    public static List<HuntYieldRow> Judge(
+        IReadOnlyList<(int ConfigurationId, int Runs, int GreyKeys, double HoursSpent, double MedianRunMinutes)> osservazioni)
     {
         ArgumentNullException.ThrowIfNull(osservazioni);
         if (osservazioni.Count == 0) return [];
 
         var rese = osservazioni
-            .Select(o => (o.ConfigurationId, o.Runs, o.GreyKeys, PerRun: o.Runs > 0 ? (double)o.GreyKeys / o.Runs : 0))
+            .Select(o => (o.ConfigurationId, o.Runs, o.GreyKeys, o.HoursSpent, o.MedianRunMinutes,
+                          PerRun: o.Runs > 0 ? (double)o.GreyKeys / o.Runs : 0))
             .ToList();
 
         // La mediana si calcola SOLO sulle configurazioni giudicabili: includere quelle con tre run
@@ -101,15 +148,28 @@ public static class HuntYield
 
         return rese.Select(r => new HuntYieldRow(
             r.ConfigurationId, r.Runs, r.GreyKeys, r.PerRun,
-            r.Runs < MinRunsForVerdict
-                ? HuntYieldVerdict.TroppoPresto
-                // Con mediana zero nessuno rende: non è una configurazione che è rotta, è la caccia
-                // intera — e condannarne una sarebbe scegliere un capro espiatorio.
-                : mediana <= 0 || r.PerRun >= mediana * SterileFractionOfMedian
-                    ? HuntYieldVerdict.Produttiva
-                    : HuntYieldVerdict.Sterile))
-            .OrderByDescending(r => r.KeysPerRun)
+            Verdetto(r.Runs, r.PerRun, r.HoursSpent, mediana),
+            r.HoursSpent, r.MedianRunMinutes))
+            // [K54b] Ordine per COSTO decrescente: la domanda che il pannello deve far venire in
+            // mente e' «dove sono le ore», non «chi rende di piu'». A parita' di costo, la resa.
+            .OrderByDescending(r => r.HoursSpent).ThenByDescending(r => r.KeysPerRun)
             .ToList();
+    }
+
+    private static HuntYieldVerdict Verdetto(int runs, double perRun, double ore, double mediana)
+    {
+        if (runs < MinRunsForVerdict) return HuntYieldVerdict.TroppoPresto;
+
+        // [K54b] Il costo PRIMA della resa: condannare una caccia che non consuma nulla e' scrivere
+        // un'etichetta, non prendere una decisione. La config 8 e' stata dichiarata «sterile»
+        // mentre era ferma da tredici giorni.
+        if (ore < MinHoursForWasteVerdict) return HuntYieldVerdict.Dormiente;
+
+        // Con mediana zero nessuno rende: non è una configurazione che è rotta, è la caccia
+        // intera — e condannarne una sarebbe scegliere un capro espiatorio.
+        return mediana <= 0 || perRun >= mediana * SterileFractionOfMedian
+            ? HuntYieldVerdict.Produttiva
+            : HuntYieldVerdict.Sterile;
     }
 
     /// <summary>La frase da mostrare accanto alla configurazione, col numero che la sostiene.</summary>
@@ -117,10 +177,17 @@ public static class HuntYield
     {
         HuntYieldVerdict.TroppoPresto =>
             $"{r.Runs} run: sotto i {MinRunsForVerdict} necessari per un giudizio, non si dice nulla",
+        HuntYieldVerdict.Dormiente =>
+            $"{r.Runs} run per {r.HoursSpent:F1} ore nella finestra: consuma troppo poco perche' "
+            + "metterla in sonno liberi qualcosa. Se non gira piu', il posto dove guardare non e' la resa: "
+            + "e' PERCHE' ha smesso di essere invocata",
         HuntYieldVerdict.Sterile =>
             $"{r.GreyKeys} candidati grigi distinti in {r.Runs} run ({r.KeysPerRun:F2}/run) contro una mediana di "
-            + $"{medianaPerRun:F2}: sta consumando budget di caccia per una resa {(medianaPerRun > 0 ? medianaPerRun / Math.Max(r.KeysPerRun, 0.01) : 0):F0} volte più bassa",
-        _ => $"{r.GreyKeys} candidati grigi distinti in {r.Runs} run ({r.KeysPerRun:F2}/run)",
+            + $"{medianaPerRun:F2}, e COSTA {r.HoursSpent:F1} ore ({r.MedianRunMinutes:F0} min a run): "
+            + $"resa {(medianaPerRun > 0 ? medianaPerRun / Math.Max(r.KeysPerRun, 0.01) : 0):F0} volte più bassa "
+            + "a budget speso davvero",
+        _ => $"{r.GreyKeys} candidati grigi distinti in {r.Runs} run ({r.KeysPerRun:F2}/run, "
+             + $"{r.KeysPerHour:F2}/ora su {r.HoursSpent:F1} ore)",
     };
 }
 
@@ -137,9 +204,12 @@ public sealed class HuntYieldReader(IDbContextFactory<ApplicationDbContext> dbFa
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var da = DateTime.UtcNow.AddDays(-Math.Max(1, windowDays));
 
+        // [K54b] Anche la DURATA: senza il costo, la resa da sola condanna chi non consuma niente
+        // e assolve chi consuma tutto. Wall-clock e non CPU — nessuna colonna misura la CPU vera —
+        // quindi e' un limite SUPERIORE, e almeno due configurazioni si sovrappongono ogni notte.
         var run = await db.PipelineRuns.AsNoTracking()
             .Where(r => r.Status == "Completed" && r.StartedAt > da)
-            .Select(r => new { r.Id, r.ConfigurationId })
+            .Select(r => new { r.Id, r.ConfigurationId, r.StartedAt, r.CompletedAt })
             .ToListAsync(ct);
         if (run.Count == 0) return [];
 
@@ -155,11 +225,26 @@ public sealed class HuntYieldReader(IDbContextFactory<ApplicationDbContext> dbFa
         var configDiRun = run.ToDictionary(r => r.Id, r => r.ConfigurationId);
         var osservazioni = run
             .GroupBy(r => r.ConfigurationId)
-            .Select(g => (
-                ConfigurationId: g.Key,
-                Runs: g.Count(),
-                GreyKeys: chiavi.Where(c => configDiRun.TryGetValue(c.RunId, out var cfg) && cfg == g.Key)
-                    .Select(c => c.CandidateKey).Distinct(StringComparer.Ordinal).Count()))
+            .Select(g =>
+            {
+                var minuti = g
+                    .Where(r => r.CompletedAt is not null)
+                    .Select(r => (r.CompletedAt!.Value - r.StartedAt).TotalMinutes)
+                    .Where(m => m >= 0)
+                    .OrderBy(m => m)
+                    .ToList();
+                return (
+                    ConfigurationId: g.Key,
+                    Runs: g.Count(),
+                    GreyKeys: chiavi.Where(c => configDiRun.TryGetValue(c.RunId, out var cfg) && cfg == g.Key)
+                        .Select(c => c.CandidateKey).Distinct(StringComparer.Ordinal).Count(),
+                    HoursSpent: minuti.Sum() / 60.0,
+                    MedianRunMinutes: minuti.Count == 0
+                        ? 0
+                        : minuti.Count % 2 == 1
+                            ? minuti[minuti.Count / 2]
+                            : (minuti[minuti.Count / 2 - 1] + minuti[minuti.Count / 2]) / 2.0);
+            })
             .ToList();
 
         return HuntYield.Judge(osservazioni);

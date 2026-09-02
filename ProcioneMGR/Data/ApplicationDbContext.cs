@@ -271,6 +271,15 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // nuovo. Una colonna che nasce obbligatoria dev'essere scrivibile anche da chi non
             // sa che esiste — cioè avere un default — oppure nascere annullabile e diventare
             // obbligatoria in una seconda migrazione, dopo il rilascio.
+            // Il DEFAULT sta in DUE posti, e non è una svista: qui per i database costruiti dal
+            // MODELLO (`EnsureCreated`, cioè tutti quelli dei test), e nella migrazione
+            // `DecisionOutcomeDefault` per quelli costruiti dalle MIGRAZIONI (la produzione).
+            //
+            // Sono due percorsi davvero disgiunti: l'app non referenzia l'assembly delle migrazioni
+            // — scelta deliberata di Program.cs per evitare un ciclo di progetti — quindi
+            // `Database.MigrateAsync()` dentro i test non trova nulla e la suite ha SEMPRE creato lo
+            // schema dal modello. È anche il motivo per cui questo difetto non poteva essere preso
+            // da un test: nessuna prova esercita le migrazioni.
             entity.Property(e => e.Outcome).HasMaxLength(32).IsRequired()
                 .HasDefaultValue(DecisionOutcome.Applied);
             entity.HasIndex(e => e.AtUtc);

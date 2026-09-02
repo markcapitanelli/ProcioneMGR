@@ -668,13 +668,51 @@ else
                                     </h6>
                                     <dl class="row small mb-2">
                                         <dt class="col-6">Sharpe atteso</dt>
-                                        <dd class="col-6">@(r.ExpectedSharpe?.ToString("F2") ?? "—")</dd>
+                                        <dd class="col-6">
+                                            @(r.ExpectedSharpe?.ToString("F2") ?? "—")
+                                            @* [K54, 2026-09-02] L'aspettativa si scrive UNA VOLTA, allo schieramento, e non si
+                                               ricontrolla mai piu' — mentre la caccia continua a rivalutare la stessa ipotesi ogni
+                                               notte su finestre che scorrono. Misurato: la corsia 6 porta 1,8754 del 21 agosto
+                                               (due giorni PRIMA che il motore walk-forward venisse sostituito) e le undici
+                                               rivalutazioni successive hanno mediana 0,479. Un rapporto calcolato contro 1,875 non
+                                               misura il decadimento della gamba: misura quanto era ottimistica la notte in cui e'
+                                               stata proposta. *@
+                                            @if (r.Evidence is { Contraddetta: true } smentita)
+                                            {
+                                                <br />
+                                                <span class="badge bg-warning text-dark"
+                                                      title="@($"Il numero atteso e' del {smentita.Ancora:yyyy-MM-dd}. Da allora la ricerca ha rivalutato la STESSA identica ipotesi (parametri compresi) {smentita.MisureDopo} volte, e la mediana e' {smentita.MedianaDopo:F3}. Il verdetto qui sotto usa la stima corrente, non quella d'origine.")">
+                                                    smentito dall'evidenza successiva
+                                                </span>
+                                                <div class="small text-muted mt-1">@smentita.Racconto</div>
+                                            }
+                                            else if (r.Evidence is { Giudicabile: true } conferma)
+                                            {
+                                                <span class="badge bg-light text-dark ms-1"
+                                                      title="@($"Rivalutata {conferma.MisureDopo} volte dopo il {conferma.Ancora:yyyy-MM-dd}: mediana {conferma.MedianaDopo:F3}. Il numero portato regge.")">
+                                                    confermato ×@conferma.MisureDopo
+                                                </span>
+                                            }
+                                        </dd>
                                         <dt class="col-6">Sharpe realizzato</dt>
                                         <dd class="col-6">@(r.RealizedSharpe?.ToString("F2") ?? "—")</dd>
                                         <dt class="col-6">Delta</dt>
                                         <dd class="col-6 @(r.SharpeDelta is >= 0 ? "text-success" : "text-danger")">@(r.SharpeDelta?.ToString("F2") ?? "—")</dd>
-                                        <dt class="col-6">% dell'atteso</dt>
-                                        <dd class="col-6">@(r.SharpeRatio?.ToString("P0") ?? "—")</dd>
+                                        @if (r.SharpeRatioVsEvidence is decimal contro)
+                                        {
+                                            <dt class="col-6">% della stima corrente</dt>
+                                            <dd class="col-6">
+                                                <strong>@contro.ToString("P0")</strong>
+                                                <span class="text-muted" title="È su questo che scatta (o non scatta) l'allarme: la stima corrente è la mediana delle rivalutazioni successive.">← il verdetto è su questo</span>
+                                            </dd>
+                                            <dt class="col-6 text-muted">% dell'atteso d'origine</dt>
+                                            <dd class="col-6 text-muted">@(r.SharpeRatio?.ToString("P0") ?? "—")</dd>
+                                        }
+                                        else
+                                        {
+                                            <dt class="col-6">% dell'atteso</dt>
+                                            <dd class="col-6">@(r.SharpeRatio?.ToString("P0") ?? "—")</dd>
+                                        }
                                         <dt class="col-6">Trade analizzati</dt>
                                         <dd class="col-6">
                                             @r.TradeCount

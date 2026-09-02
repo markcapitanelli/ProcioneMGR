@@ -38,7 +38,11 @@ public sealed class EnsembleManager(
     // Ensemble→Trading che questo file dichiara di voler evitare (vedi GetDecayReportsAsync): la
     // composizione avviene nel composition root, che conosce entrambi. Null (vecchi harness di
     // test) ⇒ 0,1%, il valore storico.
-    Func<decimal>? liveFeePercent = null) : IEnsembleManager
+    Func<decimal>? liveFeePercent = null,
+    // [K54, 2026-09-02] Che cosa ha detto la ricerca DOPO che l'aspettativa è stata scritta.
+    // Opzionale come il resto dei collaboratori: assente ⇒ il monitor di decadimento giudica come
+    // ha sempre fatto, contro il numero d'origine. Aggiunge, non sottrae.
+    Fleet.IExpectationEvidenceReader? expectationEvidence = null) : IEnsembleManager
 {
     private const int DefaultWindowDays = 120;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -250,9 +254,18 @@ public sealed class EnsembleManager(
                 ? await legTrades.CountAsync(t => t.PnlPercent <= -tetto || t.PnlPercent >= tetto, ct)
                 : 0;
 
+            // [K54, 2026-09-02] Che cosa ha detto la ricerca DOPO che l'aspettativa è stata
+            // scritta. Senza questo, il rapporto misura quanto era ottimistica la notte in cui la
+            // gamba è stata proposta, non come sta andando adesso: la corsia 6 porta 1,8754 del
+            // 21 agosto e le undici rivalutazioni successive della stessa identica ipotesi hanno
+            // mediana 0,479. Assente o insufficiente ⇒ il verdetto resta quello storico.
+            var evidenza = expectationEvidence is null
+                ? null
+                : await expectationEvidence.ReadAsync(cfg, s, ct);
+
             // [M5] Il timeframe della corsia porta il realizzato sulla stessa base per-candela
             // dell'atteso (vedi StrategyDecayMonitor.BuildPeriodReturns).
-            var report = decayMonitor.Analyze(s, recentTrades, cfg.Timeframe, options);
+            var report = decayMonitor.Analyze(s, recentTrades, cfg.Timeframe, options, evidenza);
             report.Symbol = cfg.Symbol;
             report.TradesExcludedOtherSymbol = excluded;
             report.TradesExcludedImplausible = rotti;

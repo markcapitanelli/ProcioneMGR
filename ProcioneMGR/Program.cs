@@ -596,6 +596,10 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneIdentityLifetimeRe
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill>();
 // [K13] Il gemello di J9 per la PROVENIENZA: le gambe schierate prima dell'etichetta T1 non dicono
 // da dove vengono, e l'ignoto conta come grigio senza che nessuna superficie possa spiegarlo.
+// [K54] Che cosa ha detto la ricerca DOPO che l'aspettativa di una gamba è stata scritta: sola
+// lettura sull'archivio dei candidati, e l'unico consumatore è il monitor di decadimento.
+builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IExpectationEvidenceReader,
+    ProcioneMGR.Services.Fleet.ExpectationEvidenceReader>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.SourceVerdictBackfill>();
 // [K22] Il timbro di nascita ricostruito dal ledger di osservazione: sola lettura finché non si
 // preme «Timbra e salva», come gli altri due backfill.

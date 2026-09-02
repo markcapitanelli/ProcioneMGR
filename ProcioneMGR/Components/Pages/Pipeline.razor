@@ -153,6 +153,7 @@
                                     var stile = resa.Verdict switch
                                     {
                                         ProcioneMGR.Services.Pipeline.HuntYieldVerdict.Sterile => "bg-danger",
+                                        ProcioneMGR.Services.Pipeline.HuntYieldVerdict.Dormiente => "bg-secondary",
                                         ProcioneMGR.Services.Pipeline.HuntYieldVerdict.TroppoPresto => "bg-light text-dark border",
                                         _ => "bg-success",
                                     };
@@ -161,10 +162,28 @@
                                         @(resa.Verdict switch
                                         {
                                             ProcioneMGR.Services.Pipeline.HuntYieldVerdict.Sterile => $"sterile · {resa.KeysPerRun:F2}/run",
+                                            ProcioneMGR.Services.Pipeline.HuntYieldVerdict.Dormiente => $"ferma · {resa.HoursSpent:F1} h",
                                             ProcioneMGR.Services.Pipeline.HuntYieldVerdict.TroppoPresto => $"{resa.Runs} run",
                                             _ => $"resa {resa.KeysPerRun:F2}/run",
                                         })
                                     </span>
+                                    @* [K54b, 2026-09-02] IL COSTO ACCANTO ALLA RESA, e non e'
+                                       decorazione: con la sola resa si condanna chi non consuma
+                                       nulla (la config 8, dichiarata «sterile» mentre era ferma da
+                                       tredici giorni e costava ZERO ore su 48,7) e si assolve chi
+                                       consuma tutto (la config 19: mediana 43,7 minuti a run,
+                                       undici volte la 17, e nemmeno una gamba schierata).
+
+                                       Le ore sono wall-clock, non CPU: nessuna colonna misura la
+                                       CPU vera, e almeno due configurazioni si sovrappongono ogni
+                                       notte. E' un limite superiore, e va letto come tale. *@
+                                    @if (resa.HoursSpent > 0)
+                                    {
+                                        <span class="badge @(resa.MedianRunMinutes >= 30 ? "bg-warning text-dark" : "bg-light text-dark border") ms-1"
+                                              title="@($"{resa.HoursSpent:F1} ore di caccia in finestra su {resa.Runs} run, mediana {resa.MedianRunMinutes:F0} minuti a run. Wall-clock, non CPU: e' un limite superiore. Resa per ORA di calcolo: {resa.KeysPerHour:F2} chiavi grigie — e' la lettura che regge meglio il confronto, perche' le chiavi PER RUN hanno al denominatore una scelta di pianificazione (misurato: stessa config, stesso motore, resa da 0,477 a 7,250 col tasso di grigi piatto).")">
+                                            @resa.HoursSpent.ToString("F1") h · @resa.MedianRunMinutes.ToString("F0") min/run
+                                        </span>
+                                    }
                                 }
                                 @* [K49b] Le serie sospese si dicono DOVE SI SCEGLIE cosa eseguire:
                                    MKR/USDT e' rimasto in due configurazioni per 35 giorni dopo la

@@ -210,7 +210,11 @@ public static class TradingServiceCollectionExtensions
                 // del motore (hot-reload), non più 0,1% fisso: i pesi si calcolano sui costi che
                 // si pagano davvero. Composto qui perché Ensemble non importa Trading (vedi il
                 // commento sul parametro).
-                () => sp.GetRequiredService<IOptionsMonitor<SafetyConfiguration>>().CurrentValue.FeePercent));
+                () => sp.GetRequiredService<IOptionsMonitor<SafetyConfiguration>>().CurrentValue.FeePercent,
+                // [K54] L'evidenza successiva all'aspettativa. Opzionale nel costruttore, ma qui
+                // c'è sempre: senza, il monitor di decadimento continuerebbe a giudicare contro un
+                // numero che la ricerca ha già smentito undici volte.
+                sp.GetService<Fleet.IExpectationEvidenceReader>()));
 
             if (useRemote)
             {
