@@ -1,4 +1,7 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using ProcioneMGR.Data;
 
 #nullable disable
 
@@ -33,6 +36,16 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
     /// al database vivo lo romperebbe. Finché il tooling non è a posto, le migrazioni di questo
     /// repository si scrivono a mano — ed è il motivo per cui questa è idempotente.</para>
     /// </summary>
+    // [2026-09-02] I DUE ATTRIBUTI NON SONO CERIMONIA: senza, EF non vede la migrazione.
+    // Le migrazioni generate li ricevono nel file `.Designer.cs`; questa e' scritta a mano (vedi
+    // sopra: `migrations add` in questo repository produce migrazioni sbagliate) e la prima
+    // versione li aveva dimenticati. Effetto misurato all'avvio del guscio:
+    //     «Nessuna migrazione pendente (38 note)»   ...su 39 file presenti.
+    // Nessun errore, nessuna riga rossa sul file: semplicemente non esisteva. L'ha scoperta il
+    // guardiano di DatabaseMigrator, che confronta modello e snapshot e RIFIUTA di dichiarare lo
+    // schema allineato — cioe' il controllo che si e' rifiutato di rassicurare.
+    [DbContext(typeof(ApplicationDbContext))]
+    [Migration("20260902160000_DecisionOutcomeDefault")]
     public partial class DecisionOutcomeDefault : Migration
     {
         /// <inheritdoc />
