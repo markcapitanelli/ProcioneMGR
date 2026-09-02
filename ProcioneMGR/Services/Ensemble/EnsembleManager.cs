@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Backtesting;
@@ -46,6 +46,14 @@ public sealed class EnsembleManager(
 
     public int LaneId => laneId;
 
+    /// <summary>
+    /// [K48] Le scritture che il manager fa per conto proprio: accendere/spegnere l'ensemble e il
+    /// ribilanciamento dei pesi. Non passano da una porta, quindi si dichiarano da sole.
+    /// </summary>
+    private static readonly ConfigWriteContext InternalWrite = ConfigWriteContext.Create(
+        ConfigWriteSources.EnsembleManagerInternal,
+        "interruttore dell'ensemble o ribilanciamento programmato dei pesi");
+
     public async Task<EnsembleConfiguration> GetConfigurationAsync(CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
@@ -57,13 +65,15 @@ public sealed class EnsembleManager(
         finally { _gate.Release(); }
     }
 
-    public async Task UpdateConfigurationAsync(EnsembleConfiguration config, CancellationToken ct = default)
+    public async Task UpdateConfigurationAsync(
+        EnsembleConfiguration config, ConfigWriteContext writtenBy, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(writtenBy);
         await _gate.WaitAsync(ct);
         try
         {
             using var scope = scopeFactory.CreateScope();
-            await SaveConfigAsync(scope, laneId, config, ct);
+            await SaveConfigAsync(scope, laneId, config, writtenBy, ct);
         }
         finally { _gate.Release(); }
     }
@@ -79,7 +89,7 @@ public sealed class EnsembleManager(
             using var scope = scopeFactory.CreateScope();
             var cfg = await LoadConfigAsync(scope, laneId, ct);
             cfg.IsEnabled = enabled;
-            await SaveConfigAsync(scope, laneId, cfg, ct);
+            await SaveConfigAsync(scope, laneId, cfg, InternalWrite, ct);
         }
         finally { _gate.Release(); }
         logger.LogInformation("Ensemble {State}.", enabled ? "avviato" : "fermato");
@@ -363,7 +373,7 @@ public sealed class EnsembleManager(
                 strat.CurrentCapital = weights[i] * cfg.TotalCapital;
             }
 
-            await SaveConfigAsync(scope, laneId, cfg, ct);
+            await SaveConfigAsync(scope, laneId, cfg, InternalWrite, ct);
             await SaveRebalanceHistoryAsync(scope, laneId, new RebalanceEvent { Timestamp = to, Allocations = allocations, Reason = reason }, ct);
 
             logger.LogInformation("Rebalanced ensemble ({Reason}): {Allocs}", reason,
@@ -694,21 +704,59 @@ public sealed class EnsembleManager(
         return JsonSerializer.Deserialize<EnsembleConfiguration>(row.ConfigurationJson, Json) ?? new EnsembleConfiguration();
     }
 
-    private static async Task SaveConfigAsync(IServiceScope scope, int laneId, EnsembleConfiguration config, CancellationToken ct)
+    private static async Task SaveConfigAsync(
+        IServiceScope scope, int laneId, EnsembleConfiguration config, ConfigWriteContext writtenBy, CancellationToken ct)
     {
         var dbf = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
         await using var db = await dbf.CreateDbContextAsync(ct);
         var row = await db.EnsembleStates.Where(e => e.LaneId == laneId).OrderBy(e => e.Id).FirstOrDefaultAsync(ct);
         var json = JsonSerializer.Serialize(config, Json);
+        var precedente = row?.ConfigurationJson;
+        var now = DateTime.UtcNow;
         if (row is null)
         {
-            db.EnsembleStates.Add(new EnsembleState { LaneId = laneId, ConfigurationJson = json, StatusJson = "{}", LastUpdatedUtc = DateTime.UtcNow });
+            db.EnsembleStates.Add(new EnsembleState { LaneId = laneId, ConfigurationJson = json, StatusJson = "{}", LastUpdatedUtc = now });
         }
         else
         {
             row.ConfigurationJson = json;
-            row.LastUpdatedUtc = DateTime.UtcNow;
+            row.LastUpdatedUtc = now;
         }
+
+        // [K48, 2026-09-02] LA SCRITTURA SI REGISTRA, NELLA STESSA TRANSAZIONE.
+        //
+        // Riscrivere la configurazione di una corsia è l'azione meno reversibile della piattaforma:
+        // `EnsembleStates` tiene un solo ConfigurationJson, quindi la configurazione precedente non
+        // è conservata da nessuna parte e non è ricostruibile guardando la corsia dopo. Eppure fino
+        // a oggi la si poteva fare senza lasciare traccia — ed è successo: il 31/08 le corsie 4 e 6
+        // sono state riscritte e K37 ha poi dovuto dichiarare la loro provenienza NON ACCERTABILE,
+        // su un campo che governa il tetto grigio.
+        //
+        // Stessa SaveChangesAsync della configurazione, non due passi in fila: un registro che può
+        // fallire DOPO l'azione registra solo le azioni fortunate.
+        //
+        // Si scrive solo quando qualcosa cambia davvero: un Save che non muove nulla (l'operatore
+        // apre e salva senza toccare) non è un evento, e riempirne l'audit renderebbe illeggibile
+        // il registro proprio a chi cerca l'unica riga che conta.
+        if (!string.Equals(precedente, json, StringComparison.Ordinal))
+        {
+            db.TradingAuditLogs.Add(new Trading.TradingAuditLog
+            {
+                LaneId = laneId,
+                TimestampUtc = now,
+                Action = "EnsembleConfigWritten",
+                Details = JsonSerializer.Serialize(new
+                {
+                    source = writtenBy.Source,
+                    reason = writtenBy.Reason,
+                    symbol = config.Symbol,
+                    timeframe = config.Timeframe,
+                    legs = config.Strategies.Where(x => x.IsActive).Select(x => x.StrategyName).ToList(),
+                    creata = precedente is null,
+                }),
+            });
+        }
+
         await db.SaveChangesAsync(ct);
     }
 

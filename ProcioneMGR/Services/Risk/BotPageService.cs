@@ -186,7 +186,9 @@ public sealed class BotPageService(
             var cfg = await Ensemble.GetConfigurationAsync(ct);
             cfg.TotalCapital = Capital;
             cfg.RiskProfileName = Profile.Name;
-            await Ensemble.UpdateConfigurationAsync(cfg, ct);
+            await Ensemble.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create(
+                ProcioneMGR.Services.Ensemble.ConfigWriteSources.BotPage,
+                "modalita' semplice: applicazione del profilo scelto dalla pagina /bot"), ct);
         });
     }
 
@@ -207,7 +209,9 @@ public sealed class BotPageService(
             }
             cfg.TotalCapital = Capital;
             cfg.RiskProfileName = Profile.Name;
-            await Ensemble.UpdateConfigurationAsync(cfg, ct);
+            await Ensemble.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create(
+                ProcioneMGR.Services.Ensemble.ConfigWriteSources.BotPage,
+                "modalita' semplice: applicazione del profilo scelto dalla pagina /bot"), ct);
 
             await Engine.StartAsync(TradingMode.Paper, ct);
         });

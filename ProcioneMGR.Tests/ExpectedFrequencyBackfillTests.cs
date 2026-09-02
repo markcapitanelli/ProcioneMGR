@@ -47,7 +47,7 @@ public class ExpectedFrequencyBackfillTests : IAsyncDisposable
         public EnsembleConfiguration Config { get; private set; } = config;
         public int Saves { get; private set; }
         public Task<EnsembleConfiguration> GetConfigurationAsync(CancellationToken ct = default) => Task.FromResult(Config);
-        public Task UpdateConfigurationAsync(EnsembleConfiguration config, CancellationToken ct = default)
+        public Task UpdateConfigurationAsync(EnsembleConfiguration config, ProcioneMGR.Services.Ensemble.ConfigWriteContext writtenBy, CancellationToken ct = default)
         {
             Config = config;
             Saves++;

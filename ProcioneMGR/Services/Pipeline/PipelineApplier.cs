@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Analysis;
@@ -127,7 +127,9 @@ public sealed class PipelineApplier(
                     : Math.Round(100m / group.Count, 1);
                 return BuildLegStrategy(l, autoSl, autoTp, alloc, recommendation.HoldoutMonths);
             }).ToList();
-            await mgr.UpdateConfigurationAsync(cfg, ct);
+            await mgr.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create(
+            ProcioneMGR.Services.Ensemble.ConfigWriteSources.PipelineApplier,
+            "auto-apply dell'impronta storica: riscrittura della corsia dal run selezionato"), ct);
 
             var sl = cfg.Strategies.Count(s => s.StopLossPercent is not null || s.TrailingStopPercent is not null);
             var tp = cfg.Strategies.Count(s => s.TakeProfitPercent is not null);

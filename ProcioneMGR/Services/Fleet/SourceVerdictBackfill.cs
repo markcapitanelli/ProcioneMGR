@@ -102,7 +102,8 @@ public sealed class SourceVerdictBackfill(
 
             if (changed)
             {
-                await manager.UpdateConfigurationAsync(cfg, ct);
+                await manager.UpdateConfigurationAsync(cfg, ConfigWriteContext.Create(ConfigWriteSources.Backfill,
+                    "K37: ricostruzione della provenienza (SourceVerdict) delle gambe schierate"), ct);
                 logger.LogInformation("Corsia {Lane}: provenienza delle gambe ricostruita e salvata (K13).", laneId);
             }
         }

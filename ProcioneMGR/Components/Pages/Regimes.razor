@@ -440,7 +440,14 @@
             return;
         }
         cfg.RegimeAwareWeighting = _regimeAware;
-        await EnsembleMgr.UpdateConfigurationAsync(cfg);
+        @* [K48, 2026-09-02] Questa pagina inietta l'IEnsembleManager NON keyed, che il composition
+           root risolve alla CORSIA 0: scrive sempre lì, qualunque corsia l'operatore stia
+           guardando, e fino a oggi non lasciava traccia da nessuna parte. Il contesto obbligatorio
+           la costringe a dichiararsi, e la dichiarazione dice anche la corsia — così l'audit
+           mostra l'anomalia invece di nasconderla. *@
+        await EnsembleMgr.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create(
+            ProcioneMGR.Services.Ensemble.ConfigWriteSources.RegimesPage,
+            "pesatura regime-aware accesa/spenta da /regimes — questa pagina scrive SEMPRE sulla corsia 0 (manager non keyed)"));
         await LoadCurrentRegimeAsync();
         SetStatus($"Regime-Aware Weighting {(_regimeAware ? "attivato" : "disattivato")} (scrive la configurazione della corsia 0).", false);
     }

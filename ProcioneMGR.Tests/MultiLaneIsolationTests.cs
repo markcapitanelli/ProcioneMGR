@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -73,7 +73,7 @@ public class MultiLaneIsolationTests : IAsyncDisposable
     {
         public int LaneId => laneId;
         public Task<EnsembleConfiguration> GetConfigurationAsync(CancellationToken ct = default) => Task.FromResult(config);
-        public Task UpdateConfigurationAsync(EnsembleConfiguration c, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateConfigurationAsync(EnsembleConfiguration c, ProcioneMGR.Services.Ensemble.ConfigWriteContext writtenBy, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<EnsembleStatus> GetStatusAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task StartAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task StopAsync(CancellationToken ct = default) => throw new NotImplementedException();
@@ -241,12 +241,12 @@ public class MultiLaneIsolationTests : IAsyncDisposable
         var cfg0 = await mgr0.GetConfigurationAsync();
         cfg0.Symbol = "BTC/USDT";
         cfg0.Strategies = [new EnsembleStrategy { StrategyId = "a", StrategyName = "RsiOversold", DisplayName = "A", IsActive = true }];
-        await mgr0.UpdateConfigurationAsync(cfg0);
+        await mgr0.UpdateConfigurationAsync(cfg0, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         var cfg1 = await mgr1.GetConfigurationAsync();
         cfg1.Symbol = "ETH/USDT";
         cfg1.Strategies = [];
-        await mgr1.UpdateConfigurationAsync(cfg1);
+        await mgr1.UpdateConfigurationAsync(cfg1, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         var reloaded0 = await mgr0.GetConfigurationAsync();
         var reloaded1 = await mgr1.GetConfigurationAsync();

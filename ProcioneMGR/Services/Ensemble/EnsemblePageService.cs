@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Data;
@@ -540,7 +540,8 @@ public sealed class EnsemblePageService(
     public async Task<string> SaveAsync(int laneId, CancellationToken ct = default)
     {
         if (Config is null) return "Nessuna configurazione caricata.";
-        await Manager(laneId).UpdateConfigurationAsync(Config, ct);
+        await Manager(laneId).UpdateConfigurationAsync(Config, ConfigWriteContext.Create(
+            ConfigWriteSources.EnsemblePage, "salvataggio della configurazione dalla pagina /ensemble"), ct);
         await RefreshAsync(laneId, ct);
         return "Configurazione salvata.";
     }
@@ -548,7 +549,8 @@ public sealed class EnsemblePageService(
     public async Task<string> StartEnsembleAsync(int laneId, CancellationToken ct = default)
     {
         if (Config is null) return "Nessuna configurazione caricata.";
-        await Manager(laneId).UpdateConfigurationAsync(Config, ct);
+        await Manager(laneId).UpdateConfigurationAsync(Config, ConfigWriteContext.Create(
+            ConfigWriteSources.EnsemblePage, "avvio dell'ensemble dalla pagina /ensemble (interruttore del ribilanciamento)"), ct);
         await Manager(laneId).StartAsync(ct);
         Config.IsEnabled = true;
         await RefreshAsync(laneId, ct);
@@ -566,7 +568,8 @@ public sealed class EnsemblePageService(
     public async Task<string> RebalanceNowAsync(int laneId, CancellationToken ct = default)
     {
         if (Config is null) return "Nessuna configurazione caricata.";
-        await Manager(laneId).UpdateConfigurationAsync(Config, ct);
+        await Manager(laneId).UpdateConfigurationAsync(Config, ConfigWriteContext.Create(
+            ConfigWriteSources.EnsemblePage, "ribilanciamento manuale richiesto dalla pagina /ensemble"), ct);
         await Manager(laneId).RebalanceAsync("Manual", ct);
         Config = await Manager(laneId).GetConfigurationAsync(ct);
         await RefreshAsync(laneId, ct);

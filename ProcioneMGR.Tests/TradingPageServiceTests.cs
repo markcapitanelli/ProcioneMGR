@@ -916,7 +916,7 @@ public class TradingPageServiceTests
     {
         public int LaneId => 0;
         public Task<ProcioneMGR.Services.Ensemble.EnsembleConfiguration> GetConfigurationAsync(CancellationToken ct = default) => Task.FromResult(config);
-        public Task UpdateConfigurationAsync(ProcioneMGR.Services.Ensemble.EnsembleConfiguration c, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateConfigurationAsync(ProcioneMGR.Services.Ensemble.EnsembleConfiguration c, ProcioneMGR.Services.Ensemble.ConfigWriteContext writtenBy, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<ProcioneMGR.Services.Ensemble.EnsembleStatus> GetStatusAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task StartAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task StopAsync(CancellationToken ct = default) => throw new NotImplementedException();

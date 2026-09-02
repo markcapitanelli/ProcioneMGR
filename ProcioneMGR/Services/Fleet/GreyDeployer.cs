@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -209,7 +209,9 @@ public sealed class GreyDeployer(
                 ExpectedTradesSource = fonteAttesi,
             },
         ];
-        await manager.UpdateConfigurationAsync(cfg, ct);
+        await manager.UpdateConfigurationAsync(cfg, ConfigWriteContext.Create(
+            ConfigWriteSources.GreyDeployer,
+            $"schieramento {(source == "fleet" ? "automatico della flotta" : "da click F5")} del candidato {candidate.Key} (run {runId.ToString()[..8]})"), ct);
 
         var startedText = "configurata, DA AVVIARE da /trading";
         string? error = null;
