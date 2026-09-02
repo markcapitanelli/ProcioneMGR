@@ -52,7 +52,7 @@ public sealed class LaneRiskProfileEndToEndTests : IAsyncDisposable
     {
         public int LaneId => 0;
         public Task<EnsembleConfiguration> GetConfigurationAsync(CancellationToken ct = default) => Task.FromResult(config);
-        public Task UpdateConfigurationAsync(EnsembleConfiguration c, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpdateConfigurationAsync(EnsembleConfiguration c, ProcioneMGR.Services.Ensemble.ConfigWriteContext writtenBy, CancellationToken ct = default) => Task.CompletedTask;
         public Task<EnsembleStatus> GetStatusAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task StartAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task StopAsync(CancellationToken ct = default) => throw new NotImplementedException();

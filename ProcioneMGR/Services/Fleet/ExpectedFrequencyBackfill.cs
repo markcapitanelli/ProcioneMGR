@@ -77,7 +77,8 @@ public sealed class ExpectedFrequencyBackfill(
 
             if (changed)
             {
-                await manager.UpdateConfigurationAsync(cfg, ct);
+                await manager.UpdateConfigurationAsync(cfg, ConfigWriteContext.Create(ConfigWriteSources.Backfill,
+                    "J9: ricostruzione della frequenza attesa (ExpectedTradesPerMonth)"), ct);
                 logger.LogInformation("Corsia {Lane}: frequenze attese ricostruite e salvate (J9).", laneId);
             }
         }

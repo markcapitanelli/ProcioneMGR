@@ -114,7 +114,7 @@ public sealed class EnsembleSimulationCacheTests : IAsyncDisposable
             new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "A", IsActive = true },
             new EnsembleStrategy { StrategyId = "leg-b", StrategyName = "Momentum", DisplayName = "B", IsActive = true },
         ];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         return (manager, engine, dbf);
     }
@@ -167,7 +167,7 @@ public sealed class EnsembleSimulationCacheTests : IAsyncDisposable
 
         var cfg = await manager.GetConfigurationAsync();
         cfg.Strategies[0].Parameters["Period"] = 21m; // qualunque cambio di config cambia la chiave
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await manager.GetStatusAsync();
         Assert.True(engine.Runs > warm, "una configurazione cambiata deve invalidare la cache");

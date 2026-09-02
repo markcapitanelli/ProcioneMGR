@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -68,14 +68,19 @@ public interface IGreyDeployer
     /// banda «pass» a gamba singola). Default false: il click umano F5 resta il braccio della
     /// PROPOSTA grigia, non una porta di servizio.
     /// </param>
-    /// <param name="journal">
-    /// [J14] false = il journal lo scrive il CHIAMANTE (il worker della flotta, che vi aggiunge i
-    /// voti del comitato): due righe per la stessa azione sarebbero rumore nel journal.
+    /// <param name="journalId">
+    /// [K51, 2026-09-02] L'id della riga di INTENTO gia' aperta dal chiamante, oppure <c>null</c>
+    /// se deve aprirla (e chiuderla) questo servizio.
+    ///
+    /// <para>Ha sostituito un <c>bool journal</c>, e la differenza non e' cosmetica. Col booleano,
+    /// «una riga per azione» era un <b>accordo fra due file</b>: il worker passava <c>false</c> e si
+    /// impegnava a scriverla lui. Con l'handle e' una <b>conseguenza della forma</b> — chi apre
+    /// l'intento e' anche chi lo chiude, e non esiste un cammino in cui nessuno dei due lo faccia.</para>
     /// </param>
     Task<GreyDeployResult> DeployAsync(
         Guid runId, string candidateKey,
         int laneId, bool startPaper, CancellationToken ct = default,
-        string source = "human", bool allowSurvivor = false, bool journal = true);
+        string source = "human", bool allowSurvivor = false, int? journalId = null);
 }
 
 public sealed class GreyDeployer(
@@ -112,7 +117,7 @@ public sealed class GreyDeployer(
     public async Task<GreyDeployResult> DeployAsync(
         Guid runId, string candidateKey,
         int laneId, bool startPaper, CancellationToken ct = default,
-        string source = "human", bool allowSurvivor = false, bool journal = true)
+        string source = "human", bool allowSurvivor = false, int? journalId = null)
     {
         // --- La corsia: di flotta, libera, senza vincoli. Si RILEGGE lo stato adesso, non ci si
         // fida della lista mostrata al momento del render (l'operatore può aver cliccato tardi).
@@ -209,7 +214,37 @@ public sealed class GreyDeployer(
                 ExpectedTradesSource = fonteAttesi,
             },
         ];
-        await manager.UpdateConfigurationAsync(cfg, ct);
+        // --- [K51, 2026-09-02] L'INTENTO SI SCRIVE PRIMA. E se non si scrive, la corsia non si tocca.
+        //
+        // Riscrivere la configurazione di una corsia non e' ricostruibile guardandola dopo:
+        // EnsembleStates tiene un solo ConfigurationJson e la versione precedente non esiste piu'.
+        // Un'azione irreversibile e non ricostruibile senza il suo registro e' esattamente quella a
+        // cui si applica il fail-closed della regola 4 — e il costo del verso opposto e' misurato:
+        // sono le corsie 4 e 6 del 2026-08-31, di cui K37 ha dovuto dichiarare la provenienza NON
+        // ACCERTABILE, su un campo che governa il tetto grigio.
+        //
+        // Il rifiuto e' RUMOROSO: sostituire un buco silenzioso con un altro non sarebbe un
+        // progresso.
+        var mioIntento = journalId;
+        if (mioIntento is null)
+        {
+            try
+            {
+                mioIntento = await ApriIntentoAsync(runId, laneId, source, candidate.Key, sl, tp, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Corsia {Lane}: impossibile scrivere l'intento nel journal; lo schieramento NON avviene.", laneId);
+                return new(false,
+                    $"Non riesco a registrare l'intento nel journal ({ex.Message}): la corsia {laneId} NON e' stata "
+                    + "toccata. Riscrivere una corsia senza poterlo registrare significa perdere per sempre la "
+                    + "configurazione precedente e la provenienza di quella nuova — e' successo il 2026-08-31.");
+            }
+        }
+
+        await manager.UpdateConfigurationAsync(cfg, ConfigWriteContext.Create(
+            ConfigWriteSources.GreyDeployer,
+            $"schieramento {(source == "fleet" ? "automatico della flotta" : "da click F5")} del candidato {candidate.Key} (run {runId.ToString()[..8]})"), ct);
 
         var startedText = "configurata, DA AVVIARE da /trading";
         string? error = null;
@@ -227,37 +262,63 @@ public sealed class GreyDeployer(
             }
         }
 
-        if (journal)
-        await using (var db = await dbFactory.CreateDbContextAsync(ct))
+        // [K51] L'intento si CHIUDE con l'esito. Se l'ha aperto il chiamante (il worker, che vi
+        // aggiunge i voti del comitato), e' lui a chiuderlo: una riga per azione, per costruzione.
+        if (journalId is null && mioIntento is int idIntento)
         {
-            db.OrchestratorDecisions.Add(new OrchestratorDecision
-            {
-                AtUtc = DateTime.UtcNow,
-                Kind = "Assign",
-                LaneId = laneId,
-                RunId = runId,
-                Source = source, // [J14] "human" (click F5) o "fleet" (braccio dell'orchestratore)
-                Applied = error is null,
-                DryRun = false,
-                Error = error,
-                // [Difetto C, 2026-08-22] Nel journal va la CHIAVE, non la terna: la specifica
-                // schierata il 2026-08-03 su corsia 6 (Composite LTC/USDT 15m, terna ambigua) si
-                // può ancora ricostruire, ma solo dai Parameters della corsia e solo finché quella
-                // corsia non viene riassegnata. Il journal, da solo, non bastava.
-                Reason = $"[{(source == "fleet" ? "J14, flotta" : "F5, click umano")}] {candidate.Key} → corsia {laneId}, {startedText}. " +
-                         $"Sharpe holdout {candidate.HoldoutSharpe:F2} su {candidate.HoldoutTrades} trade; SL {sl:F2}% / TP {tp:F2}%." +
-                         // [K33] L'avviso della guardia che NON ha bloccato finisce a journal: una
-                         // terna gia' in corsa schierata comunque e' una scelta, e una scelta senza
-                         // traccia e' indistinguibile da un incidente — che e' esattamente cio' che
-                         // e' successo il 31/08.
-                         (duplicato.Reason is { } avviso ? $" ⚠ {avviso}" : string.Empty),
-            });
-            await db.SaveChangesAsync(ct);
+            await ChiudiIntentoAsync(idIntento, error, startedText, candidate, sl, tp, source, duplicato.Reason, ct);
         }
 
         logger.LogInformation("Candidato grigio schierato: {Candidato} → corsia {Lane} ({Stato}).",
             candidate.Key, laneId, startedText);
         return new(error is null, $"{candidate.Key} → corsia {laneId}: {startedText}. SL {sl:F2}% / TP {tp:F2}% (bracket automatico).");
+    }
+
+    /// <summary>
+    /// [K51] Apre la riga d'intento PRIMA di toccare la corsia. Se questa fallisce, il chiamante
+    /// rinuncia: e' il fail-closed della regola 4 applicato all'azione meno reversibile che c'e'.
+    /// </summary>
+    private async Task<int> ApriIntentoAsync(
+        Guid runId, int laneId, string source, string candidateKey, decimal sl, decimal tp, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var riga = new OrchestratorDecision
+        {
+            AtUtc = DateTime.UtcNow,
+            Kind = "Assign",
+            LaneId = laneId,
+            RunId = runId,
+            Source = source,
+            Outcome = DecisionOutcome.Intended,
+            Applied = false,
+            DryRun = false,
+            Reason = $"[{(source == "fleet" ? "J14, flotta" : "F5, click umano")}] INTENTO: {candidateKey} -> corsia {laneId} "
+                   + $"in Paper, SL {sl:F2}% / TP {tp:F2}%. L'esito arriva alla chiusura di questa riga.",
+        };
+        db.OrchestratorDecisions.Add(riga);
+        await db.SaveChangesAsync(ct);
+        return riga.Id;
+    }
+
+    /// <summary>
+    /// [K51] Chiude l'intento con l'esito. Una riga che resta <c>Intended</c> non e' un difetto del
+    /// journal: e' l'informazione che il processo e' morto a meta' schieramento, e prima di oggi
+    /// quello stato non era esprimibile — quindi era invisibile.
+    /// </summary>
+    private async Task ChiudiIntentoAsync(
+        int journalId, string? error, string startedText, ValidatedCandidate candidate,
+        decimal sl, decimal tp, string source, string? avvisoGuardia, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var riga = await db.OrchestratorDecisions.FirstOrDefaultAsync(d => d.Id == journalId, ct);
+        if (riga is null) return;
+        riga.Outcome = error is null ? DecisionOutcome.Applied : DecisionOutcome.Failed;
+        riga.Applied = error is null;
+        riga.Error = error;
+        riga.Reason = $"[{(source == "fleet" ? "J14, flotta" : "F5, click umano")}] {candidate.Key} -> corsia {riga.LaneId}, {startedText}. "
+                    + $"Sharpe holdout {candidate.HoldoutSharpe:F2} su {candidate.HoldoutTrades} trade; SL {sl:F2}% / TP {tp:F2}%."
+                    + (avvisoGuardia is not null ? $" [!] {avvisoGuardia}" : string.Empty);
+        await db.SaveChangesAsync(ct);
     }
 
     /// <summary>

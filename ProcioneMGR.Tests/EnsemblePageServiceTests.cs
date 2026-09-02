@@ -51,7 +51,7 @@ public sealed class EnsemblePageServiceTests : IAsyncDisposable
 
         public Task<EnsembleConfiguration> GetConfigurationAsync(CancellationToken ct = default)
         { Calls.Add("GetConfiguration"); return Task.FromResult(ConfigToReturn); }
-        public Task UpdateConfigurationAsync(EnsembleConfiguration c, CancellationToken ct = default)
+        public Task UpdateConfigurationAsync(EnsembleConfiguration c, ProcioneMGR.Services.Ensemble.ConfigWriteContext writtenBy, CancellationToken ct = default)
         { Calls.Add("Update"); LastUpdatedConfig = c; return Task.CompletedTask; }
         public Task<EnsembleStatus> GetStatusAsync(CancellationToken ct = default)
         { Calls.Add("GetStatus"); return Task.FromResult(StatusToReturn); }

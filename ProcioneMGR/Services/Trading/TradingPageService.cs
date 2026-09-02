@@ -335,7 +335,9 @@ public sealed class TradingPageService(
             cfg.Symbol = string.Empty;
             cfg.Timeframe = string.Empty;
             cfg.Strategies = [];
-            await manager.UpdateConfigurationAsync(cfg, ct);
+            await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create(
+            ProcioneMGR.Services.Ensemble.ConfigWriteSources.TradingPage,
+            "modifica della corsia dalla pagina /trading"), ct);
 
             Message = $"Corsia {laneId} svuotata: configurazione azzerata, storico conservato — libera per la flotta.";
             IsError = false;

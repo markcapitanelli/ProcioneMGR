@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcioneMGR.Data;
@@ -105,7 +105,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
             new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita },
             new EnsembleStrategy { StrategyId = "leg-b", StrategyName = "Momentum", DisplayName = "Gamba B", IsActive = true, ExpectedSharpe = null, ExpectedSharpeAtUtc = TimbroDiNascita },
         ];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
         {
@@ -149,7 +149,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var cfg = await manager.GetConfigurationAsync();
         cfg.Symbol = "BTC/USDT";                       // la vita ATTUALE della corsia
         cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
         {
@@ -189,7 +189,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var cfg = await manager.GetConfigurationAsync();
         cfg.Symbol = "ADA/USDT";
         cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
         {
@@ -218,7 +218,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var cfg = await manager.GetConfigurationAsync();
         cfg.Symbol = "BTC/USDT";
         cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
         {
@@ -253,7 +253,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var cfg = await manager.GetConfigurationAsync();
         cfg.Symbol = "BTC/USDT";
         cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
         {
@@ -277,7 +277,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         var manager = await BuildAsync();
         var cfg = await manager.GetConfigurationAsync();
         cfg.Strategies = [new EnsembleStrategy { StrategyId = "leg-a", StrategyName = "RsiOversold", DisplayName = "Gamba A", IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = TimbroDiNascita }];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         var reports = await manager.GetDecayReportsAsync();
 
@@ -318,7 +318,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
                 IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = nascita,
             },
         ];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
         {
@@ -357,7 +357,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
                 IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = nascita,
             },
         ];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
         {
@@ -392,7 +392,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
                 IsActive = true, ExpectedSharpe = 1.5m, ExpectedSharpeAtUtc = null,
             },
         ];
-        await manager.UpdateConfigurationAsync(cfg);
+        await manager.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await using (var db = await _provider!.GetRequiredService<IDbContextFactory<ApplicationDbContext>>().CreateDbContextAsync())
         {

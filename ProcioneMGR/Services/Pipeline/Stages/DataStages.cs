@@ -67,7 +67,66 @@ public sealed class DataIngestionStage(
             output.Series.Add(status);
             ctx.LogLine($"[{Name}] {series.Symbol} {series.Timeframe}: {status.CandleCount} candele, selection {(status.CoversSelection ? "OK" : "SCOPERTA")}, holdout {(status.CoversHoldout ? "OK" : "SCOPERTO")}.");
         }
+
+        // [K49b, PRD autonomia-piena — Fase 3, 2026-09-02] LA POTATURA CHE MANCAVA.
+        //
+        // `CoversHoldout` esisteva, si accendeva a ogni run e NESSUNO lo leggeva a valle: il suo
+        // unico effetto era una chiamata di rete a vuoto, ripetuta a ogni giro. È la famiglia
+        // «gate senza strumento» rovesciata — qui lo strumento c'era e mancava il gate.
+        //
+        // Misurato sui 122 run delle due configurazioni attive negli ultimi 30 giorni:
+        // `MKR/USDT` risultava scoperta **122 volte su 122**, senza una candela dal 2025-09-15
+        // (351 giorni), e continuava a produrre 11 chiavi candidate a zero trade — 424 righe di
+        // bocciatura, ~53 minuti di CPU ogni 30 giorni, e altrettanti tentativi nel denominatore
+        // del DSR.
+        //
+        // LA DISTINZIONE CHE MANCAVA, ed è tutta qui: una serie scoperta perché NUOVA o con un buco
+        // di ingestione va SCARICATA (ed è ciò che il ramo qui sopra fa, correttamente); una serie
+        // che l'exchange ha SOSPESO va ESCLUSA. Il codice non le distingueva perché non guardava
+        // `TrackedSeries`, cioè il posto dove quella differenza è scritta.
+        //
+        // E il verso: potare RIDUCE i tentativi, quindi abbassa SR* — sembra un allentamento del
+        // gate. Misurato, è l'opposto: SR* si muove di +0,0017 e +0,0182 (config 17 e 18), cioè
+        // il gate si STRINGE. Un candidato su una serie senza dati non è un tentativo vero, e
+        // toglierlo dal denominatore corregge un conteggio, non lo allenta.
+        var sospese = await SerieSospeseAsync(output.Series, ct);
+        if (sospese.Count > 0)
+        {
+            var potate = ctx.Universe.Where(u => sospese.Contains((u.Symbol, u.Timeframe))).ToList();
+            ctx.Universe = ctx.Universe.Where(u => !sospese.Contains((u.Symbol, u.Timeframe))).ToList();
+            output.PrunedSuspended = potate.Select(p => $"{p.Symbol} {p.Timeframe}").ToList();
+            ctx.LogLine($"[{Name}] POTATE {potate.Count} serie SOSPESE dall'exchange e senza copertura: "
+                + string.Join(", ", output.PrunedSuspended)
+                + ". Non sono tentativi: sono serie che non possono produrre un candidato, e finora "
+                + "gonfiavano il denominatore del DSR a ogni run.");
+        }
+
         ctx.DataStatus = output;
+    }
+
+    /// <summary>
+    /// [K49b] Le serie dell'universo che sono <b>sospese dall'exchange</b> — disabilitate in
+    /// <c>TrackedSeries</c> — <b>e</b> non coperte dai dati. Servono ENTRAMBE le condizioni:
+    /// disabilitata ma coperta significa che i dati storici bastano ancora (il backtest è legittimo);
+    /// scoperta ma abilitata è un buco di ingestione, che si ripara scaricando.
+    /// </summary>
+    private async Task<HashSet<(string Symbol, string Timeframe)>> SerieSospeseAsync(
+        IReadOnlyList<SeriesDataStatus> stati, CancellationToken ct)
+    {
+        var scoperte = stati.Where(s => !s.CoversHoldout || !s.CoversSelection)
+            .Select(s => (s.Symbol, s.Timeframe)).ToHashSet();
+        if (scoperte.Count == 0) return [];
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var disabilitate = await db.TrackedSeries.AsNoTracking()
+            .Where(t => !t.Enabled)
+            .Select(t => new { t.Symbol, t.Timeframe })
+            .ToListAsync(ct);
+
+        return disabilitate
+            .Select(d => (d.Symbol, d.Timeframe))
+            .Where(scoperte.Contains)
+            .ToHashSet();
     }
 
     private async Task<SeriesDataStatus> QueryStatusAsync(SeriesSpec series, DateTime from, DateTime to, TimeSpan tolerance, PipelineContext ctx, CancellationToken ct)
@@ -98,12 +157,20 @@ public sealed class DataIngestionStage(
         {
             StageName = Name,
             DisplayName = DisplayName,
-            Text = $"{o.Series.Count} serie verificate, {covered} completamente coperte, {o.CandlesIngested} candele scaricate.",
+            Text = $"{o.Series.Count} serie verificate, {covered} completamente coperte, {o.CandlesIngested} candele scaricate."
+                 // [K49b] La potatura si DICE: un universo che si accorcia in silenzio e'
+                 // indistinguibile da una configurazione modificata, e cambia il denominatore del DSR.
+                 + (o.PrunedSuspended.Count > 0
+                     ? $" POTATE {o.PrunedSuspended.Count} serie sospese dall'exchange e senza copertura ("
+                       + string.Join(", ", o.PrunedSuspended)
+                       + "): non sono tentativi, e toglierle dal denominatore STRINGE il gate."
+                     : string.Empty),
             Metrics = new()
             {
                 ["Serie"] = o.Series.Count,
                 ["SerieCoperte"] = covered,
                 ["CandeleScaricate"] = o.CandlesIngested,
+                ["SeriePotate"] = o.PrunedSuspended.Count,
             },
         };
     }

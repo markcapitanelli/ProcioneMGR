@@ -66,7 +66,7 @@ public sealed class HomeDecayWiringTests : BunitContext
         // Il resto dell'interfaccia non serve alla Home: se un giorno la toccasse, il test deve
         // rompersi rumorosamente invece di restituire un default plausibile.
         public Task<EnsembleConfiguration> GetConfigurationAsync(CancellationToken ct = default) => throw new NotSupportedException();
-        public Task UpdateConfigurationAsync(EnsembleConfiguration config, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task UpdateConfigurationAsync(EnsembleConfiguration config, ProcioneMGR.Services.Ensemble.ConfigWriteContext writtenBy, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<EnsembleStatus> GetStatusAsync(CancellationToken ct = default) => throw new NotSupportedException();
         public Task StartAsync(CancellationToken ct = default) => throw new NotSupportedException();
         public Task StopAsync(CancellationToken ct = default) => throw new NotSupportedException();

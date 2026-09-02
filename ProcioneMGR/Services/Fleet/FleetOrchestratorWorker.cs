@@ -248,14 +248,176 @@ public sealed class FleetOrchestratorWorker(
 
         var validi = verdict.Votes.Count(v => v.Valid);
         if (verdict.Votes.Count == 0) return "default:non-interrogato";   // budget esaurito, zero provider con chiave
+
+        // [K52, 2026-09-02] Questo ramo va PRIMA degli altri due, per lo stesso motivo per cui in
+        // K40 «non so leggere le corsie» precede «le corsie sono impegnate»: quando un votante è
+        // morto in modo permanente, dire «la maggioranza non si è formata» descrive il sintomo e
+        // nasconde la causa. La differenza per chi legge è tutta qui — «riprova più tardi» contro
+        // «vai a cambiare il nome di un modello, o il comitato resterà un timbro per sempre».
+        if (Llm.Committee.CommitteeDiagnosis.VotantiGuasti(verdict.Votes).Count > 0)
+        {
+            return "default:provider-guasti";
+        }
+
         if (validi == 0) return "default:tutti-astenuti";                 // interrogati, nessuna risposta valida
         return "default:quorum-mancato";                                  // hanno risposto, la maggioranza non si è formata
     }
+
+    private bool _committeeFaultNotified;
+
+    /// <summary>
+    /// [K52] Lo stato del comitato all'ultima interrogazione, per il pannello. <c>null</c> = non è
+    /// mai stato interrogato da questo processo (che non è «sta bene»: è «non lo so», ed è la
+    /// distinzione che K40 ha già pagato per un'altra superficie).
+    /// </summary>
+    public CommitteeFaultReport? LastCommitteeFault { get; private set; }
+
+    /// <summary>
+    /// [K52] Lo stato dei votanti: chi è caduto in QUESTO giro, chi lo fa da abbastanza giri da
+    /// poterlo chiamare guasto, e se con i superstiti il quorum sia ancora aritmeticamente
+    /// possibile.
+    /// </summary>
+    /// <param name="Votanti">Provider interrogati in questo giro.</param>
+    /// <param name="Sospetti">Caduti in questo giro con un errore di forma «configurazione», con la causa testuale.</param>
+    /// <param name="Confermati">Quelli fra i sospetti che cadono da <see cref="ConfermaGuastoGiri"/> giri di fila.</param>
+    /// <param name="Serie">Provider → giri consecutivi di caduta, per mostrare quanto manca alla conferma.</param>
+    /// <param name="MinValidi">La soglia richiesta (<c>Committee:MinValidVotes</c>).</param>
+    /// <param name="QuorumIrraggiungibile">Vero = <b>coi soli confermati</b>, anche se i superstiti fossero unanimi non basterebbero.</param>
+    public sealed record CommitteeFaultReport(
+        int Votanti,
+        IReadOnlyList<(string Provider, string Causa)> Sospetti,
+        IReadOnlyList<string> Confermati,
+        IReadOnlyDictionary<string, int> Serie,
+        int MinValidi,
+        bool QuorumIrraggiungibile);
+
+    /// <summary>
+    /// [K52, corretto il 2026-09-02 dopo la misura] Giri consecutivi di caduta prima di chiamarlo
+    /// guasto.
+    ///
+    /// <para><b>Perché non basta una volta, e il numero che lo dimostra.</b> La prima versione di
+    /// K52 dichiarava il guasto alla prima risposta 404/410. Misurando NVIDIA dal vivo su un
+    /// campione controllato di 10 tentativi identici, stesso modello e stessa chiave:
+    /// <b>6 successi e 4 volte</b> <c>HTTP 404 «Function '…': Not found for account '…'»</c>, con il
+    /// 404 restituito in 753 ms — è il livello di instradamento che rifiuta, non il modello che
+    /// manca. Un 404 su quel provider <b>non prova affatto</b> che la configurazione sia stantia:
+    /// con la regola vecchia la piattaforma avrebbe emesso una notifica critica «il modello non
+    /// esiste più» ogni due giri, su un provider che funziona.</para>
+    ///
+    /// <para>La distinzione resta giusta — Groq era davvero morto per sedici giorni — ma la prova
+    /// non è la singola risposta: è la <b>ripetizione</b>. È la stessa isteresi di K42 sul ritiro e
+    /// di K46 sul tick: un giro storto è rumore, tre di fila sono un guasto. Con il tick a 15
+    /// minuti la conferma arriva in 45 minuti; il caso vero (sedici giorni) la supera di
+    /// millecinquecento volte.</para>
+    /// </summary>
+    public const int ConfermaGuastoGiri = 3;
+
+    /// <summary>Provider → giri consecutivi in cui è caduto con un errore di forma «configurazione».</summary>
+    private readonly Dictionary<string, int> _committeeFaultStreak = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// [K52] Dichiara che il comitato ha perso dei votanti per un guasto di configurazione — ma
+    /// <b>solo dopo</b> <see cref="ConfermaGuastoGiri"/> giri consecutivi, perché un 404 isolato è
+    /// rumore misurato e non una diagnosi. Una notifica per episodio, come K46, e la guarigione è
+    /// una notizia quanto il guasto.
+    ///
+    /// <para>Il testo distingue il caso in cui il quorum è <b>aritmeticamente</b> irraggiungibile:
+    /// è la differenza fra «il comitato è più fragile» e «il comitato non esiste più, e ogni
+    /// decisione la sta prendendo il default deterministico».</para>
+    /// </summary>
+    private async Task DeclareCommitteeFaultAsync(
+        Llm.Committee.CommitteeVerdict verdict, int minValidVotes, CancellationToken ct)
+    {
+        var sospetti = Llm.Committee.CommitteeDiagnosis.VotantiGuasti(verdict.Votes);
+        var caduti = sospetti.Select(s => s.Provider).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var voto in verdict.Votes)
+        {
+            if (caduti.Contains(voto.Provider))
+            {
+                _committeeFaultStreak[voto.Provider] = _committeeFaultStreak.GetValueOrDefault(voto.Provider) + 1;
+            }
+            else if (voto.Valid)
+            {
+                // Un voto valido azzera: il provider ha appena dimostrato di funzionare.
+                _committeeFaultStreak.Remove(voto.Provider);
+            }
+            // Un'astensione per altra causa (timeout, scelta fuori menù) NON tocca la serie: non è
+            // prova a favore né contro un guasto di configurazione, e trattarla come una delle due
+            // sarebbe inventare un'informazione che quel voto non porta.
+        }
+
+        var confermati = _committeeFaultStreak
+            .Where(kv => kv.Value >= ConfermaGuastoGiri && caduti.Contains(kv.Key))
+            .Select(kv => kv.Key)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // L'irraggiungibilità si calcola SUI SOLI CONFERMATI: coi sospetti direbbe «il comitato non
+        // esiste più» a ogni 404 di passaggio.
+        var superstiti = verdict.Votes.Count - confermati.Count;
+        var irraggiungibile = verdict.Votes.Count > 0 && confermati.Count > 0
+                              && superstiti < Math.Max(1, minValidVotes);
+
+        LastCommitteeFault = new CommitteeFaultReport(
+            verdict.Votes.Count,
+            sospetti.Select(g => (g.Provider, Causa: Troncato(g.Reason))).ToList(),
+            confermati,
+            new Dictionary<string, int>(_committeeFaultStreak, StringComparer.OrdinalIgnoreCase),
+            minValidVotes,
+            irraggiungibile);
+
+        if (confermati.Count == 0)
+        {
+            if (_committeeFaultNotified)
+            {
+                logger.LogInformation("Comitato di flotta: i votanti guasti sono tornati a rispondere.");
+                _committeeFaultNotified = false;
+            }
+            return;
+        }
+
+        logger.LogWarning(
+            "Comitato di flotta: {Guasti} votanti su {Totale} cadono da almeno {Giri} giri ({Chi}). Quorum irraggiungibile: {Irr}.",
+            confermati.Count, verdict.Votes.Count, ConfermaGuastoGiri, string.Join(", ", confermati), irraggiungibile);
+
+        if (_committeeFaultNotified || notifier is null) return;
+        _committeeFaultNotified = true;
+        try
+        {
+            var elenco = string.Join(" · ", sospetti
+                .Where(s => confermati.Contains(s.Provider, StringComparer.OrdinalIgnoreCase))
+                .Select(g => $"{g.Provider}: {Troncato(g.Reason)}"));
+            await notifier.NotifyAsync(NotificationSeverity.Critical,
+                irraggiungibile
+                    ? "Il comitato AI non può più raggiungere il quorum"
+                    : "Il comitato AI ha perso dei votanti per un guasto di configurazione",
+                (irraggiungibile
+                    ? $"Restano {superstiti} votanti possibili contro i {minValidVotes} richiesti: "
+                      + "ogni decisione della Regina la sta prendendo il default deterministico, e continuerà a prenderla "
+                      + "finché la configurazione non cambia. "
+                    : "Il comitato decide ancora, ma con meno voci di quante ne risultano configurate. ")
+                + $"Non è un caso isolato: cadono da {ConfermaGuastoGiri} giri di fila con un errore che dice «il modello non esiste». {elenco}. "
+                + "Si corregge in /admin/ai-supervisor, con «Scarica modelli» per l'elenco vero della propria chiave.", ct);
+        }
+        catch (Exception notifyEx)
+        {
+            logger.LogError(notifyEx, "Anche la notifica del comitato guasto è fallita.");
+        }
+    }
+
+    /// <summary>[K52] Superficie di prova per l'isteresi: un giro di voti, senza toccare la flotta.</summary>
+    internal Task ValutaComitatoPerTestAsync(Llm.Committee.CommitteeVerdict verdict, int minValidVotes)
+        => DeclareCommitteeFaultAsync(verdict, minValidVotes, CancellationToken.None);
+
+    private static string Troncato(string s) => s.Length <= 160 ? s : s[..160];
 
     /// <summary>Un tick completo. Pubblico per i test di integrazione e per un futuro "Esegui ora".</summary>
     public async Task TickAsync(CancellationToken ct)
     {
         var opt = options.CurrentValue;
+        // [K51] Prima di decidere: chiudere i conti aperti del giro precedente.
+        await RiconciliaIntentiAppesiAsync(opt.TickMinutes, ct);
         var state = await reader.ReadAsync(ct);
         var plan = FleetOrchestrator.Decide(state, opt);
         // [I8] La diagnosi si calcola SEMPRE, anche quando il piano contiene azioni: «perché non fa
@@ -304,6 +466,13 @@ public sealed class FleetOrchestratorWorker(
                 // avesse deliberato o non fosse mai stato interrogato — che è la differenza fra
                 // «ha scelto la regola» e «non ha funzionato».
                 assignSource = DescribeAssignSource(verdict);
+
+                // [K52, 2026-09-02] E poi lo si DICE. Il journal registra la causa da I8, ma il
+                // journal lo legge chi va a cercarlo: un comitato ridotto a un votante su tre
+                // continuava a sembrare un comitato da qualunque superficie della piattaforma.
+                var minValidi = serviceProvider
+                    .GetService<IOptionsMonitor<Llm.Committee.CommitteeOptions>>()?.CurrentValue.MinValidVotes ?? 2;
+                await DeclareCommitteeFaultAsync(verdict, minValidi, ct);
 
                 if (verdict.ByQuorum && Guid.TryParseExact(verdict.ChosenOptionId, "N", out var chosen)
                     && chosen != menu.DefaultRunId
@@ -506,22 +675,49 @@ public sealed class FleetOrchestratorWorker(
     /// <summary>
     /// [J13/J14] L'esecuzione di un'assegnazione: lo STESSO deployer del click umano F5
     /// (bracket automatico, frequenza attesa, rilettura fail-closed della corsia), con
-    /// <c>Source="fleet"</c>. Il journal lo scrive QUI il worker — non il deployer — perché la
-    /// riga deve portare i voti del comitato e la fonte della scelta, che il deployer non conosce:
-    /// due righe per la stessa azione sarebbero rumore nel posto dove si va a cercare cosa è
-    /// successo.
+    /// <c>Source="fleet"</c>.
+    ///
+    /// <para>[K51, 2026-09-02] La riga di journal si apre <b>PRIMA</b> di chiamare il deployer, e si
+    /// chiude con l'esito. Il worker la apre lui perché deve portare i voti del comitato e la fonte
+    /// della scelta, che il deployer non conosce — ma ora l'handle passa, quindi «una riga per
+    /// azione» non è più un accordo fra due file: è la forma.</para>
+    ///
+    /// <para><b>E se l'intento non si scrive, non si schiera.</b> È il fail-closed della regola 4
+    /// applicato all'azione meno reversibile della piattaforma, e il costo del verso opposto è
+    /// misurato: il 2026-08-31 due schieramenti su quattro sono avvenuti senza lasciare riga.</para>
     /// </summary>
     private async Task ExecuteAssignAsync(
         Guid runId, string candidateKey, int laneId, bool isGrey,
         string reason, string assignSource, string votesJson, CancellationToken ct)
     {
+        // [K51] L'intento, prima di toccare la corsia.
+        int intentoId;
+        try
+        {
+            intentoId = await ApriIntentoAssegnazioneAsync(runId, laneId, assignSource, votesJson, reason, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Corsia {Lane}: impossibile aprire l'intento a journal; NON si schiera.", laneId);
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(NotificationSeverity.Critical,
+                    "La flotta non riesce a registrare cosa sta per fare",
+                    $"L'orchestratore stava per schierare {candidateKey} sulla corsia {laneId} e non e' riuscito a "
+                    + $"scrivere l'intento nel journal ({ex.Message}). Lo schieramento NON e' avvenuto: riscrivere una "
+                    + "corsia senza poterlo registrare perde per sempre la configurazione precedente e la provenienza "
+                    + "di quella nuova.", ct);
+            }
+            return;
+        }
+
         string? error = null;
         var message = string.Empty;
         try
         {
             // allowSurvivor: il braccio «pass» schiera sopravvissuti; quello grigio solo grigi.
             var result = await greyDeployer!.DeployAsync(runId, candidateKey, laneId,
-                startPaper: true, ct, source: "fleet", allowSurvivor: !isGrey, journal: false);
+                startPaper: true, ct, source: "fleet", allowSurvivor: !isGrey, journalId: intentoId);
             message = result.Message;
             if (!result.Success) error = result.Message;
         }
@@ -532,12 +728,7 @@ public sealed class FleetOrchestratorWorker(
             message = ex.Message;
         }
 
-        await JournalAsync(new OrchestratorDecision
-        {
-            AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = laneId, RunId = runId,
-            Source = assignSource == "rules" ? "fleet" : assignSource, VotesJson = votesJson,
-            Reason = $"{reason} Esito: {message}", DryRun = false, Applied = error is null, Error = error,
-        }, ct);
+        await ChiudiIntentoAssegnazioneAsync(intentoId, error, $"{reason} Esito: {message}", ct);
 
         if (error is null)
         {
@@ -636,6 +827,85 @@ public sealed class FleetOrchestratorWorker(
     /// è ripetuto e la corsia esce dall'isteresi.
     /// </summary>
     internal readonly record struct RetireStreakChange(int LaneId, int Da, int A, string Reason);
+
+    /// <summary>
+    /// [K51] Apre l'intento di assegnazione: la riga esiste PRIMA che la corsia venga toccata, e
+    /// porta gia' tutto cio' che e' deciso prima dell'azione (corsia, run, fonte, voti, motivo).
+    /// Ciò che non e' ancora noto e' solo l'esito.
+    /// </summary>
+    private async Task<int> ApriIntentoAssegnazioneAsync(
+        Guid runId, int laneId, string assignSource, string votesJson, string reason, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var riga = new OrchestratorDecision
+        {
+            AtUtc = DateTime.UtcNow,
+            Kind = "Assign",
+            LaneId = laneId,
+            RunId = runId,
+            Source = assignSource == "rules" ? "fleet" : assignSource,
+            VotesJson = votesJson,
+            Outcome = DecisionOutcome.Intended,
+            Applied = false,
+            DryRun = false,
+            Reason = $"INTENTO. {reason}",
+        };
+        db.OrchestratorDecisions.Add(riga);
+        await db.SaveChangesAsync(ct);
+        return riga.Id;
+    }
+
+    /// <summary>
+    /// [K51] Chiude l'intento con l'esito. Se questa non arriva — perche' il processo e' morto a
+    /// meta' — la riga resta <c>Intended</c>, e <b>quella e' l'informazione</b>: la riconciliazione
+    /// del tick successivo la marchera' <c>Unknown</c>, mai <c>Applied</c> per somiglianza.
+    /// </summary>
+    private async Task ChiudiIntentoAssegnazioneAsync(int journalId, string? error, string reason, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var riga = await db.OrchestratorDecisions.FirstOrDefaultAsync(d => d.Id == journalId, ct);
+        if (riga is null) return;
+        riga.Outcome = error is null ? DecisionOutcome.Applied : DecisionOutcome.Failed;
+        riga.Applied = error is null;
+        riga.Error = error;
+        riga.Reason = reason;
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// [K51] <b>Gli intenti rimasti aperti si dichiarano, non si indovinano.</b>
+    ///
+    /// <para>Un intento aperto oltre due tick non puo' piu' chiudersi da solo: il processo che
+    /// l'aveva aperto non c'e' piu'. Si marca <c>Unknown</c> — <b>mai</b> <c>Applied</c> per
+    /// somiglianza con lo stato della corsia, che sarebbe una deduzione presentata come misura, la
+    /// trappola gia' pagata piu' volte in questo progetto.</para>
+    ///
+    /// <para>E' anche la prima superficie in assoluto che rende visibile un crash a meta'
+    /// schieramento: prima del 2026-09-02 quello stato non era esprimibile, quindi non esisteva.</para>
+    /// </summary>
+    /// <summary>Superficie per i test: la riconciliazione e' l'unico pezzo del tick che vive da solo.</summary>
+    internal Task RiconciliaPerTestAsync(int tickMinutes, CancellationToken ct = default)
+        => RiconciliaIntentiAppesiAsync(tickMinutes, ct);
+
+    private async Task RiconciliaIntentiAppesiAsync(int tickMinutes, CancellationToken ct)
+    {
+        var limite = DateTime.UtcNow.AddMinutes(-2 * Math.Max(1, tickMinutes));
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var appesi = await db.OrchestratorDecisions
+            .Where(d => d.Outcome == DecisionOutcome.Intended && d.AtUtc < limite)
+            .ToListAsync(ct);
+        if (appesi.Count == 0) return;
+
+        foreach (var riga in appesi)
+        {
+            riga.Outcome = DecisionOutcome.Unknown;
+            riga.Error = "esito ignoto: il processo e' terminato fra l'intento e la conferma. "
+                       + "Lo stato attuale della corsia NON viene usato per dedurre l'esito: sarebbe una "
+                       + "deduzione presentata come misura.";
+        }
+        await db.SaveChangesAsync(ct);
+        logger.LogWarning("Riconciliati {N} intenti rimasti aperti oltre due tick: marcati «esito ignoto».", appesi.Count);
+    }
 
     /// <summary>
     /// L'isteresi del ritiro, e da [K42] anche <b>le sue transizioni</b>.

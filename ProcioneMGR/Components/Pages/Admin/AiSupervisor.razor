@@ -250,7 +250,25 @@
             }
             else
             {
-                <span class="badge bg-success">operativo</span>
+                <span class="badge bg-success" title="Significa una cosa sola: il breaker non è aperto. NON significa che l'AI attiva stia rispondendo — se fallisce, il failover passa al provider successivo e il breaker non si muove.">operativo</span>
+            }
+
+            @* [K52, 2026-09-02] «Operativo» diceva soltanto «il breaker non è aperto», ed è rimasto
+               verde per otto giorni con l'AI attiva morta: NVIDIA rispondeva 410 a ogni chiamata e
+               il failover passava a Gemini in silenzio, quindi il breaker non si muoveva mai. Il
+               badge non mentiva sul proprio significato — mentiva su quello che chi legge gli
+               attribuisce.
+
+               Per l'AI ATTIVA il silenzio È un'informazione, a differenza degli altri provider:
+               l'attiva è il primo anello e viene interpellata a OGNI chiamata. Se non produce una
+               risposta riuscita da giorni mentre il layer continua a funzionare, la sta portando
+               qualcun altro. *@
+            @if (_freschezza.FirstOrDefault(f => string.Equals(f.Provider, LlmOptionsMonitor.CurrentValue.Provider, StringComparison.OrdinalIgnoreCase)) is { GiorniFa: >= 3 } stantia)
+            {
+                <span class="badge bg-warning text-dark"
+                      title="L'AI attiva è il primo anello della catena e viene chiamata ogni volta. Se non risponde da giorni mentre il layer funziona, sta rispondendo un provider di riserva — e il breaker non lo segnala, perché il failover ha successo.">
+                    l'AI attiva non risponde da @stantia.GiorniFa giorni — risponde il failover
+                </span>
             }
 
             <span class="badge bg-light text-dark">advisory ok: @_okCount</span>
@@ -357,6 +375,59 @@
             </div>
             <p class="text-muted small mb-2">Solo i delta di oggi non ancora scritti a database; i totali nei badge comprendono anche il persistito.</p>
         }
+
+        @* [K52, PRD autonomia-piena — Fase 4, 2026-09-02] QUANDO OGNI PROVIDER HA RISPOSTO L'ULTIMA VOLTA.
+
+           Il fatto che l'ha resa necessaria: NVIDIA ha smesso di rispondere il 25/08 (il modello
+           configurato e' andato in end-of-life il 26/08, HTTP 410) e Groq il 17/08 (HTTP 404, il
+           modello non e' piu' nel catalogo). Il comitato di flotta e' rimasto con un votante su
+           tre contro una soglia di due — quorum irraggiungibile — e nessuna pagina lo diceva,
+           perche' un'astensione e' progettata per non costare nulla.
+
+           Questa tabella e' l'unica superficie da cui il guasto era gia' visibile PRIMA che
+           servisse una decisione: i dati c'erano tutti in LlmUsageRecords, mancava chi li
+           guardasse.
+
+           NOTA IMPORTANTE, ed e' la lezione di «gate senza strumento»: qui si mostra il NUMERO,
+           non un verdetto. Un provider silenzioso NON e' per forza rotto — se sta in fondo alla
+           catena di failover puo' non essere mai stato interpellato, e chiamarlo «guasto»
+           fabbricherebbe un allarme dal nulla. Il silenzio dice «vai a provarlo», non «e' morto».
+           Chi puo' dire «e' morto» e' il pulsante Prova, o un 404/410 vero. *@
+        @if (_freschezza.Count > 0)
+        {
+            <h3 class="h6 mt-3">Ultima risposta valida per provider</h3>
+            <div class="table-responsive mb-1">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Provider</th><th>Modello che ha risposto</th><th>Ultima risposta</th><th class="text-end">Giorni fa</th></tr></thead>
+                    <tbody>
+                        @foreach (var f in _freschezza)
+                        {
+                            var configurato = GetModelFor(LlmOptionsMonitor.CurrentValue, f.Provider);
+                            var cambiato = !string.IsNullOrEmpty(configurato)
+                                           && !string.Equals(configurato, f.Model, StringComparison.OrdinalIgnoreCase);
+                            <tr class="@(f.GiorniFa >= 7 ? "table-warning" : null)">
+                                <td>@f.Provider</td>
+                                <td>
+                                    <code>@f.Model</code>
+                                    @if (cambiato)
+                                    {
+                                        <br /><span class="badge bg-secondary" title="La configurazione attuale punta a un modello diverso da quello che ha prodotto l'ultima risposta valida. Se il provider tace da allora, questo e' il primo posto dove guardare.">ora configurato: <code>@configurato</code></span>
+                                    }
+                                </td>
+                                <td>@f.UltimaUtc.ToLocalTime().ToString("yyyy-MM-dd")</td>
+                                <td class="text-end">@f.GiorniFa</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-muted small mb-2">
+                Dal persistito (<code>LlmUsageRecords</code>), che conta solo le risposte <em>riuscite</em>: un errore non
+                lascia riga qui. Il silenzio non prova un guasto — un provider in fondo alla catena di failover puo'
+                non essere mai stato interpellato — ma <strong>una riga vecchia con un modello diverso da quello
+                configurato</strong> e' il sintomo che ha tenuto il comitato senza quorum per due settimane.
+            </p>
+        }
         <div class="row g-2 align-items-end">
             <div class="col-auto form-check ms-2 mb-2">
                 <input type="checkbox" class="form-check-input" id="budget-tracking" @bind="_budgetTracking" />
@@ -451,7 +522,37 @@
                     else
                     {
                         <span class="badge bg-secondary ms-1">default deterministico</span>
-                        <span class="text-muted"> — la maggioranza non si è formata: è il comportamento previsto, non un guasto.</span>
+                        @* [K52, 2026-09-02] Qui c'era, invariabilmente, «è il comportamento previsto,
+                           non un guasto». Rassicurava a prescindere dalla realtà: il 2026-09-01 due
+                           votanti su tre erano MORTI — modello in end-of-life e modello sparito dal
+                           catalogo — e questa riga diceva lo stesso che non c'era nulla che non
+                           andasse. Ora la frase dipende dai voti, e quando il quorum è
+                           irraggiungibile lo dice. *@
+                        @if (ProcioneMGR.Services.Llm.Committee.CommitteeDiagnosis
+                                 .QuorumIrraggiungibile(probe.Votes, _committee.MinValidVotes))
+                        {
+                            <span class="badge bg-danger ms-1">QUORUM IRRAGGIUNGIBILE</span>
+                            <div class="text-danger small mt-1">
+                                Questo <strong>non</strong> è il comportamento previsto: dei
+                                @probe.Votes.Count votanti interrogati,
+                                <strong>@ProcioneMGR.Services.Llm.Committee.CommitteeDiagnosis.VotantiGuasti(probe.Votes).Count
+                                puntano a un modello che non esiste più</strong>, e i superstiti non bastano a fare
+                                @_committee.MinValidVotes. Finché resta così, ogni pareggio della flotta lo decide la
+                                regola deterministica — e non è un ripiego occasionale, è per sempre.
+                            </div>
+                        }
+                        else if (ProcioneMGR.Services.Llm.Committee.CommitteeDiagnosis.VotantiGuasti(probe.Votes).Count > 0)
+                        {
+                            <span class="text-warning small">
+                                — la maggioranza non si è formata, ma attenzione: qualche votante ha un
+                                <strong>modello non più esistente</strong>. Il quorum resta possibile, il comitato però
+                                sta decidendo con meno voci di quante ne risultano configurate.
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="text-muted"> — la maggioranza non si è formata: è il comportamento previsto, non un guasto.</span>
+                        }
                     }
                 </div>
                 <div class="table-responsive">
@@ -969,12 +1070,22 @@ else
                     var current = _models.GetValueOrDefault(p, "");
                     if (string.IsNullOrWhiteSpace(current) || !models.Contains(current, StringComparer.OrdinalIgnoreCase))
                     {
-                        if (ModelAutoSelector.Pick(p, models) is { } picked)
+                        // [K53, 2026-09-02] Prima delle euristiche sul nome, i modelli di questo
+                        // provider che HANNO DAVVERO RISPOSTO. Senza, per NVIDIA la regola
+                        // «llama+instruct+70b» trovava un solo candidato in tutto il catalogo —
+                        // `nvidia/llama-3.1-nemotron-70b-instruct` — che risponde 404: il pilota
+                        // automatico riportava la configurazione sul modello morto a ogni apertura
+                        // della pagina.
+                        var provati = await ModelliGiaFunzionantiAsync(p);
+                        if (ModelAutoSelector.Pick(p, models, provati) is { } picked)
                         {
                             _models[p] = picked;
+                            var perche = provati.Contains(picked, StringComparer.OrdinalIgnoreCase)
+                                ? $"{picked} (ha già risposto con questa chiave)"
+                                : picked;
                             autoPicked.Add(string.IsNullOrWhiteSpace(current)
-                                ? $"{p}: scelto {picked}"
-                                : $"{p}: «{current}» non è più nell'elenco → scelto {picked}");
+                                ? $"{p}: scelto {perche}"
+                                : $"{p}: «{current}» non è più nell'elenco → scelto {perche}");
                         }
                     }
                 }
@@ -1442,6 +1553,72 @@ else
         finally { _busy = false; }
     }
 
+    /// <summary>
+    /// [K52, 2026-09-02] Per ogni provider, <b>quando ha risposto validamente l'ultima volta</b> e
+    /// con quale modello. Da <c>LlmUsageRecords</c>, che registra solo le chiamate RIUSCITE: un
+    /// errore non lascia riga, quindi l'assenza di righe recenti è esattamente il segnale.
+    ///
+    /// <para>Query di sola lettura e aggregata: una riga per provider su una tabella che cresce di
+    /// poche righe al giorno.</para>
+    /// </summary>
+    private sealed record FreschezzaProvider(string Provider, string Model, DateTime UltimaUtc, int GiorniFa);
+
+    private List<FreschezzaProvider> _freschezza = [];
+
+    /// <summary>
+    /// [K53] I modelli di un provider che hanno prodotto almeno una chiamata riuscita, dal più
+    /// recente. È l'unica prova non congetturale di che cosa quell'account può invocare:
+    /// <c>LlmUsageRecords</c> si scrive solo dopo una risposta valida.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> ModelliGiaFunzionantiAsync(string provider)
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            return await db.LlmUsageRecords.AsNoTracking()
+                .Where(r => r.Provider == provider.ToLowerInvariant())
+                .GroupBy(r => r.Model)
+                .Select(g => new { Model = g.Key, Ultimo = g.Max(r => r.DayUtc) })
+                .OrderByDescending(x => x.Ultimo)
+                .Select(x => x.Model)
+                .ToListAsync();
+        }
+        catch
+        {
+            // Fail-open sulla diagnostica: senza la prova si torna alle euristiche, che è il
+            // comportamento di prima — mai peggio.
+            return [];
+        }
+    }
+
+    private async Task CaricaFreschezzaAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            // L'ultima riga per provider: il modello va preso da QUELLA riga, non dalla
+            // configurazione attuale — è proprio la divergenza fra i due che si vuole vedere.
+            var righe = await db.LlmUsageRecords.AsNoTracking()
+                .GroupBy(r => r.Provider)
+                .Select(g => g.OrderByDescending(r => r.DayUtc).First())
+                .ToListAsync();
+
+            var oggi = DateTime.UtcNow.Date;
+            _freschezza = righe
+                .Select(r => new FreschezzaProvider(r.Provider, r.Model, r.DayUtc, (int)(oggi - r.DayUtc.Date).TotalDays))
+                .OrderByDescending(f => f.GiorniFa)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            // Fail-open sulla diagnostica (regola 4): un pannello che non riesce a leggere questa
+            // tabella non deve impedire di leggere il resto. Ma nemmeno mostrare righe vecchie
+            // come se fossero attuali: la lista resta vuota e il riquadro sparisce.
+            _freschezza = [];
+            Console.Error.WriteLine($"[K52] Freschezza provider non leggibile: {ex.Message}");
+        }
+    }
+
     private async Task LoadAsync()
     {
         _busy = true;
@@ -1452,6 +1629,7 @@ else
             // [AF1] Snapshot consumo + verdetto budget + valori correnti del form.
             _usage = UsageSink.GetSnapshot();
             _budgetVerdict = UsageSink.CheckBudget();
+            await CaricaFreschezzaAsync();
             var budget = BudgetMonitor.CurrentValue;
             _budgetTracking = budget.TrackingEnabled;
             _budgetDailyCalls = budget.DailyCallLimit;

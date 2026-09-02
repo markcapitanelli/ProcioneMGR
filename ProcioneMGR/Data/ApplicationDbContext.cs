@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Services.Security;
 
@@ -247,6 +247,32 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // non ha funzionato», ed è esattamente ciò che I8 esisteva per dire. Il guardiano che
             // lega le due cose è in `FleetSourceLunghezzaK45Tests`.
             entity.Property(e => e.Source).HasMaxLength(32).IsRequired();
+            // [K51] Larga il doppio del più lungo dei cinque valori: la lezione di K45 è che una
+            // colonna stretta su un vocabolario che cresce è un guasto che aspetta.
+            //
+            // [K53, 2026-09-02] IL DEFAULT NON È COSMETICO: senza, questa colonna ha tenuto ferma
+            // la Regina per cinque ore e mezza, ed è un difetto di FORMA della migrazione, non del
+            // codice che la usa.
+            //
+            // Il fatto. `AddDecisionOutcome` è stata applicata al database VIVO mentre il codice di
+            // K51 stava ancora in un ramo non fuso. Il guscio in esecuzione — compilato da master —
+            // non conosce la proprietà `Outcome`, quindi la sua INSERT non la elenca affatto; senza
+            // un default la colonna riceve NULL e il vincolo la respinge:
+            //     23502: il valore nullo nella colonna "Outcome" viola il vincolo non nullo
+            // Risultato: journal fermo alla riga 137 delle 07:46 UTC, tick abortito, nessuno
+            // schieramento e nessun ritiro. La stessa forma di guasto di K45, presa dall'altro
+            // verso: là era la colonna troppo stretta per la stringa, qui è la colonna troppo
+            // severa per il binario che la scrive.
+            //
+            // La regola che ne discende, e che vale per OGNI migrazione futura di questa
+            // piattaforma: con le migrazioni applicate all'avvio e un database condiviso, fra
+            // l'istante in cui lo schema cambia e l'istante in cui il codice nuovo entra in
+            // servizio c'è SEMPRE una finestra in cui il binario vecchio scrive sullo schema
+            // nuovo. Una colonna che nasce obbligatoria dev'essere scrivibile anche da chi non
+            // sa che esiste — cioè avere un default — oppure nascere annullabile e diventare
+            // obbligatoria in una seconda migrazione, dopo il rilascio.
+            entity.Property(e => e.Outcome).HasMaxLength(32).IsRequired()
+                .HasDefaultValue(DecisionOutcome.Applied);
             entity.HasIndex(e => e.AtUtc);
             entity.HasIndex(e => new { e.RunId, e.Kind });
         });

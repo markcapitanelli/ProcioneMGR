@@ -45,6 +45,7 @@
 @inject ProcioneMGR.Services.Fleet.IGreyDeployer GreyDeployer
 @inject ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill FrequencyBackfill
 @inject ProcioneMGR.Services.Fleet.SourceVerdictBackfill ProvenanceBackfill
+@inject ProcioneMGR.Services.Fleet.LegBirthBackfill LegBirthBackfill
 @inject ProcioneMGR.Services.Fleet.ILaneIdentityLifetimeReader IdentityLifetime
 @inject ILaneDirectory LaneDirectory
 @inject IPipelineApplier PipelineApplier
@@ -451,6 +452,92 @@
                     <div class="mt-1"><code>@erroreTick</code></div>
                 </div>
             }
+            @* [K52, 2026-09-02] IL COMITATO CHE NON PUÒ PIÙ VOTARE.
+
+               Misurato sulle righe 129 e 130 del journal: dei tre votanti configurati, NVIDIA
+               rispondeva 410 («il modello ha raggiunto il fine vita il 2026-08-26») e Groq 404
+               («il modello non esiste»). Un voto valido su tre contro una soglia di due: quorum
+               aritmeticamente irraggiungibile, e tale dal 17/08 — due settimane in cui ogni scelta
+               della Regina l'ha presa il default deterministico mentre il pannello mostrava un
+               comitato «attivo».
+
+               Il difetto non era il modello ritirato: era che un'astensione permanente e una
+               transitoria producevano la stessa riga. Un guasto che non si può distinguere dal
+               rumore è, per chi guarda, un guasto che non esiste. *@
+            @* [Rettifica del 2026-09-02, poche ore dopo K52.] La prima versione gridava al guasto
+               alla PRIMA risposta 404. Campione controllato su NVIDIA — dieci tentativi identici,
+               stesso modello, stessa chiave — 6 successi e 4 volte «404 Function not found for
+               account», col 404 tornato in 753 ms: e' l'instradamento che rifiuta, non il modello
+               che manca. Con la regola vecchia questo riquadro sarebbe diventato rosso ogni due
+               giri su un provider che funziona, cioe' esattamente un allarme che non vuol dire
+               niente. Ora il sospetto e la conferma sono due cose diverse, e si vede la serie. *@
+            @if (FleetWorker.LastCommitteeFault is { Sospetti.Count: > 0 } comitato)
+            {
+                var confermato = comitato.Confermati.Count > 0;
+                <div class="alert @(comitato.QuorumIrraggiungibile ? "alert-danger" : confermato ? "alert-warning" : "alert-secondary") py-2 small mb-2">
+                    <strong>
+                        @if (comitato.QuorumIrraggiungibile)
+                        {
+                            @:Il comitato AI non può più raggiungere il quorum.
+                        }
+                        else if (confermato)
+                        {
+                            @:Il comitato AI ha perso @comitato.Confermati.Count votanti su @comitato.Votanti.
+                        }
+                        else
+                        {
+                            @:@comitato.Sospetti.Count votanti non hanno risposto in questo giro — non ancora un guasto.
+                        }
+                    </strong>
+                    @if (comitato.QuorumIrraggiungibile)
+                    {
+                        <text>
+                            Restano <strong>@(comitato.Votanti - comitato.Confermati.Count)</strong> votanti possibili contro i
+                            <strong>@comitato.MinValidi</strong> richiesti: anche se fossero unanimi non basterebbero, quindi
+                            <strong>ogni decisione la sta prendendo il default deterministico</strong> — e continuerà a
+                            prenderla finché la configurazione non cambia.
+                        </text>
+                    }
+                    else if (confermato)
+                    {
+                        <text>Decide ancora, ma con meno voci di quante ne risultano configurate.</text>
+                    }
+                    else
+                    {
+                        <text>
+                            Il provider ha risposto «il modello non esiste», ma <strong>una volta sola non è una
+                            diagnosi</strong>: misurato su NVIDIA, quello stesso errore arriva 4 volte su 10 tentativi
+                            identici su un modello che funziona. Serve che si ripeta per
+                            <strong>@ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.ConfermaGuastoGiri giri di fila</strong>
+                            prima di chiamarlo guasto — e a quel punto arriva anche la notifica.
+                        </text>
+                    }
+                    <ul class="mb-1 mt-1">
+                        @foreach (var g in comitato.Sospetti)
+                        {
+                            var giriDiFila = comitato.Serie.TryGetValue(g.Provider, out var n) ? n : 0;
+                            var ok = comitato.Confermati.Contains(g.Provider, StringComparer.OrdinalIgnoreCase);
+                            <li>
+                                <strong>@g.Provider</strong>
+                                @if (ok)
+                                {
+                                    <span class="badge bg-danger ms-1">guasto confermato — @giriDiFila giri di fila</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary ms-1">@giriDiFila di @ProcioneMGR.Services.Fleet.FleetOrchestratorWorker.ConfermaGuastoGiri giri</span>
+                                }
+                                <br /><code>@g.Causa</code>
+                            </li>
+                        }
+                    </ul>
+                    @if (confermato)
+                    {
+                        <a href="/admin/ai-supervisor" class="btn btn-sm btn-outline-dark py-0">Correggi in /admin/ai-supervisor</a>
+                        <span class="text-muted">— «Scarica modelli» dà l'elenco vero della propria chiave.</span>
+                    }
+                </div>
+            }
             @if (silence.UnreadableLanes > 0)
             {
                 <div class="alert alert-danger py-2 small mb-2">
@@ -753,6 +840,37 @@
                 </div>
             }
         </div>
+        @* [K22, 2026-09-02] Il timbro di nascita mancante. Da K39 una gamba senza
+           ExpectedSharpeAtUtc NON è misurabile dal monitor di decadimento — verso giusto, ma 4
+           gambe su 7 restano fuori dal giudizio per sempre. Il rimedio del PRD (togliere e
+           rimettere le gambe) conierebbe uno StrategyId nuovo, cioè azzererebbe l'identità della
+           corsia e l'orologio dell'osservazione: dieci giorni di cancello per guadagnare un campo. *@
+        <div class="border rounded p-2 mb-3">
+            <strong class="small">Timbro di nascita delle gambe mancante (K22)</strong>
+            <div class="small text-muted mb-2">
+                Scrive <code>ExpectedSharpeAtUtc</code> sulle gambe che non ce l'hanno, prendendolo dal
+                <strong>primo avvistamento della stessa identità</strong> nel ledger di osservazione
+                (<code>FleetLaneObservations.FirstSeenUtc</code>). Non è la nascita: è il primo momento in cui
+                qualcuno l'ha vista — ma <strong>per costruzione non può precederla</strong>, quindi l'errore
+                possibile è solo «il giudizio parte più tardi», mai «entrano trade di un'altra ipotesi», che è
+                il difetto che K39 ha corretto. Se il ledger osserva un'identità <em>diversa</em>, la gamba resta
+                senza timbro: quella data appartiene a un'altra ipotesi.
+            </div>
+            <button class="btn btn-outline-secondary btn-sm me-2" @onclick="() => RunLegBirthBackfillAsync(dryRun: true)" disabled="@_busy">Anteprima (non scrive)</button>
+            <button class="btn btn-warning btn-sm" @onclick="() => RunLegBirthBackfillAsync(dryRun: false)" disabled="@_busy">Timbra e salva</button>
+            @if (_legBirthReport is { } lbr)
+            {
+                <div class="small mt-2">
+                    <strong>@(lbr.DryRun ? "Anteprima" : "Eseguito"):</strong> @lbr.Updated gambe timbrabili su @lbr.Legs.Count esaminate.
+                    <ul class="mb-0">
+                        @foreach (var l in lbr.Legs.Take(12))
+                        {
+                            <li class="@(l.Timbro is not null ? "" : "text-muted")">corsia @l.LaneId — @l.Leg: @l.Detail</li>
+                        }
+                    </ul>
+                </div>
+            }
+        </div>
         @* [F5] IL CLICK UMANO: schiera un candidato grigio proposto su una corsia di flotta libera. *@
         @if (_greyRuns.Count > 0)
         {
@@ -847,10 +965,45 @@
                                     }
                                 </td>
                                 <td>
-                                    @if (d.DryRun) { <span class="badge bg-info">dry-run</span> }
-                                    else if (d.Applied) { <span class="badge bg-success">eseguita</span> }
-                                    else if (d.Error is not null) { <span class="badge bg-danger" title="@d.Error">errore</span> }
-                                    else { <span class="badge bg-secondary">no</span> }
+                                    @* [K51, 2026-09-02] L'ESITO, che prima era un booleano con tre
+                                       significati schiacciati insieme: esito dell'azione, intento
+                                       (le proposte scrivono «true» perche' la proposta E' l'azione)
+                                       e rifiuto — e quest'ultimo con DryRun cablato a true anche a
+                                       dry-run spento, dove significava «non ho agito» invece di
+                                       «ero in prova».
+
+                                       E ne mancava un quarto, che e' quello che serviva: «e' stato
+                                       deciso di toccare la corsia e non si sa come sia finita». Il
+                                       31/08 due schieramenti su quattro sono avvenuti senza riga, e
+                                       quello stato non era esprimibile — quindi era invisibile. *@
+                                    @switch (d.Outcome)
+                                    {
+                                        case ProcioneMGR.Data.DecisionOutcome.Intended:
+                                            <span class="badge bg-warning text-dark"
+                                                  title="Deciso, e non ancora concluso. Se resta cosi' oltre due tick, il processo e' morto a meta': la riconciliazione lo marchera' «esito ignoto», mai «eseguita» per somiglianza.">
+                                                in corso
+                                            </span>
+                                            break;
+                                        case ProcioneMGR.Data.DecisionOutcome.Unknown:
+                                            <span class="badge bg-danger"
+                                                  title="@($"ESITO IGNOTO. {d.Error} Questa riga e' la prova che qualcosa e' stato deciso e nessuno sa se sia avvenuto: prima del 2026-09-02 questo stato non esisteva, e un crash a meta' schieramento era semplicemente invisibile.")">
+                                                esito ignoto
+                                            </span>
+                                            break;
+                                        case ProcioneMGR.Data.DecisionOutcome.Failed:
+                                            <span class="badge bg-danger" title="@d.Error">fallita</span>
+                                            break;
+                                        case ProcioneMGR.Data.DecisionOutcome.Refused:
+                                            <span class="badge bg-secondary"
+                                                  title="@($"Non si e' nemmeno tentato, per una regola (dry-run, corsia non autorizzata, budget del tick, guardia). {d.Error}")">
+                                                rifiutata
+                                            </span>
+                                            break;
+                                        default:
+                                            @if (d.DryRun) { <span class="badge bg-info">dry-run</span> }
+                                            else { <span class="badge bg-success">eseguita</span> }
+                                            break;
+                                    }
                                 </td>
                                 <td class="small">@d.Reason</td>
                             </tr>
@@ -2554,6 +2707,24 @@
         catch (Exception ex)
         {
             _status = $"Backfill provenienza fallito: {ex.Message}";
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    // [K22, 2026-09-02] Il timbro di nascita ricostruito dal ledger di osservazione.
+    private ProcioneMGR.Services.Fleet.LegBirthReport? _legBirthReport;
+
+    private async Task RunLegBirthBackfillAsync(bool dryRun)
+    {
+        _busy = true;
+        try
+        {
+            _legBirthReport = await LegBirthBackfill.RunAsync(dryRun);
+        }
+        catch (Exception ex)
+        {
+            _status = $"Backfill del timbro di nascita fallito: {ex.Message}";
             _isError = true;
         }
         finally { _busy = false; }

@@ -17,6 +17,7 @@
 @inject AuthenticationStateProvider AuthProvider
 @inject ILogger<Pipeline> Logger
 @inject PipelinePageService Svc
+@inject IHuntYieldReader ReseDiCaccia
 
 <PageTitle>Pipeline autonomo</PageTitle>
 <h1>Pipeline autonomo
@@ -141,6 +142,40 @@
                                    confrontabili. Quattro configurazioni erano in quello stato e una
                                    girava ogni notte producendo nulla: il badge lo dice qui, dove si
                                    sceglie cosa eseguire, invece di lasciarlo scoprire a run finito. *@
+                                @* [K50, 2026-09-02] LA RESA, accanto alla configurazione.
+                                   Nessuno metteva in sonno una caccia che non rende, e il criterio
+                                   ovvio — «zero gambe assemblate» — e' una trappola: misurato,
+                                   ensembleLegs e' vuoto in 173 run su 173, quindi le
+                                   addormenterebbe tutte. Cio' che discrimina e' la fascia grigia:
+                                   1,32 chiavi/run contro 0,06, un fattore ventidue. *@
+                                @if (_resa.FirstOrDefault(y => y.ConfigurationId == c.Id) is { } resa)
+                                {
+                                    var stile = resa.Verdict switch
+                                    {
+                                        ProcioneMGR.Services.Pipeline.HuntYieldVerdict.Sterile => "bg-danger",
+                                        ProcioneMGR.Services.Pipeline.HuntYieldVerdict.TroppoPresto => "bg-light text-dark border",
+                                        _ => "bg-success",
+                                    };
+                                    <span class="badge @stile ms-1"
+                                          title="@ProcioneMGR.Services.Pipeline.HuntYield.Describe(resa, _resaMediana)">
+                                        @(resa.Verdict switch
+                                        {
+                                            ProcioneMGR.Services.Pipeline.HuntYieldVerdict.Sterile => $"sterile · {resa.KeysPerRun:F2}/run",
+                                            ProcioneMGR.Services.Pipeline.HuntYieldVerdict.TroppoPresto => $"{resa.Runs} run",
+                                            _ => $"resa {resa.KeysPerRun:F2}/run",
+                                        })
+                                    </span>
+                                }
+                                @* [K49b] Le serie sospese si dicono DOVE SI SCEGLIE cosa eseguire:
+                                   MKR/USDT e' rimasto in due configurazioni per 35 giorni dopo la
+                                   disabilitazione, producendo 424 righe di bocciatura a ogni giro. *@
+                                @if (PipelinePageService.SerieSospese(c, Svc.DisabledSeries) is { } sospese)
+                                {
+                                    <span class="badge bg-warning text-dark ms-1"
+                                          title="@($"Queste serie sono SOSPESE dall'exchange e disabilitate in watchlist ({sospese}): non hanno candele fresche e non possono produrre un candidato. Dal 2026-09-02 lo stage di ingestione le pota dal run e lo dichiara, ma restano nella configurazione: toglierle di qui rende la lista onesta.")">
+                                        serie sospese
+                                    </span>
+                                }
                                 @if (TimeframeMisti(c) is { } tfs)
                                 {
                                     <span class="badge bg-danger ms-1"
@@ -610,6 +645,10 @@
     private bool _isError;
     private PollingTimer? _timer;
 
+    /// <summary>[K50] La resa per configurazione, e la mediana con cui si confronta.</summary>
+    private IReadOnlyList<ProcioneMGR.Services.Pipeline.HuntYieldRow> _resa = [];
+    private double _resaMediana;
+
     protected override async Task OnInitializedAsync()
     {
         var state = await AuthProvider.GetAuthenticationStateAsync();
@@ -627,6 +666,23 @@
 
     private async Task ReloadAsync()
     {
+        // [K49b] Le serie disabilitate servono al badge «serie sospese»: si leggono col resto, e
+        // se la lettura fallisce l'insieme resta vuoto — il badge sparisce, che è meglio di un
+        // badge che afferma «nessuna sospesa» senza averlo guardato.
+        try { await Svc.LoadDisabledSeriesAsync(); } catch (Exception) { /* badge assente, mai falso */ }
+        // [K50] La resa: se non si legge, il badge sparisce — meglio nessun giudizio che un
+        // giudizio costruito su un elenco vuoto, che direbbe «sterile» a tutte.
+        try
+        {
+            _resa = await ReseDiCaccia.ReadAsync();
+            var giudicabili = _resa
+                .Where(y => y.Verdict != ProcioneMGR.Services.Pipeline.HuntYieldVerdict.TroppoPresto)
+                .Select(y => y.KeysPerRun).OrderBy(x => x).ToList();
+            _resaMediana = giudicabili.Count == 0 ? 0
+                : giudicabili.Count % 2 == 1 ? giudicabili[giudicabili.Count / 2]
+                : (giudicabili[giudicabili.Count / 2 - 1] + giudicabili[giudicabili.Count / 2]) / 2.0;
+        }
+        catch (Exception) { _resa = []; }
         try { await Svc.ReloadAsync(); }
         catch { /* refresh resiliente */ }
     }

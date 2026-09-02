@@ -44,7 +44,7 @@ public sealed class BotPageServiceTests : IAsyncDisposable
 
         public int LaneId => 0;
         public Task<EnsembleConfiguration> GetConfigurationAsync(CancellationToken ct = default) => Task.FromResult(Config);
-        public Task UpdateConfigurationAsync(EnsembleConfiguration c, CancellationToken ct = default)
+        public Task UpdateConfigurationAsync(EnsembleConfiguration c, ProcioneMGR.Services.Ensemble.ConfigWriteContext writtenBy, CancellationToken ct = default)
         {
             Config = c;
             UpdateCount++;
@@ -114,7 +114,7 @@ public sealed class BotPageServiceTests : IAsyncDisposable
         {
             var cfg = ensemble.Config;
             cfg.Strategies = [new EnsembleStrategy { StrategyId = "s1", StrategyName = "EmaCross", DisplayName = "EMA", IsActive = true }];
-            await ensemble.UpdateConfigurationAsync(cfg);
+            await ensemble.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
         }
 
         var services = new ServiceCollection();
@@ -201,7 +201,7 @@ public sealed class BotPageServiceTests : IAsyncDisposable
         var cfg = ensemble.Config;
         cfg.RiskProfileName = RiskProfiles.Prudente;
         cfg.TotalCapital = 3_000m;
-        await ensemble.UpdateConfigurationAsync(cfg);
+        await ensemble.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await svc.LoadAsync();
 
@@ -216,7 +216,7 @@ public sealed class BotPageServiceTests : IAsyncDisposable
         var (svc, ensemble, _, _, _) = await BuildAsync(withStrategies: true);
         var cfg = ensemble.Config;
         cfg.RiskProfileName = "ProfiloCheNonEsistePiù";
-        await ensemble.UpdateConfigurationAsync(cfg);
+        await ensemble.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create("test", "prova"));
 
         await svc.LoadAsync();
 
