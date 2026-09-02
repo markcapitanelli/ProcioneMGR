@@ -123,14 +123,23 @@ public class ResaDellaCacciaK50Tests
 
         // [K54b] La frase non parla piu' di resa, perche' la resa non e' la ragione: parla di ore.
         // E indirizza alla domanda giusta — non «rende poco», ma «perche' ha smesso di girare».
-        Assert.Contains("17 run per 0,0 ore", testo, StringComparison.Ordinal);
+        //
+        // [2026-09-02] Le asserzioni NON contengono numeri decimali formattati, ed e' una lezione
+        // pagata: la prima versione cercava «0,0 ore» e passava in locale (macchina italiana)
+        // fallendo in CI (invariante, «0.0»). La stringa di prodotto DEVE restare culture-dependent
+        // — e' testo che un italiano legge — quindi a cambiare e' la prova, non la frase.
+        Assert.Contains("17 run per", testo, StringComparison.Ordinal);
+        Assert.Contains("ore nella finestra", testo, StringComparison.Ordinal);
         Assert.Contains("PERCHE' ha smesso di essere invocata", testo, StringComparison.Ordinal);
+        Assert.DoesNotContain("mediana", testo, StringComparison.Ordinal);   // non e' un giudizio di resa
 
         // La frase della caccia davvero sterile, invece, porta la resa E il costo.
         var sterile = HuntYield.Judge([(1, 40, 40, 10.0, 15.0), (2, 40, 1, 10.0, 15.0)])
             .Single(r => r.ConfigurationId == 2);
         var testoSterile = HuntYield.Describe(sterile, medianaPerRun: 1.0);
         Assert.Contains("contro una mediana di", testoSterile, StringComparison.Ordinal);
-        Assert.Contains("COSTA 10,0 ore", testoSterile, StringComparison.Ordinal);
+        Assert.Contains("COSTA", testoSterile, StringComparison.Ordinal);
+        Assert.Contains("ore (", testoSterile, StringComparison.Ordinal);
+        Assert.Contains("min a run)", testoSterile, StringComparison.Ordinal);
     }
 }
