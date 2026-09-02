@@ -29,17 +29,21 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
     /// scrivibile <b>anche da chi non sa che esiste</b>. Il guardiano è
     /// <c>ColonnaObbligatoriaScrivibileK53Tests</c>.</para>
     ///
-    /// <para><b>Scritta a mano, e perché.</b> <c>dotnet ef migrations add</c> in questo repository
-    /// produce migrazioni sbagliate — rigenera le ultime cinque, comprese <c>CreateTable</c> di
-    /// tabelle che esistono già — perché l'app non referenzia l'assembly delle migrazioni (scelta
-    /// deliberata di <c>Program.cs</c>, evita un ciclo di progetti). Applicare quella scaffoldatura
-    /// al database vivo lo romperebbe. Finché il tooling non è a posto, le migrazioni di questo
-    /// repository si scrivono a mano — ed è il motivo per cui questa è idempotente.</para>
+    /// <para><b>Scritta a mano, e la ragione che avevo dato era sbagliata.</b> Avevo concluso che
+    /// <c>dotnet ef migrations add</c> «produce migrazioni sbagliate in questo repository», perché
+    /// rigenerava le ultime cinque migrazioni comprese <c>CreateTable</c> di tabelle esistenti. La
+    /// causa vera è banale: <b><c>dotnet ef</c> senza <c>--configuration</c> usa DEBUG</b>, e
+    /// <c>ProcioneMGR/bin/Debug/</c> conteneva un assembly delle migrazioni fermo al 2026-08-22 —
+    /// trenta migrazioni su trentanove. Diffare contro quello produce esattamente quella
+    /// scaffoldatura. Con <c>--configuration Release</c> il tooling è corretto e dice
+    /// «<i>No changes have been made to the model since the last migration</i>».</para>
+    ///
+    /// <para>Questa resta scritta a mano perché ormai c'è ed è idempotente, ma <b>non c'è nessun
+    /// motivo per non usare il generatore</b>: basta passargli la configurazione giusta.</para>
     /// </summary>
     // [2026-09-02] I DUE ATTRIBUTI NON SONO CERIMONIA: senza, EF non vede la migrazione.
-    // Le migrazioni generate li ricevono nel file `.Designer.cs`; questa e' scritta a mano (vedi
-    // sopra: `migrations add` in questo repository produce migrazioni sbagliate) e la prima
-    // versione li aveva dimenticati. Effetto misurato all'avvio del guscio:
+    // Le migrazioni generate li ricevono nel file `.Designer.cs`; questa e' scritta a mano e la
+    // prima versione li aveva dimenticati. Effetto misurato all'avvio del guscio:
     //     «Nessuna migrazione pendente (38 note)»   ...su 39 file presenti.
     // Nessun errore, nessuna riga rossa sul file: semplicemente non esisteva. L'ha scoperta il
     // guardiano di DatabaseMigrator, che confronta modello e snapshot e RIFIUTA di dichiarare lo

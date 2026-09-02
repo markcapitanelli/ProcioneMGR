@@ -280,6 +280,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // `Database.MigrateAsync()` dentro i test non trova nulla e la suite ha SEMPRE creato lo
             // schema dal modello. È anche il motivo per cui questo difetto non poteva essere preso
             // da un test: nessuna prova esercita le migrazioni.
+            //
+            // E lo snapshot registra il default: senza, `dotnet ef database update` fallisce con
+            // PendingModelChangesWarning e l'E2E su kind resta rosso — è successo dal merge di
+            // #129 (2026-09-02 15:00) fino a qui.
             entity.Property(e => e.Outcome).HasMaxLength(32).IsRequired()
                 .HasDefaultValue(DecisionOutcome.Applied);
             entity.HasIndex(e => e.AtUtc);
