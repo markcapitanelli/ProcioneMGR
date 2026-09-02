@@ -256,6 +256,8 @@ public sealed class FleetOrchestratorWorker(
     public async Task TickAsync(CancellationToken ct)
     {
         var opt = options.CurrentValue;
+        // [K51] Prima di decidere: chiudere i conti aperti del giro precedente.
+        await RiconciliaIntentiAppesiAsync(opt.TickMinutes, ct);
         var state = await reader.ReadAsync(ct);
         var plan = FleetOrchestrator.Decide(state, opt);
         // [I8] La diagnosi si calcola SEMPRE, anche quando il piano contiene azioni: «perché non fa
@@ -506,22 +508,49 @@ public sealed class FleetOrchestratorWorker(
     /// <summary>
     /// [J13/J14] L'esecuzione di un'assegnazione: lo STESSO deployer del click umano F5
     /// (bracket automatico, frequenza attesa, rilettura fail-closed della corsia), con
-    /// <c>Source="fleet"</c>. Il journal lo scrive QUI il worker — non il deployer — perché la
-    /// riga deve portare i voti del comitato e la fonte della scelta, che il deployer non conosce:
-    /// due righe per la stessa azione sarebbero rumore nel posto dove si va a cercare cosa è
-    /// successo.
+    /// <c>Source="fleet"</c>.
+    ///
+    /// <para>[K51, 2026-09-02] La riga di journal si apre <b>PRIMA</b> di chiamare il deployer, e si
+    /// chiude con l'esito. Il worker la apre lui perché deve portare i voti del comitato e la fonte
+    /// della scelta, che il deployer non conosce — ma ora l'handle passa, quindi «una riga per
+    /// azione» non è più un accordo fra due file: è la forma.</para>
+    ///
+    /// <para><b>E se l'intento non si scrive, non si schiera.</b> È il fail-closed della regola 4
+    /// applicato all'azione meno reversibile della piattaforma, e il costo del verso opposto è
+    /// misurato: il 2026-08-31 due schieramenti su quattro sono avvenuti senza lasciare riga.</para>
     /// </summary>
     private async Task ExecuteAssignAsync(
         Guid runId, string candidateKey, int laneId, bool isGrey,
         string reason, string assignSource, string votesJson, CancellationToken ct)
     {
+        // [K51] L'intento, prima di toccare la corsia.
+        int intentoId;
+        try
+        {
+            intentoId = await ApriIntentoAssegnazioneAsync(runId, laneId, assignSource, votesJson, reason, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Corsia {Lane}: impossibile aprire l'intento a journal; NON si schiera.", laneId);
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(NotificationSeverity.Critical,
+                    "La flotta non riesce a registrare cosa sta per fare",
+                    $"L'orchestratore stava per schierare {candidateKey} sulla corsia {laneId} e non e' riuscito a "
+                    + $"scrivere l'intento nel journal ({ex.Message}). Lo schieramento NON e' avvenuto: riscrivere una "
+                    + "corsia senza poterlo registrare perde per sempre la configurazione precedente e la provenienza "
+                    + "di quella nuova.", ct);
+            }
+            return;
+        }
+
         string? error = null;
         var message = string.Empty;
         try
         {
             // allowSurvivor: il braccio «pass» schiera sopravvissuti; quello grigio solo grigi.
             var result = await greyDeployer!.DeployAsync(runId, candidateKey, laneId,
-                startPaper: true, ct, source: "fleet", allowSurvivor: !isGrey, journal: false);
+                startPaper: true, ct, source: "fleet", allowSurvivor: !isGrey, journalId: intentoId);
             message = result.Message;
             if (!result.Success) error = result.Message;
         }
@@ -532,12 +561,7 @@ public sealed class FleetOrchestratorWorker(
             message = ex.Message;
         }
 
-        await JournalAsync(new OrchestratorDecision
-        {
-            AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = laneId, RunId = runId,
-            Source = assignSource == "rules" ? "fleet" : assignSource, VotesJson = votesJson,
-            Reason = $"{reason} Esito: {message}", DryRun = false, Applied = error is null, Error = error,
-        }, ct);
+        await ChiudiIntentoAssegnazioneAsync(intentoId, error, $"{reason} Esito: {message}", ct);
 
         if (error is null)
         {
@@ -636,6 +660,85 @@ public sealed class FleetOrchestratorWorker(
     /// è ripetuto e la corsia esce dall'isteresi.
     /// </summary>
     internal readonly record struct RetireStreakChange(int LaneId, int Da, int A, string Reason);
+
+    /// <summary>
+    /// [K51] Apre l'intento di assegnazione: la riga esiste PRIMA che la corsia venga toccata, e
+    /// porta gia' tutto cio' che e' deciso prima dell'azione (corsia, run, fonte, voti, motivo).
+    /// Ciò che non e' ancora noto e' solo l'esito.
+    /// </summary>
+    private async Task<int> ApriIntentoAssegnazioneAsync(
+        Guid runId, int laneId, string assignSource, string votesJson, string reason, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var riga = new OrchestratorDecision
+        {
+            AtUtc = DateTime.UtcNow,
+            Kind = "Assign",
+            LaneId = laneId,
+            RunId = runId,
+            Source = assignSource == "rules" ? "fleet" : assignSource,
+            VotesJson = votesJson,
+            Outcome = DecisionOutcome.Intended,
+            Applied = false,
+            DryRun = false,
+            Reason = $"INTENTO. {reason}",
+        };
+        db.OrchestratorDecisions.Add(riga);
+        await db.SaveChangesAsync(ct);
+        return riga.Id;
+    }
+
+    /// <summary>
+    /// [K51] Chiude l'intento con l'esito. Se questa non arriva — perche' il processo e' morto a
+    /// meta' — la riga resta <c>Intended</c>, e <b>quella e' l'informazione</b>: la riconciliazione
+    /// del tick successivo la marchera' <c>Unknown</c>, mai <c>Applied</c> per somiglianza.
+    /// </summary>
+    private async Task ChiudiIntentoAssegnazioneAsync(int journalId, string? error, string reason, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var riga = await db.OrchestratorDecisions.FirstOrDefaultAsync(d => d.Id == journalId, ct);
+        if (riga is null) return;
+        riga.Outcome = error is null ? DecisionOutcome.Applied : DecisionOutcome.Failed;
+        riga.Applied = error is null;
+        riga.Error = error;
+        riga.Reason = reason;
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// [K51] <b>Gli intenti rimasti aperti si dichiarano, non si indovinano.</b>
+    ///
+    /// <para>Un intento aperto oltre due tick non puo' piu' chiudersi da solo: il processo che
+    /// l'aveva aperto non c'e' piu'. Si marca <c>Unknown</c> — <b>mai</b> <c>Applied</c> per
+    /// somiglianza con lo stato della corsia, che sarebbe una deduzione presentata come misura, la
+    /// trappola gia' pagata piu' volte in questo progetto.</para>
+    ///
+    /// <para>E' anche la prima superficie in assoluto che rende visibile un crash a meta'
+    /// schieramento: prima del 2026-09-02 quello stato non era esprimibile, quindi non esisteva.</para>
+    /// </summary>
+    /// <summary>Superficie per i test: la riconciliazione e' l'unico pezzo del tick che vive da solo.</summary>
+    internal Task RiconciliaPerTestAsync(int tickMinutes, CancellationToken ct = default)
+        => RiconciliaIntentiAppesiAsync(tickMinutes, ct);
+
+    private async Task RiconciliaIntentiAppesiAsync(int tickMinutes, CancellationToken ct)
+    {
+        var limite = DateTime.UtcNow.AddMinutes(-2 * Math.Max(1, tickMinutes));
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var appesi = await db.OrchestratorDecisions
+            .Where(d => d.Outcome == DecisionOutcome.Intended && d.AtUtc < limite)
+            .ToListAsync(ct);
+        if (appesi.Count == 0) return;
+
+        foreach (var riga in appesi)
+        {
+            riga.Outcome = DecisionOutcome.Unknown;
+            riga.Error = "esito ignoto: il processo e' terminato fra l'intento e la conferma. "
+                       + "Lo stato attuale della corsia NON viene usato per dedurre l'esito: sarebbe una "
+                       + "deduzione presentata come misura.";
+        }
+        await db.SaveChangesAsync(ct);
+        logger.LogWarning("Riconciliati {N} intenti rimasti aperti oltre due tick: marcati «esito ignoto».", appesi.Count);
+    }
 
     /// <summary>
     /// L'isteresi del ritiro, e da [K42] anche <b>le sue transizioni</b>.

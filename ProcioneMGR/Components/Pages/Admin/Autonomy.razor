@@ -847,10 +847,45 @@
                                     }
                                 </td>
                                 <td>
-                                    @if (d.DryRun) { <span class="badge bg-info">dry-run</span> }
-                                    else if (d.Applied) { <span class="badge bg-success">eseguita</span> }
-                                    else if (d.Error is not null) { <span class="badge bg-danger" title="@d.Error">errore</span> }
-                                    else { <span class="badge bg-secondary">no</span> }
+                                    @* [K51, 2026-09-02] L'ESITO, che prima era un booleano con tre
+                                       significati schiacciati insieme: esito dell'azione, intento
+                                       (le proposte scrivono «true» perche' la proposta E' l'azione)
+                                       e rifiuto — e quest'ultimo con DryRun cablato a true anche a
+                                       dry-run spento, dove significava «non ho agito» invece di
+                                       «ero in prova».
+
+                                       E ne mancava un quarto, che e' quello che serviva: «e' stato
+                                       deciso di toccare la corsia e non si sa come sia finita». Il
+                                       31/08 due schieramenti su quattro sono avvenuti senza riga, e
+                                       quello stato non era esprimibile — quindi era invisibile. *@
+                                    @switch (d.Outcome)
+                                    {
+                                        case ProcioneMGR.Data.DecisionOutcome.Intended:
+                                            <span class="badge bg-warning text-dark"
+                                                  title="Deciso, e non ancora concluso. Se resta cosi' oltre due tick, il processo e' morto a meta': la riconciliazione lo marchera' «esito ignoto», mai «eseguita» per somiglianza.">
+                                                in corso
+                                            </span>
+                                            break;
+                                        case ProcioneMGR.Data.DecisionOutcome.Unknown:
+                                            <span class="badge bg-danger"
+                                                  title="@($"ESITO IGNOTO. {d.Error} Questa riga e' la prova che qualcosa e' stato deciso e nessuno sa se sia avvenuto: prima del 2026-09-02 questo stato non esisteva, e un crash a meta' schieramento era semplicemente invisibile.")">
+                                                esito ignoto
+                                            </span>
+                                            break;
+                                        case ProcioneMGR.Data.DecisionOutcome.Failed:
+                                            <span class="badge bg-danger" title="@d.Error">fallita</span>
+                                            break;
+                                        case ProcioneMGR.Data.DecisionOutcome.Refused:
+                                            <span class="badge bg-secondary"
+                                                  title="@($"Non si e' nemmeno tentato, per una regola (dry-run, corsia non autorizzata, budget del tick, guardia). {d.Error}")">
+                                                rifiutata
+                                            </span>
+                                            break;
+                                        default:
+                                            @if (d.DryRun) { <span class="badge bg-info">dry-run</span> }
+                                            else { <span class="badge bg-success">eseguita</span> }
+                                            break;
+                                    }
                                 </td>
                                 <td class="small">@d.Reason</td>
                             </tr>

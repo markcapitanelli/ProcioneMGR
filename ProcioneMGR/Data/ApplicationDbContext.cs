@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using ProcioneMGR.Services.Security;
 
@@ -247,6 +247,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // non ha funzionato», ed è esattamente ciò che I8 esisteva per dire. Il guardiano che
             // lega le due cose è in `FleetSourceLunghezzaK45Tests`.
             entity.Property(e => e.Source).HasMaxLength(32).IsRequired();
+            // [K51] Larga il doppio del più lungo dei cinque valori: la lezione di K45 è che una
+            // colonna stretta su un vocabolario che cresce è un guasto che aspetta.
+            entity.Property(e => e.Outcome).HasMaxLength(32).IsRequired();
             entity.HasIndex(e => e.AtUtc);
             entity.HasIndex(e => new { e.RunId, e.Kind });
         });
