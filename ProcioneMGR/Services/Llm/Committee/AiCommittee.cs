@@ -48,11 +48,79 @@ public sealed record CommitteeQuestion(
     IReadOnlyList<CommitteeOption> Options,
     string DefaultOptionId);
 
-/// <summary>Il voto di un provider. <see cref="Valid"/> falso = astensione (errore, timeout, scelta fuori menù).</summary>
-public sealed record CommitteeVote(string Provider, string? OptionId, double? Confidence, string Reason, bool Valid);
+/// <summary>
+/// Il voto di un provider. <see cref="Valid"/> falso = astensione (errore, timeout, scelta fuori menù).
+///
+/// <para>[K52, 2026-09-02] <see cref="FaultCause"/> è la classificazione dell'errore secondo
+/// <see cref="LlmCallGuard.Classify(Exception)"/>, <c>null</c> quando il voto è arrivato (valido o
+/// fuori menù che sia). Serve a separare <b>«non ha risposto stavolta»</b> da <b>«non risponderà
+/// mai più finché un umano non cambia la configurazione»</b>: fino a oggi erano la stessa cosa, e
+/// due votanti su tre erano morti da sedici giorni senza che nulla lo dicesse.</para>
+/// </summary>
+public sealed record CommitteeVote(
+    string Provider, string? OptionId, double? Confidence, string Reason, bool Valid, string? FaultCause = null);
 
 /// <summary>Il verdetto: SEMPRE un'opzione del menù. <see cref="ByQuorum"/> falso = ha deciso il default.</summary>
 public sealed record CommitteeVerdict(string ChosenOptionId, bool ByQuorum, IReadOnlyList<CommitteeVote> Votes);
+
+/// <summary>
+/// [K52, PRD autonomia-piena — Fase 4, 2026-09-02] <b>Chi manca al comitato, e se tornerà.</b>
+///
+/// <para><b>Il fatto.</b> Il comitato di flotta è configurato su tre votanti (NVIDIA, Groq, Gemini)
+/// e ne chiede due validi (<c>MinValidVotes = 2</c>). Il 2026-09-01, alla prima decisione utile
+/// dopo settimane, i voti registrati nel journal erano questi:</para>
+/// <code>
+/// Nvidia : HTTP 410 — «model 'meta/llama-3.3-70b-instruct' has reached its end of life on 2026-08-26»
+/// Groq   : HTTP 404 — «model `llama-3.3-70b-versatile` does not exist or you do not have access»
+/// Gemini : voto valido, confidenza 0,95, con una motivazione nel merito
+/// </code>
+///
+/// <para>Un voto valido su tre: il quorum è <b>aritmeticamente irraggiungibile</b>, e lo era dal
+/// 2026-08-17 (ultima risposta valida di Groq in <c>LlmUsageRecords</c>; NVIDIA il 25/08). Per due
+/// settimane ogni decisione della Regina è stata presa dal default deterministico, e la piattaforma
+/// ha continuato a mostrare un comitato «attivo».</para>
+///
+/// <para><b>Perché è rimasto invisibile è la parte che conta.</b> Il comitato è progettato perché
+/// un'astensione non costi nulla — «il 503 di un free tier non deve costare più di un voto» — e
+/// quel principio è giusto. Ma applicato senza distinzioni copre anche il caso in cui il votante
+/// <b>non tornerà mai</b>: un modello ritirato dal catalogo non è un provider che ha una brutta
+/// giornata. È la stessa forma dei «controlli che rassicurano a prescindere dalla realtà» già
+/// pagata nel filone E, ed è la regola 5 — degradare <i>dicendolo</i>.</para>
+/// </summary>
+public static class CommitteeDiagnosis
+{
+    /// <summary>
+    /// I votanti persi per un guasto che <b>non guarisce da solo</b>: la configurazione punta a un
+    /// modello che non esiste più. Lista vuota = nessuno, che è diverso da «non lo so».
+    /// </summary>
+    public static IReadOnlyList<CommitteeVote> VotantiGuasti(IReadOnlyList<CommitteeVote> votes)
+    {
+        ArgumentNullException.ThrowIfNull(votes);
+        return votes.Where(v => !v.Valid && v.FaultCause == LlmCallGuard.ModelloAssente).ToList();
+    }
+
+    /// <summary>
+    /// Il quorum è <b>irraggiungibile per costruzione</b>: anche se ogni votante superstite
+    /// rispondesse, e fossero tutti d'accordo, resterebbero sotto <paramref name="minValidVotes"/>.
+    ///
+    /// <para>È il predicato che separa «stavolta non ce l'hanno fatta» da «non ce la faranno mai»:
+    /// il primo è rumore e si ignora, il secondo è un guasto e si dichiara. Senza questa
+    /// distinzione le due cose producono la stessa riga di journal, che è esattamente quello che è
+    /// successo per sedici giorni.</para>
+    /// </summary>
+    public static bool QuorumIrraggiungibile(IReadOnlyList<CommitteeVote> votes, int minValidVotes)
+    {
+        ArgumentNullException.ThrowIfNull(votes);
+        // Zero voti = il comitato non è stato interrogato affatto (spento, budget esaurito, nessuna
+        // chiave). È una causa diversa, e chiamarla «irraggiungibile» le darebbe una spiegazione —
+        // un guasto dei provider — che non è stata misurata.
+        if (votes.Count == 0) return false;
+
+        var guasti = VotantiGuasti(votes).Count;
+        if (guasti == 0) return false;
+        return votes.Count - guasti < Math.Max(1, minValidVotes);
+    }
+}
 
 public interface IAiCommittee
 {
@@ -163,9 +231,16 @@ public sealed class AiCommittee(
         catch (Exception ex)
         {
             // Astensione, mai errore: il 503 di un free tier non deve costare più di un voto.
+            //
+            // [K52, 2026-09-02] Ma «quanto costa» non è tutto: conta anche SE tornerà. La causa
+            // viene classificata e portata dentro il voto, perché un 503 passa da solo e un 410
+            // «end of life» no — e il comitato deve poter dire quale dei due gli ha tolto il
+            // votante, invece di scrivere «astensione» per entrambi come ha fatto per sedici
+            // giorni mentre due votanti su tre erano irrimediabilmente morti.
+            var (_, causa) = LlmCallGuard.Classify(ex);
             logger.LogInformation("Voto di {Provider} non pervenuto ({Cause}): astensione.", provider, FirstLine(ex.Message));
             metrics?.RecordLlmCall("committee", "error");
-            return new CommitteeVote(provider, null, null, $"astensione: {FirstLine(ex.Message)}", Valid: false);
+            return new CommitteeVote(provider, null, null, $"astensione: {FirstLine(ex.Message)}", Valid: false, FaultCause: causa);
         }
     }
 

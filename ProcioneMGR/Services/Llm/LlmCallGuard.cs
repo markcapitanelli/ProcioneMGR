@@ -290,9 +290,28 @@ public sealed class LlmCallGuard(
         402 => (true, "credito API"),
         429 => (true, "rate-limit"),
         401 or 403 => (true, "credenziali"),
+        // [K52, 2026-09-02] Il modello configurato NON ESISTE PIÙ. È una categoria a sé, e la
+        // separazione non è cosmetica: tutte le altre cause qui sopra guariscono da sole — il
+        // rate-limit passa, il credito si ricarica, il server torna su. Questa no. Nessun retry,
+        // nessun failover, nessun cooldown del breaker la risolve: la risolve un umano che cambia
+        // una stringa. Chiamarla «richiesta non valida», come si faceva fino a oggi, la metteva
+        // nello stesso mucchio degli errori che passano da soli.
+        //
+        // Misurato: NVIDIA `meta/llama-3.3-70b-instruct` è andato in end-of-life il 2026-08-26
+        // (HTTP 410) e Groq `llama-3.3-70b-versatile` è sparito dal catalogo il 2026-08-17
+        // (HTTP 404). Ultima risposta valida in `LlmUsageRecords`: 25/08 e 17/08. Nessuna
+        // superficie della piattaforma lo diceva.
+        404 or 410 => (false, ModelloAssente),
         >= 500 => (true, "server"),   // incl. il 503 "request limit reached" del free tier NVIDIA
         _ => (false, "richiesta non valida"),
     };
+
+    /// <summary>
+    /// [K52] La causa che <b>non guarisce da sola</b>: il modello configurato non esiste più (404)
+    /// o è stato ritirato (410). Costante e non stringa sparsa perché il comitato e il pannello la
+    /// confrontano — e un refuso la renderebbe silenziosamente ineguagliabile.
+    /// </summary>
+    public const string ModelloAssente = "modello assente";
 
     /// <summary>Il billing arriva come 400 generico: si riconosce solo dal testo dell'errore.</summary>
     private static bool IsBilling(AnthropicBadRequestException ex)

@@ -390,7 +390,7 @@ caccia gira su una costante inventata.
 | # | Cosa |
 |---|---|
 | K21 | **`AutoReapply:MaxGreyLegs`, scritto esplicitamente.** Sapendo che 1 non fa nulla, 2 sblocca 3 run su 18, 3 li sblocca tutti — e che subito dopo c'è K22 |
-| K22 | **Sbloccare il fail-closed RF0**: rimuovere e ri-aggiungere le tre gambe delle corsie 1 e 2 da `/ensemble` (il timbro `ExpectedSharpeAtUtc` si scrive solo in aggiunta). Finché non si fa, il percorso campagna è chiuso a chiave a valle di qualunque manopola |
+| K22 ✅ | **Sbloccare il fail-closed RF0** — *ma non nel modo scritto qui.* Rimuovere e ri-aggiungere le gambe conia uno `StrategyId` nuovo: azzera l'identità della corsia e l'orologio dell'osservazione, dieci giorni di cancello per guadagnare un campo. Fatto invece come **backfill da una data registrata**: `FleetLaneObservations.FirstSeenUtc`, il primo avvistamento della *stessa* identità. Non è la nascita, ma **per costruzione non può precederla** — quindi l'errore possibile è solo «il giudizio parte più tardi», mai «entrano i trade di un'ipotesi precedente», che è il difetto corretto da K39. Identità diversa o ledger muto ⇒ **niente timbro**. Anteprima e scrittura separate in `/admin/autonomy`; misurato: 4 gambe su 7 senza timbro (corsie 1, 2, 5) |
 | K23 | **Controllo `IsRunning` sulla scrittura** dell'impronta 0..2, come già ce l'ha l'avvio. Il rischio non è il trade sbagliato subito: è la corsia che riparte su una configurazione mai scelta |
 | K24 | **Dichiarare la seconda porta**: `/bot` applica l'ultimo run trovato da solo, senza guardia grigia. O la si guarda, o il messaggio dell'artifact smette di dire che la porta è una sola |
 | K25 | **Il funding reale nei backtest della pipeline**: collegare `IFundingHistoryProvider` allo stage, e popolare `FundingHistory`. Oggi la caccia gira su una costante inventata mentre il carry vivo usa il dato vero |
@@ -429,8 +429,41 @@ con il loro numero: 0,102 contro 0,130 di rumore, e la trappola del `RejectReaso
 > **Nessuna azione automatica.** Si misura e si mostra dove si sceglie cosa eseguire: mettere in
 > sonno una caccia è una decisione del proprietario, e questo numero non era mai esistito prima.
 
+> **K52 — 2026-09-02: aprendo K30 si è scoperto che il comitato non poteva votare, e da sedici giorni.**
+>
+> I voti stanno nel journal (righe 129 e 130) e non c'era niente da dedurre: NVIDIA rispondeva
+> `HTTP 410 — «il modello ha raggiunto il fine vita il 2026-08-26»`, Groq `HTTP 404 — «il modello non
+> esiste»`, Gemini votava da solo. **Un voto valido su tre contro `MinValidVotes = 2`: quorum
+> aritmeticamente impossibile.** Il consumo persistito conferma la data — ultima risposta riuscita
+> di Groq il **17/08**, di NVIDIA il **25/08**.
+>
+> **Il difetto non era il modello ritirato, era che nessuna superficie poteva dirlo.** Il comitato è
+> progettato perché un'astensione non costi nulla, e il principio è giusto; ma applicato senza
+> distinguere copre anche il votante che *non tornerà*. `/admin/ai-supervisor` diceva «operativo» in
+> verde (significava solo «il breaker non è aperto», e il breaker non si muoveva perché il failover
+> riusciva su Gemini) e, sul verdetto, «è il comportamento previsto, non un guasto» — invariabilmente.
+> È la quarta istanza in questo filone del difetto del filone E: **un controllo che rassicura a
+> prescindere dalla realtà**.
+>
+> Fatto: categoria nuova nel classificatore (404/410 → `modello assente`, l'unica che **non guarisce
+> da sola**), la causa dentro il voto, il journal che scrive `default:provider-guasti` *prima* delle
+> altre cause (regola di K40: la causa prima del sintomo), notifica critica una per episodio, e tre
+> superfici corrette — fra cui una tabella nuova, *ultima risposta valida per provider*, dai dati che
+> c'erano già e che nessuno guardava.
+>
+> **Configurazione riparata e verificata dal vivo**: comitato su `Groq,Gemini,HuggingFace` — tre
+> votanti vivi di **tre lignaggi distinti**, perché tre votanti che girano lo stesso modello sono un
+> votante con tre cappelli. Risultato del pulsante «Prova il comitato»: `2 voti validi su 3 →
+> Verdetto per QUORUM`. Prima delibera dal 17 agosto.
+>
+> **Resta al proprietario**: la chiave NVIDIA dà `404 Function not found for account` con due modelli
+> diversi presi dal suo stesso catalogo — è l'account, non il modello, e si verifica solo su
+> build.nvidia.com. NVIDIA è ancora l'«AI attiva», quindi ogni chiamata del layer paga un 404 prima
+> di arrivare a chi risponde.
+
 | # | Cosa |
 |---|---|
+| K52 ✅ | **Un votante morto non è un'astensione.** Classificatore, journal, notifica, tre superfici e la configurazione riparata. Il prerequisito di K30 |
 | K28 | **Pianificatore adattivo**: resa per configurazione (chiavi distinte in fascia utile per ora di CPU), budget spostato verso i terreni che rendono, config sterili in sonno dichiarata. Oggi 42,4 ore/mese, e 17/18 hanno prodotto zero gambe su 119 run |
 | K29 | **Tuner dei parametri di caccia** — non delle strategie: universo, `topN`, ampiezza finestre, `confirmTopN`, timeframe. Una proposta per giro, A/B dichiarato, gate a valle **invariato**, registro di cosa ha cambiato e perché |
 | K30 | **L'AI dal veto alla proposta motivata.** Spostare il comitato su una domanda che esiste davvero (la scelta fra grigi quando una corsia si libera) invece di un pareggio che questa pipeline non produce. E spostare il supervisore **dopo** il comparatore: oggi paga una chiamata LLM per un verdetto già scritto |

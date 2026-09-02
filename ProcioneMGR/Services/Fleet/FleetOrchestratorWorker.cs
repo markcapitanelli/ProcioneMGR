@@ -248,9 +248,102 @@ public sealed class FleetOrchestratorWorker(
 
         var validi = verdict.Votes.Count(v => v.Valid);
         if (verdict.Votes.Count == 0) return "default:non-interrogato";   // budget esaurito, zero provider con chiave
+
+        // [K52, 2026-09-02] Questo ramo va PRIMA degli altri due, per lo stesso motivo per cui in
+        // K40 «non so leggere le corsie» precede «le corsie sono impegnate»: quando un votante è
+        // morto in modo permanente, dire «la maggioranza non si è formata» descrive il sintomo e
+        // nasconde la causa. La differenza per chi legge è tutta qui — «riprova più tardi» contro
+        // «vai a cambiare il nome di un modello, o il comitato resterà un timbro per sempre».
+        if (Llm.Committee.CommitteeDiagnosis.VotantiGuasti(verdict.Votes).Count > 0)
+        {
+            return "default:provider-guasti";
+        }
+
         if (validi == 0) return "default:tutti-astenuti";                 // interrogati, nessuna risposta valida
         return "default:quorum-mancato";                                  // hanno risposto, la maggioranza non si è formata
     }
+
+    private bool _committeeFaultNotified;
+
+    /// <summary>
+    /// [K52] Lo stato del comitato all'ultima interrogazione, per il pannello. <c>null</c> = non è
+    /// mai stato interrogato da questo processo (che non è «sta bene»: è «non lo so», ed è la
+    /// distinzione che K40 ha già pagato per un'altra superficie).
+    /// </summary>
+    public CommitteeFaultReport? LastCommitteeFault { get; private set; }
+
+    /// <summary>
+    /// [K52] Quanti votanti ha il comitato, quanti ne ha persi <b>per sempre</b>, e se con quelli
+    /// che restano il quorum sia ancora aritmeticamente possibile.
+    /// </summary>
+    /// <param name="Votanti">Provider interrogati in questo giro.</param>
+    /// <param name="Guasti">Chi è caduto per una configurazione stantia, con la sua causa testuale.</param>
+    /// <param name="MinValidi">La soglia richiesta (<c>Committee:MinValidVotes</c>).</param>
+    /// <param name="QuorumIrraggiungibile">Vero = anche se i superstiti fossero unanimi, non basterebbero.</param>
+    public sealed record CommitteeFaultReport(
+        int Votanti,
+        IReadOnlyList<(string Provider, string Causa)> Guasti,
+        int MinValidi,
+        bool QuorumIrraggiungibile);
+
+    /// <summary>
+    /// [K52] Dichiara che il comitato ha perso dei votanti per un guasto <b>che non guarisce da
+    /// solo</b>. Una notifica per episodio, come K46, e la guarigione è una notizia quanto il
+    /// guasto — altrimenti resta acceso per sempre e smette di voler dire qualcosa.
+    ///
+    /// <para>Il testo distingue esplicitamente il caso in cui il quorum è <b>aritmeticamente</b>
+    /// irraggiungibile: è la differenza fra «il comitato è più fragile» e «il comitato non esiste
+    /// più, e ogni decisione la sta prendendo il default deterministico».</para>
+    /// </summary>
+    private async Task DeclareCommitteeFaultAsync(
+        Llm.Committee.CommitteeVerdict verdict, int minValidVotes, CancellationToken ct)
+    {
+        var guasti = Llm.Committee.CommitteeDiagnosis.VotantiGuasti(verdict.Votes);
+        var irraggiungibile = Llm.Committee.CommitteeDiagnosis.QuorumIrraggiungibile(verdict.Votes, minValidVotes);
+        LastCommitteeFault = new CommitteeFaultReport(
+            verdict.Votes.Count,
+            guasti.Select(g => (g.Provider, Causa: Troncato(g.Reason))).ToList(),
+            minValidVotes,
+            irraggiungibile);
+
+        if (guasti.Count == 0)
+        {
+            if (_committeeFaultNotified)
+            {
+                logger.LogInformation("Comitato di flotta: i votanti guasti sono tornati a rispondere.");
+                _committeeFaultNotified = false;
+            }
+            return;
+        }
+
+        logger.LogWarning(
+            "Comitato di flotta: {Guasti} votanti su {Totale} hanno un guasto di configurazione ({Chi}). Quorum irraggiungibile: {Irr}.",
+            guasti.Count, verdict.Votes.Count, string.Join(", ", guasti.Select(g => g.Provider)), irraggiungibile);
+
+        if (_committeeFaultNotified || notifier is null) return;
+        _committeeFaultNotified = true;
+        try
+        {
+            var elenco = string.Join(" · ", guasti.Select(g => $"{g.Provider}: {Troncato(g.Reason)}"));
+            await notifier.NotifyAsync(NotificationSeverity.Critical,
+                irraggiungibile
+                    ? "Il comitato AI non può più raggiungere il quorum"
+                    : "Il comitato AI ha perso dei votanti per un guasto di configurazione",
+                (irraggiungibile
+                    ? $"Restano {verdict.Votes.Count - guasti.Count} votanti possibili contro i {minValidVotes} richiesti: "
+                      + "ogni decisione della Regina la sta prendendo il default deterministico, e continuerà a prenderla "
+                      + "finché la configurazione non cambia. "
+                    : "Il comitato decide ancora, ma con meno voci di quante ne risultano configurate. ")
+                + $"Il guasto NON si risolve da solo — non è un rate-limit né un 503: il modello configurato non esiste più. {elenco}. "
+                + "Si corregge in /admin/ai-supervisor, con «Scarica modelli» per l'elenco vero della propria chiave.", ct);
+        }
+        catch (Exception notifyEx)
+        {
+            logger.LogError(notifyEx, "Anche la notifica del comitato guasto è fallita.");
+        }
+    }
+
+    private static string Troncato(string s) => s.Length <= 160 ? s : s[..160];
 
     /// <summary>Un tick completo. Pubblico per i test di integrazione e per un futuro "Esegui ora".</summary>
     public async Task TickAsync(CancellationToken ct)
@@ -306,6 +399,13 @@ public sealed class FleetOrchestratorWorker(
                 // avesse deliberato o non fosse mai stato interrogato — che è la differenza fra
                 // «ha scelto la regola» e «non ha funzionato».
                 assignSource = DescribeAssignSource(verdict);
+
+                // [K52, 2026-09-02] E poi lo si DICE. Il journal registra la causa da I8, ma il
+                // journal lo legge chi va a cercarlo: un comitato ridotto a un votante su tre
+                // continuava a sembrare un comitato da qualunque superficie della piattaforma.
+                var minValidi = serviceProvider
+                    .GetService<IOptionsMonitor<Llm.Committee.CommitteeOptions>>()?.CurrentValue.MinValidVotes ?? 2;
+                await DeclareCommitteeFaultAsync(verdict, minValidi, ct);
 
                 if (verdict.ByQuorum && Guid.TryParseExact(verdict.ChosenOptionId, "N", out var chosen)
                     && chosen != menu.DefaultRunId

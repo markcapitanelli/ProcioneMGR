@@ -1,0 +1,174 @@
+using ProcioneMGR.Services.Fleet;
+using ProcioneMGR.Services.Llm;
+using ProcioneMGR.Services.Llm.Committee;
+
+namespace ProcioneMGR.Tests;
+
+/// <summary>
+/// [K52, PRD autonomia-piena — Fase 4, 2026-09-02] <b>Un votante morto non è un'astensione.</b>
+///
+/// <para><b>Il fatto misurato.</b> Il comitato di flotta ha tre votanti e ne chiede due validi. Il
+/// 2026-09-01, alla prima decisione utile dopo settimane, i voti registrati nel journal
+/// (<c>OrchestratorDecisions.VotesJson</c>, righe 129 e 130) erano:</para>
+/// <code>
+/// Nvidia : HTTP 410 — «model 'meta/llama-3.3-70b-instruct' has reached its end of life on 2026-08-26»
+/// Groq   : HTTP 404 — «model `llama-3.3-70b-versatile` does not exist or you do not have access»
+/// Gemini : valido, confidenza 0,95
+/// </code>
+///
+/// <para>Un voto su tre contro una soglia di due: <b>quorum aritmeticamente irraggiungibile</b>, e
+/// tale dal 2026-08-17 (ultima risposta valida di Groq in <c>LlmUsageRecords</c>; NVIDIA il 25/08).
+/// Per due settimane la Regina ha deciso col default deterministico e nessuna superficie lo diceva,
+/// perché il comitato è progettato — giustamente — perché un'astensione non costi nulla. Il difetto
+/// è che quel principio copriva anche il votante che <b>non tornerà</b>.</para>
+///
+/// <para><b>Il nullo di questa suite</b> è la parte che conta: un classificatore che marchia tutto
+/// come guasto permanente passerebbe le prove positive e trasformerebbe ogni 503 di free tier in un
+/// allarme critico — cioè rifarebbe, nel verso opposto, lo stesso errore.</para>
+/// </summary>
+public class ComitatoVotantiMortiK52Tests
+{
+    private static CommitteeVote Guasto(string provider, int status) => new(
+        provider, null, null, $"astensione: {provider.ToUpperInvariant()} HTTP {status}: {{}}",
+        Valid: false, FaultCause: LlmCallGuard.Classify(
+            new InvalidOperationException($"{provider.ToUpperInvariant()} HTTP {status}: {{}}")).Cause);
+
+    private static CommitteeVote Valido(string provider, string optionId) =>
+        new(provider, optionId, 0.9, "va bene", Valid: true);
+
+    // ---------------------------------------------------------------- il classificatore
+
+    /// <summary>
+    /// 404 e 410 sono le due forme reali osservate, e devono cadere nella stessa categoria: il
+    /// catalogo di Groq lo toglie (404), quello di NVIDIA lo dichiara ritirato (410). Il rimedio è
+    /// identico, e la proprietà che conta è che <b>nessun retry le risolve</b>.
+    /// </summary>
+    [Theory]
+    [InlineData(404)]
+    [InlineData(410)]
+    public void ModelloSparito_eGuastoPERMANENTE(int status)
+    {
+        var (retryable, cause) = LlmCallGuard.Classify(new InvalidOperationException($"GROQ HTTP {status}: {{}}"));
+        Assert.False(retryable);
+        Assert.Equal(LlmCallGuard.ModelloAssente, cause);
+    }
+
+    /// <summary>
+    /// <b>Il nullo del classificatore.</b> Senza questo, marchiare tutto come «modello assente»
+    /// passerebbe la prova qui sopra: sono proprio le cause che GUARISCONO da sole a dover restare
+    /// fuori, perché su di esse una notifica critica è rumore e il rimedio giusto è aspettare.
+    /// </summary>
+    [Theory]
+    [InlineData(429, "rate-limit")]
+    [InlineData(402, "credito API")]
+    [InlineData(401, "credenziali")]
+    [InlineData(503, "server")]
+    [InlineData(500, "server")]
+    [InlineData(400, "richiesta non valida")]
+    public void LeCAUSEcheGUARISCONOdaSOLE_nonSonoGUASTIdiCONFIGURAZIONE(int status, string attesa)
+    {
+        var (_, cause) = LlmCallGuard.Classify(new InvalidOperationException($"NVIDIA HTTP {status}: {{}}"));
+        Assert.Equal(attesa, cause);
+        Assert.NotEqual(LlmCallGuard.ModelloAssente, cause);
+    }
+
+    // ---------------------------------------------------------------- la diagnosi del comitato
+
+    [Fact]
+    public void ILcasoREALEdel1SETTEMBRE_dueVOTANTImorti_quorumIRRAGGIUNGIBILE()
+    {
+        List<CommitteeVote> voti = [Guasto("Nvidia", 410), Guasto("Groq", 404), Valido("Gemini", "abc")];
+
+        var guasti = CommitteeDiagnosis.VotantiGuasti(voti);
+        Assert.Equal(["Nvidia", "Groq"], guasti.Select(g => g.Provider));
+        Assert.True(CommitteeDiagnosis.QuorumIrraggiungibile(voti, minValidVotes: 2));
+    }
+
+    /// <summary>
+    /// <b>Il nullo della diagnosi.</b> Gli stessi tre votanti, ma le astensioni sono transitorie:
+    /// nessun guasto di configurazione, e il quorum è mancato solo per stavolta. Senza questa
+    /// prova, un predicato che dicesse sempre «irraggiungibile» supererebbe quella sopra.
+    /// </summary>
+    [Fact]
+    public void ILNULLO_astensioniTRANSITORIE_nonSonoUNguasto()
+    {
+        List<CommitteeVote> voti = [Guasto("Nvidia", 503), Guasto("Groq", 429), Valido("Gemini", "abc")];
+
+        Assert.Empty(CommitteeDiagnosis.VotantiGuasti(voti));
+        Assert.False(CommitteeDiagnosis.QuorumIrraggiungibile(voti, minValidVotes: 2));
+    }
+
+    /// <summary>
+    /// Un votante morto su tre con soglia 2: il comitato è più fragile, ma il quorum è ancora
+    /// possibile. La distinzione serve al testo della notifica — «decide con meno voci» contro
+    /// «ogni decisione la prende il default» — e senza di essa i due casi si confonderebbero.
+    /// </summary>
+    [Fact]
+    public void UNguastoSOLO_conDUEsuperstiti_ilQUORUMrestaPOSSIBILE()
+    {
+        List<CommitteeVote> voti = [Guasto("Nvidia", 410), Valido("Groq", "abc"), Valido("Gemini", "abc")];
+
+        Assert.Single(CommitteeDiagnosis.VotantiGuasti(voti));
+        Assert.False(CommitteeDiagnosis.QuorumIrraggiungibile(voti, minValidVotes: 2));
+    }
+
+    /// <summary>
+    /// Comitato mai interrogato: zero voti. NON è «irraggiungibile», perché quella parola
+    /// attribuirebbe la colpa a un guasto dei provider che non è stato misurato — le cause vere
+    /// sono altre (spento, budget esaurito, nessuna chiave) e hanno già la loro etichetta.
+    /// </summary>
+    [Fact]
+    public void ZEROvoti_nonSiCHIAMAirraggiungibile()
+    {
+        Assert.False(CommitteeDiagnosis.QuorumIrraggiungibile([], minValidVotes: 2));
+        Assert.Empty(CommitteeDiagnosis.VotantiGuasti([]));
+    }
+
+    // ---------------------------------------------------------------- l'etichetta del journal
+
+    [Fact]
+    public void LaFONTE_diceGUASTOeNONquorumMANCATO()
+    {
+        var verdetto = new CommitteeVerdict("abc", ByQuorum: false,
+            [Guasto("Nvidia", 410), Guasto("Groq", 404), Valido("Gemini", "abc")]);
+
+        Assert.Equal("default:provider-guasti", FleetOrchestratorWorker.DescribeAssignSource(verdetto));
+    }
+
+    /// <summary>
+    /// <b>Il nullo dell'etichetta.</b> Due voti validi e discordi: il quorum è mancato davvero, per
+    /// disaccordo, e chiamarlo «provider guasti» manderebbe il proprietario a cercare un guasto che
+    /// non c'è. Il ramo nuovo deve precedere gli altri <i>solo</i> quando la sua condizione vale.
+    /// </summary>
+    [Fact]
+    public void ILNULLO_disaccordoVERO_restaQUORUMmancato()
+    {
+        var verdetto = new CommitteeVerdict("abc", ByQuorum: false,
+            [Valido("Nvidia", "abc"), Valido("Groq", "xyz")]);
+
+        Assert.Equal("default:quorum-mancato", FleetOrchestratorWorker.DescribeAssignSource(verdetto));
+    }
+
+    /// <summary>Le altre due cause di I8 non devono essere state assorbite dal ramo nuovo.</summary>
+    [Fact]
+    public void LeCAUSEdiI8_sopravvivono()
+    {
+        Assert.Equal("default:non-interrogato",
+            FleetOrchestratorWorker.DescribeAssignSource(new CommitteeVerdict("abc", false, [])));
+
+        Assert.Equal("default:tutti-astenuti", FleetOrchestratorWorker.DescribeAssignSource(
+            new CommitteeVerdict("abc", false, [Guasto("Nvidia", 503), Guasto("Groq", 429)])));
+
+        Assert.Equal("committee", FleetOrchestratorWorker.DescribeAssignSource(
+            new CommitteeVerdict("abc", true, [Valido("Nvidia", "abc"), Valido("Groq", "abc")])));
+    }
+
+    /// <summary>
+    /// La lezione di K45, applicata prima di pagarla: l'etichetta nuova deve STARE nella colonna.
+    /// <c>OrchestratorDecisions.Source</c> è <c>varchar(32)</c> da K45 — e la volta scorsa una
+    /// stringa diagnostica più lunga della colonna ha tenuto ferma la flotta per settimane.
+    /// </summary>
+    [Fact]
+    public void LETICHETTAnuova_STAnellaCOLONNA()
+        => Assert.True("default:provider-guasti".Length <= 32);
+}
