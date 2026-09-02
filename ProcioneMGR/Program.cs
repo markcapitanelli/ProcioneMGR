@@ -588,6 +588,8 @@ builder.Services.AddHostedService<ProcioneMGR.Services.Notifications.DailyDigest
 builder.Services.Configure<ProcioneMGR.Services.Fleet.FleetOptions>(builder.Configuration.GetSection("Fleet"));
 // [J8] Il registro dell'osservazione cumulata: dichiarato PRIMA del reader che lo consuma.
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneObservationLedger, ProcioneMGR.Services.Fleet.LaneObservationLedger>();
+// [K47] La distribuzione della vita degli esperimenti, e se i cancelli in vigore siano raggiungibili.
+builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneIdentityLifetimeReader, ProcioneMGR.Services.Fleet.LaneIdentityLifetimeReader>();
 // [J9] La ricostruzione delle frequenze attese mancanti (azione amministrativa, /admin/autonomy).
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill>();
 // [K13] Il gemello di J9 per la PROVENIENZA: le gambe schierate prima dell'etichetta T1 non dicono

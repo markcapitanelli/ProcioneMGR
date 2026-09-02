@@ -45,6 +45,7 @@
 @inject ProcioneMGR.Services.Fleet.IGreyDeployer GreyDeployer
 @inject ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill FrequencyBackfill
 @inject ProcioneMGR.Services.Fleet.SourceVerdictBackfill ProvenanceBackfill
+@inject ProcioneMGR.Services.Fleet.ILaneIdentityLifetimeReader IdentityLifetime
 @inject ILaneDirectory LaneDirectory
 @inject IPipelineApplier PipelineApplier
 @inject IOptionsMonitor<ProcioneMGR.Services.Health.HeartbeatOptions> HeartbeatMonitor
@@ -433,6 +434,23 @@
                incompleto. Il 2026-09-01 alle 11:30 UTC tutte e cinque le corsie erano mute e il
                journal ha scritto «il vincolo sono le corsie, non i candidati» — che manda a
                liberare una corsia mentre il problema è che il motore non risponde. *@
+            @* [K46, 2026-09-02] IL TICK CHE NON ARRIVA IN FONDO, sopra tutto il resto.
+               Dal 2026-09-01 sera la flotta ha smesso di scrivere qualunque riga: il tick decideva
+               un'azione e falliva sull'INSERT (Source era varchar(16) contro una fonte da 22
+               caratteri). L'eccezione finiva in un LogError, e da questa pagina il sintomo era
+               «azioni ultimo piano: 1» con il journal muto — indistinguibile da «non c'è niente da
+               fare» per chi non andasse a leggere i log del processo. I numeri qui sotto sono di un
+               giro che non è arrivato in fondo, e vanno letti sapendolo. *@
+            @if (FleetWorker.LastTickError is { } erroreTick)
+            {
+                <div class="alert alert-danger py-2 small mb-2">
+                    <strong>L'ultimo tick non è arrivato in fondo</strong>
+                    (@FleetWorker.ConsecutiveTickFailures di fila). La Regina sta decidendo ma non
+                    completa il giro: <strong>non schiera, non ritira e non scrive il proprio journal</strong>.
+                    I numeri qui sotto sono di un giro interrotto.
+                    <div class="mt-1"><code>@erroreTick</code></div>
+                </div>
+            }
             @if (silence.UnreadableLanes > 0)
             {
                 <div class="alert alert-danger py-2 small mb-2">
@@ -544,6 +562,46 @@
                 </label>
                 <input type="number" id="fl_starvd" class="form-control" @bind="_fleet.StarvationMinDays" min="1" style="width: 7rem;" />
             </div>
+            @* [K47, 2026-09-02] IL NUMERO CHE DICE SE QUESTE SOGLIE SONO RAGGIUNGIBILI, accanto alle
+               soglie stesse. Ogni criterio di ritiro è ancorato al primo avvistamento
+               dell'identità, quindi è denominato nella vita di un esperimento — una grandezza di
+               cui, fino a oggi, non esisteva la distribuzione: `FleetLaneObservations` teneva una
+               riga per corsia e la sovrascriveva. Ricostruita a mano dal journal dava 27,0 giorni
+               di mediana, e con quel numero si è visto che alzare le soglie a 27 o 41 giorni non
+               le rende severe: le SPEGNE. Una soglia più lunga della vita tipica di un esperimento
+               non è severa, è spenta — e finge di essere un meccanismo di governo. *@
+            @if (_vitaIdentita is { } vita)
+            {
+                <div class="col-12 small mt-2">
+                    @if (vita.Episodi == 0)
+                    {
+                        <span class="text-muted">
+                            <strong>Vita degli esperimenti: ancora nessun episodio chiuso.</strong>
+                            L'archivio (K47) registra un esperimento quando l'identità di una corsia cambia; finché
+                            non succede, non si sa se queste soglie siano raggiungibili — e <em>non saperlo</em> è
+                            diverso da «sono giuste».
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="@(vita.CancelloInediaRaggiungibile && vita.CancelloSharpeRaggiungibile ? "text-muted" : "text-danger-emphasis fw-semibold")">
+                            <strong>Vita degli esperimenti</strong> (@vita.Episodi chiusi@(vita.CampioneTroppoPiccolo ? ", campione ancora piccolo" : "")):
+                            mediana <strong>@vita.MedianaGiorniOsservati.ToString("F1") gg osservati</strong>
+                            (@vita.MedianaGiorniCalendario.ToString("F1") di calendario), da
+                            @vita.MinGiorniOsservati.ToString("F1") a @vita.MassimoGiorniOsservati.ToString("F1").
+                            Sarebbero arrivati al cancello dell'inedia <strong>@vita.RaggiungonoCancelloInedia su @vita.Episodi</strong>,
+                            a quello dello Sharpe <strong>@vita.RaggiungonoCancelloSharpe su @vita.Episodi</strong>.
+                            @if (!vita.CancelloInediaRaggiungibile || !vita.CancelloSharpeRaggiungibile)
+                            {
+                                <text>
+                                    <br />⚠ <strong>Un cancello che nessun esperimento raggiunge non è severo: è spento.</strong>
+                                    Abbassare la soglia, o accettare che quel criterio non si esprimerà mai.
+                                </text>
+                            }
+                        </span>
+                    }
+                </div>
+            }
             <div class="col-auto">
                 <label class="form-label">Asseg./tick @Hot()</label>
                 <input type="number" class="form-control" @bind="_fleet.MaxAssignmentsPerTick" min="1" style="width: 7rem;" />
@@ -2439,6 +2497,9 @@
 
     private ProcioneMGR.Services.Fleet.FleetOptions _fleet = new();
 
+    /// <summary>[K47] La distribuzione della vita degli esperimenti, per dire se le soglie sono raggiungibili.</summary>
+    private ProcioneMGR.Services.Fleet.LaneIdentityLifetimeReport? _vitaIdentita;
+
     /// <summary>[AF2b] Le corsie autorizzate come CSV: e' la forma con cui si scrive una lista, non un secondo stato.</summary>
     private string _fleetExecutionLanesCsv = string.Empty;
     private int _fleetFootprint = 3;
@@ -2774,6 +2835,11 @@
         _pairsWatch = Clone(PairsWatchMonitor.CurrentValue);
         _pairsWatchPairsCsv = string.Join(", ", _pairsWatch.Pairs);
         _fleetFootprint = PipelineApplier.LaneCount; // l'impronta storica dell'auto-apply: il confine della flotta
+        // [K47] Il numero che dice se le soglie di ritiro sono raggiungibili. Se la lettura fallisce
+        // resta null e il blocco non si disegna: mostrare uno zero sarebbe dire «nessun episodio»,
+        // che e' un fatto diverso da «non lo so leggere».
+        try { _vitaIdentita = await IdentityLifetime.ReadAsync(); }
+        catch (Exception) { _vitaIdentita = null; }
         await using (var db = await DbFactory.CreateDbContextAsync())
         {
             _fleetJournal = await db.OrchestratorDecisions.AsNoTracking()

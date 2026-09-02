@@ -108,6 +108,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[J8] L'orologio dell'osservazione per corsia di flotta (non si azzera al riavvio).</summary>
     public DbSet<FleetLaneObservation> FleetLaneObservations => Set<FleetLaneObservation>();
 
+    /// <summary>[K47] La storia degli esperimenti CHIUSI in corsia: append-only, mai sovrascritta.</summary>
+    public DbSet<FleetLaneIdentityEpisode> FleetLaneIdentityEpisodes => Set<FleetLaneIdentityEpisode>();
+
     /// <summary>[G4] Post-mortem delle operazioni chiuse in perdita: testo e classificazione, mai un parametro.</summary>
     public DbSet<TradePostMortem> TradePostMortems => Set<TradePostMortem>();
 
@@ -203,6 +206,18 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(e => e.LastTickUtc).IsConcurrencyToken();
         });
 
+        // [K47] La storia degli esperimenti chiusi: append-only. L'indice è su (LaneId, FirstSeenUtc)
+        // perché le due domande sono «come è andata questa corsia nel tempo» e «quanto vivono le
+        // identità»: la prima scorre una corsia in ordine, la seconda le legge tutte.
+        builder.Entity<FleetLaneIdentityEpisode>(entity =>
+        {
+            entity.ToTable("FleetLaneIdentityEpisodes");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Identity).HasMaxLength(512).IsRequired();
+            entity.Property(e => e.NextIdentity).HasMaxLength(512).IsRequired();
+            entity.HasIndex(e => new { e.LaneId, e.FirstSeenUtc });
+        });
+
         // [AF2] Journal della flotta: append-only, letto per data discendente dal pannello e per
         // (RunId, Kind) dal reader ("questo run è già stato gestito?").
         builder.Entity<OrchestratorDecision>(entity =>
@@ -210,7 +225,28 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.ToTable("OrchestratorDecisions");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Kind).HasMaxLength(32).IsRequired();
-            entity.Property(e => e.Source).HasMaxLength(16).IsRequired();
+            // [K45, 2026-09-02] 16 → 32, e non è cosmetica: era il difetto che TENEVA FERMA LA
+            // FLOTTA.
+            //
+            // I8 ha raffinato la fonte dell'assegnazione per distinguere tre cause diverse che
+            // prima collassavano nella parola «default» — `default:non-interrogato` (23 caratteri),
+            // `default:tutti-astenuti` e `default:quorum-mancato` (22) — senza guardare la
+            // larghezza della colonna, che era 16. Da allora ogni tick in cui il comitato viene
+            // interrogato e NON raggiunge il quorum falliva con
+            // «22001: il valore è troppo lungo per il tipo character varying(16)», e l'eccezione
+            // veniva inghiottita dal catch di `ExecuteAsync` («Tick fallito; ritento al prossimo»).
+            //
+            // Il difetto è rimasto invisibile finché la coda era bloccata: senza corsie libere non
+            // nasce nessun menù, quindi il comitato non veniva mai interrogato e `Source` restava
+            // «rules». È bastato liberare uno slot il 2026-09-01 perché il primo pareggio
+            // producesse un `default:...` e la flotta smettesse di scrivere qualunque riga — piano
+            // con un'azione, journal muto, ogni quindici minuti.
+            //
+            // Il verso della correzione è allargare la colonna, non accorciare la stringa: quelle
+            // tre parole sono la differenza fra «il comitato ha scelto la regola» e «il comitato
+            // non ha funzionato», ed è esattamente ciò che I8 esisteva per dire. Il guardiano che
+            // lega le due cose è in `FleetSourceLunghezzaK45Tests`.
+            entity.Property(e => e.Source).HasMaxLength(32).IsRequired();
             entity.HasIndex(e => e.AtUtc);
             entity.HasIndex(e => new { e.RunId, e.Kind });
         });
