@@ -395,9 +395,39 @@ caccia gira su una costante inventata.
 | K24 | **Dichiarare la seconda porta**: `/bot` applica l'ultimo run trovato da solo, senza guardia grigia. O la si guarda, o il messaggio dell'artifact smette di dire che la porta è una sola |
 | K25 | **Il funding reale nei backtest della pipeline**: collegare `IFundingHistoryProvider` allo stage, e popolare `FundingHistory`. Oggi la caccia gira su una costante inventata mentre il carry vivo usa il dato vero |
 | K26 | **Il DSR anche per i bocciati «Solo N trade»**, con provenienza dichiarata e **senza cambiare il verdetto**: è l'unico modo di sapere se sotto il pavimento c'è qualcosa, senza ridurre la fascia grigia. Strumento di misura, non leva |
-| K27 | **Potare l'universo con `CoversHoldout`** e farlo derivare dalle serie abilitate: `MKR/USDT` è delistato e produce 11 chiavi a zero trade più il 3% di tentativi contati nel DSR |
+| K27 ✅ | **Potare l'universo con `CoversHoldout`** — fatto come **K49b**: lo strumento c'era e mancava il gate. La distinzione che serviva è fra serie *nuova* (da scaricare) e serie **sospesa dall'exchange** (da escludere), e il codice non guardava `TrackedSeries`. Più il badge su `/pipeline`, dove si sceglie cosa eseguire |
+
+#### Fase 3 — secondo blocco, 2026-09-02
+
+| # | Cosa | esito |
+|---|---|---|
+| K48 ✅ | **Chi riscrive una corsia lascia il suo nome.** Gli scrittori sono **dieci**, non le tre porte di schieramento: il contesto è un parametro **obbligatorio**, così l'undicesimo non compila finché non dice chi è. Riga nella stessa transazione, e solo quando qualcosa cambia |
+| K49 ✅ | **La guardia contro l'ipotesi doppia anche dall'auto-apply** — la porta dell'impronta *e* di `/bot`, che non la attraversava. A cavallo dei due territori nessuno dei due tetti se ne accorgeva |
+| K49b ✅ | **L'universo si pota**: `MKR/USDT` scoperta 122 volte su 122, senza una candela da 351 giorni. Potare **stringe** il gate (SR\* +0,0017 / +0,0182), non lo allenta |
+
+**Restano di Fase 3:** il **journal come intento** (scritto *prima* di agire, con `Outcome` che separa
+le tre semantiche oggi schiacciate su `Applied`), **K21** (`MaxGreyLegs`) e **K22** nella forma non
+distruttiva (backfill del timbro di nascita dove la fonte esiste). **K25 e K26** restano rimandati
+con il loro numero: 0,102 contro 0,130 di rumore, e la trappola del `RejectReason`.
 
 ### Fase 4 — Qualcuno che sceglie (è qui che nasce la Regina)
+
+> **Avviata il 2026-09-02 — K50, e il criterio ovvio era una trappola.**
+>
+> Il primo dei «cinque che nessuno fa» è *nessuno mette in sonno una caccia che non rende*. Ma
+> misurando: **`ensembleLegs` è vuoto in 173 run su 173**, su tutte e cinque le configurazioni
+> attive — «zero gambe assemblate» le addormenterebbe **tutte**, perché il collo di bottiglia è il
+> gate, non la caccia. È lo stesso errore di misurare una corsia su un criterio che nessuna corsia
+> può raggiungere.
+>
+> **Ciò che discrimina è la fascia grigia**, e di molto: chiavi candidate *distinte* per run —
+> `cfg 17: 1,32` · `cfg 20: 0,87` · `cfg 18: 0,41` · `cfg 19: 0,31` · **`cfg 8: 0,06`**, un fattore
+> ventidue. Il confronto è **relativo** e va detto perché: configurazioni diverse cacciano universi
+> diversi, e una resa assoluta bassa può essere la domanda più difficile — ciò che non è difendibile
+> è consumare budget per rendere un ventesimo della mediana.
+>
+> **Nessuna azione automatica.** Si misura e si mostra dove si sceglie cosa eseguire: mettere in
+> sonno una caccia è una decisione del proprietario, e questo numero non era mai esistito prima.
 
 | # | Cosa |
 |---|---|
