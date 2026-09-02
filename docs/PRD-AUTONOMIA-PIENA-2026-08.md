@@ -375,6 +375,20 @@ caccia gira su una costante inventata.
 
 | # | Cosa |
 |---|---|
+#### Fase 3 — avviata il 2026-09-01/02
+
+| # | Cosa | esito |
+|---|---|---|
+| K41 ✅ | **`RecordedAtUtc`**: l'ora di parete accanto all'ora di candela, messa dal database e inforgiabile. Le 371 righe storiche restano `NULL` |
+| K45 ✅ | **`OrchestratorDecisions.Source` era `varchar(16)` contro stringhe da 23**: ogni tick col comitato senza quorum falliva, e la flotta ha smesso di scrivere qualunque riga. Il guardiano lega i valori possibili e la larghezza |
+| K46 ✅ | **Un tick che non arriva in fondo non è più silenzioso**: stato leggibile, notifica critica per episodio, riquadro rosso sul pannello. Anche la guarigione è una notizia |
+| K47 ✅ | **L'archivio append-only degli episodi di identità** — il numero che sette avversari su sette hanno chiesto. E accanto alle soglie, quanti esperimenti ci sarebbero arrivati: *una soglia più lunga della vita tipica non è severa, è spenta* |
+
+**Restano** i sette item qui sotto, con le quattro correzioni misurate, più il journal-come-registro
+(scritto per primo, come intento) e la porta `/bot`.
+
+| # | Cosa |
+|---|---|
 | K21 | **`AutoReapply:MaxGreyLegs`, scritto esplicitamente.** Sapendo che 1 non fa nulla, 2 sblocca 3 run su 18, 3 li sblocca tutti — e che subito dopo c'è K22 |
 | K22 | **Sbloccare il fail-closed RF0**: rimuovere e ri-aggiungere le tre gambe delle corsie 1 e 2 da `/ensemble` (il timbro `ExpectedSharpeAtUtc` si scrive solo in aggiunta). Finché non si fa, il percorso campagna è chiuso a chiave a valle di qualunque manopola |
 | K23 | **Controllo `IsRunning` sulla scrittura** dell'impronta 0..2, come già ce l'ha l'avvio. Il rischio non è il trade sbagliato subito: è la corsia che riparte su una configurazione mai scelta |
