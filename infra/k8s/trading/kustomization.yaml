@@ -113,4 +113,4 @@ images:
     # RIAVVIATA da /trading. Il ripiego dichiarato copre l'intervallo, ma solo uno StartAsync
     # lascia sulla riga la fotografia delle gambe di questa sessione.
     # Vedi docs/audit/33_FLOTTA_INERTE_2026-08-21.md.
-    newTag: local-94aa42eb
+    newTag: local-6d2c0866
