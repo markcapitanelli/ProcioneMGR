@@ -588,6 +588,8 @@ builder.Services.AddHostedService<ProcioneMGR.Services.Notifications.DailyDigest
 builder.Services.Configure<ProcioneMGR.Services.Fleet.FleetOptions>(builder.Configuration.GetSection("Fleet"));
 // [J8] Il registro dell'osservazione cumulata: dichiarato PRIMA del reader che lo consuma.
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneObservationLedger, ProcioneMGR.Services.Fleet.LaneObservationLedger>();
+// [K50] La resa delle configurazioni di caccia: quale produce e quale consuma budget per niente.
+builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IHuntYieldReader, ProcioneMGR.Services.Pipeline.HuntYieldReader>();
 // [K47] La distribuzione della vita degli esperimenti, e se i cancelli in vigore siano raggiungibili.
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneIdentityLifetimeReader, ProcioneMGR.Services.Fleet.LaneIdentityLifetimeReader>();
 // [J9] La ricostruzione delle frequenze attese mancanti (azione amministrativa, /admin/autonomy).
