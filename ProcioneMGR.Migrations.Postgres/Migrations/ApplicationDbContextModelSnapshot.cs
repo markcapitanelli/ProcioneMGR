@@ -692,8 +692,10 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
 
                     b.Property<string>("Outcome")
                         .IsRequired()
+                        .ValueGeneratedOnAdd()
                         .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("Applied");
 
                     b.Property<string>("Reason")
                         .IsRequired()

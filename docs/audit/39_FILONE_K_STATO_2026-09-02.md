@@ -520,10 +520,17 @@ Il problema vero è più grande e già dichiarato nel codice, in `Program.cs`:
 
 Da cui due conseguenze, entrambe misurate:
 
-1. **`dotnet ef migrations add` produce migrazioni sbagliate** — rigenera le ultime cinque, comprese
-   `CreateTable` di tabelle che esistono già. Applicarle al database vivo lo romperebbe. Verificato
-   sia dal worktree sia dal repo principale, con build pulita: **non è un artefatto del worktree.**
-   Finché non è risolto, **le migrazioni di questo repository si scrivono a mano.**
+1. ~~**`dotnet ef migrations add` produce migrazioni sbagliate.**~~ **Sbagliato anche questo, e la
+   causa vera è banale.** `dotnet ef` **senza `--configuration` usa DEBUG**, e
+   `ProcioneMGR/bin/Debug/` conteneva un assembly delle migrazioni fermo al **2026-08-22**: trenta
+   migrazioni su trentanove. Diffare contro quello produce esattamente la scaffoldatura che avevo
+   scambiato per un difetto del tooling. Con `--configuration Release` il risultato è
+   `No changes have been made to the model since the last migration`, e `migrations list` ne vede
+   **39**, l'ultima è quella giusta.
+
+   > **La regola operativa:** in questo repository ogni comando `dotnet ef` vuole
+   > **`--configuration Release`**. Senza, lavora su un mondo vecchio di due settimane e mente con
+   > sicurezza.
 2. **Nessun test della suite esercita le migrazioni**: `MigrateAsync()` dentro i test non trova
    nulla, e ogni fixture costruisce lo schema dal modello con `EnsureCreated`. **È il motivo per cui
    il guasto delle cinque ore e mezza non poteva essere preso da un test** — e la ragione per cui il
@@ -536,7 +543,9 @@ debito noto delle altre colonne obbligatorie senza default, perché quella lista
 
 ### Cosa resta ancora aperto
 
-1. **Il tooling delle migrazioni**, sopra. È la cosa che può rompere di nuovo la produzione.
+1. **Nessun test esercita le migrazioni** (sopra): il percorso che ha rotto la produzione per cinque
+   ore e mezza non è coperto da nessuna prova, e lo ha scoperto solo il guardiano di
+   `DatabaseMigrator` all'avvio del guscio.
 2. **Un gate introdotto con un commento falso** ha spento la config 8 senza che nessuno se ne
    accorgesse (`932eb21`, § 4-quater). Non esiste una superficie che dica «questa caccia non gira
    più» — stesso difetto di forma di K46, in un altro posto. Il verdetto `Dormiente` di K54b lo
