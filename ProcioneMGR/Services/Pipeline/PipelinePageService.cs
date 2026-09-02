@@ -376,6 +376,40 @@ public sealed class PipelinePageService(
         return "data:text/markdown;charset=utf-8," + Uri.EscapeDataString(md);
     }
 
+    /// <summary>
+    /// [K49b, 2026-09-02] Le serie dell'universo che l'exchange ha <b>sospeso</b> (disabilitate in
+    /// <c>TrackedSeries</c>), se ce ne sono.
+    ///
+    /// <para><b>Perché serve qui e non solo a runtime.</b> Lo stage di ingestione ora le pota dal
+    /// run, ma la potatura si vede solo <i>dopo</i> aver speso il giro. Questa colonna la dice
+    /// <b>dove si sceglie cosa eseguire</b>: <c>MKR/USDT</c> è rimasto in due configurazioni per
+    /// <b>35 giorni</b> dopo la disabilitazione, producendo 11 chiavi a zero trade e 424 righe di
+    /// bocciatura a ogni giro. Il controllo gemello per le CORSIE esisteva già
+    /// (<c>WatchlistPageService.LaneOnDisabledSeries</c>); per le configurazioni di caccia no, ed è
+    /// esattamente il motivo per cui nessuno se n'è accorto.</para>
+    /// </summary>
+    public static string? SerieSospese(PipelineConfiguration config, IReadOnlySet<(string Symbol, string Timeframe)> disabilitate)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(disabilitate);
+        var universe = JsonSerializer.Deserialize<List<SeriesSpec>>(config.UniverseJson) ?? [];
+        var sospese = universe.Where(u => disabilitate.Contains((u.Symbol, u.Timeframe)))
+            .Select(u => $"{u.Symbol} {u.Timeframe}").ToList();
+        return sospese.Count == 0 ? null : string.Join(", ", sospese);
+    }
+
+    /// <summary>Le serie disabilitate, caricate una volta per render della lista.</summary>
+    public IReadOnlySet<(string Symbol, string Timeframe)> DisabledSeries { get; private set; } =
+        new HashSet<(string, string)>();
+
+    public async Task LoadDisabledSeriesAsync(CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var righe = await db.TrackedSeries.AsNoTracking().Where(t => !t.Enabled)
+            .Select(t => new { t.Symbol, t.Timeframe }).ToListAsync(ct);
+        DisabledSeries = righe.Select(r => (r.Symbol, r.Timeframe)).ToHashSet();
+    }
+
     /// <summary>Riassunto compatto dell'universo di una config ("BTC/USDT 1h, ETH/USDT 4h +2").</summary>
     public static string UniverseSummary(PipelineConfiguration config)
     {

@@ -131,7 +131,7 @@ public sealed class PipelineApplierFootprintTests : IDisposable
     public void Dispose() => TradingLanes.ResetForTests();
 
     private static Services.Pipeline.PipelineApplier Applier()
-        => new(null!, null!, null!); // solo la proprietà LaneCount: nessuna dipendenza toccata
+        => new(null!, null!, null!, null!); // solo la proprietà LaneCount: nessuna dipendenza toccata
 
     [Fact]
     public void FleetGrowth_DoesNotWidenTheAutoApplyFootprint()

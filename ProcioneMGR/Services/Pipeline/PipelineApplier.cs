@@ -51,13 +51,24 @@ public sealed class ApplyResult
     public int Overflow { get; set; }
     public List<string> Deployed { get; set; } = new();
     public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// [K49, PRD autonomia-piena — Fase 3, 2026-09-02] Corsie <b>saltate</b> perché l'ipotesi da
+    /// scrivere è già in corsa altrove, col motivo. Un'applicazione parziale dichiarata è meglio di
+    /// una doppia scommessa silenziosa — e senza questo elenco un conteggio più basso di corsie si
+    /// leggerebbe come un guasto.
+    /// </summary>
+    public List<string> Skipped { get; set; } = new();
 }
 
 /// <inheritdoc cref="IPipelineApplier"/>
 public sealed class PipelineApplier(
     IDbContextFactory<ApplicationDbContext> dbFactory,
     ExcursionAnalyzer excursion,
-    IServiceProvider serviceProvider) : IPipelineApplier
+    IServiceProvider serviceProvider,
+    // [K49] La guardia contro l'ipotesi doppia vale anche QUI: questa e' la porta dell'auto-apply
+    // E di /bot, cioe' due dei dieci scrittori, e finora nessuna delle due la attraversava.
+    Trading.ILaneDirectory laneDirectory) : IPipelineApplier
 {
     /// <summary>
     /// [AF0] The literal 3 predates <see cref="TradingLanes"/> and is KEPT as the auto-apply
@@ -127,19 +138,46 @@ public sealed class PipelineApplier(
                     : Math.Round(100m / group.Count, 1);
                 return BuildLegStrategy(l, autoSl, autoTp, alloc, recommendation.HoldoutMonths);
             }).ToList();
+            // [K49, 2026-09-02] LA STESSA IPOTESI NON OCCUPA DUE CORSIE — anche da questa porta.
+            //
+            // La guardia K33 era stata messa sulle tre porte di SCHIERAMENTO; questa e' la porta
+            // dell'auto-apply dell'impronta e di /bot, e non la attraversava. Il difetto che K33
+            // esiste per impedire — la stessa scommessa con due dotazioni di capitale — rientrava
+            // esattamente da qui, e per giunta a cavallo dei due territori: l'impronta (0-2) e la
+            // flotta (3-7) non si guardano fra loro, quindi nessuno dei due tetti se ne accorgeva.
+            //
+            // Le corsie che QUESTO run sta per riscrivere sono escluse dal confronto: sono gruppi
+            // (simbolo, timeframe) distinti per costruzione, e confrontarle fra loro produrrebbe
+            // un falso positivo su un'operazione legittima.
+            var chiaveGamba = cfg.Strategies.Count == 1
+                ? PipelineCandidateKey.Build(cfg.Strategies[0].StrategyName, symbol, timeframe, cfg.Strategies[0].Parameters)
+                : string.Empty;
+            var altre = (await laneDirectory.ListAsync(ct)).Where(l => l.Id >= lanesUsed).ToList();
+            var duplicato = Fleet.HypothesisGuard.Check(altre, lane, chiaveGamba, blockOnTriple: false);
+            if (duplicato.Blocked)
+            {
+                result.Skipped.Add($"corsia {lane}: {duplicato.Reason}");
+                continue;
+            }
+
             await mgr.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create(
             ProcioneMGR.Services.Ensemble.ConfigWriteSources.PipelineApplier,
-            "auto-apply dell'impronta storica: riscrittura della corsia dal run selezionato"), ct);
+            "auto-apply dell'impronta storica: riscrittura della corsia dal run selezionato"
+            + (duplicato.Reason is { } avviso ? $" ⚠ {avviso}" : string.Empty)), ct);
 
             var sl = cfg.Strategies.Count(s => s.StopLossPercent is not null || s.TrailingStopPercent is not null);
             var tp = cfg.Strategies.Count(s => s.TakeProfitPercent is not null);
             result.Deployed.Add($"corsia {lane}: {symbol} {timeframe} ({group.Count} gambe, SL {sl}/{group.Count}, TP {tp}/{group.Count})");
         }
 
-        result.LanesUsed = lanesUsed;
+        result.LanesUsed = lanesUsed - result.Skipped.Count;
         result.Overflow = groups.Count - lanesUsed;
         result.Message = $"Ensemble distribuito su {lanesUsed} corsie con parametri validati + SL/TP automatici — {string.Join("; ", result.Deployed)}"
                        + (result.Overflow > 0 ? $". {result.Overflow} gruppi-simbolo aggiuntivi non applicati (solo {LaneCount} corsie disponibili)" : "")
+                       + (result.Skipped.Count > 0
+                            ? $". {result.Skipped.Count} corsie SALTATE perche' l'ipotesi e' gia' in corsa altrove: "
+                              + string.Join(" | ", result.Skipped)
+                            : string.Empty)
                        + ". Avvia le corsie da /trading in Paper — nessun trading è stato avviato automaticamente.";
         return result;
     }

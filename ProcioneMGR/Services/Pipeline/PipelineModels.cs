@@ -401,6 +401,15 @@ public sealed class DataIngestionOutput
 {
     public List<SeriesDataStatus> Series { get; set; } = new();
     public long CandlesIngested { get; set; }
+
+    /// <summary>
+    /// [K49b, 2026-09-02] Serie <b>tolte dall'universo</b> perché sospese dall'exchange e senza
+    /// copertura dati. Si dichiara, e per due ragioni: un universo che si accorcia in silenzio è
+    /// indistinguibile da una configurazione modificata, e il numero di tentativi che entra nel DSR
+    /// cambia — quindi cambia la soglia SR*, e un cambio di soglia senza il suo perché è il modo in
+    /// cui un gate si allenta senza che nessuno lo decida (qui invece si stringe, misurato).
+    /// </summary>
+    public List<string> PrunedSuspended { get; set; } = new();
 }
 
 public sealed class AltDataOutput
