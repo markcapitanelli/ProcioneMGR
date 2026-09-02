@@ -347,6 +347,99 @@ dominio invece che sui nomi che esistono.
 
 ---
 
+## 4-quater. La caccia n° 8, e perché la domanda era sbagliata — compresa la mia metrica
+
+Il proprietario ha chiesto il quadro prima di decidere. Il quadro **demolisce la premessa**, la mia
+inclusa.
+
+### La config 8 è già ferma, e non è stata giudicata: è stata dimenticata
+
+**Ultimo run: 2026-08-20**, tredici giorni fa. Metterla in sonno libera **0 ore su 48,7 al mese.**
+
+Il commit `932eb21` del **2026-08-20** — lo stesso giorno del suo ultimo run — aggiunge a
+`HoldoutValidationStage.ValidateInput` un rifiuto degli universi a timeframe misti, col commento
+«*le campagne reali sono già tutte a timeframe singolo, quindi nessun run esistente cambia*».
+**È falso: 28 run su 29 della config 8 sono misti.** E in database non c'è un solo run `Failed`
+della 8 — non ha mai sbattuto contro il gate, ha semplicemente **smesso di essere invocata**
+(`ScheduleEnabled = false`, mentre le altre quattro girano su `Campaign`/`Event`). In parallelo
+`FleetStateReader` e `ResearchPageService` escludono i run misti: tutte le sue 1.625 righe sono già
+fuori da `/research` e dalla coda della flotta.
+
+### E la metrica di K50 non regge il confronto — l'ho costruita io stamattina
+
+| l'obiezione | il numero |
+|---|---|
+| dipende dal denominatore | stessa config, stesso motore, stesso universo: cfg 17 fino al 20/08 → resa **0,477**; cfg 17 nei soli 21-22/08 → resa **7,250**. Tasso di grigi piatto (14,6 % → 13,3 %), resa **×15,2** |
+| dipende dall'ampiezza del paniere | **86,6 %** delle chiavi grigie di cfg 17 (71 su 82) è su simboli che la config 8 **non caccia**. Sulle 10 majors condivise cfg 17 scende a 11 chiavi |
+| dipende da quale motore ha eseguito | il motore walk-forward è stato **sostituito il 2026-08-23**. Copertura post-fix: cfg 20 = 92 % · cfg 19 = 90 % · cfg 18 = 30 % · cfg 17 = 23 % · **cfg 8 = 0 %** |
+| **premia ciò che dovrebbe punire** | la resa è correlata **ρ = 0,90 (Spearman) col PBO medio** dei candidati che premia. Le due configurazioni con la resa più alta hanno PBO medio **sopra `maxPbo = 0,5`**: cfg 20 = 0,726 e cfg 17 = 0,603, contro **cfg 8 = 0,319** |
+
+A motore uguale le rese diventano `17 = 0,476 · 20 = 0,200 · 18 = 0,115 · 8 = 0,034`: il divario con
+la 18 passa da 12× a **3,4×**, non 22×.
+
+E il confronto testa a testa, stesso terreno: **sull'1h la config 18 non ha prodotto un solo
+candidato con Sharpe holdout ≥ 0,5 in 639 righe; la config 8 ne ha prodotti 28 su 838.**
+
+> Resta però un fatto a carico della 8, e sopravvive a ogni obiezione: il **p95** del suo Sharpe
+> holdout è **0,483**, cioè sotto la sua stessa soglia di 0,5 (0,026 deduplicando per chiave). Nella
+> forma pre-fix non poteva passare. Ma è un giudizio su un motore che la piattaforma ha smesso di
+> considerare valido tre giorni dopo.
+
+### Cosa si perderebbe archiviandola, misurato
+
+- **27 delle 49 triple** strategia × simbolo × timeframe che valutava **non sono valutate da nessuna
+  configurazione attiva** dopo il 2026-08-23. Post-fix la cfg 18 valuta solo Composite,
+  EventTrigger, RegimeConditional e Ml: **zero righe** di Supertrend, EmaCross, MacdTrend, Momentum,
+  DonchianBreakout, Stochastic. **E cinque delle sette gambe oggi schierate appartengono proprio a
+  quelle famiglie.**
+- L'unico **banco di regressione deterministico** della macchina di ricerca: 58 chiavi con Sharpe
+  holdout bit-identico su fino a 28 notti. Nessun'altra lo dà — cfg 17 ha l'11 % di chiavi
+  deterministiche, cfg 18 il 10 %, **cfg 19 e 20 zero**.
+
+### Il vero consumo è la config 19
+
+**30,19 h/mese = 62 % del budget**, mediana 43,7 minuti a run, 5 chiavi grigie, **zero gambe
+schierate**, e **11,2 valori distinti per la stessa ipotesi** in circa dodici notti. Qualunque cosa
+si decida sulla 8 non sposta il budget; la 19 sì.
+
+---
+
+## 4-quinquies. K54 — le corsie portano il MASSIMO di misure ripetute
+
+Il rilievo è emerso dall'analisi della caccia 8 e l'ho verificato da solo, **confrontando l'ipotesi
+esatta** (strategia + simbolo + timeframe + *parametri*), non la sola terna — la scorciatoia che oggi
+mi aveva già ingannato.
+
+| corsia | ipotesi | `expectedSharpe` | misure | mediana | massimo | valori distinti |
+|---|---|---|---|---|---|---|
+| 6 | GridMeanReversion DOGE 15m | **1,875** | 12 | 0,498 | **1,875** | **12 su 12** |
+| 2 | Supertrend ADA 4h | **3,195** | 45 | 3,195 | **3,195** | 4 |
+| 2 | Composite ADA 4h | **1,062** | 15 | −2,482 | **1,062** | 3 |
+| 4 | Composite XLM 4h | **1,291** | 48 | 1,243 | **1,291** | 2 |
+| 7 | Supertrend TRX 4h | **3,053** | 5 | 2,734 | **3,053** | **5 su 5** |
+| 3 | MacdTrend AAVE 4h | 3,961 | 3 | 4,123 | 4,137 | 3 — *porta il **minimo*** |
+| 5 | GridMeanReversion UNI 4h | 1,187 | 44 | 1,187 | 1,187 | 1 — *deterministica* |
+
+**Cinque gambe su sette portano esattamente il massimo** delle misure ripetute della stessa ipotesi.
+Il caso peggiore è la corsia 6: dodici misure, **dodici valori diversi**, e la gamba porta 1,875
+contro una mediana di 0,498 — **3,8 volte**.
+
+**Perché succede, e perché non è un dettaglio.** La fascia grigia si ordina per Sharpe: fra molte
+misure rumorose della stessa ipotesi, quella che viene proposta è, per costruzione, la notte in cui
+il rumore ha spinto più in alto. È selezione del massimo, la trappola che questo progetto ha già
+pagato altrove.
+
+**La conseguenza è sul ritiro.** Il criterio confronta lo Sharpe vivo con `expectedSharpe`: le corsie
+vengono giudicate contro un numero preso dalla cima di una distribuzione rumorosa, quindi
+«decadranno» anche se non è cambiato niente. Il ritiro per Sharpe, che oggi è irraggiungibile per
+altre ragioni, sarebbe **sistematicamente ingiusto** appena diventasse raggiungibile.
+
+> Da notare che **non è universale**: la corsia 3 porta il minimo e la corsia 5 è deterministica. La
+> non-determinismo delle misure non è la regola dappertutto — ma dove c'è, lo schieramento prende
+> sempre la cima.
+
+---
+
 ### Cosa resta della Fase 4
 
 | # | Cosa | perché non è un pomeriggio |
@@ -370,16 +463,24 @@ dominio invece che sui nomi che esistono.
 | **NVIDIA** | chiave rigenerata dal proprietario | ✅ **funziona**. Il 404 era per-modello, non per-account: sono deployment ritirati che restano in catalogo. Modello attivo `nvidia/nemotron-3-super-120b-a12b`, 12 chiamate riuscite. Il 404 resta intermittente al ~40%, e ora l'isteresi lo assorbe invece di gridare |
 | **`Fleet:MaxGreyLanes`** | 4 → **6** | ✅ la corsia 7 è ripartita alle 14:04 UTC con un candidato scelto **dal comitato**, e resta uno slot di riserva |
 | **`AutoReapply:MaxGreyLegs`** | 0 → **2** | ✅ sblocca 3 run su 18. ⚠️ resta vero, e non è coperto: quelle gambe grigie sulle corsie d'impronta **non entrano** nel tetto `MaxGreyLanes` della flotta — sono due tetti scollegati sullo stesso rischio, e la superficie che lo dichiara non esiste ancora |
-| **Config 8** | «prima guardiamola» | quadro in preparazione: universo, costo in ore/mese, e se la sua unica ipotesi sia mai arrivata in forward test |
+| **Config 8** | «prima guardiamola» | ✅ § 4-quater: **è già ferma da 13 giorni** e non è stata giudicata, è stata *dimenticata* da un gate introdotto con un commento falso. Metterla in sonno libera **0 ore su 48,7**. E la metrica con cui l'avevo condannata non regge |
 
-### Cosa resta aperto
+### Cosa resta aperto, in ordine di gravità
 
-1. **Il doppio tetto scollegato** introdotto dalla decisione su `MaxGreyLegs`: il rischio «gambe di
-   fascia grigia in forward test» ora si accumula su due percorsi che si contano separatamente.
-   Nessuna superficie somma i due. È il prossimo candidato naturale a diventare un item.
-2. **Lo snapshot delle migrazioni è alla deriva**: non contiene `OrchestratorDecisions.Outcome`, e un
+1. **K54 — le corsie portano il massimo di misure ripetute** (§ 4-quinquies). Cinque gambe su sette.
+   Il ritiro per Sharpe le giudicherebbe contro un numero preso dalla cima del rumore: sarebbe
+   sistematicamente ingiusto appena diventasse raggiungibile.
+2. **La config 19 consuma il 62 % del budget** (30,19 h/mese) e ha schierato **zero** gambe, dando
+   11,2 valori distinti alla stessa ipotesi. È la decisione che sposta il budget, non la 8.
+3. **Il doppio tetto scollegato** introdotto dalla decisione su `MaxGreyLegs`: il rischio «gambe di
+   fascia grigia in forward test» si accumula su due percorsi contati separatamente, e nessuna
+   superficie li somma.
+4. **Un gate introdotto con un commento falso** ha spento una configurazione senza che nessuno se ne
+   accorgesse (`932eb21`, § 4-quater). Non esiste una superficie che dica «questa caccia non gira
+   più»: il difetto di forma è lo stesso di K46, in un altro posto.
+5. **Lo snapshot delle migrazioni è alla deriva**: non contiene `OrchestratorDecisions.Outcome`, e un
    `migrations add` rigenera migrazioni sbagliate (vuole ricreare `FleetLaneObservations` e
    riaggiungere `MixedTimeframeUniverse`). Precede K51 e va riallineato prima della prossima
    migrazione vera.
-3. **Gemini è il votante lento**: si astiene per timeout anche a 50 s, ed è quello che dà le
+6. **Gemini è il votante lento**: si astiene per timeout anche a 50 s, ed è quello che dà le
    motivazioni più argomentate. Alzare ancora il timeout allunga ogni tick della flotta.
