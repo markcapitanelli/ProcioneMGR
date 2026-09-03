@@ -596,6 +596,10 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneIdentityLifetimeRe
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill>();
 // [K13] Il gemello di J9 per la PROVENIENZA: le gambe schierate prima dell'etichetta T1 non dicono
 // da dove vengono, e l'ignoto conta come grigio senza che nessuna superficie possa spiegarlo.
+// [K57] La stabilità di un'ipotesi fra le sue rimisurazioni: informazione già in archivio, pagata
+// col budget di caccia e finora buttata a ogni giro. È la radice di K54, attaccata dove nasce.
+builder.Services.AddSingleton<ProcioneMGR.Services.Research.IStabilitaReader,
+    ProcioneMGR.Services.Research.StabilitaReader>();
 // [K54] Che cosa ha detto la ricerca DOPO che l'aspettativa di una gamba è stata scritta: sola
 // lettura sull'archivio dei candidati, e l'unico consumatore è il monitor di decadimento.
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.IExpectationEvidenceReader,

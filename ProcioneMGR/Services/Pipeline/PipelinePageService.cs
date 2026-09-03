@@ -160,6 +160,8 @@ public sealed class PipelinePageService(
                 Schedule = config.Schedule,
                 ScheduleEnabled = config.ScheduleEnabled,
                 NextRunAt = config.NextRunAt,
+                // [K56] La cadenza propria della configurazione nella rotazione automatica.
+                MinHoursBetweenRuns = config.MinHoursBetweenRuns,
             },
             Universe = JsonSerializer.Deserialize<List<SeriesSpec>>(config.UniverseJson) ?? [],
             Ranges = JsonSerializer.Deserialize<PipelineDateRanges>(config.DateRangesJson) ?? new PipelineDateRanges(),
@@ -217,6 +219,9 @@ public sealed class PipelinePageService(
         row.ExecutionMode = draft.Config.ExecutionMode;
         row.Schedule = draft.Config.Schedule;
         row.ScheduleEnabled = draft.Config.ScheduleEnabled;
+        // [K56] Mai negativa: un numero negativo qui significherebbe «gia' scaduta da sempre»,
+        // cioe' esattamente il contrario di cio' che il campo promette.
+        row.MinHoursBetweenRuns = Math.Max(0, draft.Config.MinHoursBetweenRuns);
         if (scheduleChanged) row.NextRunAt = null;
         row.UniverseJson = JsonSerializer.Serialize(draft.Universe);
         row.DateRangesJson = JsonSerializer.Serialize(draft.Ranges);

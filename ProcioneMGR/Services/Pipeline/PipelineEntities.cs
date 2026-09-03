@@ -52,6 +52,29 @@ public class PipelineConfiguration
     /// recent PipelineRun for "last run" info instead of a denormalized copy.
     /// </summary>
     public DateTime? NextRunAt { get; set; }
+
+    /// <summary>
+    /// [K56, 2026-09-02] <b>Ore minime fra due run DI QUESTA configurazione</b> nella rotazione
+    /// automatica. <c>0</c> = nessun limite proprio, vale il solo backoff della campagna
+    /// (comportamento storico).
+    ///
+    /// <para><b>Perché per-configurazione e non globale.</b> La rotazione ha un solo pomello —
+    /// <c>VettingCampaign.BackoffHours</c>, più <c>Campaign:RearmHours</c> — per cacce che costano
+    /// misure diversissime. Al 2026-09-02, mediana per run: <b>cfg 17 = 3,7 minuti</b>,
+    /// <b>cfg 19 = 43,8 minuti</b>. Dodici volte tanto, stessa cadenza. Alzare il pomello globale
+    /// per rallentare la 19 rallenterebbe anche la 17, che costa un dodicesimo.</para>
+    ///
+    /// <para><b>Perché rallentare è quasi gratis, misurato.</b> La finestra di holdout della cfg 19
+    /// è di <b>112 giorni</b> e scorre di un giorno al giorno: fra un run e il successivo — 14,1 ore
+    /// mediane — entrano <b>288 candele nuove su circa 32.000</b>, cioè lo <b>0,5%</b>. Si spendono
+    /// 44 minuti di calcolo per mezzo punto percentuale di dati nuovi. A 48 ore la finestra si muove
+    /// dell'1,8% e il costo scende da ~35,7 a ~11 ore al mese.</para>
+    ///
+    /// <para><b>Ciò che NON si perde:</b> la qualità non dipende dalla cadenza ma dalla finestra, che
+    /// resta la stessa. Ciò che si perde è la <i>ridondanza</i> — e la dispersione fra rimisurazioni
+    /// resta comunque abbondante per il gate di stabilità (13-16 misure per ipotesi).</para>
+    /// </summary>
+    public int MinHoursBetweenRuns { get; set; }
 }
 
 /// <summary>

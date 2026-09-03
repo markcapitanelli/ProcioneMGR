@@ -32,6 +32,18 @@ public sealed record GreyChoice
     public required decimal HoldoutSharpe { get; init; }
     public required int HoldoutTrades { get; init; }
     public string? RejectReason { get; init; }
+
+    /// <summary>
+    /// [K57, 2026-09-02] La stabilità di QUESTA ipotesi fra le sue rimisurazioni. <c>null</c> =
+    /// meno di cinque misure in archivio, cioè «non lo so» — che non è «va bene».
+    ///
+    /// <para>Il numero qui sopra (<see cref="HoldoutSharpe"/>) è quello del run che si sta
+    /// guardando. Le finestre scorrono, quindi la stessa identica ipotesi viene rivalutata a ogni
+    /// giro: misurato, 13-16 volte con un ventaglio mediano di 0,4-0,75 — contro un cancello posto
+    /// a 0,5. Ordinare per il valore di un singolo run significa proporre, per costruzione, la
+    /// notte in cui il ventaglio era al massimo.</para>
+    /// </summary>
+    public Research.StabilitaIpotesi? Stabilita { get; init; }
 }
 
 /// <summary>Esito dello schieramento, scritto per un umano.</summary>
@@ -91,13 +103,35 @@ public sealed class GreyDeployer(
     ExcursionAnalyzer excursion,
     ILaneDirectory laneDirectory,
     IOptionsMonitor<FleetOptions> options,
-    ILogger<GreyDeployer> logger) : IGreyDeployer
+    ILogger<GreyDeployer> logger,
+    // [K57] La stabilità fra rimisurazioni. Opzionale come gli altri collaboratori: assente ⇒
+    // l'ordinamento resta quello storico, per Sharpe del singolo run.
+    Research.IStabilitaReader? stabilita = null) : IGreyDeployer
 {
     public async Task<IReadOnlyList<GreyChoice>> ListGreyAsync(Guid runId, CancellationToken ct = default)
     {
         var grey = await LoadGreyCandidatesAsync(runId, ct);
+
+        // [K57, 2026-09-02] SI ORDINA PER LA MEDIANA DELLE RIMISURAZIONI, non per il valore del
+        // singolo run — e le instabili scendono in fondo invece di sparire.
+        //
+        // Misurato sulle 324 chiavi giudicabili del motore corrente: 111 passano la soglia di 0,5
+        // col MASSIMO delle loro misure, 87 con la MEDIANA. Le 24 di differenza — il 22% — passano
+        // solo perché è esistita una notte fortunata. Ordinare per il singolo run le mette in
+        // cima, ed è così che la corsia 6 ha ricevuto un'aspettativa di 1,875 contro una mediana
+        // di 0,479.
+        //
+        // Non si CANCELLANO: è una lista che un umano legge e da cui sceglie. Toglierle
+        // nasconderebbe che esistono; metterle in fondo, con il loro racconto accanto, lascia la
+        // decisione a chi guarda. Chi non ha abbastanza misure resta dov'era: l'ignoranza non
+        // retrocede nessuno.
+        var stab = stabilita is null
+            ? new Dictionary<string, Research.StabilitaIpotesi>(StringComparer.Ordinal)
+            : await stabilita.ReadAsync([.. grey.Select(c => c.Key)], ct);
+
         return grey
-            .OrderByDescending(c => c.HoldoutSharpe)
+            .OrderBy(c => stab.TryGetValue(c.Key, out var st) && st.Instabile)
+            .ThenByDescending(c => stab.TryGetValue(c.Key, out var st) ? st.Mediana : c.HoldoutSharpe)
             // [Difetto C] La chiave viaggia FINO al form: è il valore che tornerà indietro in
             // DeployAsync. Senza, l'ordinamento per Sharpe di questa riga e l'ordine dell'artifact
             // letto in DeployAsync producevano due liste diverse sulla stessa terna.
@@ -110,6 +144,7 @@ public sealed class GreyDeployer(
                 HoldoutSharpe = c.HoldoutSharpe,
                 HoldoutTrades = c.HoldoutTrades,
                 RejectReason = c.RejectReason,
+                Stabilita = stab.TryGetValue(c.Key, out var s) ? s : null,
             })
             .ToList();
     }

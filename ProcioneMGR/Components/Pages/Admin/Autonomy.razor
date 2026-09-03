@@ -925,8 +925,23 @@
                                    (Composite LTC/USDT 15m, entrambe Sharpe 0,97 su 9 trade) anche etichette
                                    identiche al carattere. L'impronta dei parametri e' l'unica cosa che le
                                    distingue: si mostra, altrimenti la scelta resta cieca. *@
+                                @* [K57, 2026-09-02] LA STABILITA' ACCANTO AL NUMERO.
+
+                                   Le finestre scorrono, quindi la stessa identica ipotesi viene
+                                   rivalutata a ogni giro: misurato, 13-16 volte con un ventaglio
+                                   mediano di 0,4-0,75 — contro un cancello posto a 0,5. Su 324
+                                   chiavi giudicabili, 111 passano la soglia col MASSIMO delle loro
+                                   misure e 87 con la MEDIANA: le 24 di differenza passano solo
+                                   perche' e' esistita una notte fortunata.
+
+                                   Lo Sharpe qui sopra e' quello del run che si sta guardando. Senza
+                                   la mediana accanto, sceglierebbe la notte piu' fortunata — ed e'
+                                   cosi' che la corsia 6 porta un'aspettativa di 1,875 contro una
+                                   mediana di 0,479. *@
                                 <option value="@c.CandidateKey">
-                                    @c.CandidateKey — Sharpe @c.HoldoutSharpe.ToString("F2") su @c.HoldoutTrades trade
+                                    @c.CandidateKey — Sharpe @c.HoldoutSharpe.ToString("F2") su @c.HoldoutTrades trade@(c.Stabilita is { Giudicabile: true } st
+                                        ? $" · mediana {st.Mediana:F2} su {st.Misure} misure (ventaglio {st.Ampiezza:F2}){(st.Instabile ? " ⚠ INSTABILE" : "")}"
+                                        : " · stabilità sconosciuta (meno di 5 rimisurazioni)")
                                 </option>
                             }
                         </select>

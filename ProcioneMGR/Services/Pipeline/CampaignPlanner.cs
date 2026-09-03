@@ -440,6 +440,26 @@ public sealed class CampaignPlanner(
                 logger.LogWarning("Campagna {Id}: config {ConfigId} inesistente, saltata.", campaign.Id, state.ConfigurationId);
                 continue;
             }
+
+            // [K56, 2026-09-02] LA CADENZA PROPRIA DELLA CONFIGURAZIONE, quando ne ha una.
+            //
+            // Il backoff della campagna e' UNO per cacce che costano misure diversissime: mediana
+            // per run al 2026-09-02, cfg 17 = 3,7 minuti contro cfg 19 = 43,8. Dodici volte tanto,
+            // stessa cadenza. E rallentare la 19 e' quasi gratis: la sua finestra di holdout e' di
+            // 112 giorni e fra un run e l'altro entrano 288 candele su ~32.000, lo 0,5%.
+            //
+            // Il wake NON la scavalca, a differenza del backoff: un trigger di regime e' una
+            // ragione per svegliare la ROTAZIONE, non per pagare 44 minuti su dati che non sono
+            // cambiati. Se la finestra non si e' mossa, il regime nuovo lo vedra' il run dopo.
+            if (config.MinHoursBetweenRuns > 0
+                && state.LastRunAtUtc is DateTime ultimo
+                && ultimo.AddHours(config.MinHoursBetweenRuns) > now)
+            {
+                logger.LogDebug(
+                    "Campagna {Id}: config {ConfigId} '{Name}' saltata, cadenza propria {Ore}h non ancora scaduta (ultimo run {Ultimo:u}).",
+                    campaign.Id, config.Id, config.Name, config.MinHoursBetweenRuns, ultimo);
+                continue;
+            }
             if (config.ExecutionMode == "Live")
             {
                 // Stessa regola non negoziabile dello scheduler: i run automatici non eseguono MAI in Live.
