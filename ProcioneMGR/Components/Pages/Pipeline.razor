@@ -18,6 +18,7 @@
 @inject ILogger<Pipeline> Logger
 @inject PipelinePageService Svc
 @inject IHuntYieldReader ReseDiCaccia
+@inject IHuntCoverageReader CoperturaDiCaccia
 
 <PageTitle>Pipeline autonomo</PageTitle>
 <h1>Pipeline autonomo
@@ -110,6 +111,57 @@
             @if (_live.RecentLog.Count > 0)
             {
                 <pre class="small bg-dark text-light p-2 rounded" style="max-height: 220px; overflow:auto;">@string.Join("\n", _live.RecentLog)</pre>
+            }
+        </div>
+    </div>
+}
+
+@* [K58, 2026-09-03] CHE COSA SI PAGA E NON SI GUARDA.
+
+   La piattaforma tiene aggiornate le serie in watchlist a ogni giro dell'ingestione. Misurato il
+   2026-09-03: 222 celle seguite, 125 cacciate — NOVANTASETTE si pagavano senza che nessuna caccia
+   le guardasse, e nessuna superficie lo diceva.
+
+   Non e' un allarme: e' il numero che serve per rispondere a «quale caccia aggiungere». Il buco piu'
+   grande e' la risposta, e non c'e' bisogno di inventarla. *@
+@if (_copertura is { Seguite.Count: > 0 } cop)
+{
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Copertura della caccia</span>
+            <span class="badge @(cop.Scoperte.Count == 0 ? "bg-success" : cop.FrazioneCoperta >= 0.8 ? "bg-warning text-dark" : "bg-danger")">
+                @cop.Cacciate.Count su @cop.Seguite.Count celle (@((cop.FrazioneCoperta * 100).ToString("F0"))%)
+            </span>
+        </div>
+        <div class="card-body py-2">
+            @if (cop.Scoperte.Count == 0)
+            {
+                <p class="small mb-0 text-muted">Ogni serie seguita è dentro l'universo di almeno una caccia in rotazione.</p>
+            }
+            else
+            {
+                <p class="small mb-2">
+                    <strong>@cop.Scoperte.Count celle</strong> sono seguite in watchlist — quindi si pagano a ogni giro
+                    dell'ingestione — e <strong>nessuna caccia le guarda</strong>. È da qui che si decide quale caccia
+                    aggiungere: il buco più grande è la risposta, e non serve inventarla.
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th>Timeframe</th><th class="text-end">Mai cacciate</th><th>Quali</th></tr></thead>
+                        <tbody>
+                            @foreach (var (tf, simboli) in cop.BuchiPerTimeframe)
+                            {
+                                <tr>
+                                    <td><code>@tf</code></td>
+                                    <td class="text-end"><strong>@simboli.Count</strong></td>
+                                    <td class="small text-muted">
+                                        @string.Join(", ", simboli.Take(8))@(simboli.Count > 8 ? $" … e altre {simboli.Count - 8}" : "")
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
             }
         </div>
     </div>
@@ -719,6 +771,7 @@
         try
         {
             _resa = await ReseDiCaccia.ReadAsync();
+            await CaricaCoperturaAsync();
             var giudicabili = _resa
                 .Where(y => y.Verdict != ProcioneMGR.Services.Pipeline.HuntYieldVerdict.TroppoPresto)
                 .Select(y => y.KeysPerRun).OrderBy(x => x).ToList();
@@ -933,6 +986,27 @@
             ? $" A {misurata:F0} minuti mediani a run misurati, fanno circa {giri * 30 * misurata / 60:F0} ore al mese."
             : string.Empty;
         return $"Un run ogni {ore} ore, cioè {(giri >= 1 ? $"{giri:F1} al giorno" : $"uno ogni {ore / 24.0:F1} giorni")}.{stima}";
+    }
+
+    /// <summary>[K58] La copertura corrente; null finché non è stata letta (mai «tutto a posto» per default).</summary>
+    private ProcioneMGR.Services.Pipeline.CoperturaCaccia? _copertura;
+
+    private async Task CaricaCoperturaAsync()
+    {
+        try
+        {
+            // In rotazione = le configurazioni non disabilitate. È l'approssimazione onesta finché
+            // la rotazione vive dentro il JSON della campagna: sovrastima le cacciate, quindi
+            // dichiara MENO buchi — e un buco dichiarato in meno non fa fabbricare una caccia che
+            // non serve.
+            var attive = _configs.Where(c => c.ExecutionMode != "Disabled").Select(c => c.Id).ToList();
+            _copertura = await CoperturaDiCaccia.ReadAsync(attive);
+        }
+        catch (Exception ex)
+        {
+            _copertura = null;
+            Logger.LogDebug(ex, "Copertura della caccia non leggibile: il riquadro resta nascosto.");
+        }
     }
 
     private string SchedulePreviewText()

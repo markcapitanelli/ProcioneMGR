@@ -596,6 +596,12 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ILaneIdentityLifetimeRe
 builder.Services.AddSingleton<ProcioneMGR.Services.Fleet.ExpectedFrequencyBackfill>();
 // [K13] Il gemello di J9 per la PROVENIENZA: le gambe schierate prima dell'etichetta T1 non dicono
 // da dove vengono, e l'ignoto conta come grigio senza che nessuna superficie possa spiegarlo.
+// [K58/K59/K60] Il governo della caccia: che cosa si paga e non si guarda (copertura), quanto costa
+// in ore (budget), e quale buco riempire per primo (proposta a menù chiuso, scelta dal comitato).
+builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IHuntCoverageReader,
+    ProcioneMGR.Services.Pipeline.HuntCoverageReader>();
+builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IHuntProposer,
+    ProcioneMGR.Services.Pipeline.HuntProposer>();
 // [K57] La stabilità di un'ipotesi fra le sue rimisurazioni: informazione già in archivio, pagata
 // col budget di caccia e finora buttata a ogni giro. È la radice di K54, attaccata dove nasce.
 builder.Services.AddSingleton<ProcioneMGR.Services.Research.IStabilitaReader,
