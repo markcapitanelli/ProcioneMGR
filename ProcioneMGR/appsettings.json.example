@@ -73,7 +73,9 @@
     "GreyAutoDeploy": false,
     "MaxGreyLanes": 3,
     "_comment_K33": "[K33, 2026-09-01] BlockDuplicateTriple: la guardia contro l'ipotesi doppia rifiuta anche la stessa TERNA (strategia, simbolo, timeframe) con parametri diversi, non solo la replica esatta. Default true. Spegnerla e' legittimo se si vogliono deliberatamente due tarature dello stesso segnale: il motivo finisce a journal.",
-    "BlockDuplicateTriple": true
+    "BlockDuplicateTriple": true,
+    "_comment_K57": "[K57, 2026-09-04] StabilitaDaUtc: il gate di stabilita' (lista dei grigi) considera solo le rimisurazioni completate da questa data. Default 2026-08-23, la sostituzione del motore walk-forward su cui la soglia e' stata misurata. null = tutte le righe (di entrambi i motori).",
+    "StabilitaDaUtc": "2026-08-23T00:00:00Z"
   },
   "Heartbeat": {
     "_comment": "[AF5.1] Heartbeat incrociato guscio/motore (tabella HostHeartbeats): ogni host scrive il PROPRIO battito e sorveglia quello altrui; stantio oltre StaleMinutes => Telegram Warning una volta per transizione. Il pannello in /admin/autonomy salva su ENTRAMBI gli host.",

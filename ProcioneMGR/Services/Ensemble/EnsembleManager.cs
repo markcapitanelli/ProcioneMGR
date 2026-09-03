@@ -235,7 +235,13 @@ public sealed class EnsembleManager(
             var candidateTrades = await ancorati.Where(t => t.Symbol == cfg.Symbol).ToListAsync(ct);
             var senzaRepliche = Trading.TradeDeduplication.Distinti(candidateTrades);
             var repliche = Trading.TradeDeduplication.Repliche(candidateTrades, senzaRepliche);
-            var recentTrades = senzaRepliche
+            // [K41 chiuso, 2026-09-04] E solo i trade VIVI: le righe scritte giorni dopo la loro
+            // candela sono replay di storico (corsia fermata e riavviata), non operazioni della
+            // gamba. Non hanno un originale da cui essere dedotte, e senza questo filtro il
+            // decadimento giudicava trade che non sono mai avvenuti.
+            var vivi = Trading.TradeDeduplication.Vivi(senzaRepliche, cfg.Timeframe);
+            var replay = Trading.TradeDeduplication.Replay(senzaRepliche, vivi);
+            var recentTrades = vivi
                 .OrderByDescending(t => t.ClosedAtUtc)
                 .Take(options.WindowTradeCount)
                 .ToList();
@@ -272,6 +278,7 @@ public sealed class EnsembleManager(
             report.TradesExcludedBeforeLeg = primaDellaGamba;
             report.LegHasNoBirthStamp = ancora is null;
             report.TradesExcludedDuplicate = repliche;
+            report.TradesExcludedReplay = replay;
             reports.Add(report);
 
             if (rotti > 0)

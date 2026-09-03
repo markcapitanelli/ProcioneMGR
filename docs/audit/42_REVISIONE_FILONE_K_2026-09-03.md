@@ -335,3 +335,20 @@ dell'app.
 Il numero del budget (40 h su 13 configurazioni) è più alto delle «~32 su nove» del doc 41 perché
 conta TUTTE le configurazioni non disabilitate con un run negli ultimi 30 giorni, al ritmo osservato:
 è il consumo vero, non quello della sola rotazione.
+
+---
+
+## 9. Chiusura dei punti rimasti (2026-09-04, ramo `fase4/revisione-filone-k`)
+
+Su richiesta del proprietario («completare l'automazione»), i quattro punti dichiarati aperti in §8:
+
+| Punto | Fatto |
+|---|---|
+| 3.7 `RecordedAtUtc` mai letto | `TradeDeduplication.Vivi(righe, timeframe)`: una riga scritta più di **tre barre + 30′** dopo la sua candela è replay, non un trade. Applicato in `TradingEngine.GetPerformanceAsync` (il ritiro di flotta e la promozione) e nel monitor di decadimento, con lo scarto dichiarato (`TradesExcludedReplay`, «Esclusi perché replay» in `/ensemble`). Le 371 righe storiche senza ora di parete restano. Test `TradeViviK41Tests` |
+| 3.12 àncora K54 = schieramento | `ExpectationEvidenceReader` ancora l'evidenza al **run che ha prodotto il numero** (ultima misura della stessa identità, non posteriore allo schieramento, con lo stesso Sharpe holdout); se non si trova resta lo schieramento, e il racconto dice quale àncora ha usato (`AncoraDalRun`). Con i numeri veri della corsia 6: 11 rivalutazioni, mediana 0,479, contraddetta — prima non era giudicabile. Test `AncoraEvidenzaK54Tests` su Postgres |
+| K57 filtro per motore | `Fleet:StabilitaDaUtc` (default 2026-08-23, la sostituzione del walk-forward su cui la soglia è stata misurata; `null` = tutte le righe), manopola in `/admin/autonomy` accanto alla guardia K33, esempio in `appsettings.json.example`; `StabilitaReader` filtra `RunCompletedUtc`. Test: sei misure larghe del motore vecchio + sei strette del nuovo ⇒ stabile col filtro, instabile senza |
+| test di integrazione | `RitiroConIntentoTests` (Postgres + motore finto: riga Intended→Applied con uno stop; corsia non Paper ⇒ Refused senza stop; journal irraggiungibile ⇒ **nessuno stop**); `CandidatiGestitiDallaFlottaTests` (la regola di `ContaComeGestito` riga per riga, e 96 rifiuti in dry-run che non bruciano nulla); `AncoraEvidenzaK54Tests` (K54 e K57 su Postgres). Il riuso del menù del comitato resta senza test dedicato |
+
+Due fixture di test hanno dovuto dichiarare quando i loro trade sono stati scritti: `EnsembleManagerDecayTests`
+(righe di settimane fa inserite adesso = firma del replay) e `MultiLaneIsolationTests` (candele
+sintetiche del 2026-01-01). Non è un aggiustamento: è la regola nuova che li ha trovati.

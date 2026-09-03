@@ -143,3 +143,15 @@ selezionata è sempre visibile.
   i fattori sono simbolo-specifici per costruzione.
 - L'avviso MiCA su Binance Futures (righe 190–198) riflette il vincolo normativo reale
   dal 2026-07-01 per i residenti SEE: per la leva si usa Bitget.
+
+## Filone K (2026-09-01 → 09-04): il monitor di decadimento dice su cosa giudica
+
+- **Stima corrente accanto all'atteso d'origine** (K54): quando la stessa identica ipotesi è stata
+  rivalutata almeno cinque volte dopo il run che ha prodotto il numero, il verdetto è sulla mediana
+  delle rivalutazioni e la card lo dice («% della stima corrente ← il verdetto è su questo»); il
+  numero d'origine resta. Dal 2026-09-04 l'àncora è il run sorgente, non l'ora dello schieramento.
+- **Scarti dichiarati**: «esclusi perché di un altro simbolo», «precedenti alla gamba» (K39),
+  «fill rotti», «repliche» (K43) e, dal 2026-09-04, **«replay»** (K41: righe scritte più di tre barre
+  dopo la loro candela, fabbricate dal rigioco di candele storiche dopo un riavvio della corsia).
+- **Badge del motore** (K34): «MOTORE IN CORSA / FERMO» dalla fonte viva; quando le due fonti non
+  concordano lo scrive.

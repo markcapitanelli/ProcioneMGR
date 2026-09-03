@@ -452,6 +452,10 @@ public sealed class FleetOrchestratorWorker(
     internal Task ValutaComitatoPerTestAsync(Llm.Committee.CommitteeVerdict verdict, int minValidVotes)
         => DeclareCommitteeFaultAsync(verdict, minValidVotes, CancellationToken.None);
 
+    /// <summary>[Revisione 2026-09-04] Superficie di prova per il ritiro con intento: ferma una corsia come farebbe il tick.</summary>
+    internal Task RitiraPerTestAsync(StopAndFreeLane retire, CancellationToken ct = default)
+        => ExecuteRetireAsync(retire, ct);
+
     private static string Troncato(string s) => s.Length <= 160 ? s : s[..160];
 
     /// <summary>Un tick completo. Pubblico per i test di integrazione e per un futuro "Esegui ora".</summary>

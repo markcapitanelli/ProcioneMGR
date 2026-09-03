@@ -1652,11 +1652,6 @@ public sealed class TradingEngine(
             trades = TradeDeduplication.Distinti(await q.ToListAsync(ct));
         }
 
-        var wins = trades.Where(t => t.Pnl > 0m).ToList();
-        var losses = trades.Where(t => t.Pnl < 0m).ToList();
-        var grossWin = wins.Sum(t => t.Pnl);
-        var grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
-
         // Snapshot ATOMICO di curva e stato sotto il gate — poi si calcola fuori. Prima si leggeva
         // _equity viva in TRE punti (ToList, SharpeRatio, MaxDrawdown) mentre ProcessCandleAsync
         // poteva farci Add sotto il SUO gate: una collisione lancia ("collection modified") o copia
@@ -1679,6 +1674,24 @@ public sealed class TradingEngine(
             timeframe = _state.Timeframe;
         }
         finally { _gate.Release(); }
+
+        // [K41 chiuso, 2026-09-04] E i trade devono essere VIVI: una riga scritta giorni dopo la sua
+        // candela è replay di storico (corsia fermata e riavviata con la stessa gamba), non
+        // un'operazione avvenuta. La deduplica non la vede — non ha un originale — e senza questo
+        // filtro entrava nel ritiro di flotta come trade vero. Le righe storiche senza
+        // RecordedAtUtc restano, dichiarate.
+        var prima = trades.Count;
+        trades = TradeDeduplication.Vivi(trades, timeframe);
+        if (trades.Count != prima)
+        {
+            logger.LogInformation("Corsia {Lane}: {N} righe di replay escluse dalla performance (scritte oltre {Tol} dopo la candela).",
+                laneId, prima - trades.Count, TradeDeduplication.TolleranzaDiScrittura(timeframe));
+        }
+
+        var wins = trades.Where(t => t.Pnl > 0m).ToList();
+        var losses = trades.Where(t => t.Pnl < 0m).ToList();
+        var grossWin = wins.Sum(t => t.Pnl);
+        var grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
 
         var ppy = Statistics.PeriodsPerYear(timeframe);
 

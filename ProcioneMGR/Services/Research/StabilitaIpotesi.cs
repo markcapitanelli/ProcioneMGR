@@ -99,7 +99,9 @@ public interface IStabilitaReader
 /// già in <c>ResearchCandidates</c>, pagate col budget di caccia e finora buttate a ogni giro
 /// tenendo solo l'ultima riga. È la radice di K54, attaccata dove nasce invece che a valle.</para>
 /// </summary>
-public sealed class StabilitaReader(IDbContextFactory<ApplicationDbContext> dbFactory) : IStabilitaReader
+public sealed class StabilitaReader(
+    IDbContextFactory<ApplicationDbContext> dbFactory,
+    Microsoft.Extensions.Options.IOptionsMonitor<Fleet.FleetOptions>? fleetOptions = null) : IStabilitaReader
 {
     public async Task<IReadOnlyDictionary<string, StabilitaIpotesi>> ReadAsync(
         IReadOnlyCollection<string> candidateKeys, CancellationToken ct = default)
@@ -111,11 +113,17 @@ public sealed class StabilitaReader(IDbContextFactory<ApplicationDbContext> dbFa
         var chiavi = candidateKeys.Distinct(StringComparer.Ordinal).ToList();
 
         // Si legge SOLO lo Sharpe holdout: è il numero su cui il cancello decide, ed è quello che
-        // la fascia grigia ordina. Nessun filtro sul motore che ha prodotto la riga — filtrarlo qui
-        // significherebbe scegliere quale storia raccontare; a monte la finestra è già limitata da
-        // chi chiama.
-        var righe = await db.ResearchCandidates.AsNoTracking()
-            .Where(c => chiavi.Contains(c.CandidateKey))
+        // la fascia grigia ordina.
+        //
+        // [Revisione 2026-09-04] E solo le righe del MOTORE CORRENTE (Fleet:StabilitaDaUtc, default
+        // 2026-08-23): la soglia è stata calibrata su quelle, e il commento che diceva «a monte la
+        // finestra è già limitata da chi chiama» descriveva un chiamante che non esisteva —
+        // GreyDeployer passa solo le chiavi. Con le righe di due motori il ventaglio misurava il
+        // cambio di motore, non l'ipotesi.
+        var da = fleetOptions?.CurrentValue.StabilitaDaUtc;
+        var query = db.ResearchCandidates.AsNoTracking().Where(c => chiavi.Contains(c.CandidateKey));
+        if (da is DateTime soglia) query = query.Where(c => c.RunCompletedUtc >= soglia);
+        var righe = await query
             .Select(c => new { c.CandidateKey, c.HoldoutSharpe })
             .ToListAsync(ct);
 

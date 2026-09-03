@@ -57,4 +57,46 @@ public static class TradeDeduplication
         ArgumentNullException.ThrowIfNull(distinti);
         return righe.Count - distinti.Count;
     }
+
+    /// <summary>
+    /// [K41 chiuso, revisione 2026-09-03/04] <b>Un trade è VIVO se è stato scritto quando è
+    /// avvenuto.</b> <c>RecordedAtUtc</c> (ora di parete, messa dal database) meno <c>ClosedAtUtc</c>
+    /// (ora di candela) è il ritardo di scrittura: per un trade eseguito dal vivo vale al più una
+    /// barra e qualche secondo; per un trade fabbricato dal replay di candele storiche vale giorni.
+    ///
+    /// <para><b>Il caso che la deduplica non vede.</b> Una corsia Paper fermata per giorni e
+    /// riavviata con la stessa gamba riparte con <c>LastCandleUtc</c> nullo e rigioca trenta giorni
+    /// di candele: le righe dei giorni in cui era FERMA non hanno un originale da cui essere
+    /// dedotte, hanno tempi di candela dopo l'àncora della gamba, e finivano nel ritiro e nel
+    /// monitor di decadimento come trade veri. La colonna che le distingue esisteva da K41 e non
+    /// aveva lettori.</para>
+    ///
+    /// <para><b>La tolleranza</b> è tre barre più mezz'ora: due ordini di grandezza sotto il replay
+    /// misurato (giorni) e sopra il ritardo normale del motore (una barra). Le righe SENZA
+    /// <c>RecordedAtUtc</c> — le 371 storiche, precedenti a K41 — restano: non si può giudicare ciò
+    /// che non è stato misurato, e scartarle azzererebbe la storia delle corsie d'impronta.</para>
+    /// </summary>
+    public static List<TradeRecord> Vivi(IEnumerable<TradeRecord> righe, string timeframe)
+    {
+        ArgumentNullException.ThrowIfNull(righe);
+        var tolleranza = TolleranzaDiScrittura(timeframe);
+        return righe.Where(t => t.RecordedAtUtc is not DateTime scritto || scritto - t.ClosedAtUtc <= tolleranza).ToList();
+    }
+
+    /// <summary>Quante righe sono state scartate perché scritte troppo tardi per essere trade vivi.</summary>
+    public static int Replay(IReadOnlyCollection<TradeRecord> righe, IReadOnlyCollection<TradeRecord> vivi)
+    {
+        ArgumentNullException.ThrowIfNull(righe);
+        ArgumentNullException.ThrowIfNull(vivi);
+        return righe.Count - vivi.Count;
+    }
+
+    /// <summary>Tre barre del timeframe più mezz'ora; con un timeframe ignoto vale un giorno.</summary>
+    public static TimeSpan TolleranzaDiScrittura(string timeframe)
+    {
+        // Stessa tabella di Statistics.PeriodsPerYear (anno di 365 giorni): 1d → 1 giorno, 5m → 5 minuti.
+        var ppy = Optimization.Statistics.PeriodsPerYear(timeframe);
+        var barra = ppy > 0 ? TimeSpan.FromDays(365.0 / ppy) : TimeSpan.FromHours(8);
+        return barra * 3 + TimeSpan.FromMinutes(30);
+    }
 }

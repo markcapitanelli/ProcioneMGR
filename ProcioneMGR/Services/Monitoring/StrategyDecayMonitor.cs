@@ -218,6 +218,14 @@ public sealed class DecayReport
     public int TradesExcludedDuplicate { get; set; }
 
     /// <summary>
+    /// [K41 chiuso, 2026-09-04] Righe <b>scartate perché replay</b>: scritte più di tre barre dopo la
+    /// loro candela (<c>RecordedAtUtc − ClosedAtUtc</c>), cioè fabbricate dal rigioco di candele
+    /// storiche dopo un riavvio della corsia, non operazioni della gamba. Non sono repliche —
+    /// non hanno un originale — e prima entravano nel verdetto come trade veri.
+    /// </summary>
+    public int TradesExcludedReplay { get; set; }
+
+    /// <summary>
     /// [I13b] <b>Questa gamba è misurabile?</b> Vero quando i trade sul simbolo attuale bastano
     /// perché il confronto realizzato-vs-atteso significhi qualcosa.
     ///
