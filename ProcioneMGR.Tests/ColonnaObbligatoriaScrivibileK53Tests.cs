@@ -57,7 +57,10 @@ public class ColonnaObbligatoriaScrivibileK53Tests(PostgresFixture pg)
 
         var outcome = await db.OrchestratorDecisions.AsNoTracking()
             .Where(d => d.Reason == "binario vecchio").Select(d => d.Outcome).SingleAsync();
-        Assert.Equal(DecisionOutcome.Applied, outcome);
+        // [Revisione 2026-09-03] Chi non dichiara l'esito NON LO SA: il default è «Unknown», mai
+        // «Applied». Con 'Applied' come default ogni riga scritta da un binario vecchio — e ogni
+        // scrittore che dimenticava il campo — risultava «eseguita» nel pannello.
+        Assert.Equal(DecisionOutcome.Unknown, outcome);
     }
 
     /// <summary>

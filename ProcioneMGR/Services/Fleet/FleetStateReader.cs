@@ -210,8 +210,35 @@ public sealed class FleetStateReader(
         // [K14 2026-08-31] DUE insiemi, non uno. Prima "Assign" e "ProposeGrey" finivano insieme in
         // «gia' gestito», e con l'ereditarieta' per identita' una NOTIFICA a un umano toglieva il
         // candidato al braccio automatico — per sempre, dentro la finestra dei 30 giorni.
+        // [Revisione 2026-09-03] Solo le assegnazioni che hanno TOCCATO (o stanno toccando) una
+        // corsia contano come «gestito»: Applied, Intended, Unknown. Un «Assign» RIFIUTATO dal gate
+        // (dry-run, corsia non autorizzata, budget del tick) prima finiva qui uguale, e bruciava il
+        // candidato — e per ereditarietà di identità tutti i run della stessa chiave — per i 14
+        // giorni di CandidateMaxAgeDays: in dry-run la coda si svuotava in poche ore e il no-op
+        // diceva «tutti già schierati in passato». Un rifiuto per regola non è uno schieramento.
+        // I Failed contano per 24 ore: abbastanza per non ritentare a ogni tick uno schieramento
+        // che fallisce per una ragione stabile (bracket non derivabile, motore muto), non
+        // abbastanza per perdere il candidato per due settimane.
+        //
+        // I Refused a dry-run SPENTO contano anch'essi per 24 ore — ed è ciò che fa AVANZARE la
+        // coda: un candidato che il braccio non può eseguire per una ragione stabile (ensemble
+        // multi-gamba, corsia non autorizzata) altrimenti resterebbe in testa alla FIFO e
+        // occuperebbe l'unico slot del tick per quattordici giorni, senza che i candidati dietro di
+        // lui vengano mai proposti. In DRY-RUN invece nulla brucia: il rifiuto è la modalità, non
+        // una proprietà del candidato, e chi spegne il dry-run dopo giorni di osservazione deve
+        // trovare la coda intera.
+        //
+        // Unknown conta solo se porta un errore (un intento chiuso dalla riconciliazione) o se è
+        // applicato: una riga senza esito scritta da un binario che non conosce la colonna, nella
+        // finestra fra migrazione e rilascio, non è uno schieramento.
+        var cutoffRecenti = DateTime.UtcNow.AddHours(-24);
         var assignedByFleet = (await db.OrchestratorDecisions.AsNoTracking()
-                .Where(d => d.RunId != null && runIds.Contains(d.RunId.Value) && d.Kind == "Assign")
+                .Where(d => d.RunId != null && runIds.Contains(d.RunId.Value) && d.Kind == "Assign"
+                            && (d.Outcome == DecisionOutcome.Applied
+                                || d.Outcome == DecisionOutcome.Intended
+                                || (d.Outcome == DecisionOutcome.Unknown && (d.Applied || d.Error != null))
+                                || (d.Outcome == DecisionOutcome.Failed && d.AtUtc >= cutoffRecenti)
+                                || (d.Outcome == DecisionOutcome.Refused && !d.DryRun && d.AtUtc >= cutoffRecenti)))
                 .Select(d => d.RunId!.Value)
                 .ToListAsync(ct))
             .ToHashSet();

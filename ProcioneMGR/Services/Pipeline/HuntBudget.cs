@@ -6,8 +6,31 @@ namespace ProcioneMGR.Services.Pipeline;
 /// <param name="OreAttualiAlMese">Al ritmo corrente, contando la cadenza propria.</param>
 /// <param name="ChiaviPerOra">La resa che regge il confronto (K54b): 0 quando non ha ancora prodotto.</param>
 /// <param name="CadenzaOre">La cadenza propria attuale (<c>MinHoursBetweenRuns</c>), 0 = nessun limite.</param>
+/// <param name="Run">
+/// Run completati nella finestra. Serve a distinguere <b>«rende zero»</b> da <b>«non ha ancora
+/// avuto modo di rendere»</b>: sotto <see cref="HuntYield.MinRunsForVerdict"/> la resa non è un
+/// giudizio, e chi non è giudicabile non va in cima alla fila dei tagli.
+/// </param>
+/// <param name="RunAlMese">
+/// [Revisione 2026-09-03] Il ritmo con cui la caccia gira DAVVERO, in run al mese, misurato dal
+/// conteggio dei run sull'età della finestra (fino a oggi). 0 = non noto: si ricava da ore e durata.
+/// </param>
 public sealed record CostoCaccia(
-    int ConfigurationId, double MinutiPerRun, double OreAttualiAlMese, double ChiaviPerOra, int CadenzaOre);
+    int ConfigurationId, double MinutiPerRun, double OreAttualiAlMese, double ChiaviPerOra, int CadenzaOre,
+    int Run = int.MaxValue, double RunAlMese = 0)
+{
+    /// <summary>
+    /// [K59, corretto dal test] Vero = ci sono abbastanza run perché la resa voglia dire qualcosa.
+    ///
+    /// <para><b>Il difetto che l'ha imposto.</b> Le configurazioni entrate in rotazione il
+    /// 2026-09-03 (9, 11, 14, 16) hanno resa <c>0</c> — non perché siano sterili, ma perché non
+    /// hanno ancora girato. Ordinando per resa crescente finivano <b>prime</b> nella fila dei
+    /// rallentamenti: la caccia appena aggiunta sarebbe stata la prima a essere frenata, e non
+    /// avrebbe mai avuto modo di dimostrare nulla. È la regola dell'ignoranza che non condanna,
+    /// violata al primo giro.</para>
+    /// </summary>
+    public bool ResaGiudicabile => Run >= HuntYield.MinRunsForVerdict;
+};
 
 /// <summary>Una modifica di cadenza proposta, con la ragione e il risparmio.</summary>
 public sealed record ProposteCadenza(int ConfigurationId, int CadenzaAttuale, int CadenzaProposta, double OreRisparmiate, string Perche);
@@ -71,7 +94,10 @@ public static class HuntBudget
         // una decisione, è un tiro a indovinare.
         var candidate = cacce
             .Where(c => c.MinutiPerRun > 0 && c.OreAttualiAlMese > 0)
-            .OrderBy(c => c.ChiaviPerOra)
+            // Chi non ha ancora abbastanza run va IN FONDO alla fila, non in cima: la sua resa a
+            // zero non è un giudizio. Si tocca solo se rallentare le giudicabili non basta.
+            .OrderBy(c => c.ResaGiudicabile ? 0 : 1)
+            .ThenBy(c => c.ChiaviPerOra)
             .ThenByDescending(c => c.OreAttualiAlMese)
             .ToList();
 
@@ -101,12 +127,45 @@ public static class HuntBudget
 
             var risparmio = c.OreAttualiAlMese - oreDopo;
             proposte.Add(new ProposteCadenza(c.ConfigurationId, c.CadenzaOre, proposta, risparmio,
-                $"resa {c.ChiaviPerOra:F2} chiavi/ora — la più bassa fra quelle misurate; "
-                + $"da {c.OreAttualiAlMese:F1} a {oreDopo:F1} ore al mese"));
+                (c.ResaGiudicabile
+                    ? $"resa {c.ChiaviPerOra:F2} chiavi/ora su {c.Run} run — fra le più basse misurate"
+                    : $"solo {c.Run} run: la resa non è ancora giudicabile, ma rallentare le altre non bastava")
+                + $"; da {c.OreAttualiAlMese:F1} a {oreDopo:F1} ore al mese"));
             daTagliare -= risparmio;
         }
 
         return proposte;
+    }
+
+    /// <summary>
+    /// [Revisione 2026-09-03] <b>Le ore al mese AL RITMO IN VIGORE.</b> Con una cadenza propria
+    /// (<c>MinHoursBetweenRuns &gt; 0</c>) la proiezione è <i>durata mediana × run al mese a quella
+    /// cadenza</i>; solo senza cadenza si proietta dall'osservato.
+    ///
+    /// <para><b>Il difetto che l'ha imposta.</b> La prima versione proiettava sempre dalle ore
+    /// OSSERVATE negli ultimi 30 giorni, e <see cref="Riallinea"/> assumeva che quelle ore
+    /// corrispondessero alla cadenza attuale. Dopo una riscrittura le ore osservate non cambiano per
+    /// settimane: lo sforo veniva «visto» di nuovo al giro dopo e la stessa configurazione
+    /// raddoppiata ancora — 48 → 96 → 192 → 336 ore in tre giri, poi la successiva. E un solo run
+    /// osservato (span zero → un giorno) valeva 21,9 ore/mese per la cfg 19.</para>
+    /// </summary>
+    /// <para><b>Un solo stimatore, rivisto la sera stessa.</b> La prima versione proiettava con la
+    /// cadenza dalla durata <i>mediana</i> e senza cadenza dalla <i>somma</i> delle ore: con durate
+    /// asimmetriche i due numeri divergevano, e il solo atto di scrivere una cadenza faceva
+    /// «rientrare» lo sforo senza che il consumo cambiasse. Ora il costo è sempre
+    /// <c>durata media × ritmo</c>, dove il ritmo è il MINORE fra quello della cadenza (720/ore) e
+    /// quello osservato (run al mese sull'età della finestra): una cadenza è un minimo, non una
+    /// schedulazione, e una configurazione fuori rotazione o lanciata una volta a mano non gira a
+    /// 720/cadenza run al mese solo perché ha una cadenza scritta.</para>
+    /// </summary>
+    /// <param name="minutiMedi">Durata media di un run (ore consumate / run), 0 = mai misurata.</param>
+    /// <param name="runAlMese">Ritmo osservato: run al mese sull'età della finestra (fino a oggi).</param>
+    /// <param name="cadenzaOre">La cadenza propria in vigore, 0 = nessuna.</param>
+    public static double ProiettaOreAlMese(double minutiMedi, double runAlMese, int cadenzaOre)
+    {
+        if (minutiMedi <= 0 || runAlMese <= 0) return 0;
+        var ritmo = cadenzaOre > 0 ? Math.Min(30.0 * 24.0 / cadenzaOre, runAlMese) : runAlMese;
+        return minutiMedi / 60.0 * ritmo;
     }
 
     /// <summary>
@@ -115,8 +174,12 @@ public static class HuntBudget
     /// </summary>
     private static int StimaCadenzaImplicita(CostoCaccia c)
     {
-        if (c.MinutiPerRun <= 0 || c.OreAttualiAlMese <= 0) return 0;
-        var runAlMese = c.OreAttualiAlMese * 60 / c.MinutiPerRun;
+        // [Revisione 2026-09-03] Il ritmo misurato dal CONTEGGIO, quando c'è: è lo stesso numero
+        // con cui è stata proiettata OreAttualiAlMese, quindi la cadenza implicita e il costo
+        // parlano della stessa caccia. Il ricavo da ore/durata resta il ripiego per i fixture.
+        var runAlMese = c.RunAlMese > 0
+            ? c.RunAlMese
+            : (c.MinutiPerRun <= 0 || c.OreAttualiAlMese <= 0 ? 0 : c.OreAttualiAlMese * 60 / c.MinutiPerRun);
         return runAlMese <= 0 ? 0 : Math.Max(1, (int)Math.Round(30 * 24 / runAlMese));
     }
 

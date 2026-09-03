@@ -149,21 +149,33 @@ public sealed class PipelineApplier(
             // Le corsie che QUESTO run sta per riscrivere sono escluse dal confronto: sono gruppi
             // (simbolo, timeframe) distinti per costruzione, e confrontarle fra loro produrrebbe
             // un falso positivo su un'operazione legittima.
-            var chiaveGamba = cfg.Strategies.Count == 1
-                ? PipelineCandidateKey.Build(cfg.Strategies[0].StrategyName, symbol, timeframe, cfg.Strategies[0].Parameters)
-                : string.Empty;
+            // [Revisione 2026-09-03] UNA chiave per OGNI gamba del gruppo, non solo per i gruppi a
+            // gamba singola. La prima versione costruiva la chiave solo se Strategies.Count == 1 e
+            // altrimenti passava una stringa vuota, su cui HypothesisGuard non confronta nulla: i
+            // gruppi (simbolo, timeframe) dell'auto-apply sono di norma multi-gamba, quindi la
+            // porta che K49 dichiarava chiusa restava aperta nel caso ordinario. Basta che UNA
+            // gamba sia già in corsa altrove perché la corsia venga saltata: è la stessa scommessa
+            // con due dotazioni di capitale, quale che sia la gamba che la porta.
             var altre = (await laneDirectory.ListAsync(ct)).Where(l => l.Id >= lanesUsed).ToList();
-            var duplicato = Fleet.HypothesisGuard.Check(altre, lane, chiaveGamba, blockOnTriple: false);
-            if (duplicato.Blocked)
+            string? bloccata = null;
+            var avvisi = new List<string>();
+            foreach (var gamba in cfg.Strategies)
             {
-                result.Skipped.Add($"corsia {lane}: {duplicato.Reason}");
+                var chiaveGamba = PipelineCandidateKey.Build(gamba.StrategyName, symbol, timeframe, gamba.Parameters);
+                var esito = Fleet.HypothesisGuard.Check(altre, lane, chiaveGamba, blockOnTriple: false);
+                if (esito.Blocked) { bloccata = esito.Reason; break; }
+                if (esito.Reason is { } avviso) avvisi.Add(avviso);
+            }
+            if (bloccata is not null)
+            {
+                result.Skipped.Add($"corsia {lane}: {bloccata}");
                 continue;
             }
 
             await mgr.UpdateConfigurationAsync(cfg, ProcioneMGR.Services.Ensemble.ConfigWriteContext.Create(
             ProcioneMGR.Services.Ensemble.ConfigWriteSources.PipelineApplier,
             "auto-apply dell'impronta storica: riscrittura della corsia dal run selezionato"
-            + (duplicato.Reason is { } avviso ? $" ⚠ {avviso}" : string.Empty)), ct);
+            + (avvisi.Count > 0 ? $" ⚠ {string.Join(" | ", avvisi.Distinct(StringComparer.Ordinal))}" : string.Empty)), ct);
 
             var sl = cfg.Strategies.Count(s => s.StopLossPercent is not null || s.TrailingStopPercent is not null);
             var tp = cfg.Strategies.Count(s => s.TakeProfitPercent is not null);
@@ -172,7 +184,9 @@ public sealed class PipelineApplier(
 
         result.LanesUsed = lanesUsed - result.Skipped.Count;
         result.Overflow = groups.Count - lanesUsed;
-        result.Message = $"Ensemble distribuito su {lanesUsed} corsie con parametri validati + SL/TP automatici — {string.Join("; ", result.Deployed)}"
+        // [Revisione 2026-09-03] Il conteggio nella frase è quello DECURTATO delle corsie saltate:
+        // prima diceva «distribuito su 3 corsie» e poi «1 corsie SALTATE» nella stessa riga.
+        result.Message = $"Ensemble distribuito su {result.LanesUsed} corsie con parametri validati + SL/TP automatici — {string.Join("; ", result.Deployed)}"
                        + (result.Overflow > 0 ? $". {result.Overflow} gruppi-simbolo aggiuntivi non applicati (solo {LaneCount} corsie disponibili)" : "")
                        + (result.Skipped.Count > 0
                             ? $". {result.Skipped.Count} corsie SALTATE perche' l'ipotesi e' gia' in corsa altrove: "

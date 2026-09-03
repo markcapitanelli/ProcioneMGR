@@ -318,6 +318,29 @@ public sealed class PipelineSchedulerWorker(
             return;
         }
 
+        // [K56/K59, revisione 2026-09-03] La cadenza propria vale anche per i run a cron. Prima la
+        // leggeva solo la rotazione di campagna: per una configurazione schedulata il guardiano del
+        // budget «riscriveva la cadenza» e lo scheduler la lanciava lo stesso — un no-op dichiarato
+        // «riallineato». Se l'ultimo run completato è più recente della cadenza, si salta e si dice.
+        if (config.MinHoursBetweenRuns > 0)
+        {
+            // Qualunque esito terminale conta: un run fallito ha comunque consumato il motore, e
+            // rilanciarlo a ogni slot del cron sarebbe pagare ventiquattro volte lo stesso errore.
+            var ultimoCompletato = await db.PipelineRuns.AsNoTracking()
+                .Where(r => r.ConfigurationId == config.Id
+                            && (r.Status == "Completed" || r.Status == "Failed" || r.Status == "Cancelled"))
+                .MaxAsync(r => (DateTime?)r.StartedAt, ct);
+            if (ultimoCompletato is DateTime ultimo && ultimo.AddHours(config.MinHoursBetweenRuns) > now)
+            {
+                logger.LogInformation(
+                    "Run schedulato SALTATO per config {Id} '{Name}': cadenza propria {Ore}h non ancora scaduta (ultimo run {Ultimo:u}). Prossimo tentativo alla schedulazione successiva.",
+                    config.Id, config.Name, config.MinHoursBetweenRuns, ultimo);
+                config.NextRunAt = nextRun;
+                await db.SaveChangesAsync(ct);
+                return;
+            }
+        }
+
         try
         {
             var runId = await engine.StartRunAsync(config.Id, "Scheduled", config.CreatedBy, ct);

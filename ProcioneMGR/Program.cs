@@ -602,6 +602,10 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IHuntCoverageReader,
     ProcioneMGR.Services.Pipeline.HuntCoverageReader>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.IHuntProposer,
     ProcioneMGR.Services.Pipeline.HuntProposer>();
+// [K59] Il guardiano del budget: misura e propone. Scrive solo con Campaign:BudgetAutoApply acceso,
+// che nasce spento — rallentare una caccia e' una decisione di budget del proprietario.
+builder.Services.AddSingleton<ProcioneMGR.Services.Pipeline.HuntBudgetWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcioneMGR.Services.Pipeline.HuntBudgetWorker>());
 // [K57] La stabilità di un'ipotesi fra le sue rimisurazioni: informazione già in archivio, pagata
 // col budget di caccia e finora buttata a ogni giro. È la radice di K54, attaccata dove nasce.
 builder.Services.AddSingleton<ProcioneMGR.Services.Research.IStabilitaReader,

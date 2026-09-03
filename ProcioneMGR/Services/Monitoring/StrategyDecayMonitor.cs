@@ -347,9 +347,17 @@ public sealed class StrategyDecayMonitor : IStrategyDecayMonitor
             ? FormattableString.Invariant(
                 $" ATTENZIONE: risk-free residuo di {options.ExpectedRiskFreeRateAnnual:P0}/anno sull'atteso (~{b:F2} punti di Sharpe). Dal 2026-08-22 dovrebbe essere zero: qualcuno lo ha rimesso.")
             : " Attenzione: il realizzato è un rendimento sul NOZIONALE, l'atteso su un'equity a una frazione del capitale. Il rapporto non è pulito, e non si può correggere: la taglia con cui l'holdout è girato non viene persistita.";
-        report.StatusMessage = (report.IsAlert
-            ? $"ALERT: Sharpe realizzato {realizedSharpe:F2} vs atteso {expected:F2} ({ratio:P0}) — sotto la soglia {options.AlertThresholdRatio:P0}."
-            : $"In linea: Sharpe realizzato {realizedSharpe:F2} vs atteso {expected:F2} ({ratio:P0}).") + bias;
+        // [Revisione 2026-09-03] La frase racconta il rapporto su cui il verdetto è stato PRESO. Con
+        // l'evidenza K54 il verdetto usa la stima corrente, ma il messaggio citava ancora l'atteso
+        // d'origine: «In linea … (27%)» accanto a un IsAlert=false — e nel verso opposto un ALERT
+        // «(80%) sotto la soglia 50%», aritmeticamente falso. Il numero d'origine resta accanto.
+        report.StatusMessage = (report.SharpeRatioVsEvidence is decimal rapportoGiudicato && report.Evidence is { } evidenza
+            ? (report.IsAlert
+                ? $"ALERT: Sharpe realizzato {realizedSharpe:F2} vs stima corrente {evidenza.Corrente:F2} ({rapportoGiudicato:P0}) — sotto la soglia {options.AlertThresholdRatio:P0}. Atteso d'origine {expected:F2} ({ratio:P0}), {(evidenza.Contraddetta ? "smentito" : "confermato")} da {evidenza.MisureDopo} rivalutazioni."
+                : $"In linea: Sharpe realizzato {realizedSharpe:F2} vs stima corrente {evidenza.Corrente:F2} ({rapportoGiudicato:P0}). Atteso d'origine {expected:F2} ({ratio:P0}), {(evidenza.Contraddetta ? "smentito" : "confermato")} da {evidenza.MisureDopo} rivalutazioni: il verdetto è sulla loro mediana.")
+            : (report.IsAlert
+                ? $"ALERT: Sharpe realizzato {realizedSharpe:F2} vs atteso {expected:F2} ({ratio:P0}) — sotto la soglia {options.AlertThresholdRatio:P0}."
+                : $"In linea: Sharpe realizzato {realizedSharpe:F2} vs atteso {expected:F2} ({ratio:P0}).")) + bias;
         return report;
     }
 

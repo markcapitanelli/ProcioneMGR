@@ -283,9 +283,14 @@ public sealed class EnsembleManager(
 
             if (report.IsAlert)
             {
+                // [Revisione 2026-09-03] Il log racconta il rapporto su cui il verdetto è stato preso
+                // (la stima corrente quando l'evidenza K54 decide), non l'atteso d'origine.
                 logger.LogWarning(
-                    "Decadimento rilevato per {Strategy} ({StrategyId}): Sharpe realizzato {Realized:F2} vs atteso {Expected:F2} ({Ratio:P0}) su {Trades} trade.",
-                    s.DisplayName, s.StrategyId, report.RealizedSharpe, report.ExpectedSharpe, report.SharpeRatio, report.TradeCount);
+                    "Decadimento rilevato per {Strategy} ({StrategyId}): Sharpe realizzato {Realized:F2} vs {Metro} {Expected:F2} ({Ratio:P0}) su {Trades} trade.",
+                    s.DisplayName, s.StrategyId, report.RealizedSharpe,
+                    report.SharpeRatioVsEvidence is not null ? "stima corrente" : "atteso",
+                    report.Evidence is { Giudicabile: true } ev ? ev.Corrente : report.ExpectedSharpe,
+                    report.SharpeRatioVsEvidence ?? report.SharpeRatio, report.TradeCount);
             }
         }
         return reports;

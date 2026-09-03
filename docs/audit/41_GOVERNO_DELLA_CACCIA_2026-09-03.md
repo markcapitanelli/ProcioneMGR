@@ -142,14 +142,70 @@ sono decisioni del proprietario.
 
 ---
 
-## 8. Cosa resta
+## 8. I quattro punti rimasti — tre chiusi il 2026-09-03, uno in attesa di misura
 
-1. **La cfg 11 non ha mai girato**: il suo costo è una stima. La prima esecuzione lo misura, e da lì
-   la cadenza si può stringere.
-2. **La cfg 15 caccia a 30m**, ma nessuna serie 30m risulta in watchlist: da verificare prima che
-   produca run a vuoto.
-3. **Il tetto in ore non è ancora agganciato a un worker**: il servizio calcola e propone, ma nessuno
-   lo interroga a cadenza. È il passo successivo, e va guardato girare prima di dargli il potere di
-   riscrivere le cadenze.
-4. **Il proponitore non ha ancora una superficie**: produce l'esito, ma il pulsante che lo mostra e
-   lo adotta non c'è.
+> **Rivisto la sera stessa** ([doc 42](42_REVISIONE_FILONE_K_2026-09-03.md)): la prima versione del
+> guardiano proiettava le ore dalle sole durate osservate (con `BudgetAutoApply` le cadenze sarebbero
+> raddoppiate a ogni giro fino a 336 h), «Guarda adesso» scriveva, senza tetto il proponitore riceveva
+> un residuo di 4,5·10³⁰⁷ ore e la cadenza non valeva per i run a cron. Corretto: proiezione al ritmo
+> in vigore (`HuntBudget.ProiettaOreAlMese`), `MisuraAsync` per i pulsanti, residuo `null` = «senza
+> tetto» dichiarato, cadenza onorata anche dallo scheduler, un giro per volta.
+
+### 1. La cfg 11 non ha mai girato ⏳ *si misura da sola*
+
+Il suo costo resta una stima (~10 minuti, scalati da cfg 18 sul numero di serie) finché non gira. È
+in rotazione a 48h, e la campagna si riarma a `RearmHours = 13` dall'ultimo run: la misura arriva al
+primo giro utile. Forzarla dall'interfaccia richiederebbe le credenziali del proprietario, e non è
+un lavoro che valga una scorciatoia.
+
+### 2. Le serie a 30m ✅ *esistevano già, ferme da 39 giorni*
+
+`OhlcvData` conteneva **129.605 candele a 30m** — esattamente i cinque simboli che la cfg 15 vuole
+(BTC, ETH, SOL, LINK, LTC), **25.921 candele ciascuno** — ma l'ultima era del **2026-07-26**:
+trentanove giorni. Nessuna riga in `TrackedSeries`, quindi nessuno le aggiornava.
+
+Le cinque righe sono state aggiunte e abilitate: **+5 celle su 222** (+2,3 % di ingestione), con lo
+storico già a terra. La cfg 15 è rientrata in rotazione, che ora conta **nove configurazioni**.
+
+### 3. Il tetto in ore ✅ *agganciato, e propone*
+
+`HuntBudgetWorker` gira ogni `Campaign:BudgetTickMinutes` (default 60), misura il costo di ogni
+configurazione attiva dalle **durate osservate**, e propone che cosa rallentare per stare dentro
+`Campaign:MonthlyHourBudget`.
+
+**Non scrive**: `Campaign:BudgetAutoApply` nasce **spento**, ed è la stessa scelta già fatta per
+`GreyAutoDeploy` e per il sonno di una caccia. Con lo spento il worker misura, dichiara e notifica —
+che è ciò che serve per guardarlo girare prima di dargli il potere di riscrivere le cadenze.
+
+> **Un difetto trovato dal suo stesso test.** La prima versione ordinava i tagli per sola resa
+> crescente — e le quattro configurazioni entrate in rotazione oggi hanno resa **0** perché non hanno
+> ancora girato, non perché siano sterili. Finivano **prime** nella fila: la caccia appena aggiunta
+> sarebbe stata la prima a essere frenata, senza aver potuto dimostrare nulla. Ora chi non ha
+> abbastanza run (`HuntYield.MinRunsForVerdict`) va **in fondo**, e si tocca solo se rallentare le
+> giudicabili non basta.
+
+### 4. Il proponitore ✅ *ha la sua superficie*
+
+Due pulsanti in `/pipeline`: **«Guarda adesso»** (il budget, con le proposte e il loro risparmio) e
+**«Proponi una caccia»** (il menù dei buchi, la scelta del comitato e la sua motivazione, con le
+alternative scartate in un dettaglio richiudibile).
+
+Le ore residue passano al proponitore: una proposta che non entra nel budget **non si fa**. E la
+riga finale del riquadro lo dice a chiare lettere — *nessuna proposta si adotta da sola*.
+
+E le tre chiavi nuove hanno la loro manopola in `/admin/autonomy`, perché il guardiano
+`ConfigurationKeyUiCoverageTests` non lascia passare una chiave senza pannello: è la regola del
+2026-08-09, e ha fatto rosso al primo giro su `BudgetTickMinutes`.
+
+---
+
+## 9. Cosa resta davvero
+
+1. **Il tetto non è impostato** (`MonthlyHourBudget = 0`): il consumo misurato è di **~32 ore/mese**
+   su nove cacce, ed è il numero da cui scegliere. Finché è zero il pannello lo dice — «il consumo
+   non è governato da niente» — invece di tacere.
+2. **Il proponitore non crea la configurazione**: mostra la proposta col suo prezzo, e la si crea a
+   mano da «+ Nuova». Adottarla da solo significherebbe spendere ore e aggiungere tentativi senza
+   che nessuno abbia detto sì.
+3. **Il DSR non è mai stato raggiunto**: 0 righe su 711, massimo 0,817 contro 0,95. Finché è così il
+   forward test resta l'unico giudice.

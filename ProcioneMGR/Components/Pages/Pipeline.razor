@@ -7,6 +7,7 @@
 @using ProcioneMGR.Services.Backtesting
 @using ProcioneMGR.Services.Ensemble
 @using ProcioneMGR.Services.Exchanges
+@using Microsoft.Extensions.Options
 @using ProcioneMGR.Services.Pipeline
 @using ProcioneMGR.Services.Pipeline.Stages
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
@@ -19,6 +20,9 @@
 @inject PipelinePageService Svc
 @inject IHuntYieldReader ReseDiCaccia
 @inject IHuntCoverageReader CoperturaDiCaccia
+@inject IHuntProposer Proponitore
+@inject HuntBudgetWorker GuardianoDelBudget
+@inject IOptionsMonitor<CampaignOptions> OpzioniCampagna
 
 <PageTitle>Pipeline autonomo</PageTitle>
 <h1>Pipeline autonomo
@@ -166,6 +170,123 @@
         </div>
     </div>
 }
+
+@* [K59/K60, 2026-09-03] IL BUDGET E LA PROPOSTA — entrambi PROPONGONO, non agiscono.
+
+   Rallentare una caccia e adottarne una nuova sono decisioni di budget del proprietario, e in questo
+   filone la stessa scelta e' gia' stata fatta due volte: GreyAutoDeploy nasce spento, e K50 dichiara
+   «nessuna azione automatica» sul sonno di una caccia.
+
+   E serve un tetto ESPLICITO perche' nessuno scatta da solo: il gate del DSR deflaziona per i
+   tentativi del PROPRIO run e non vede le altre cacce. Aggiungerne non lo rende piu' severo. *@
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Budget della caccia</span>
+        <span>
+            <button class="btn btn-sm btn-outline-secondary me-1" @onclick="GuardaBudgetAsync" disabled="@_busy">Guarda adesso</button>
+            <button class="btn btn-sm btn-outline-primary" @onclick="ProponiCacciaAsync" disabled="@_busy">Proponi una caccia</button>
+        </span>
+    </div>
+    <div class="card-body py-2">
+        @{
+            var opzC = OpzioniCampagna.CurrentValue;
+            var rep = _budget ?? GuardianoDelBudget.Ultimo;
+        }
+        @if (rep is null)
+        {
+            <p class="small text-muted mb-0">
+                Il guardiano non ha ancora fatto un giro in questo processo — premi «Guarda adesso».
+                <em>Non sapere non è «va bene».</em>
+            </p>
+        }
+        else
+        {
+            <div class="d-flex flex-wrap gap-3 mb-2 small">
+                <span><strong>@rep.OreTotali.ToString("F1")</strong> ore/mese al ritmo attuale</span>
+                <span>tetto: <strong>@(rep.Budget > 0 ? rep.Budget.ToString("F0") : "nessuno")</strong></span>
+                @if (Math.Abs(rep.Budget - opzC.MonthlyHourBudget) > 0.001)
+                {
+                    <span class="badge bg-warning text-dark"
+                          title="@($"Il tetto in vigore è {(opzC.MonthlyHourBudget > 0 ? opzC.MonthlyHourBudget.ToString("F0") : "nessuno")}, ma il racconto e le proposte qui sotto sono stati calcolati sul tetto dell'ultima misura. Premi «Guarda adesso».")">
+                        tetto cambiato dopo la misura
+                    </span>
+                }
+                @if (rep.ScritturaFallita)
+                {
+                    <span class="badge bg-danger" title="Campaign:BudgetAutoApply è acceso ma la riscrittura delle cadenze non è riuscita: vedi il log del guscio.">riscrittura FALLITA</span>
+                }
+                <span class="badge @(opzC.BudgetAutoApply ? "bg-warning text-dark" : "bg-light text-dark border")"
+                      title="Con l'applicazione automatica spenta il guardiano misura e propone; le cadenze le riscrivi tu.">
+                    @(opzC.BudgetAutoApply ? "applica da solo" : "propone e basta")
+                </span>
+                <span class="text-muted">misurato @rep.QuandoUtc.ToLocalTime().ToString("HH:mm")</span>
+            </div>
+            <p class="small mb-2">@rep.Racconto</p>
+            @if (rep.Proposte.Count > 0)
+            {
+                <ul class="small mb-0">
+                    @foreach (var p in rep.Proposte)
+                    {
+                        <li>
+                            <strong>config @p.ConfigurationId</strong>: da
+                            @(p.CadenzaAttuale > 0 ? $"{p.CadenzaAttuale}h" : "nessun limite") a
+                            <strong>@p.CadenzaProposta h</strong> — @p.Perche
+                        </li>
+                    }
+                </ul>
+                @if (!rep.Applicate)
+                {
+                    <p class="small text-muted mt-1 mb-0">
+                        Nessuna modifica applicata: la cadenza si cambia dal campo «Ore minime fra due run»
+                        della configurazione, oppure accendendo <code>Campaign:BudgetAutoApply</code>.
+                    </p>
+                }
+            }
+        }
+
+        @if (_proposta is { } prop)
+        {
+            <hr class="my-2" />
+            <div class="small">
+                <strong>Proposta di caccia</strong>
+                <span class="badge @(prop.Fonte == "committee" ? "bg-success" : "bg-secondary") ms-1">@prop.Fonte</span>
+                @if (opzC.MonthlyHourBudget <= 0)
+                {
+                    <span class="badge bg-warning text-dark ms-1"
+                          title="Campaign:MonthlyHourBudget = 0: la cadenza proposta è quella del modello, non una cadenza che entra in un budget. Il tetto si imposta in /admin/autonomy, card Campagne.">senza tetto</span>
+                }
+                <div class="mt-1">@prop.Motivazione</div>
+                @if (prop.Scelta is { } sc)
+                {
+                    <div class="mt-1">
+                        <strong>@sc.Etichetta</strong>
+                        <div class="text-muted">
+                            Copia forma e finestre dalla configurazione @sc.ModelloId — il costo è una
+                            <em>stima</em>, scalata dalla durata misurata di quella su @sc.Simboli.Count serie.
+                        </div>
+                    </div>
+                }
+                @if (prop.Menu.Count > 1)
+                {
+                    <details class="mt-1">
+                        <summary class="text-muted">le altre @(prop.Menu.Count - 1) del menù</summary>
+                        <ul class="mb-0">
+                            @foreach (var alt in prop.Menu.Where(m => m.Id != prop.Scelta?.Id))
+                            {
+                                <li>@alt.Etichetta</li>
+                            }
+                        </ul>
+                    </details>
+                }
+                <p class="text-muted mt-1 mb-0">
+                    <em>Nessuna proposta si adotta da sola</em>: una caccia nuova costa ore e aggiunge
+                    tentativi, e il gate del DSR non vede la molteplicità fra cacce. Si crea a mano da
+                    «+ Nuova», con l'universo indicato qui sopra.
+                </p>
+            </div>
+        }
+    </div>
+</div>
 
 @* ============================== CONFIGURAZIONI ============================== *@
 <div class="card mb-3">
@@ -348,7 +469,7 @@
                 <div class="col-md-3">
                     <label class="form-label small" for="minHoursBetweenRuns">
                         Ore minime fra due run
-                        <span class="text-muted" title="Nella rotazione automatica delle campagne. 0 = nessun limite proprio, vale solo il backoff della campagna. Non si applica ai run lanciati a mano da qui.">ⓘ</span>
+                        <span class="text-muted" title="Nella rotazione automatica delle campagne E nei run schedulati a cron (dal 2026-09-03). 0 = nessun limite proprio: in campagna vale solo il backoff. Non si applica ai run lanciati a mano da qui.">ⓘ</span>
                     </label>
                     <input type="number" min="0" max="720" class="form-control form-control-sm"
                            id="minHoursBetweenRuns" @bind="_editing.MinHoursBetweenRuns" />
@@ -766,6 +887,13 @@
         // se la lettura fallisce l'insieme resta vuoto — il badge sparisce, che è meglio di un
         // badge che afferma «nessuna sospesa» senza averlo guardato.
         try { await Svc.LoadDisabledSeriesAsync(); } catch (Exception) { /* badge assente, mai falso */ }
+        // [Revisione 2026-09-03] Le configurazioni si caricano PRIMA della copertura: la copertura
+        // K58 legge «in rotazione» da _configs, e con l'ordine inverso al primo caricamento della
+        // pagina l'elenco era vuoto — il riquadro dichiarava «0 su 227 celle cacciate», cioè che
+        // nessuna caccia guardava nessuna serie, a ogni apertura di /pipeline. Un controllo che
+        // allarma a prescindere dalla realtà è la stessa classe di difetto di quello che rassicura.
+        try { await Svc.ReloadAsync(); }
+        catch { /* refresh resiliente */ }
         // [K50] La resa: se non si legge, il badge sparisce — meglio nessun giudizio che un
         // giudizio costruito su un elenco vuoto, che direbbe «sterile» a tutte.
         try
@@ -780,8 +908,6 @@
                 : (giudicabili[giudicabili.Count / 2 - 1] + giudicabili[giudicabili.Count / 2]) / 2.0;
         }
         catch (Exception) { _resa = []; }
-        try { await Svc.ReloadAsync(); }
-        catch { /* refresh resiliente */ }
     }
 
     // -------------------------------------------------------------- config CRUD
@@ -990,6 +1116,59 @@
 
     /// <summary>[K58] La copertura corrente; null finché non è stata letta (mai «tutto a posto» per default).</summary>
     private ProcioneMGR.Services.Pipeline.CoperturaCaccia? _copertura;
+
+    /// <summary>[K59/K60] Un giro in corso: i due pulsanti fanno lavoro vero e non devono accavallarsi.</summary>
+    private bool _busy;
+
+    /// <summary>[K59] L'ultimo giro del budget chiesto da questa pagina (null = si mostra quello del worker).</summary>
+    private BudgetReport? _budget;
+
+    /// <summary>[K60] L'ultima proposta di caccia calcolata da questa pagina.</summary>
+    private EsitoProposta? _proposta;
+
+    private async Task GuardaBudgetAsync()
+    {
+        _busy = true;
+        try
+        {
+            // [Revisione 2026-09-03] «Guarda» guarda: MisuraAsync non scrive e non notifica. Prima
+            // chiamava TickAsync, che con BudgetAutoApply acceso riscriveva le cadenze da un click
+            // etichettato come lettura.
+            _budget = await GuardianoDelBudget.MisuraAsync(CancellationToken.None);
+            _message = null;
+        }
+        catch (Exception ex)
+        {
+            _message = $"Lettura del budget fallita: {ex.Message}";
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ProponiCacciaAsync()
+    {
+        _busy = true;
+        try
+        {
+            // Le ore residue vengono dal tetto MENO il consumo misurato: proporre una caccia senza
+            // sapere quanto spazio c'e' significherebbe proporre di sforare.
+            var rep = _budget ?? GuardianoDelBudget.Ultimo ?? await GuardianoDelBudget.MisuraAsync(CancellationToken.None);
+            _budget = rep;
+            var tetto = OpzioniCampagna.CurrentValue.MonthlyHourBudget;
+            // null = nessun tetto: il proponitore lo dice invece di ricevere un numero a 308 cifre.
+            double? residue = tetto > 0 ? Math.Max(0, tetto - rep.OreTotali) : null;
+
+            var attive = _configs.Where(c => c.ExecutionMode != "Disabled").Select(c => c.Id).ToList();
+            _proposta = await Proponitore.ProponiAsync(attive, residue, CancellationToken.None);
+            _message = null;
+        }
+        catch (Exception ex)
+        {
+            _message = $"Proposta di caccia fallita: {ex.Message}";
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
 
     private async Task CaricaCoperturaAsync()
     {

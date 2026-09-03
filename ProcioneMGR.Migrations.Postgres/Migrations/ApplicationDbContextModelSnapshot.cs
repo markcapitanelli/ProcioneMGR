@@ -695,7 +695,7 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                         .ValueGeneratedOnAdd()
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)")
-                        .HasDefaultValue("Applied");
+                        .HasDefaultValue("Unknown");
 
                     b.Property<string>("Reason")
                         .IsRequired()

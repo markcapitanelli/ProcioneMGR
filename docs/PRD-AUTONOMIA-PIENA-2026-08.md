@@ -384,15 +384,16 @@ caccia gira su una costante inventata.
 | K46 ✅ | **Un tick che non arriva in fondo non è più silenzioso**: stato leggibile, notifica critica per episodio, riquadro rosso sul pannello. Anche la guarigione è una notizia |
 | K47 ✅ | **L'archivio append-only degli episodi di identità** — il numero che sette avversari su sette hanno chiesto. E accanto alle soglie, quanti esperimenti ci sarebbero arrivati: *una soglia più lunga della vita tipica non è severa, è spenta* |
 
-**Restano** i sette item qui sotto, con le quattro correzioni misurate, più il journal-come-registro
-(scritto per primo, come intento) e la porta `/bot`.
+I sette item della lista originale, con le quattro correzioni misurate. *[Rettifica della revisione
+del 2026-09-03: la frase «Restano i sette item» era rimasta anche dopo che K21, K22, K27 e il
+journal-come-intento (K51, commit `873a569`) erano stati chiusi; lo stato vero è nella colonna.]*
 
 | # | Cosa |
 |---|---|
-| K21 | **`AutoReapply:MaxGreyLegs`, scritto esplicitamente.** Sapendo che 1 non fa nulla, 2 sblocca 3 run su 18, 3 li sblocca tutti — e che subito dopo c'è K22 |
+| K21 ✅ | **`AutoReapply:MaxGreyLegs`, scritto esplicitamente.** Sapendo che 1 non fa nulla, 2 sblocca 3 run su 18, 3 li sblocca tutti — e che subito dopo c'è K22. *Scritto a 0 la mattina del 2026-09-02, portato a 2 con la decisione del doc 39 §5* |
 | K22 ✅ | **Sbloccare il fail-closed RF0** — *ma non nel modo scritto qui.* Rimuovere e ri-aggiungere le gambe conia uno `StrategyId` nuovo: azzera l'identità della corsia e l'orologio dell'osservazione, dieci giorni di cancello per guadagnare un campo. Fatto invece come **backfill da una data registrata**: `FleetLaneObservations.FirstSeenUtc`, il primo avvistamento della *stessa* identità. Non è la nascita, ma **per costruzione non può precederla** — quindi l'errore possibile è solo «il giudizio parte più tardi», mai «entrano i trade di un'ipotesi precedente», che è il difetto corretto da K39. Identità diversa o ledger muto ⇒ **niente timbro**. Anteprima e scrittura separate in `/admin/autonomy`; misurato: 4 gambe su 7 senza timbro (corsie 1, 2, 5) |
-| K23 | **Controllo `IsRunning` sulla scrittura** dell'impronta 0..2, come già ce l'ha l'avvio. Il rischio non è il trade sbagliato subito: è la corsia che riparte su una configurazione mai scelta |
-| K24 | **Dichiarare la seconda porta**: `/bot` applica l'ultimo run trovato da solo, senza guardia grigia. O la si guarda, o il messaggio dell'artifact smette di dire che la porta è una sola |
+| K23 | **Controllo `IsRunning` sulla scrittura** dell'impronta 0..2, come già ce l'ha l'avvio. Il rischio non è il trade sbagliato subito: è la corsia che riparte su una configurazione mai scelta. *Ancora aperto al 2026-09-03: nessun `K23` nel codice* |
+| K24 ◐ | **Dichiarare la seconda porta**: `/bot` applica l'ultimo run trovato da solo, senza guardia grigia. *K49 la guarda (e dal 2026-09-03 per OGNI gamba del gruppo, non solo per i gruppi a gamba singola); il messaggio dell'artifact in `RunApplyEvaluator` dice ancora «l'applica manuale da /pipeline resta possibile»* |
 | K25 | **Il funding reale nei backtest della pipeline**: collegare `IFundingHistoryProvider` allo stage, e popolare `FundingHistory`. Oggi la caccia gira su una costante inventata mentre il carry vivo usa il dato vero |
 | K26 | **Il DSR anche per i bocciati «Solo N trade»**, con provenienza dichiarata e **senza cambiare il verdetto**: è l'unico modo di sapere se sotto il pavimento c'è qualcosa, senza ridurre la fascia grigia. Strumento di misura, non leva |
 | K27 ✅ | **Potare l'universo con `CoversHoldout`** — fatto come **K49b**: lo strumento c'era e mancava il gate. La distinzione che serviva è fra serie *nuova* (da scaricare) e serie **sospesa dall'exchange** (da escludere), e il codice non guardava `TrackedSeries`. Più il badge su `/pipeline`, dove si sceglie cosa eseguire |
@@ -405,10 +406,11 @@ caccia gira su una costante inventata.
 | K49 ✅ | **La guardia contro l'ipotesi doppia anche dall'auto-apply** — la porta dell'impronta *e* di `/bot`, che non la attraversava. A cavallo dei due territori nessuno dei due tetti se ne accorgeva |
 | K49b ✅ | **L'universo si pota**: `MKR/USDT` scoperta 122 volte su 122, senza una candela da 351 giorni. Potare **stringe** il gate (SR\* +0,0017 / +0,0182), non lo allenta |
 
-**Restano di Fase 3:** il **journal come intento** (scritto *prima* di agire, con `Outcome` che separa
-le tre semantiche oggi schiacciate su `Applied`), **K21** (`MaxGreyLegs`) e **K22** nella forma non
-distruttiva (backfill del timbro di nascita dove la fonte esiste). **K25 e K26** restano rimandati
-con il loro numero: 0,102 contro 0,130 di rumore, e la trappola del `RejectReason`.
+**Restano di Fase 3** (stato al 2026-09-03): **K23** e la dichiarazione dell'artifact di **K24**;
+**K25 e K26** rimandati con il loro numero (0,102 contro 0,130 di rumore, e la trappola del
+`RejectReason`). Il **journal come intento** è K51 ✅ (`873a569`), esteso il 2026-09-03 anche al
+**ritiro** (prima lo stop precedeva la riga) e con `Outcome` esplicito in tutti gli scrittori e
+default `Unknown` — vedi [`docs/audit/42`](audit/42_REVISIONE_FILONE_K_2026-09-03.md).
 
 ### Fase 4 — Qualcuno che sceglie (è qui che nasce la Regina)
 
@@ -498,7 +500,12 @@ con il loro numero: 0,102 contro 0,130 di rumore, e la trappola del `RejectReaso
 | K54 ✅ | **Le corsie portano il MASSIMO di misure ripetute.** Cinque gambe su sette: `expectedSharpe` = massimo esatto delle misure della *stessa* ipotesi (parametri compresi). Peggiore la corsia 6 — 12 misure, **12 valori diversi**, atteso 1,875 contro mediana 0,498 (**3,8×**). La fascia grigia si ordina per Sharpe, quindi fra misure rumorose viene proposta per costruzione la notte più fortunata. **Il ritiro confronta lo Sharpe vivo con `expectedSharpe`**: appena diventasse raggiungibile, condannerebbe corsie per non aver riprodotto un numero che non era mai stato reale. **[Rettificato due volte lo stesso giorno.]** «Cinque su sette portano il massimo» è vero e fuorviante: in quattro casi il massimo COINCIDE con la mediana (28 e 43 rivalutazioni con lo stesso valore). La divergenza vera è **una**: la corsia 6 porta 1,8754 del **21 agosto** — due giorni prima che il motore walk-forward venisse sostituito — contro una mediana di **0,479** su undici rivalutazioni successive. E non finisce nel ritiro (soglia assoluta, verificato nel codice) ma nel **monitor di decadimento**: un **falso allarme**, non un'assoluzione. Fatto: il verdetto usa la stima corrente quando l'evidenza è sufficiente, il numero d'origine resta accanto, e `/ensemble` e la Home lo dicono |
 | K54b ✅ | **Uno spreco è resa bassa MOLTIPLICATA per costo reale.** K50 dichiarava «sterile» la config 8 sulla sola resa, mentre era ferma dal 20 agosto e consumava **0 ore su 48,7**: un'etichetta, non una decisione. Ora il costo entra nel giudizio (ore, minuti/run, chiavi per ORA), il pannello ordina per costo, e nasce il verdetto `Dormiente`. Il consumo vero è la **config 19**: 62 % del budget, 43,7 minuti mediani a run, **zero** gambe schierate |
 | K55 ✅ | **Due tetti scollegati sullo stesso rischio.** Da quando `AutoReapply:MaxGreyLegs` vale 2, l'auto-apply mette gambe grigie sulle corsie d'impronta — e `Fleet:MaxGreyLanes` **non le conta**. Ora si contano, si somma il totale e si dichiara. Non diventano un vincolo: trasformarlo in tetto in silenzio bloccherebbe schieramenti per una ragione che nessuno ha scelto |
-| K28 | **Pianificatore adattivo**: resa per configurazione (chiavi distinte in fascia utile per ora di CPU), budget spostato verso i terreni che rendono, config sterili in sonno dichiarata. Oggi 42,4 ore/mese, e 17/18 hanno prodotto zero gambe su 119 run |
+| K56 ✅ | **Cadenza per configurazione** (`MinHoursBetweenRuns`): il backoff della campagna era uno solo per cacce da 0,6 e da 43,8 minuti. Il wake di regime non la scavalca. *Dal 2026-09-03 vale anche per i run a cron e per il riarmo a tempo* — [doc 40](audit/40_CACCIA_19_E_STABILITA_2026-09-03.md) |
+| K57 ✅ | **Il gate di stabilità**: un'ipotesi «sopravvive alla rimisurazione?» guardando FRA i run. *Applicato all'ordinamento della lista dei grigi letta dall'umano (`GreyDeployer.ListGreyAsync`), NON alla coda automatica della flotta* — [doc 40 §4.3](audit/40_CACCIA_19_E_STABILITA_2026-09-03.md) |
+| K58 ✅ | **La copertura della caccia**: 222 celle seguite, 125 cacciate, 97 pagate e mai guardate; riquadro in `/pipeline`. *Il riquadro diceva «0 su 227» per un ordine di caricamento, corretto il 2026-09-03* — [doc 41](audit/41_GOVERNO_DELLA_CACCIA_2026-09-03.md) |
+| K59 ◐ | **Il tetto in ORE** (`Campaign:MonthlyHourBudget`, `BudgetAutoApply`, `BudgetTickMinutes`): il guardiano misura al ritmo in vigore, propone da chi rende meno per ora, scrive solo se acceso. *Il worker, i pannelli e i test sono nel worktree e vanno committati insieme al doc 41; K28 è assorbito qui per la parte misurabile* |
+| K60 ✅ | **Il proponitore a menù chiuso**: il codice costruisce le proposte dai buchi di K58, l'AI sceglie e argomenta. Nessuna proposta si adotta da sola. *Senza tetto la cadenza è quella del modello, e lo dice* |
+| K28 ◐ | **Pianificatore adattivo**: resa per configurazione, budget spostato verso i terreni che rendono, config sterili in sonno dichiarata. *La parte misurabile è K50/K54b/K56/K59; resta lo spostamento AUTOMATICO del budget, che il proprietario non ha chiesto.* La motivazione originale («17/18 hanno prodotto zero gambe su 119 run») è caduta con la rettifica di K50 |
 | K29 | **Tuner dei parametri di caccia** — non delle strategie: universo, `topN`, ampiezza finestre, `confirmTopN`, timeframe. Una proposta per giro, A/B dichiarato, gate a valle **invariato**, registro di cosa ha cambiato e perché |
 | K30 | **L'AI dal veto alla proposta motivata.** Spostare il comitato su una domanda che esiste davvero (la scelta fra grigi quando una corsia si libera) invece di un pareggio che questa pipeline non produce. E spostare il supervisore **dopo** il comparatore: oggi paga una chiamata LLM per un verdetto già scritto |
 | K31 | **Il post-mortem rientra nella caccia**: una gamba che decade genera un'ipotesi (stesso simbolo altro timeframe, stessa strategia altri parametri, esclusione del simbolo) che entra in rotazione |
@@ -516,10 +523,9 @@ con il loro numero: 0,102 contro 0,130 di rumore, e la trappola del `RejectReaso
   servirebbe uno Sharpe ≈ 5,2-5,5.
 - **Non si abbassa `minHoldoutTrades` per far passare qualcuno.** È misurato che ridurrebbe la fascia
   grigia invece di allargarla (§4.4). Si può usare per **misurare**, mai per schierare.
-- **Non si accende `MarketData:Realtime:DriveProtectiveExits`.** Il file vivo lo porta a `true`
-  contro la regola 7; oggi non morde perché il feed realtime è spento, ma va rimesso a `false` prima
-  che qualcuno accenda il realtime: uscire al tocco è peggio a barra chiusa in **24 configurazioni
-  su 24**.
+- **Non si accende `MarketData:Realtime:DriveProtectiveExits`.** Il file vivo lo portava a `true`
+  contro la regola 7; **rimesso a `false` il 2026-09-01** (doc 37 §1) e verificato `false` il
+  2026-09-03. Uscire al tocco è peggio a barra chiusa in **24 configurazioni su 24**.
 - **Niente raccolta permanente di microstruttura** (informa a p 0,005, edge 6-34× sotto il costo del
   giro) e **niente RL** (respinto due volte, sim-to-real gap).
 - **Il comitato propone, le metriche decidono.** Nessun servizio di esecuzione entra in
@@ -547,16 +553,21 @@ esiste, la fase non è finita — non si passa oltre.
 
 ---
 
-## 8. Le decisioni che restano al proprietario
+## 8. Le decisioni che restavano al proprietario — e come sono finite
 
-1. **I quattro ritiri del 4-5 settembre**: voluti o no? Se sì, sapendo che nessuno verrà schierato al
-   loro posto finché K12-K14 non sono fatti; se no, la manopola è `Fleet:StarvationMinDays` o
-   `ExecutionLanes`, e va girata prima.
-2. **`AutoReapply:MaxGreyLegs`**: 0, 2 o 3 — sapendo che il valore intermedio sblocca un sesto dei
-   casi e che a valle c'è comunque K22.
-3. **Le tre gambe delle corsie 1 e 2**: ri-aggiungerle da `/ensemble` per ri-timbrarle, oppure
-   accettare che il percorso campagna resti chiuso.
-4. **`/bot`**: guardato dalla stessa guardia di `/pipeline`, o dichiarato come porta aperta.
+*[Aggiornato dalla revisione del 2026-09-03: erano presentate come aperte, ma erano già state prese.]*
+
+1. **I quattro ritiri del 4-5 settembre** — *superati*: K11 ha fermato le corsie a mano il 31/08 e
+   tre sono state rischierate la sera stessa dalla Regina (doc 36 §1.8); il 4-5/09 non succede nulla.
+2. **`AutoReapply:MaxGreyLegs`** — *deciso 0 → 2 il 2026-09-02* (doc 39 §5).
+3. **Le tre gambe delle corsie 1 e 2** — *scartato il rimedio distruttivo*, fatto come backfill del
+   timbro di nascita (K22).
+4. **`/bot`** — *guardato* dalla stessa guardia (K49), per ogni gamba dal 2026-09-03; resta da
+   aggiornare il testo dell'artifact (K24 ◐).
+
+**Decisioni nuove, aperte al 2026-09-03:** il tetto `Campaign:MonthlyHourBudget` (oggi 0: il consumo
+misurato è ~32 h/mese su nove cacce); se accendere `BudgetAutoApply`; se committare il diff K59 del
+worktree dopo le correzioni del doc 42.
 
 ---
 

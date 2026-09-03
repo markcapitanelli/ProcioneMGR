@@ -284,8 +284,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             // E lo snapshot registra il default: senza, `dotnet ef database update` fallisce con
             // PendingModelChangesWarning e l'E2E su kind resta rosso — è successo dal merge di
             // #129 (2026-09-02 15:00) fino a qui.
+            // [Revisione 2026-09-03] Default «Unknown», non «Applied»: il binario che non conosce la
+            // colonna deve dichiarare «non lo so», non «avvenuto». Migrazione DecisionOutcomeUnknownDefault.
             entity.Property(e => e.Outcome).HasMaxLength(32).IsRequired()
-                .HasDefaultValue(DecisionOutcome.Applied);
+                .HasDefaultValue(DecisionOutcome.Unknown);
             entity.HasIndex(e => e.AtUtc);
             entity.HasIndex(e => new { e.RunId, e.Kind });
         });

@@ -1,0 +1,337 @@
+# Revisione della sessione «Filone K — PRD Autonomia piena» (2026-08-31 → 09-03)
+
+> **Data:** 2026-09-03, revisione autonoma eseguita mentre il proprietario era assente.
+> **Oggetto:** i 64 commit fra `9e4b690` (master del 28/08) e `e68e956` (PR #133), più il lavoro
+> **non committato** nel worktree `procione-mgr-roadmap-ai-829af2`.
+> **Metodo:** dieci dimensioni di lettura (flotta/ritiro, comitato AI, caccia, motore/corsie,
+> migrazioni, notifiche/UI, qualità dei test, coerenza dei documenti, regole/sicurezza, plancia)
+> con verifica avversariale delle segnalazioni, poi i quattro livelli di `STANDARD-VERIFICA.md`.
+> Due dimensioni (regole/sicurezza, plancia/script) **non sono state completate**: il limite di
+> sessione ha ucciso gli agenti due volte. Quello che ne è stato coperto di sponda è in §6.
+
+---
+
+## 0. Il fatto più importante: K59 non è in master
+
+La PR #133 («K58 copertura, K59 il tetto in ore, K60 il proponitore») è stata mergiata alle 06:41
+UTC, ma contiene solo `HuntBudget` (la funzione pura) e `HuntProposer`. **Il guardiano
+`HuntBudgetWorker`, le tre manopole in `/admin/autonomy`, il riquadro «Budget della caccia» in
+`/pipeline`, `GuardianoDelBudgetK59Tests` e il §8 del doc 41 sono ancora modifiche non committate**
+nel worktree della sessione (`git status`: 7 file modificati, 2 non tracciati). Il doc 41 in master
+dice onestamente «non ancora agganciato a un worker»; la versione nel worktree dice «chiusi».
+
+La **suite completa finale** della sessione non era mai stata registrata: il comando in background è
+morto col processo. Rieseguita qui (§1): verde.
+
+Quel diff non va committato com'è: porta i difetti di §3.8-3.10.
+
+---
+
+## 1. I quattro livelli
+
+| Livello | Esito |
+|---|---|
+| Build del worktree (ramo + non committato) | `dotnet build ProcioneMGR.sln -c Release`: **0 errori**, 2 avvisi NU1902 (AngleSharp, pre-esistenti) |
+| Test mirati (K58-K60, K59, K57, K54b, K50, guardiani config/migrazioni) | **57/57** in 4 s |
+| Suite completa (`--no-build`, Testcontainers) | **3595/3595, 0 ignorati, 28 m 30 s** — durata normale, quindi corsa valida (la soglia «macchina satura» è 1 h+) |
+| Dal vivo su `f510ddd` (guscio riavviato da `sync-piani` alle 08:59, pod deployato) | 6 conferme e **3 difetti** (§2) |
+
+---
+
+## 2. Dal vivo (livello 4)
+
+**Regge:**
+- `/market/watchlist`: le 5 serie a 30m (BTC, ETH, SOL, LINK, LTC) sono abilitate e fresche —
+  27.806 candele ciascuna, ultima 06:30Z, sincronizzate 06:52Z (doc 41 §8.2).
+- `/campaign`: **9 configurazioni** in rotazione; le 5 nuove sono partite al riarmo (in `/pipeline`
+  compaiono con «1 run»), doc 41 §2.
+- `/pipeline` → Modifica: il campo K56 «Ore minime fra due run» c'è (24 sulla cfg 9).
+- `/admin/autonomy`: sonda K1/K2 («Campaign Planner ACCESO E OPERANTE», «Orchestratore … 5 corsie
+  sotto governo»), K47 «Vita degli esperimenti», K55 «Esposizione grigia su due percorsi: 5 di
+  flotta + 2 d'impronta», backfill K22 con anteprima.
+- `/admin/ai-supervisor`: comitato con 3/3 provider, tabella K52 presente.
+- Home: «Battiti: 3 attivi · guscio su f510ddd9», «Decadimento delle gambe: nessun allarme,
+  0 gambe misurabili su 8».
+
+**Non regge:**
+
+| # | Dove | Cosa si vede | Causa (verificata nel codice) |
+|---|---|---|---|
+| L4-1 | `/pipeline`, riquadro K58 | **«0 su 227 celle (0%)»**: tutte le serie dichiarate «mai cacciate», anche le 34 a 1h/4h cacciate da 17 e 18 (il doc 41 misura 125 cacciate su 222) | `Pipeline.razor` `ReloadAsync`: `CaricaCoperturaAsync()` gira **prima** di `Svc.ReloadAsync()`, quindi al primo caricamento `_configs` è vuota, `attive = []` e il lettore non vede nessuna caccia. Riproducibile a ogni apertura della pagina |
+| L4-2 | `/admin/ai-supervisor`, tabella K52 | «ora configurato: claude-opus-4-8» su **tutti e quattro** i provider, badge «modello cambiato» sempre acceso | `AiSupervisor.razor:1154` `GetModelFor` confronta con le costanti PascalCase (`"Nvidia"`), ma `LlmUsage.cs:142` salva il provider in minuscolo: lo switch cade sempre sul default `Model` |
+| L4-3 | `/admin/autonomy`, journal | Ogni riga `Blocked` («NESSUNA corsia di flotta libera») porta il badge verde **«eseguita»**, una ogni 15′ | Sette scrittori del journal non impostano `Outcome`, che nasce `Applied` (§3.1) |
+
+---
+
+## 3. Segnalazioni confermate — gravità alta
+
+Verificate nel codice (righe riaperte, chiamanti seguiti); dove c'è un test che le copre lo dico.
+
+### 3.1 K51: sette scrittori del journal non scrivono `Outcome`
+`FleetOrchestratorWorker.cs` righe 531, 574, 595, 615, 640, 658, 797: nessun `Outcome =`; la riga
+nasce con l'inizializzatore `= DecisionOutcome.Applied` (`OrchestratorDecision.cs:52`). Solo il
+percorso «intento» (riga 840) lo scrive. Un `Retire` fallito (`Applied=false, Error=…`), un
+`Assign` rifiutato, un `Blocked`, un `RetirePending` risultano **«eseguita»** nel pannello (ramo
+`default` dello switch in `Autonomy.razor:1022-1048`). Nessun codice di produzione scrive mai
+`Refused`. Il default a DB (`SET DEFAULT 'Applied'`, migrazione `DecisionOutcomeDefault`) ha lo
+stesso verso: chi non conosce la colonna dichiara «avvenuto». **Fix:** `Outcome` esplicito in ogni
+scrittore (`Refused` nei gate, `error is null ? Applied : Failed` nel ritiro), default DB/CLR su
+`Unknown`, migrazione correttiva idempotente per le righe con `Applied=false`.
+
+### 3.2 K51 non copre il ritiro
+`ExecuteRetireAsync` chiama `engine.StopAsync` (786) e **poi** `JournalAsync` (797): l'INSERT che
+fallisce lascia la corsia ferma senza riga — il caso «quattro arresti su quattro senza riga» che ha
+motivato K51. Gli intenti esistono solo per `Assign`. **Fix:** riga `Retire/Intended` prima dello
+stop, fail-closed; `RiconciliaIntentiAppesiAsync` già la chiuderebbe.
+
+### 3.3 Un `Assign` rifiutato brucia il candidato per 14 giorni
+`FleetStateReader.cs:213-217`: `assignedByFleet` prende ogni riga `Kind="Assign"` **senza guardare
+`Applied`/`Outcome`**, quindi anche i rifiuti del gate, i dry-run e gli intenti chiusi `Failed`. Il
+candidato (e per identità tutti i run della stessa chiave in `CandidateMaxAgeDays`) diventa
+`AlreadyHandled` e il no-op dice «tutti già schierati». **Fix:** contare solo `d.Applied`; i `Failed`
+in un insieme separato con finestra breve e motivo proprio.
+
+### 3.4 Comitato: la conferma conta i pareggi, non i giri
+`DeclareCommitteeFaultAsync` è chiamata solo dentro `if (… plan.Menu is { } menu)` (434→475): tre
+«giri» sono tre **pareggi**, non 45 minuti. Nel caso che ha motivato K52 (Groq/NVIDIA morti dal
+17/08, due sole consultazioni in sedici giorni) la conferma non sarebbe mai arrivata. In più
+(verificato): un giro con zero voti (budget esaurito, comitato spento) o un'astensione per 429/503
+azzera `LastCommitteeFault`, spegne il riquadro, logga «tornati a rispondere» e **riarma la notifica
+critica** — una notifica per ogni esaurimento del budget. **Fix:** contare il tempo dalla prima
+caduta senza voto valido nel frattempo, o un probe leggero per tick; con `Votes.Count == 0` non
+toccare stato né flag.
+
+### 3.5 K36: l'allarme «corsia ferma con posizioni» non si riarma
+`LaneInvariantWatchdog.cs:139-142`: il flag si toglie solo se la corsia compare fra le ferme con zero
+posizioni; una corsia che riparte e si ferma di nuovo con posizioni aperte non allarma più.
+**Fix:** `Remove(laneId)` quando `IsRunning` è true.
+
+### 3.6 K56: il riarmo a tempo non conosce la cadenza propria
+`CampaignPlanner.cs:166-170` giudica eleggibile per solo backoff; `TryStartNextConfigAsync`
+(454-461) poi salta per cadenza e, senza avvii, passa a `WaitingForTrigger` con **Warning**. Il riarmo
+non muove `LastRunAtUtc`: con tutte le config entro cadenza (oggi 7 su 9 a 24-48h) il ciclo
+Waiting→Rotating→«esaurita» si ripete ogni due tick, un Warning ogni ~2 minuti fino al tetto 20/h,
+che poi zittisce gli altri produttori. **Fix:** eleggibilità = backoff **e** cadenza; «tutte in
+attesa» = esito informativo senza cambio di stato.
+
+### 3.7 K41: `RecordedAtUtc` è scritto e mai letto
+Zero lettori (solo DbContext e modelli). Fermo + riavvio manuale di una corsia Paper con la stessa
+gamba → `StartAsync` crea stato nuovo (`LastCandleUtc` null) → replay a −30 giorni → trade con tempi
+di candela nel periodo fermo, dopo l'ancora K18 e senza originale da deduplicare: entrano nel ritiro
+e nel decadimento come vivi. **Fix:** filtro «trade vivo» su `RecordedAtUtc − ClosedAtUtc` in
+`TradeDeduplication`, col conteggio scartato dichiarato.
+
+### 3.8 K59 (non committato): con `BudgetAutoApply` le cadenze raddoppiano fino a 336 h
+`LeggiCostiAsync` proietta le ore/mese dalle sole durate **osservate** (`oreMese = Ore/Giorni*30`),
+senza la cadenza in vigore; `Riallinea` assume che quelle ore corrispondano alla cadenza attuale.
+Dopo una riscrittura le ore osservate non cambiano per settimane → lo sforo è «visto» di nuovo al
+giro dopo → 48→96→192→336 in tre ore, poi la config successiva. Con un solo run lo span è 0 →
+«1 giorno» → 21,9 h/mese per la cfg 19. Il commento di `CostoCaccia` («contando la cadenza propria»)
+descrive ciò che il codice non fa. **Fix:** proiettare al ritmo in vigore quando la cadenza è > 0
+(`mediana/60 × 720/cadenza`), osservato solo con span sufficiente.
+
+### 3.9 K59 (non committato): «Guarda adesso» scrive, e nessuno lascia il nome
+`GuardaBudgetAsync` e `ProponiCacciaAsync` chiamano `TickAsync`, che con `BudgetAutoApply` riscrive
+`MinHoursBetweenRuns` e notifica; `Ultimo`/`_sforoNotificato` sono condivisi col worker senza
+sincronizzazione; `SaveConfigAsync` riscrive la cadenza dalla bozza (stantia) e annulla la
+riscrittura in silenzio — nessun token di concorrenza su `PipelineConfigurations`. La cadenza inoltre
+è letta **solo** dal `CampaignPlanner`: per una config a cron la «riscrittura» è un no-op dichiarato
+«cadenze riallineate». **Fix:** `TickAsync(applica:false)` per il pulsante, un solo scrittore della
+cadenza (applicazione dal pannello via `PipelinePageService`, con identità), campo «chi ha scritto».
+
+### 3.10 K60: senza tetto il proponitore riceve 4,5·10³⁰⁷ ore
+`Pipeline.razor:1134` `residue = double.MaxValue/4` con `MonthlyHourBudget = 0` (stato vivo): il
+comitato riceve «Budget residuo: 4494232837…,0 ore/mese», la proposta esce sempre a 12 h (la più
+costosa), e il pannello non dice che non c'è un tetto. `CadenzaCheEntra` inoltre salta da 192 a 384 e
+non prova mai 336. **Fix:** residuo `double?`, cadenza del modello quando è null, «senza tetto» a
+schermo.
+
+### 3.11 K49: la guardia dell'auto-apply è un no-op per i gruppi multi-gamba
+`PipelineApplier.cs:151-153`: `chiaveGamba` esiste solo se `Strategies.Count == 1`; con chiave
+vuota `HypothesisGuard.Check` restituisce «non bloccato». I gruppi (simbolo, timeframe) dell'auto-apply
+sono di norma multi-gamba: la porta che K49 dichiara chiusa è aperta nel caso ordinario, e nessun
+test la esercita (`PotaturaEPorteK49Tests` copre solo K49b). Il messaggio conta le corsie saltate
+come distribuite (176). **Fix:** una chiave per gamba, `Check` per ciascuna; `result.LanesUsed` nel
+messaggio; test dell'applier.
+
+### 3.12 K54: l'àncora è l'ora di schieramento (non verificata avversarialmente)
+`ExpectationEvidence` conta le rivalutazioni dopo `leg.ExpectedSharpeAtUtc`, che i tre percorsi di
+schieramento timbrano a `DateTime.UtcNow` (`GreyDeployer:239`, `PipelineApplier:313`,
+`EnsemblePageService:280/428`). La corsia 6 porta un numero del 21/08 ma è stata schierata il 31/08:
+le rivalutazioni «dopo» sono meno di `MinMisurePerGiudicare = 5`, quindi non è giudicabile e
+`/ensemble` mostra solo «Sharpe atteso 1,88» (visto dal vivo). I test K54 fissano l'àncora sintetica
+al 21/08 e non lo vedono. **Da confermare** con una lettura dedicata; se regge, il falso allarme che
+K54 doveva togliere resta.
+
+### 3.13 Test che non provano ciò che dichiarano
+- `FleetRitiroK18Tests:32`: **guardiano di sorgente** (`Assert.Contains` sul testo di
+  `TradingEngine.cs`), mentre `TradingEngineEquityRetentionTests` ha già il motore vero per un test
+  di comportamento.
+- `GuardianoDelBudgetK59Tests`: il worker non è mai esercitato; «scrive solo se glielo si dice» è
+  asserito su un record costruito dal test; l'asserzione «la non giudicabile va in fondo» è dentro
+  un `if` che con quei fixture non entra mai.
+- Nessun test per: K42 (isteresi del ritiro), K46, K56, la guardia K49 dell'applier, il gate K57 in
+  `GreyDeployer`, `ProponiAsync`/`HuntCoverageReader` (K58/K60), `ExpectationEvidenceReader` (K54),
+  la notifica K52. `ScriptsSintassiTests` e `PlanciaRisveglioTests` escono subito su Linux: in CI
+  (ubuntu) sono verdi senza aver parsato nulla.
+
+### 3.14 Documenti: K1 dichiara una scheda in Home che non esiste
+Il criterio di K1 nel PRD («la scheda deve dire guscio 0 · plancia 13 · pod 0») non è realizzato:
+Home mostra solo «guscio su <sha>»; il confronto con HEAD vive solo in `procione stato`.
+
+---
+
+## 4. Confermate — gravità media (in breve)
+
+- **Migrazioni:** default `Outcome='Applied'` a DB/modello/CLR (vedi 3.1); il guardiano K53 misura lo
+  schema del **modello** (`EnsureCreated`) su 3 tabelle, non la catena delle migrazioni — il guasto che
+  porta il suo nome passerebbe di nuovo; `WidenOrchestratorDecisionSource.Down()` non è eseguibile sul
+  DB vivo (22001) e non lo dichiara.
+- **Flotta:** K37 con journal muto etichetta dal run più recente contro commento e PRD (e il test lo
+  cementa); K48 non conserva la configurazione precedente che dichiara irrecuperabile;
+  `RetireStreaks` copia il dizionario vivo senza lock.
+- **Comitato:** «Prova il comitato» dice «QUORUM IRRAGGIUNGIBILE … è per sempre» su **un** 404,
+  contro la rettifica K53; il journal scrive `default:provider-guasti` su un solo 404; tabella K52,
+  badge «non risponde da N giorni» e prova K53 dipendono da `Llm:Budget:TrackingEnabled` senza dirlo
+  (oggi è acceso); nel guard un 404/410 **chiude** il breaker e azzera i fallimenti («operativo» in
+  verde con l'AI attiva morta); `HuntProposer` etichetta sempre `quorum-mancato` e non alimenta
+  l'isteresi; la «prova» K53 conta come funzionante un modello che risponde senza testo.
+- **Motore:** K54 `StatusMessage` e log raccontano il rapporto storico anche quando il verdetto usa la
+  stima corrente («In linea … (27%)»); K35 con `DriveProtectiveExits=true` una UPDATE per **tick** per
+  posizione, non per candela (latente: il flag è false per misura); K57 il lettore aggrega righe di
+  entrambi i motori walk-forward mentre la soglia è calibrata sul corrente.
+- **Caccia:** `HuntBudgetWorker` è un terzo scrittore senza token di concorrenza; K49b equipara
+  «disabilitata in watchlist» a «sospesa dall'exchange»; `Riallinea` spinge la prima caccia a 336 h
+  prima di toccare la seconda.
+- **UI/config:** nessuna regola in `AdminConfigRules` per le tre chiavi K59 (il worker clampa
+  5..1440, il pannello mostra il valore salvato); `appsettings.json.example` senza le chiavi K59 e
+  `Fleet:BlockDuplicateTriple`; soglia dei battiti in Home cablata a 10′ mentre `Heartbeat:StaleMinutes`
+  è amministrabile; `/regimes` resta una scrittura immediata sulla corsia 0; la corsia dei critici K6
+  non ha superficie di pressione.
+- **Documenti:** Fase 3 del PRD ha K22/K27 ✅ dentro «Restano» e K51/K21 aperti benché chiusi; §8
+  «decisioni che restano al proprietario» sono tutte già prese; §6 e ROADMAP dicono ancora
+  `DriveProtectiveExits=true` nel file vivo (oggi è **false**, verificato); K56-K60 e i doc 39-41
+  assenti dal PRD e dalla ROADMAP; K23 non nel codice e K24 non menzionato nel doc 39; il gate della
+  Fase 1 (una riga `Retire` non umana) non è mai stato raggiunto ma si è passati oltre; `00_INDEX.md`
+  fermo al 4 agosto; `docs/pagine` non toccate da nessun commit del filone; tre monte-ore diversi
+  (35 h/8, 35 h/9, 32 h/9) nello stesso giorno.
+
+## 5. Bassa (elenco)
+Down non eseguibile dichiarato; ordine di rilascio guscio→pod per `RecordedAtUtc` (RETURNING su
+colonna assente) non documentato; K8 il battito del carry avanza anche con zero simboli valutati;
+K55 ternario morto e frase fissa su `MaxGreyLegs`; K47 lettura fallita che sparisce senza dirlo;
+K58 badge verde su un'approssimazione; asserzioni vacue/tautologiche in K58K60, K59, K54b, K48, K5b;
+pin di costanti misurate; guardiani di sorgente per K15/K41/hosted service e dipendenza da
+`PROCIONE_REPO`; MKR «delistato» vs «sospeso» in due punti del PRD.
+
+---
+
+## 6. Ciò che NON è stato coperto, e cosa se ne sa di sponda
+
+- **Regole e sicurezza (trasversale):** agente caduto. Di sponda: nessuna riga in `Services/Fleet` o
+  `Services/Ensemble` usa `TradingMode.Live/Testnet` per avviare (solo `Paper` letterale in
+  `GreyDeployer:290`); `Services/Llm` resta senza esecuzione (`CommitteeDiagnosis` e classificatore
+  puri; `HuntProposer` sta in `Services/Pipeline` e solo propone); `SafetyChecker` non compare nel
+  diff; `DriveProtectiveExits` **false** nel file vivo e nei default; nessun segreto trovato nei
+  diff letti (l'id account NVIDIA nel doc 39 è troncato). Non verificati: gate K4 «CI verde» in
+  `deploy-trading.ps1` con GitHub irraggiungibile, `[Authorize]` su tutte le pagine toccate (solo
+  quelle di §UI), endpoint `/health/quiet` (senza auth, rivela «2 posizioni aperte»).
+- **Plancia e script:** agente caduto. Osservato dal vivo: `sync-piani` ha **riavviato il guscio alle
+  08:59 con un utente loggato e 2 posizioni aperte** («vivono nel pod»); la plancia si è aggiornata da
+  sola («segnale inviato ma il supervisore risulta ancora vivo», poi «supervisore fermato»/riavviato);
+  la veglia è scaduta **due volte** a 240 s al riavvio del PC mentre Docker partiva — allarme
+  prevedibile, non un guasto; il `procione.cmd` di un worktree compila un exe **stantio** che non
+  conosce il lavoro `piani` (usare l'exe del repo principale o `--ricompila`).
+
+---
+
+## 7. Che cosa fare, in ordine
+
+1. **Decidere il diff non committato** del worktree: non committarlo com'è (3.8-3.10); correggere
+   proiezione/scrittori/residuo, poi committarlo **insieme** al doc 41 §8.
+2. **Due correzioni da una riga** sul codice già in master: ordine `Svc.ReloadAsync()` →
+   `CaricaCoperturaAsync()` in `Pipeline.razor` (L4-1); confronto case-insensitive in `GetModelFor`
+   (L4-2).
+3. **`Outcome` esplicito nei sette scrittori** + default `Unknown` + migrazione correttiva (3.1), e
+   l'intento anche sul ritiro (3.2). Poi il filtro `Applied` in `assignedByFleet` (3.3).
+4. Riarmo K56 (3.6) prima che le nove cadenze producano il ciclo di Warning.
+5. Comitato: conferma nel tempo e giri non informativi (3.4); watchdog K36 (3.5).
+6. Test veri per K18, K42, K49, K56, K59; guardiano delle migrazioni sulla **catena** e non sul
+   modello; gate su `pwsh` invece che su Windows nei test degli script.
+7. Documenti: PRD (Fase 3, §6, §8, K56-K60), ROADMAP, `00_INDEX.md`, `docs/pagine`; poi ricaricare
+   39-42 nel notebook.
+
+---
+
+## 8. Applicato la sera stessa (2026-09-03, non committato)
+
+Su richiesta del proprietario, nel worktree della sessione, insieme al diff K59:
+
+| Segnalazione | Correzione |
+|---|---|
+| L4-1 copertura «0 su 227» | `Pipeline.razor`: le configurazioni si caricano prima della copertura |
+| L4-2 «ora configurato» su tutti | `GetModelFor` confronta senza distinzione di maiuscole |
+| L4-3 / 3.1 «eseguita» su tutto | `Outcome` esplicito nei sette scrittori; nuova costante `Noted` per Blocked/RetirePending; default **`Unknown`** nel modello, nello snapshot e a database (migrazione `20260903190000_DecisionOutcomeUnknownDefault`, che riclassifica le righe contraddittorie: Error ⇒ Failed, Blocked/RetirePending ⇒ Noted, altrimenti Refused); il pannello mostra «annotata» e «esito non dichiarato» invece del verde di default |
+| 3.2 ritiro senza intento | `ExecuteRetireAsync` apre una riga `Retire/Intended` prima dello stop (fail-closed), la chiude Applied/Failed; rifiuti per modalità/corsia ferma ⇒ Refused |
+| 3.3 candidato bruciato | `assignedByFleet` conta Applied/Intended/Unknown e i Failed delle ultime 24 h; mai i Refused |
+| 3.4 comitato | zero voti ⇒ nessun cambio di stato; confermato = serie ≥ 3 senza voto valido nel giro; `provider-guasti` a journal solo se il caduto è confermato; il commento e il probe dicono che i «giri» sono consultazioni |
+| 3.5 K36 | il flag si riarma quando la corsia gira |
+| 3.6 K56 riarmo | eleggibilità = backoff **e** cadenza; «tutte entro cadenza» senza Warning |
+| 3.8 K59 raddoppio | `HuntBudget.ProiettaOreAlMese`: al ritmo in vigore quando c'è una cadenza |
+| 3.9 «Guarda adesso» | `MisuraAsync` (sola lettura); `TickAsync` serializzato; la cadenza vale anche per lo scheduler a cron; log di chi ha riscritto |
+| 3.10 K60 senza tetto | residuo `double?`; cadenza del modello e testo «nessun tetto impostato»; `CadenzaCheEntra` prova 336; badge «senza tetto» |
+| 3.11 K49 multi-gamba | una chiave per ogni gamba; messaggio con `LanesUsed` decurtato |
+| media: K54 messaggio, probe «per sempre», regole K59, esempio di configurazione | `StatusMessage` sulla stima corrente; testo del probe con la rettifica K53; `AdminConfigRules` per le tre chiavi; `appsettings.json.example` con K59 e `Fleet:BlockDuplicateTriple` |
+| test | K52 (provider-guasti solo con conferma + nullo), K53 (default Unknown), K59 (asserzione senza `if`), K58K60 (proiezione, un solo run, cadenza massima) |
+
+**Non applicato, di proposito:** 3.7 (`RecordedAtUtc` mai letto: servono una soglia misurata e una
+decisione sulle 371 righe storiche a `NULL`); 3.12 (àncora K54 = schieramento: richiede il run
+sorgente della gamba); K57 filtro per motore (richiede una chiave di configurazione e il suo pannello);
+la tabella «chi ha riscritto la cadenza» (colonna nuova); i test di integrazione su Postgres per
+`HuntBudgetWorker`, `LaneInvariantWatchdog` (riarmo) e `FleetStateReader` (filtro).
+
+Verifica del primo giro: build 0 errori; 348 test mirati verdi; **suite completa 3601/3601 in
+27 m 33 s**.
+
+### 8.1 Il secondo giro: le regressioni trovate dalla revisione delle correzioni
+
+Tre revisori sul diff delle correzioni hanno trovato ciò che il primo giro aveva rotto o lasciato a
+metà. Corretto la sera stessa:
+
+| Regressione | Correzione |
+|---|---|
+| Senza «bruciare» i rifiutati, un candidato che il braccio non può eseguire per una causa stabile (ensemble multi-gamba, corsia non autorizzata) restava in testa alla coda FIFO e bloccava gli altri per 14 giorni | i `Refused` a dry-run SPENTO contano come gestiti per 24 h (la coda avanza); in dry-run non brucia nulla; `Unknown` conta solo se porta un errore o è applicato |
+| Un rifiuto per tick = 96 righe al giorno per candidato, e il comitato riconsultato a ogni tick sullo stesso menù (budget LLM bruciato per decisioni che nessuno esegue) | i rifiuti si scrivono una volta per causa (come i `Blocked`); lo stesso menù non si riconsulta: il verdetto precedente si riusa, voti ed eletto compresi |
+| Confermato = serie ≥ 3 senza vincolo sul giro: un provider tolto dal comitato restava «confermato», falsava i superstiti e dichiarava irraggiungibile un quorum appena raggiunto | confermato = serie ≥ 3 **e interrogato in questo giro** senza voto valido; test «tolto dal comitato esce dalla diagnosi» |
+| Il riquadro del comitato spariva quando il confermato si asteneva per altra causa (503, timeout) | acceso finché c'è un confermato; elenco = sospetti ∪ confermati; con zero voti il quadro dichiara di essere più vecchio dell'ultima interrogazione |
+| Proiezione K59 con due stimatori (mediana con cadenza, somma senza): scrivere una cadenza faceva «rientrare» lo sforo senza cambiare il consumo; un run solo a cadenza 0 valeva ancora 30 run/mese; una cadenza valeva come schedulazione anche per una caccia lanciata una volta a mano | un solo stimatore: `durata media × min(ritmo della cadenza, ritmo osservato)`, con l'età della finestra misurata fino a oggi; `RunAlMese` nel `CostoCaccia` e nella cadenza implicita |
+| Scrittura fallita con `BudgetAutoApply` acceso: la notifica diceva «è spento» | terzo stato `ScritturaFallita`: notifica Critical dedicata, badge nel pannello, si rinotifica finché non riesce |
+| Wake di regime non azzerato nel ramo «tutte entro cadenza»: il riarmo a tempo lo ritrovava e marcava «Event» un run partito ore dopo | `PendingWakeReason` azzerato e dichiarato «assorbito» nell'esito |
+| Il cron contava solo i run `Completed`: una config che fallisce veniva rilanciata a ogni slot | qualunque esito terminale (Completed/Failed/Cancelled) |
+| «smentito dalle rivalutazioni» anche quando l'evidenza CONFERMA l'atteso; log di decadimento ancora sull'atteso d'origine | testo su `Contraddetta`; log sul metro del verdetto |
+| Testi: tooltip della cadenza (ora vale anche a cron), 35 vs 32 ore nel POCO, «Scarica modelli» che non esiste, soglia del probe dal form invece che in vigore, avvisi ripetuti per gamba, ritiri storici «corsia già ferma» marcati `Failed` dalla migrazione | tutti allineati |
+
+Test aggiunti nel secondo giro: K52 (zero voti non cancella la conferma; timeout non guarisce;
+provider tolto esce dalla diagnosi), K58K60 (la cadenza non inventa un ritmo; un solo run decade con
+l'età della finestra).
+
+**Ancora senza test di integrazione** (dichiarato): il filtro di `FleetStateReader` su Postgres,
+l'intento del ritiro con un motore finto, il riuso del menù del comitato.
+
+### 8.2 Livello 4 sul codice corretto (2026-09-03, 23:15-23:25)
+
+Build 0 errori; 293 test mirati verdi dopo il secondo giro. App del worktree avviata sulla 5199 con
+login reale (guscio e supervisore fermati per la durata del collaudo, poi ripristinati); la
+migrazione `20260903190000_DecisionOutcomeUnknownDefault` è stata applicata al DB vivo all'avvio
+(«Migrazioni pendenti (1)… Le applico ora»), nessun errore server, nessun errore di console
+dell'app.
+
+| Pagina | Visto |
+|---|---|
+| `/pipeline` | copertura **130 su 227 celle (57 %)**, 97 mai cacciate (prima: «0 su 227»); budget «40,0 ore/mese al ritmo attuale su 13 configurazioni · tetto: nessuno · propone e basta», misurato dal worker alle 23:17 e rimisurato da «Guarda adesso» alle 23:21 senza scrivere; «Proponi una caccia» → **scelta dal comitato** (fonte `committee`) fra 4 buchi: 5m su 10 serie, ~15 min/run, 7,7 h/mese **a 24h di cadenza** (la cadenza del modello, cfg 13), col badge **«senza tetto»** e la riga «nessuna proposta si adotta da sola» |
+| `/admin/ai-supervisor` | tabella «Ultima risposta valida per provider» con i quattro provider e **zero** badge «ora configurato» (prima: quattro falsi) |
+| `/admin/autonomy` | journal: le righe `Blocked` portano **«annotata»** (15), le `ProposeGrey` «eseguita» (5), nessun verde sui rifiuti; nessun riquadro del comitato (nessun guasto); le tre manopole K59 («Tetto caccia (ore/mese)», «Giro del budget (min)», «Applica da solo i rallentamenti») presenti con la spia ✅ delle regole |
+
+Il numero del budget (40 h su 13 configurazioni) è più alto delle «~32 su nove» del doc 41 perché
+conta TUTTE le configurazioni non disabilitate con un run negli ultimi 30 giorni, al ritmo osservato:
+è il consumo vero, non quello della sola rotazione.
