@@ -280,6 +280,31 @@
                     <span class="small text-muted">@SchedulePreviewText()</span>
                 </div>
             </div>
+
+            @* [K56, 2026-09-02] LA CADENZA PROPRIA DI QUESTA CACCIA nella rotazione automatica.
+
+               La rotazione aveva UN solo pomello — il backoff della campagna — per cacce che
+               costano misure diversissime: mediana per run al 2026-09-02, cfg 17 = 3,7 minuti
+               contro cfg 19 = 43,8. Dodici volte tanto, stessa cadenza. Alzare il pomello globale
+               per rallentare la piu' cara rallentava anche quella che costa un dodicesimo.
+
+               E rallentare una caccia lenta e' quasi gratis: la finestra di holdout della cfg 19 e'
+               di 112 giorni e scorre di un giorno al giorno, quindi fra un run e il successivo
+               entrano 288 candele su ~32.000 — lo 0,5%. Quarantaquattro minuti di calcolo per mezzo
+               punto percentuale di dati nuovi. *@
+            <div class="row g-3 mb-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label small" for="minHoursBetweenRuns">
+                        Ore minime fra due run
+                        <span class="text-muted" title="Nella rotazione automatica delle campagne. 0 = nessun limite proprio, vale solo il backoff della campagna. Non si applica ai run lanciati a mano da qui.">ⓘ</span>
+                    </label>
+                    <input type="number" min="0" max="720" class="form-control form-control-sm"
+                           id="minHoursBetweenRuns" @bind="_editing.MinHoursBetweenRuns" />
+                </div>
+                <div class="col-md-8">
+                    <span class="small text-muted">@CadenzaPropriaText()</span>
+                </div>
+            </div>
             @if (_editing.ScheduleEnabled && _editing.ExecutionMode == "Live")
             {
                 <div class="alert alert-warning py-2 small mb-2">
@@ -886,6 +911,30 @@
     }
 
     /// <summary>Anteprima leggibile della prossima esecuzione per l'espressione cron nell'editor, ricalcolata a ogni render.</summary>
+    /// <summary>
+    /// [K56] Che cosa cambia davvero alzando la cadenza propria: si dice in ore E in costo, perche'
+    /// il numero da solo non fa capire che si stanno spendendo 44 minuti per lo 0,5% di dati nuovi.
+    /// </summary>
+    private string CadenzaPropriaText()
+    {
+        if (_editing is null) return string.Empty;
+        var ore = _editing.MinHoursBetweenRuns;
+        if (ore <= 0)
+        {
+            return "Nessun limite proprio: vale solo il backoff della campagna, lo stesso per tutte le cacce — "
+                 + "comprese quelle che costano dodici volte tanto.";
+        }
+
+        var giri = 24.0 / ore;
+        // La durata mediana viene dalla resa gia' letta (K54b): nessuna seconda query, e nessun
+        // numero inventato quando la configurazione non ha ancora uno storico.
+        var misurata = _resa.FirstOrDefault(y => y.ConfigurationId == _editing.Id)?.MedianRunMinutes ?? 0;
+        var stima = misurata > 0
+            ? $" A {misurata:F0} minuti mediani a run misurati, fanno circa {giri * 30 * misurata / 60:F0} ore al mese."
+            : string.Empty;
+        return $"Un run ogni {ore} ore, cioè {(giri >= 1 ? $"{giri:F1} al giorno" : $"uno ogni {ore / 24.0:F1} giorni")}.{stima}";
+    }
+
     private string SchedulePreviewText()
     {
         if (string.IsNullOrWhiteSpace(_editing?.Schedule)) return "Nessuna espressione impostata.";
