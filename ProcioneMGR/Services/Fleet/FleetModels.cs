@@ -184,6 +184,101 @@ public sealed class FleetOptions
     /// le righe (comportamento storico, dichiarato).
     /// </summary>
     public DateTime? StabilitaDaUtc { get; set; } = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc);
+
+    // --- [K61, 2026-09-04] La SOSTITUZIONE: rimpiazzare un occupante inerte -------------------
+
+    /// <summary>
+    /// [K61, richiesta del proprietario 2026-09-04] <b>La Regina può schierare un candidato al posto
+    /// di un occupante inerte</b>, invece di aspettare che una corsia si liberi da sola.
+    ///
+    /// <para><b>Perché serve, misurato il 2026-09-04.</b> <see cref="GreyAutoDeploy"/> è ACCESO e 19
+    /// candidati grigi sono schierabili, ma le cinque corsie di flotta (3-7) sono tutte occupate e
+    /// <b>nessuna può liberarsi</b>: il ritiro per Sharpe pretende <see cref="RetireMinTrades"/>
+    /// trade (le corsie ne hanno 0, 0, 1, 3, 4) e il ritiro per inedia pretende un ritmo atteso
+    /// dichiarato, che sulla corsia 5 è <c>null</c>. Il braccio automatico gira a vuoto da giorni
+    /// scrivendo «nessuna corsia di flotta libera»: il vincolo non sono i candidati, sono le corsie.</para>
+    ///
+    /// <para><b>Perché NON distrugge il forward test.</b> È l'obiezione seria: il forward test Paper
+    /// è l'unico giudice immune al multiple testing, e ricambiare corsie lo consuma. Questa regola
+    /// tocca <b>solo corsie che non stanno producendo prove</b> — zero operazioni chiuse oltre la
+    /// soglia di silenzio, e nessuna posizione aperta. Una corsia muta non accumula evidenza che si
+    /// possa sprecare: occupa uno slot senza dire niente. Sostituire una corsia che <i>opera</i>
+    /// sarebbe un'altra cosa, e questa regola non lo fa mai.</para>
+    ///
+    /// <para><b>Default spento.</b> È un potere nuovo su una corsia in corsa (in Paper) e si accende
+    /// apposta, dopo aver guardato nel pannello quante corsie arriverebbero al cancello.</para>
+    /// </summary>
+    public bool ReplaceIdleLanes { get; set; }
+
+    /// <summary>
+    /// [K61] Giorni di <b>silenzio</b> (nessuna operazione chiusa) oltre i quali una corsia diventa
+    /// candidata alla sostituzione, quando il suo ritmo atteso NON è dichiarato.
+    ///
+    /// <para>Default 10, allineato a <see cref="StarvationMinDays"/>: le due regole rispondono alla
+    /// stessa domanda da due lati (il tasso cumulato lì, la recenza qui) e due pavimenti diversi
+    /// sarebbero una contraddizione che nessuna superficie spiega. La sostituzione si esprime
+    /// <b>solo dove il ritiro si astiene</b>, e non duplica mai l'inedia.</para>
+    /// </summary>
+    public int ReplaceIdleDays { get; set; } = 10;
+
+    /// <summary>
+    /// [K61] Quando il ritmo atteso <i>è</i> dichiarato, il silenzio si misura anche in <b>multipli
+    /// dell'intervallo medio fra due operazioni attese</b>: la soglia diventa il massimo fra
+    /// <see cref="ReplaceIdleDays"/> e questo multiplo.
+    ///
+    /// <para><b>Senza questa scala una soglia fissa punirebbe le corsie lente.</b> Misurato il
+    /// 2026-09-04: la corsia 4 (XLM/USDT 4h) dichiara 1,65 trade/mese, cioè un'operazione ogni 18,4
+    /// giorni — con una soglia secca a 10 giorni risulterebbe «inerte» mentre sta rispettando il
+    /// proprio ritmo. Con il multiplo 2,0 la sua soglia diventa 36,9 giorni.</para>
+    /// </summary>
+    public decimal ReplaceIdleExpectedMultiple { get; set; } = 2.0m;
+
+    /// <summary>
+    /// [K61] <b>Pavimento di residenza</b>: giorni di osservazione cumulata sotto i quali una corsia
+    /// non si tocca, qualunque cosa dica il silenzio. Non si uccide un esperimento appena schierato
+    /// che non ha ancora avuto occasione di operare.
+    /// </summary>
+    public int ReplaceMinLaneDays { get; set; } = 7;
+
+    /// <summary>
+    /// [K61] Il rimpiazzo dev'essere un'ipotesi <b>stabile</b>: mediana K57 delle sue rimisurazioni
+    /// almeno pari a questo valore. Non lo Sharpe del run migliore — quello è la notte fortunata.
+    ///
+    /// <para>Misurato il 2026-09-04 sulla fascia grigia: <c>EventTrigger GRT/USDT 4h</c> porta 3,91
+    /// nel run più recente ma ha mediana 2,79 con un ventaglio di 3,26 su 20 rimisurazioni e 3 soli
+    /// trade di holdout; <c>MacdTrend AAVE/USDT 4h</c> ha mediana 3,98 con ventaglio 0,21 su 52
+    /// trade. Ordinare per data — come fa oggi il braccio automatico — non distingue i due.</para>
+    /// </summary>
+    public decimal ReplaceMinCandidateMedian { get; set; } = 1.0m;
+
+    /// <summary>
+    /// [K61] Quante rimisurazioni servono perché la mediana di stabilità sia <b>giudicabile</b>.
+    /// Sotto questa soglia il candidato non è ammesso alla sostituzione: fail-closed, perché non
+    /// sapere se un'ipotesi regge non è una ragione per preferirla a una corsia già in corsa.
+    /// </summary>
+    public int ReplaceMinCandidateMeasures { get; set; } = 5;
+
+    /// <summary>
+    /// [K61] Quante sostituzioni al massimo per giro. Default 1, come gli altri due budget: una
+    /// corsia per volta si distingue da un guasto del lettore di stato, cinque no.
+    /// </summary>
+    public int MaxReplacementsPerTick { get; set; } = 1;
+
+    /// <summary>
+    /// [K61b] <b>Scegliere il grigio per merito invece che per data</b>, anche sul braccio che
+    /// riempie le corsie già libere.
+    ///
+    /// <para>Oggi <c>GreyAccorpati</c> ordina per <c>CompletedAtUtc</c> crescente: con 19 candidati
+    /// schierabili e uno slot, la Regina prende il più vecchio. La stabilità K57 — che dice quale
+    /// ipotesi regge alle rimisurazioni — vive solo nell'ordinamento della lista che legge un umano.
+    /// K57 ha misurato che il 22 % delle chiavi passa il cancello solo col proprio MASSIMO: la data
+    /// non è un ordinamento neutro rispetto a questa domanda, è indipendente da essa.</para>
+    ///
+    /// <para><b>Default spento</b> perché cambia il comportamento di un braccio già in esercizio. Il
+    /// pannello mostra affiancati chi verrebbe schierato per data e chi per merito: si accende dopo
+    /// aver visto la differenza, non prima.</para>
+    /// </summary>
+    public bool PreferStableGrey { get; set; }
 }
 
 /// <summary>Fotografia di una corsia come la vede l'orchestratore (sola lettura).</summary>
@@ -239,7 +334,33 @@ public sealed record FleetLaneState(
     /// sui rendimenti di barra, quindi porta un fattore <c>√PeriodsPerYear</c> che vale 46,8 a 4h e
     /// 187,2 a 15m. Una soglia sola su quel numero è <b>quattro soglie diverse</b>.</para>
     /// </summary>
-    decimal? RealizedSharpePerTrade = null);
+    decimal? RealizedSharpePerTrade = null,
+    /// <summary>
+    /// [K61, 2026-09-04] Quando la corsia ha chiuso l'<b>ultima operazione</b>. <c>null</c> = non ne
+    /// ha chiusa nessuna nella finestra osservata, e il silenzio si misura allora sull'intera
+    /// osservazione cumulata.
+    ///
+    /// <para><b>Non è <c>LastOrderUtc</c>, di proposito.</b> Quel campo lo scrive solo l'APERTURA di
+    /// una posizione, mai la chiusura (alimenta l'anti-raffica del <c>SafetyChecker</c>), e per di
+    /// più si azzera a ogni <c>StartAsync</c>: una corsia riavviata dal redeploy di un pod sembrerebbe
+    /// muta da sempre. Qui si legge l'ultimo <c>ClosedAtUtc</c> di
+    /// <c>TradingPerformance.Trades</c>, che arriva già deduplicato e ripulito dal replay (K41) —
+    /// un <c>MAX(ClosedAtUtc)</c> scritto a mano leggerebbe l'ultima riga di REPLAY come ultima
+    /// operazione.</para>
+    ///
+    /// <para><b>Limite dichiarato:</b> <c>ClosedAtUtc</c> è un tempo di CANDELA, non di parete. La
+    /// misura del silenzio è quindi sfasata di al più una barra — irrilevante contro una soglia in
+    /// giorni, e va detto invece di far finta che sia esatta.</para>
+    /// </summary>
+    DateTime? LastTradeUtc = null,
+    /// <summary>
+    /// [K61] Posizioni attualmente aperte sulla corsia. <b>Una sostituzione non si fa mai sopra una
+    /// posizione viva</b>: <c>StopAsync</c> lascia le posizioni aperte e il successivo
+    /// <c>StartAsync</c> in Paper le cancella senza scrivere alcun <c>TradeRecord</c> — la posizione
+    /// sparirebbe dalla storia invece di chiudersi. È anche l'invariante K36 che
+    /// <c>LaneInvariantWatchdog</c> sorveglia come allarme Critical.
+    /// </summary>
+    int OpenPositions = 0);
 
 /// <summary>
 /// Un run candidato al forward test. <paramref name="Band"/>: "pass" = sopravvissuti alla
@@ -287,7 +408,20 @@ public sealed record FleetCandidate(
     /// <para><c>null</c> = identità non derivabile (verdetti illeggibili): in quel caso il candidato
     /// NON si deduplica, perché accorpare per ignoranza nasconderebbe proposte diverse.</para>
     /// </summary>
-    string? Identity = null);
+    string? Identity = null,
+    /// <summary>
+    /// [K61, 2026-09-04] <b>Mediana K57</b> dello Sharpe di holdout della stessa identità su tutte le
+    /// sue rimisurazioni: la stima robusta alla «notte fortunata». <c>null</c> = non giudicabile.
+    ///
+    /// <para>Serve al braccio AUTOMATICO. Finora la stabilità viveva solo nell'ordinamento della
+    /// lista che legge un umano in <c>/admin/autonomy</c>, mentre <c>Decide</c> sceglieva per DATA:
+    /// due superfici con due criteri diversi sulla stessa domanda.</para>
+    /// </summary>
+    decimal? StabilityMedian = null,
+    /// <summary>[K61] Quante rimisurazioni compongono <see cref="StabilityMedian"/>.</summary>
+    int StabilityMeasures = 0,
+    /// <summary>[K61] Ventaglio (massimo − minimo) delle rimisurazioni: quanto è ballerina l'ipotesi.</summary>
+    decimal? StabilitySpread = null);
 
 /// <summary>Lo stato complessivo su cui <see cref="FleetOrchestrator.Decide"/> ragiona. Solo dati, nessun servizio.</summary>
 public sealed class FleetState
@@ -329,6 +463,24 @@ public sealed record AssignGreyCandidateToLane(Guid RunId, string CandidateKey, 
 
 /// <summary>Ferma un forward test perdente e libera la corsia.</summary>
 public sealed record StopAndFreeLane(int LaneId, string Reason) : FleetAction(Reason);
+
+/// <summary>
+/// [K61, 2026-09-04] <b>Sostituzione</b>: ferma l'occupante INERTE della corsia e schiera al suo
+/// posto il candidato indicato, nello stesso giro.
+///
+/// <para><b>Una sola azione, non due.</b> Il piano ha l'invariante «mai due azioni sulla stessa
+/// corsia» (provato dal fuzz su 20.000 stati) e il ritiro ha la regola «un motivo solo per corsia».
+/// Esprimere la sostituzione come <see cref="StopAndFreeLane"/> + <see cref="AssignGreyCandidateToLane"/>
+/// violerebbe entrambe e, peggio, permetterebbe al worker di eseguirne una sola: una corsia fermata
+/// e non riempita è un esito diverso da quello deciso, e nessuno se ne accorgerebbe.</para>
+///
+/// <para><b>Il journal resta a due righe</b> (<c>Retire</c> e <c>Assign</c>, entrambe con il motivo
+/// prefissato da «[Sostituzione]»): i consumatori esistenti filtrano per quei due <c>Kind</c> — in
+/// particolare la deduplica dei candidati già gestiti — e un <c>Kind</c> nuovo li renderebbe ciechi,
+/// facendo riproporre per sempre lo stesso candidato.</para>
+/// </summary>
+public sealed record ReplaceLaneOccupant(Guid RunId, string CandidateKey, int LaneId, string Reason)
+    : FleetAction(Reason);
 
 /// <summary>Fascia grigia (F5): si propone al click umano, MAI si assegna da soli.</summary>
 public sealed record ProposeGreyCandidate(Guid RunId, string Reason) : FleetAction(Reason);

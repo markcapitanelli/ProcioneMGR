@@ -657,6 +657,11 @@ public sealed class FleetOrchestratorWorker(
         // numero di assegnazioni che il PIANO contiene: qui governa anche la loro esecuzione.
         var budgetRitiri = Math.Max(1, opt.MaxExecutionsPerTick);
         var budgetAssegnazioni = Math.Max(1, opt.MaxAssignmentsPerTick);
+        // [K61] Un TERZO tetto, per la stessa ragione per cui K15 ne ha voluti due: una sostituzione
+        // non è né solo un ritiro né solo un'assegnazione, e lasciarla pescare dai due tetti
+        // esistenti significherebbe che alzare le assegnazioni alza anche quante corsie in corsa si
+        // possono fermare in un colpo. Consuma comunque anche gli altri due: fa entrambe le cose.
+        var budgetSostituzioni = Math.Max(1, opt.MaxReplacementsPerTick);
 
         var bloccatiInQuestoGiro = new HashSet<string>(StringComparer.Ordinal);
         // [Revisione 2026-09-03] I rifiuti si scrivono una volta per CAUSA, come i blocchi: da quando
@@ -755,6 +760,49 @@ public sealed class FleetOrchestratorWorker(
                     // log, che è per chi sta guardando adesso.
                     logger.LogDebug("Ritiro corsia {Lane} in attesa di conferma ({Streak}/{Needed}): {Reason}",
                         pending.LaneId, _retireStreak.GetValueOrDefault(pending.LaneId), Math.Max(1, opt.RetireConfirmTicks), pending.Reason);
+                    break;
+
+                // [K61] SOSTITUZIONE confermata dall'isteresi: ferma l'inerte e schiera al suo posto.
+                case ReplaceLaneOccupant replace when confirmedRetires.Contains(replace.LaneId):
+                    // Due cancelli, perché l'azione è due cose: deve poter FERMARE (budget dei
+                    // ritiri, corsia autorizzata) e deve poter SCHIERARE (budget delle assegnazioni,
+                    // deployer presente). Passare da uno solo darebbe a questa azione un permesso
+                    // che nessuna delle due metà ha da sola.
+                    var percheReplace = WhyNotExecuted(opt, replace.LaneId, budgetRitiri)
+                        ?? WhyNotExecutedAssignment(opt, replace.LaneId, budgetAssegnazioni,
+                            hasKey: true, hasDeployer: greyDeployer is not null, isGrey: true)
+                        ?? (budgetSostituzioni <= 0 ? "budget di sostituzione esaurito in questo giro" : null);
+
+                    if (percheReplace is not null)
+                    {
+                        if (RifiutoNuovo($"Replace|{replace.LaneId}|{replace.RunId:N}|{percheReplace}"))
+                        {
+                            await JournalAsync(new OrchestratorDecision
+                            {
+                                AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = replace.LaneId, RunId = replace.RunId,
+                                Source = assignSource, VotesJson = votesJson,
+                                Reason = $"[{percheReplace}] {replace.Reason}", DryRun = opt.DryRun, Applied = false,
+                                Outcome = DecisionOutcome.Refused,
+                            }, ct);
+                            logger.LogInformation("[{Perche}] Sostituirei l'occupante della corsia {Lane}: {Reason}",
+                                percheReplace, replace.LaneId, replace.Reason);
+                        }
+                    }
+                    else
+                    {
+                        budgetRitiri--;
+                        budgetAssegnazioni--;
+                        budgetSostituzioni--;
+                        await ExecuteReplaceAsync(replace, opt, assignSource, votesJson, ct);
+                    }
+                    break;
+
+                case ReplaceLaneOccupant pendingReplace:
+                    // [K42] Come per il ritiro: la riga della serie l'ha già scritta il blocco dei
+                    // cambi, e ripeterla qui darebbe 96 righe al giorno per una decisione ferma.
+                    logger.LogDebug("Sostituzione corsia {Lane} in attesa di conferma ({Streak}/{Needed}): {Reason}",
+                        pendingReplace.LaneId, _retireStreak.GetValueOrDefault(pendingReplace.LaneId),
+                        Math.Max(1, opt.RetireConfirmTicks), pendingReplace.Reason);
                     break;
 
                 case ProposeGreyCandidate grey:
@@ -873,6 +921,144 @@ public sealed class FleetOrchestratorWorker(
                     $"Flotta: schieramento sulla corsia {laneId} non riuscito", error, ct);
             }
         }
+    }
+
+    /// <summary>
+    /// [K61, 2026-09-04] <b>La SOSTITUZIONE: ferma l'occupante inerte e schiera al suo posto.</b>
+    ///
+    /// <para><b>L'ordine è obbligato e non è una preferenza.</b> <c>GreyDeployer.DeployAsync</c>
+    /// rifiuta di schierare su una corsia che sta girando («fermala prima, o scegline una libera»),
+    /// quindi non esiste uno schieramento atomico: si ferma, poi si schiera. Fra i due passi c'è una
+    /// finestra in cui la corsia è ferma e configurata sull'ipotesi VECCHIA.</para>
+    ///
+    /// <para><b>La finestra è l'esito peggiore accettabile, e si è scelto quale.</b> Se lo
+    /// schieramento fallisce, la corsia resta ferma e configurata come prima: è lo stesso stato in
+    /// cui la lascerebbe un ritiro normale — reversibile con un clic da <c>/trading</c> — e al giro
+    /// dopo il braccio ordinario la vede LIBERA e la riempie da sé. Il contrario (schierare prima e
+    /// fermare dopo) non è possibile, e fermare senza aver verificato nulla sarebbe peggio.</para>
+    ///
+    /// <para><b>Le posizioni aperte vietano la sostituzione, e si rileggono ADESSO.</b> Non è
+    /// prudenza generica: <c>StopAsync</c> lascia le posizioni aperte, e il successivo
+    /// <c>StartAsync</c> in Paper esegue <c>OpenPositions.ExecuteDelete</c> senza filtro di modalità
+    /// — la posizione sparirebbe <b>senza TradeRecord, senza PnL, senza audit</b>. È il danno che il
+    /// doc-comment di K36 descrive parola per parola e che il 2026-08-31 si è già verificato sulla
+    /// corsia 6 (short DOGE/USDT, 799 USDT di nozionale). Il piano nasce da una fotografia che può
+    /// avere minuti: una posizione può essersi aperta nel frattempo, e il sorvegliante K36 non è la
+    /// rete di sicurezza — se stop e schieramento cadono nello stesso giro la sua finestra di
+    /// osservazione può non aprirsi mai.</para>
+    ///
+    /// <para><b>Non si appiattisce la posizione, di proposito.</b> <c>LanePromoter</c> chiama
+    /// <c>CloseAllPositionsAsync</c> prima dello stop, ed è giusto lì: un cambio di modalità deve
+    /// spostare la corsia intera e non ha alternative. Qui invece l'alternativa c'è ed è gratis —
+    /// aspettare. Chiudere a mercato una posizione viva realizzerebbe un PnL a metà ipotesi e
+    /// sporcherebbe proprio il forward test che questa regola dice di non voler consumare. Una corsia
+    /// con una posizione aperta, del resto, <b>sta operando</b>: non è il bersaglio di una regola che
+    /// si chiama «sostituisci ciò che è inerte».</para>
+    /// </summary>
+    private async Task ExecuteReplaceAsync(
+        ReplaceLaneOccupant replace, FleetOptions opt, string assignSource, string votesJson, CancellationToken ct)
+    {
+        Trading.ITradingEngine engine;
+        string? rifiuto = null;
+        try
+        {
+            engine = serviceProvider.GetRequiredKeyedService<Trading.ITradingEngine>(replace.LaneId);
+            var status = await engine.GetStatusAsync(ct);
+
+            if (status.Mode != Trading.TradingMode.Paper)
+            {
+                rifiuto = $"corsia in {status.Mode}, non Paper: l'orchestratore non sostituisce corsie che non governa";
+            }
+            else if (!status.IsRunning)
+            {
+                rifiuto = "corsia già ferma: non è una sostituzione, la riempie il braccio ordinario";
+            }
+            else if (status.OpenPositionCount > 0)
+            {
+                rifiuto = $"la corsia ha {status.OpenPositionCount} posizioni APERTE: fermarla e riscriverla le "
+                    + "cancellerebbe senza scrivere alcun TradeRecord (danno K36). Una corsia con una posizione viva "
+                    + "sta operando, e non è inerte per definizione";
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            await JournalAsync(new OrchestratorDecision
+            {
+                AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = replace.LaneId, RunId = replace.RunId,
+                Source = assignSource, VotesJson = votesJson,
+                Reason = replace.Reason, DryRun = false, Applied = false, Error = ex.Message,
+                Outcome = DecisionOutcome.Failed,
+            }, ct);
+            logger.LogWarning("Sostituzione sulla corsia {Lane} NON eseguita ({Error}).", replace.LaneId, ex.Message);
+            return;
+        }
+
+        if (rifiuto is not null)
+        {
+            await JournalAsync(new OrchestratorDecision
+            {
+                AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = replace.LaneId, RunId = replace.RunId,
+                Source = assignSource, VotesJson = votesJson,
+                Reason = replace.Reason, DryRun = false, Applied = false, Error = rifiuto,
+                Outcome = DecisionOutcome.Refused,
+            }, ct);
+            logger.LogWarning("Sostituzione sulla corsia {Lane} NON eseguita ({Error}).", replace.LaneId, rifiuto);
+            return;
+        }
+
+        // --- Metà 1: fermare. Intento PRIMA dello stop, come il ritiro dopo la revisione K51. ----
+        int intentoStop;
+        try
+        {
+            intentoStop = await ApriIntentoAsync("Retire", replace.RunId, replace.LaneId, assignSource, votesJson,
+                replace.Reason, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Corsia {Lane}: impossibile aprire l'intento di sostituzione a journal; NON si ferma.", replace.LaneId);
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(NotificationSeverity.Critical,
+                    "La flotta non riesce a registrare cosa sta per fare",
+                    $"L'orchestratore stava per sostituire l'occupante della corsia {replace.LaneId} e non è riuscito "
+                    + $"a scrivere l'intento nel journal ({ex.Message}). Niente è avvenuto.", ct);
+            }
+            return;
+        }
+
+        string? erroreStop = null;
+        try
+        {
+            await engine.StopAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            erroreStop = ex.Message;
+        }
+
+        await ChiudiIntentoAssegnazioneAsync(intentoStop, erroreStop, replace.Reason, ct);
+
+        if (erroreStop is not null)
+        {
+            // La corsia gira ancora: niente è cambiato, e il candidato non è stato consumato.
+            logger.LogWarning("Corsia {Lane}: sostituzione interrotta, lo stop non è riuscito ({Errore}).",
+                replace.LaneId, erroreStop);
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(NotificationSeverity.Warning,
+                    $"Flotta: sostituzione sulla corsia {replace.LaneId} non riuscita",
+                    $"Lo stop non è riuscito ({erroreStop}). La corsia sta ancora girando sull'ipotesi precedente.", ct);
+            }
+            return;
+        }
+
+        logger.LogWarning("Corsia {Lane} FERMATA per sostituzione: {Reason}", replace.LaneId, replace.Reason);
+
+        // --- Metà 2: schierare. Stesso percorso del clic umano e del braccio grigio. -------------
+        await ExecuteAssignAsync(replace.RunId, replace.CandidateKey, replace.LaneId,
+            isGrey: true, replace.Reason, assignSource, votesJson, ct);
     }
 
     /// <summary>
@@ -1110,6 +1296,17 @@ public sealed class FleetOrchestratorWorker(
         FleetPlan plan, int confirmTicks)
     {
         var votati = plan.Actions.OfType<StopAndFreeLane>().ToDictionary(a => a.LaneId, a => a.Reason);
+
+        // [K61, 2026-09-04] La SOSTITUZIONE passa dalla stessa isteresi del ritiro, e non è un
+        // dettaglio: la sua metà distruttiva è uno stop — esattamente l'azione che K42 ha voluto
+        // veder confermata per due giri prima di eseguirla. Un ramo che fermasse una corsia senza
+        // passare di qui avrebbe una guardia in MENO del ritiro, pur facendo la stessa cosa e una
+        // in più.
+        foreach (var sostituzione in plan.Actions.OfType<ReplaceLaneOccupant>())
+        {
+            votati.TryAdd(sostituzione.LaneId, sostituzione.Reason);
+        }
+
         var cambi = new List<RetireStreakChange>();
 
         foreach (var lane in _retireStreak.Keys.Where(l => !votati.ContainsKey(l)).ToList())

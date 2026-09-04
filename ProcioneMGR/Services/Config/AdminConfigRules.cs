@@ -121,7 +121,22 @@ public static class AdminConfigRules
                 "Le corsie autorizzate all'esecuzione sono numeri di corsia: nessuno puo' essere negativo."),
             // [J14] Zero e' ammesso ed e' un modo legittimo di dire «niente grigi automatici»
             // tenendo il flag acceso per il futuro; negativo no.
-            (o.MaxGreyLanes >= 0, "Il tetto delle corsie grigie non puo' essere negativo (0 = nessuno schieramento grigio automatico).")),
+            (o.MaxGreyLanes >= 0, "Il tetto delle corsie grigie non puo' essere negativo (0 = nessuno schieramento grigio automatico)."),
+            // [K61] La sostituzione. Le soglie che fanno danno RESTANDO valide per il binder, come
+            // per StarvationFraction: un pavimento a 0 giorni renderebbe inerte qualunque corsia che
+            // non ha operato oggi, e un pavimento di residenza a 0 permetterebbe di sostituire una
+            // corsia schierata cinque minuti prima. Il ricambio continuo consuma il forward test
+            // Paper, che e' l'unico giudice immune al multiple testing.
+            (o.ReplaceIdleDays >= 1,
+                "Il silenzio minimo per la sostituzione dev'essere almeno 1 giorno: a 0 ogni corsia che non ha operato oggi risulterebbe inerte."),
+            (o.ReplaceIdleExpectedMultiple >= 0m,
+                "Il multiplo dell'intervallo atteso non puo' essere negativo (0 = si usa il solo pavimento in giorni)."),
+            (o.ReplaceMinLaneDays >= 1,
+                "Il pavimento di residenza dev'essere almeno 1 giorno: a 0 si sostituirebbe una corsia appena schierata, prima che abbia avuto occasione di operare."),
+            (o.ReplaceMinCandidateMeasures >= 1,
+                "Il rimpiazzo va scelto su almeno 1 rimisurazione: a 0 entrerebbe qualunque candidato, e la sostituzione sceglierebbe la notte fortunata."),
+            (o.MaxReplacementsPerTick >= 1,
+                "Serve almeno 1 sostituzione possibile per tick (la funzione si spegne con Fleet:ReplaceIdleLanes, non con questo tetto).")),
 
         // [I14c] La sorveglianza dello spread. La soglia di persistenza e' quella che puo' fare
         // danno restando "valida" per il binder: a 0 ogni coppia risulta persistente (anche il puro

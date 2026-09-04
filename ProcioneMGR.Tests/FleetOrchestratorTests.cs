@@ -53,13 +53,26 @@ public sealed class FleetOrchestratorTests
                 emergency: rnd.Next(6) == 0,
                 sharpe: (decimal)(rnd.NextDouble() * 8 - 4),
                 trades: rnd.Next(0, 500),
-                observationDays: rnd.Next(0, 200))).ToList();
+                observationDays: rnd.Next(0, 200)) with
+                {
+                    // [K61] Il fuzz deve poter produrre corsie inerti, altrimenti la quarta azione
+                    // non nascerebbe mai e le sue invarianti passerebbero inosservate.
+                    LastTradeUtc = rnd.Next(3) == 0 ? null : DateTime.UtcNow.AddDays(-rnd.Next(0, 60)),
+                    OpenPositions = rnd.Next(4) == 0 ? rnd.Next(1, 4) : 0,
+                }).ToList();
 
             var candidates = Enumerable.Range(0, rnd.Next(0, 6)).Select(_ => new FleetCandidate(
                 Guid.NewGuid(), DateTime.UtcNow.AddDays(-rnd.Next(0, 20)),
                 rnd.Next(2) == 0 ? "pass" : "grey",
                 (decimal)(rnd.NextDouble() * 40 - 5),   // anche frequenze negative assurde
-                "1h", "fuzz", rnd.Next(3) == 0)).ToList();
+                "1h", "fuzz", rnd.Next(3) == 0) with
+                {
+                    // [K61] Identità e stabilità: senza identità nessun candidato è sostituibile, e
+                    // senza misure nessuno è giudicabile. Il fuzz deve attraversare tutti e tre i casi.
+                    Identity = rnd.Next(4) == 0 ? null : $"k{rnd.Next(0, 5)}",
+                    StabilityMeasures = rnd.Next(0, 20),
+                    StabilityMedian = rnd.Next(5) == 0 ? null : (decimal)(rnd.NextDouble() * 6 - 2),
+                }).ToList();
 
             var opt = new FleetOptions
             {
@@ -69,6 +82,15 @@ public sealed class FleetOrchestratorTests
                 MaxAssignmentsPerTick = rnd.Next(-1, 4),
                 MinTradesPerMonth = (decimal)(rnd.NextDouble() * 5),
                 MaxLanesWithoutExposureGuard = rnd.Next(-1, 6),
+                // [K61] Anche la sostituzione entra nel fuzz, con soglie assurde comprese.
+                ReplaceIdleLanes = rnd.Next(2) == 0,
+                ReplaceIdleDays = rnd.Next(-2, 30),
+                ReplaceIdleExpectedMultiple = (decimal)(rnd.NextDouble() * 4 - 1),
+                ReplaceMinLaneDays = rnd.Next(-2, 30),
+                ReplaceMinCandidateMedian = (decimal)(rnd.NextDouble() * 4 - 2),
+                ReplaceMinCandidateMeasures = rnd.Next(-2, 12),
+                MaxReplacementsPerTick = rnd.Next(-1, 4),
+                PreferStableGrey = rnd.Next(2) == 0,
             };
 
             var plan = FleetOrchestrator.Decide(State(lanes, candidates, footprint, guardOn: rnd.Next(2) == 0), opt);
@@ -102,6 +124,29 @@ public sealed class FleetOrchestratorTests
                         Assert.False(r.Quarantined || r.CampaignOwned || r.EmergencyStopped,
                             $"iter {i}: ritiro di una corsia vincolata");
                         Assert.Equal("Paper", r.Mode); // mai Live/Testnet, nemmeno oltre l'impronta
+                        break;
+
+                    // [K61] La quarta azione. Senza questo ramo la sostituzione attraverserebbe
+                    // 20.000 stati senza che nessuna invariante la guardi — e il conteggio di
+                    // touchedLanes non la vedrebbe nemmeno come «azione sulla corsia».
+                    case ReplaceLaneOccupant rep:
+                        touchedLanes.Add(rep.LaneId);
+                        var sostituita = byId[rep.LaneId];
+                        Assert.True(opt.ReplaceIdleLanes, $"iter {i}: sostituzione a interruttore SPENTO");
+                        Assert.True(rep.LaneId >= footprint, $"iter {i}: sostituzione sull'impronta (corsia {rep.LaneId})");
+                        Assert.True(sostituita.IsRunning, $"iter {i}: sostituzione di una corsia ferma (era libera: bastava assegnarla)");
+                        Assert.Equal(0, sostituita.OpenPositions); // il danno K36: mai sopra una posizione viva
+                        Assert.False(sostituita.Quarantined || sostituita.CampaignOwned || sostituita.EmergencyStopped,
+                            $"iter {i}: sostituzione su corsia vincolata");
+                        Assert.Equal("Paper", sostituita.Mode);
+                        var rimpiazzo = candidates.Single(c => c.RunId == rep.RunId);
+                        Assert.False(rimpiazzo.AlreadyHandled, $"iter {i}: rimpiazzo già gestito");
+                        Assert.False(string.IsNullOrEmpty(rimpiazzo.Identity), $"iter {i}: rimpiazzo senza identità");
+                        Assert.Equal(rimpiazzo.Identity, rep.CandidateKey);
+                        Assert.True(rimpiazzo.StabilityMeasures >= Math.Max(1, opt.ReplaceMinCandidateMeasures),
+                            $"iter {i}: rimpiazzo non giudicabile");
+                        Assert.True(rimpiazzo.StabilityMedian >= opt.ReplaceMinCandidateMedian,
+                            $"iter {i}: rimpiazzo sotto la mediana minima");
                         break;
 
                     case ProposeGreyCandidate g:

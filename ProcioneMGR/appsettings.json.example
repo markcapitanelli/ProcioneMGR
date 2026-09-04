@@ -75,7 +75,17 @@
     "_comment_K33": "[K33, 2026-09-01] BlockDuplicateTriple: la guardia contro l'ipotesi doppia rifiuta anche la stessa TERNA (strategia, simbolo, timeframe) con parametri diversi, non solo la replica esatta. Default true. Spegnerla e' legittimo se si vogliono deliberatamente due tarature dello stesso segnale: il motivo finisce a journal.",
     "BlockDuplicateTriple": true,
     "_comment_K57": "[K57, 2026-09-04] StabilitaDaUtc: il gate di stabilita' (lista dei grigi) considera solo le rimisurazioni completate da questa data. Default 2026-08-23, la sostituzione del motore walk-forward su cui la soglia e' stata misurata. null = tutte le righe (di entrambi i motori).",
-    "StabilitaDaUtc": "2026-08-23T00:00:00Z"
+    "StabilitaDaUtc": "2026-08-23T00:00:00Z",
+    "_comment_K61": "[K61, 2026-09-04, richiesta del proprietario] ReplaceIdleLanes: la Regina puo' fermare una corsia INERTE e schierare al suo posto il candidato piu' stabile, invece di aspettare che una corsia si liberi da sola. Ultima risorsa: agisce solo se non e' rimasta nessuna corsia libera. INERTE = in corsa, ZERO posizioni aperte, oltre ReplaceMinLaneDays giorni di osservazione cumulata, e senza operazioni chiuse da piu' della propria soglia di silenzio (il massimo fra ReplaceIdleDays e ReplaceIdleExpectedMultiple volte l'intervallo medio fra due operazioni attese). Perche' NON consuma il forward test: una corsia muta non accumula evidenza che si possa sprecare, occupa uno slot senza dire niente. Perche' le posizioni aperte la vietano: StopAsync le lascia aperte e il successivo StartAsync in Paper le CANCELLA con ExecuteDelete senza scrivere alcun TradeRecord (il danno K36, gia' avvenuto il 2026-08-31 sulla corsia 6 su uno short DOGE/USDT da 799 USDT nominali). Il rimpiazzo dev'essere GIUDICABILE: almeno ReplaceMinCandidateMeasures rimisurazioni K57 e mediana >= ReplaceMinCandidateMedian, mai lo Sharpe del run migliore. Passa dalla stessa isteresi del ritiro e consuma tutti e tre i budget. Default false.",
+    "ReplaceIdleLanes": false,
+    "ReplaceIdleDays": 10,
+    "ReplaceIdleExpectedMultiple": 2.0,
+    "ReplaceMinLaneDays": 7,
+    "ReplaceMinCandidateMedian": 1.0,
+    "ReplaceMinCandidateMeasures": 5,
+    "MaxReplacementsPerTick": 1,
+    "_comment_K61b": "[K61b] PreferStableGrey: il braccio automatico sceglie i grigi per MERITO (mediana K57) invece che per DATA. Oggi GreyAccorpati ordina per CompletedAtUtc crescente e prende il piu' vecchio, mentre la stabilita' vive solo nell'ordinamento della lista che legge un umano: K57 ha misurato che il 22% delle chiavi passa il cancello solo col proprio MASSIMO, quindi la data e' indipendente dalla domanda «quale ipotesi regge». Default false perche' cambia il comportamento di un braccio gia' in esercizio; il pannello mostra il conteggio dei rimpiazzi stabili accanto a quello delle corsie inerti.",
+    "PreferStableGrey": false
   },
   "Heartbeat": {
     "_comment": "[AF5.1] Heartbeat incrociato guscio/motore (tabella HostHeartbeats): ogni host scrive il PROPRIO battito e sorveglia quello altrui; stantio oltre StaleMinutes => Telegram Warning una volta per transizione. Il pannello in /admin/autonomy salva su ENTRAMBI gli host.",
