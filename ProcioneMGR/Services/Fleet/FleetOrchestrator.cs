@@ -159,6 +159,22 @@ public static class FleetOrchestrator
                 .Where(c => c.TradesPerMonth >= opt.MinTradesPerMonth)
                 .ToList();
 
+            // [K61b, 2026-09-04] Per MERITO invece che per data, se lo si è chiesto.
+            //
+            // GreyAccorpati ordina per CompletedAtUtc crescente: con 19 candidati schierabili e uno
+            // slot, la Regina prende il più vecchio. La stabilità K57 — quale ipotesi regge alle
+            // rimisurazioni — viveva solo nell'ordinamento della lista che legge un umano, mentre il
+            // braccio automatico sceglieva per data: due superfici, due criteri, stessa domanda.
+            // I non giudicabili restano in coda nell'ordine di prima, mai davanti a chi ha una misura.
+            if (opt.PreferStableGrey)
+            {
+                eligible = [.. eligible
+                    .OrderByDescending(c => c.StabilityMeasures >= Math.Max(1, opt.ReplaceMinCandidateMeasures) ? 1 : 0)
+                    .ThenByDescending(c => c.StabilityMedian ?? decimal.MinValue)
+                    .ThenBy(c => c.CompletedAtUtc)
+                    .ThenBy(c => c.RunId)];
+            }
+
             // [K40, 2026-09-01] L'ILLEGGIBILITA' SI DICHIARA PER PRIMA, PERCHE' IL RIMEDIO E' UN ALTRO.
             //
             // Una corsia che non risponde esce da FleetLanes, quindi non risulta «libera»; e il
@@ -246,6 +262,20 @@ public static class FleetOrchestrator
             }
         }
 
+        // --- 4. [K61] SOSTITUZIONE: un candidato al posto di un occupante INERTE ----------------
+        //
+        // Ultima risorsa, e si vede dall'ordine: prima si riempiono le corsie libere (blocchi 2 e 3),
+        // e solo se non ne è rimasta nessuna si guarda chi sta occupando uno slot senza produrre
+        // niente. Il vincolo misurato il 2026-09-04 è esattamente questo: 19 grigi schierabili, cinque
+        // corsie occupate, e NESSUNA che possa liberarsi (zero corsie arrivano ai 20 trade del
+        // giudizio per Sharpe, e la corsia 5 non ha ritmo atteso dichiarato quindi non può nemmeno
+        // andare in inedia). Il braccio automatico girava a vuoto scrivendo «nessuna corsia libera».
+        if (opt.ReplaceIdleLanes)
+        {
+            var libereRimaste = freeLanes.Count - passAssigned - greyAssignedRuns.Count;
+            actions.AddRange(Sostituzioni(state, opt, fleetLanes, actions, libereRimaste, exposureBlocked, greyAssignedRuns));
+        }
+
         // Le proposte al click umano restano per tutto ciò che NON è stato assegnato: flag spento
         // (F5 pieno, comportamento storico), tetto raggiunto, corsie finite, identità assente.
         foreach (var (grey, duplicati) in greyPairs)
@@ -262,6 +292,272 @@ public static class FleetOrchestrator
         }
 
         return actions.Count == 0 ? FleetPlan.Empty : new FleetPlan(actions, menu);
+    }
+
+    // === [K61, 2026-09-04] LA SOSTITUZIONE ======================================================
+
+    /// <summary>
+    /// [K61] Da quanto tempo la corsia <b>non chiude un'operazione</b>. Se non ne ha mai chiusa, il
+    /// silenzio è tutta la sua osservazione cumulata.
+    ///
+    /// <para>Il tempo trascorso dall'ultima operazione è di PARETE, mentre l'osservazione è cumulata
+    /// (non scorre mentre la corsia è ferma). Sono due orologi diversi e qui si prende il <b>minore</b>:
+    /// una corsia spenta per due giorni non deve accumulare silenzio mentre nessuno la fa operare.
+    /// È la stessa prudenza del ritiro — l'ignoranza non condanna.</para>
+    /// </summary>
+    internal static TimeSpan Silenzio(FleetLaneState lane, DateTime nowUtc)
+    {
+        if (lane.LastTradeUtc is not DateTime ultima) return lane.Observation;
+        var parete = nowUtc - ultima;
+        if (parete < TimeSpan.Zero) parete = TimeSpan.Zero;
+        return parete < lane.Observation ? parete : lane.Observation;
+    }
+
+    /// <summary>
+    /// [K61] La soglia di silenzio DI QUESTA corsia. Con un ritmo atteso dichiarato è il massimo fra
+    /// il pavimento in giorni e il multiplo dell'intervallo medio fra due operazioni attese; senza,
+    /// è il solo pavimento.
+    ///
+    /// <para>Senza la scala, una soglia secca punirebbe le corsie lente: la corsia 4 (XLM/USDT 4h,
+    /// 1,65 trade/mese attesi = una ogni 18,4 giorni) risulterebbe «inerte» a 10 giorni mentre sta
+    /// rispettando il proprio ritmo.</para>
+    /// </summary>
+    /// <summary>
+    /// [K61] Tetto puramente aritmetico della soglia scalata: oltre dieci anni di silenzio richiesto
+    /// la soglia è comunque irraggiungibile, e il limite serve solo perché un ritmo atteso assurdo
+    /// non faccia traboccare il conto dentro una funzione pura chiamata a ogni tick.
+    /// </summary>
+    internal const double MaxSogliaSilenzioGiorni = 3650;
+
+    internal static TimeSpan SogliaSilenzio(FleetLaneState lane, FleetOptions opt)
+    {
+        var pavimento = TimeSpan.FromDays(Math.Max(1, opt.ReplaceIdleDays));
+        if (lane.ExpectedTradesPerMonth is not decimal attesi || attesi <= 0m) return pavimento;
+
+        var multiplo = opt.ReplaceIdleExpectedMultiple;
+        if (multiplo <= 0m) return pavimento;
+
+        // 30,44 giorni per mese: la stessa costante che TradeFrequency usa per convertire il ritmo.
+        //
+        // L'aritmetica si fa in double e si limita, perché questa è una funzione PURA chiamata a
+        // ogni tick e non deve poter lanciare: un ritmo atteso minuscolo (una gamba che dichiara
+        // 1e-28 trade/mese) farebbe traboccare prima la divisione decimal e poi TimeSpan.FromDays,
+        // e un'eccezione qui fermerebbe l'INTERA decisione della flotta — ritiri compresi — per un
+        // campo di configurazione scritto male. Il tetto a dieci anni non è una politica: oltre, la
+        // soglia sarebbe comunque irraggiungibile, e serve solo perché il conto non esploda.
+        var giorni = (double)multiplo * 30.44 / (double)attesi;
+        if (double.IsNaN(giorni) || giorni <= 0) return pavimento;
+
+        var scalata = giorni >= MaxSogliaSilenzioGiorni
+            ? TimeSpan.FromDays(MaxSogliaSilenzioGiorni)
+            : TimeSpan.FromDays(giorni);
+        return scalata > pavimento ? scalata : pavimento;
+    }
+
+    /// <summary>
+    /// [K61] <b>La corsia è INERTE</b>: sta occupando uno slot senza produrre prove, e può essere
+    /// sostituita. Puro, e condiviso fra la decisione e la sua spiegazione.
+    ///
+    /// <para>Le quattro condizioni, tutte necessarie:</para>
+    /// <list type="number">
+    /// <item>la corsia gira (una ferma è già libera: la riempie il braccio normale);</item>
+    /// <item><b>nessuna posizione aperta</b> — non è prudenza generica: <c>StopAsync</c> lascia le
+    /// posizioni aperte e il successivo <c>StartAsync</c> in Paper le CANCELLA con
+    /// <c>ExecuteDelete</c> senza scrivere alcun <c>TradeRecord</c>. Sostituire sopra una posizione
+    /// viva la farebbe sparire dalla storia invece di chiuderla — il danno K36, già avvenuto il
+    /// 2026-08-31 sulla corsia 6 (short DOGE/USDT, 799 USDT di nozionale). Il sorvegliante che
+    /// grida non basterebbe: se stop e schieramento cadono nello stesso giro, la sua finestra di
+    /// osservazione può non aprirsi mai;</item>
+    /// <item>osservazione cumulata oltre il <b>pavimento di residenza</b>: non si uccide un
+    /// esperimento che non ha ancora avuto occasione di operare;</item>
+    /// <item>silenzio oltre la soglia della corsia.</item>
+    /// </list>
+    ///
+    /// <para><b>Perché non è un doppione dell'inedia.</b> <see cref="IsStarving"/> è un test di TASSO
+    /// cumulato che pretende un ritmo atteso dichiarato e si astiene senza; questo è un test di
+    /// RECENZA che non ne ha bisogno. Il chiamante lo applica <b>solo alle corsie che il ritiro non
+    /// ha condannato</b>: dove l'inedia parla, la sostituzione tace.</para>
+    /// </summary>
+    internal static bool IsIdle(FleetLaneState lane, FleetOptions opt, DateTime nowUtc) =>
+        lane.IsRunning
+        && lane.OpenPositions == 0
+        // [revisione 2026-09-04] Ritmo atteso NON CONFRONTABILE (configurazione e motore in
+        // disaccordo sulle gambe): il lettore lo azzera per far astenere il ritiro per inedia, e
+        // leggerlo qui come «non dichiarato» applicherebbe il pavimento secco al posto della soglia
+        // scalata — cioè trasformerebbe un'ammissione di ignoranza in un giudizio più severo. Ci si
+        // astiene, come fa il ritiro.
+        && !lane.ExpectedDiverged
+        && lane.Observation >= TimeSpan.FromDays(Math.Max(1, opt.ReplaceMinLaneDays))
+        && Silenzio(lane, nowUtc) >= SogliaSilenzio(lane, opt);
+
+    /// <summary>
+    /// [revisione 2026-09-04] <b>La corsia è condannata dal RITIRO</b> — per Sharpe o per inedia.
+    /// Estratto perché la decisione e la sua spiegazione devono contare esattamente lo stesso
+    /// insieme: il pannello dichiarava «inerti sostituibili» includendo corsie che <c>Decide</c>
+    /// ritira per Sharpe, cioè esponeva un cancello più largo di quello vero. È il difetto di D2 e
+    /// di SeriesFreshness — due definizioni della stessa cosa — nel posto in cui costa di più.
+    /// </summary>
+    internal static bool IsRetirable(FleetLaneState lane, FleetOptions opt)
+    {
+        if (!lane.IsRunning) return false;
+
+        var enoughHistory = lane.TradeCount >= Math.Max(1, opt.RetireMinTrades)
+                            && lane.Observation >= TimeSpan.FromDays(7 * Math.Max(1, opt.RetireMinWeeks));
+
+        return (enoughHistory && lane.RealizedSharpePerTrade is decimal s && s < opt.RetireSharpeThreshold)
+            || IsStarving(lane, opt);
+    }
+
+    /// <summary>
+    /// [K61] I candidati ammessi a SOSTITUIRE, ordinati per merito. Non per data: con 19 schierabili
+    /// e uno slot, la data non è un ordinamento neutro rispetto alla domanda «quale ipotesi regge».
+    ///
+    /// <para>Ammessi solo i <b>giudicabili</b> (abbastanza rimisurazioni) sopra la mediana minima:
+    /// fail-closed, perché non sapere se un'ipotesi è stabile non è una ragione per preferirla a una
+    /// corsia già in corsa. Misurato il 2026-09-04: <c>EventTrigger GRT/USDT 4h</c> porta 3,91 nel run
+    /// più recente ma ha mediana 2,79 con ventaglio 3,26 su 3 trade di holdout, contro
+    /// <c>MacdTrend AAVE/USDT 4h</c> con mediana 3,98, ventaglio 0,21 e 52 trade.</para>
+    /// </summary>
+    internal static List<FleetCandidate> RimpiazziAmmessi(FleetState state, FleetOptions opt) => state.Candidates
+        .Where(c => !c.AlreadyHandled)
+        .Where(c => !string.IsNullOrEmpty(c.Identity))
+        .Where(c => c.TradesPerMonth >= opt.MinTradesPerMonth)
+        // [revisione 2026-09-04] Il braccio di sostituzione schiera col percorso GRIGIO
+        // (allowSurvivor false): un candidato di banda «pass» fermerebbe la corsia e poi verrebbe
+        // rifiutato dal deployer. La banda viaggia sull'azione e il ramo la rispetta.
+        .Where(c => c.Band == "grey" || c.Band == "pass")
+        .Where(c => c.StabilityMeasures >= Math.Max(1, opt.ReplaceMinCandidateMeasures))
+        .Where(c => c.StabilityMedian is decimal m && m >= opt.ReplaceMinCandidateMedian)
+        // [revisione 2026-09-04] IL SECONDO MEZZO DEL PREDICATO K57. La mediana da sola non basta:
+        // `StabilitaIpotesi.Instabile` è «mediana <= 0 OPPURE ventaglio > mediana», ed è il criterio
+        // che la lista del clic umano mostra come «⚠ INSTABILE». Senza di esso il braccio automatico
+        // ammetterebbe — e chiamerebbe «stabile» — proprio l'ipotesi che la stessa pagina marca come
+        // ballerina: EventTrigger GRT/USDT 4h, mediana 2,79 con ventaglio 3,26 su 3 trade di holdout.
+        .Where(c => c.StabilitySpread is not decimal ampiezza
+                    || ampiezza <= c.StabilityMedian!.Value * Research.StabilitaIpotesi.MaxAmpiezzaSuMediana)
+        // Una identità sola, anche se più run l'hanno ritrovata: si tiene la rimisurazione più recente.
+        .GroupBy(c => c.Identity!, StringComparer.Ordinal)
+        .Select(g => g.OrderByDescending(c => c.CompletedAtUtc).ThenBy(c => c.RunId).First())
+        .OrderByDescending(c => c.StabilityMedian!.Value)
+        .ThenBy(c => c.CompletedAtUtc)
+        .ThenBy(c => c.RunId)
+        .ToList();
+
+    /// <summary>
+    /// [K61] Le corsie inerti, dalla più muta. Solo quelle che il ritiro NON ha già condannato in
+    /// questo giro: due azioni sulla stessa corsia romperebbero l'invariante del piano, e un ritiro
+    /// già deciso libera comunque lo slot al giro dopo.
+    /// </summary>
+    internal static List<FleetLaneState> CorsieInerti(
+        IEnumerable<FleetLaneState> fleetLanes, IEnumerable<FleetAction> giaDecise, FleetOptions opt, DateTime nowUtc)
+    {
+        var condannate = giaDecise.OfType<StopAndFreeLane>().Select(a => a.LaneId).ToHashSet();
+        return [.. fleetLanes
+            .Where(l => !condannate.Contains(l.LaneId))
+            // Doppia cintura: il chiamante passa già le azioni decise, ma il predicato del ritiro è
+            // l'unica definizione che il pannello può usare senza rifare il piano. Le due strade
+            // devono dare lo stesso insieme, e qui si vede se divergono.
+            .Where(l => !IsRetirable(l, opt))
+            .Where(l => IsIdle(l, opt, nowUtc))
+            .OrderByDescending(l => Silenzio(l, nowUtc))
+            .ThenBy(l => l.LaneId)];
+    }
+
+    /// <summary>
+    /// [K61] Il ramo di sostituzione: dichiara sempre perché NON sostituisce, come fa il ramo grigio
+    /// dopo K12. Un ramo che tace per cinque ragioni diverse e non ne nomina nessuna è
+    /// indistinguibile da un ramo spento.
+    /// </summary>
+    private static List<FleetAction> Sostituzioni(
+        FleetState state, FleetOptions opt, List<FleetLaneState> fleetLanes, List<FleetAction> giaDecise,
+        int libereRimaste, bool exposureBlocked, HashSet<Guid> giaAssegnati)
+    {
+        var esito = new List<FleetAction>();
+        var inerti = CorsieInerti(fleetLanes, giaDecise, opt, state.NowUtc);
+        if (inerti.Count == 0) return esito;
+
+        // C'è ancora uno slot vuoto: si riempie quello, che non costa niente a nessuno.
+        if (libereRimaste > 0)
+        {
+            esito.Add(new FleetNoOp(
+                $"{inerti.Count} corsie inerti, ma ci sono ancora {libereRimaste} corsie LIBERE da riempire: "
+                + "la sostituzione è l'ultima risorsa e non anticipa il braccio normale."));
+            return esito;
+        }
+
+        if (exposureBlocked)
+        {
+            // Una sostituzione non allarga la flotta, ma cambia il SIMBOLO della corsia — cioè la
+            // matrice di correlazione su cui la guardia ragiona. Fail-closed, come l'assegnazione.
+            esito.Add(new FleetNoOp(
+                $"{inerti.Count} corsie inerti sostituibili ma Trading:CorrelatedExposure SPENTO: una sostituzione "
+                + "non allarga la flotta ma ne cambia i simboli, cioè la matrice di correlazione (AF4b)."));
+            return esito;
+        }
+
+        var ammessi = RimpiazziAmmessi(state, opt).Where(c => !giaAssegnati.Contains(c.RunId)).ToList();
+        if (ammessi.Count == 0)
+        {
+            var giudicabili = state.Candidates.Count(c => c.StabilityMeasures >= Math.Max(1, opt.ReplaceMinCandidateMeasures));
+            esito.Add(new FleetNoOp(
+                $"{inerti.Count} corsie inerti ma NESSUN rimpiazzo ammesso: servono almeno "
+                + $"{Math.Max(1, opt.ReplaceMinCandidateMeasures)} rimisurazioni e una mediana K57 ≥ "
+                + $"{opt.ReplaceMinCandidateMedian:F2} (candidati giudicabili in finestra: {giudicabili}). "
+                + "Non sapere se un'ipotesi regge non è una ragione per preferirla a una corsia in corsa."));
+            return esito;
+        }
+
+        // Il tetto grigio: sostituire una corsia NON grigia con un candidato grigio allarga
+        // l'esposizione della fascia grigia, sostituirne una grigia la lascia dov'è.
+        //
+        // [revisione 2026-09-04] Si parte dal conteggio che comprende i grigi assegnati NELLO STESSO
+        // GIRO. GreyOccupied legge la fotografia, dove una corsia appena assegnata non risulta ancora
+        // in corsa: senza questa somma il tetto verrebbe superato di una corsia — e proprio nel giro
+        // in cui il ramo grigio ha consumato l'ultima corsia libera, che è la condizione che apre la
+        // sostituzione. Ogni elemento di `giaAssegnati` è un grigio su una corsia prima ferma, quindi
+        // vale esattamente +1.
+        var greyRunning = GreyOccupied(state).Count + giaAssegnati.Count;
+        var budget = Math.Max(1, opt.MaxReplacementsPerTick);
+
+        foreach (var (corsia, candidato) in inerti.Zip(ammessi))
+        {
+            if (budget <= 0) break;
+
+            var candidatoGrigio = candidato.Band == "grey";
+            var corsiaGrigia = corsia.GreySourced != false;
+            if (candidatoGrigio && !corsiaGrigia && greyRunning + 1 > Math.Max(0, opt.MaxGreyLanes))
+            {
+                esito.Add(new FleetNoOp(
+                    $"Corsia {corsia.LaneId} inerte e rimpiazzabile, ma metterci un grigio al posto di una gamba "
+                    + $"dichiarata sopravvissuta porterebbe le corsie grigie a {greyRunning + 1} sul tetto di "
+                    + $"{opt.MaxGreyLanes}."));
+                continue;
+            }
+
+            esito.Add(new ReplaceLaneOccupant(candidato.RunId, candidato.Identity!, corsia.LaneId,
+                $"[Sostituzione] Corsia {corsia.LaneId} INERTE su {corsia.Symbol} {corsia.Timeframe}: "
+                + $"nessuna operazione da {Silenzio(corsia, state.NowUtc).TotalDays:F1} giorni "
+                + $"(soglia {SogliaSilenzio(corsia, opt).TotalDays:F1}, "
+                + (corsia.ExpectedTradesPerMonth is decimal a
+                    ? $"ritmo atteso {a:F2}/mese"
+                    : "ritmo atteso NON dichiarato: il ritiro per inedia non può esprimersi")
+                + $"), nessuna posizione aperta, {corsia.Observation.TotalDays:F1} giorni osservati. "
+                + $"Al suo posto: {candidato.Summary} — mediana K57 {candidato.StabilityMedian:F2} su "
+                + $"{candidato.StabilityMeasures} rimisurazioni"
+                + (candidato.StabilitySpread is decimal v ? $" (ventaglio {v:F2})" : "")
+                + $", ~{candidato.TradesPerMonth:F1} trade/mese.",
+                IsGrey: candidatoGrigio));
+
+            // [revisione 2026-09-04] Il candidato scelto NON va anche proposto al clic umano nello
+            // stesso piano: sarebbe una notifica che chiede all'operatore di fare a mano ciò che la
+            // Regina sta già facendo da sola, sulla stessa corsia.
+            giaAssegnati.Add(candidato.RunId);
+
+            if (candidatoGrigio && !corsiaGrigia) greyRunning++;
+            budget--;
+        }
+
+        return esito;
     }
 
     /// <summary>Live e Testnet non sono affare dell'orchestratore, nemmeno oltre l'impronta.</summary>
@@ -474,8 +770,18 @@ public static class FleetOrchestrator
                         ? "un solo candidato idoneo: l'assegnazione è determinata, non c'è pareggio da arbitrare"
                         : "ci sono le condizioni per un'assegnazione e per un pareggio da arbitrare";
 
+        // [K61] Il cancello della sostituzione si CONTA sempre, anche a interruttore spento: è così
+        // che si decide se accenderlo, ed è la lezione del «gate senza strumento» — una soglia senza
+        // la superficie che dice quante corsie ci arriverebbero è un criterio di cui nessuno sa se è
+        // severo o finto. Si esclude chi il ritiro ha già condannato, come fa la decisione vera.
+        // [revisione 2026-09-04] Si escludono TUTTE le condannate, non le sole affamate: il criterio
+        // per Sharpe condanna anch'esso, e contarle qui esporrebbe un cancello più largo di quello
+        // vero. Stesso predicato della decisione, non una seconda scrittura.
+        var inerti = fleetLanes.Count(l => !IsRetirable(l, opt) && IsIdle(l, opt, state.NowUtc));
+        var rimpiazzi = RimpiazziAmmessi(state, opt).Count;
+
         return new FleetSilence(queue.Count, grey, free.Count, fleetLanes.Count, reason, starving, illeggibili,
-            GreyOccupied(state).Count, GreyOnFootprintLanes(state));
+            GreyOccupied(state).Count, GreyOnFootprintLanes(state), inerti, rimpiazzi);
     }
 }
 
@@ -513,7 +819,19 @@ public sealed record FleetSilence(
     /// <b>Non sono contate da <c>MaxGreyLanes</c></b>: sono lo stesso rischio su un secondo
     /// percorso, aperto dal 2026-09-02 quando <c>AutoReapply:MaxGreyLegs</c> è passato da 0 a 2.
     /// </summary>
-    int GreyFootprintLanes = 0)
+    int GreyFootprintLanes = 0,
+    /// <summary>
+    /// [K61] Corsie che arriverebbero al cancello della SOSTITUZIONE: in corsa, senza posizioni
+    /// aperte, oltre il pavimento di residenza e oltre la propria soglia di silenzio.
+    ///
+    /// <para>Sta qui per la lezione del «gate senza strumento»: una soglia va scritta insieme alla
+    /// superficie che dice quante corsie ci arriverebbero, altrimenti resta un criterio di cui
+    /// nessuno sa se è severo o spento. Il conteggio si fa <b>sempre</b>, anche a interruttore
+    /// spento: è così che si decide se accenderlo.</para>
+    /// </summary>
+    int IdleLanes = 0,
+    /// <summary>[K61] Candidati ammessi a sostituire: giudicabili e sopra la mediana minima.</summary>
+    int ReplacementsReady = 0)
 {
     /// <summary>Vero quando esistono le condizioni perché il comitato riceva una domanda.</summary>
     public bool CommitteeCouldBeAsked => PassCandidatesQueued >= 2 && FreeFleetLanes > 0;

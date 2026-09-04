@@ -32,7 +32,10 @@ public sealed class FleetStateReader(
     // delle corsie, così Decide e la sua spiegazione (Explain, il pannello) leggono lo STESSO
     // numero — due orologi darebbero un pannello che spiega un ritiro diverso da quello vero.
     ILaneObservationLedger observationLedger,
-    ILogger<FleetStateReader> logger) : IFleetStateReader
+    ILogger<FleetStateReader> logger,
+    // [K61] La stabilità K57 dei candidati, per il braccio AUTOMATICO. Opzionale: senza di essa
+    // nessun candidato risulta giudicabile e la sostituzione non parte — fail-closed.
+    Research.IStabilitaReader? stabilitaReader = null) : IFleetStateReader
 {
     // Soglia F5 (GreyDsrFloor): trasferita in GreyZone.DsrFloor insieme al giudice — vedi IsGrey.
 
@@ -70,6 +73,11 @@ public sealed class FleetStateReader(
             var trades = 0;
             var observation = TimeSpan.Zero;
             var expected = s.ExpectedTradesPerMonth;
+            // [K61] I due dati che la sostituzione richiede: quando la corsia ha chiuso l'ultima
+            // operazione, e se ha una posizione viva addosso.
+            DateTime? lastTrade = null;
+            var openPositions = 0;
+            var diverged = false;
 
             // Lo stato vivo serve solo alle corsie di flotta potenzialmente toccabili; per le
             // altre bastano directory e vincoli (meno chiamate, meno superfici di guasto).
@@ -82,6 +90,10 @@ public sealed class FleetStateReader(
                     running = status.IsRunning;
                     mode = status.Mode.ToString();
                     emergency = status.IsEmergencyStopped;
+                    // [K61] Dal motore, non dal database: è lo stesso numero che il SafetyChecker usa
+                    // per MaxOpenPositions, e una sostituzione sopra una posizione viva la
+                    // cancellerebbe senza scrivere alcun TradeRecord (danno K36).
+                    openPositions = status.OpenPositionCount;
 
                     // [J8] L'osservazione viene dal REGISTRO CUMULATO, non da now − StartedAtUtc:
                     // quella finestra riparte da zero a ogni riavvio del motore, e con
@@ -102,6 +114,14 @@ public sealed class FleetStateReader(
                         // come verdetto contro una soglia a zero sarebbe una condanna emessa da
                         // un'assenza.
                         sharpePerTrade = perf.SharpePerTradeSamples >= 2 ? perf.SharpePerTrade : null;
+
+                        // [K61] L'ultima operazione CHIUSA, dalla stessa lista già deduplicata e
+                        // ripulita dal replay (K41) da cui esce TotalTrades. Un MAX(ClosedAtUtc)
+                        // scritto a mano leggerebbe l'ultima riga di REPLAY come ultima operazione,
+                        // e una corsia muta da settimane sembrerebbe attiva di ieri.
+                        lastTrade = perf.Trades.Count > 0
+                            ? perf.Trades.Max(t => t.ClosedAtUtc)
+                            : null;
                     }
 
                     // [I12-rev] IL NUMERATORE E IL DENOMINATORE DEVONO VENIRE DALLA STESSA
@@ -120,6 +140,11 @@ public sealed class FleetStateReader(
                     if (running && expected is not null && Diverge(s.ActiveStrategyIds, status.RunningStrategyIds))
                     {
                         expected = null;
+                        // [K61] Il null va DISTINTO da «non dichiarato»: la sostituzione legge lo
+                        // stesso campo e senza questa bandiera applicherebbe il pavimento secco al
+                        // posto della soglia scalata, cioè un giudizio più severo proprio dove il
+                        // ritiro si astiene.
+                        diverged = true;
                         logger.LogInformation(
                             "Corsia {Lane}: configurazione e motore non concordano sulle gambe attive (riavvio in sospeso) — "
                             + "il ritmo atteso non e' confrontabile e il ritiro per inedia non si esprime.", s.Id);
@@ -149,7 +174,12 @@ public sealed class FleetStateReader(
                 // [K40] «Non risponde» separato da «fermata per emergenza»: rimedi opposti.
                 Unreadable: unreadable,
                 // [K44] Il numero su cui una soglia unica e' davvero unica.
-                RealizedSharpePerTrade: sharpePerTrade));
+                RealizedSharpePerTrade: sharpePerTrade,
+                // [K61] I due dati della sostituzione: l'ultima operazione chiusa (dalla lista gia'
+                // ripulita dal replay) e le posizioni vive, che la vietano.
+                LastTradeUtc: lastTrade,
+                OpenPositions: openPositions,
+                ExpectedDiverged: diverged));
         }
 
         // --- Candidati --------------------------------------------------------------------------
@@ -337,6 +367,54 @@ public sealed class FleetStateReader(
             if (schierata != c.AlreadyHandled || proposta != c.AlreadyProposed)
             {
                 list[i] = c with { AlreadyHandled = schierata, AlreadyProposed = proposta };
+            }
+        }
+
+        // [K61, 2026-09-04] LA STABILITÀ ARRIVA FIN QUI, non si ferma alla lista che legge un umano.
+        //
+        // Finora K57 viveva solo in /admin/autonomy, accanto alla tendina del clic umano: il braccio
+        // AUTOMATICO ordinava per data e non sapeva distinguere una mediana di 3,98 su ventaglio 0,21
+        // da una di 2,79 su ventaglio 3,26. Due superfici, due criteri, la stessa domanda.
+        //
+        // Il lettore restituisce SOLO le chiavi giudicabili (>= StabilitaIpotesi.MinMisurePerGiudicare
+        // rimisurazioni): l'assenza qui significa «non lo so», mai «va bene», e Fleet:ReplaceMinCandidateMeasures
+        // può quindi rendere il cancello più severo, mai più largo. Senza il lettore (costruzioni di
+        // test) tutti restano non giudicabili: fail-closed, la sostituzione non parte.
+        if (stabilitaReader is not null)
+        {
+            var chiavi = list
+                .Select(c => c.Identity)
+                .Where(k => !string.IsNullOrEmpty(k))
+                .Select(k => k!)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            if (chiavi.Count > 0)
+            {
+                try
+                {
+                    var stabilita = await stabilitaReader.ReadAsync(chiavi, ct);
+                    for (var i = 0; i < list.Count; i++)
+                    {
+                        var c = list[i];
+                        if (c.Identity is not null && stabilita.TryGetValue(c.Identity, out var s))
+                        {
+                            list[i] = c with
+                            {
+                                StabilityMedian = s.Mediana,
+                                StabilityMeasures = s.Misure,
+                                StabilitySpread = s.Ampiezza,
+                            };
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Fail-open sulla DIAGNOSTICA, fail-closed sull'AZIONE: senza stabilità la coda
+                    // resta leggibile e le proposte al clic umano continuano, ma nessun candidato è
+                    // ammesso alla sostituzione (RimpiazziAmmessi pretende le misure).
+                    logger.LogWarning(ex, "Stabilità K57 non leggibile: i candidati restano non giudicabili per la sostituzione.");
+                }
             }
         }
 

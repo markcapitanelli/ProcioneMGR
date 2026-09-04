@@ -213,3 +213,29 @@ sezione, niente chiavi cancellate per dimenticanza.
   scrittura separate; dove la fonte manca la gamba resta senza etichetta.
 - **Campagne** (K59): «Tetto caccia (ore/mese)», «Giro del budget (min)» (0 = spento, altrimenti
   5..1440, con la regola di validazione che lo dice) e «Applica da solo i rallentamenti».
+
+## K61 — La sostituzione di una corsia inerte (2026-09-04)
+
+Nel riquadro del braccio esecutivo, accanto a «Schiera i GRIGI da solo (J14)», c'è
+«Sostituisci gli INERTI (K61)» con sei soglie e un settimo interruttore, «Grigi per MERITO, non per
+data (K61b)».
+
+**Che cosa fa.** Quando non è rimasta nessuna corsia libera, la Regina può fermare una corsia
+*inerte* e schierare al suo posto il candidato più stabile. Inerte vuol dire quattro cose insieme:
+la corsia gira, non ha **nessuna posizione aperta**, ha superato il pavimento di residenza, e non
+chiude un'operazione da più della propria soglia di silenzio. La soglia si scala sul ritmo atteso
+dichiarato, così una corsia lenta che rispetta il proprio ritmo non viene punita.
+
+**Che cosa non fa.** Non confronta lo Sharpe del candidato con quello della corsia: sono due
+grandezze diverse su campioni incomparabili, e sulla corsia muta il numero non esiste proprio. Non
+tocca mai una corsia che opera. Non tocca mai una corsia con una posizione aperta — fermarla e
+riscriverla la cancellerebbe senza scrivere alcun `TradeRecord`. Non parla dove parla il ritiro: una
+corsia già condannata per inedia non viene anche sostituita.
+
+**Due numeri da guardare prima di accendere**, nella riga diagnostica accanto a «in inedia»:
+«inerti sostituibili» e «rimpiazzi stabili pronti». Si contano sempre, anche a interruttore spento:
+sono lì per decidere se accenderlo. Se il primo è positivo e il secondo è zero, il cancello è chiuso
+dal lato dei candidati, non delle corsie.
+
+Il motivo di ogni sostituzione finisce a journal su due righe (`Retire` e `Assign`) con il prefisso
+«[Sostituzione]». Dettaglio e misure in `docs/audit/42_REVISIONE_FILONE_K_2026-09-03.md` §11.

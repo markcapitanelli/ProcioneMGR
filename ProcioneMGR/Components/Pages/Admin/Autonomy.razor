@@ -275,7 +275,7 @@
                 <input type="number" class="form-control" @bind="_autoReapply.MaxPerTick" min="1" style="width: 8rem;" />
             </div>
             <div class="col-auto">
-                <label class="form-label" title="Gambe di fascia grigia (o a provenienza ignota) tollerate in un'applica automatica. 0 = solo sopravvissuti pieni: il grigio si propone al click umano, mai si schiera da solo (F5). L'applica manuale da /pipeline non passa da questa guardia.">
+                <label class="form-label" title="Gambe di fascia grigia (o a provenienza ignota) tollerate in un'applica automatica. 0 = solo sopravvissuti pieni: il grigio si propone e aspetta il tuo clic sul pulsante «Schiera» di questa pagina, mai si schiera da solo (è la voce F5 della roadmap, non il tasto F5). L'applica manuale da /pipeline non passa da questa guardia.">
                     Gambe grigie max (auto) @Hot()
                 </label>
                 <input type="number" class="form-control" @bind="_autoReapply.MaxGreyLegs" min="0" style="width: 8rem;" />
@@ -413,7 +413,7 @@
             Gestisce le corsie di flotta (dalla @(_fleetFootprint) in su, mai l'impronta storica
             dell'auto-apply né Live/Testnet/quarantene/campagne): assegna candidati validati alle
             corsie Paper libere, ritira i forward test perdenti (con isteresi), propone la fascia
-            grigia al tuo click (F5). In DRY-RUN decide e journalizza senza eseguire — è
+            grigia al tuo clic sul pulsante «Schiera» qui sotto (F5 è la voce della roadmap, non il tasto). In DRY-RUN decide e journalizza senza eseguire — è
             l'incremento corrente. Config in sezione <code>Fleet</code>; ogni decisione è una riga qui sotto.
         </p>
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
@@ -606,6 +606,16 @@
                           title="Corsie in corsa che stanno producendo meno della frazione dichiarata dei trade attesi: il prossimo tick le ritira e libera il posto. Zero non vuol dire «tutte in salute», vuol dire «nessuna condannabile» — e comprende quelle di cui il ritmo atteso non è noto.">
                         <strong>@silence.StarvingLanes</strong> in inedia
                     </span>
+                    @* [K61] Lo strumento accanto al cancello: si conta sempre, anche a interruttore
+                       spento, perché è guardando questo numero che si decide se accenderlo. *@
+                    <span class="@(silence.IdleLanes > 0 ? "text-warning-emphasis fw-semibold" : "")"
+                          title="Corsie che arriverebbero al cancello della SOSTITUZIONE: in corsa, senza posizioni aperte, oltre il pavimento di residenza e oltre la propria soglia di silenzio. Il conteggio non dipende dall'interruttore: è il numero che serve per decidere se accenderlo. Sono escluse le corsie che il ritiro ha già condannato — dove l'inedia parla, la sostituzione tace.">
+                        <strong>@silence.IdleLanes</strong> inerti sostituibili
+                    </span>
+                    <span class="@(silence.IdleLanes > 0 && silence.ReplacementsReady == 0 ? "text-danger-emphasis fw-semibold" : "")"
+                          title="Candidati ammessi a sostituire: identità nota, ritmo atteso sopra il minimo, e soprattutto GIUDICABILI — abbastanza rimisurazioni K57 e mediana sopra la soglia. Zero qui con corsie inerti sopra significa che il cancello è chiuso dal lato dei candidati, non delle corsie: non sapere se un'ipotesi regge non è una ragione per preferirla a una corsia in corsa.">
+                        <strong>@silence.ReplacementsReady</strong> rimpiazzi stabili pronti
+                    </span>
                     @* [K42, 2026-09-01] LE CONDANNE A METÀ STRADA. Era lo stato che K20 chiedeva di
                        rendere visibile: una corsia poteva essere a un tick dall'essere fermata e
                        nessuna superficie lo diceva. Il verdetto non confermato «si annotava solo
@@ -772,7 +782,7 @@
                         <div class="form-check form-switch align-self-end mb-1">
                             <input class="form-check-input" type="checkbox" id="fl_greyauto" @bind="_fleet.GreyAutoDeploy" />
                             <label class="form-check-label" for="fl_greyauto"
-                                   title="Rovescia F5: l'orchestratore può schierare DA SOLO un candidato grigio su una corsia libera e autorizzata (solo Paper, stesso deployer del click umano, bracket automatico). Freni: tetto di corsie grigie, corsie solo in lista, budget per tick, guardia di esposizione, comitato sui pareggi. Il forward test Paper è l'unico giudice immune al multiple testing: riempirlo in automatico lo consuma — serve il ritiro (J8-J10) che libera le corsie.">
+                                   title="Rovescia la regola del clic umano (voce F5 della roadmap): l'orchestratore può schierare DA SOLO un candidato grigio su una corsia libera e autorizzata (solo Paper, stesso deployer del click umano, bracket automatico). Freni: tetto di corsie grigie, corsie solo in lista, budget per tick, guardia di esposizione, comitato sui pareggi. Il forward test Paper è l'unico giudice immune al multiple testing: riempirlo in automatico lo consuma — serve il ritiro (J8-J10) che libera le corsie.">
                                 Schiera i GRIGI da solo (J14) @Hot()
                             </label>
                         </div>
@@ -802,6 +812,74 @@
                                 Stabilità K57: rimisurazioni da @Hot()
                             </label>
                             <input type="date" class="form-control" id="fl_stabilita_da" @bind="_fleet.StabilitaDaUtc" @bind:format="yyyy-MM-dd" style="width: 11rem;" />
+                        </div>
+                        @* [K61, 2026-09-04, richiesta del proprietario] LA SOSTITUZIONE. Sta dentro la
+                           cornice dell'esecuzione, accanto a J14, perché è la stessa domanda vista dal
+                           lato opposto: J14 riempie le corsie libere, questa RENDE libera una corsia
+                           che non sta producendo prove. *@
+                        <div class="form-check form-switch align-self-end mb-1">
+                            <input class="form-check-input" type="checkbox" id="fl_replace" @bind="_fleet.ReplaceIdleLanes" />
+                            <label class="form-check-label" for="fl_replace"
+                                   title="La Regina può fermare una corsia INERTE — zero operazioni chiuse oltre la soglia di silenzio e nessuna posizione aperta — e schierare al suo posto il candidato più stabile. Ultima risorsa: agisce solo quando non è rimasta nessuna corsia libera. Non tocca mai una corsia che opera, né una con una posizione viva (fermarla la cancellerebbe senza scrivere alcun TradeRecord: è il danno K36 del 2026-08-31). Passa dalla stessa isteresi del ritiro, dagli stessi tre budget e dalla guardia di esposizione.">
+                                Sostituisci gli INERTI (K61) @Hot()
+                            </label>
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_replidle" title="Giorni senza operazioni chiuse oltre i quali una corsia è inerte, quando il suo ritmo atteso NON è dichiarato. Allineato a StarvationMinDays: le due regole rispondono alla stessa domanda da due lati, e due pavimenti diversi sarebbero una contraddizione che nessuna superficie spiega.">
+                                Silenzio (giorni) @Hot()
+                            </label>
+                            <input type="number" class="form-control" id="fl_replidle" @bind="_fleet.ReplaceIdleDays" min="1" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_replmult" title="Quando il ritmo atteso È dichiarato, la soglia diventa il massimo fra i giorni qui accanto e questo multiplo dell'intervallo medio fra due operazioni attese. Senza la scala, una soglia secca punirebbe le corsie lente: la corsia 4 (XLM/USDT 4h) dichiara 1,65 trade/mese, cioè una ogni 18,4 giorni.">
+                                × intervallo atteso @Hot()
+                            </label>
+                            <input type="number" step="0.1" class="form-control" id="fl_replmult" @bind="_fleet.ReplaceIdleExpectedMultiple" min="0" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_replmin" title="Pavimento di residenza: giorni di osservazione cumulata sotto i quali una corsia non si tocca, qualunque cosa dica il silenzio. Non si uccide un esperimento che non ha ancora avuto occasione di operare.">
+                                Residenza min (gg) @Hot()
+                            </label>
+                            <input type="number" class="form-control" id="fl_replmin" @bind="_fleet.ReplaceMinLaneDays" min="1" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_replmed" title="Il rimpiazzo dev'essere un'ipotesi stabile: mediana K57 delle sue rimisurazioni almeno pari a questo valore. Non lo Sharpe del run migliore, che è la notte fortunata.">
+                                Mediana K57 min @Hot()
+                            </label>
+                            <input type="number" step="0.1" class="form-control" id="fl_replmed" @bind="_fleet.ReplaceMinCandidateMedian" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_replmis" title="Quante rimisurazioni servono perché la mediana sia giudicabile. Sotto questa soglia il candidato non è ammesso: non sapere se un'ipotesi regge non è una ragione per preferirla a una corsia già in corsa. Il lettore K57 restituisce comunque solo le chiavi con almeno 5 misure: questo valore può rendere il cancello più severo, mai più largo.">
+                                Rimisurazioni min @Hot()
+                            </label>
+                            <input type="number" class="form-control" id="fl_replmis" @bind="_fleet.ReplaceMinCandidateMeasures" min="1" style="width: 7rem;" />
+                        </div>
+                        <div>
+                            <label class="form-label mb-1" for="fl_replmax" title="Quante sostituzioni al massimo per giro. Consuma comunque anche il budget dei ritiri e quello delle assegnazioni: fa entrambe le cose.">
+                                Sostituzioni max/tick @Hot()
+                            </label>
+                            <input type="number" class="form-control" id="fl_replmax" @bind="_fleet.MaxReplacementsPerTick" min="1" style="width: 7rem;" />
+                        </div>
+                        @* [K61b] Il merito al posto della data, anche sul braccio che riempie le libere. *@
+                        <div class="form-check form-switch align-self-end mb-1">
+                            <input class="form-check-input" type="checkbox" id="fl_preferstable" @bind="_fleet.PreferStableGrey" />
+                            <label class="form-check-label" for="fl_preferstable"
+                                   title="Oggi il braccio automatico ordina i grigi per DATA e prende il più vecchio. La stabilità K57 vive solo nell'ordinamento della lista che leggi tu, più in basso in questa pagina. K57 ha misurato che il 22% delle chiavi passa il cancello solo col proprio MASSIMO: la data è indipendente dalla domanda «quale ipotesi regge». Acceso, il braccio automatico sceglie per mediana; i non giudicabili restano in coda, mai davanti a chi ha una misura.">
+                                Grigi per MERITO, non per data (K61b) @Hot()
+                            </label>
+                        </div>
+                        <div class="small text-muted flex-fill" style="min-width: 22rem;">
+                            <strong>La sostituzione, e perché non consuma il forward test.</strong> È l'obiezione seria:
+                            il forward test Paper è l'unico giudice immune al multiple testing, e ricambiare corsie lo
+                            consuma. Questa regola tocca <strong>solo corsie che non stanno producendo prove</strong> —
+                            zero operazioni oltre la soglia e nessuna posizione aperta. Una corsia muta non accumula
+                            evidenza che si possa sprecare: occupa uno slot senza dire niente.
+                            <br />
+                            <strong>Perché serve.</strong> Misurato il 2026-09-04: 19 candidati grigi schierabili, cinque
+                            corsie occupate e <strong>nessuna che possa liberarsi</strong> — il ritiro per Sharpe pretende
+                            20 trade (le corsie ne hanno 0, 0, 1, 3, 4) e quello per inedia pretende un ritmo atteso
+                            dichiarato, che sulla corsia 5 è assente. Il braccio automatico girava a vuoto scrivendo
+                            «nessuna corsia di flotta libera»: il vincolo non erano i candidati.
                         </div>
                         <div class="small text-muted flex-fill" style="min-width: 22rem;">
                             <strong>Perché esiste.</strong> Il 2026-08-31 <code>GridMeanReversion DOGE/USDT 15m</code>
