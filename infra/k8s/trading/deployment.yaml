@@ -132,14 +132,21 @@ spec:
           # riavviassero il motore A META' BUILD — il cugino della «probe 1s» che uccideva
           # l'ingestion a metà recupero (2026-08-13). Con 10s × 6 fallimenti servono ~3 minuti
           # di sordità TOTALE: un processo morto davvero li raggiunge, un nodo sotto build no.
+          # [2026-09-05] Non bastava. Alle 22:5x UTC, con l'host al 94 % di RAM e il nodo kind
+          # marcato NotReady per un intervallo, la liveness ha fallito («context deadline
+          # exceeded») mentre il pod rispondeva a /health in 0,1 ms dall'interno: era affamato il
+          # kubelet, non l'app. Un riavvio del motore sotto pressione costa il replay di ogni corsia
+          # e la finestra K36 sulle posizioni aperte (due, quella sera): e' il danno peggiore che
+          # una sonda possa infliggere, per curare un sintomo che non era del pod. 20s × 10 = cinque
+          # minuti di sordita' totale prima di uccidere: un processo morto li raggiunge comunque.
           livenessProbe:
             httpGet:
               path: /health
               port: health
             initialDelaySeconds: 15
             periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 6
+            timeoutSeconds: 20
+            failureThreshold: 10
           resources:
             requests:
               cpu: "100m"

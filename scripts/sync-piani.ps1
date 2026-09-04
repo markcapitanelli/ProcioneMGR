@@ -153,6 +153,16 @@ if (-not $SoloPlancia) {
                     Log "Guscio   : git pull --ff-only fallito (albero sporco o divergente): non tocco nulla." 'Red'
                 }
                 else {
+                    # [2026-09-05] La DLL delle migrazioni NON la ricostruisce il build dell'app:
+                    # `dotnet run` rifa' ProcioneMGR e copia l'assembly delle migrazioni cosi' com'e'
+                    # in bin. Dopo un merge che aggiunge una migrazione, il guscio parte con uno
+                    # snapshot vecchio e scrive «il MODELLO differisce dallo snapshot» a livello
+                    # fail — visto all'avvio di stanotte. Si ricostruisce PRIMA di riavviare, cosi'
+                    # il bring-up copia quella giusta. Un fallimento qui non ferma il rilascio:
+                    # l'app non ne ha bisogno per girare, solo per dichiarare lo schema allineato.
+                    dotnet build (Join-Path $repoRoot 'ProcioneMGR.Migrations.Postgres') -c Release --nologo -v q 2>&1 | Out-Null
+                    if ($LASTEXITCODE -ne 0) { Log "Guscio   : build delle migrazioni fallito (codice $LASTEXITCODE): il guscio partira' con lo snapshot precedente." 'Yellow' }
+
                     # La plancia sa gia' fermare il guscio: non si riscrive quel codice qui.
                     & (Join-Path $repoRoot 'tools\Procione\bin\Release\net10.0\procione.exe') ferma guscio
                     if ($LASTEXITCODE -ne 0) {
