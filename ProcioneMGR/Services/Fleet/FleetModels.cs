@@ -360,7 +360,18 @@ public sealed record FleetLaneState(
     /// sparirebbe dalla storia invece di chiudersi. È anche l'invariante K36 che
     /// <c>LaneInvariantWatchdog</c> sorveglia come allarme Critical.
     /// </summary>
-    int OpenPositions = 0);
+    int OpenPositions = 0,
+    /// <summary>
+    /// [K61, revisione 2026-09-04] Il ritmo atteso è <b>null perché non confrontabile</b>, non perché
+    /// non dichiarato: la configurazione e il motore non concordano sulle gambe attive (I12-rev), e
+    /// il lettore lo azzera apposta per far ASTENERE il ritiro per inedia.
+    ///
+    /// <para>Senza questa distinzione la sostituzione farebbe l'opposto: leggendo lo stesso <c>null</c>
+    /// come «ritmo non dichiarato» applicherebbe il pavimento secco al posto della soglia scalata, cioè
+    /// un giudizio <b>più severo</b>. Un'ammissione di ignoranza non può diventare un'aggravante — è la
+    /// stessa politica del ritiro, e qui va detta esplicitamente perché il campo è condiviso.</para>
+    /// </summary>
+    bool ExpectedDiverged = false);
 
 /// <summary>
 /// Un run candidato al forward test. <paramref name="Band"/>: "pass" = sopravvissuti alla
@@ -479,7 +490,13 @@ public sealed record StopAndFreeLane(int LaneId, string Reason) : FleetAction(Re
 /// particolare la deduplica dei candidati già gestiti — e un <c>Kind</c> nuovo li renderebbe ciechi,
 /// facendo riproporre per sempre lo stesso candidato.</para>
 /// </summary>
-public sealed record ReplaceLaneOccupant(Guid RunId, string CandidateKey, int LaneId, string Reason)
+/// <param name="IsGrey">
+/// [K61, revisione 2026-09-04] La banda del rimpiazzo viaggia sull'azione. Il braccio esecutivo la
+/// passa a <c>GreyDeployer</c> come <c>allowSurvivor: !IsGrey</c>: un rimpiazzo di banda «pass»
+/// schierato col percorso grigio verrebbe <b>sempre</b> rifiutato dal deployer — e la corsia sarebbe
+/// già stata fermata, perché lo stop precede lo schieramento.
+/// </param>
+public sealed record ReplaceLaneOccupant(Guid RunId, string CandidateKey, int LaneId, string Reason, bool IsGrey = true)
     : FleetAction(Reason);
 
 /// <summary>Fascia grigia (F5): si propone al click umano, MAI si assegna da soli.</summary>

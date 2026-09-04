@@ -615,3 +615,37 @@ accendere.
   ledger dell'osservazione le assegna un'identità nuova.
 - **Il lease non viene toccato** dallo schieramento: in topologia remota la corsia risulta avviata
   finché l'host del feed non riacquisisce. Vale già oggi per ogni schieramento.
+
+### 11.9 La revisione avversariale, e le otto correzioni che ha prodotto
+
+Sei revisori indipendenti con lenti diverse (correttezza del predicato, braccio esecutivo,
+interazioni con il resto del sistema, provenienza dei dati, configurazione e superficie, qualità dei
+test) hanno attaccato il commit; ogni rilievo è poi stato affidato a un verificatore incaricato di
+**confutarlo**. Diciannove rilievi confermati, cinque caduti in verifica. Al netto delle
+sovrapposizioni sono otto difetti distinti, tutti corretti:
+
+| # | Difetto | Perché contava |
+|---|---|---|
+| 1 | `ExecuteReplaceAsync` schierava sempre col percorso grigio | Un rimpiazzo di banda «pass» avrebbe fermato la corsia e poi sarebbe **sempre** fallito allo schieramento. La banda ora viaggia sull'azione. |
+| 2 | La guardia sui duplicati stava solo dentro il deployer, cioè **dopo** lo stop | È il rifiuto più probabile di tutti: il decisore puro non può vederlo (la corsia non porta l'identità delle gambe) e la caccia ritrova di continuo tarature vicine di ciò che gira già. Ora `HypothesisGuard` è consultata prima di fermare. |
+| 3 | Il cancello del rimpiazzo applicava solo la mediana K57, non il criterio di instabilità | `StabilitaIpotesi.Instabile` è «mediana ≤ 0 **oppure** ventaglio > mediana». Senza il secondo mezzo, il braccio automatico avrebbe ammesso — chiamandola stabile — proprio l'ipotesi che la lista del clic umano marca «⚠ INSTABILE». |
+| 4 | Il ritmo atteso azzerato per **divergenza** veniva letto come «non dichiarato» | Il lettore lo azzera per far *astenere* il ritiro per inedia; la sostituzione faceva l'opposto, applicando il pavimento secco al posto della soglia scalata — un'ammissione di ignoranza trasformata in aggravante. Ora la corsia porta il flag e la sostituzione si astiene. |
+| 5 | Il tetto `MaxGreyLanes` poteva essere superato di una corsia | `GreyOccupied` legge la fotografia, dove un grigio assegnato poche righe prima non risulta ancora in corsa — e quello è proprio il giro in cui il ramo grigio consuma l'ultima corsia libera, cioè la condizione che apre la sostituzione. |
+| 6 | Il pannello contava fra gli «inerti sostituibili» anche le corsie che il ritiro condanna per Sharpe | Due definizioni della stessa cosa: il difetto di D2 e di `SeriesFreshness`. Estratto `IsRetirable`, usato da decisione e spiegazione. |
+| 7 | Il candidato scelto per la sostituzione veniva **anche** proposto al clic umano | Una notifica che chiede all'operatore di fare a mano ciò che la Regina sta già facendo, sulla stessa corsia. |
+| 8 | Nessuna notifica quando la corsia resta ferma a metà sostituzione | La notifica dello schieramento dice «non riuscito» e non nomina il fatto nuovo: che una corsia è stata fermata e non è ripartita. Ora sono due messaggi, uno per tempo. |
+
+Aggiunto anche un difetto trovato prima della revisione: `SogliaSilenzio` poteva far traboccare
+l'aritmetica (`decimal` prima, `TimeSpan.FromDays` poi) con un ritmo atteso minuscolo, e
+un'eccezione dentro la funzione pura avrebbe fermato **l'intera decisione della flotta**, ritiri
+compresi, per un campo di configurazione scritto male. Ora il conto si fa in `double` e si limita.
+
+**I test.** Da 20 a 33 prove nel file dedicato, più il fuzz. Fra le aggiunte: la prova deterministica
+di K61b che mancava (a interruttore spento vince la data, acceso vince la mediana — e invertire
+l'ordinamento adesso fa rosso), la tabella dell'instabilità K57, il tetto grigio nello stesso giro,
+il confronto fra ciò che il pannello conta e ciò che la decisione fa, e i ritmi assurdi.
+
+**Il fuzz** genera ora anche `ExpectedTradesPerMonth` (null, zero, potenze di dieci fino a 1e-25,
+valori negativi), `LastTradeUtc`, `OpenPositions`, identità e stabilità dei candidati, e valuta le
+invarianti della quarta azione: mai a interruttore spento, mai sull'impronta, mai su corsia ferma,
+**mai con posizioni aperte**, mai su corsia vincolata, mai con un rimpiazzo non giudicabile.

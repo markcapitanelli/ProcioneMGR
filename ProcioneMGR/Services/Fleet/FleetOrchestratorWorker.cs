@@ -770,7 +770,7 @@ public sealed class FleetOrchestratorWorker(
                     // che nessuna delle due metà ha da sola.
                     var percheReplace = WhyNotExecuted(opt, replace.LaneId, budgetRitiri)
                         ?? WhyNotExecutedAssignment(opt, replace.LaneId, budgetAssegnazioni,
-                            hasKey: true, hasDeployer: greyDeployer is not null, isGrey: true)
+                            hasKey: true, hasDeployer: greyDeployer is not null, isGrey: replace.IsGrey)
                         ?? (budgetSostituzioni <= 0 ? "budget di sostituzione esaurito in questo giro" : null);
 
                     if (percheReplace is not null)
@@ -979,6 +979,26 @@ public sealed class FleetOrchestratorWorker(
                     + "cancellerebbe senza scrivere alcun TradeRecord (danno K36). Una corsia con una posizione viva "
                     + "sta operando, e non è inerte per definizione";
             }
+            else
+            {
+                // [revisione 2026-09-04] LA GUARDIA DEI DUPLICATI VIENE PRIMA DELLO STOP.
+                //
+                // `GreyDeployer` la applica da sé, ma la applica DOPO — e qui lo stop precede lo
+                // schieramento: un rifiuto per ipotesi già in corsa lascerebbe la corsia ferma per
+                // niente. È il rifiuto più probabile di tutti, perché il decisore puro non può
+                // vederlo (FleetLaneState non porta l'identità delle gambe) e la caccia ritrova di
+                // continuo tarature vicine di ciò che gira già: al 2026-09-01, su 16 proposte
+                // schierabili, una collideva per identità esatta e tre per terna.
+                var duplicato = HypothesisGuard.Check(
+                    await serviceProvider.GetRequiredService<Trading.ILaneDirectory>().ListAsync(ct),
+                    replace.LaneId, replace.CandidateKey, opt.BlockDuplicateTriple);
+
+                if (duplicato.Blocked)
+                {
+                    rifiuto = $"ipotesi già in corsa su un'altra corsia — {duplicato.Reason} "
+                        + "(controllato PRIMA di fermare: la corsia non è stata toccata)";
+                }
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -1056,9 +1076,22 @@ public sealed class FleetOrchestratorWorker(
 
         logger.LogWarning("Corsia {Lane} FERMATA per sostituzione: {Reason}", replace.LaneId, replace.Reason);
 
+        // [revisione 2026-09-04] Lo stop si notifica QUANDO AVVIENE, non si lascia raccontare dalla
+        // notifica dello schieramento. Se la seconda metà fallisce, quella notifica dice «schieramento
+        // non riuscito» e non nomina il fatto nuovo — che una corsia è stata FERMATA e non è ripartita.
+        // Due messaggi per un'azione in due tempi: il primo dice cosa è successo, il secondo com'è finita.
+        if (notifier is not null)
+        {
+            await notifier.NotifyAsync(NotificationSeverity.Warning,
+                $"Flotta: corsia {replace.LaneId} FERMATA per sostituzione",
+                $"{replace.Reason}\nOra provo a schierare il rimpiazzo: il prossimo messaggio dirà com'è finita. "
+                + "Se lo schieramento non riesce la corsia resta ferma e configurata come prima, "
+                + "riavviabile con un clic da /trading, e il braccio ordinario la riempirà al giro dopo.", ct);
+        }
+
         // --- Metà 2: schierare. Stesso percorso del clic umano e del braccio grigio. -------------
         await ExecuteAssignAsync(replace.RunId, replace.CandidateKey, replace.LaneId,
-            isGrey: true, replace.Reason, assignSource, votesJson, ct);
+            replace.IsGrey, replace.Reason, assignSource, votesJson, ct);
     }
 
     /// <summary>

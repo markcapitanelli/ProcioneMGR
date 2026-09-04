@@ -77,6 +77,7 @@ public sealed class FleetStateReader(
             // operazione, e se ha una posizione viva addosso.
             DateTime? lastTrade = null;
             var openPositions = 0;
+            var diverged = false;
 
             // Lo stato vivo serve solo alle corsie di flotta potenzialmente toccabili; per le
             // altre bastano directory e vincoli (meno chiamate, meno superfici di guasto).
@@ -139,6 +140,11 @@ public sealed class FleetStateReader(
                     if (running && expected is not null && Diverge(s.ActiveStrategyIds, status.RunningStrategyIds))
                     {
                         expected = null;
+                        // [K61] Il null va DISTINTO da «non dichiarato»: la sostituzione legge lo
+                        // stesso campo e senza questa bandiera applicherebbe il pavimento secco al
+                        // posto della soglia scalata, cioè un giudizio più severo proprio dove il
+                        // ritiro si astiene.
+                        diverged = true;
                         logger.LogInformation(
                             "Corsia {Lane}: configurazione e motore non concordano sulle gambe attive (riavvio in sospeso) — "
                             + "il ritmo atteso non e' confrontabile e il ritiro per inedia non si esprime.", s.Id);
@@ -172,7 +178,8 @@ public sealed class FleetStateReader(
                 // [K61] I due dati della sostituzione: l'ultima operazione chiusa (dalla lista gia'
                 // ripulita dal replay) e le posizioni vive, che la vietano.
                 LastTradeUtc: lastTrade,
-                OpenPositions: openPositions));
+                OpenPositions: openPositions,
+                ExpectedDiverged: diverged));
         }
 
         // --- Candidati --------------------------------------------------------------------------

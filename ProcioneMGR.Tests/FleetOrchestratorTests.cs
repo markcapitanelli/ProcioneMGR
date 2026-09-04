@@ -59,6 +59,16 @@ public sealed class FleetOrchestratorTests
                     // non nascerebbe mai e le sue invarianti passerebbero inosservate.
                     LastTradeUtc = rnd.Next(3) == 0 ? null : DateTime.UtcNow.AddDays(-rnd.Next(0, 60)),
                     OpenPositions = rnd.Next(4) == 0 ? rnd.Next(1, 4) : 0,
+                    // [K61] Il ritmo atteso entra nel fuzz con valori ASSURDI compresi: un ritmo
+                    // minuscolo produce un intervallo medio enorme, e la soglia scalata deve
+                    // limitarsi invece di far traboccare l'aritmetica dentro una funzione pura.
+                    ExpectedTradesPerMonth = rnd.Next(4) switch
+                    {
+                        0 => null,
+                        1 => 0m,
+                        2 => (decimal)Math.Pow(10, -rnd.Next(0, 26)),
+                        _ => (decimal)(rnd.NextDouble() * 40 - 5),
+                    },
                 }).ToList();
 
             var candidates = Enumerable.Range(0, rnd.Next(0, 6)).Select(_ => new FleetCandidate(

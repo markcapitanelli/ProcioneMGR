@@ -129,6 +129,45 @@ public sealed class SostituzioneCorsieK61Tests
     public void UnULTIMAoperazioneNELfuturo_nonPRODUCEsilenzioNEGATIVO()
         => Assert.Equal(TimeSpan.Zero, FleetOrchestrator.Silenzio(Corsia(silenzioGiorni: -2), Adesso));
 
+    /// <summary>
+    /// Un ritmo atteso ASSURDO non deve far esplodere una funzione pura chiamata a ogni tick:
+    /// un'eccezione qui fermerebbe l'intera decisione della flotta, ritiri compresi, per un campo di
+    /// configurazione scritto male. La soglia si limita, non trabocca.
+    /// </summary>
+    [Theory]
+    [InlineData(1e-28)]
+    [InlineData(1e-10)]
+    [InlineData(0.0001)]
+    [InlineData(1e+28)]
+    public void UnRITMOassurdo_nonFAesplodereLaSOGLIA(double attesi)
+    {
+        var soglia = FleetOrchestrator.SogliaSilenzio(Corsia(attesiAlMese: (decimal)attesi), Opzioni());
+
+        Assert.True(soglia >= TimeSpan.FromDays(10), "la soglia non scende mai sotto il pavimento");
+        Assert.True(soglia <= TimeSpan.FromDays(FleetOrchestrator.MaxSogliaSilenzioGiorni),
+            "la soglia si limita invece di traboccare");
+    }
+
+    /// <summary>Ritmo atteso zero o negativo: non è un ritmo, e vince il pavimento.</summary>
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(-3.0)]
+    public void UnRITMOnonPOSITIVO_valeCOMEnonDICHIARATO(double attesi)
+        => Assert.Equal(TimeSpan.FromDays(10),
+            FleetOrchestrator.SogliaSilenzio(Corsia(attesiAlMese: (decimal)attesi), Opzioni()));
+
+    /// <summary>Un multiplo a zero o negativo spegne la scala, non la ribalta.</summary>
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(-2.0)]
+    public void UnMULTIPLOnonPOSITIVO_spegneLaSCALA(double multiplo)
+    {
+        var opt = Opzioni();
+        opt.ReplaceIdleExpectedMultiple = (decimal)multiplo;
+
+        Assert.Equal(TimeSpan.FromDays(10), FleetOrchestrator.SogliaSilenzio(Corsia(attesiAlMese: 1.65m), opt));
+    }
+
     /// <summary>La soglia scalata sul ritmo atteso, con i numeri veri delle corsie del 2026-09-04.</summary>
     [Theory]
     [InlineData(null, 10.0)]     // niente ritmo dichiarato: il solo pavimento
@@ -342,5 +381,163 @@ public sealed class SostituzioneCorsieK61Tests
 
         Assert.Equal(1, silenzio.IdleLanes);
         Assert.Equal(1, silenzio.ReplacementsReady);
+    }
+
+    // ------------------------------------------- correzioni dalla revisione avversariale 2026-09-04
+
+    /// <summary>
+    /// Il ritmo atteso azzerato perché <b>non confrontabile</b> (configurazione e motore in
+    /// disaccordo sulle gambe) non deve rendere la corsia PIÙ facile da sostituire.
+    ///
+    /// <para>Senza la distinzione, la corsia 4 — 1,65 trade/mese attesi, soglia propria 36,9 giorni —
+    /// dopo una modifica di configurazione non riavviata ricadrebbe sul pavimento secco di 10 giorni
+    /// e verrebbe sostituita mentre rispetta il proprio ritmo. Un'ammissione di ignoranza non può
+    /// diventare un'aggravante.</para>
+    /// </summary>
+    [Fact]
+    public void UnATTESOnonCONFRONTABILE_faASTENERE_nonCONDANNA()
+    {
+        var divergente = Corsia(osservazioneGiorni: 60, silenzioGiorni: 12, attesiAlMese: null) with
+        {
+            ExpectedDiverged = true,
+        };
+
+        Assert.False(FleetOrchestrator.IsIdle(divergente, Opzioni(), Adesso));
+
+        // Il nullo del nullo: senza divergenza, lo stesso stato È inerte (il pavimento morde).
+        Assert.True(FleetOrchestrator.IsIdle(divergente with { ExpectedDiverged = false }, Opzioni(), Adesso));
+    }
+
+    /// <summary>
+    /// Il secondo mezzo del predicato K57: un'ipotesi col ventaglio più largo della mediana è
+    /// INSTABILE, e la lista del clic umano la marca «⚠ INSTABILE». Il braccio automatico non può
+    /// ammetterla e chiamarla stabile.
+    /// </summary>
+    [Theory]
+    [InlineData(2.79, 3.26, false, "EventTrigger GRT: ventaglio maggiore della mediana")]
+    [InlineData(3.98, 0.21, true, "MacdTrend AAVE: ventaglio stretto")]
+    [InlineData(2.00, 2.00, true, "ventaglio pari alla mediana: al limite, ammesso")]
+    public void UnIPOTESIinstabileNONeUNrimpiazzo(double mediana, double ventaglio, bool ammesso, string caso)
+    {
+        var candidato = Rimpiazzo(mediana: (decimal)mediana, misure: 20) with
+        {
+            StabilitySpread = (decimal)ventaglio,
+        };
+
+        var ammessi = FleetOrchestrator.RimpiazziAmmessi(Stato([Corsia()], [candidato]), Opzioni());
+        Assert.Equal(ammesso, ammessi.Count == 1);
+    }
+
+    /// <summary>
+    /// Il tetto grigio conta anche i grigi assegnati NELLO STESSO GIRO. La fotografia non li vede
+    /// ancora in corsa, e senza la somma il tetto verrebbe superato di una corsia — proprio nel giro
+    /// in cui il ramo grigio consuma l'ultima corsia libera, che è la condizione che apre la
+    /// sostituzione.
+    /// </summary>
+    [Fact]
+    public void IlTETTOgrigioCONTAancheIgrigiDIquestoGIRO()
+    {
+        var opt = Opzioni();
+        opt.GreyAutoDeploy = true;
+        opt.MaxGreyLanes = 3;
+        opt.MaxAssignmentsPerTick = 2;
+
+        var stato = Stato(
+            [
+                Corsia(id: 3, silenzioGiorni: 0, osservazioneGiorni: 1),   // grigia in corsa, non inerte
+                Corsia(id: 4, silenzioGiorni: 0, osservazioneGiorni: 1),   // grigia in corsa, non inerte
+                Corsia(id: 5, grigia: false),                              // NON grigia, inerte
+                Corsia(id: 6, running: false),                             // libera
+            ],
+            [
+                Rimpiazzo(identita: "A #1"),
+                Rimpiazzo(identita: "B #2", mediana: 3.5m, misure: 8),
+            ]);
+
+        var piano = FleetOrchestrator.Decide(stato, opt);
+
+        // Il grigio va sulla corsia libera; la sostituzione porterebbe le grigie a 4 su un tetto di 3.
+        Assert.Single(piano.Actions.OfType<AssignGreyCandidateToLane>());
+        Assert.Empty(piano.Actions.OfType<ReplaceLaneOccupant>());
+    }
+
+    /// <summary>Il candidato scelto per la sostituzione non viene ANCHE proposto al clic umano.</summary>
+    [Fact]
+    public void IlRIMPIAZZOsceltoNONeANCHEunaPROPOSTA()
+    {
+        var candidato = Rimpiazzo();
+        var piano = FleetOrchestrator.Decide(Stato([Corsia()], [candidato]), Opzioni());
+
+        Assert.Single(piano.Actions.OfType<ReplaceLaneOccupant>());
+        Assert.Empty(piano.Actions.OfType<ProposeGreyCandidate>().Where(p => p.RunId == candidato.RunId));
+    }
+
+    /// <summary>
+    /// La banda viaggia sull'azione: un rimpiazzo «pass» va schierato col percorso dei sopravvissuti,
+    /// altrimenti il deployer lo rifiuta a corsia già ferma.
+    /// </summary>
+    [Theory]
+    [InlineData("grey", true)]
+    [InlineData("pass", false)]
+    public void LaBANDAviaggiaSULLazione(string band, bool grigioAtteso)
+    {
+        var piano = FleetOrchestrator.Decide(
+            Stato([Corsia()], [Rimpiazzo(band: band)]), Opzioni());
+
+        Assert.Equal(grigioAtteso, Assert.Single(piano.Actions.OfType<ReplaceLaneOccupant>()).IsGrey);
+    }
+
+    /// <summary>
+    /// Il conteggio del pannello e la decisione devono contare lo STESSO insieme: una corsia che il
+    /// ritiro condanna per Sharpe non è «inerte sostituibile», e mostrarla esporrebbe un cancello
+    /// più largo di quello vero.
+    /// </summary>
+    [Fact]
+    public void ExplainNONcontaLEcorsieCHEilRITIROcondanna()
+    {
+        var opt = Opzioni();
+        opt.RetireMinTrades = 1;
+        opt.RetireMinWeeks = 1;
+        opt.RetireSharpeThreshold = 0.5m;
+
+        // Storia sufficiente e Sharpe per trade sotto soglia: il ritiro la condanna.
+        var perdente = Corsia(osservazioneGiorni: 30, silenzioGiorni: 20) with
+        {
+            TradeCount = 25,
+            RealizedSharpePerTrade = 0.1m,
+        };
+
+        var piano = FleetOrchestrator.Decide(Stato([perdente], [Rimpiazzo()]), opt);
+        var silenzio = FleetOrchestrator.Explain(Stato([perdente], [Rimpiazzo()]), opt);
+
+        Assert.Single(piano.Actions.OfType<StopAndFreeLane>());
+        Assert.Empty(piano.Actions.OfType<ReplaceLaneOccupant>());
+        Assert.Equal(0, silenzio.IdleLanes);
+    }
+
+    /// <summary>
+    /// [K61b] Il braccio automatico sceglie il grigio per MERITO quando glielo si chiede. Prova
+    /// deterministica: due candidati, quello mediocre è più vecchio — a interruttore spento vince
+    /// la data, acceso vince la mediana.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "EventTrigger GRT/USDT 4h #69438482")]
+    [InlineData(true, "MacdTrend AAVE/USDT 4h #f523b2ee")]
+    public void K61b_perDATAoPERmerito(bool perMerito, string identitaAttesa)
+    {
+        var opt = Opzioni(accesa: false);
+        opt.GreyAutoDeploy = true;
+        opt.PreferStableGrey = perMerito;
+
+        var vecchioMediocre = new FleetCandidate(
+            Guid.NewGuid(), Adesso.AddDays(-15), "grey", 5m, "4h", "EventTrigger GRT/USDT 4h",
+            AlreadyHandled: false, AlreadyProposed: false, Identity: "EventTrigger GRT/USDT 4h #69438482",
+            StabilityMedian: 2.79m, StabilityMeasures: 20, StabilitySpread: 0.5m);
+
+        var piano = FleetOrchestrator.Decide(
+            Stato([Corsia(id: 5, running: false)], [vecchioMediocre, Rimpiazzo()]), opt);
+
+        var schierato = Assert.Single(piano.Actions.OfType<AssignGreyCandidateToLane>());
+        Assert.Equal(identitaAttesa, schierato.CandidateKey);
     }
 }
