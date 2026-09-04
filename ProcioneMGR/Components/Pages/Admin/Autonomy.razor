@@ -275,7 +275,7 @@
                 <input type="number" class="form-control" @bind="_autoReapply.MaxPerTick" min="1" style="width: 8rem;" />
             </div>
             <div class="col-auto">
-                <label class="form-label" title="Gambe di fascia grigia (o a provenienza ignota) tollerate in un'applica automatica. 0 = solo sopravvissuti pieni: il grigio si propone al click umano, mai si schiera da solo (F5). L'applica manuale da /pipeline non passa da questa guardia.">
+                <label class="form-label" title="Gambe di fascia grigia (o a provenienza ignota) tollerate in un'applica automatica. 0 = solo sopravvissuti pieni: il grigio si propone e aspetta il tuo clic sul pulsante «Schiera» di questa pagina, mai si schiera da solo (è la voce F5 della roadmap, non il tasto F5). L'applica manuale da /pipeline non passa da questa guardia.">
                     Gambe grigie max (auto) @Hot()
                 </label>
                 <input type="number" class="form-control" @bind="_autoReapply.MaxGreyLegs" min="0" style="width: 8rem;" />
@@ -413,7 +413,7 @@
             Gestisce le corsie di flotta (dalla @(_fleetFootprint) in su, mai l'impronta storica
             dell'auto-apply né Live/Testnet/quarantene/campagne): assegna candidati validati alle
             corsie Paper libere, ritira i forward test perdenti (con isteresi), propone la fascia
-            grigia al tuo click (F5). In DRY-RUN decide e journalizza senza eseguire — è
+            grigia al tuo clic sul pulsante «Schiera» qui sotto (F5 è la voce della roadmap, non il tasto). In DRY-RUN decide e journalizza senza eseguire — è
             l'incremento corrente. Config in sezione <code>Fleet</code>; ogni decisione è una riga qui sotto.
         </p>
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
@@ -772,7 +772,7 @@
                         <div class="form-check form-switch align-self-end mb-1">
                             <input class="form-check-input" type="checkbox" id="fl_greyauto" @bind="_fleet.GreyAutoDeploy" />
                             <label class="form-check-label" for="fl_greyauto"
-                                   title="Rovescia F5: l'orchestratore può schierare DA SOLO un candidato grigio su una corsia libera e autorizzata (solo Paper, stesso deployer del click umano, bracket automatico). Freni: tetto di corsie grigie, corsie solo in lista, budget per tick, guardia di esposizione, comitato sui pareggi. Il forward test Paper è l'unico giudice immune al multiple testing: riempirlo in automatico lo consuma — serve il ritiro (J8-J10) che libera le corsie.">
+                                   title="Rovescia la regola del clic umano (voce F5 della roadmap): l'orchestratore può schierare DA SOLO un candidato grigio su una corsia libera e autorizzata (solo Paper, stesso deployer del click umano, bracket automatico). Freni: tetto di corsie grigie, corsie solo in lista, budget per tick, guardia di esposizione, comitato sui pareggi. Il forward test Paper è l'unico giudice immune al multiple testing: riempirlo in automatico lo consuma — serve il ritiro (J8-J10) che libera le corsie.">
                                 Schiera i GRIGI da solo (J14) @Hot()
                             </label>
                         </div>
