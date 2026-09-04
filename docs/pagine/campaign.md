@@ -89,3 +89,8 @@ intraday 1m - 10 majors»], backoff 12 h, **senza** avvio corsie Paper dopo l'ap
 campagna 1 perché il planner ha una sola corsia di esecuzione (un run alla volta, «run rimandato,
 un altro run è già in corso»). Le due configurazioni hanno cadenza propria K56: 48 h la 30m, 72 h
 la 1m. Contesto in `docs/audit/42_REVISIONE_FILONE_K_2026-09-03.md` §10.1.
+
+Aggiornamento sera del 4/09: il primo run della config 22 (1m) è durato 5h43m, di cui 5h04m nello
+stage «Screening coppie» (cointegrazione su 45 coppie × 216k barre). Lo stage è stato disabilitato
+sulla sola config 22 dall'editor di `/pipeline`; le altre 17 fasi sono invariate. Dettaglio in
+`docs/audit/42_REVISIONE_FILONE_K_2026-09-03.md` §10.5.

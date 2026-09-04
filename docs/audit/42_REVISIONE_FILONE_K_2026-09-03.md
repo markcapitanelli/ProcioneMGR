@@ -434,3 +434,46 @@ Il run `pull_request` della PR #134 era rosso per `RegistryPageRenderTests.Ritir
 (`Find("input.form-control")` subito dopo il clic, senza attesa del render: passa in locale e nel
 run `push`, cade sotto carico). Sostituito con `WaitForElement(…, 10 s)` nei due punti. Rilanciato
 il job fallito: verde.
+
+### 10.5 Dopo il merge (2026-09-04, sera): schierato, verificato, e il run a 1m costava 5 ore di coppie
+
+PR #134 fusa alle 11:16 UTC. La plancia ha fatto da sola ciò che doveva: guscio ricompilato e
+riavviato alle 12:34 (revisione f17b16e = pin del deploy sopra il merge), motore riavviato alle
+11:48 sull'immagine `local-3233bd04`, 0 riavvii, 0 errori nei log del pod, `procione stato`
+«tutto in ordine (26 controlli)». Ingestion e ml restano sulle immagini di agosto: la PR non tocca
+codice che gira lì. Nessuna migrazione da applicare (la `Unknown` era già sul DB dal 3/09).
+
+Verifiche dal vivo sul codice fuso:
+
+| Cosa | Prima | Dopo |
+|---|---|---|
+| K58 copertura in `/pipeline` | «0 su 241» (difetto §8) | **145 su 241 (60%)**; 30m e 1m non più fra le «mai cacciate» |
+| Journal `Blocked` senza corsia libera | 14-15 righe al giorno | **1 riga** dal riavvio (dedupe per tick): esito `Noted` |
+| Comitato AI | — | vivo dopo il riavvio: voti alle 14:13, 14:17, 14:35, 17:40; modello Nvidia risolto (casing) |
+| Corsie 1-7 | — | tutte `IsRunning`, ultima candela attuale (15m alle 18:45, 4h alle 12:00) |
+| K59 budget | — | 101,7 ore/mese al ritmo attuale su 15 configurazioni, tetto nessuno |
+
+**Il run a 1m.** Completato in **5h43m**: DataIngestion 14 min (823.576 candele scaricate, le 4
+serie nuove ora hanno 216k candele = 150 gg), StrategyDiscovery 5 min, CreativeDiscovery 11 min,
+e **PairsScreening 5h04m**: cointegrazione Engle-Granger su 45 coppie con 216k barre l'una. Esito:
+2 candidati, 0 sopravvissuti. Con cadenza 72h sarebbero ~57 ore/mese, più della metà dell'intero
+budget di caccia, spese in uno stage che nessuna corsia a 1m può usare. **Stage «Screening
+coppie» disabilitato sulla config 22** dall'editor di `/pipeline` (verificato a DB:
+`PairsScreening:false`, le altre 17 fasi invariate). Il prossimo run a 1m dovrebbe costare
+~35 minuti. La 30m (17 min/run) resta com'è.
+
+**Sette righe `Blocked` con `Outcome=Applied` e `Applied=false`** scritte il 3-4/09 dal guscio
+vecchio DOPO la migrazione correttiva: il pannello le mostra come «eseguita». Nessun effetto sulle
+corsie (LaneId nullo), ma vanno lette come «annotata». Rieseguire l'UPDATE della migrazione
+`20260903190000` le sistemerebbe; non l'ho fatto dal vivo (scrittura diretta a DB).
+
+**Visto di sponda, non corretto:** `SentimentSyncWorker` ha fallito 2 tick su ~80 con
+`23505 IX_AltDataPoints_DedupeKey` (chiave duplicata): due scrittori sugli AltDataPoints nello
+stesso processo (il worker e lo stage AltDataSync dei run) si pestano di rado. Si riprova al tick
+dopo, nessun dato perso. Da guardare se cresce.
+
+**Trappola del pannello browser** (per chi verifica dopo di me): con il pannello più stretto del
+layout (782 px contro ~1120), i pulsanti della colonna Azioni sono fuori viewport e il clic
+fallisce; l'emulazione di un viewport largo (`resize_window`) viene scalata e i clic non arrivano
+al componente; anche Tab+Invio sul pulsante non produce il render. Funziona `document.body.style.zoom`
+a 0,66 (solo per vedere, non è una modifica) e poi il clic per ref.
