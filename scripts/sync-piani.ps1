@@ -155,11 +155,33 @@ if (-not $SoloPlancia) {
                 else {
                     # La plancia sa gia' fermare il guscio: non si riscrive quel codice qui.
                     & (Join-Path $repoRoot 'tools\Procione\bin\Release\net10.0\procione.exe') ferma guscio
-                    # bringup ricompila e riavvia: `dotnet run -c Release` rifa' il binario
-                    # dall'albero di lavoro, che ora e' master. E' anche il passo che rimette i
-                    # port-forward, che muoiono col guscio.
-                    & (Join-Path $PSScriptRoot 'bringup.ps1')
-                    Log "Guscio   : aggiornato e riavviato." 'Green'
+                    if ($LASTEXITCODE -ne 0) {
+                        # [2026-09-05] Se il guscio NON e' stato fermato, il bring-up lo trova in
+                        # ascolto e dichiara «gia' in ascolto»: un rilascio finto, con la revisione
+                        # vecchia che continua a girare. E' successo alle 00:54: macchina satura,
+                        # query dei pid scaduta, «gia' fermo» letto da una lista vuota.
+                        Log "Guscio   : `procione ferma guscio` NON e' riuscito (codice $LASTEXITCODE): non lancio il bring-up, riprovo al prossimo giro." 'Red'
+                    }
+                    else {
+                        # bringup ricompila e riavvia: `dotnet run -c Release` rifa' il binario
+                        # dall'albero di lavoro, che ora e' master. E' anche il passo che rimette i
+                        # port-forward, che muoiono col guscio.
+                        & (Join-Path $PSScriptRoot 'bringup.ps1')
+
+                        # Si VERIFICA la revisione dopo, invece di dichiarare l'esito prima: il
+                        # bring-up e' idempotente e non distingue «l'ho avviato» da «c'era gia'».
+                        $dopo = $null
+                        try { $dopo = (Invoke-RestMethod -Uri "$shellUrl/health" -TimeoutSec 60).revision } catch { }
+                        if ($dopo -and $rev -and $dopo -eq $rev) {
+                            Log "Guscio   : NON aggiornato - dopo il bring-up risponde ancora $($rev.Substring(0,8)). Il processo vecchio non e' stato fermato: riprovo al prossimo giro." 'Red'
+                        }
+                        elseif ($dopo) {
+                            Log "Guscio   : aggiornato e riavviato ($($dopo.Substring(0,8)))." 'Green'
+                        }
+                        else {
+                            Log "Guscio   : bring-up eseguito, ma /health non risponde ancora: la revisione la dira' il prossimo giro." 'Yellow'
+                        }
+                    }
                 }
             }
         }

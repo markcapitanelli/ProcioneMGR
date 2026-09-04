@@ -160,6 +160,20 @@ internal static class Actions
     {
         Ui.Title("Arresto del guscio");
         var pids = OwningPids(Platform.ShellPort);
+
+        // [2026-09-05] «Nessun processo» e «non sono riuscito a chiedere» NON sono la stessa cosa.
+        // Alle 00:54 il sync-piani ha chiamato questo comando su una macchina satura (7,5 GB su
+        // 7,7, CPU al 76 %): la query PowerShell non ha risposto in tempo, la lista e' tornata
+        // vuota, qui si e' letto «gia' fermo», il bring-up ha trovato la porta ancora occupata e
+        // ha concluso «gia' in ascolto», e il sync ha scritto «aggiornato e riavviato» — mentre il
+        // guscio era ancora quello di undici ore prima, con il merge mai schierato. Un'assenza
+        // letta come un esito e' il difetto di sempre, nel posto in cui costa un rilascio finto.
+        if (pids is null)
+        {
+            Ui.Error($"non sono riuscito a leggere chi ascolta su {Platform.ShellPort}: NON so se il guscio e' fermo, e non lo dichiaro.");
+            Ui.Info("la macchina e' probabilmente satura: riprova fra un minuto, oppure `procione stato` per il pid.");
+            return 1;
+        }
         if (pids.Count == 0) { Ui.Info($"nessun processo in ascolto su {Platform.ShellPort}: gia' fermo."); return 0; }
 
         Kill(pids);
@@ -943,11 +957,16 @@ internal static class Actions
 
     private static int Say(string testo) { Ui.Info(testo); return 1; }
 
-    /// <summary>PID dei processi in ascolto su una porta.</summary>
-    private static List<int> OwningPids(int porta)
+    /// <summary>
+    /// PID dei processi in ascolto su una porta. <c>null</c> = la domanda NON ha avuto risposta
+    /// (PowerShell scaduto o fallito): e' un'altra cosa da «nessuno ascolta», e chi chiama deve
+    /// poterle distinguere — vedi <see cref="DownShell"/>.
+    /// </summary>
+    private static List<int>? OwningPids(int porta)
     {
         var r = Proc.Ps($"Get-NetTCPConnection -State Listen -LocalPort {porta} -ErrorAction SilentlyContinue | " +
                         "Select-Object -ExpandProperty OwningProcess -Unique", 15000);
+        if (r.Code != 0) return null;
         return r.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries)
                     .Select(s => int.TryParse(s.Trim(), out var v) ? v : 0)
                     .Where(v => v > 0).Distinct().ToList();
