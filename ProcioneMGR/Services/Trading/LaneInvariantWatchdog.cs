@@ -74,6 +74,13 @@ public sealed class LaneInvariantWatchdog(
                 continue;
             }
 
+            // [Revisione 2026-09-03] La corsia GIRA: l'allarme K36 «ferma con posizioni» si ri-arma
+            // qui, non solo quando la corsia torna ferma SENZA posizioni. Prima il flag restava
+            // armato attraverso un riavvio, e al secondo episodio «ferma con posizioni aperte» il
+            // watchdog taceva — proprio il caso (stop, riavvio, nuovo stop con una posizione viva)
+            // che la notifica di ritiro invita a produrre.
+            _stoppedWithPositionsAlerted.Remove(laneId);
+
             // Già in quarantena: la riga esistente conserva l'evidenza, non si accumulano duplicati.
             if (await db.LaneQuarantines.AsNoTracking().AnyAsync(q => q.LaneId == laneId, ct)) continue;
 

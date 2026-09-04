@@ -28,8 +28,15 @@ public sealed record EsitoProposta(
 
 public interface IHuntProposer
 {
+    /// <param name="inRotazione">Le configurazioni in rotazione, da cui copiare la forma.</param>
+    /// <param name="oreResidueAlMese">
+    /// Ore che restano nel tetto mensile. <c>null</c> = <b>nessun tetto impostato</b>: la cadenza
+    /// proposta è quella del modello (o 24h), e lo si dice — prima arrivava qui
+    /// <c>double.MaxValue/4</c>, la proposta usciva alla cadenza più fitta e il comitato riceveva
+    /// «Budget residuo: 4494232837…,0 ore/mese» nel prompt.
+    /// </param>
     Task<EsitoProposta> ProponiAsync(
-        IReadOnlyCollection<int> inRotazione, double oreResidueAlMese, CancellationToken ct = default);
+        IReadOnlyCollection<int> inRotazione, double? oreResidueAlMese, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -70,7 +77,7 @@ public sealed class HuntProposer(
     public const int ProposteMax = 4;
 
     public async Task<EsitoProposta> ProponiAsync(
-        IReadOnlyCollection<int> inRotazione, double oreResidueAlMese, CancellationToken ct = default)
+        IReadOnlyCollection<int> inRotazione, double? oreResidueAlMese, CancellationToken ct = default)
     {
         var cop = await coverage.ReadAsync(inRotazione, ct);
         if (cop.Scoperte.Count == 0)
@@ -82,7 +89,7 @@ public sealed class HuntProposer(
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var modelli = await db.PipelineConfigurations.AsNoTracking()
             .Where(c => inRotazione.Contains(c.Id))
-            .Select(c => new { c.Id, c.UniverseJson, c.Name })
+            .Select(c => new { c.Id, c.UniverseJson, c.Name, c.MinHoursBetweenRuns })
             .ToListAsync(ct);
 
         var durate = await DurateMedianeAsync(db, ct);
@@ -115,7 +122,12 @@ public sealed class HuntProposer(
             // senza aver mai girato quella caccia, e viene dichiarata come stima.
             var minuti = minutiModello * scelte.Count / (double)serieModello;
 
-            var cadenza = CadenzaCheEntra(minuti, oreResidueAlMese);
+            // [Revisione 2026-09-03] Senza tetto la cadenza è quella del modello (o 24h): non c'è
+            // un budget in cui «entrare», e proporre la cadenza più fitta sarebbe proporre la caccia
+            // più costosa possibile presentandola come «entra nel residuo».
+            var cadenza = oreResidueAlMese is double residuo
+                ? CadenzaCheEntra(minuti, residuo)
+                : (modello.MinHoursBetweenRuns > 0 ? modello.MinHoursBetweenRuns : 24);
             if (cadenza <= 0)
             {
                 logger.LogDebug("Buco a {Tf}: non entra nelle {Ore:F1} ore residue nemmeno a cadenza massima.", tf, oreResidueAlMese);
@@ -125,11 +137,17 @@ public sealed class HuntProposer(
             menu.Add(new CacciaProposta(tf, scelte, modello.Id, minuti, cadenza));
         }
 
+        var budgetTesto = oreResidueAlMese is double r
+            ? $"Budget residuo: {r:F1} ore/mese."
+            : "Nessun tetto impostato (Campaign:MonthlyHourBudget = 0): la cadenza proposta è quella del modello, non una cadenza che entra in un budget.";
+
         if (menu.Count == 0)
         {
             return new EsitoProposta([], null, "budget",
-                $"Ci sono {cop.Scoperte.Count} celle scoperte, ma nessuna proposta entra nelle "
-                + $"{oreResidueAlMese:F1} ore residue — o manca una configurazione modello a quel timeframe.");
+                $"Ci sono {cop.Scoperte.Count} celle scoperte, ma nessuna proposta si può fare: "
+                + (oreResidueAlMese is double r0
+                    ? $"nessuna entra nelle {r0:F1} ore residue, o manca una configurazione modello a quel timeframe."
+                    : "manca una configurazione modello (con durata misurata) a quel timeframe."));
         }
 
         // Ordine deterministico: prima il buco più grande. È anche il default se il comitato tace.
@@ -143,7 +161,7 @@ public sealed class HuntProposer(
         var domanda = new CommitteeQuestion(
             "hunt-proposal",
             $"La piattaforma tiene aggiornate {cop.Seguite.Count} serie e ne caccia {cop.Cacciate.Count}: "
-            + $"{cop.Scoperte.Count} non le guarda nessuno. Budget residuo: {oreResidueAlMese:F1} ore/mese.\n"
+            + $"{cop.Scoperte.Count} non le guarda nessuno. {budgetTesto}\n"
             + "Ogni proposta occupa serie MAI cacciate e copia forma e finestre da una configurazione che gira già.\n"
             + "Criterio: preferire il buco che porta più informazione nuova per ora spesa, senza sbilanciare "
             + "il budget su un solo timeframe.",
@@ -184,7 +202,11 @@ public sealed class HuntProposer(
             var oreMese = minutiPerRun / 60.0 * (30.0 * 24.0 / ore);
             if (oreMese <= oreResidueAlMese) return ore;
         }
-        return 0;
+        // [Revisione 2026-09-03] Il raddoppio salta da 192 a 384 e non prova mai il massimo (336):
+        // una caccia che entra SOLO a due settimane veniva scartata «nemmeno a cadenza massima»,
+        // mentre Riallinea quella cadenza la propone. Stesso massimo per i due pezzi di K59/K60.
+        var oreMeseMax = minutiPerRun / 60.0 * (30.0 * 24.0 / HuntBudget.MaxCadenzaOre);
+        return oreMeseMax <= oreResidueAlMese ? HuntBudget.MaxCadenzaOre : 0;
     }
 
     private static async Task<Dictionary<int, double>> DurateMedianeAsync(ApplicationDbContext db, CancellationToken ct)

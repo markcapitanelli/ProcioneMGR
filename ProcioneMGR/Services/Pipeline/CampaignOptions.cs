@@ -55,6 +55,42 @@ public sealed class CampaignOptions
     public int StallAlertHours { get; set; } = 12;
 
     /// <summary>
+    /// [K59, 2026-09-03] <b>Il tetto di ore di caccia al mese.</b> <c>0</c> = nessun tetto, e allora
+    /// non si propone nulla — il consumo resta non governato, ma dichiarato.
+    ///
+    /// <para><b>Perché in ore e non in numero di cacce.</b> La mediana per run va da <b>0,6 minuti</b>
+    /// (cfg 9, 1d su 10 serie) a <b>43,8</b> (cfg 19, 5m su 10 serie): settanta volte. Contare le
+    /// cacce tratterebbe come uguali due cose che non lo sono — è lo stesso errore per cui K54b ha
+    /// dovuto mettere il costo accanto alla resa.</para>
+    ///
+    /// <para><b>Perché serve un tetto esplicito.</b> Il gate del DSR deflaziona per i tentativi del
+    /// PROPRIO run e non vede le altre cacce: aggiungerne non lo rende più severo, quindi
+    /// <b>nessun freno scatta da solo</b>.</para>
+    ///
+    /// <para>Riferimento misurato il 2026-09-03: dopo i tagli su 18 e 19 e l'ingresso di cinque
+    /// configurazioni, il consumo previsto è di circa <b>32 ore al mese</b> su nove cacce (otto con
+    /// un costo misurato).</para>
+    /// </summary>
+    public double MonthlyHourBudget { get; set; }
+
+    /// <summary>
+    /// [K59] Le proposte di rallentamento si <b>applicano da sole</b>. Default <c>false</c>, ed è
+    /// deliberato: riscrivere la cadenza di una caccia è una decisione di budget del proprietario,
+    /// e la stessa scelta è già stata fatta per <c>GreyAutoDeploy</c> e per il sonno di una caccia
+    /// (K50: «nessuna azione automatica»).
+    ///
+    /// <para>Con <c>false</c> il worker misura, scrive il verdetto e — se serve — notifica. È
+    /// esattamente ciò che serve per guardarlo girare prima di dargli il potere di scrivere.</para>
+    /// </summary>
+    public bool BudgetAutoApply { get; set; }
+
+    /// <summary>
+    /// [K59] Ogni quanti minuti guardare il budget. Non è una decisione urgente — le ore si
+    /// accumulano lentamente — e un giro ogni ora è già abbondante. <c>0</c> = spento.
+    /// </summary>
+    public int BudgetTickMinutes { get; set; } = 60;
+
+    /// <summary>
     /// [I7] Il percorso campagna rispetta <c>AutoReapply:Enabled</c>. Default <c>true</c>.
     ///
     /// <para>Prima il planner chiamava l'applier senza consultare quel gate, che è letto solo dallo

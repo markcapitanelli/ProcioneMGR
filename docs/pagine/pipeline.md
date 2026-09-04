@@ -129,3 +129,26 @@ quello storico (regressione fissata da `EnsembleAssemblyGreyZoneTests`).
 - Il confronto col run precedente (Δ metriche) rende visibile il decadimento tra cacce
   successive senza aprire due dettagli.
 - L'export report è un markdown scaricabile: il run è documentabile fuori dalla piattaforma.
+
+## Filone K (2026-09-02 → 09-04): il governo della caccia
+
+Tre riquadri nuovi in cima alla pagina, tutti **di sola lettura o proposta** — nessuno esegue.
+
+- **Copertura della caccia** (K58): quante celle (serie × timeframe) seguite in watchlist sono
+  cacciate da almeno una configurazione in rotazione, e quali no, per timeframe. Il numero che
+  risponde a «che caccia aggiungere». *Difetto corretto il 2026-09-03: al primo caricamento diceva
+  «0 su 227» perché le configurazioni venivano lette dopo la copertura.*
+- **Budget della caccia** (K59): ore/mese al ritmo in vigore (durata media × min(ritmo della
+  cadenza, ritmo osservato)), il tetto `Campaign:MonthlyHourBudget`, e le proposte di rallentamento
+  partendo da chi rende meno per ora. «Guarda adesso» **solo misura**; le cadenze le scrive il
+  guardiano soltanto con `Campaign:BudgetAutoApply` acceso (in `/admin/autonomy`), e se la
+  scrittura fallisce lo dice col badge «riscrittura FALLITA». Badge «tetto cambiato dopo la misura»
+  quando il tetto in vigore non è quello dell'ultimo giro.
+- **Proponi una caccia** (K60): il codice costruisce il menù dai buchi di copertura (serie mai
+  cacciate, forma copiata da una configurazione dello stesso timeframe che gira davvero, costo
+  stimato), il comitato AI sceglie e argomenta. Senza tetto la cadenza è quella del modello e il
+  badge «senza tetto» lo dice. **Nessuna proposta si adotta da sola**: si crea da «+ Nuova».
+
+Nella tabella delle configurazioni: badge di resa e costo (K50/K54b: chiavi grigie per run, ore al
+mese, minuti per run, verdetto `Dormiente`), badge «serie sospese» (K49b) e, nel form di modifica,
+il campo **«Ore minime fra due run»** (K56) che vale nella rotazione di campagna **e** nei run a cron.

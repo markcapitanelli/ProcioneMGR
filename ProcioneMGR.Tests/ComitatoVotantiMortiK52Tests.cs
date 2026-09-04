@@ -139,7 +139,28 @@ public class ComitatoVotantiMortiK52Tests
         var verdetto = new CommitteeVerdict("abc", ByQuorum: false,
             [Guasto("Nvidia", 410), Guasto("Groq", 404), Valido("Gemini", "abc")]);
 
-        Assert.Equal("default:provider-guasti", FleetOrchestratorWorker.DescribeAssignSource(verdetto));
+        // [Revisione 2026-09-03] «provider-guasti» solo se il caduto è CONFERMATO dall'isteresi.
+        Assert.Equal("default:provider-guasti",
+            FleetOrchestratorWorker.DescribeAssignSource(verdetto, provideConfermatiGuasti: ["Groq"]));
+    }
+
+    /// <summary>
+    /// <b>Il nullo della rettifica K53.</b> Un 404 isolato è rumore misurato (4 su 10 su NVIDIA con
+    /// un modello che funziona): senza conferma dell'isteresi il journal NON deve scrivere
+    /// «provider-guasti», che manderebbe a cercare un modello morto che non c'è.
+    /// </summary>
+    [Fact]
+    public void ILNULLO_un404isolato_senzaCONFERMA_nonEguasto()
+    {
+        var verdetto = new CommitteeVerdict("abc", ByQuorum: false,
+            [Guasto("Nvidia", 404), Valido("Groq", "abc"), Valido("Gemini", "xyz")]);
+
+        Assert.Equal("default:quorum-mancato", FleetOrchestratorWorker.DescribeAssignSource(verdetto));
+        Assert.Equal("default:quorum-mancato",
+            FleetOrchestratorWorker.DescribeAssignSource(verdetto, provideConfermatiGuasti: []));
+        // Confermato un ALTRO provider, non quello caduto in questo giro: ancora non è la causa.
+        Assert.Equal("default:quorum-mancato",
+            FleetOrchestratorWorker.DescribeAssignSource(verdetto, provideConfermatiGuasti: ["HuggingFace"]));
     }
 
     /// <summary>
@@ -312,6 +333,75 @@ public class ComitatoVotantiMortiK52Tests
             [Guasto("Nvidia", 503), Valido("Groq", "abc"), Valido("Gemini", "abc")]), minValidVotes: 2);
 
         Assert.Equal(1, w.LastCommitteeFault!.Serie["Nvidia"]);   // né 2, né sparita
+    }
+
+    /// <summary>
+    /// [Revisione 2026-09-03] <b>Un giro a zero voti non guarisce nessuno.</b> Budget esaurito o
+    /// comitato spento: il quadro precedente resta (dichiarando di essere più vecchio), la serie
+    /// non si azzera, e al 404 successivo NON parte una seconda notifica critica.
+    /// </summary>
+    [Fact]
+    public async Task ZEROvoti_nonCANCELLAlaCONFERMA_eNONriarmaLaNOTIFICA()
+    {
+        var w = Worker();
+        for (var i = 0; i < FleetOrchestratorWorker.ConfermaGuastoGiri; i++)
+        {
+            await w.ValutaComitatoPerTestAsync(GiroConNvidiaGiu(), minValidVotes: 2);
+        }
+        Assert.Equal(["Nvidia"], w.LastCommitteeFault!.Confermati);
+
+        await w.ValutaComitatoPerTestAsync(new CommitteeVerdict("abc", false, []), minValidVotes: 2);
+
+        var r = w.LastCommitteeFault!;
+        Assert.Equal(["Nvidia"], r.Confermati);                       // la conferma resta
+        Assert.Equal(FleetOrchestratorWorker.ConfermaGuastoGiri, r.Serie["Nvidia"]);
+        Assert.True(r.UltimoGiroSenzaVoti);                          // ...e il quadro dice di essere vecchio
+    }
+
+    /// <summary>
+    /// [Revisione 2026-09-03] Un provider confermato che in QUESTO giro si astiene per altra causa
+    /// (503, timeout) resta confermato: l'astensione non è una guarigione.
+    /// </summary>
+    [Fact]
+    public async Task UNconfermatoCHEvaInTIMEOUT_restaCONFERMATO()
+    {
+        var w = Worker();
+        for (var i = 0; i < FleetOrchestratorWorker.ConfermaGuastoGiri; i++)
+        {
+            await w.ValutaComitatoPerTestAsync(GiroConNvidiaGiu(), minValidVotes: 2);
+        }
+
+        await w.ValutaComitatoPerTestAsync(new CommitteeVerdict("abc", false,
+            [Guasto("Nvidia", 503), Valido("Groq", "abc"), Valido("Gemini", "xyz")]), minValidVotes: 2);
+
+        var r = w.LastCommitteeFault!;
+        Assert.Empty(r.Sospetti);                                     // nessun «modello assente» in questo giro...
+        Assert.Equal(["Nvidia"], r.Confermati);                       // ...ma il guasto confermato resta
+    }
+
+    /// <summary>
+    /// [Revisione 2026-09-03] <b>Il nullo della conferma.</b> Un provider confermato guasto e poi
+    /// TOLTO dal comitato (il rimedio che la notifica suggerisce) non è più fra i votanti: esce dalla
+    /// diagnosi. Non deve restare «confermato» falsando i superstiti e dichiarando irraggiungibile
+    /// un quorum che il comitato ha appena raggiunto.
+    /// </summary>
+    [Fact]
+    public async Task UNconfermatoTOLTOdalCOMITATO_esceDALLAdiagnosi()
+    {
+        var w = Worker();
+        for (var i = 0; i < FleetOrchestratorWorker.ConfermaGuastoGiri; i++)
+        {
+            await w.ValutaComitatoPerTestAsync(GiroConNvidiaGiu(), minValidVotes: 2);
+        }
+        Assert.Equal(["Nvidia"], w.LastCommitteeFault!.Confermati);
+
+        // Nvidia rimossa dalla configurazione: il giro ha solo Groq e Gemini, e delibera.
+        await w.ValutaComitatoPerTestAsync(new CommitteeVerdict("abc", true,
+            [Valido("Groq", "abc"), Valido("Gemini", "abc")]), minValidVotes: 2);
+
+        var r = w.LastCommitteeFault!;
+        Assert.Empty(r.Confermati);
+        Assert.False(r.QuorumIrraggiungibile);
     }
 
     /// <summary>

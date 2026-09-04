@@ -48,8 +48,15 @@ public class OrchestratorDecision
     /// <para><c>Applied</c> resta, ed è ora una <b>vista derivata</b>: i consumatori esistenti —
     /// il badge del pannello e <c>SourceVerdictBackfill</c>, che sceglie il run di provenienza fra
     /// le <c>Assign</c> applicate — continuano a leggere ciò che leggevano.</para>
+    ///
+    /// <para><b>[Revisione 2026-09-03] Il default è <see cref="DecisionOutcome.Unknown"/>, non
+    /// <c>Applied</c>.</b> Prima nasceva <c>Applied</c> (qui, nel modello EF e nel DEFAULT a
+    /// database), e sette scrittori del worker non lo impostavano: ogni riga di rifiuto, blocco,
+    /// condanna pendente e ritiro FALLITO risultava «eseguita» nel pannello. Lo stato di successo
+    /// non può essere ciò che si ottiene quando nessuno ha scritto l'esito: chi non lo dichiara non
+    /// lo sa, e <c>Unknown</c> è esattamente quella parola.</para>
     /// </summary>
-    public string Outcome { get; set; } = DecisionOutcome.Applied;
+    public string Outcome { get; set; } = DecisionOutcome.Unknown;
 
     /// <summary>True se la decisione è stata presa col dry-run acceso (solo journal, mai azione).</summary>
     public bool DryRun { get; set; }
@@ -85,6 +92,19 @@ public static class DecisionOutcome
     /// Un intento rimasto aperto oltre il tempo in cui poteva chiudersi: <b>non si sa</b> se
     /// l'azione sia avvenuta. Non si promuove mai a <c>Applied</c> per somiglianza — sarebbe una
     /// deduzione presentata come misura, la trappola già pagata in questo progetto.
+    ///
+    /// <para>[Revisione 2026-09-03] È anche il <b>default</b> della colonna, a database e nel
+    /// modello: una riga scritta da chi non conosce l'esito (un binario vecchio nella finestra fra
+    /// migrazione e rilascio, uno scrittore che dimentica il campo) dichiara «non lo so», mai
+    /// «avvenuto».</para>
     /// </summary>
     public const string Unknown = "Unknown";
+
+    /// <summary>
+    /// [Revisione 2026-09-03] <b>Un'annotazione, non un'azione.</b> Le righe «Blocked» (perché la
+    /// flotta non fa nulla) e «RetirePending» (una condanna a metà strada) descrivono uno stato,
+    /// non un gesto sulla corsia: non sono né applicate né rifiutate né fallite. Prima nascevano
+    /// <c>Applied</c> per default e il pannello le mostrava col badge verde «eseguita».
+    /// </summary>
+    public const string Noted = "Noted";
 }

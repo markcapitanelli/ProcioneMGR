@@ -767,6 +767,21 @@ else
                                                 </span>
                                             </dd>
                                         }
+                                        @if (r.TradesExcludedReplay > 0)
+                                        {
+                                            @* [K41 chiuso, 2026-09-04] Il replay senza originale: righe scritte
+                                               giorni dopo la loro candela, da una corsia riavviata che rigioca
+                                               lo storico. Non sono trade della gamba. *@
+                                            <dt class="col-6">Esclusi perché replay</dt>
+                                            <dd class="col-6">
+                                                @r.TradesExcludedReplay
+                                                <span class="text-muted d-block">
+                                                    Righe scritte più di tre barre <strong>dopo</strong> la loro candela
+                                                    (ora di parete contro ora di candela): fabbricate dal rigioco di candele
+                                                    storiche dopo un riavvio della corsia, non operazioni avvenute.
+                                                </span>
+                                            </dd>
+                                        }
                                         @if (r.TradesExcludedBeforeLeg > 0 && !r.LegHasNoBirthStamp)
                                         {
                                             <dt class="col-6">Esclusi perché precedenti</dt>

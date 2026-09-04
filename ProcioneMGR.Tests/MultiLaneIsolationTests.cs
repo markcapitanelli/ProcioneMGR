@@ -139,11 +139,20 @@ public class MultiLaneIsolationTests : IAsyncDisposable
             new ProcioneMGR.Services.Execution.ExecutionAlgorithmFactory(),
             NullLogger<TradingEngine>.Instance);
 
+    /// <summary>
+    /// [K41 chiuso, 2026-09-04] Le candele sintetiche stanno vicino ad ADESSO: il trade che il
+    /// motore chiude sulla candela i viene scritto ora (<c>RecordedAtUtc</c> dal database), e una
+    /// candela di mesi fa avrebbe la firma del replay — che la performance ora scarta, di proposito.
+    /// Base = sei ore fa, all'ora tonda: la candela 5 chiude un'ora fa, dentro la tolleranza.
+    /// </summary>
+    private static readonly DateTime BaseCandele =
+        new DateTime(DateTime.UtcNow.Ticks - DateTime.UtcNow.Ticks % TimeSpan.TicksPerHour, DateTimeKind.Utc).AddHours(-6);
+
     private static OhlcvData Candle(int i, decimal close) => new()
     {
         Symbol = "BTC/USDT",
         Timeframe = "1h",
-        TimestampUtc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddHours(i),
+        TimestampUtc = BaseCandele.AddHours(i),
         Open = close,
         High = close,
         Low = close,

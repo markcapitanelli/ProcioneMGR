@@ -165,6 +165,27 @@ public sealed class FleetStateReader(
         };
     }
 
+    /// <summary>
+    /// [Revisione 2026-09-03/04] <b>Una riga «Assign» conta come «candidato gestito» solo se ha
+    /// toccato (o sta toccando) una corsia</b>: Applied, Intended, Unknown con un errore o applicato.
+    /// I Failed e i Refused a dry-run SPENTO contano per <see cref="FinestraRifiuti"/>: abbastanza per
+    /// far avanzare la coda oltre un candidato che il braccio non può eseguire (ensemble multi-gamba,
+    /// corsia non autorizzata), non abbastanza per perderlo per due settimane. In dry-run nulla
+    /// brucia: il rifiuto è la modalità, non una proprietà del candidato. Puro: si prova senza DB.
+    /// </summary>
+    internal static readonly TimeSpan FinestraRifiuti = TimeSpan.FromHours(24);
+
+    internal static bool ContaComeGestito(string outcome, bool dryRun, bool applied, string? error, DateTime atUtc, DateTime now)
+        => outcome switch
+        {
+            DecisionOutcome.Applied => true,
+            DecisionOutcome.Intended => true,
+            DecisionOutcome.Unknown => applied || error is not null,
+            DecisionOutcome.Failed => atUtc >= now - FinestraRifiuti,
+            DecisionOutcome.Refused => !dryRun && atUtc >= now - FinestraRifiuti,
+            _ => false,
+        };
+
     private async Task<IReadOnlyList<FleetCandidate>> ReadCandidatesAsync(DateTime now, CancellationToken ct)
     {
         var opt = fleetOptions.CurrentValue;
@@ -210,10 +231,33 @@ public sealed class FleetStateReader(
         // [K14 2026-08-31] DUE insiemi, non uno. Prima "Assign" e "ProposeGrey" finivano insieme in
         // «gia' gestito», e con l'ereditarieta' per identita' una NOTIFICA a un umano toglieva il
         // candidato al braccio automatico — per sempre, dentro la finestra dei 30 giorni.
+        // [Revisione 2026-09-03] Solo le assegnazioni che hanno TOCCATO (o stanno toccando) una
+        // corsia contano come «gestito»: Applied, Intended, Unknown. Un «Assign» RIFIUTATO dal gate
+        // (dry-run, corsia non autorizzata, budget del tick) prima finiva qui uguale, e bruciava il
+        // candidato — e per ereditarietà di identità tutti i run della stessa chiave — per i 14
+        // giorni di CandidateMaxAgeDays: in dry-run la coda si svuotava in poche ore e il no-op
+        // diceva «tutti già schierati in passato». Un rifiuto per regola non è uno schieramento.
+        // I Failed contano per 24 ore: abbastanza per non ritentare a ogni tick uno schieramento
+        // che fallisce per una ragione stabile (bracket non derivabile, motore muto), non
+        // abbastanza per perdere il candidato per due settimane.
+        //
+        // I Refused a dry-run SPENTO contano anch'essi per 24 ore — ed è ciò che fa AVANZARE la
+        // coda: un candidato che il braccio non può eseguire per una ragione stabile (ensemble
+        // multi-gamba, corsia non autorizzata) altrimenti resterebbe in testa alla FIFO e
+        // occuperebbe l'unico slot del tick per quattordici giorni, senza che i candidati dietro di
+        // lui vengano mai proposti. In DRY-RUN invece nulla brucia: il rifiuto è la modalità, non
+        // una proprietà del candidato, e chi spegne il dry-run dopo giorni di osservazione deve
+        // trovare la coda intera.
+        //
+        // Unknown conta solo se porta un errore (un intento chiuso dalla riconciliazione) o se è
+        // applicato: una riga senza esito scritta da un binario che non conosce la colonna, nella
+        // finestra fra migrazione e rilascio, non è uno schieramento.
         var assignedByFleet = (await db.OrchestratorDecisions.AsNoTracking()
                 .Where(d => d.RunId != null && runIds.Contains(d.RunId.Value) && d.Kind == "Assign")
-                .Select(d => d.RunId!.Value)
+                .Select(d => new { RunId = d.RunId!.Value, d.Outcome, d.DryRun, d.Applied, d.Error, d.AtUtc })
                 .ToListAsync(ct))
+            .Where(d => ContaComeGestito(d.Outcome, d.DryRun, d.Applied, d.Error, d.AtUtc, now))
+            .Select(d => d.RunId)
             .ToHashSet();
         var proposedByFleet = (await db.OrchestratorDecisions.AsNoTracking()
                 .Where(d => d.RunId != null && runIds.Contains(d.RunId.Value) && d.Kind == "ProposeGrey")

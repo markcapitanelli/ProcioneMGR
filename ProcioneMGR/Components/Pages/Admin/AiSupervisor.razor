@@ -529,24 +529,30 @@
                            andasse. Ora la frase dipende dai voti, e quando il quorum è
                            irraggiungibile lo dice. *@
                         @if (ProcioneMGR.Services.Llm.Committee.CommitteeDiagnosis
-                                 .QuorumIrraggiungibile(probe.Votes, _committee.MinValidVotes))
+                                 .QuorumIrraggiungibile(probe.Votes, CommitteeMonitor.CurrentValue.MinValidVotes))
                         {
-                            <span class="badge bg-danger ms-1">QUORUM IRRAGGIUNGIBILE</span>
+                            @* [Revisione 2026-09-03] Una prova è UNA risposta, non una diagnosi (K53:
+                               su NVIDIA il 404 arriva 4 volte su 10 su un modello che funziona). Il
+                               lessico «per sempre» spetta alla conferma dell'orchestratore, che conta
+                               le ripetizioni; qui si dice cosa è successo in QUESTA prova e cosa fare. *@
+                            <span class="badge bg-danger ms-1">QUORUM MANCATO IN QUESTA PROVA</span>
                             <div class="text-danger small mt-1">
-                                Questo <strong>non</strong> è il comportamento previsto: dei
-                                @probe.Votes.Count votanti interrogati,
+                                Dei @probe.Votes.Count votanti interrogati,
                                 <strong>@ProcioneMGR.Services.Llm.Committee.CommitteeDiagnosis.VotantiGuasti(probe.Votes).Count
-                                puntano a un modello che non esiste più</strong>, e i superstiti non bastano a fare
-                                @_committee.MinValidVotes. Finché resta così, ogni pareggio della flotta lo decide la
-                                regola deterministica — e non è un ripiego occasionale, è per sempre.
+                                hanno risposto «modello assente»</strong> (HTTP 404/410) e i superstiti non bastano a fare
+                                @CommitteeMonitor.CurrentValue.MinValidVotes (la soglia in vigore). Una risposta sola non prova che il modello sia morto: su NVIDIA
+                                il 404 è stato misurato 4 volte su 10 su un modello che funziona. <strong>Ripeti la prova</strong>;
+                                se si ripete, correggi il modello con il pulsante ↻ accanto al campo del modello (aggiorna
+                                l'elenco per la tua chiave). La conferma vera — tre consultazioni di fila — è quella
+                                dell'orchestratore, nel riquadro del comitato in /admin/autonomy.
                             </div>
                         }
                         else if (ProcioneMGR.Services.Llm.Committee.CommitteeDiagnosis.VotantiGuasti(probe.Votes).Count > 0)
                         {
                             <span class="text-warning small">
-                                — la maggioranza non si è formata, ma attenzione: qualche votante ha un
-                                <strong>modello non più esistente</strong>. Il quorum resta possibile, il comitato però
-                                sta decidendo con meno voci di quante ne risultano configurate.
+                                — la maggioranza non si è formata, e qualche votante ha risposto
+                                <strong>«modello assente»</strong> in questa prova. Non è ancora una diagnosi: ripeti la prova,
+                                e se si ripete correggi il modello. Il quorum resta possibile.
                             </span>
                         }
                         else
@@ -1150,13 +1156,22 @@ else
         finally { _fetchingModels = null; }
     }
 
-    /// <summary>Il modello del provider dentro LlmOptions (campi piatti, stile NvidiaModel).</summary>
+    /// <summary>
+    /// Il modello del provider dentro LlmOptions (campi piatti, stile NvidiaModel).
+    ///
+    /// <para>[Revisione 2026-09-03] Confronto SENZA distinzione di maiuscole: la tabella K52 passa
+    /// il provider come lo persiste <c>LlmUsageRecords</c> (minuscolo, <c>LlmUsage.cs</c>
+    /// <c>ToLowerInvariant</c>), mentre le costanti di <see cref="AiProviders"/> sono in PascalCase.
+    /// Con il confronto esatto lo switch cadeva sempre sul ramo di default e il pannello mostrava
+    /// «ora configurato: claude-opus-4-8» su TUTTI i provider — il badge «modello cambiato» acceso a
+    /// prescindere dalla realtà, visto dal vivo il 2026-09-03.</para>
+    /// </summary>
     private static string GetModelFor(LlmOptions o, string provider) => provider switch
     {
-        AiProviders.Nvidia => o.NvidiaModel,
-        AiProviders.Gemini => o.GeminiModel,
-        AiProviders.Groq => o.GroqModel,
-        AiProviders.HuggingFace => o.HuggingFaceModel,
+        var p when p.Equals(AiProviders.Nvidia, StringComparison.OrdinalIgnoreCase) => o.NvidiaModel,
+        var p when p.Equals(AiProviders.Gemini, StringComparison.OrdinalIgnoreCase) => o.GeminiModel,
+        var p when p.Equals(AiProviders.Groq, StringComparison.OrdinalIgnoreCase) => o.GroqModel,
+        var p when p.Equals(AiProviders.HuggingFace, StringComparison.OrdinalIgnoreCase) => o.HuggingFaceModel,
         _ => o.Model,
     };
 

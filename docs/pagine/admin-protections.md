@@ -158,3 +158,12 @@ uno stato che non è quello vero.
   documenta `size` come controvalore quote sui market-buy: senza verifica, ordine rifiutato).
   È un'attestazione registrata, non una preferenza; sezione aggiunta alle Writable di
   `EngineConfigSections` (la legge il motore, a ogni ordine).
+
+## Sentinella d'ombra: le righe di replay (2026-09-04)
+
+Dal 4/09 un confronto d'ombra si scrive solo se la barra che ha chiuso la posizione è quella di
+adesso: un tick più giovane della barra di oltre due passi del timeframe è replay al riavvio della
+corsia e viene scartato (`ProtectiveExitShadowReplayGuard`). Le righe scritte prima — in
+particolare le 14 del 23/08 18:05-18:07 e del 31/08 20:24-20:25 con costi fra 700 e 2.000 bps e
+anticipo zero — sono replay, non crolli con gap: il pannello le mostra ancora, vanno lette così.
+Dettaglio in `docs/audit/42_REVISIONE_FILONE_K_2026-09-03.md` §10.3.

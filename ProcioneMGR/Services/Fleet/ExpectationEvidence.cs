@@ -12,12 +12,19 @@ namespace ProcioneMGR.Services.Fleet;
 /// <param name="Ancora">Quando è stato scritto (<c>ExpectedSharpeAtUtc</c>).</param>
 /// <param name="MisureDopo">Quante volte la STESSA identica ipotesi è stata rivalutata da allora.</param>
 /// <param name="MedianaDopo">La mediana di quelle rivalutazioni: la stima corrente, non quella d'origine.</param>
+/// <param name="AncoraDalRun">
+/// [Revisione 2026-09-04] Vero = l'àncora è il run che ha PRODOTTO il numero, non l'ora dello
+/// schieramento. La corsia 6 porta un numero del 21/08 ma è stata schierata il 31/08: contando
+/// «dopo» dallo schieramento le rivalutazioni erano meno di cinque e la gamba non era giudicabile
+/// — il falso allarme che K54 doveva togliere restava.
+/// </param>
 /// </summary>
 public sealed record ExpectationEvidence(
     decimal Portato,
     DateTime Ancora,
     int MisureDopo,
-    decimal? MedianaDopo)
+    decimal? MedianaDopo,
+    bool AncoraDalRun = false)
 {
     /// <summary>
     /// Sotto questa soglia di misure successive non si dice nulla: due rivalutazioni non
@@ -59,11 +66,12 @@ public sealed record ExpectationEvidence(
     /// </summary>
     public decimal Corrente => Giudicabile ? MedianaDopo!.Value : Portato;
 
-    public string Racconto => !Giudicabile
+    public string Racconto => (!Giudicabile
         ? $"nessuna rivalutazione sufficiente da quando è stata scritta ({MisureDopo} su {MinMisurePerGiudicare} necessarie): resta l'unica misura che c'è"
         : Contraddetta
             ? $"da allora la stessa ipotesi è stata rivalutata {MisureDopo} volte e la mediana è {MedianaDopo:F3}, non {Portato:F3}"
-            : $"confermata da {MisureDopo} rivalutazioni successive (mediana {MedianaDopo:F3})";
+            : $"confermata da {MisureDopo} rivalutazioni successive (mediana {MedianaDopo:F3})")
+        + (AncoraDalRun ? $" [àncora: il run del {Ancora:yyyy-MM-dd} che ha prodotto il numero]" : $" [àncora: lo schieramento del {Ancora:yyyy-MM-dd}]");
 }
 
 public interface IExpectationEvidenceReader
@@ -134,12 +142,26 @@ public sealed class ExpectationEvidenceReader(
             var key = Pipeline.PipelineCandidateKey.Build(
                 leg.StrategyName, cfg.Symbol, cfg.Timeframe, leg.Parameters);
 
+            // [Revisione 2026-09-04] L'àncora è il RUN che ha prodotto il numero, quando si trova:
+            // l'ultima misura della stessa identità, non posteriore allo schieramento, con lo
+            // stesso Sharpe holdout della gamba. Lo schieramento timbra ExpectedSharpeAtUtc con
+            // «adesso», e un numero può essere di dieci giorni prima (corsia 6: numero del 21/08,
+            // schierata il 31/08): contare «dopo» dallo schieramento nascondeva le rivalutazioni
+            // che lo avevano già smentito. Se il run non si trova, resta lo schieramento.
+            var sorgente = await db.ResearchCandidates.AsNoTracking()
+                .Where(c => c.CandidateKey == key && c.RunCompletedUtc <= ancora
+                            && c.HoldoutSharpe >= portato - 0.0001m && c.HoldoutSharpe <= portato + 0.0001m)
+                .OrderByDescending(c => c.RunCompletedUtc)
+                .Select(c => (DateTime?)c.RunCompletedUtc)
+                .FirstOrDefaultAsync(ct);
+            var ancoraEffettiva = sorgente ?? ancora;
+
             var dopo = await db.ResearchCandidates.AsNoTracking()
-                .Where(c => c.CandidateKey == key && c.RunCompletedUtc > ancora)
+                .Where(c => c.CandidateKey == key && c.RunCompletedUtc > ancoraEffettiva)
                 .Select(c => c.HoldoutSharpe)
                 .ToListAsync(ct);
 
-            return new ExpectationEvidence(portato, ancora, dopo.Count, Mediana(dopo));
+            return new ExpectationEvidence(portato, ancoraEffettiva, dopo.Count, Mediana(dopo), AncoraDalRun: sorgente is not null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)

@@ -276,7 +276,13 @@ public static class AdminConfigRules
             (o.CancelPauseMinutes >= 0, "La pausa dopo un annullamento non può essere negativa (0 = nessuna pausa)."),
             // [J1] Nessun massimo: un riarmo lunghissimo è una scelta legittima; negativo no.
             (o.RearmHours >= 0, "Il riarmo a tempo non può essere negativo (0 = mai: si esce solo per trigger o a mano)."),
-            (o.StallAlertHours >= 1, "La soglia di fermo della ricerca dev'essere almeno 1 ora.")),
+            (o.StallAlertHours >= 1, "La soglia di fermo della ricerca dev'essere almeno 1 ora."),
+            // [K59, revisione 2026-09-03] Gli stessi limiti che il guardiano applica: senza queste
+            // regole il pannello salvava 2 e il worker girava ogni 5, cioè un numero a schermo e un
+            // altro in vigore — il difetto [M1] di questo stesso file.
+            (o.MonthlyHourBudget >= 0, "Il tetto della caccia in ore al mese non può essere negativo (0 = nessun tetto, dichiarato)."),
+            (o.BudgetTickMinutes == 0 || (o.BudgetTickMinutes >= 5 && o.BudgetTickMinutes <= 1440),
+                "Il giro del budget vale 0 (spento) oppure da 5 a 1440 minuti: sono i limiti che il guardiano applica davvero.")),
 
         RegimeTriggerOptions o => Check(
             (o.CheckIntervalMinutes >= 1, "L'intervallo di controllo dev'essere almeno 1 minuto."),

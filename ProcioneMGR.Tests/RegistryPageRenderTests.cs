@@ -156,7 +156,7 @@ public sealed class RegistryPageRenderTests : BunitContext
         Button(cut, "Ritira").Click();
         // `oninput` e non `onchange`: il pulsante di conferma è disabilitato finché il motivo è
         // vuoto, e con onchange l'abilitazione arriverebbe solo all'uscita dal campo.
-        cut.Find("input.form-control").Input("sospetto look-ahead sulle feature");
+        cut.WaitForElement("input.form-control", TimeSpan.FromSeconds(10)).Input("sospetto look-ahead sulle feature");
         Button(cut, "Sì, ritira").Click();
 
         cut.WaitForAssertion(() => Assert.Contains("Modello ritirato", cut.Markup), TimeSpan.FromSeconds(10));
@@ -210,7 +210,7 @@ public sealed class RegistryPageRenderTests : BunitContext
         Button(cut, "Ritira").Click();                                   // conferma armata
         await MutaStadioDiNascostoAsync(db, id, ModelStage.Retired, "drift: 3 feature in alert (Mom1, Rsi14, Atr)");
 
-        cut.Find("input.form-control").Input("Ritirato manualmente dalla UI.");
+        cut.WaitForElement("input.form-control", TimeSpan.FromSeconds(10)).Input("Ritirato manualmente dalla UI.");
         Button(cut, "Sì, ritira").Click();
 
         cut.WaitForAssertion(() => Assert.Contains("alert-warning", cut.Markup), TimeSpan.FromSeconds(10));

@@ -983,6 +983,18 @@ public sealed class TradingEngine(
         // Se l'uscita è già arrivata dal tick, non c'è ritardo da misurare: i due lati coincidono.
         if (source == "tick") return;
 
+        // [2026-09-04] Replay: al riavvio la corsia riconsuma candele vecchie, e una posizione
+        // richiusa su una barra di giorni fa incontrerebbe il tick di oggi. Il confronto fra due
+        // mercati diversi non è una misura (14 righe su 24 nella tabella dal vivo, 3 allarmi falsi
+        // sopra soglia): si scarta e si dice a debug. Vedi ProtectiveExitShadowReplayGuard.
+        if (ProtectiveExitShadowReplayGuard.EReplay(detection.AtUtc, ts, _state.Timeframe))
+        {
+            logger.LogDebug(
+                "Lane {Lane}: confronto d'ombra scartato — la barra {Barra:u} è replay rispetto al tick {Tick:u} ({Symbol}).",
+                laneId, ts, detection.AtUtc, pos.Symbol);
+            return;
+        }
+
         try
         {
             var isLong = pos.Side == OrderSide.Buy;
@@ -1652,11 +1664,6 @@ public sealed class TradingEngine(
             trades = TradeDeduplication.Distinti(await q.ToListAsync(ct));
         }
 
-        var wins = trades.Where(t => t.Pnl > 0m).ToList();
-        var losses = trades.Where(t => t.Pnl < 0m).ToList();
-        var grossWin = wins.Sum(t => t.Pnl);
-        var grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
-
         // Snapshot ATOMICO di curva e stato sotto il gate — poi si calcola fuori. Prima si leggeva
         // _equity viva in TRE punti (ToList, SharpeRatio, MaxDrawdown) mentre ProcessCandleAsync
         // poteva farci Add sotto il SUO gate: una collisione lancia ("collection modified") o copia
@@ -1679,6 +1686,24 @@ public sealed class TradingEngine(
             timeframe = _state.Timeframe;
         }
         finally { _gate.Release(); }
+
+        // [K41 chiuso, 2026-09-04] E i trade devono essere VIVI: una riga scritta giorni dopo la sua
+        // candela è replay di storico (corsia fermata e riavviata con la stessa gamba), non
+        // un'operazione avvenuta. La deduplica non la vede — non ha un originale — e senza questo
+        // filtro entrava nel ritiro di flotta come trade vero. Le righe storiche senza
+        // RecordedAtUtc restano, dichiarate.
+        var prima = trades.Count;
+        trades = TradeDeduplication.Vivi(trades, timeframe);
+        if (trades.Count != prima)
+        {
+            logger.LogInformation("Corsia {Lane}: {N} righe di replay escluse dalla performance (scritte oltre {Tol} dopo la candela).",
+                laneId, prima - trades.Count, TradeDeduplication.TolleranzaDiScrittura(timeframe));
+        }
+
+        var wins = trades.Where(t => t.Pnl > 0m).ToList();
+        var losses = trades.Where(t => t.Pnl < 0m).ToList();
+        var grossWin = wins.Sum(t => t.Pnl);
+        var grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
 
         var ppy = Statistics.PeriodsPerYear(timeframe);
 

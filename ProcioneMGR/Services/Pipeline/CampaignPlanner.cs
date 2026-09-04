@@ -166,7 +166,21 @@ public sealed class CampaignPlanner(
         if (silence < TimeSpan.FromHours(rearmHours)) return;
 
         var backoff = TimeSpan.FromHours(Math.Max(1, campaign.BackoffHours));
-        var anyEligible = states.Any(s => s.LastRunAtUtc is null || s.LastRunAtUtc + backoff <= now);
+        // [Revisione 2026-09-03] L'eleggibilità qui è la STESSA del planner: backoff della campagna
+        // E cadenza propria della configurazione (K56). Prima il riarmo guardava solo il backoff,
+        // il planner poi saltava tutto per cadenza e dichiarava «rotazione esaurita» con un
+        // Warning: con nove cacce tutte entro cadenza il ciclo Waiting→Rotating→esaurita si
+        // ripeteva a ogni riarmo, cioè un Warning ogni due tick fino al tetto delle notifiche.
+        var ids = states.Select(s => s.ConfigurationId).ToList();
+        var cadenze = await db.PipelineConfigurations.AsNoTracking()
+            .Where(c => ids.Contains(c.Id))
+            .Select(c => new { c.Id, c.MinHoursBetweenRuns })
+            .ToDictionaryAsync(c => c.Id, c => c.MinHoursBetweenRuns, ct);
+        var anyEligible = states.Any(s =>
+            s.LastRunAtUtc is null
+            || (s.LastRunAtUtc + backoff <= now
+                && (!cadenze.TryGetValue(s.ConfigurationId, out var ore) || ore <= 0
+                    || s.LastRunAtUtc.Value.AddHours(ore) <= now)));
         if (!anyEligible) return;
 
         campaign.Status = CampaignStatus.Rotating;
@@ -427,6 +441,7 @@ public sealed class CampaignPlanner(
             if (states[i].LastRunAtUtc is DateTime t && (lastRun is null || t > lastRun)) { lastRun = t; lastIdx = i; }
         }
 
+        var saltatePerCadenza = 0;
         for (var offset = 1; offset <= states.Count; offset++)
         {
             var state = states[(lastIdx + offset) % states.Count];
@@ -458,6 +473,7 @@ public sealed class CampaignPlanner(
                 logger.LogDebug(
                     "Campagna {Id}: config {ConfigId} '{Name}' saltata, cadenza propria {Ore}h non ancora scaduta (ultimo run {Ultimo:u}).",
                     campaign.Id, config.Id, config.Name, config.MinHoursBetweenRuns, ultimo);
+                saltatePerCadenza++;
                 continue;
             }
             if (config.ExecutionMode == "Live")
@@ -495,10 +511,27 @@ public sealed class CampaignPlanner(
 
         // Nessuna config eleggibile: le non-eseguite sono sempre eleggibili, quindi qui la
         // rotazione è ESAURITA (tutte già tentate e in backoff) → attesa di un trigger (Fase 2).
+        //
+        // [Revisione 2026-09-03] ...oppure sono entro la propria CADENZA (K56): non è «esaurita»,
+        // è «in attesa della prima cadenza che scade», e il riarmo a tempo la rimette in moto da
+        // solo. Si scrive lo stato, ma senza il Warning: un'attesa prevista non è un allarme.
         if (campaign.Status != CampaignStatus.WaitingForTrigger)
         {
             campaign.Status = CampaignStatus.WaitingForTrigger;
-            SetOutcome(campaign, "Rotazione esaurita senza ensemble schierato: in attesa di un trigger contestuale (cambio regime/vol) o dell'operatore.");
+            // Un wake assorbito non resta armato: altrimenti il riarmo a tempo lo ritroverebbe,
+            // scavalcherebbe il backoff e marcherebbe «Event» un run partito ore dopo l'evento.
+            var wakeAssorbito = campaign.PendingWakeReason is { } motivoWake ? $" Wake «{motivoWake}» assorbito." : string.Empty;
+            campaign.PendingWakeReason = null;
+            if (saltatePerCadenza > 0)
+            {
+                SetOutcome(campaign,
+                    $"Tutte le configurazioni eleggibili sono entro la propria cadenza ({saltatePerCadenza} saltate per cadenza): "
+                    + "la rotazione riparte da sola alla prima cadenza scaduta, o a un trigger contestuale." + wakeAssorbito);
+                await db.SaveChangesAsync(ct);
+                logger.LogInformation("Campagna {Id} '{Name}': {Outcome}", campaign.Id, campaign.Name, campaign.LastOutcome);
+                return;
+            }
+            SetOutcome(campaign, "Rotazione esaurita senza ensemble schierato: in attesa di un trigger contestuale (cambio regime/vol) o dell'operatore." + wakeAssorbito);
             await db.SaveChangesAsync(ct);
             logger.LogWarning("Campagna {Id} '{Name}': {Outcome}", campaign.Id, campaign.Name, campaign.LastOutcome);
             await NotifyAsync(Notifications.NotificationSeverity.Warning,

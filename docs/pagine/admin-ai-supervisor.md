@@ -96,3 +96,17 @@ per i payload corrotti.
 - Il pattern breaker+probe+notifiche nasce da una lezione concreta: un layer esterno che
   fallisce in silenzio è peggio di uno spento — lo stato dev'essere visibile e il recupero
   automatico.
+
+## Filone K (2026-09-02 → 09-03): il votante morto non è un'astensione
+
+- **Ultima risposta valida per provider** (K52): dal persistito `LlmUsageRecords`, che conta solo le
+  risposte riuscite; una riga vecchia con un modello diverso da quello configurato è il sintomo che
+  ha tenuto il comitato senza quorum per due settimane. *Difetto corretto il 2026-09-03: il badge
+  «ora configurato» compariva su tutti i provider per un confronto sensibile alle maiuscole.* Dipende
+  da `Llm:Budget:TrackingEnabled`.
+- **Prova il comitato**: un giro vero. Una risposta «modello assente» (404/410) in una prova **non
+  è una diagnosi** (K53: su NVIDIA il 404 arriva 4 volte su 10 su un modello che funziona): il testo
+  dice di ripetere la prova; la conferma è quella dell'orchestratore, dopo tre consultazioni di
+  fila. La soglia mostrata è quella in vigore, non il campo del form.
+- **Selettore automatico dei modelli** (K53): la prova (`LlmUsageRecords`) precede l'euristica sul
+  nome.

@@ -71,7 +71,11 @@
     "UseCommittee": false,
     "_comment_J14": "[J14] GreyAutoDeploy: il ROVESCIAMENTO di F5, per decisione del proprietario (PRD autonomia-operativa 2026-08-25) — l'orchestratore puo' schierare DA SOLO un candidato grigio su una corsia libera e AUTORIZZATA (ExecutionLanes), solo Paper, stesso deployer del click umano. Default false: e' il cambio di natura della fascia grigia e si accende apposta. MaxGreyLanes: tetto di corsie occupabili da grigi contemporaneamente (le altre restano alla banda pass); una corsia dalla provenienza ignota conta come grigia.",
     "GreyAutoDeploy": false,
-    "MaxGreyLanes": 3
+    "MaxGreyLanes": 3,
+    "_comment_K33": "[K33, 2026-09-01] BlockDuplicateTriple: la guardia contro l'ipotesi doppia rifiuta anche la stessa TERNA (strategia, simbolo, timeframe) con parametri diversi, non solo la replica esatta. Default true. Spegnerla e' legittimo se si vogliono deliberatamente due tarature dello stesso segnale: il motivo finisce a journal.",
+    "BlockDuplicateTriple": true,
+    "_comment_K57": "[K57, 2026-09-04] StabilitaDaUtc: il gate di stabilita' (lista dei grigi) considera solo le rimisurazioni completate da questa data. Default 2026-08-23, la sostituzione del motore walk-forward su cui la soglia e' stata misurata. null = tutte le righe (di entrambi i motori).",
+    "StabilitaDaUtc": "2026-08-23T00:00:00Z"
   },
   "Heartbeat": {
     "_comment": "[AF5.1] Heartbeat incrociato guscio/motore (tabella HostHeartbeats): ogni host scrive il PROPRIO battito e sorveglia quello altrui; stantio oltre StaleMinutes => Telegram Warning una volta per transizione. Il pannello in /admin/autonomy salva su ENTRAMBI gli host.",
@@ -194,7 +198,11 @@
     "_comment_J1": "[J1] RearmHours: ore di silenzio (dall'ultimo run) dopo cui una campagna in WaitingForTrigger torna in rotazione DA SOLA — la sorgente di ripartenza indipendente dal trigger di regime (il 2026-08-23 la ricerca e' rimasta ferma 43+ ore perche' l'unica uscita era un wake del detector, e il detector puo' guastarsi nei due sensi). Il riarmo rispetta i backoff per-config e la pausa dopo annullamento. 0 = mai (comportamento storico). [J3] StallAlertHours: ore senza run oltre cui la card in Home dichiara la ricerca FERMA — soglia di lettura, non un gate.",
     "RearmHours": 24,
     "StallAlertHours": 12,
-    "RespectAutoReapplyGate": true
+    "RespectAutoReapplyGate": true,
+    "_comment_K59": "[K59, 2026-09-03] MonthlyHourBudget: tetto di ORE di caccia al mese (in ore, non in numero di cacce: la mediana per run va da 0,6 a 43,8 minuti). 0 = nessun tetto — il consumo resta dichiarato in /pipeline ma non governato. BudgetAutoApply: false = il guardiano misura, propone e notifica; true = riscrive da solo MinHoursBetweenRuns delle configurazioni (una decisione di budget del proprietario, come GreyAutoDeploy). BudgetTickMinutes: ogni quanti minuti il guardiano guarda (0 = spento, altrimenti 5..1440). Riferimento misurato il 2026-09-03: ~32 ore/mese su nove cacce.",
+    "MonthlyHourBudget": 0,
+    "BudgetAutoApply": false,
+    "BudgetTickMinutes": 60
   },
   "RegimeTrigger": {
     "_comment": "Trigger contestuale (Fase 2, PRD Autonomia): sveglia il Campaign Planner quando il cluster K-means corrente cambia rispetto all'ultimo run della campagna o la vol realizzata esce dalla banda [forecast/k, forecast*k] del forecast GARCH di quel run. NON lancia mai run direttamente (parla solo col planner, run marcati Event). Inerte senza Campaign:Enabled. Cooldown di default 6h.",

@@ -80,6 +80,17 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
             NullLogger<EnsembleManager>.Instance);
     }
 
+    /// <summary>
+    /// [K41 chiuso, 2026-09-04] I trade seminati vanno dichiarati SCRITTI QUANDO SONO AVVENUTI. La
+    /// colonna <c>RecordedAtUtc</c> la mette il database (<c>now()</c>, inforgiabile da EF): righe
+    /// con chiusure di settimane fa scritte adesso hanno esattamente la firma del replay, e il
+    /// monitor le scarta — che è il comportamento giusto sul database vero, e la ragione per cui
+    /// qui l'ora di parete va riallineata a mano. Cinque minuti dopo la candela: un trade vivo.
+    /// </summary>
+    private static Task ScrittiQuandoAvvenutiAsync(ApplicationDbContext db)
+        => db.Database.ExecuteSqlRawAsync(
+            """UPDATE "TradeRecords" SET "RecordedAtUtc" = "ClosedAtUtc" + interval '5 minutes' WHERE "RecordedAtUtc" IS NULL OR "RecordedAtUtc" > "ClosedAtUtc" + interval '1 day';""");
+
     private static TradeRecord Trade(string strategyId, decimal pnlPercent, DateTime closedAtUtc, string symbol = "BTC/USDT") => new()
     {
         StrategyId = strategyId,
@@ -119,6 +130,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
                 db.TradeRecords.Add(Trade("leg-b", 1m, start.AddDays(i)));
             }
             await db.SaveChangesAsync();
+            await ScrittiQuandoAvvenutiAsync(db);
         }
 
         var reports = await manager.GetDecayReportsAsync();
@@ -165,6 +177,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
                 db.TradeRecords.Add(Trade("leg-a", -40m, start.AddDays(-30 + i), symbol: "SUI/USDT"));
             }
             await db.SaveChangesAsync();
+            await ScrittiQuandoAvvenutiAsync(db);
         }
 
         var report = Assert.Single(await manager.GetDecayReportsAsync());
@@ -196,6 +209,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
             var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             for (var i = 0; i < 12; i++) db.TradeRecords.Add(Trade("leg-a", 1m, start.AddDays(i), symbol: "SUI/USDT"));
             await db.SaveChangesAsync();
+            await ScrittiQuandoAvvenutiAsync(db);
         }
 
         var report = Assert.Single(await manager.GetDecayReportsAsync());
@@ -231,6 +245,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
             // senza questo filtro entrerebbe di sicuro nella finestra delle ultime 20.
             db.TradeRecords.Add(Trade("leg-a", -227340.72m, start.AddDays(500)));
             await db.SaveChangesAsync();
+            await ScrittiQuandoAvvenutiAsync(db);
         }
 
         var report = Assert.Single(await manager.GetDecayReportsAsync());
@@ -261,6 +276,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
             for (var i = 0; i < 19; i++) db.TradeRecords.Add(Trade("leg-a", 1m, start.AddDays(i * 9)));
             db.TradeRecords.Add(Trade("leg-a", -85m, start.AddDays(500)));   // -85%: brutale, ma possibile
             await db.SaveChangesAsync();
+            await ScrittiQuandoAvvenutiAsync(db);
         }
 
         var report = Assert.Single(await manager.GetDecayReportsAsync());
@@ -328,6 +344,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
             // e 3 trade VERI, dopo la nascita.
             for (var i = 0; i < 3; i++) db.TradeRecords.Add(Trade("leg-a", 0.9m, nascita.AddDays(1 + i)));
             await db.SaveChangesAsync();
+            await ScrittiQuandoAvvenutiAsync(db);
         }
 
         var report = Assert.Single(await manager.GetDecayReportsAsync());
@@ -363,6 +380,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
         {
             for (var i = 0; i < 20; i++) db.TradeRecords.Add(Trade("leg-a", i % 2 == 0 ? 1.2m : 0.8m, nascita.AddDays(1 + i * 5)));
             await db.SaveChangesAsync();
+            await ScrittiQuandoAvvenutiAsync(db);
         }
 
         var report = Assert.Single(await manager.GetDecayReportsAsync());
@@ -399,6 +417,7 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
             var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             for (var i = 0; i < 30; i++) db.TradeRecords.Add(Trade("leg-a", 1.2m, start.AddDays(i)));
             await db.SaveChangesAsync();
+            await ScrittiQuandoAvvenutiAsync(db);
         }
 
         var report = Assert.Single(await manager.GetDecayReportsAsync());

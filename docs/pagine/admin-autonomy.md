@@ -191,3 +191,25 @@ esposti `MarketRegime:Model` (KMeans/Jump) e `JumpLambda`, con la nota del contr
 confronto delle transizioni sta nei log di ogni training, si cambia dopo averlo letto.
 Gli scalari si salvano con `SaveValueAsync` (scrittura chirurgica): niente POCO dell'intera
 sezione, niente chiavi cancellate per dimenticanza.
+
+## Filone K (2026-08-31 → 09-04): le manopole del governo autonomo
+
+- **Stato degli agenti** (K1/K2): «acceso» e «operante» distinti, letti dal file caricato e dal
+  database; il comitato si giudica sui voti emessi, non sugli interruttori.
+- **Orchestratore di flotta**: condanne in corso (K42, la serie di conferme per corsia), riquadro
+  rosso del tick che non arriva in fondo (K46), vita degli esperimenti (K47: quanti sarebbero
+  arrivati ai cancelli — «un cancello che nessuno raggiunge è spento»), esposizione grigia su due
+  percorsi (K55), guardia sulla stessa terna (K33, `Fleet:BlockDuplicateTriple`) e, dal
+  2026-09-04, **«Stabilità K57: rimisurazioni da»** (`Fleet:StabilitaDaUtc`, default 2026-08-23:
+  il gate di stabilità conta solo le rimisurazioni del motore corrente).
+- **Journal** (K51): ogni riga porta un esito esplicito — «in corso», «eseguita», «rifiutata»,
+  «fallita», «esito ignoto», «annotata» (blocchi e condanne pendenti). Dal 2026-09-03 l'intento
+  precede anche il ritiro, il default della colonna è `Unknown`, i rifiuti si scrivono una volta
+  per causa e lo stesso menù non fa riconsultare il comitato.
+- **Riquadro del comitato** (K52/K53): sospetti del giro, guasti confermati (tre consultazioni di
+  fila senza voto valido — consultazioni, non tick), quorum irraggiungibile; resta acceso finché
+  c'è un confermato, e dichiara se l'ultima consultazione ha avuto zero voti.
+- **Backfill** K13 (provenienza), J9 (frequenza attesa), K22 (timbro di nascita): anteprima e
+  scrittura separate; dove la fonte manca la gamba resta senza etichetta.
+- **Campagne** (K59): «Tetto caccia (ore/mese)», «Giro del budget (min)» (0 = spento, altrimenti
+  5..1440, con la regola di validazione che lo dice) e «Applica da solo i rallentamenti».

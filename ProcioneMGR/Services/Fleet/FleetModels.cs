@@ -174,6 +174,16 @@ public sealed class FleetOptions
     /// scritto nel journal, che è la differenza fra una scelta e un incidente.</para>
     /// </summary>
     public bool BlockDuplicateTriple { get; set; } = true;
+
+    /// <summary>
+    /// [K57, revisione 2026-09-04] <b>Da quando contano le rimisurazioni per il gate di stabilità.</b>
+    /// La soglia <c>MaxAmpiezzaSuMediana</c> è stata misurata sulle chiavi del <i>motore corrente</i>
+    /// (walk-forward sostituito il 2026-08-23), ma il lettore aggregava OGNI riga della chiave: per
+    /// le configurazioni 17 e 18 il 70-77 % delle righe è precedente alla sostituzione, e il
+    /// ventaglio misurava il cambio di motore, non l'instabilità dell'ipotesi. <c>null</c> = tutte
+    /// le righe (comportamento storico, dichiarato).
+    /// </summary>
+    public DateTime? StabilitaDaUtc { get; set; } = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc);
 }
 
 /// <summary>Fotografia di una corsia come la vede l'orchestratore (sola lettura).</summary>

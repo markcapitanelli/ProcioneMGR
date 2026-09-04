@@ -30,6 +30,18 @@
 | — | [playwright-smoke.mjs](playwright-smoke.mjs) | script di smoke test eseguibile |
 | — | [`/CLAUDE.md`](../../CLAUDE.md) | istruzioni per Claude Code: **il notebook come memoria primaria** |
 
+## Filone K — il governo autonomo (2026-08-31 → 09-03)
+
+| # | File | Contenuto |
+|---|---|---|
+| 36 | [36_RITIRO_CORSIA_NUMERI_2026-09-01.md](36_RITIRO_CORSIA_NUMERI_2026-09-01.md) | i numeri per decidere quando ritirare una corsia |
+| 37 | [37_DECISIONI_RITIRO_2026-09-01.md](37_DECISIONI_RITIRO_2026-09-01.md) | le decisioni sul ritiro, e cinque difetti sotto la taratura |
+| 38 | [38_FASE3_MISURE_2026-09-01.md](38_FASE3_MISURE_2026-09-01.md) | la Fase 3 misurata prima di essere fatta: quattro item cambiano |
+| 39 | [39_FILONE_K_STATO_2026-09-02.md](39_FILONE_K_STATO_2026-09-02.md) | lo stato del filone: K48-K53, la rettifica di K50, il comitato senza quorum |
+| 40 | [40_CACCIA_19_E_STABILITA_2026-09-03.md](40_CACCIA_19_E_STABILITA_2026-09-03.md) | K56 cadenza per configurazione, K57 gate di stabilità |
+| 41 | [41_GOVERNO_DELLA_CACCIA_2026-09-03.md](41_GOVERNO_DELLA_CACCIA_2026-09-03.md) | K58 copertura, K59 tetto in ore, K60 proponitore |
+| 42 | [42_REVISIONE_FILONE_K_2026-09-03.md](42_REVISIONE_FILONE_K_2026-09-03.md) | **revisione completa del filone**: 14 segnalazioni alte, tre difetti dal vivo, correzioni applicate |
+
 ## Secondo passaggio — 2026-08-04, sera
 
 L'audit è stato ripreso e approfondito. Cosa è cambiato:

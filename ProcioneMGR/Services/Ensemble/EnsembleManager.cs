@@ -235,7 +235,13 @@ public sealed class EnsembleManager(
             var candidateTrades = await ancorati.Where(t => t.Symbol == cfg.Symbol).ToListAsync(ct);
             var senzaRepliche = Trading.TradeDeduplication.Distinti(candidateTrades);
             var repliche = Trading.TradeDeduplication.Repliche(candidateTrades, senzaRepliche);
-            var recentTrades = senzaRepliche
+            // [K41 chiuso, 2026-09-04] E solo i trade VIVI: le righe scritte giorni dopo la loro
+            // candela sono replay di storico (corsia fermata e riavviata), non operazioni della
+            // gamba. Non hanno un originale da cui essere dedotte, e senza questo filtro il
+            // decadimento giudicava trade che non sono mai avvenuti.
+            var vivi = Trading.TradeDeduplication.Vivi(senzaRepliche, cfg.Timeframe);
+            var replay = Trading.TradeDeduplication.Replay(senzaRepliche, vivi);
+            var recentTrades = vivi
                 .OrderByDescending(t => t.ClosedAtUtc)
                 .Take(options.WindowTradeCount)
                 .ToList();
@@ -272,6 +278,7 @@ public sealed class EnsembleManager(
             report.TradesExcludedBeforeLeg = primaDellaGamba;
             report.LegHasNoBirthStamp = ancora is null;
             report.TradesExcludedDuplicate = repliche;
+            report.TradesExcludedReplay = replay;
             reports.Add(report);
 
             if (rotti > 0)
@@ -283,9 +290,14 @@ public sealed class EnsembleManager(
 
             if (report.IsAlert)
             {
+                // [Revisione 2026-09-03] Il log racconta il rapporto su cui il verdetto è stato preso
+                // (la stima corrente quando l'evidenza K54 decide), non l'atteso d'origine.
                 logger.LogWarning(
-                    "Decadimento rilevato per {Strategy} ({StrategyId}): Sharpe realizzato {Realized:F2} vs atteso {Expected:F2} ({Ratio:P0}) su {Trades} trade.",
-                    s.DisplayName, s.StrategyId, report.RealizedSharpe, report.ExpectedSharpe, report.SharpeRatio, report.TradeCount);
+                    "Decadimento rilevato per {Strategy} ({StrategyId}): Sharpe realizzato {Realized:F2} vs {Metro} {Expected:F2} ({Ratio:P0}) su {Trades} trade.",
+                    s.DisplayName, s.StrategyId, report.RealizedSharpe,
+                    report.SharpeRatioVsEvidence is not null ? "stima corrente" : "atteso",
+                    report.Evidence is { Giudicabile: true } ev ? ev.Corrente : report.ExpectedSharpe,
+                    report.SharpeRatioVsEvidence ?? report.SharpeRatio, report.TradeCount);
             }
         }
         return reports;

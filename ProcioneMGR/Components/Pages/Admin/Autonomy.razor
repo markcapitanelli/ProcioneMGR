@@ -471,9 +471,18 @@
                che manca. Con la regola vecchia questo riquadro sarebbe diventato rosso ogni due
                giri su un provider che funziona, cioe' esattamente un allarme che non vuol dire
                niente. Ora il sospetto e la conferma sono due cose diverse, e si vede la serie. *@
-            @if (FleetWorker.LastCommitteeFault is { Sospetti.Count: > 0 } comitato)
+            @* [Revisione 2026-09-03] Il riquadro resta acceso finché c'è un guasto CONFERMATO, non
+               solo quando qualcuno ha risposto «modello assente» in QUESTO giro: un provider morto
+               che stavolta va in timeout non è guarito, e il pannello spariva proprio allora. *@
+            @if (FleetWorker.LastCommitteeFault is { } comitato && (comitato.Sospetti.Count > 0 || comitato.Confermati.Count > 0))
             {
                 var confermato = comitato.Confermati.Count > 0;
+                var elenco = comitato.Sospetti
+                    .Select(s => (s.Provider, s.Causa))
+                    .Concat(comitato.Confermati
+                        .Where(c => !comitato.Sospetti.Any(s => string.Equals(s.Provider, c, StringComparison.OrdinalIgnoreCase)))
+                        .Select(c => (Provider: c, Causa: "in questo giro non ha risposto «modello assente»: astenuto per altra causa, e la conferma resta")))
+                    .ToList();
                 <div class="alert @(comitato.QuorumIrraggiungibile ? "alert-danger" : confermato ? "alert-warning" : "alert-secondary") py-2 small mb-2">
                     <strong>
                         @if (comitato.QuorumIrraggiungibile)
@@ -512,8 +521,15 @@
                             prima di chiamarlo guasto — e a quel punto arriva anche la notifica.
                         </text>
                     }
+                    @if (comitato.UltimoGiroSenzaVoti)
+                    {
+                        <div class="text-muted">
+                            Quadro dell'ultima consultazione <em>con voti</em>@(comitato.AtUtc is DateTime q ? $" ({q.ToLocalTime():dd/MM HH:mm})" : ""):
+                            da allora almeno una consultazione ha avuto <strong>zero voti</strong> (budget esaurito o comitato spento) e non ha potuto aggiornarlo.
+                        </div>
+                    }
                     <ul class="mb-1 mt-1">
-                        @foreach (var g in comitato.Sospetti)
+                        @foreach (var g in elenco)
                         {
                             var giriDiFila = comitato.Serie.TryGetValue(g.Provider, out var n) ? n : 0;
                             var ok = comitato.Confermati.Contains(g.Provider, StringComparer.OrdinalIgnoreCase);
@@ -775,6 +791,17 @@
                                    title="La replica ESATTA (stessa PipelineCandidateKey su un'altra corsia in corsa) è sempre rifiutata e non ha manopola. Questo interruttore governa il secondo gradino: la stessa TERNA (strategia, coppia, timeframe) con parametri diversi. Spento, lo schieramento passa e il motivo resta scritto nel journal.">
                                 Rifiuta anche la stessa TERNA (K33) @Hot()
                             </label>
+                        </div>
+                        @* [K57, revisione 2026-09-04] Da quando contano le rimisurazioni per il gate di
+                           stabilità: la soglia è misurata sul motore corrente (walk-forward sostituito il
+                           2026-08-23), e con le righe di due motori il ventaglio misurava il cambio di
+                           motore. Vuoto = tutte le righe, comportamento storico. *@
+                        <div class="col-auto">
+                            <label class="form-label" for="fl_stabilita_da"
+                                   title="Fleet:StabilitaDaUtc — il gate di stabilità K57 (lista dei grigi in questa pagina) considera solo le rimisurazioni completate da questa data in poi. Default 2026-08-23: la sostituzione del motore walk-forward, su cui la soglia MaxAmpiezzaSuMediana = 1,0 è stata misurata. Vuoto = tutte le righe, di entrambi i motori.">
+                                Stabilità K57: rimisurazioni da @Hot()
+                            </label>
+                            <input type="date" class="form-control" id="fl_stabilita_da" @bind="_fleet.StabilitaDaUtc" @bind:format="yyyy-MM-dd" style="width: 11rem;" />
                         </div>
                         <div class="small text-muted flex-fill" style="min-width: 22rem;">
                             <strong>Perché esiste.</strong> Il 2026-08-31 <code>GridMeanReversion DOGE/USDT 15m</code>
@@ -1042,9 +1069,25 @@
                                                 rifiutata
                                             </span>
                                             break;
-                                        default:
+                                        case ProcioneMGR.Data.DecisionOutcome.Noted:
+                                            <span class="badge bg-light text-dark border"
+                                                  title="Un'annotazione, non un'azione: la flotta ha scritto uno stato (blocco, condanna a meta' strada), non ha toccato nessuna corsia.">
+                                                annotata
+                                            </span>
+                                            break;
+                                        case ProcioneMGR.Data.DecisionOutcome.Applied:
                                             @if (d.DryRun) { <span class="badge bg-info">dry-run</span> }
                                             else { <span class="badge bg-success">eseguita</span> }
+                                            break;
+                                        default:
+                                            @* [Revisione 2026-09-03] Prima il ramo di default mostrava
+                                               «eseguita» in verde per qualunque valore non previsto —
+                                               e con sette scrittori che non impostavano Outcome, per
+                                               ogni riga di rifiuto, blocco o ritiro fallito. Un valore
+                                               che il pannello non conosce si dichiara, non si traveste. *@
+                                            <span class="badge bg-warning text-dark" title="@($"Esito «{d.Outcome}» non previsto dal pannello. {d.Error}")">
+                                                esito non dichiarato
+                                            </span>
                                             break;
                                     }
                                 </td>
@@ -1957,6 +2000,36 @@
             <div class="col-auto form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="cp_gate" @bind="_campaign.RespectAutoReapplyGate" />
                 <label class="form-check-label" for="cp_gate">Rispetta il gate della ri-applica @Hot()</label>
+            </div>
+            @* [K59, 2026-09-03] IL TETTO DELLA CACCIA, IN ORE.
+
+               Non in numero di cacce: la mediana per run va da 0,6 minuti (cfg 9, 1d su 10 serie) a
+               43,8 (cfg 19, 5m su 10 serie) — settanta volte. Contarle tratterebbe come uguali due
+               cose che non lo sono, ed e' lo stesso errore per cui K54b ha dovuto mettere il costo
+               accanto alla resa.
+
+               E serve un tetto ESPLICITO perche' nessun freno scatta da solo: il gate del DSR
+               deflaziona per i tentativi del PROPRIO run e non vede le altre cacce, quindi
+               aggiungerne non lo rende piu' severo. Riferimento misurato il 2026-09-03: ~32 ore/mese
+               su nove cacce, dopo i tagli su 18 e 19. *@
+            <div class="col-auto">
+                <label class="form-label" title="Ore di caccia al mese oltre cui il guardiano propone di rallentare, partendo da chi rende meno PER ORA. 0 = nessun tetto: il consumo non e' governato da niente (e il pannello lo dice, invece di tacere). Riferimento misurato il 2026-09-03: ~32 ore/mese su nove configurazioni.">
+                    Tetto caccia (ore/mese) @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_campaign.MonthlyHourBudget" min="0" step="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" title="Ogni quanti minuti il guardiano guarda il budget. Le ore si accumulano lentamente: un giro all'ora e' gia' abbondante. 0 = spento.">
+                    Giro del budget (min) @Hot()
+                </label>
+                <input type="number" class="form-control" @bind="_campaign.BudgetTickMinutes" min="0" style="width: 8rem;" />
+            </div>
+            <div class="col-auto form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="cp_budget_auto" @bind="_campaign.BudgetAutoApply" />
+                <label class="form-check-label" for="cp_budget_auto"
+                       title="Spento (default): il guardiano misura, propone e notifica; le cadenze le riscrivi tu dal campo «Ore minime fra due run» della configurazione. Acceso: le riscrive da solo. Rallentare una caccia e' una decisione di budget, ed e' la stessa scelta gia' fatta per GreyAutoDeploy e per il sonno di una caccia (K50).">
+                    Applica da solo i rallentamenti @Hot()
+                </label>
             </div>
             <div class="col-auto">
                 <button class="btn btn-primary" @onclick='() => SaveAsync("Campaign", _campaign, "Campagne")' disabled="@_busy">Salva</button>

@@ -241,7 +241,8 @@ public sealed class FleetOrchestratorWorker(
     /// la risposta, nel secondo è un ripiego su un guasto. Con una parola sola per entrambi, sedici
     /// giorni di righe identiche non dicevano quale dei due fosse.</para>
     /// </summary>
-    internal static string DescribeAssignSource(Llm.Committee.CommitteeVerdict verdict)
+    internal static string DescribeAssignSource(
+        Llm.Committee.CommitteeVerdict verdict, IReadOnlyCollection<string>? provideConfermatiGuasti = null)
     {
         ArgumentNullException.ThrowIfNull(verdict);
         if (verdict.ByQuorum) return "committee";
@@ -254,7 +255,16 @@ public sealed class FleetOrchestratorWorker(
         // morto in modo permanente, dire «la maggioranza non si è formata» descrive il sintomo e
         // nasconde la causa. La differenza per chi legge è tutta qui — «riprova più tardi» contro
         // «vai a cambiare il nome di un modello, o il comitato resterà un timbro per sempre».
-        if (Llm.Committee.CommitteeDiagnosis.VotantiGuasti(verdict.Votes).Count > 0)
+        //
+        // [Revisione 2026-09-03] ...ma SOLO se il guasto è CONFERMATO dall'isteresi. K53 ha misurato
+        // che su NVIDIA il 404 arriva 4 volte su 10 su un modello che funziona: etichettare il
+        // journal «provider-guasti» su una risposta sola mandava chi legge a cercare un modello
+        // morto che non c'era, mentre la causa vera era un disaccordo. Senza conferme note
+        // (chiamante che non le passa) il ramo non si accende: meglio «quorum-mancato» che una
+        // diagnosi congetturale scritta come fatto.
+        if (provideConfermatiGuasti is { Count: > 0 } confermati
+            && Llm.Committee.CommitteeDiagnosis.VotantiGuasti(verdict.Votes)
+                .Any(g => confermati.Contains(g.Provider, StringComparer.OrdinalIgnoreCase)))
         {
             return "default:provider-guasti";
         }
@@ -283,13 +293,17 @@ public sealed class FleetOrchestratorWorker(
     /// <param name="Serie">Provider → giri consecutivi di caduta, per mostrare quanto manca alla conferma.</param>
     /// <param name="MinValidi">La soglia richiesta (<c>Committee:MinValidVotes</c>).</param>
     /// <param name="QuorumIrraggiungibile">Vero = <b>coi soli confermati</b>, anche se i superstiti fossero unanimi non basterebbero.</param>
+    /// <param name="AtUtc">Quando è stata fatta l'ultima consultazione CON voti che ha prodotto questo quadro.</param>
+    /// <param name="UltimoGiroSenzaVoti">Vero = dopo questo quadro c'è stata almeno una consultazione a zero voti (budget esaurito, comitato spento): il quadro è più vecchio dell'ultima interrogazione, e lo dice.</param>
     public sealed record CommitteeFaultReport(
         int Votanti,
         IReadOnlyList<(string Provider, string Causa)> Sospetti,
         IReadOnlyList<string> Confermati,
         IReadOnlyDictionary<string, int> Serie,
         int MinValidi,
-        bool QuorumIrraggiungibile);
+        bool QuorumIrraggiungibile,
+        DateTime? AtUtc = null,
+        bool UltimoGiroSenzaVoti = false);
 
     /// <summary>
     /// [K52, corretto il 2026-09-02 dopo la misura] Giri consecutivi di caduta prima di chiamarlo
@@ -306,9 +320,14 @@ public sealed class FleetOrchestratorWorker(
     ///
     /// <para>La distinzione resta giusta — Groq era davvero morto per sedici giorni — ma la prova
     /// non è la singola risposta: è la <b>ripetizione</b>. È la stessa isteresi di K42 sul ritiro e
-    /// di K46 sul tick: un giro storto è rumore, tre di fila sono un guasto. Con il tick a 15
-    /// minuti la conferma arriva in 45 minuti; il caso vero (sedici giorni) la supera di
-    /// millecinquecento volte.</para>
+    /// di K46 sul tick: un giro storto è rumore, tre di fila sono un guasto.</para>
+    ///
+    /// <para><b>[Revisione 2026-09-03] «Giri» = CONSULTAZIONI del comitato, non tick.</b> Il
+    /// comitato viene interrogato solo sui pareggi dell'orchestratore, che sono rari (due in sedici
+    /// giorni nel caso che ha motivato K52): la conferma arriva alla terza consultazione con lo
+    /// stesso errore, non «in 45 minuti». Il pannello lo dice. Chi vuole una conferma nel tempo
+    /// preme «Prova il comitato» in /admin/ai-supervisor, che non è invece soggetto all'isteresi
+    /// e va letto per ciò che è: una risposta, non una diagnosi.</para>
     /// </summary>
     public const int ConfermaGuastoGiri = 3;
 
@@ -328,8 +347,23 @@ public sealed class FleetOrchestratorWorker(
     private async Task DeclareCommitteeFaultAsync(
         Llm.Committee.CommitteeVerdict verdict, int minValidVotes, CancellationToken ct)
     {
+        // [Revisione 2026-09-03] Un giro con ZERO voti (budget esaurito, comitato spento) non dice
+        // nulla sui votanti: non tocca le serie, non cancella una conferma, non riarma la notifica.
+        // Prima azzerava tutto e loggava «tornati a rispondere», e al 404 successivo partiva una
+        // NUOVA notifica critica — una per ogni esaurimento del budget, su un guasto permanente.
+        // Il quadro precedente resta, ma DICE di essere più vecchio dell'ultima interrogazione.
+        if (verdict.Votes.Count == 0)
+        {
+            if (LastCommitteeFault is { } precedente && !precedente.UltimoGiroSenzaVoti)
+            {
+                LastCommitteeFault = precedente with { UltimoGiroSenzaVoti = true };
+            }
+            return;
+        }
+
         var sospetti = Llm.Committee.CommitteeDiagnosis.VotantiGuasti(verdict.Votes);
         var caduti = sospetti.Select(s => s.Provider).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var interrogati = verdict.Votes.Select(v => v.Provider).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         foreach (var voto in verdict.Votes)
         {
@@ -347,8 +381,15 @@ public sealed class FleetOrchestratorWorker(
             // sarebbe inventare un'informazione che quel voto non porta.
         }
 
+        // [Revisione 2026-09-03] Confermato = serie ≥ soglia E interrogato in questo giro senza un
+        // voto valido. NON «caduto con 404 anche in questo giro»: un provider morto che stavolta va
+        // in timeout o 429 resta morto — un'astensione per altra causa non è una guarigione, e
+        // trattarla come tale spegneva il riquadro e riarmava la notifica critica a ogni giro
+        // storto. Ma un provider che NON è più fra i votanti (tolto dalla configurazione, chiave
+        // rimossa: il rimedio che la notifica stessa suggerisce) esce dalla diagnosi — non è né
+        // guasto né guarito, e contarlo fra i confermati falserebbe i superstiti e il quorum.
         var confermati = _committeeFaultStreak
-            .Where(kv => kv.Value >= ConfermaGuastoGiri && caduti.Contains(kv.Key))
+            .Where(kv => kv.Value >= ConfermaGuastoGiri && interrogati.Contains(kv.Key))
             .Select(kv => kv.Key)
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -365,7 +406,8 @@ public sealed class FleetOrchestratorWorker(
             confermati,
             new Dictionary<string, int>(_committeeFaultStreak, StringComparer.OrdinalIgnoreCase),
             minValidVotes,
-            irraggiungibile);
+            irraggiungibile,
+            AtUtc: DateTime.UtcNow);
 
         if (confermati.Count == 0)
         {
@@ -410,6 +452,10 @@ public sealed class FleetOrchestratorWorker(
     internal Task ValutaComitatoPerTestAsync(Llm.Committee.CommitteeVerdict verdict, int minValidVotes)
         => DeclareCommitteeFaultAsync(verdict, minValidVotes, CancellationToken.None);
 
+    /// <summary>[Revisione 2026-09-04] Superficie di prova per il ritiro con intento: ferma una corsia come farebbe il tick.</summary>
+    internal Task RitiraPerTestAsync(StopAndFreeLane retire, CancellationToken ct = default)
+        => ExecuteRetireAsync(retire, ct);
+
     private static string Troncato(string s) => s.Length <= 160 ? s : s[..160];
 
     /// <summary>Un tick completo. Pubblico per i test di integrazione e per un futuro "Esegui ora".</summary>
@@ -433,6 +479,22 @@ public sealed class FleetOrchestratorWorker(
         var votesJson = "[]";
         if (opt.UseCommittee && committee is not null && plan.Menu is { } menu)
         {
+            // [Revisione 2026-09-03] Lo STESSO menù non si riconsulta a ogni tick. Da quando un
+            // rifiuto non brucia più il candidato (dry-run, corsia non autorizzata), la coda resta
+            // uguale fra un tick e l'altro: senza questa memoria il comitato veniva interrogato
+            // 96 volte al giorno per una decisione che nessuno avrebbe eseguito, consumando il
+            // budget LLM anche per le decisioni vere. Il verdetto precedente si riusa, voti compresi.
+            var firmaMenu = $"{menu.LaneId}|{string.Join(",", menu.Eligible.Select(c => c.RunId.ToString("N")).OrderBy(x => x, StringComparer.Ordinal))}";
+            var consulta = firmaMenu != _ultimoMenuConsultato || _ultimoVerdettoDelMenu is null;
+            if (!consulta)
+            {
+                var precedente = _ultimoVerdettoDelMenu!.Value;
+                assignSource = precedente.Source;
+                votesJson = precedente.VotesJson;
+                if (precedente.Eletto is Guid elettoPrima) plan = ApplicaEletto(plan, menu, elettoPrima);
+                logger.LogDebug("Comitato: menù invariato dal giro precedente (corsia {Lane}), verdetto riusato senza una nuova consultazione.", menu.LaneId);
+            }
+            if (consulta)
             try
             {
                 // [G4] Contesto in più: come sono andate le ultime operazioni in perdita DI QUESTA
@@ -465,8 +527,6 @@ public sealed class FleetOrchestratorWorker(
                 // journal vedeva sempre lo stesso «default» e non poteva sapere se il comitato
                 // avesse deliberato o non fosse mai stato interrogato — che è la differenza fra
                 // «ha scelto la regola» e «non ha funzionato».
-                assignSource = DescribeAssignSource(verdict);
-
                 // [K52, 2026-09-02] E poi lo si DICE. Il journal registra la causa da I8, ma il
                 // journal lo legge chi va a cercarlo: un comitato ridotto a un votante su tre
                 // continuava a sembrare un comitato da qualunque superficie della piattaforma.
@@ -474,32 +534,21 @@ public sealed class FleetOrchestratorWorker(
                     .GetService<IOptionsMonitor<Llm.Committee.CommitteeOptions>>()?.CurrentValue.MinValidVotes ?? 2;
                 await DeclareCommitteeFaultAsync(verdict, minValidi, ct);
 
+                // [Revisione 2026-09-03] La fonte si descrive DOPO l'isteresi: «provider-guasti»
+                // solo se il votante caduto è confermato, altrimenti un 404 isolato (rumore misurato)
+                // finirebbe a journal come diagnosi.
+                assignSource = DescribeAssignSource(verdict, LastCommitteeFault?.Confermati);
+
+                Guid? eletto = null;
                 if (verdict.ByQuorum && Guid.TryParseExact(verdict.ChosenOptionId, "N", out var chosen)
                     && chosen != menu.DefaultRunId
-                    && menu.Eligible.FirstOrDefault(c => c.RunId == chosen) is { } elected)
+                    && menu.Eligible.Any(c => c.RunId == chosen))
                 {
-                    // Il verdetto è GIÀ garantito dentro il menù (doppia validazione nel comitato);
-                    // qui si sostituisce solo l'azione corrispondente, mai altro.
-                    plan = plan with
-                    {
-                        Actions = plan.Actions.Select(a => a switch
-                        {
-                            // [J13] La CHIAVE dell'eletto viaggia con la sostituzione: senza, il
-                            // comitato che sceglie renderebbe l'azione ineseguibile (key null).
-                            AssignCandidateToLane assign when assign.LaneId == menu.LaneId
-                                => new AssignCandidateToLane(elected.RunId, menu.LaneId,
-                                    $"Scelto dal comitato fra {menu.Eligible.Count} candidati: {elected.Summary} " +
-                                    $"(~{elected.TradesPerMonth:F1} trade/mese, {elected.Timeframe}).",
-                                    CandidateKey: elected.Identity),
-                            // [J14] Il menù può essere dei GRIGI: stessa sostituzione, stessa azione.
-                            AssignGreyCandidateToLane greyAssign when greyAssign.LaneId == menu.LaneId && elected.Identity is not null
-                                => new AssignGreyCandidateToLane(elected.RunId, elected.Identity, menu.LaneId,
-                                    $"[J14] Scelto dal comitato fra {menu.Eligible.Count} candidati grigi: {elected.Summary} " +
-                                    $"(~{elected.TradesPerMonth:F1} trade/mese, {elected.Timeframe})."),
-                            _ => a,
-                        }).ToList(),
-                    };
+                    eletto = chosen;
+                    plan = ApplicaEletto(plan, menu, chosen);
                 }
+                _ultimoMenuConsultato = firmaMenu;
+                _ultimoVerdettoDelMenu = (assignSource, votesJson, eletto);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
@@ -520,6 +569,51 @@ public sealed class FleetOrchestratorWorker(
             logger.LogWarning("Fleet:DryRun=false ma Fleet:ExecutionLanes è VUOTA: nessuna corsia autorizzata, il tick resta di solo journal.");
         }
 
+        await EseguiPianoAsync(plan, opt, assignSource, votesJson, ct);
+    }
+
+    /// <summary>Firma dell'ultimo menù sottoposto al comitato, e il suo verdetto: si riusa finché il menù non cambia.</summary>
+    private string? _ultimoMenuConsultato;
+    private (string Source, string VotesJson, Guid? Eletto)? _ultimoVerdettoDelMenu;
+
+    /// <summary>I rifiuti già scritti a journal nel tick precedente: si riscrivono solo se cambiano.</summary>
+    private HashSet<string> _ultimiRifiuti = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Sostituisce nel piano l'assegnazione della corsia del menù con l'eletto dal comitato. Il
+    /// verdetto è GIÀ garantito dentro il menù (doppia validazione nel comitato): qui si sostituisce
+    /// solo l'azione corrispondente, mai altro.
+    /// </summary>
+    private static FleetPlan ApplicaEletto(FleetPlan plan, FleetAssignmentMenu menu, Guid chosen)
+    {
+        if (menu.Eligible.FirstOrDefault(c => c.RunId == chosen) is not { } elected) return plan;
+        return plan with
+        {
+            Actions = plan.Actions.Select(a => a switch
+            {
+                // [J13] La CHIAVE dell'eletto viaggia con la sostituzione: senza, il
+                // comitato che sceglie renderebbe l'azione ineseguibile (key null).
+                AssignCandidateToLane assign when assign.LaneId == menu.LaneId
+                                => new AssignCandidateToLane(elected.RunId, menu.LaneId,
+                                    $"Scelto dal comitato fra {menu.Eligible.Count} candidati: {elected.Summary} " +
+                                    $"(~{elected.TradesPerMonth:F1} trade/mese, {elected.Timeframe}).",
+                                    CandidateKey: elected.Identity),
+                            // [J14] Il menù può essere dei GRIGI: stessa sostituzione, stessa azione.
+                            AssignGreyCandidateToLane greyAssign when greyAssign.LaneId == menu.LaneId && elected.Identity is not null
+                                => new AssignGreyCandidateToLane(elected.RunId, elected.Identity, menu.LaneId,
+                                    $"[J14] Scelto dal comitato fra {menu.Eligible.Count} candidati grigi: {elected.Summary} " +
+                                    $"(~{elected.TradesPerMonth:F1} trade/mese, {elected.Timeframe})."),
+                            _ => a,
+                        }).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// L'esecuzione del piano: journal dell'isteresi, budget del giro, azioni. Separata dalla
+    /// consultazione del comitato per leggibilità (revisione 2026-09-03).
+    /// </summary>
+    private async Task EseguiPianoAsync(FleetPlan plan, FleetOptions opt, string assignSource, string votesJson, CancellationToken ct)
+    {
         var (confirmedRetires, cambiIsteresi) = ApplyRetireHysteresis(plan, Math.Max(1, opt.RetireConfirmTicks));
 
         // [K42] La condanna a metà strada si SCRIVE. Prima di ogni altra cosa del giro, perché è la
@@ -539,6 +633,9 @@ public sealed class FleetOrchestratorWorker(
                 // Non è un'azione applicata: è lo stato di una decisione in corso. Applied=true
                 // qui significherebbe «la corsia è stata fermata», che è falso.
                 Applied = false,
+                // [Revisione 2026-09-03] Un'annotazione, non un'azione: senza Outcome esplicito la
+                // riga nasceva col default e il pannello la mostrava «eseguita».
+                Outcome = DecisionOutcome.Noted,
             }, ct);
             logger.LogInformation("Ritiro corsia {Lane}: serie {Da} → {A}. {Reason}",
                 cambio.LaneId, cambio.Da, cambio.A, cambio.Reason);
@@ -562,6 +659,15 @@ public sealed class FleetOrchestratorWorker(
         var budgetAssegnazioni = Math.Max(1, opt.MaxAssignmentsPerTick);
 
         var bloccatiInQuestoGiro = new HashSet<string>(StringComparer.Ordinal);
+        // [Revisione 2026-09-03] I rifiuti si scrivono una volta per CAUSA, come i blocchi: da quando
+        // un rifiuto non brucia più il candidato, lo stesso rifiuto si ripresenta a ogni tick, e
+        // 96 righe al giorno identiche saturerebbero il journal e il digest.
+        var rifiutiInQuestoGiro = new HashSet<string>(StringComparer.Ordinal);
+        bool RifiutoNuovo(string chiave)
+        {
+            rifiutiInQuestoGiro.Add(chiave);
+            return !_ultimiRifiuti.Contains(chiave);
+        }
 
         foreach (var action in plan.Actions)
         {
@@ -571,14 +677,21 @@ public sealed class FleetOrchestratorWorker(
                     if (WhyNotExecutedAssignment(opt, assign.LaneId, budgetAssegnazioni,
                         hasKey: assign.CandidateKey is not null, hasDeployer: greyDeployer is not null, isGrey: false) is { } percheAssign)
                     {
-                        await JournalAsync(new OrchestratorDecision
+                        if (RifiutoNuovo($"Assign|{assign.LaneId}|{assign.RunId:N}|{percheAssign}"))
                         {
-                            AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = assign.LaneId, RunId = assign.RunId,
-                            Source = assignSource, VotesJson = votesJson,
-                            Reason = $"[{percheAssign}] {assign.Reason}", DryRun = true, Applied = false,
-                        }, ct);
-                        logger.LogInformation("[{Perche}] Assegnerei il run {Run} alla corsia {Lane}: {Reason}",
-                            percheAssign, assign.RunId, assign.LaneId, assign.Reason);
+                            await JournalAsync(new OrchestratorDecision
+                            {
+                                AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = assign.LaneId, RunId = assign.RunId,
+                                Source = assignSource, VotesJson = votesJson,
+                                // [Revisione 2026-09-03] Rifiutata per regola: Outcome esplicito (prima
+                                // nasceva col default e risultava «eseguita»), e DryRun dice se ERA in
+                                // prova, non «non ho agito» — il difetto che K51 aveva già nominato.
+                                Reason = $"[{percheAssign}] {assign.Reason}", DryRun = opt.DryRun, Applied = false,
+                                Outcome = DecisionOutcome.Refused,
+                            }, ct);
+                            logger.LogInformation("[{Perche}] Assegnerei il run {Run} alla corsia {Lane}: {Reason}",
+                                percheAssign, assign.RunId, assign.LaneId, assign.Reason);
+                        }
                     }
                     else
                     {
@@ -592,14 +705,18 @@ public sealed class FleetOrchestratorWorker(
                     if (WhyNotExecutedAssignment(opt, greyAssign.LaneId, budgetAssegnazioni,
                         hasKey: true, hasDeployer: greyDeployer is not null, isGrey: true) is { } percheGrey)
                     {
-                        await JournalAsync(new OrchestratorDecision
+                        if (RifiutoNuovo($"AssignGrey|{greyAssign.LaneId}|{greyAssign.RunId:N}|{percheGrey}"))
                         {
-                            AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = greyAssign.LaneId, RunId = greyAssign.RunId,
-                            Source = assignSource, VotesJson = votesJson,
-                            Reason = $"[{percheGrey}] {greyAssign.Reason}", DryRun = true, Applied = false,
-                        }, ct);
-                        logger.LogInformation("[{Perche}] Schiererei il grigio {Run} sulla corsia {Lane}: {Reason}",
-                            percheGrey, greyAssign.RunId, greyAssign.LaneId, greyAssign.Reason);
+                            await JournalAsync(new OrchestratorDecision
+                            {
+                                AtUtc = DateTime.UtcNow, Kind = "Assign", LaneId = greyAssign.LaneId, RunId = greyAssign.RunId,
+                                Source = assignSource, VotesJson = votesJson,
+                                Reason = $"[{percheGrey}] {greyAssign.Reason}", DryRun = opt.DryRun, Applied = false,
+                                Outcome = DecisionOutcome.Refused,
+                            }, ct);
+                            logger.LogInformation("[{Perche}] Schiererei il grigio {Run} sulla corsia {Lane}: {Reason}",
+                                percheGrey, greyAssign.RunId, greyAssign.LaneId, greyAssign.Reason);
+                        }
                     }
                     else
                     {
@@ -612,12 +729,16 @@ public sealed class FleetOrchestratorWorker(
                 case StopAndFreeLane retire when confirmedRetires.Contains(retire.LaneId):
                     if (WhyNotExecuted(opt, retire.LaneId, budgetRitiri) is { } perche)
                     {
-                        await JournalAsync(new OrchestratorDecision
+                        if (RifiutoNuovo($"Retire|{retire.LaneId}|{perche}"))
                         {
-                            AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = retire.LaneId,
-                            Reason = $"[{perche}] {retire.Reason}", DryRun = true, Applied = false,
-                        }, ct);
-                        logger.LogWarning("[{Perche}] Ritirerei la corsia {Lane}: {Reason}", perche, retire.LaneId, retire.Reason);
+                            await JournalAsync(new OrchestratorDecision
+                            {
+                                AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = retire.LaneId,
+                                Reason = $"[{perche}] {retire.Reason}", DryRun = opt.DryRun, Applied = false,
+                                Outcome = DecisionOutcome.Refused,
+                            }, ct);
+                            logger.LogWarning("[{Perche}] Ritirerei la corsia {Lane}: {Reason}", perche, retire.LaneId, retire.Reason);
+                        }
                     }
                     else
                     {
@@ -641,6 +762,7 @@ public sealed class FleetOrchestratorWorker(
                     {
                         AtUtc = DateTime.UtcNow, Kind = "ProposeGrey", RunId = grey.RunId,
                         Reason = grey.Reason, DryRun = opt.DryRun, Applied = true, // la proposta È l'azione
+                        Outcome = DecisionOutcome.Applied,
                     }, ct);
                     if (notifier is not null)
                     {
@@ -658,7 +780,7 @@ public sealed class FleetOrchestratorWorker(
                         await JournalAsync(new OrchestratorDecision
                         {
                             AtUtc = DateTime.UtcNow, Kind = "Blocked", Reason = blocked.Reason,
-                            DryRun = opt.DryRun, Applied = false,
+                            DryRun = opt.DryRun, Applied = false, Outcome = DecisionOutcome.Noted,
                         }, ct);
                         logger.LogInformation("Flotta bloccata: {Reason}", blocked.Reason);
                     }
@@ -668,6 +790,7 @@ public sealed class FleetOrchestratorWorker(
 
         // Le cause rientrate escono dal ricordo: se tornano, tornano a essere una notizia.
         _lastBlockedReasons = bloccatiInQuestoGiro;
+        _ultimiRifiuti = rifiutiInQuestoGiro;
 
         await WatchCarryAsync(ct);
     }
@@ -766,27 +889,81 @@ public sealed class FleetOrchestratorWorker(
     /// fine, altrimenti la riga porta l'errore. Un journal che dichiara applicato ciò che è fallito
     /// è la classe di difetto «controllo che rassicura» nel posto peggiore — quello dove qualcuno
     /// andrà a cercare cosa è successo.</para>
+    ///
+    /// <para>[Revisione 2026-09-03] <b>Anche il ritiro scrive l'intento PRIMA di fermare.</b> K51
+    /// l'aveva fatto solo per le assegnazioni: qui lo stop precedeva il journal, e un INSERT
+    /// fallito (o un processo morto fra i due) lasciava la corsia ferma senza riga — esattamente i
+    /// «quattro arresti su quattro senza riga» che avevano motivato K51. Fail-closed come
+    /// l'assegnazione: se l'intento non si scrive, non si ferma. I rifiuti per modalità o corsia
+    /// già ferma non aprono intenti: non toccano nulla, e si scrivono come <c>Refused</c>.</para>
     /// </summary>
     private async Task ExecuteRetireAsync(StopAndFreeLane retire, CancellationToken ct)
     {
-        string? error = null;
+        Trading.ITradingEngine engine;
+        string? rifiuto = null;
         try
         {
-            var engine = serviceProvider.GetRequiredKeyedService<Trading.ITradingEngine>(retire.LaneId);
+            engine = serviceProvider.GetRequiredKeyedService<Trading.ITradingEngine>(retire.LaneId);
             var status = await engine.GetStatusAsync(ct);
 
             if (status.Mode != Trading.TradingMode.Paper)
             {
-                error = $"corsia in {status.Mode}, non Paper: l'orchestratore non ferma corsie che non governa";
+                rifiuto = $"corsia in {status.Mode}, non Paper: l'orchestratore non ferma corsie che non governa";
             }
             else if (!status.IsRunning)
             {
-                error = "corsia già ferma: niente da fare";
+                rifiuto = "corsia già ferma: niente da fare";
             }
-            else
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            // Stato non leggibile: non si tocca (fail-closed), e si dice come è finita.
+            await JournalAsync(new OrchestratorDecision
             {
-                await engine.StopAsync(ct);
+                AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = retire.LaneId,
+                Reason = retire.Reason, DryRun = false, Applied = false, Error = ex.Message,
+                Outcome = DecisionOutcome.Failed,
+            }, ct);
+            logger.LogWarning("Ritiro della corsia {Lane} NON eseguito ({Error}): {Reason}", retire.LaneId, ex.Message, retire.Reason);
+            return;
+        }
+
+        if (rifiuto is not null)
+        {
+            await JournalAsync(new OrchestratorDecision
+            {
+                AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = retire.LaneId,
+                Reason = retire.Reason, DryRun = false, Applied = false, Error = rifiuto,
+                Outcome = DecisionOutcome.Refused,
+            }, ct);
+            logger.LogWarning("Ritiro della corsia {Lane} NON eseguito ({Error}): {Reason}", retire.LaneId, rifiuto, retire.Reason);
+            return;
+        }
+
+        int intentoId;
+        try
+        {
+            intentoId = await ApriIntentoAsync("Retire", null, retire.LaneId, "rules", "[]", retire.Reason, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Corsia {Lane}: impossibile aprire l'intento di ritiro a journal; NON si ferma.", retire.LaneId);
+            if (notifier is not null)
+            {
+                await notifier.NotifyAsync(NotificationSeverity.Critical,
+                    "La flotta non riesce a registrare cosa sta per fare",
+                    $"L'orchestratore stava per fermare la corsia {retire.LaneId} e non e' riuscito a scrivere "
+                    + $"l'intento nel journal ({ex.Message}). Lo stop NON e' avvenuto: una corsia fermata senza "
+                    + "riga e' esattamente il caso del 2026-08-31.", ct);
             }
+            return;
+        }
+
+        string? error = null;
+        try
+        {
+            await engine.StopAsync(ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -794,11 +971,7 @@ public sealed class FleetOrchestratorWorker(
             error = ex.Message;
         }
 
-        await JournalAsync(new OrchestratorDecision
-        {
-            AtUtc = DateTime.UtcNow, Kind = "Retire", LaneId = retire.LaneId,
-            Reason = retire.Reason, DryRun = false, Applied = error is null, Error = error,
-        }, ct);
+        await ChiudiIntentoAssegnazioneAsync(intentoId, error, retire.Reason, ct);
 
         if (error is null)
         {
@@ -833,14 +1006,19 @@ public sealed class FleetOrchestratorWorker(
     /// porta gia' tutto cio' che e' deciso prima dell'azione (corsia, run, fonte, voti, motivo).
     /// Ciò che non e' ancora noto e' solo l'esito.
     /// </summary>
-    private async Task<int> ApriIntentoAssegnazioneAsync(
+    private Task<int> ApriIntentoAssegnazioneAsync(
         Guid runId, int laneId, string assignSource, string votesJson, string reason, CancellationToken ct)
+        => ApriIntentoAsync("Assign", runId, laneId, assignSource, votesJson, reason, ct);
+
+    /// <summary>[Revisione 2026-09-03] L'intento, per qualunque azione sulla corsia: Assign e Retire.</summary>
+    private async Task<int> ApriIntentoAsync(
+        string kind, Guid? runId, int laneId, string assignSource, string votesJson, string reason, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var riga = new OrchestratorDecision
         {
             AtUtc = DateTime.UtcNow,
-            Kind = "Assign",
+            Kind = kind,
             LaneId = laneId,
             RunId = runId,
             Source = assignSource == "rules" ? "fleet" : assignSource,
