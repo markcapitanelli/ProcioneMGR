@@ -81,3 +81,11 @@ pipeline con trigger 🎯 "Campaign".
   l'abilitazione esplicita (e il gate globale).
 - La sicurezza è a strati indipendenti: gate globale → gate campagna → skip config Live →
   solo Paper su corsie ferme → quarantena della corsia come ultima difesa.
+
+## Campagna 3 «Caccia intraday 1m+30m» (2026-09-04)
+
+Creata dalla UI con rotazione [config 21 «Caccia intraday 30m - 10 majors», config 22 «Caccia
+intraday 1m - 10 majors»], backoff 12 h, **senza** avvio corsie Paper dopo l'applica. Convive con la
+campagna 1 perché il planner ha una sola corsia di esecuzione (un run alla volta, «run rimandato,
+un altro run è già in corso»). Le due configurazioni hanno cadenza propria K56: 48 h la 30m, 72 h
+la 1m. Contesto in `docs/audit/42_REVISIONE_FILONE_K_2026-09-03.md` §10.1.

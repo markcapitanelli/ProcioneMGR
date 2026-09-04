@@ -141,3 +141,45 @@ public sealed class ProtectiveExitShadowRecorder(
             + "senza crolli con gap: se questo si ripete, va rimisurato.", ct);
     }
 }
+
+/// <summary>
+/// [2026-09-04, revisione stop/take] <b>Un confronto d'ombra vale solo se la barra è quella di adesso.</b>
+///
+/// <para>Il fatto, letto nella tabella dal vivo: 24 confronti dal 4 agosto, di cui 14 con
+/// |costo| fra 700 e 2.000 bps — tutti scritti in DUE minuti (23/08 18:05-18:07 sulle corsie 1 e 6,
+/// 31/08 20:24-20:25 sulla corsia 4), tutti con anticipo zero. Non erano crolli con gap: erano
+/// <b>replay</b>. Al riavvio di una corsia il motore riconsuma le candele dal punto in cui si era
+/// fermato; ogni posizione riaperta e richiusa su una barra di tre giorni prima incontrava il tick
+/// di oggi, e la sentinella confrontava il prezzo di oggi con il fill di una barra vecchia. Tre di
+/// quei confronti superavano la soglia dei 200 bps e hanno prodotto un allarme «il feed avrebbe
+/// fatto meglio di 10%» che non descriveva nessun mercato. È la stessa cecità di K41
+/// (<c>TradeDeduplication</c>): il replay non si marca da solo, va riconosciuto.</para>
+///
+/// <para>Il criterio è puro e di sola aritmetica: la rilevazione sul tick porta l'ora del tick, la
+/// risoluzione sul percorso a candele porta il timestamp della barra. Se il tick è più giovane della
+/// barra di oltre <b>due passi del timeframe</b>, la barra non è quella di adesso e il confronto non
+/// si scrive. Due passi, non uno: una barra arriva dall'ingestione con un ritardo che può superare
+/// un passo intero senza che sia replay. Un timeframe sconosciuto NON è un motivo per scartare —
+/// si conserva il comportamento di prima, che è meglio di una sentinella che tace per un refuso.</para>
+/// </summary>
+public static class ProtectiveExitShadowReplayGuard
+{
+    /// <summary>Quanti passi di timeframe fra tick e barra prima di chiamarlo replay.</summary>
+    public const int PassiTollerati = 2;
+
+    /// <summary>
+    /// Vero se la barra che ha chiuso la posizione è troppo vecchia rispetto al tick che aveva
+    /// rilevato l'uscita: il confronto sarebbe fra due mercati diversi.
+    /// </summary>
+    public static bool EReplay(DateTime rilevatoAlTickUtc, DateTime timestampBarraUtc, string? timeframe)
+    {
+        if (string.IsNullOrWhiteSpace(timeframe)
+            || !Exchanges.Timeframes.Supported.TryGetValue(timeframe, out var passo))
+        {
+            return false;
+        }
+
+        var distanza = rilevatoAlTickUtc - timestampBarraUtc;
+        return distanza > TimeSpan.FromTicks(passo.Ticks * PassiTollerati);
+    }
+}

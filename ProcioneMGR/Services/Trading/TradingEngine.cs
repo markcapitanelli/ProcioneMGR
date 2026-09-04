@@ -983,6 +983,18 @@ public sealed class TradingEngine(
         // Se l'uscita è già arrivata dal tick, non c'è ritardo da misurare: i due lati coincidono.
         if (source == "tick") return;
 
+        // [2026-09-04] Replay: al riavvio la corsia riconsuma candele vecchie, e una posizione
+        // richiusa su una barra di giorni fa incontrerebbe il tick di oggi. Il confronto fra due
+        // mercati diversi non è una misura (14 righe su 24 nella tabella dal vivo, 3 allarmi falsi
+        // sopra soglia): si scarta e si dice a debug. Vedi ProtectiveExitShadowReplayGuard.
+        if (ProtectiveExitShadowReplayGuard.EReplay(detection.AtUtc, ts, _state.Timeframe))
+        {
+            logger.LogDebug(
+                "Lane {Lane}: confronto d'ombra scartato — la barra {Barra:u} è replay rispetto al tick {Tick:u} ({Symbol}).",
+                laneId, ts, detection.AtUtc, pos.Symbol);
+            return;
+        }
+
         try
         {
             var isLong = pos.Side == OrderSide.Buy;

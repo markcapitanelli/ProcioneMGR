@@ -352,3 +352,85 @@ Su richiesta del proprietario («completare l'automazione»), i quattro punti di
 Due fixture di test hanno dovuto dichiarare quando i loro trade sono stati scritti: `EnsembleManagerDecayTests`
 (righe di settimane fa inserite adesso = firma del replay) e `MultiLaneIsolationTests` (candele
 sintetiche del 2026-01-01). Non è un aggiustamento: è la regola nuova che li ha trovati.
+
+## 10. Cacce a 1m e 30m, strategie nuove, e dove stanno gli stop (2026-09-04, mattina)
+
+Tre richieste del proprietario, arrivate insieme: le serie a 1 e 30 minuti per le stesse dieci
+coppie della caccia 5m, cacce anche su quei timeframe; la caccia su **tutte** le strategie, anche
+quelle future; e la domanda se stop e take profit non dovrebbero essere aggiornati «con i timeframe
+più corti piuttosto che con le barre lunghe».
+
+### 10.1 Serie e cacce: fatto, dalla UI
+
+Tutto via interfaccia, come autorizzato (le scritture dirette al DB sono state rifiutate dal
+classificatore, e va bene così: la UI è il percorso che lascia traccia).
+
+| Cosa | Dove | Esito verificato (psql, `OhlcvData` e `PipelineConfigurations`) |
+|---|---|---|
+| 10 serie a 30m abilitate (5 nuove: BNB, XRP, DOGE, ADA, AVAX) | `/data` watchlist | 10/10 con 28.608 candele dal 2025-01-16: lo stage DataIngestion del primo run ha scaricato la finestra intera in ~26 s per serie |
+| 10 serie a 1m abilitate (4 nuove: ADA, AVAX, LINK, LTC) | `/data` watchlist | 6 storiche da 2025-07-20 (592k candele l'una), 4 nuove con 7 gg di backfill; il resto della finestra (120+30 gg, ~860k candele) lo scarica il primo run a 1m |
+| Config **21** «Caccia intraday 30m - 10 majors» | `/pipeline`, clone della 19 | finestre scorrevoli 484/112, cadenza propria 48h, stessa catena di 18 stage |
+| Config **22** «Caccia intraday 1m - 10 majors» | `/pipeline`, clone della 19 | finestre **120/30** (a 1m sono ~173k e ~43k barre per serie: la 484/112 costerebbe 5× senza aggiungere regimi), cadenza 72h |
+| Campagna **3** «Caccia intraday 1m+30m» | `/campaign` | rotazione [21, 22], backoff 12h, **avvio corsie Paper: no**, abilitata; primo run `8a4067ce` sulla 21 partito alle 06:10 UTC col «Tick adesso» |
+
+Perché una campagna nuova e non la rotazione esistente: la pagina `/campaign` crea campagne, non
+modifica la rotazione di una campagna viva (K-revisione §3.x), e la campagna 1 è «esaurita, in attesa
+di trigger». Il planner ha una sola corsia di esecuzione (`un altro run è già in corso` →
+rimandato), quindi due campagne non producono due run insieme.
+
+La copertura K58 in `/pipeline` sul guscio vivo dice ancora «0 su 241»: è il difetto «0 su 227»
+corretto in questa PR (§8), non ancora schierato. Al merge le celle 30m e 1m risulteranno cacciate.
+
+### 10.2 «Tutte le strategie, anche le nuove»: già così, e ora c'è un guardiano
+
+La caccia enumera `IStrategyFactory.Prototypes` quando la configurazione non elenca strategie —
+ed è il caso di tutte le configurazioni in rotazione (`strategies` vuoto nello stage Discovery). Una
+strategia nuova registrata nella fabbrica entra da sola. La trappola è altrove:
+`StrategyDiscoveryEngine.DefaultRanges` è uno `switch` sul nome col default vuoto, quindi una
+strategia nella fabbrica ma dimenticata lì verrebbe «cacciata» con zero parametri, cioè non
+cacciata, senza che nulla lo dica. `GriglieDiCacciaPerOgniStrategiaTests` fa rosso alla prima
+strategia senza griglia (oggi 14/14 ne hanno una).
+
+### 10.3 Stop e take profit: come funzionano davvero, e perché restano a barra chiusa
+
+**Come sono valutati.** `ProtectiveExitEvaluator` è puro e unico per i due percorsi. A ogni
+candela chiusa della corsia guarda High/Low della barra: stop (o trailing, causale) con precedenza
+sul target, fill al livello oppure all'apertura se la barra ha aperto oltre — sempre l'esito
+peggiore. Il feed real-time passa dallo stesso evaluator con una barra degenere
+open=high=low=close=prezzo, ma con `DriveProtectiveExits=false` **osserva e basta**: rileva
+l'ombra, non chiude.
+
+**La domanda del proprietario è esattamente la misura B3.** «Aggiornare con i timeframe più corti»
+è ciò che il replay B3 ha simulato usando 5m/1m come surrogato dei tick contro le barre di corsia:
+
+| Misura | Esito | Fonte |
+|---|---|---|
+| B3 (2026-07-28), stop, 24 configurazioni | uscire al tocco è **peggio** in 24/24 (mediane −2 … −77 bps): lo stop preso sull'ombra è rumore che rientra | `docs/REPORT-B3-EXITLAG-2026-07-28.md` |
+| B3-bis (2026-08-06), stop | negativo 4/4, −2,4 … −10,7 bps | `docs/REPORT-B3BIS-USCITE-PER-TIPO-2026-08-06.md` |
+| B3-bis, take profit | al tocco meglio in 3/4, **+1,9 … +10,6 bps** prima di slippage; la 4h dice −8,8 | idem |
+
++1,9 bps è sotto i costi; solo una corsia (+10,6) respira. Il report chiude: per accendere servono
+un interruttore **solo-target** (non esiste: il flag accende entrambi i lati), la decisione **per
+corsia** e i costi dentro il criterio. Nessuno dei tre è stato fatto e questa sessione non lo fa:
+è la regola 7, l'interruttore è una misura, non una svista. Su barre 1m e 30m, che ora entrano
+nella caccia, la distanza fra tocco e chiusura è per costruzione più piccola che a 4h.
+
+**Il pezzo che invece era rotto: la sentinella dal vivo.** `ProtectiveExitShadows` è lo strumento
+che dovrebbe dire se il mercato smette di comportarsi come nel replay (crollo con gap). Letta oggi:
+24 righe dal 4/08, **14 con |costo| fra 700 e 2.000 bps, tutte in due minuti** (23/08 18:05-18:07
+corsie 1 e 6; 31/08 20:24-25 corsia 4), anticipo zero. Incrociate con `TradeRecords`: le uscite
+«reali» avevano fill di barre del 20-22/08 — **replay al riavvio della corsia**, il tick di oggi
+confrontato con la barra di tre giorni prima. Tre di quelle righe superavano la soglia dei 200 bps e
+hanno prodotto allarmi «il feed avrebbe fatto meglio del 10%» che non descrivevano alcun mercato.
+Stessa cecità di K41. Correzione: `ProtectiveExitShadowReplayGuard.EReplay` (puro: tick più
+giovane della barra di oltre due passi ⇒ replay, non si scrive; timeframe ignoto ⇒ comportamento
+di prima), agganciato in `ResolveShadowAsync`; `SentinellaOmbraReplayTests` (12 casi). Le 14 righe
+storiche restano nella tabella e nel pannello di `/admin/protections`: vanno lette come replay, non
+come mercato.
+
+### 10.4 CI
+
+Il run `pull_request` della PR #134 era rosso per `RegistryPageRenderTests.Ritira_AlSecondoClic…`
+(`Find("input.form-control")` subito dopo il clic, senza attesa del render: passa in locale e nel
+run `push`, cade sotto carico). Sostituito con `WaitForElement(…, 10 s)` nei due punti. Rilanciato
+il job fallito: verde.
