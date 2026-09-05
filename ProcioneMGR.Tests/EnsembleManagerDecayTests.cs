@@ -87,9 +87,15 @@ public class EnsembleManagerDecayTests : IAsyncDisposable
     /// monitor le scarta — che è il comportamento giusto sul database vero, e la ragione per cui
     /// qui l'ora di parete va riallineata a mano. Cinque minuti dopo la candela: un trade vivo.
     /// </summary>
+    // [2026-09-05] INCONDIZIONATO. La versione precedente riallineava solo le righe scritte
+    // oltre un giorno dopo la candela: il 5/09 l'ultimo trade seminato da
+    // `IlNULLO_diK39_iTradeDOPOlaNascita_entranoTUTTI` chiudeva a mezzanotte di QUEL giorno,
+    // scritto sette ore dopo, quindi non veniva toccato — e sette ore superano le 3 barre e mezza
+    // di tolleranza a 1h: il filtro anti-replay lo scartava, 19 su 20, rosso su master. Un test
+    // che passa o cade a seconda del giorno del calendario è una bomba a tempo, non una prova.
     private static Task ScrittiQuandoAvvenutiAsync(ApplicationDbContext db)
         => db.Database.ExecuteSqlRawAsync(
-            """UPDATE "TradeRecords" SET "RecordedAtUtc" = "ClosedAtUtc" + interval '5 minutes' WHERE "RecordedAtUtc" IS NULL OR "RecordedAtUtc" > "ClosedAtUtc" + interval '1 day';""");
+            """UPDATE "TradeRecords" SET "RecordedAtUtc" = "ClosedAtUtc" + interval '5 minutes';""");
 
     private static TradeRecord Trade(string strategyId, decimal pnlPercent, DateTime closedAtUtc, string symbol = "BTC/USDT") => new()
     {
