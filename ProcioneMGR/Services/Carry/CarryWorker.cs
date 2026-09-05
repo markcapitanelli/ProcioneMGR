@@ -57,6 +57,9 @@ public sealed class CarryWorker(
 
     private CarryEngine? _engine;
 
+    /// <summary>[2026-09-05] Gli episodi aperti sono stati riletti dal registro (una volta per vita del processo).</summary>
+    private bool _restored;
+
     /// <summary>Stato per-simbolo del forward test (vuoto finché non c'è stata una valutazione).</summary>
     public IReadOnlyDictionary<string, CarrySymbolState> States =>
         _engine?.States ?? new Dictionary<string, CarrySymbolState>();
@@ -121,6 +124,28 @@ public sealed class CarryWorker(
             _config,
             scope.ServiceProvider.GetRequiredService<ILogger<CarryEngine>>());
         var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ApplicationDbContext>>();
+        var ledger = new CarryLedger(dbFactory, scope.ServiceProvider.GetRequiredService<ILogger<CarryLedger>>());
+        var modeName = mode.ToString();
+
+        // [2026-09-05] IL REGISTRO PRIMA DI TUTTO. Fino a oggi lo stato viveva solo in memoria e ogni
+        // rischieramento del pod (uno per merge) «riapriva» i sei carry azzerando il funding incassato:
+        // il forward test dell'unica classe di edge misurata positiva non lasciava alcuna misura.
+        // Il ripristino è fail-closed: se il registro non risponde NON si valuta, perché valutare
+        // senza sapere cosa è aperto significherebbe scrivere aperture doppie.
+        if (!_restored)
+        {
+            try
+            {
+                await ledger.RestoreAsync(_engine, modeName, ct);
+                _restored = true;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Carry: registro non leggibile, salto la valutazione di questo giro (riprovo al prossimo).");
+                return 0;
+            }
+        }
 
         // Dedupe: il binding delle liste .NET APPENDE al default invece di sostituirlo (default 6 +
         // config 6 = 12 con duplicati). Distinct rende l'insieme corretto qualunque sia la config.
@@ -128,21 +153,57 @@ public sealed class CarryWorker(
 
         var evaluated = 0;
         var missing = new List<string>();
+        var costPercent = CarryLedgerMath.RoundTripCostPercent(_config);
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         foreach (var sym in symbols)
         {
             // Ultimi funding del simbolo (più recente in coda), per la finestra di decisione.
-            var recent = await db.SentimentMetricPoints.AsNoTracking()
+            var recentPoints = await db.SentimentMetricPoints.AsNoTracking()
                 .Where(p => p.Metric == SentimentMetrics.FundingRate && p.Symbol == sym)
                 .OrderByDescending(p => p.TimestampUtc)
                 .Take(opt.TrailingFundingEvents)
-                .Select(p => p.Value)
+                .Select(p => new { p.TimestampUtc, p.Value })
                 .ToListAsync(ct);
-            recent.Reverse();   // ordine cronologico crescente (ultimo = più recente)
+            recentPoints.Reverse();   // ordine cronologico crescente (ultimo = più recente)
 
-            if (recent.Count < opt.TrailingFundingEvents) { missing.Add(sym); continue; }
-            await _engine.EvaluateAsync(sym + "/USDT", recent, ct);
+            if (recentPoints.Count < opt.TrailingFundingEvents) { missing.Add(sym); continue; }
+            var recent = recentPoints.Select(p => p.Value).ToList();
+            var latest = recentPoints[^1];
+            var symbol = sym + "/USDT";
+            var action = await _engine.EvaluateAsync(symbol, recent, ct);
             evaluated++;
+
+            // Il registro segue la decisione, mai il contrario: un errore qui non cambia ciò che il
+            // motore ha deciso, ma va detto — è la misura che manca, non un dettaglio.
+            try
+            {
+                var annualized = _engine.LastAnnualized(symbol) ?? 0m;
+                var state = _engine.States.GetValueOrDefault(symbol);
+                switch (action)
+                {
+                    case CarryAction.Open when state is not null:
+                        await ledger.OpenAsync(symbol, modeName, state.NotionalQuote, annualized, costPercent,
+                            latest.TimestampUtc, DateTime.UtcNow, ct);
+                        break;
+                    case CarryAction.Close:
+                        await ledger.AccrueAsync(symbol, modeName, latest.TimestampUtc, latest.Value, ct);
+                        await ledger.CloseAsync(symbol, modeName, annualized, DateTime.UtcNow,
+                            $"funding annualizzato {annualized:F1}% sotto {_config.ExitAnnualFundingPercent:F1}%", ct);
+                        break;
+                    default:
+                        if (state is { InPosition: true })
+                        {
+                            var totale = await ledger.AccrueAsync(symbol, modeName, latest.TimestampUtc, latest.Value, ct);
+                            if (totale is decimal t) state.FundingCollectedPercent = t;
+                        }
+                        break;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Carry [{Mode}] {Sym}: registro non aggiornato dopo {Action}.", modeName, symbol, action);
+            }
         }
 
         SymbolsWithoutData = missing;

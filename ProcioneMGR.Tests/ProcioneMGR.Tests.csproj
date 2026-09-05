@@ -40,6 +40,10 @@
     <!-- La plancia di comando (`procione`). Riferimento a un Exe: serve solo a provarne la logica
          pura di lettura e verdetto, quella che potrebbe mentire in silenzio. -->
     <ProjectReference Include="..\tools\Procione\Procione.csproj" />
+    <!-- [2026-09-05] Le migrazioni entrano nei test: l'app NON le referenzia (anti-ciclo), i test si'.
+         Fino a oggi nessun test le esercitava e lo snapshot scritto a mano si verificava solo al
+         primo avvio del guscio, cioe' troppo tardi (vedi MigrazioniAllineateTests). -->
+    <ProjectReference Include="..\ProcioneMGR.Migrations.Postgres\ProcioneMGR.Migrations.Postgres.csproj" />
   </ItemGroup>
 
   <ItemGroup>

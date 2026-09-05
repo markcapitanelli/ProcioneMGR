@@ -144,7 +144,7 @@ e con la posizione aperta il ritiro aspetta.
 
 | # | Gravità | Fatto | Esito |
 |---|---|---|---|
-| I1 | **alta** | **Il forward test del carry non produce misure**: `CarryEngine` tiene lo stato in memoria (`:64`), `FundingCollectedPercent` viene solo azzerato all'apertura (`:94`) e nessun altro codice lo tocca; `PaperCarryExecutor` fa solo log; l'unica traccia persistita è `HostHeartbeats[carry]` con «Paper · 6/6 simboli». A ogni rischieramento (uno per merge, cinque nelle ultime 48 h) i sei simboli «riaprono». Dal guscio il pannello ottiene `null` e lo dichiara | **aperto**: è il buco più costoso — la sola classe di edge misurata positiva (5,5-11,9 %/anno, doc 30) non ha un forward test leggibile |
+| I1 | **alta** | **Il forward test del carry non produce misure**: `CarryEngine` tiene lo stato in memoria (`:64`), `FundingCollectedPercent` viene solo azzerato all'apertura (`:94`) e nessun altro codice lo tocca; `PaperCarryExecutor` fa solo log; l'unica traccia persistita è `HostHeartbeats[carry]` con «Paper · 6/6 simboli». A ogni rischieramento (uno per merge, cinque nelle ultime 48 h) i sei simboli «riaprono». Dal guscio il pannello ottiene `null` e lo dichiara | **corretto (PR #140)**: tabella `CarryLedger` (migrazione scritta a mano `20260905143000_AddCarryLedger`), un episodio per apertura, funding accreditato a ogni evento nuovo, netto alla chiusura col modello di costo del backtest (0,42 % per giro), ripristino delle posizioni aperte al riavvio del pod; registro leggibile in `/admin/autonomy`. Con la stessa PR nascono i due guardiani delle migrazioni (`MigrazioniAllineateTests`): snapshot = modello, e la catena intera costruisce uno schema usabile su un DB vergine — prima nessun test le esercitava |
 | I2 | alta | Sizing del carry senza tetto aggregato: `InitialCapital` fisso 10 000 (`CarryModels.cs:13`), 50 % per gamba × 6 simboli = **300 % per lato** | aperto |
 | I3 | alta | `deploy-trading.ps1` scrive il pin nel kustomization **prima** di `kubectl apply` e del rollout (`:139-145`); se uno dei due fallisce, il giro dopo committa il pin orfano e dichiara «già allineato» (`:60-83`) mentre il cluster resta sull'immagine vecchia | aperto |
 | I4 | alta | **La macchina**: 18 eventi Kernel-Power 41 (spegnimento brutale) dal 13/08; ultimo riavvio 05/09 05:07; RAM 7,7 GB con 0,6 liberi; calico-kube-controllers 240 riavvii, kube-controller-manager 166; veglia uccisa dal timeout due volte nella notte. I 55/56 riavvii di ingestion e ml sono **reboot del nodo + liveness su nodo saturo** (`Last State: Terminated, Reason: Unknown, Exit 255`, log precedenti puliti), non crash applicativi. Le probe di ingestion/ml (`timeoutSeconds: 5`, soglia 3) sono quattro volte più strette di quelle del trading (20 s × 10) | aperto: decisione del proprietario (hardware / probe) |
@@ -206,8 +206,8 @@ allinearsi al presente, alle 11:55: le eventuali righe di quel replay sono ricon
    gambe grigie del run migliore quando batte l'incumbent (+10 %, z ≥ 0,35); oggi le corsie 0-1 sono
    governate a mano da questa revisione. Scelta: automazione (con il difetto F-LanesUsed aperto,
    `PipelineApplier.cs:185` vs `CampaignPlanner.cs:361-366`) o governo umano.
-2. **Il carry**: persistere episodi e funding incassato (tabella nuova, migrazione scritta a mano) e
-   un tetto aggregato al sizing. Senza, la sola classe positiva non produce evidenza.
+2. **Il carry**: gli episodi ora sono persistiti (PR #140); resta il **tetto aggregato al sizing**
+   (6 × 50 % = 300 % per lato, capitale fisso 10 000): è una scelta sulla misura, non un difetto.
 3. **La macchina**: 18 spegnimenti brutali in tre settimane sono la causa prima di ogni «non
    leggibile», «tempo scaduto» e riavvio dei pod. Nessuna correzione software li sostituisce.
 4. **`Campaign:MonthlyHourBudget`** (oggi nessun tetto, 101 h/mese misurate): la caccia 1m costa

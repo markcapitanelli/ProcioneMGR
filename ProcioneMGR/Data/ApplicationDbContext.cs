@@ -99,6 +99,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     /// <summary>[AF5.1] Battiti di vita degli host (una riga per processo: "shell" / "engine").</summary>
     public DbSet<HostHeartbeat> HostHeartbeats => Set<HostHeartbeat>();
 
+    /// <summary>[2026-09-05] Gli episodi del forward test del carry: la misura che prima non esisteva.</summary>
+    public DbSet<CarryLedgerEntry> CarryLedger => Set<CarryLedgerEntry>();
+
     /// <summary>[AF1] Consumo LLM aggregato per giorno/provider/modello/percorso.</summary>
     public DbSet<LlmUsageRecord> LlmUsageRecords => Set<LlmUsageRecord>();
 
@@ -194,6 +197,19 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.HasKey(e => e.Host);
             entity.Property(e => e.Host).HasMaxLength(16);
             entity.Property(e => e.Version).HasMaxLength(64);
+        });
+
+        // [2026-09-05] Episodi del carry: l'indice (Symbol, ClosedUtc) serve alle due letture che
+        // contano — «l'episodio aperto di questo simbolo» al riavvio e «gli ultimi chiusi» in UI.
+        // Migrazione scritta a mano: 20260905143000_AddCarryLedger.
+        builder.Entity<CarryLedgerEntry>(entity =>
+        {
+            entity.ToTable("CarryLedger");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Symbol).HasMaxLength(16);
+            entity.Property(e => e.Mode).HasMaxLength(8);
+            entity.Property(e => e.ClosedReason).HasMaxLength(200);
+            entity.HasIndex(e => new { e.Symbol, e.ClosedUtc });
         });
 
         // [J8] Una riga per corsia, aggiornata coi tick e protetta da concorrenza ottimistica sul

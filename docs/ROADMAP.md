@@ -2874,8 +2874,12 @@ nei prossimi giorni e che PR #139 corregge con le prove:
 corsia 1 (RsiOversold DOT 15m di luglio, −65,87 su 42 operazioni) chiusa in utile e rischierata su
 Composite XLM/USDT 1h. Promozione automatica a Testnet **lasciata spenta**.
 
-**Aperto, in ordine di valore**: il forward test del carry non produce misure (stato in memoria,
-funding mai accumulato, 300 % per lato senza tetto); `deploy-trading.ps1` promuove a metà e lo
+**Seconda PR (#140)**: il forward test del carry lascia una misura — tabella `CarryLedger` scritta
+dal pod (episodi, funding per evento, netto), ripristino al riavvio, registro in `/admin/autonomy`;
+e i primi due test che esercitano le migrazioni (snapshot = modello, catena intera su DB vergine).
+
+**Aperto, in ordine di valore**: il sizing del carry senza tetto aggregato (300 % per lato);
+`deploy-trading.ps1` promuove a metà e lo
 dichiara fatto; la macchina si è spenta brutalmente 18 volte in tre settimane (è la causa dei
 riavvii dei pod e delle «corsie non leggibili»); `/admin/backup` cerca un task che non esiste più;
 `MinDistinctSymbols=2` tiene morta la ri-applica sulle corsie 0-2 con cacce mono-simbolo.

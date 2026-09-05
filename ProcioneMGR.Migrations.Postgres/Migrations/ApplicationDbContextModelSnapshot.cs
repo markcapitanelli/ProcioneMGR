@@ -538,6 +538,68 @@ namespace ProcioneMGR.Migrations.Postgres.Migrations
                     b.ToTable("FleetLaneObservations", (string)null);
                 });
 
+            modelBuilder.Entity("ProcioneMGR.Data.CarryLedgerEntry", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime?>("ClosedUtc")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("ClosedReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<decimal>("CostPercent")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("EntryAnnualizedPercent")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal?>("ExitAnnualizedPercent")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("FundingCollectedPercent")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("FundingCollectedQuote")
+                        .HasColumnType("numeric");
+
+                    b.Property<int>("FundingEventsAccrued")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("LastFundingUtc")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<decimal?>("NetQuote")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("NotionalQuote")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime>("OpenedUtc")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Symbol", "ClosedUtc");
+
+                    b.ToTable("CarryLedger", (string)null);
+                });
+
             modelBuilder.Entity("ProcioneMGR.Data.HostHeartbeat", b =>
                 {
                     b.Property<string>("Host")
