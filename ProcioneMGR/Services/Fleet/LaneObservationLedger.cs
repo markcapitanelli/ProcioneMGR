@@ -15,6 +15,16 @@ public interface ILaneObservationLedger
     /// </summary>
     Task<(TimeSpan Observed, DateTime FirstSeenUtc)> AccumulateAsync(
         int laneId, string identity, bool isRunning, DateTime nowUtc, CancellationToken ct = default);
+
+    /// <summary>
+    /// [2026-09-05] Legge l'osservazione cumulata SENZA accreditare nulla: per chi deve giudicare
+    /// con lo stesso orologio del ritiro senza essere lui a farlo scorrere. <c>null</c> = nessuna
+    /// riga per questa corsia, oppure identità diversa da quella registrata (esperimento nuovo che
+    /// il lettore della flotta non ha ancora visto): in entrambi i casi l'osservazione è ignota, e
+    /// l'ignoranza non si trasforma in un numero.
+    /// </summary>
+    Task<(TimeSpan Observed, DateTime FirstSeenUtc)?> ReadAsync(
+        int laneId, string identity, CancellationToken ct = default);
 }
 
 /// <inheritdoc cref="ILaneObservationLedger"/>
@@ -36,6 +46,16 @@ public sealed class LaneObservationLedger(
     /// </summary>
     internal static string BuildIdentity(string symbol, string timeframe, IReadOnlyList<string>? strategyIds) =>
         $"{symbol}|{timeframe}|{string.Join(",", (strategyIds ?? []).OrderBy(x => x, StringComparer.Ordinal))}";
+
+    public async Task<(TimeSpan Observed, DateTime FirstSeenUtc)?> ReadAsync(
+        int laneId, string identity, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var row = await db.FleetLaneObservations.AsNoTracking()
+            .FirstOrDefaultAsync(o => o.LaneId == laneId, ct);
+        if (row is null || !string.Equals(row.Identity, identity, StringComparison.Ordinal)) return null;
+        return (TimeSpan.FromSeconds(row.ObservedSeconds), DateTime.SpecifyKind(row.FirstSeenUtc, DateTimeKind.Utc));
+    }
 
     public async Task<(TimeSpan Observed, DateTime FirstSeenUtc)> AccumulateAsync(
         int laneId, string identity, bool isRunning, DateTime nowUtc, CancellationToken ct = default)

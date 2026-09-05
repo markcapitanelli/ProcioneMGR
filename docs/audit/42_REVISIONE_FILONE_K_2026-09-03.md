@@ -649,3 +649,47 @@ il confronto fra ciò che il pannello conta e ciò che la decisione fa, e i ritm
 valori negativi), `LastTradeUtc`, `OpenPositions`, identità e stabilità dei candidati, e valuta le
 invarianti della quarta azione: mai a interruttore spento, mai sull'impronta, mai su corsia ferma,
 **mai con posizioni aperte**, mai su corsia vincolata, mai con un rimpiazzo non giudicabile.
+
+## 12. Operatività a pieno regime (2026-09-05, notte) — il mandato «massimo profitto, automatizzato»
+
+Il proprietario ha chiesto di far rendere la piattaforma al massimo, automatizzando, con licenza di
+correggere. La premessa è scritta nei documenti di ricerca e non si può aggirare: **non esiste un
+edge veloce misurato** (445k combinazioni → 0 significative; cinque angoli tutti negativi; l'unica
+classe positiva è il carry, 5,5-11,9 %/anno). Il mandato si traduce quindi in una cosa sola onesta:
+**la macchina che cerca e giudica deve girare a pieno regime, senza stalli, e ciò che è misurato
+positivo deve essere davvero in corsa.** Tutto il resto sarebbe fabbricare numeri.
+
+### 12.1 Quello che era fermo senza che nessuno lo dicesse
+
+| Fatto | Dove | Rimedio |
+|---|---|---|
+| **Il guscio non è mai stato riavviato dopo il merge.** Alle 00:54 il sync ha scritto «aggiornato e riavviato», ma il processo in ascolto era ancora il pid 6516 delle 12:34 del giorno prima, revisione vecchia. Catena: macchina satura (7,5 GB su 7,7, CPU 76 %) → la query dei pid in `procione ferma guscio` non ha risposto nei 15 s → lista vuota letta come «già fermo» → il bring-up ha trovato la porta occupata e ha concluso «già in ascolto» → il sync ha dichiarato il successo. | `tools/Procione/Actions.cs`, `scripts/sync-piani.ps1` | `OwningPids` distingue «nessuno ascolta» da «non ho potuto chiedere» (`null`); `DownShell` esce con errore invece di dichiarare; il sync verifica la revisione DOPO il bring-up e non stampa «aggiornato» se è la stessa. Riavviato a mano: revisione daf89cb dalle 23:0x UTC. |
+| **Il log del pod del motore copriva quattro minuti.** 15.931 righe nel file corrente, 3.267 di comandi SQL di Entity Framework a Information più 58 per ogni sonda: il kubelet ruota a 10 MiB e `kubectl logs` andava dalle 22:56 alle 23:00. La riga di avvio del carry, un allarme K36, il motivo di un riavvio: tutto ruotato via. | `infra/k8s/trading/trading-config.env` | `Logging__LogLevel__*` a Warning per EF, AspNetCore e HttpClient nel ConfigMap (cambia l'hash: sostituisce il pod; le posizioni vivono a DB e sopravvivono). |
+| **La promozione e il ritiro usavano due orologi** (42 % di scarto): per questo `AutoPromoteToTestnet` è spento dal 1/09. | `Services/Trading/PromotionEvaluator.cs`, `Services/Fleet/LaneObservationLedger.cs` | `ILaneObservationLedger.ReadAsync` (sola lettura, non accredita) e la promozione legge quello, ancorando i trade allo stesso primo avvistamento. Senza registro ripiega e lo dichiara. Prove: `OrologioPromozioneTests`, `RegistroOsservazioneLetturaTests`. |
+| **Nessuno schieratore consultava la freschezza della serie**: una corsia poteva partire su una serie che l'ingestione non sincronizza e restare muta per settimane. | `Services/Fleet/GreyDeployer.cs` | Guardia prima del bracket, con la stessa tolleranza del guardiano di freschezza: serie non viva ⇒ rifiuto rumoroso. |
+
+Verificato e **sano**: il carry gira nel pod (battito `carry` alle 22:30 UTC, `Paper · 6/6 simboli`,
+funding fresco all'evento delle 16:00); il comitato AI vota; il journal deduplica; i pod di
+ingestion e ml sono sulle immagini di agosto perché la PR non tocca codice che gira lì.
+
+### 12.2 Le manopole accese, e con quali numeri davanti
+
+Sul guscio nuovo il pannello dice **0 inerti sostituibili, 8 rimpiazzi stabili pronti**: il cancello
+ha lo strumento e legge come previsto (la corsia 5 arriva ai 10 giorni di silenzio fra circa due
+giorni). Accesi da `/admin/autonomy`, verificati nel file vivo:
+
+- `Fleet:ReplaceIdleLanes = true` — la Regina sostituisce gli inerti (solo Paper, default di soglie).
+- `Fleet:PreferStableGrey = true` — il braccio automatico sceglie per mediana K57, non per data.
+
+Restano com'erano: `GreyAutoDeploy` acceso, `DryRun` spento, `AutoPromoteToTestnet` **spento**. Sulla
+promozione la ragione dello spegnimento è ora rimossa nel codice, ma riaccenderla è una scelta del
+proprietario da fare dopo il merge, guardando in `/admin/autonomy` che i due orologi concordino.
+
+### 12.3 Che cosa aspettarsi, in numeri
+
+| Orizzonte | Cosa succede da solo |
+|---|---|
+| ~2 giorni | la corsia 5 (UNI/USDT 4h, muta dal 27/08, ritmo non dichiarato) supera i 10 giorni di silenzio: dopo due tick di conferma viene fermata e rimpiazzata dal primo candidato stabile non duplicato (`MacdTrend AAVE/USDT 4h` collide con la corsia 3 per terna, quindi `Composite ADA/USDT 5m`, mediana 3,48) |
+| ogni 15 min | la Regina ricontrolla; il journal scrive solo ai cambi |
+| 48 h / 72 h | le cacce 30m e 1m rigirano per cadenza propria |
+| mesi | il forward test Paper è l'unico giudice: 3-5 trade al mese per corsia significano 4-6 mesi per i 20 trade del giudizio per Sharpe. Non c'è una manopola che lo accorci senza truccare il giudice. |

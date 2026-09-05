@@ -206,6 +206,29 @@ public sealed class GreyDeployer(
             return new(false, duplicato.Reason!);
         }
 
+        // --- [2026-09-05] LA SERIE DEVE ESSERE VIVA. Nessuno schieratore consultava la freschezza:
+        // una corsia poteva partire su una serie che l'ingestione non sincronizza più (disabilitata
+        // in watchlist, sospesa dall'exchange), non ricevere mai una candela, e l'unico esito era
+        // l'allarme di inedia settimane dopo — con uno slot di flotta bruciato per tutto il tempo.
+        // Stessa tolleranza del guardiano di freschezza, così i due non si contraddicono.
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var ultimaCandela = await db.OhlcvData.AsNoTracking()
+                .Where(c => c.Symbol == symbol && c.Timeframe == timeframe)
+                .MaxAsync(c => (DateTime?)c.TimestampUtc, ct);
+            var syncMinutes = serviceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>()
+                ?.GetValue("MarketData:SyncIntervalMinutes", 5) ?? 5;
+            var tolleranza = Ingestion.SeriesFreshness.EffectiveToleranceBars(timeframe, TimeSpan.FromMinutes(Math.Max(1, syncMinutes)));
+            if (Ingestion.SeriesFreshness.IsStale(timeframe, ultimaCandela, DateTime.UtcNow, tolleranza))
+            {
+                return new(false,
+                    $"La serie {symbol} {timeframe} non è VIVA: " +
+                    Ingestion.SeriesFreshness.Describe(timeframe, ultimaCandela, DateTime.UtcNow, 0, tolleranza) +
+                    ". Una corsia su una serie che nessuno sincronizza non riceve candele e occupa lo slot senza dire niente: " +
+                    "riabilitare la serie in /data (watchlist) e aspettare la prima candela, poi schierare.");
+            }
+        }
+
         // --- Il bracket: stesso calcolo dell'applica. Senza protezioni derivabili non si parte.
         var (sl, tp) = await AutoBracket.ComputeAsync(dbFactory, excursion, symbol, timeframe, ct);
         if (sl <= 0m && tp <= 0m)

@@ -153,13 +153,45 @@ if (-not $SoloPlancia) {
                     Log "Guscio   : git pull --ff-only fallito (albero sporco o divergente): non tocco nulla." 'Red'
                 }
                 else {
+                    # [2026-09-05] La DLL delle migrazioni NON la ricostruisce il build dell'app:
+                    # `dotnet run` rifa' ProcioneMGR e copia l'assembly delle migrazioni cosi' com'e'
+                    # in bin. Dopo un merge che aggiunge una migrazione, il guscio parte con uno
+                    # snapshot vecchio e scrive «il MODELLO differisce dallo snapshot» a livello
+                    # fail — visto all'avvio di stanotte. Si ricostruisce PRIMA di riavviare, cosi'
+                    # il bring-up copia quella giusta. Un fallimento qui non ferma il rilascio:
+                    # l'app non ne ha bisogno per girare, solo per dichiarare lo schema allineato.
+                    dotnet build (Join-Path $repoRoot 'ProcioneMGR.Migrations.Postgres') -c Release --nologo -v q 2>&1 | Out-Null
+                    if ($LASTEXITCODE -ne 0) { Log "Guscio   : build delle migrazioni fallito (codice $LASTEXITCODE): il guscio partira' con lo snapshot precedente." 'Yellow' }
+
                     # La plancia sa gia' fermare il guscio: non si riscrive quel codice qui.
                     & (Join-Path $repoRoot 'tools\Procione\bin\Release\net10.0\procione.exe') ferma guscio
-                    # bringup ricompila e riavvia: `dotnet run -c Release` rifa' il binario
-                    # dall'albero di lavoro, che ora e' master. E' anche il passo che rimette i
-                    # port-forward, che muoiono col guscio.
-                    & (Join-Path $PSScriptRoot 'bringup.ps1')
-                    Log "Guscio   : aggiornato e riavviato." 'Green'
+                    if ($LASTEXITCODE -ne 0) {
+                        # [2026-09-05] Se il guscio NON e' stato fermato, il bring-up lo trova in
+                        # ascolto e dichiara «gia' in ascolto»: un rilascio finto, con la revisione
+                        # vecchia che continua a girare. E' successo alle 00:54: macchina satura,
+                        # query dei pid scaduta, «gia' fermo» letto da una lista vuota.
+                        Log "Guscio   : `procione ferma guscio` NON e' riuscito (codice $LASTEXITCODE): non lancio il bring-up, riprovo al prossimo giro." 'Red'
+                    }
+                    else {
+                        # bringup ricompila e riavvia: `dotnet run -c Release` rifa' il binario
+                        # dall'albero di lavoro, che ora e' master. E' anche il passo che rimette i
+                        # port-forward, che muoiono col guscio.
+                        & (Join-Path $PSScriptRoot 'bringup.ps1')
+
+                        # Si VERIFICA la revisione dopo, invece di dichiarare l'esito prima: il
+                        # bring-up e' idempotente e non distingue «l'ho avviato» da «c'era gia'».
+                        $dopo = $null
+                        try { $dopo = (Invoke-RestMethod -Uri "$shellUrl/health" -TimeoutSec 60).revision } catch { }
+                        if ($dopo -and $rev -and $dopo -eq $rev) {
+                            Log "Guscio   : NON aggiornato - dopo il bring-up risponde ancora $($rev.Substring(0,8)). Il processo vecchio non e' stato fermato: riprovo al prossimo giro." 'Red'
+                        }
+                        elseif ($dopo) {
+                            Log "Guscio   : aggiornato e riavviato ($($dopo.Substring(0,8)))." 'Green'
+                        }
+                        else {
+                            Log "Guscio   : bring-up eseguito, ma /health non risponde ancora: la revisione la dira' il prossimo giro." 'Yellow'
+                        }
+                    }
                 }
             }
         }

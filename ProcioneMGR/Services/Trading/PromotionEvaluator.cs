@@ -129,7 +129,10 @@ public interface IPromotionEvaluator
 /// </summary>
 public sealed class PromotionEvaluator(
     IServiceProvider serviceProvider,
-    Microsoft.Extensions.Options.IOptionsMonitor<PromotionEvaluatorOptions> options) : IPromotionEvaluator
+    Microsoft.Extensions.Options.IOptionsMonitor<PromotionEvaluatorOptions> options,
+    // [2026-09-05] Lo STESSO orologio del ritiro. Opzionale per non toccare le costruzioni di test:
+    // senza registro si torna a `now − StartedAtUtc`, dichiarandolo nel motivo.
+    Fleet.ILaneObservationLedger? observationLedger = null) : IPromotionEvaluator
 {
     /// <summary>Numero di corsie isolate (allineato a Program.cs LaneCount).</summary>
     public static int LaneCount => TradingLanes.Count;
@@ -158,11 +161,43 @@ public sealed class PromotionEvaluator(
         // smettesse di dipendere dall'osservazione perché una corsia mai avviata venisse giudicata
         // sui trade di un'altra coppia. Senza avvio non esiste un test da misurare: si passa una
         // finestra vuota, non nessuna finestra.
-        var perf = status.StartedAtUtc is DateTime avvio
+        // [2026-09-05] I DUE OROLOGI DEVONO CONCORDARE. Il 2026-09-01 il proprietario ha spento
+        // AutoPromoteToTestnet dopo aver misurato che la promozione contava l'osservazione come
+        // `now − StartedAtUtc` (8,73 gg sulla corsia 5) mentre il ritiro usa il registro cumulato
+        // (6,14 gg): 42 % di differenza sullo stesso oggetto nello stesso istante. `StartedAtUtc`
+        // riparte a ogni riavvio del motore e non sa nulla di quando l'IPOTESI è entrata in corsia;
+        // il registro J8 sì, e sopravvive ai riavvii. Qui si legge quello — in sola lettura, senza
+        // accreditare: l'orologio lo fa scorrere il lettore della flotta, uno solo. Trade e finestra
+        // si ancorano allo stesso primo avvistamento, come nel ritiro: numeratore e denominatore
+        // dalla stessa storia. Se il registro non conosce questa corsia (identità nuova non ancora
+        // vista dalla flotta) si ripiega su StartedAtUtc e lo si dice.
+        (TimeSpan Observed, DateTime FirstSeenUtc)? ledger = null;
+        if (observationLedger is not null)
+        {
+            try
+            {
+                var directory = serviceProvider.GetService<ILaneDirectory>();
+                var summary = directory is null ? null : (await directory.ListAsync(ct)).FirstOrDefault(s => s.Id == laneId);
+                if (summary is not null)
+                {
+                    var identity = Fleet.LaneObservationLedger.BuildIdentity(summary.Symbol, summary.Timeframe, summary.ActiveStrategyIds);
+                    ledger = await observationLedger.ReadAsync(laneId, identity, ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception)
+            {
+                ledger = null; // fail-open sulla DIAGNOSTICA: si ripiega sull'orologio di sessione, dichiarato sotto
+            }
+        }
+
+        var anchor = ledger?.FirstSeenUtc ?? status.StartedAtUtc;
+        var perf = anchor is DateTime avvio
             ? await engine.GetPerformanceAsync(from: avvio, ct)
             : await engine.GetPerformanceAsync(from: DateTime.UtcNow, ct);
 
-        var observation = status.StartedAtUtc is DateTime start ? DateTime.UtcNow - start : TimeSpan.Zero;
+        var observation = ledger?.Observed
+            ?? (status.StartedAtUtc is DateTime start ? DateTime.UtcNow - start : TimeSpan.Zero);
         var metrics = new LaneMetrics
         {
             RealizedSharpe = perf.SharpeRatio,

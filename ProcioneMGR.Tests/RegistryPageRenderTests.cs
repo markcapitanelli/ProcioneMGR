@@ -277,8 +277,13 @@ public sealed class RegistryPageRenderTests : BunitContext
         // La guida nasce chiusa: si apre come farebbe l'operatore, e deve dichiarare il rifiuto del
         // gate. Senza questa parte, il badge direbbe la provenienza senza dire che cosa comporta.
         cut.Find(".guida-panel-header").Click();
-        Assert.Contains("la promozione viene", cut.Markup);
-        Assert.Contains("ordine di grandezza", cut.Markup);
+        // [2026-09-05] Il render dopo il clic e' asincrono: l'assert secco cadeva in CI sotto carico
+        // («Sub-string not found»), come i due `Find` subito dopo il clic corretti il 4/09.
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("la promozione viene", cut.Markup);
+            Assert.Contains("ordine di grandezza", cut.Markup);
+        }, TimeSpan.FromSeconds(10));
     }
 
     /// <summary>
