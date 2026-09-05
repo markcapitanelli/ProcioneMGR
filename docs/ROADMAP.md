@@ -2878,9 +2878,12 @@ Composite XLM/USDT 1h. Promozione automatica a Testnet **lasciata spenta**.
 dal pod (episodi, funding per evento, netto), ripristino al riavvio, registro in `/admin/autonomy`;
 e i primi due test che esercitano le migrazioni (snapshot = modello, catena intera su DB vergine).
 
+**Terza PR (#141)**: `/admin/backup` legge il supervisore della plancia (non più il task che non
+esiste); le immagini portano il timbro della revisione (`SOURCE_REVISION`).
+
 **Aperto, in ordine di valore**: il sizing del carry senza tetto aggregato (300 % per lato);
-`deploy-trading.ps1` promuove a metà e lo
-dichiara fatto; la macchina si è spenta brutalmente 18 volte in tre settimane (è la causa dei
-riavvii dei pod e delle «corsie non leggibili»); `/admin/backup` cerca un task che non esiste più;
-`MinDistinctSymbols=2` tiene morta la ri-applica sulle corsie 0-2 con cacce mono-simbolo.
+`deploy-trading.ps1` promuove a metà e lo dichiara fatto; la macchina si è spenta brutalmente 18
+volte in tre settimane (è la causa dei riavvii dei pod e delle «corsie non leggibili»);
+`MinDistinctSymbols=2` tiene morta la ri-applica sulle corsie 0-2 con cacce mono-simbolo; il test
+`RunCycle_ChiamataAppesa_SiFermaAlBudgetInveceCheMai` è fragile a tempo su runner carichi.
 
