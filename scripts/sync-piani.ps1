@@ -173,6 +173,19 @@ if (-not $SoloPlancia) {
                         Log "Guscio   : `procione ferma guscio` NON e' riuscito (codice $LASTEXITCODE): non lancio il bring-up, riprovo al prossimo giro." 'Red'
                     }
                     else {
+                        # [2026-09-05] La DLL delle migrazioni va COPIATA nel bin del guscio: nessun
+                        # riferimento di progetto la porta li' (docs/POSTGRES_MIGRATION.md, passo 1), e
+                        # `dotnet run` non tocca i file che non conosce. Si copia QUI, a guscio fermo:
+                        # a guscio vivo il file e' bloccato dal processo che lo ha caricato. Verificato
+                        # stanotte: ricostruita alle 08:24, il bring-up delle 08:30 ha rimesso in piedi
+                        # un guscio con quella del 03/09 in bin, e il fail «MODELLO differisce» e' tornato.
+                        $dllMig = Join-Path $repoRoot 'ProcioneMGR.Migrations.Postgres\bin\Release\net10.0\ProcioneMGR.Migrations.Postgres.dll'
+                        $binGuscio = Join-Path $repoRoot 'ProcioneMGR\bin\Release\net10.0'
+                        if ((Test-Path $dllMig) -and (Test-Path $binGuscio)) {
+                            try { Copy-Item $dllMig $binGuscio -Force; Log "Guscio   : DLL delle migrazioni copiata nel bin." }
+                            catch { Log "Guscio   : copia della DLL delle migrazioni fallita ($($_.Exception.Message)): il guscio partira' con la precedente." 'Yellow' }
+                        }
+
                         # bringup ricompila e riavvia: `dotnet run -c Release` rifa' il binario
                         # dall'albero di lavoro, che ora e' master. E' anche il passo che rimette i
                         # port-forward, che muoiono col guscio.
