@@ -60,7 +60,7 @@ foreach ($t in $resolved) {
 # sorgente viene il binario, e il bump nel kustomization resta la promozione — stessa filosofia
 # GitOps, stessa forma del precedente local-c026a67 (guasto GitHub 2026-08-06).
 Push-Location $repoRoot
-try { $sha = (git rev-parse --short=8 HEAD).Trim() } finally { Pop-Location }
+try { $sha = (git rev-parse --short=8 HEAD).Trim(); $fullSha = (git rev-parse HEAD).Trim() } finally { Pop-Location }
 if (-not $sha) { throw "git rev-parse fallito: impossibile calcolare il tag della promozione." }
 $pinnedSuffix = "local-$sha"
 
@@ -71,7 +71,9 @@ foreach ($t in $resolved) {
     $localTag = "procionemgr/${t}:local"
     $pinnedTag = "ghcr.io/markcapitanelli/${t}:$pinnedSuffix"
     Write-Host "== docker build --target $t ==" -ForegroundColor Cyan
-    docker build --target $t -t $localTag -t $pinnedTag $repoRoot
+    # [2026-09-05] Il timbro della revisione entra nel binario (AssemblyInformationalVersion +sha):
+    # senza, il motore batteva «senza timbro» e il confronto guscio↔motore non misurava nulla.
+    docker build --target $t --build-arg "SOURCE_REVISION=$fullSha" -t $localTag -t $pinnedTag $repoRoot
     if ($LASTEXITCODE -ne 0) { throw "Build di '$t' fallita (exit $LASTEXITCODE)." }
 }
 

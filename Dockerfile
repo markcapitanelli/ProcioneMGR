@@ -14,6 +14,11 @@
 
 # --- Build stage condiviso ---
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# [2026-09-05] Lo sha del commit compilato, passato da chi costruisce (build-images-local.ps1, CI):
+# .dockerignore esclude .git/, quindi SourceLink non puo' dedurlo e il motore batteva «senza timbro
+# (1.0.0.0)» — la HeartbeatBoard confrontava la revisione del guscio con un valore non misurato.
+# Vuoto = comportamento di prima (nessun suffisso +sha).
+ARG SOURCE_REVISION=
 WORKDIR /src
 
 # Restore separato dai sorgenti per sfruttare la cache layer sui cambi di solo codice.
@@ -45,12 +50,12 @@ COPY tools/StrategyHunter/ tools/StrategyHunter/
 # Publish in sequenza nello stesso layer: ProcioneMGR viene COMPILATO UNA VOLTA (dal primo
 # publish) e riusato dagli altri. I satelliti NON devono ereditare gli appsettings del
 # monolite (config bleed): la loro configurazione arriva da env/Secret.
-RUN dotnet publish ProcioneMGR/ProcioneMGR.csproj -c Release -o /out/procionemgr --no-restore \
- && dotnet publish ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj -c Release -o /out/procionemgr-ingestion --no-restore \
- && dotnet publish ProcioneMGR.Ml/ProcioneMGR.Ml.csproj -c Release -o /out/procionemgr-ml --no-restore \
- && dotnet publish ProcioneMGR.Trading/ProcioneMGR.Trading.csproj -c Release -o /out/procionemgr-trading --no-restore \
- && dotnet publish tools/DbBackup/DbBackup.csproj -c Release -o /out/dbbackup --no-restore \
- && dotnet publish tools/StrategyHunter/StrategyHunter.csproj -c Release -o /out/strategyhunter --no-restore \
+RUN dotnet publish ProcioneMGR/ProcioneMGR.csproj -c Release -o /out/procionemgr --no-restore -p:SourceRevisionId=${SOURCE_REVISION} \
+ && dotnet publish ProcioneMGR.Ingestion/ProcioneMGR.Ingestion.csproj -c Release -o /out/procionemgr-ingestion --no-restore -p:SourceRevisionId=${SOURCE_REVISION} \
+ && dotnet publish ProcioneMGR.Ml/ProcioneMGR.Ml.csproj -c Release -o /out/procionemgr-ml --no-restore -p:SourceRevisionId=${SOURCE_REVISION} \
+ && dotnet publish ProcioneMGR.Trading/ProcioneMGR.Trading.csproj -c Release -o /out/procionemgr-trading --no-restore -p:SourceRevisionId=${SOURCE_REVISION} \
+ && dotnet publish tools/DbBackup/DbBackup.csproj -c Release -o /out/dbbackup --no-restore -p:SourceRevisionId=${SOURCE_REVISION} \
+ && dotnet publish tools/StrategyHunter/StrategyHunter.csproj -c Release -o /out/strategyhunter --no-restore -p:SourceRevisionId=${SOURCE_REVISION} \
  && rm -f /out/procionemgr-ingestion/appsettings.Development.json /out/procionemgr-ingestion/appsettings.Production.json \
           /out/procionemgr-ml/appsettings.Development.json /out/procionemgr-ml/appsettings.Production.json \
           /out/procionemgr-trading/appsettings.Development.json /out/procionemgr-trading/appsettings.Production.json \
