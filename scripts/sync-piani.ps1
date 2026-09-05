@@ -153,16 +153,6 @@ if (-not $SoloPlancia) {
                     Log "Guscio   : git pull --ff-only fallito (albero sporco o divergente): non tocco nulla." 'Red'
                 }
                 else {
-                    # [2026-09-05] La DLL delle migrazioni NON la ricostruisce il build dell'app:
-                    # `dotnet run` rifa' ProcioneMGR e copia l'assembly delle migrazioni cosi' com'e'
-                    # in bin. Dopo un merge che aggiunge una migrazione, il guscio parte con uno
-                    # snapshot vecchio e scrive «il MODELLO differisce dallo snapshot» a livello
-                    # fail — visto all'avvio di stanotte. Si ricostruisce PRIMA di riavviare, cosi'
-                    # il bring-up copia quella giusta. Un fallimento qui non ferma il rilascio:
-                    # l'app non ne ha bisogno per girare, solo per dichiarare lo schema allineato.
-                    dotnet build (Join-Path $repoRoot 'ProcioneMGR.Migrations.Postgres') -c Release --nologo -v q 2>&1 | Out-Null
-                    if ($LASTEXITCODE -ne 0) { Log "Guscio   : build delle migrazioni fallito (codice $LASTEXITCODE): il guscio partira' con lo snapshot precedente." 'Yellow' }
-
                     # La plancia sa gia' fermare il guscio: non si riscrive quel codice qui.
                     & (Join-Path $repoRoot 'tools\Procione\bin\Release\net10.0\procione.exe') ferma guscio
                     if ($LASTEXITCODE -ne 0) {
@@ -173,12 +163,25 @@ if (-not $SoloPlancia) {
                         Log "Guscio   : `procione ferma guscio` NON e' riuscito (codice $LASTEXITCODE): non lancio il bring-up, riprovo al prossimo giro." 'Red'
                     }
                     else {
-                        # [2026-09-05] La DLL delle migrazioni va COPIATA nel bin del guscio: nessun
-                        # riferimento di progetto la porta li' (docs/POSTGRES_MIGRATION.md, passo 1), e
-                        # `dotnet run` non tocca i file che non conosce. Si copia QUI, a guscio fermo:
-                        # a guscio vivo il file e' bloccato dal processo che lo ha caricato. Verificato
-                        # stanotte: ricostruita alle 08:24, il bring-up delle 08:30 ha rimesso in piedi
-                        # un guscio con quella del 03/09 in bin, e il fail «MODELLO differisce» e' tornato.
+                        # [2026-09-05] La DLL delle migrazioni NON la ricostruisce il build dell'app
+                        # (`dotnet run` rifa' ProcioneMGR e copia l'assembly cosi' com'e'), quindi
+                        # dopo un merge con una migrazione nuova il guscio partiva con lo snapshot
+                        # vecchio e scriveva «il MODELLO differisce» a livello fail.
+                        #
+                        # Si ricostruisce A GUSCIO FERMO, e l'ordine non e' un dettaglio: il progetto
+                        # delle migrazioni referenzia ProcioneMGR, quindi ricostruirlo ricompila anche
+                        # l'app e prova a riscrivere ProcioneMGR.dll nel bin — che a guscio vivo e'
+                        # bloccata dal processo. La prima versione (build PRIMA di `ferma`) e' rimasta
+                        # 16 minuti in MSBuild a ritentare sul file, il 5/09 alle 09:14, con il rilascio
+                        # del guscio appeso dietro. Un fallimento qui non ferma il rilascio: l'app non
+                        # ne ha bisogno per girare, solo per dichiarare lo schema allineato.
+                        dotnet build (Join-Path $repoRoot 'ProcioneMGR.Migrations.Postgres') -c Release --nologo -v q 2>&1 | Out-Null
+                        if ($LASTEXITCODE -ne 0) { Log "Guscio   : build delle migrazioni fallito (codice $LASTEXITCODE): il guscio partira' con lo snapshot precedente." 'Yellow' }
+
+                        # ...e va COPIATA nel bin del guscio: nessun riferimento di progetto la porta
+                        # li' (docs/POSTGRES_MIGRATION.md, passo 1), e `dotnet run` non tocca i file che
+                        # non conosce. Verificato: ricostruita alle 08:24, il bring-up delle 08:30 ha
+                        # rimesso in piedi un guscio con quella del 03/09 e il fail e' tornato.
                         $dllMig = Join-Path $repoRoot 'ProcioneMGR.Migrations.Postgres\bin\Release\net10.0\ProcioneMGR.Migrations.Postgres.dll'
                         $binGuscio = Join-Path $repoRoot 'ProcioneMGR\bin\Release\net10.0'
                         if ((Test-Path $dllMig) -and (Test-Path $binGuscio)) {
