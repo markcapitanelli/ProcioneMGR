@@ -41,6 +41,7 @@
 | 40 | [40_CACCIA_19_E_STABILITA_2026-09-03.md](40_CACCIA_19_E_STABILITA_2026-09-03.md) | K56 cadenza per configurazione, K57 gate di stabilità |
 | 41 | [41_GOVERNO_DELLA_CACCIA_2026-09-03.md](41_GOVERNO_DELLA_CACCIA_2026-09-03.md) | K58 copertura, K59 tetto in ore, K60 proponitore |
 | 42 | [42_REVISIONE_FILONE_K_2026-09-03.md](42_REVISIONE_FILONE_K_2026-09-03.md) | **revisione completa del filone**: 14 segnalazioni alte, tre difetti dal vivo, correzioni applicate |
+| 43 | [43_REVISIONE_COMPLETA_2026-09-05.md](43_REVISIONE_COMPLETA_2026-09-05.md) | **revisione completa della piattaforma e presa in carico operativa**: barriere verificate, 6 correzioni alla flotta/promozione (PR #139), il carry senza misure, la macchina che si spegne, corsie 0 e 1 rischierate |
 
 ## Secondo passaggio — 2026-08-04, sera
 
