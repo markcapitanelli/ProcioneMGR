@@ -148,8 +148,8 @@ e con la posizione aperta il ritiro aspetta.
 | I2 | alta | Sizing del carry senza tetto aggregato: `InitialCapital` fisso 10 000 (`CarryModels.cs:13`), 50 % per gamba × 6 simboli = **300 % per lato** | aperto |
 | I3 | alta | `deploy-trading.ps1` scrive il pin nel kustomization **prima** di `kubectl apply` e del rollout (`:139-145`); se uno dei due fallisce, il giro dopo committa il pin orfano e dichiara «già allineato» (`:60-83`) mentre il cluster resta sull'immagine vecchia | aperto |
 | I4 | alta | **La macchina**: 18 eventi Kernel-Power 41 (spegnimento brutale) dal 13/08; ultimo riavvio 05/09 05:07; RAM 7,7 GB con 0,6 liberi; calico-kube-controllers 240 riavvii, kube-controller-manager 166; veglia uccisa dal timeout due volte nella notte. I 55/56 riavvii di ingestion e ml sono **reboot del nodo + liveness su nodo saturo** (`Last State: Terminated, Reason: Unknown, Exit 255`, log precedenti puliti), non crash applicativi. Le probe di ingestion/ml (`timeoutSeconds: 5`, soglia 3) sono quattro volte più strette di quelle del trading (20 s × 10) | aperto: decisione del proprietario (hardware / probe) |
-| I5 | media | Il motore batte «senza timbro (1.0.0.0)»: il `Dockerfile` (`:48-53`) pubblica senza `SourceRevisionId` e `.dockerignore` esclude `.git/`; `build-images-local.ps1:74` calcola lo sha e non lo passa | aperto (piccolo) |
-| I6 | media | `/admin/backup` interroga il Task Scheduler («NON REGISTRATA», consiglia `-Register`) mentre dal 23/08 il backup gira nel supervisore della plancia (14 dump sani, ultimo 03:31). Dovrebbe leggere `%TEMP%\procionemgr-supervisore.json` e `~/.procione/lavori.json` | aperto — un controllo che allarma a prescindere dalla realtà, e il rimedio suggerito creerebbe un **secondo** backup notturno |
+| I5 | media | Il motore batte «senza timbro (1.0.0.0)»: il `Dockerfile` (`:48-53`) pubblica senza `SourceRevisionId` e `.dockerignore` esclude `.git/`; `build-images-local.ps1:74` calcola lo sha e non lo passa | **corretto (PR #141)**: `ARG SOURCE_REVISION` + `-p:SourceRevisionId` sui sei publish, `--build-arg` nello script locale e `build-args` nei sei step della CI |
+| I6 | media | `/admin/backup` interroga il Task Scheduler («NON REGISTRATA», consiglia `-Register`) mentre dal 23/08 il backup gira nel supervisore della plancia (14 dump sani, ultimo 03:31) | **corretto (PR #141)**: `SupervisorJobProbe` legge `%TEMP%\procionemgr-supervisore.json` (la fonte di `procione lavoro`), dice esito e ultima esecuzione, e «supervisore FERMO» col rimedio; il Task Scheduler resta il ripiego; l'avviso non consiglia più un secondo backup |
 | I7 | media | `sync-piani.ps1` con `$ErrorActionPreference='Stop'` in PowerShell 5.1: una riga su stderr del build delle migrazioni (`:178`) abortisce a guscio già fermo, e il bring-up successivo non copia la DLL | aperto |
 | I8 | media | Le immagini di ingestion e ml sono del 16/08 e del 10/08; nessun lavoro le ricostruisce | aperto |
 | I9 | bassa | WebSocket senza `KeepAliveTimeout`; la watchdog per-serie notifica e non ricicla | aperto (feed in sola osservazione) |
@@ -225,3 +225,24 @@ allinearsi al presente, alle 11:55: le eventuali righe di quel replay sono ricon
 - La corsia 7 con lo short aperto: un `FleetNoOp` «posizioni APERTE» al posto del ritiro, finché lo
   stop o il take profit non chiudono.
 - `/trading` corsie 0 e 1 in corsa, prima operazione chiusa con `RecordedAtUtc` ≈ `ClosedAtUtc`.
+
+---
+
+## 9. Coda della giornata (sera)
+
+- **PR #139** fusa alle 14:4x, motore rischierato alle 15:0x: al primo tick il journal è passato da
+  «20 candidati grigi schierabili» a **«15»** (i cinque in collisione con corsie in corsa sono usciti
+  dalla coda) e conta «8 attive».
+- **PR #140** (registro del carry + guardiani delle migrazioni) fusa alle 18:41 dopo due giri rossi
+  in CI: il guardiano dello snapshot riceveva dalla cache condivisa di EF il modello costruito da un
+  test precedente **senza Identity** (in locale, da solo, passava). `EnableServiceProviderCaching(false)`,
+  come già faceva `TradingEngineCredentialDecryptTests`. Lezione: un test verde in isolamento non è
+  una prova finché non gira dentro la suite.
+- **PR #141** (backup dal supervisore, timbro delle immagini) fusa alle 19:2x. Il run `push` sullo
+  stesso sha è caduto su `MarketDataSyncWorkerTests.RunCycle_ChiamataAppesa_SiFermaAlBudgetInveceCheMai`
+  mentre il run `pull_request` e la CI su master sono verdi: è un test a budget di tempo, fragile su
+  un runner carico. Da rendere deterministico (aperto).
+- Il lavoro `deploy` della plancia è andato in **timeout a 25 minuti** durante il rischieramento
+  del motore (build dell'immagine su macchina satura: 0,4 GB liberi, nodo al 257 % di CPU), ma
+  apply e rollout erano già avvenuti e il pin era già committato: il caso I3 in forma benigna.
+
