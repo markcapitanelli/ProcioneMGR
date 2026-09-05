@@ -631,6 +631,19 @@ public sealed class TradingEngine(
             // SaveStateAsync in coda al metodo la porta con sé.
             _state.LastCandleUtc = ts;
 
+            // [2026-09-05] LA FINESTRA DELLA PERDITA GIORNALIERA SCORRE CON LE CANDELE, NON SOLO CON
+            // LE CHIUSURE. Fino a oggi l'ancora si spostava solo dentro PositionCloser, cioe' alla
+            // chiusura successiva: una corsia che il giorno 1 chiudeva a -5,1% e poi restava senza
+            // segnali per tre giorni si presentava al primo segnale del giorno 4 con lo stesso
+            // DailyPnl, il SafetyChecker leggeva «perdita giornaliera oltre il limite» e chiedeva
+            // l'EMERGENCY STOP per una perdita di tre giorni prima. Stessa aritmetica del closer
+            // (24 ore in tempo di candela), applicata a ogni barra: le due strade non divergono.
+            if ((ts - _state.DailyAnchorUtc).TotalHours >= 24)
+            {
+                _state.DailyPnl = 0m;
+                _state.DailyAnchorUtc = ts;
+            }
+
             // Futures Testnet/Live: rileva liquidazioni forzate dall'exchange (o chiusure
             // manuali fatte fuori dalla piattaforma) PRIMA di valutare qualsiasi altra cosa,
             // così lo stato locale non "mente" su una posizione che non esiste più.

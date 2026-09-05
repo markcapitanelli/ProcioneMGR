@@ -179,7 +179,10 @@ public sealed class FleetStateReader(
                 // ripulita dal replay) e le posizioni vive, che la vietano.
                 LastTradeUtc: lastTrade,
                 OpenPositions: openPositions,
-                ExpectedDiverged: diverged));
+                ExpectedDiverged: diverged,
+                // [K33-bis] Le chiavi delle gambe attive, perche' il decisore possa saltare i
+                // candidati che la guardia dei duplicati rifiuterebbe (stessa fonte della guardia).
+                ActiveCandidateKeys: s.ActiveCandidateKeys));
         }
 
         // --- Candidati --------------------------------------------------------------------------
@@ -204,6 +207,40 @@ public sealed class FleetStateReader(
     /// brucia: il rifiuto è la modalità, non una proprietà del candidato. Puro: si prova senza DB.
     /// </summary>
     internal static readonly TimeSpan FinestraRifiuti = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// [K61-bis] Quale riga del journal, oltre alle «Assign», puo' bruciare un candidato: le
+    /// «Retire» RIFIUTATE che portano un RunId sono i rifiuti di sostituzione (K61) — il candidato
+    /// e' stato provato su una corsia inerte e respinto prima dello stop. Le «Retire» eseguite o
+    /// fallite riguardano la corsia, non il candidato, e non contano. Puro: si prova senza DB.
+    /// </summary>
+    internal static bool RigaCheBrucia(string kind, string outcome)
+        => kind == "Assign" || (kind == "Retire" && outcome == DecisionOutcome.Refused);
+
+    /// <summary>
+    /// [K14-bis] Un artifact di decisione della ri-applica «gestisce» il run — cioe' lo toglie alla
+    /// flotta — solo se ha APPLICATO. Un payload illeggibile o senza il campo conta come applicato:
+    /// non sapere non allarga il permesso (fail-closed, come il tetto grigio).
+    /// </summary>
+    internal static bool DecisioneCheGestisce(string? payloadJson)
+    {
+        if (string.IsNullOrWhiteSpace(payloadJson)) return true;
+        try
+        {
+            using var doc = JsonDocument.Parse(payloadJson);
+            if (!doc.RootElement.TryGetProperty("Applied", out var applied)) return true;
+            return applied.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => true,
+            };
+        }
+        catch (JsonException)
+        {
+            return true;
+        }
+    }
 
     internal static bool ContaComeGestito(string outcome, bool dryRun, bool applied, string? error, DateTime atUtc, DateTime now)
         => outcome switch
@@ -253,10 +290,22 @@ public sealed class FleetStateReader(
             .ToDictionary(a => a.RunId, a => a.PayloadJson);
 
         // Run già gestiti: dall'auto-reapply (artifact) o da questo stesso journal.
+        //
+        // [K14-bis, 2026-09-05] SOLO LE DECISIONI CHE HANNO SCHIERATO CONTANO. Fino a oggi bastava
+        // l'esistenza dell'artifact: e la ri-applica ne scrive uno anche quando SCARTA («Candidato
+        // scartato: solo 1 simboli distinti», «Run senza ensemble applicabile») — cioe' a ogni run
+        // schedulato, dato che in trenta giorni non ha mai applicato nulla. Un rifiuto della
+        // ri-applica sulle corsie 0-2 marcava «gia' schierati» i grigi di quel run per la flotta, e
+        // per ereditarieta' d'identita' l'intera ipotesi spariva dalla coda: e' lo stesso difetto di
+        // K14 (una non-azione che consuma lo schieramento), un piano piu' sotto. Misurato: i due
+        // scarti del 02/09 e del 05/09 sulla caccia 5m avevano reso invisibile al braccio automatico
+        // Composite ADA/USDT 5m, mediana K57 3,48 — il miglior rimpiazzo libero di quel giorno.
         var handledByReapply = (await db.PipelineArtifacts.AsNoTracking()
                 .Where(a => a.Kind == AutoReapplyArtifactKinds.Decision && runIds.Contains(a.RunId))
-                .Select(a => a.RunId)
+                .Select(a => new { a.RunId, a.PayloadJson })
                 .ToListAsync(ct))
+            .Where(a => DecisioneCheGestisce(a.PayloadJson))
+            .Select(a => a.RunId)
             .ToHashSet();
         // [K14 2026-08-31] DUE insiemi, non uno. Prima "Assign" e "ProposeGrey" finivano insieme in
         // «gia' gestito», e con l'ereditarieta' per identita' una NOTIFICA a un umano toglieva il
@@ -282,10 +331,18 @@ public sealed class FleetStateReader(
         // Unknown conta solo se porta un errore (un intento chiuso dalla riconciliazione) o se è
         // applicato: una riga senza esito scritta da un binario che non conosce la colonna, nella
         // finestra fra migrazione e rilascio, non è uno schieramento.
+        // [K61-bis, 2026-09-05] Anche i RIFIUTI DI SOSTITUZIONE bruciano il candidato per la stessa
+        // finestra dei rifiuti di assegnazione. Il braccio K61 li scrive come Kind="Retire" con il
+        // RunId del candidato (la corsia non e' stata toccata, ma il candidato e' stato provato e
+        // respinto), e finora questa query guardava solo le righe "Assign": il candidato restava in
+        // testa alla lista dei rimpiazzi — ordinata per mediana, quindi stabile fra i tick — e la
+        // stessa sostituzione veniva riproposta e rifiutata a ogni giro, senza mai passare al
+        // secondo. Vedi RigaCheBrucia.
         var assignedByFleet = (await db.OrchestratorDecisions.AsNoTracking()
-                .Where(d => d.RunId != null && runIds.Contains(d.RunId.Value) && d.Kind == "Assign")
-                .Select(d => new { RunId = d.RunId!.Value, d.Outcome, d.DryRun, d.Applied, d.Error, d.AtUtc })
+                .Where(d => d.RunId != null && runIds.Contains(d.RunId.Value) && (d.Kind == "Assign" || d.Kind == "Retire"))
+                .Select(d => new { RunId = d.RunId!.Value, d.Kind, d.Outcome, d.DryRun, d.Applied, d.Error, d.AtUtc })
                 .ToListAsync(ct))
+            .Where(d => RigaCheBrucia(d.Kind, d.Outcome))
             .Where(d => ContaComeGestito(d.Outcome, d.DryRun, d.Applied, d.Error, d.AtUtc, now))
             .Select(d => d.RunId)
             .ToHashSet();

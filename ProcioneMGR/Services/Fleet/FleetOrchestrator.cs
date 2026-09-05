@@ -56,26 +56,48 @@ public static class FleetOrchestrator
             // `null` = non disponibile (meno di due trade, o un motore con un'immagine precedente
             // al campo). In quel caso NON si giudica: l'ignoranza non condanna, ed è la stessa
             // politica del ritmo atteso e della provenienza.
+            string? condanna = null;
             if (enoughHistory && lane.RealizedSharpePerTrade is decimal sharpeTrade
                 && sharpeTrade < opt.RetireSharpeThreshold)
             {
-                actions.Add(new StopAndFreeLane(lane.LaneId,
+                condanna =
                     $"Forward test perdente: Sharpe per trade {sharpeTrade:F3} < {opt.RetireSharpeThreshold:F2} " +
                     $"su {lane.TradeCount} trade in {lane.Observation.TotalDays:F0}gg ({lane.Symbol} {lane.Timeframe}). " +
                     $"Sharpe annualizzato per riferimento: {lane.RealizedSharpe:F2} — non è su quello che si giudica, " +
-                    "perché dipende dal timeframe."));
-                continue;
+                    "perché dipende dal timeframe.";
             }
-
-            if (IsStarving(lane, opt))
+            else if (IsStarving(lane, opt))
             {
-                actions.Add(new StopAndFreeLane(lane.LaneId,
+                condanna =
                     $"Corsia in INEDIA su {lane.Symbol} {lane.Timeframe}: " +
                     TradeFrequency.DescribeStarvation(
                         lane.ExpectedTradesPerMonth, lane.TradeCount, lane.Observation, opt.StarvationFraction) +
                     ". Non arriverebbe mai ai " + Math.Max(1, opt.RetireMinTrades) +
-                    " trade del giudizio per Sharpe: si libera la corsia."));
+                    " trade del giudizio per Sharpe: si libera la corsia.";
             }
+            if (condanna is null) continue;
+
+            // [K36-bis, 2026-09-05] UNA CORSIA CON POSIZIONI VIVE NON SI FERMA: SI ASPETTA CHE CHIUDANO.
+            //
+            // `StopAsync` lascia le posizioni aperte e senza protezioni (la valutazione degli stop
+            // gira solo a corsia in corsa), e il primo `StartAsync` in Paper che segue — quello del
+            // grigio che il braccio schiera sullo slot appena liberato — le CANCELLA senza scrivere
+            // un TradeRecord: la posizione sparisce dalla storia invece di chiudersi. La sostituzione
+            // K61 lo sapeva (`IsIdle` pretende zero posizioni); il ritiro no. Caso vivo il
+            // 2026-09-05: corsia 7, short TRX/USDT aperto dal 31/08, zero trade chiusi. Il verdetto
+            // resta: si esegue alla prima fotografia senza posizioni, cioe' quando lo stop, il take
+            // profit o il segnale della gamba avranno chiuso per conto loro, lasciando la riga.
+            if (lane.OpenPositions > 0)
+            {
+                actions.Add(new FleetNoOp(
+                    $"Corsia {lane.LaneId} condannata ma con {lane.OpenPositions} posizioni APERTE: il ritiro aspetta " +
+                    "che chiudano per conto loro (stop, take profit o segnale), perche' fermarla adesso le lascerebbe " +
+                    "senza protezioni e il prossimo avvio in Paper le cancellerebbe senza TradeRecord (K36). " +
+                    $"Motivo in sospeso: {condanna}"));
+                continue;
+            }
+
+            actions.Add(new StopAndFreeLane(lane.LaneId, condanna));
         }
 
         // --- 2. Assegnazioni automatiche: PRIMA la banda «pass» --------------------------------
@@ -166,10 +188,23 @@ public static class FleetOrchestrator
             // rimisurazioni — viveva solo nell'ordinamento della lista che legge un umano, mentre il
             // braccio automatico sceglieva per data: due superfici, due criteri, stessa domanda.
             // I non giudicabili restano in coda nell'ordine di prima, mai davanti a chi ha una misura.
+            // [K33-bis, 2026-09-05] Cio' che la guardia dei duplicati rifiuterebbe non entra in coda:
+            // l'ordine per merito metteva in testa tarature vicine di cio' che gira gia', e ogni
+            // giro le riproponeva. Stessa regola e stessa fonte della guardia (le chiavi delle
+            // gambe attive), applicata prima della scelta invece che dopo.
+            eligible = [.. eligible.Where(c => !CollideConCorsiaInCorsa(c.Identity, state.Lanes, opt.BlockDuplicateTriple))];
+
             if (opt.PreferStableGrey)
             {
                 eligible = [.. eligible
                     .OrderByDescending(c => c.StabilityMeasures >= Math.Max(1, opt.ReplaceMinCandidateMeasures) ? 1 : 0)
+                    // [K57-bis, 2026-09-05] La stabilita' e' due meta': mediana E ventaglio. Qui si
+                    // ordinava per la sola mediana, mentre la sostituzione (RimpiazziAmmessi) e la
+                    // lista del clic umano pretendono anche «ventaglio ≤ mediana»: sulla corsia
+                    // libera la Regina poteva scegliere proprio l'ipotesi che /admin/autonomy
+                    // marca «⚠ INSTABILE». Le instabili non spariscono — restano dopo le stabili,
+                    // e prima delle non giudicabili — cosi' uno slot non resta vuoto per principio.
+                    .ThenByDescending(c => Stabile(c) ? 1 : 0)
                     .ThenByDescending(c => c.StabilityMedian ?? decimal.MinValue)
                     .ThenBy(c => c.CompletedAtUtc)
                     .ThenBy(c => c.RunId)];
@@ -435,6 +470,11 @@ public static class FleetOrchestrator
         // ballerina: EventTrigger GRT/USDT 4h, mediana 2,79 con ventaglio 3,26 su 3 trade di holdout.
         .Where(c => c.StabilitySpread is not decimal ampiezza
                     || ampiezza <= c.StabilityMedian!.Value * Research.StabilitaIpotesi.MaxAmpiezzaSuMediana)
+        // [K33-bis, 2026-09-05] Un rimpiazzo che collide con una corsia in corsa (stessa identita',
+        // o stessa terna con BlockDuplicateTriple) non e' ammesso: il braccio lo rifiuterebbe prima
+        // dello stop, e con questa lista ordinata per mediana lo rifiuterebbe a OGNI tick, per
+        // sempre, senza mai arrivare al secondo. Stessa fonte della guardia: le chiavi delle gambe.
+        .Where(c => !CollideConCorsiaInCorsa(c.Identity, state.Lanes, opt.BlockDuplicateTriple))
         // Una identità sola, anche se più run l'hanno ritrovata: si tiene la rimisurazione più recente.
         .GroupBy(c => c.Identity!, StringComparer.Ordinal)
         .Select(g => g.OrderByDescending(c => c.CompletedAtUtc).ThenBy(c => c.RunId).First())
@@ -442,6 +482,38 @@ public static class FleetOrchestrator
         .ThenBy(c => c.CompletedAtUtc)
         .ThenBy(c => c.RunId)
         .ToList();
+
+    /// <summary>
+    /// [K57-bis] Le due meta' del predicato K57 in un posto solo: giudicabile, mediana positiva e
+    /// ventaglio non piu' largo della mediana. E' <c>!StabilitaIpotesi.Instabile</c> letto sul
+    /// candidato, cosi' la coda grigia, la sostituzione e la lista umana dicono la stessa cosa.
+    /// </summary>
+    internal static bool Stabile(FleetCandidate c)
+        => c.StabilityMeasures >= Research.StabilitaIpotesi.MinMisurePerGiudicare
+           && c.StabilityMedian is decimal mediana && mediana > 0m
+           && (c.StabilitySpread is not decimal ampiezza
+               || ampiezza <= mediana * Research.StabilitaIpotesi.MaxAmpiezzaSuMediana);
+
+    /// <summary>
+    /// [K33-bis, 2026-09-05] Il candidato collide con una corsia IN CORSA? Stessa regola a due
+    /// gradini di <see cref="HypothesisGuard.Check"/> — identita' esatta sempre, stessa terna solo
+    /// con <paramref name="blockOnTriple"/> — letta dal decisore puro sulle chiavi che lo stato
+    /// porta con se'. Le corsie che non dichiarano le proprie gambe non bloccano: e' il braccio, con
+    /// la directory completa, a dire l'ultima parola. Corsie ferme non contano: riprendere la stessa
+    /// ipotesi su un'altra corsia dopo averla fermata e' il caso normale.
+    /// </summary>
+    internal static bool CollideConCorsiaInCorsa(string? identity, IEnumerable<FleetLaneState> lanes, bool blockOnTriple)
+    {
+        if (string.IsNullOrEmpty(identity)) return false;
+        var terna = HypothesisGuard.Triple(identity);
+        foreach (var lane in lanes)
+        {
+            if (!lane.IsRunning || lane.ActiveCandidateKeys is not { Count: > 0 } keys) continue;
+            if (keys.Any(k => string.Equals(k, identity, StringComparison.Ordinal))) return true;
+            if (blockOnTriple && keys.Any(k => string.Equals(HypothesisGuard.Triple(k), terna, StringComparison.Ordinal))) return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// [K61] Le corsie inerti, dalla più muta. Solo quelle che il ritiro NON ha già condannato in

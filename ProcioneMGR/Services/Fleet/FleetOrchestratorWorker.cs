@@ -1133,6 +1133,15 @@ public sealed class FleetOrchestratorWorker(
             {
                 rifiuto = "corsia già ferma: niente da fare";
             }
+            else if (status.OpenPositionCount > 0)
+            {
+                // [K36-bis, 2026-09-05] Il decisore esclude gia' le corsie con posizioni vive; qui e'
+                // la cintura al momento dell'azione, contro la finestra fra fotografia e stop: una
+                // posizione aperta nel frattempo non deve restare senza protezioni ne' sparire al
+                // prossimo avvio senza TradeRecord.
+                rifiuto = $"la corsia ha {status.OpenPositionCount} posizioni APERTE: si ritira quando avranno chiuso "
+                    + "per conto loro (fermarla adesso le lascerebbe senza stop, e il prossimo avvio le cancellerebbe senza TradeRecord)";
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)

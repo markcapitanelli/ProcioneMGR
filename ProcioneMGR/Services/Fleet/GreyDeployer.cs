@@ -175,6 +175,16 @@ public sealed class GreyDeployer(
         {
             return new(false, $"La corsia {laneId} sta GIRANDO ({status.Symbol}): fermala prima, o scegline una libera.");
         }
+        if (status.OpenPositionCount > 0)
+        {
+            // [K36-bis, 2026-09-05] Ferma ma con posizioni: `StartAsync` in Paper le cancellerebbe
+            // dalla tabella senza scrivere un TradeRecord — la posizione sparirebbe dalla storia
+            // invece di chiudersi. Vale per tutte e tre le porte che passano di qui (clic umano,
+            // braccio della flotta, sostituzione).
+            return new(false,
+                $"La corsia {laneId} e' ferma ma ha {status.OpenPositionCount} posizioni APERTE ({status.Symbol}): avviarla su " +
+                "un'altra ipotesi le cancellerebbe senza scrivere alcun TradeRecord (K36). Chiudile da /trading, poi schiera.");
+        }
 
         // --- Il candidato: deve esistere nel run ED essere grigio per il filtro del lettore.
         // Risolto per IDENTITÀ, non per terna, e fail-closed su entrambi i lati. Vedi ResolveGrey.
