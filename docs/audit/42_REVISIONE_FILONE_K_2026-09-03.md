@@ -693,3 +693,18 @@ proprietario da fare dopo il merge, guardando in `/admin/autonomy` che i due oro
 | ogni 15 min | la Regina ricontrolla; il journal scrive solo ai cambi |
 | 48 h / 72 h | le cacce 30m e 1m rigirano per cadenza propria |
 | mesi | il forward test Paper è l'unico giudice: 3-5 trade al mese per corsia significano 4-6 mesi per i 20 trade del giudizio per Sharpe. Non c'è una manopola che lo accorci senza truccare il giudice. |
+
+### 12.4 Il controllo dopo il merge di #136 (2026-09-05, mattina)
+
+Il proprietario ha fuso #136 alle 06:18 UTC e chiesto «mergia e controlla». Il controllo ha trovato
+tre cose che il rilascio automatico avrebbe lasciato ferme.
+
+| Fatto | Effetto | Rimedio |
+|---|---|---|
+| **La CI su master era rossa**: `EnsembleManagerDecayTests.IlNULLO_diK39…` dava 19 su 20. L'helper del test riallineava `RecordedAtUtc` solo oltre un giorno dalla candela; l'ultimo trade seminato (`nascita + 96 gg`) chiudeva a mezzanotte del **5/09**, scritto sette ore dopo, e sette ore superano le 3 barre e mezza di tolleranza anti-replay a 1h. | Il lavoro `deploy` della plancia ha rifiutato di promuovere il motore («CI NON verde su origin/master: non promuovo») — è il cancello giusto, e ha funzionato. | Riallineamento incondizionato nel fixture. Un test che passa o cade col calendario non è una prova. |
+| **La DLL delle migrazioni non la copia nessuno script** nel bin del guscio (`docs/POSTGRES_MIGRATION.md`, passo 1, è manuale). Ricostruita alle 08:24, il bring-up delle 08:30 ha rimesso in piedi un guscio con quella del 03/09 02:17. | `fail: DatabaseMigrator — il MODELLO differisce dallo snapshot` a ogni avvio dal 4/09. | Il sync la copia a guscio fermo (a guscio vivo il file è bloccato). Copiata a mano e riavviato: «schema già allineato (41 note)», prima erano 40. |
+| **Il digest Telegram falliva con HTTP 400** alle 08:26 e al ritentativo: il testo supera i 4.096 caratteri di Telegram, e il notificatore scartava la descrizione dell'errore. | Nessun digest giornaliero recapitato; le altre notifiche, corte, passavano. | Spezzettamento in parti numerate (preferendo un a-capo) e corpo della risposta nell'eccezione. |
+
+Il guscio è in esercizio sulla revisione del merge (d66daae) dalle 06:3x UTC, con le manopole K61
+ancora accese; la plancia si è auto-aggiornata; carry, comitato e flotta in marcia. Il motore
+resta sull'immagine precedente finché la CI su master non torna verde: è la PR #137.
