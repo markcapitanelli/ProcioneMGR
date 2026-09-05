@@ -160,7 +160,13 @@ public sealed class DatabaseBackupService
     public NightlyBackupStatus ReadNightlyStatus()
     {
         var options = _options.CurrentValue;
-        return BuildStatus(options, ScheduledTaskProbe.Query(options.ScheduledTaskName));
+        // [2026-09-05] Dal 2026-08-23 il backup notturno è un lavoro del supervisore della plancia,
+        // non un'operazione pianificata: si legge PRIMA il suo file di stato, e solo se non c'è si
+        // interroga il Task Scheduler (macchine dove la migrazione `procione attivita migra` non è
+        // stata fatta). Cercare solo il task dichiarava «NON REGISTRATA» su un backup sano.
+        var task = SupervisorJobProbe.TryRead(SupervisorJobProbe.StatePath, DateTimeOffset.Now)
+                   ?? ScheduledTaskProbe.Query(options.ScheduledTaskName);
+        return BuildStatus(options, task);
     }
 
     /// <summary>
@@ -220,10 +226,17 @@ public sealed class DatabaseBackupService
         if (!task.Exists)
         {
             warnings.Add(
-                $"Nessuna operazione pianificata di nome «{options.ScheduledTaskName}»: il backup notturno "
-                + "non è registrato su questo host. I file eventualmente presenti sono di un'altra epoca. "
-                + "Si registra con: .\\scripts\\db-backup.ps1 -Register");
+                $"Nessuna operazione pianificata di nome «{options.ScheduledTaskName}» e nessun supervisore della "
+                + "plancia su questo host: il backup notturno non è registrato. I file eventualmente presenti sono di "
+                + "un'altra epoca. Dal 2026-08-23 il modo giusto è il supervisore (`procione servizio`, o "
+                + "`procione attivita migra` una volta sola); `.\\scripts\\db-backup.ps1 -Register` resta per le macchine "
+                + "senza plancia — mai i due insieme, sarebbero due backup notturni.");
             return warnings;
+        }
+
+        if (string.Equals(task.State, "supervisore FERMO", StringComparison.Ordinal))
+        {
+            warnings.Add($"Il lavoro «backup» esiste ma {task.Message}");
         }
 
         if (task.Destination is { Length: > 0 } destination && !SameDirectory(destination, resolvedDir))

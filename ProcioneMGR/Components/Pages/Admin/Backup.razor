@@ -144,9 +144,13 @@
                     <span class="text-muted">(conservazione: @BackupService.CurrentOptions.RetentionDays giorni)</span>
                 </dd>
 
-                <dt class="col-sm-3">Operazione pianificata</dt>
+                <dt class="col-sm-3">@(_nightly.Task.Source is null ? "Operazione pianificata" : "Lavoro del supervisore")</dt>
                 <dd class="col-sm-9">
-                    <code>@BackupService.CurrentOptions.ScheduledTaskName</code>
+                    <code>@(_nightly.Task.Source is null ? BackupService.CurrentOptions.ScheduledTaskName : "backup")</code>
+                    @if (_nightly.Task.Source is { } fonte)
+                    {
+                        <span class="text-muted small">— @fonte</span>
+                    }
                     @if (!_nightly.Task.Queryable)
                     {
                         <span class="badge bg-secondary ms-2">non interrogabile</span>

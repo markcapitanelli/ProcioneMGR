@@ -57,6 +57,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
           target: procionemgr
           load: true
           tags: |
@@ -69,6 +71,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
           target: procionemgr-ingestion
           load: true
           tags: |
@@ -80,6 +84,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
           target: procionemgr-ml
           load: true
           tags: |
@@ -91,6 +97,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
           target: procionemgr-trading
           load: true
           tags: |
@@ -102,6 +110,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
           target: strategyhunter
           load: true
           tags: |
@@ -113,6 +123,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
           target: dbbackup
           load: true
           tags: |

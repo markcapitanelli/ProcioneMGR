@@ -34,7 +34,13 @@ public sealed record ScheduledTaskStatus(
     DateTime? LastRunLocal = null,
     long? LastResult = null,
     DateTime? NextRunLocal = null,
-    string? Message = null);
+    string? Message = null,
+    /// <summary>
+    /// [2026-09-05] Chi ha risposto: <c>null</c> = il Task Scheduler di Windows (la fonte storica),
+    /// altrimenti il supervisore della plancia (<see cref="SupervisorJobProbe"/>). La pagina lo
+    /// dice, perché «operazione pianificata» e «lavoro del supervisore» hanno rimedi diversi.
+    /// </summary>
+    string? Source = null);
 
 /// <summary>
 /// Legge lo stato di un'operazione pianificata di Windows.
