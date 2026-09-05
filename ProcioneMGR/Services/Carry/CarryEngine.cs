@@ -62,8 +62,23 @@ public sealed class CarrySymbolState
 public sealed class CarryEngine(ICarryExecutor executor, CarryConfiguration config, ILogger<CarryEngine> logger)
 {
     private readonly Dictionary<string, CarrySymbolState> _state = new();
+    private readonly Dictionary<string, decimal> _lastAnnualized = new();
 
     public IReadOnlyDictionary<string, CarrySymbolState> States => _state;
+
+    /// <summary>L'ultimo funding annualizzato (%) calcolato per il simbolo: è il numero su cui si è deciso, e il registro lo scrive.</summary>
+    public decimal? LastAnnualized(string symbol) => _lastAnnualized.TryGetValue(symbol, out var v) ? v : null;
+
+    /// <summary>
+    /// [2026-09-05] Ripristina lo stato di un simbolo dal registro persistito: al riavvio del pod
+    /// una posizione ancora aperta resta aperta, invece di «riaprirsi» come se fosse nuova.
+    /// </summary>
+    public void Restore(string symbol, CarrySymbolState state)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
+        ArgumentNullException.ThrowIfNull(state);
+        _state[symbol] = state;
+    }
 
     /// <summary>
     /// Valuta un simbolo dato il suo funding recente (% per 8h, ordinato, ultimo = più recente) e
@@ -78,6 +93,7 @@ public sealed class CarryEngine(ICarryExecutor executor, CarryConfiguration conf
         var annualized = CarryDecider.TrailingAnnualized(recentFundingPercent, config.TrailingFundingEvents, config.FundingEventsPerDay);
         if (annualized is null) return CarryAction.Hold;   // finestra non piena: non si decide
 
+        _lastAnnualized[symbol] = annualized.Value;
         var st = _state.TryGetValue(symbol, out var s) ? s : (_state[symbol] = new CarrySymbolState());
         var action = CarryDecider.Decide(annualized.Value, st.InPosition, config);
 

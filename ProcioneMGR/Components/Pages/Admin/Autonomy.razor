@@ -21,6 +21,7 @@
 
 @inject IAppConfigWriter ConfigWriter
 @inject IConfiguration Config
+@inject ILogger<Autonomy> Logger
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IOptionsMonitor<AutoReapplyOptions> AutoReapplyMonitor
 @inject IOptionsMonitor<PromotionEvaluatorOptions> PromotionMonitor
@@ -2352,6 +2353,64 @@
                 </p>
             }
         }
+
+        @* [2026-09-05] Il registro degli episodi: la misura che il forward test non lasciava. Dal
+           database, scritto dal motore — quindi leggibile da qui anche col trading remoto. *@
+        <h6 class="mt-3">
+            Registro degli episodi
+            <span class="text-muted small fw-normal">— dal database, scritto dal motore a ogni apertura, evento di funding e chiusura</span>
+        </h6>
+        @if (_carryLedger.Count == 0)
+        {
+            <p class="text-muted small mb-0">
+                <em>Nessun episodio registrato ancora. La tabella nasce col rilascio del 2026-09-05: prima lo stato
+                viveva solo in memoria e ogni rischieramento del pod «riapriva» i sei carry azzerando il funding
+                incassato — «ATTIVO» era un interruttore, non una misura.</em>
+            </p>
+        }
+        else
+        {
+            var aperti = _carryLedger.Count(e => e.ClosedUtc is null);
+            var chiusi = _carryLedgerChiusi;
+            <p class="small mb-2">
+                <strong>@aperti</strong> episodi aperti ·
+                <strong>@chiusi</strong> chiusi in totale ·
+                funding incassato sugli episodi mostrati <strong class="tabular-nums">@_carryLedger.Sum(e => e.FundingCollectedQuote).ToString("N2")</strong> ·
+                netto dei chiusi mostrati <strong class="tabular-nums">@_carryLedger.Where(e => e.NetQuote is not null).Sum(e => e.NetQuote!.Value).ToString("N2")</strong>
+                (costo del giro @(_carryLedger.FirstOrDefault()?.CostPercent.ToString("0.##") ?? "—")% sul nozionale di una gamba).
+            </p>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th>Simbolo</th><th>Aperto (UTC)</th><th>Chiuso (UTC)</th>
+                            <th class="text-end">Nozionale/gamba</th><th class="text-end">Eventi</th>
+                            <th class="text-end">Funding %</th><th class="text-end">Funding</th><th class="text-end">Netto</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var e in _carryLedger)
+                        {
+                            <tr>
+                                <td>@e.Symbol</td>
+                                <td>@e.OpenedUtc.ToString("dd/MM HH:mm") <span class="text-muted">@e.EntryAnnualizedPercent.ToString("0.0")%/anno</span></td>
+                                <td>
+                                    @if (e.ClosedUtc is { } c)
+                                    { <text>@c.ToString("dd/MM HH:mm") <span class="text-muted">@(e.ExitAnnualizedPercent?.ToString("0.0"))%/anno</span></text> }
+                                    else
+                                    { <span class="badge bg-success">aperto</span> }
+                                </td>
+                                <td class="text-end tabular-nums">@e.NotionalQuote.ToString("N0")</td>
+                                <td class="text-end tabular-nums">@e.FundingEventsAccrued</td>
+                                <td class="text-end tabular-nums">@e.FundingCollectedPercent.ToString("0.000")</td>
+                                <td class="text-end tabular-nums">@e.FundingCollectedQuote.ToString("N2")</td>
+                                <td class="text-end tabular-nums">@(e.NetQuote?.ToString("N2") ?? "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
     </div>
 </div>
 
@@ -2986,6 +3045,28 @@
     private CarryOptions _carry = new();
     private string _carrySymbolsCsv = "";
 
+    /// <summary>[2026-09-05] Gli ultimi episodi del carry dal registro persistito (aperti prima, poi i chiusi più recenti).</summary>
+    private List<ProcioneMGR.Data.CarryLedgerEntry> _carryLedger = [];
+    private int _carryLedgerChiusi;
+
+    private async Task LoadCarryLedgerAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var aperti = await db.CarryLedger.AsNoTracking().Where(e => e.ClosedUtc == null).OrderBy(e => e.Symbol).ToListAsync();
+            var chiusi = await db.CarryLedger.AsNoTracking().Where(e => e.ClosedUtc != null).OrderByDescending(e => e.ClosedUtc).Take(12).ToListAsync();
+            _carryLedgerChiusi = await db.CarryLedger.CountAsync(e => e.ClosedUtc != null);
+            _carryLedger = [.. aperti, .. chiusi];
+        }
+        catch (Exception ex)
+        {
+            // Un binario precedente alla migrazione non ha la tabella: il riquadro resta vuoto e lo dice.
+            Logger.LogWarning(ex, "Registro del carry non leggibile.");
+            _carryLedger = [];
+        }
+    }
+
     /// <summary>Configurazione letta dal motore: la condividono la scheda carry e il canale di notifica.</summary>
     private EngineConfigSnapshot _engineSnapshot = new([], string.Empty, Writable: false);
 
@@ -3284,6 +3365,7 @@
         _engineSnapshot = await EngineConfig.ReadAsync(EngineSections);
         _carry = _engineSnapshot.Bind<CarryOptions>("Carry");
         _carrySymbolsCsv = SymbolsToCsv(_carry.Symbols);
+        await LoadCarryLedgerAsync();
         _engineNotifications = _engineSnapshot.Bind<NotificationOptions>("Notifications");
         _liveExec = _engineSnapshot.Bind<LiveExecutionOptions>("Trading:LiveExecution");
         _ml = _engineSnapshot.Bind<MlComparisonOptions>("Ml");
