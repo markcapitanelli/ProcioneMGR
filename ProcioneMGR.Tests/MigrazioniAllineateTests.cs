@@ -43,7 +43,14 @@ public sealed class MigrazioniAllineateTests : IAsyncDisposable
         var services = new ServiceCollection();
         services.AddSingleton<IEncryptionService, PassthroughEncryption>();
         services.AddDbContextFactory<ApplicationDbContext>(o =>
-            o.UseNpgsql(_connString, npgsql => npgsql.MigrationsAssembly(DatabaseMigrator.MigrationsAssemblyName)));
+            o.UseNpgsql(_connString, npgsql => npgsql.MigrationsAssembly(DatabaseMigrator.MigrationsAssemblyName))
+             // IL MODELLO VA COSTRUITO QUI, NON PRESO DALLA CACHE. EF condivide il provider interno
+             // — e con lui la cache dei modelli, chiave = tipo del contesto — fra tutte le opzioni
+             // «equivalenti» dello stesso processo: nella suite intera il primo test che costruisce
+             // ApplicationDbContext lo fa SENZA Identity, e questo test riceverebbe quel modello
+             // (niente AspNetUserPasskeys, chiavi a text) e gridarebbe su differenze che l'app non
+             // ha. In locale, lanciato da solo, passava; in CI, dopo tremila test, no.
+             .EnableServiceProviderCaching(false));
         // Identity va registrata COME NELL'APP (Program.cs): il modello delle tabelle AspNet*
         // (passkeys, lunghezze massime delle chiavi) nasce dalle sue opzioni, e senza di esse il
         // confronto col snapshot segnalerebbe un DropTable AspNetUserPasskeys che non esiste.
