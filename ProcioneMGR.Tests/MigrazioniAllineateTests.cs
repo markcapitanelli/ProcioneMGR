@@ -1,4 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.Extensions.DependencyInjection;
 using ProcioneMGR.Data;
 using ProcioneMGR.Services.Security;
@@ -61,8 +65,37 @@ public sealed class MigrazioniAllineateTests : IAsyncDisposable
     {
         await using var db = await Build().CreateDbContextAsync();
         Assert.True(db.Database.GetMigrations().Any(), "l'assembly delle migrazioni non espone migrazioni: riferimento mancante o versioni EF disallineate");
-        Assert.False(db.Database.HasPendingModelChanges(),
-            "il modello differisce dallo snapshot dell'ultima migrazione: manca una migrazione, o lo snapshot non e' stato aggiornato a mano");
+        var differenze = DifferenzeDalloSnapshot(db);
+        Assert.True(differenze.Count == 0,
+            "il modello differisce dallo snapshot dell'ultima migrazione (manca una migrazione, o lo snapshot non e' stato aggiornato a mano):\n"
+            + string.Join("\n", differenze));
+    }
+
+    /// <summary>
+    /// Le differenze fra lo snapshot dell'assembly delle migrazioni e il modello corrente, una per
+    /// riga e leggibili: un guardiano che dice solo «differisce» manda a cercare alla cieca.
+    /// </summary>
+    private static List<string> DifferenzeDalloSnapshot(ApplicationDbContext db)
+    {
+        var differ = db.GetService<IMigrationsModelDiffer>();
+        var assembly = db.GetService<IMigrationsAssembly>();
+        var initializer = db.GetService<IModelRuntimeInitializer>();
+        var snapshot = assembly.ModelSnapshot?.Model ?? throw new InvalidOperationException("snapshot assente nell'assembly delle migrazioni");
+        var source = initializer.Initialize(snapshot, designTime: true, validationLogger: null);
+        var target = db.GetService<IDesignTimeModel>().Model;
+        return differ.GetDifferences(source.GetRelationalModel(), target.GetRelationalModel())
+            .Select(d => d switch
+            {
+                AddColumnOperation a => $"AddColumn {a.Table}.{a.Name} {a.ColumnType} null={a.IsNullable}",
+                DropColumnOperation dc => $"DropColumn {dc.Table}.{dc.Name}",
+                AlterColumnOperation ac => $"AlterColumn {ac.Table}.{ac.Name}: {ac.OldColumn.ColumnType}->{ac.ColumnType}, null {ac.OldColumn.IsNullable}->{ac.IsNullable}, max {ac.OldColumn.MaxLength}->{ac.MaxLength}, default {ac.OldColumn.DefaultValue ?? ac.OldColumn.DefaultValueSql}->{ac.DefaultValue ?? ac.DefaultValueSql}",
+                CreateTableOperation ct => $"CreateTable {ct.Name}",
+                DropTableOperation dt => $"DropTable {dt.Name}",
+                CreateIndexOperation ci => $"CreateIndex {ci.Table}.{ci.Name}",
+                DropIndexOperation di => $"DropIndex {di.Table}.{di.Name}",
+                _ => d.GetType().Name,
+            })
+            .ToList();
     }
 
     /// <summary>La catena intera delle migrazioni costruisce su un database vergine uno schema che il modello sa leggere e scrivere.</summary>

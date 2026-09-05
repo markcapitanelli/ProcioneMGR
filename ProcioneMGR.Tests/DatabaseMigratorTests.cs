@@ -44,9 +44,15 @@ public sealed class DatabaseMigratorTests : IAsyncDisposable
     }
 
     /// <summary>
-    /// Nei test l'assembly delle migrazioni NON è caricabile (il progetto di test non lo
-    /// referenzia): è esattamente la condizione degli host satelliti, e il comportamento atteso è
-    /// dichiararlo senza lanciare. È la garanzia che un pod senza quella DLL parte comunque.
+    /// Il contesto di questo test NON dichiara <c>MigrationsAssembly</c>: e' la condizione degli host
+    /// satelliti, e il comportamento atteso e' dichiararlo senza lanciare. E' la garanzia che un pod
+    /// senza migrazioni parte comunque.
+    ///
+    /// <para>[2026-09-05] Dal giorno in cui il progetto dei test referenzia le migrazioni
+    /// (<c>MigrazioniAllineateTests</c>) la DLL sta accanto all'eseguibile dei test: il migratore la
+    /// vede sul disco ma il contesto non la conosce, e dichiara «assembly caricato ma senza
+    /// migrazioni». E' un'altra riga dichiarata, non un'esplosione — ed e' la stessa cosa che
+    /// succederebbe a un satellite con la DLL copiata per sbaglio e senza la configurazione.</para>
     /// </summary>
     [Fact]
     public async Task SenzaAssemblyDelleMigrazioni_DichiaraENonLancia()
@@ -54,8 +60,12 @@ public sealed class DatabaseMigratorTests : IAsyncDisposable
         var outcome = await DatabaseMigrator.MigrateAsync(
             Build(), new DatabaseMigrationOptions { AutoMigrate = true }, NullLogger.Instance);
 
-        // O non trova l'assembly (satellite), o non ha nulla da fare: in nessun caso esplode.
-        Assert.True(outcome.Skipped is "assembly delle migrazioni non disponibile" || outcome.Ran,
+        // O non trova l'assembly (satellite), o lo vede sul disco senza che il contesto lo dichiari,
+        // o non ha nulla da fare: in nessun caso esplode.
+        Assert.True(
+            outcome.Skipped is "assembly delle migrazioni non disponibile"
+                or "assembly caricato ma senza migrazioni (versioni EF disallineate?)"
+            || outcome.Ran,
             $"Esito inatteso: Ran={outcome.Ran}, Skipped={outcome.Skipped}");
         Assert.Empty(outcome.Applied);
     }
