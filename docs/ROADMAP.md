@@ -2848,3 +2848,35 @@ accreditata, che il ledger cumula solo `if (isRunning)` e con un tetto di 45′ 
 I numeri completi per decidere le tarature — con quattro avversari che hanno demolito sette
 affermazioni su ventuno — stanno in
 [`docs/audit/36_RITIRO_CORSIA_NUMERI_2026-09-01.md`](audit/36_RITIRO_CORSIA_NUMERI_2026-09-01.md).
+
+---
+
+## Revisione completa e presa in carico operativa (2026-09-05, diciannovesima ondata)
+
+*Richiesta del proprietario: revisione completa «sezione per sezione, codice per codice» e poi
+operare la piattaforma «massimizzandone i profitti, tutto tranne il live trade». Rapporto:
+[`docs/audit/43_REVISIONE_COMPLETA_2026-09-05.md`](audit/43_REVISIONE_COMPLETA_2026-09-05.md).*
+
+**Le barriere reggono** (SafetyChecker su ogni apertura, nessun percorso verso Live, stop a barra
+chiusa: verificato riga per riga). **Il governo della flotta no**, in tre punti che sarebbero scattati
+nei prossimi giorni e che PR #139 corregge con le prove:
+
+| # | Fatto | Correzione |
+|---|---|---|
+| K16 | l'inedia condannava a zero trade dopo 10 giorni qualunque fosse il ritmo (corsia 4 l'11/09, 58 % di probabilità di essere nella norma) | coda di Poisson < 5 % come nullo |
+| K36-bis | ritiro e schieramento grigio ciechi alle posizioni aperte: una posizione viva cancellata senza TradeRecord (corsia 7) | il ritiro aspetta; il deployer rifiuta |
+| K33-bis / K61-bis | il rimpiazzo K61 sceglieva per sempre MacdTrend AAVE 4h, che collide con la corsia 3: rifiuto a ogni tick e coda ferma | il decisore vede le chiavi delle gambe e salta; i rifiuti bruciano 24 h |
+| K14-bis | ogni **scarto** della ri-applica marcava «già gestiti» i grigi del run: Composite ADA/USDT 5m (mediana 3,48) invisibile alla Regina | conta solo `Applied=true` |
+| Promozione | una credenziale testnet (Bitget) contro sei corsie Binance: `LanePromoter` fermava e svuotava la sessione, poi falliva | pre-flight prima del primo tocco; flatten verificato |
+| Motore | `DailyPnl` di tre giorni prima chiedeva l'emergency stop al primo segnale | la finestra scorre con le candele |
+
+**Operatività**: corsia 0 (vuota e in quarantena dal 25/08) riaperta su Composite ADA/USDT 5m;
+corsia 1 (RsiOversold DOT 15m di luglio, −65,87 su 42 operazioni) chiusa in utile e rischierata su
+Composite XLM/USDT 1h. Promozione automatica a Testnet **lasciata spenta**.
+
+**Aperto, in ordine di valore**: il forward test del carry non produce misure (stato in memoria,
+funding mai accumulato, 300 % per lato senza tetto); `deploy-trading.ps1` promuove a metà e lo
+dichiara fatto; la macchina si è spenta brutalmente 18 volte in tre settimane (è la causa dei
+riavvii dei pod e delle «corsie non leggibili»); `/admin/backup` cerca un task che non esiste più;
+`MinDistinctSymbols=2` tiene morta la ri-applica sulle corsie 0-2 con cacce mono-simbolo.
+

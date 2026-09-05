@@ -371,7 +371,21 @@ public sealed record FleetLaneState(
     /// un giudizio <b>più severo</b>. Un'ammissione di ignoranza non può diventare un'aggravante — è la
     /// stessa politica del ritiro, e qui va detta esplicitamente perché il campo è condiviso.</para>
     /// </summary>
-    bool ExpectedDiverged = false);
+    bool ExpectedDiverged = false,
+    /// <summary>
+    /// [K33-bis, 2026-09-05] Le identità canoniche (<c>PipelineCandidateKey</c>) delle gambe attive
+    /// in configurazione, dalla directory. <c>null</c> o vuoto = la corsia non dichiara le proprie
+    /// gambe (JSON illeggibile, gambe senza chiave): il confronto è parziale, e lo si dice.
+    ///
+    /// <para><b>Perché il decisore le vede.</b> La guardia dei duplicati (<see cref="HypothesisGuard"/>)
+    /// viveva solo nel braccio, DOPO la scelta: il decisore ordinava i rimpiazzi per mediana K57,
+    /// metteva in testa un'ipotesi che collideva per terna con una corsia in corsa, il braccio la
+    /// rifiutava, e al tick dopo la sceglieva di nuovo — per sempre, con una riga di journal ogni
+    /// quindici minuti e la coda che non avanzava mai al secondo candidato. Misurato il 2026-09-05:
+    /// MacdTrend AAVE/USDT 4h (mediana 4,01) in testa, corsia 3 con la stessa terna. Con le chiavi
+    /// nello stato, il decisore salta ciò che il braccio rifiuterebbe comunque.</para>
+    /// </summary>
+    IReadOnlyList<string>? ActiveCandidateKeys = null);
 
 /// <summary>
 /// Un run candidato al forward test. <paramref name="Band"/>: "pass" = sopravvissuti alla

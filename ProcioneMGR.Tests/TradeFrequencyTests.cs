@@ -234,4 +234,62 @@ public class TradeFrequencyTests
     [InlineData("{non json")]
     public void JsonIllegibile_NessunaFinestraENessunaEccezione(string? json)
         => Assert.Null(FleetStateReader.HoldoutMonths(json));
+
+    // ------------------------------------------------------------------ [K16, 2026-09-05]
+
+    /// <summary>
+    /// <b>[K16] Il silenzio si condanna solo se e' improbabile sotto il proprio nullo.</b> Con la sola
+    /// frazione, zero trade era inedia per QUALUNQUE ritmo atteso: a 1,65 trade/mese la corsia 4
+    /// (Composite XLM/USDT 4h) sarebbe stata fermata al decimo giorno con il 58% di probabilita' di
+    /// essere perfettamente nella norma. La coda di Poisson P(X ≤ osservati | attesi) sotto il 5% e'
+    /// il criterio: a 10 giorni non si giudica, a 60 (λ = 3,25, P = 3,9%) si'; a 30/mese bastano i 10.
+    /// </summary>
+    [Theory]
+    [InlineData(1.65, 10, false)]
+    [InlineData(1.65, 60, true)]
+    [InlineData(30, 10, true)]
+    public void ZeroTrade_SiCondannaSoloQuandoIlSilenzioEImprobabile(double perMese, int giorni, bool inedia)
+        => Assert.Equal(inedia, TradeFrequency.IsStarving(
+            expectedPerMonth: (decimal)perMese, observed: 0, observation: TimeSpan.FromDays(giorni),
+            minFraction: 0.2m, minObservation: TimeSpan.FromDays(10)));
+
+    /// <summary>
+    /// [K16] Con un trade la stessa regola: MacdTrend AAVE/USDT 4h promette 11,11 trade/mese; un solo
+    /// trade in 20 giorni (λ = 7,3, P(X ≤ 1) = 0,56%) e' inedia, in 8 giorni (λ = 2,9, P = 22%) no —
+    /// anche se in entrambi i casi e' sotto il 20% dell'atteso.
+    /// </summary>
+    [Theory]
+    [InlineData(8, false)]
+    [InlineData(20, true)]
+    public void UnTrade_LaFrazioneNonBastaSenzaLaProbabilita(int giorni, bool inedia)
+        => Assert.Equal(inedia, TradeFrequency.IsStarving(
+            expectedPerMonth: 11.11m, observed: 1, observation: TimeSpan.FromDays(giorni),
+            minFraction: 0.2m, minObservation: TimeSpan.FromDays(7)));
+
+    /// <summary>Livello 1: la coda di Poisson contro valori calcolati a mano (e^-3 = 0,0498; e^-2·3 = 0,406; e^-0,5·1,625 = 0,9856).</summary>
+    [Theory]
+    [InlineData(0, 3.0, 0.0498)]
+    [InlineData(1, 2.0, 0.4060)]
+    [InlineData(2, 0.5, 0.9856)]
+    [InlineData(0, 0.0, 1.0)]
+    public void LaCodaDiPoisson_ControUnRiferimentoIndipendente(int osservati, double media, double atteso)
+        => Assert.Equal(atteso, (double)TradeFrequency.PoissonLowerTail(osservati, (decimal)media), 3);
+
+    /// <summary>La coda non trabocca con medie assurde (il fuzz della flotta ne passa): e' 0 quando la media e' enorme, 1 quando e' nulla.</summary>
+    [Fact]
+    public void LaCodaDiPoisson_NonTraboccaConMedieAssurde()
+    {
+        Assert.Equal(0m, TradeFrequency.PoissonLowerTail(3, 5_000m));
+        Assert.Equal(1m, TradeFrequency.PoissonLowerTail(0, 0m));
+        Assert.Equal(1m, TradeFrequency.PoissonLowerTail(500, 0.001m));
+    }
+
+    /// <summary>[K16] La spiegazione porta la probabilita' accanto al conteggio: «0 contro 0,5 attesi» e «0 contro 9,9» sono la stessa frazione e due verdetti opposti.</summary>
+    [Fact]
+    public void LaSpiegazioneRiportaLaProbabilitaDelSilenzio()
+    {
+        var testo = TradeFrequency.DescribeStarvation(30m, observed: 0, observation: TimeSpan.FromDays(10), minFraction: 0.2m);
+        Assert.Contains("probabilita'", testo, StringComparison.Ordinal);
+        Assert.Contains("0 trade in 10 giorni", testo, StringComparison.Ordinal);
+    }
 }

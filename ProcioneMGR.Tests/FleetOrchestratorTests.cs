@@ -296,4 +296,100 @@ public sealed class FleetOrchestratorTests
 
         Assert.Empty(plan.Actions); // niente da fare, e nemmeno un blocco: la coda EFFETTIVA è vuota
     }
+
+    // ------------------------------------------------------------------ [2026-09-05] K36-bis, K33-bis, K57-bis
+
+    /// <summary>
+    /// <b>[K36-bis] Una corsia condannata con posizioni vive non si ferma: si aspetta.</b> Lo stop
+    /// lascerebbe le posizioni senza protezioni e il primo avvio in Paper sullo slot liberato le
+    /// cancellerebbe senza TradeRecord. Caso vivo il 2026-09-05: corsia 7, short TRX/USDT dal 31/08.
+    /// </summary>
+    [Fact]
+    public void CorsiaCondannata_ConPosizioniAperte_AspettaInveceDiFermare()
+    {
+        var condannata = Lane(3, running: true, configured: true, sharpe: -1m, trades: 40, observationDays: 40);
+        var conPosizione = condannata with { OpenPositions = 1 };
+
+        var plan = FleetOrchestrator.Decide(State([Lane(0), Lane(1), Lane(2), conPosizione]), new FleetOptions());
+        Assert.DoesNotContain(plan.Actions, a => a is StopAndFreeLane);
+        Assert.Contains(plan.Actions, a => a is FleetNoOp n && n.Reason.Contains("posizioni APERTE", StringComparison.Ordinal));
+
+        var plan2 = FleetOrchestrator.Decide(State([Lane(0), Lane(1), Lane(2), condannata]), new FleetOptions());
+        Assert.Contains(plan2.Actions, a => a is StopAndFreeLane s && s.LaneId == 3);
+    }
+
+    private static FleetCandidate GreyStabile(string identity, decimal mediana, decimal ventaglio, int misure = 6)
+        => Grey() with { Identity = identity, StabilityMedian = mediana, StabilitySpread = ventaglio, StabilityMeasures = misure };
+
+    /// <summary>
+    /// <b>[K33-bis] La sostituzione salta il candidato che collide per terna con una corsia in corsa.</b>
+    /// Misurato il 2026-09-05: MacdTrend AAVE/USDT 4h in testa per mediana (4,01), corsia 3 con la
+    /// stessa terna: il braccio lo rifiutava a ogni tick e la coda non arrivava mai al secondo.
+    /// Con BlockDuplicateTriple spento la terna non blocca e vince la mediana.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Sostituzione_SaltaLaTernaGiaInCorsa(bool bloccaTerna)
+    {
+        var occupata = Lane(3, running: true, configured: true, trades: 5, observationDays: 20) with
+        {
+            LastTradeUtc = DateTime.UtcNow.AddDays(-1),
+            ActiveCandidateKeys = ["MacdTrend AAVE/USDT 4h #bbbbbbbb"],
+        };
+        var inerte = Lane(4, running: true, configured: true, trades: 0, observationDays: 20) with
+        {
+            LastTradeUtc = null,
+            ActiveCandidateKeys = ["GridMeanReversion UNI/USDT 4h #aaaaaaaa"],
+        };
+        var collide = GreyStabile("MacdTrend AAVE/USDT 4h #cccccccc", mediana: 4.0m, ventaglio: 0.5m);
+        var libero = GreyStabile("Composite ADA/USDT 5m #dddddddd", mediana: 3.4m, ventaglio: 1.2m);
+
+        var opt = new FleetOptions { ReplaceIdleLanes = true, BlockDuplicateTriple = bloccaTerna, PreferStableGrey = true };
+        var plan = FleetOrchestrator.Decide(State([Lane(0), Lane(1), Lane(2), occupata, inerte], [collide, libero]), opt);
+
+        var rep = Assert.Single(plan.Actions.OfType<ReplaceLaneOccupant>());
+        Assert.Equal(4, rep.LaneId);
+        Assert.Equal(bloccaTerna ? libero.RunId : collide.RunId, rep.RunId);
+    }
+
+    /// <summary>
+    /// <b>[K33-bis] Anche la coda grigia automatica salta cio' che la guardia rifiuterebbe</b>, e
+    /// <b>[K57-bis] preferisce la stabile all'instabile</b> anche se l'instabile ha la mediana piu' alta.
+    /// </summary>
+    [Fact]
+    public void CodaGrigia_SaltaLaTernaInCorsa_EPreferisceLaStabile()
+    {
+        var occupata = Lane(3, running: true, configured: true, trades: 5, observationDays: 20) with
+        {
+            LastTradeUtc = DateTime.UtcNow.AddDays(-1),
+            ActiveCandidateKeys = ["MacdTrend AAVE/USDT 4h #bbbbbbbb"],
+        };
+        var collide = GreyStabile("MacdTrend AAVE/USDT 4h #cccccccc", mediana: 5.0m, ventaglio: 0.5m);
+        var instabile = GreyStabile("EventTrigger GRT/USDT 4h #eeeeeeee", mediana: 4.5m, ventaglio: 6.0m);
+        var stabile = GreyStabile("Composite ADA/USDT 5m #dddddddd", mediana: 3.4m, ventaglio: 1.2m);
+
+        var opt = new FleetOptions { GreyAutoDeploy = true, MaxGreyLanes = 6, PreferStableGrey = true };
+        var plan = FleetOrchestrator.Decide(State([Lane(0), Lane(1), Lane(2), occupata, Lane(4)], [collide, instabile, stabile]), opt);
+
+        var assign = Assert.Single(plan.Actions.OfType<AssignGreyCandidateToLane>());
+        Assert.Equal(4, assign.LaneId);
+        Assert.Equal(stabile.RunId, assign.RunId);
+    }
+
+    /// <summary>La regola di collisione, riga per riga: identita' esatta sempre, terna solo col blocco, corsie ferme e senza chiavi mai.</summary>
+    [Fact]
+    public void LaCollisioneConLeCorsieInCorsa_RigaPerRiga()
+    {
+        var inCorsa = Lane(3, running: true, configured: true) with { ActiveCandidateKeys = ["MacdTrend AAVE/USDT 4h #bbbbbbbb"] };
+        var ferma = Lane(4, configured: true) with { ActiveCandidateKeys = ["Composite ADA/USDT 5m #dddddddd"] };
+        var muta = Lane(5, running: true, configured: true);
+        var lanes = new[] { inCorsa, ferma, muta };
+
+        Assert.True(FleetOrchestrator.CollideConCorsiaInCorsa("MacdTrend AAVE/USDT 4h #bbbbbbbb", lanes, blockOnTriple: false));
+        Assert.True(FleetOrchestrator.CollideConCorsiaInCorsa("MacdTrend AAVE/USDT 4h #cccccccc", lanes, blockOnTriple: true));
+        Assert.False(FleetOrchestrator.CollideConCorsiaInCorsa("MacdTrend AAVE/USDT 4h #cccccccc", lanes, blockOnTriple: false));
+        Assert.False(FleetOrchestrator.CollideConCorsiaInCorsa("Composite ADA/USDT 5m #dddddddd", lanes, blockOnTriple: true));
+        Assert.False(FleetOrchestrator.CollideConCorsiaInCorsa(null, lanes, blockOnTriple: true));
+    }
 }

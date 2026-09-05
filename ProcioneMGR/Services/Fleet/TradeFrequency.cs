@@ -121,7 +121,55 @@ public static class TradeFrequency
         if (mesiTrascorsi <= 0m) return false;
 
         var attesi = f * mesiTrascorsi;
-        return observed < attesi * minFraction;
+        if (observed >= attesi * minFraction) return false;
+
+        // [K16, 2026-09-05] IL SILENZIO SI CONDANNA SOLO SE E' IMPROBABILE SOTTO IL PROPRIO NULLO.
+        //
+        // La sola frazione condannava sul rumore: con zero trade osservati «0 < attesi × 0,2» e'
+        // vero per QUALUNQUE ritmo atteso positivo, quindi ogni corsia muta veniva ritirata al
+        // decimo giorno anche quando il suo ritmo dichiarato rendeva quel silenzio la cosa piu'
+        // normale del mondo — a 1,65 trade/mese la probabilita' di zero trade in dieci giorni e' del
+        // 58% (Poisson, λ = 0,54). Misurato il 2026-09-05 sulla corsia 4 (Composite XLM/USDT 4h),
+        // che sarebbe stata fermata l'11/09 mentre rispettava il proprio ritmo.
+        //
+        // Il nullo e' «la gamba opera al ritmo dichiarato»: il conteggio dei trade in un periodo e'
+        // un processo di Poisson con media `attesi`, e la coda inferiore P(X ≤ osservati | attesi)
+        // e' la probabilita' di vedere un silenzio almeno cosi' lungo per puro caso. Sotto il 5% si
+        // condanna; sopra, si aspetta — e' lo stesso livello di significativita' dei gate di
+        // ricerca. Per zero trade la soglia equivale ad attesi ≥ 3,0 (e^-3 = 4,98%): la corsia 4
+        // matura verso i 55 giorni, non i 10. Il PRD lo aveva scritto come K16 e rimandato «finche'
+        // non ci siano 30 trade vivi per tarare»: il nullo non ha bisogno di taratura, e' aritmetica.
+        return PoissonLowerTail(observed, attesi) < MaxProbabilitaDelSilenzio;
+    }
+
+    /// <summary>
+    /// [K16] Sotto questa probabilita' il silenzio di una gamba non e' piu' compatibile col suo
+    /// ritmo dichiarato: 5%, lo stesso livello dei gate di ricerca (DSR, permutazione, gemello nullo).
+    /// </summary>
+    public const decimal MaxProbabilitaDelSilenzio = 0.05m;
+
+    /// <summary>
+    /// P(X ≤ <paramref name="observed"/>) per X ~ Poisson(<paramref name="mean"/>): la probabilita' di
+    /// osservare al massimo quei trade quando il ritmo vero e' quello atteso. Puro; con media non
+    /// positiva restituisce 1 (nessun silenzio e' improbabile se non ci si aspetta nulla).
+    /// </summary>
+    public static decimal PoissonLowerTail(int observed, decimal mean)
+    {
+        if (mean <= 0m) return 1m;
+        if (observed < 0) return 0m;
+        var lambda = (double)mean;
+        // Termini calcolati in scala logaritmica: λ^k/k! trabocca gia' a k ≈ 170 in double, e i
+        // fuzz della flotta passano ritmi assurdi di proposito.
+        var logLambda = Math.Log(lambda);
+        var cumulative = 0.0;
+        var logTerm = -lambda; // log(e^-λ · λ^0 / 0!)
+        for (var k = 0; k <= observed; k++)
+        {
+            if (k > 0) logTerm += logLambda - Math.Log(k);
+            cumulative += Math.Exp(logTerm);
+            if (cumulative >= 1.0) return 1m;
+        }
+        return (decimal)Math.Clamp(cumulative, 0.0, 1.0);
     }
 
     /// <summary>La spiegazione del verdetto di inedia, per il journal: un ritiro senza il suo perché è un ordine, non una decisione.</summary>
@@ -129,8 +177,13 @@ public static class TradeFrequency
     {
         if (expectedPerMonth is not decimal f || f <= 0m) return "frequenza attesa non nota: nessun giudizio di inedia";
         var mesi = (decimal)observation.TotalDays / DaysPerMonth;
-        var attesi = Math.Round(f * mesi, 1);
+        var attesiEsatti = f * mesi;
+        var attesi = Math.Round(attesiEsatti, 1);
+        // [K16] La probabilita' va detta insieme al conteggio: «0 trade contro 0,5 attesi» e «0
+        // contro 9,9» sono la stessa frazione e due verdetti opposti.
+        var p = PoissonLowerTail(observed, attesiEsatti);
         return $"{observed} trade in {observation.TotalDays:F0} giorni contro ~{attesi:0.#} attesi "
-               + $"(~{f:0.##}/mese): sotto il {minFraction:P0} dell'atteso";
+               + $"(~{f:0.##}/mese): sotto il {minFraction:P0} dell'atteso, e un silenzio cosi' lungo ha probabilita' "
+               + $"{p:P1} sotto il ritmo dichiarato (soglia {MaxProbabilitaDelSilenzio:P0})";
     }
 }
