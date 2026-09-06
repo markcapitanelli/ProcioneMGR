@@ -190,18 +190,32 @@ internal static class Actions
     {
         Ui.Title("Chiusura dei tunnel");
         int[] porte = [Platform.IngestionPort, Platform.EngineGrpcPort, Platform.EngineHealthPort];
-        var pids = porte.SelectMany(OwningPids).Distinct().ToList();
-        if (pids.Count == 0) Ui.Info("nessun port-forward attivo.");
-        else Kill(pids);
+
+        // [2026-09-06] `porte.SelectMany(OwningPids)` era un difetto in produzione, segnalato dal
+        // compilatore stesso (CS8621): OwningPids puo' restituire null, e SelectMany su null lancia
+        // NullReferenceException. Cioe' `procione ferma tunnel` MORIVA proprio nella condizione in
+        // cui serve — la macchina satura, la stessa del rilascio finto del 2026-09-05. La lezione
+        // era gia' stata imparata su `ferma guscio` e non era stata portata al gemello.
+        var letture = porte.Select(p => (Porta: p, Pids: OwningPids(p))).ToList();
+        var incerte = letture.Where(l => l.Pids is null).Select(l => l.Porta).ToList();
+        var pids = letture.Where(l => l.Pids is not null).SelectMany(l => l.Pids!).Distinct().ToList();
+
+        if (pids.Count == 0 && incerte.Count == 0) Ui.Info("nessun port-forward attivo.");
+        else if (pids.Count > 0) Kill(pids);
 
         // I marcatori vanno via con i tunnel: lasciarli farebbe credere alla prossima sonda che un
         // tunnel inesistente stia servendo un pod.
         foreach (var m in new[] { Platform.TradingTunnelMarker, Platform.IngestionTunnelMarker })
             try { if (File.Exists(m)) File.Delete(m); } catch { }
 
+        // Il verdetto NON e' «ho ucciso i PID che ho trovato»: e' lo stato delle porte, che si
+        // legge in-process e vale anche quando l'identificazione del proprietario e' fallita.
         var rimaste = porte.Where(Probes.ListeningPorts().Contains).ToList();
-        if (rimaste.Count == 0) { Ui.Good("tutte le porte dei tunnel sono libere (verificato)."); return 0; }
-        Ui.Warn($"ancora in ascolto: {string.Join(", ", rimaste)}");
+        var (riuscito, messaggio, nota) = Verdicts.ChiusuraTunnel(rimaste, incerte);
+
+        if (riuscito) { Ui.Good(messaggio); return 0; }
+        Ui.Warn(messaggio);
+        if (nota is not null) Ui.Info(nota);
         return 1;
     }
 
@@ -458,7 +472,7 @@ internal static class Actions
     /// <summary>
     /// Accende il supervisore residente in QUESTO processo, e non torna finche' non lo si ferma.
     /// </summary>
-    public static async Task<int> Servizio(bool muto)
+    public static async Task<int> Servizio(bool muto, bool conIcona = true)
     {
         if (muto)
         {
@@ -485,10 +499,11 @@ internal static class Actions
         {
             Ui.Title("Supervisore");
             Ui.Info("gli script girano qui dentro, con l'output catturato: nessuna finestra nasce mai.");
+            if (conIcona) Ui.Info("l'icona accanto all'orologio mostra il verdetto e apre il menu dei comandi.");
             Ui.Info("Ctrl+C per fermarlo. `procione stato` lo vede anche da un'altra finestra.");
         }
 
-        await supervisore.RunAsync(muto, cts.Token);
+        await supervisore.RunAsync(muto, cts.Token, conIcona);
         return 0;
     }
 
@@ -517,6 +532,114 @@ internal static class Actions
         return 1;
     }
 
+    /// <summary>
+    /// Mostra l'icona nell'area di notifica e basta: nessun supervisore, nessun lavoro.
+    ///
+    /// E' la risposta a «l'icona non compare», che altrimenti non ne avrebbe una: l'icona vive
+    /// dentro il supervisore, quindi diagnosticarla vorrebbe dire fermare le automazioni della
+    /// macchina per guardare un pallino. Qui si prova solo quella, in primo piano, e si DICE se la
+    /// shell l'ha accettata — che e' l'unica prova che «sempre visibile» sia vero.
+    /// </summary>
+    /// <param name="secondi">
+    /// Per quanto tenerla. Serve quando non c'e' una console da cui premere INVIO (uno script, una
+    /// verifica automatica): senza, il comando uscirebbe subito e non si vedrebbe niente.
+    /// </param>
+    public static async Task<int> Icona(int? secondi)
+    {
+        Ui.Title("Icona nell'area di notifica");
+        Ui.Info("prova isolata: non tocca il supervisore residente e non esegue nessun lavoro.");
+
+        Snapshot? quadro = null;
+        using var tray = Tray.Start(() => quadro, () => { });
+        if (tray is null)
+        {
+            Ui.Error("non e' stato possibile creare la finestra dell'icona.");
+            Ui.Info("succede in una sessione senza desktop (servizio, connessione remota chiusa).");
+            return 2;
+        }
+
+        Ui.Info("rilevo lo stato della piattaforma...");
+        quadro = await Probes.RunAsync();
+        tray.Update(quadro);
+
+        // Il verdetto e' la RISPOSTA della shell: NIM_ADD puo' fallire — al logon l'area di
+        // notifica non esiste ancora — e l'icona ritenta per dieci secondi.
+        for (var i = 0; i < 24 && !tray.Attaccata; i++) await Task.Delay(500);
+
+        if (tray.Attaccata)
+        {
+            Ui.Good($"icona attiva accanto all'orologio: {Ui.Glyph(quadro.Worst)} {quadro.Count(Level.Down)} guasti, " +
+                    $"{quadro.Count(Level.Warn)} avvisi. Clic destro per il menu, doppio clic per la plancia.");
+            // Due domande diverse: la shell l'ha accettata, e il pallino e' stato disegnato. Con la
+            // seconda fallita l'icona ci sarebbe ma senza immagine — visibile e muta sul verdetto.
+            if (tray.DisegnoRiuscito) Ui.Good("pallino disegnato (CreateIcon ha reso un handle valido).");
+            else Ui.Warn("il pallino NON e' stato disegnato: l'icona c'e' ma non mostra il colore.");
+        }
+        else Ui.Error("la shell ha RIFIUTATO l'icona: non compare.");
+
+        if (secondi is { } s)
+        {
+            Ui.Info($"la tengo per {s} secondi.");
+            await Task.Delay(TimeSpan.FromSeconds(Math.Clamp(s, 1, 600)));
+        }
+        else if (Console.IsInputRedirected)
+        {
+            Ui.Info("nessuna console interattiva: la tengo per 15 secondi (`--per <secondi>` per cambiare).");
+            await Task.Delay(TimeSpan.FromSeconds(15));
+        }
+        else
+        {
+            Ui.Info("resta finche' non premi INVIO.");
+            Console.ReadLine();
+        }
+        return tray.Attaccata ? 0 : 2;
+    }
+
+    /// <summary>
+    /// Ferma il supervisore e lo rimette in piedi, staccato da questa finestra.
+    ///
+    /// Serve dopo una ricompilazione della plancia (l'eseguibile e' in uso finche' il supervisore
+    /// gira) e ogni volta che si vuole ripartire puliti senza aspettare il logon successivo. Il
+    /// nuovo processo nasce con <c>--muto</c>, cioe' senza finestra: e' la stessa forma con cui lo
+    /// avvia l'attivita' pianificata, non una seconda.
+    /// </summary>
+    public static int ServizioRiavvia()
+    {
+        var e = ServizioFerma();
+        if (e == 1) return e;   // non risponde al segnale: rimetterne su un altro sarebbe un doppione
+
+        var exe = Platform.SelfExe;
+        if (exe is null || !Path.GetFileName(exe).StartsWith("procione", StringComparison.OrdinalIgnoreCase))
+        {
+            Ui.Error("la plancia non sta girando dal proprio eseguibile (probabilmente `dotnet run`).");
+            Ui.Info("compila e rilancia: `procione.cmd --ricompila`, poi `procione servizio`.");
+            return 2;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(exe)
+            {
+                Arguments = "servizio --muto",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Platform.MainRepoRoot,
+            });
+        }
+        catch (Exception ex) { Ui.Error($"riavvio fallito: {ex.Message.Trim()}"); return 2; }
+
+        // Il verdetto e' il BATTITO, non l'avvio del processo: un supervisore che parte e muore
+        // subito (esclusione non ottenuta, eccezione all'avvio) lascerebbe la macchina scoperta
+        // mentre questo comando annuncia successo.
+        if (WaitFor(() => Supervisor.IsAlive(Supervisor.ReadState(), DateTimeOffset.Now), 30))
+        {
+            Ui.Good("supervisore riavviato (battito verificato).");
+            return 0;
+        }
+        Ui.Error("il supervisore non batte: guarda `procione log supervisore`.");
+        return 2;
+    }
+
     /// <summary>I lavori: elencarli, accenderli, spegnerli, farne partire uno adesso.</summary>
     public static async Task<int> Lavoro(string? nome, string? cosa)
     {
@@ -539,7 +662,7 @@ internal static class Actions
             {
                 var c = Verdicts.Job(job, stato?.Jobs.FirstOrDefault(j => j.Name == job.Name), vivo, adesso,
                                      copertoDaTask: daTask.Contains(job.Name),
-                                     acceso: Prefs.IsEnabled(job, accesi));
+                                     acceso: accesi is null ? null : Prefs.IsEnabled(job, accesi));
                 Ui.Write("  " + Ui.Glyph(c.Level) + " ", Ui.Color(c.Level));
                 Ui.Write(job.Name.PadRight(10), ConsoleColor.White);
                 Ui.Line(c.Detail, ConsoleColor.Gray);
@@ -958,19 +1081,16 @@ internal static class Actions
     private static int Say(string testo) { Ui.Info(testo); return 1; }
 
     /// <summary>
-    /// PID dei processi in ascolto su una porta. <c>null</c> = la domanda NON ha avuto risposta
-    /// (PowerShell scaduto o fallito): e' un'altra cosa da «nessuno ascolta», e chi chiama deve
-    /// poterle distinguere — vedi <see cref="DownShell"/>.
+    /// PID dei processi in ascolto su una porta. <c>null</c> = la domanda NON ha avuto risposta:
+    /// e' un'altra cosa da «nessuno ascolta», e chi chiama deve poterle distinguere — vedi
+    /// <see cref="DownShell"/>.
+    ///
+    /// [2026-09-06] Passa da <see cref="Net"/>, cioe' da una chiamata di libreria dentro questo
+    /// processo, e non piu' da un <c>Get-NetTCPConnection</c> in un processo figlio: era proprio
+    /// quel figlio a non rispondere in tempo sulla macchina satura, e la sua lista vuota a
+    /// diventare un «gia' fermo» che ha prodotto un rilascio finto (2026-09-05, 00:54).
     /// </summary>
-    private static List<int>? OwningPids(int porta)
-    {
-        var r = Proc.Ps($"Get-NetTCPConnection -State Listen -LocalPort {porta} -ErrorAction SilentlyContinue | " +
-                        "Select-Object -ExpandProperty OwningProcess -Unique", 15000);
-        if (r.Code != 0) return null;
-        return r.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(s => int.TryParse(s.Trim(), out var v) ? v : 0)
-                    .Where(v => v > 0).Distinct().ToList();
-    }
+    private static List<int>? OwningPids(int porta) => Net.OwningPids(porta);
 
     private static void Kill(IEnumerable<int> pids)
     {

@@ -49,6 +49,7 @@ internal static class Program
         var segui = Flag(args, "-f", "--segui", "--follow");
         var conMotore = Flag(args, "--motore", "--engine");
         var conVolumi = Flag(args, "-v", "--volumi");
+        var produzione = Flag(args, "--produzione", "--production");
         var righe = int.TryParse(Opt(args, "-n") ?? Opt(args, "--righe"), out var n) ? n : 80;
         var ogni = int.TryParse(Opt(args, "--ogni") ?? Opt(args, "--every"), out var o) ? o : (int?)null;
 
@@ -67,12 +68,17 @@ internal static class Program
                 return (Arg(args) ?? "tutto") switch
                 {
                     "tutto" or "all" => Actions.UpAll(forza),
-                    "guscio" or "shell" or "ui" => Actions.UpShell(forza),
-                    "cluster" or "kind" => Actions.UpCluster(),
+                    // --produzione e' la vecchia `procione postgres`: il guscio come lo avvia
+                    // run-postgres.ps1, in ambiente Production. Dietro un flag perche' e' l'altra
+                    // via, non quella normale.
+                    "guscio" or "shell" or "ui" => produzione ? Actions.Postgres() : Actions.UpShell(forza),
+                    "cluster" or "kind" => Machine.Cluster("avvia", si),
+                    "docker" => Machine.Docker("avvia", si),
+                    "db" or "database" or "postgres" => Machine.Database("avvia", si),
                     "compose" => Actions.UpCompose(conMotore, forza),
                     "osservabilita" or "obs" => Actions.Observability("su", false),
                     "argocd" => Actions.Argocd("su"),
-                    var altro => Sconosciuto(altro, "tutto, guscio, cluster, compose, osservabilita, argocd"),
+                    var altro => Sconosciuto(altro, "tutto, guscio, cluster, docker, db, compose, osservabilita, argocd"),
                 };
 
             case "ferma" or "down" or "giu":
@@ -81,16 +87,28 @@ internal static class Program
                     "tutto" or "all" => Actions.DownAll(),
                     "guscio" or "shell" or "ui" => Actions.DownShell(),
                     "tunnel" or "tunnels" => Actions.DownTunnels(),
+                    "cluster" or "kind" => Machine.Cluster("ferma", si),
+                    "docker" => Machine.Docker("ferma", si),
+                    "db" or "database" or "postgres" => Machine.Database("ferma", si),
+                    "supervisore" or "servizio" => Actions.ServizioFerma(),
                     "compose" => Actions.DownCompose(conVolumi),
                     "osservabilita" or "obs" => Actions.Observability("giu", purga),
                     "argocd" => Actions.Argocd("giu"),
-                    var altro => Sconosciuto(altro, "tutto, guscio, tunnel, compose, osservabilita, argocd"),
+                    var altro => Sconosciuto(altro, "tutto, guscio, tunnel, cluster, docker, db, supervisore, compose, osservabilita, argocd"),
                 };
 
             case "riavvia" or "restart":
                 var che = Arg(args);
-                if (che is null) return Sconosciuto("(niente)", "guscio, motore, ingestion, ml");
-                return che is "guscio" or "shell" ? Actions.RestartShell() : Actions.Restart(che, si);
+                if (che is null)
+                    return Sconosciuto("(niente)", "guscio, motore, ingestion, ml, cluster, db, supervisore");
+                return che switch
+                {
+                    "guscio" or "shell" => Actions.RestartShell(),
+                    "cluster" or "kind" => Machine.Cluster("riavvia", si),
+                    "db" or "database" or "postgres" => Machine.Database("riavvia", si),
+                    "supervisore" or "servizio" => Actions.ServizioRiavvia(),
+                    _ => Actions.Restart(che, si),
+                };
 
             case "ripara" or "fix":
                 return (Arg(args) ?? "tutto") switch
@@ -113,10 +131,13 @@ internal static class Program
             case "servizio" or "supervisore" or "service":
                 return (Arg(args) ?? "avvia") switch
                 {
-                    "avvia" or "su" or "start" => await Actions.Servizio(Flag(args, "--muto", "--silenzioso", "--quiet")),
+                    "avvia" or "su" or "start" => await Actions.Servizio(
+                        Flag(args, "--muto", "--silenzioso", "--quiet"),
+                        conIcona: !Flag(args, "--senza-icona", "--no-icon")),
                     "ferma" or "giu" or "stop" => Actions.ServizioFerma(),
+                    "riavvia" or "restart" => Actions.ServizioRiavvia(),
                     "stato" or "status" => await Actions.Lavoro(null, null),
-                    var altro => Sconosciuto(altro, "avvia, ferma, stato"),
+                    var altro => Sconosciuto(altro, "avvia, ferma, riavvia, stato"),
                 };
 
             case "lavoro" or "lavori" or "job":
@@ -151,8 +172,24 @@ internal static class Program
             case "segreti" or "secrets":
                 return Actions.Secrets(Arg(args));
 
-            case "postgres" or "pg":
-                return Actions.Postgres();
+            // --- cio' che sta SOTTO la piattaforma: Docker, il database, le porte -----------------
+
+            case "db" or "database" or "postgres" or "pg":
+                // `postgres` significa il DATABASE, che e' quello che la parola vuol dire. Fino al
+                // 2026-09-06 avviava invece il GUSCIO (run-postgres.ps1, ambiente Production): un
+                // comando che fa una cosa diversa dal proprio nome e' una trappola, e per giunta
+                // qui la cosa diversa era piu' invasiva. Quella resta, dietro un flag esplicito:
+                // `procione avvia guscio --produzione`.
+                return Machine.Database(Arg(args), si);
+
+            case "docker":
+                return Machine.Docker(Arg(args), si);
+
+            case "porte" or "ports":
+                return Machine.Ports();
+
+            case "icona" or "tray":
+                return await Actions.Icona(int.TryParse(Opt(args, "--per"), out var sec) ? sec : null);
 
             case "esegui" or "run":
                 return Actions.Run(grezzi.FirstOrDefault(), [.. grezzi.Skip(1)]);
@@ -183,7 +220,9 @@ internal static class Program
                 {
                     "crea" or "create" => Actions.UpCluster(),
                     "distruggi" or "destroy" => Actions.DestroyCluster(),
-                    var altro => Sconosciuto(altro, "crea, distruggi"),
+                    // Fra «crea» e «distruggi» non c'era niente, e il rimedio che la plancia
+                    // stampava per un nodo fermo era un comando docker da battere altrove.
+                    var altro => Machine.Cluster(altro, si),
                 };
 
             case "aiuto" or "help" or "-h" or "--help" or "/?":
@@ -291,11 +330,14 @@ internal static class Program
             ("procione guarda [--ogni 10]",   "lo stesso quadro, che si ridisegna da solo"),
             ("procione dottore",              "i PREREQUISITI della macchina: strumenti, segreti, configurazione"),
             ("procione log <cosa> [-n 200] [-f]", "guscio, motore, ingestion, ml, supervisore, bringup, watchdog, compose"),
+            ("procione porte",                "chi occupa le porte della piattaforma, con nome e percorso del processo"),
         ]);
 
         Sezione("Le automazioni (dentro questo programma)", [
-            ("procione servizio",             "accende il supervisore: veglia ogni 5 minuti, backup notturno. Senza finestre"),
+            ("procione servizio",             "accende il supervisore e l'ICONA accanto all'orologio. Nessuna finestra"),
             ("procione servizio ferma",       "lo ferma (serve anche per ricompilare la plancia: l'eseguibile e' in uso)"),
+            ("procione servizio riavvia",     "lo rimette in piedi staccato da questa finestra, senza aspettare il logon"),
+            ("procione icona [--per 30]",     "prova SOLO l'icona e dice se la shell l'ha accettata; non tocca nulla"),
             ("procione lavoro",               "i lavori: cadenza, ultimo esito, prossima scadenza"),
             ("procione lavoro <nome> ora",    "esegui un lavoro adesso, fuori cadenza (veglia, backup, avvio)"),
             ("procione lavoro <nome> accendi|spegni", "acceso/spento e' una preferenza, sopravvive al riavvio"),
@@ -306,10 +348,17 @@ internal static class Program
         Sezione("Accendere e spegnere", [
             ("procione avvia",                "bring-up completo (scripts/bringup.ps1): Docker, proxy, cluster, tunnel, guscio"),
             ("procione avvia guscio",         "solo il guscio, come il profilo procione-main; rifiuta se la 5199 e' occupata"),
-            ("procione avvia cluster",        "crea il cluster kind (prerequisito una-tantum)"),
+            ("procione avvia guscio --produzione", "come run-postgres.ps1: ambiente Production (era `procione postgres`)"),
             ("procione avvia compose [--motore]", "assetto Docker Compose; rifiuta se kind e' vivo (regola 2)"),
-            ("procione ferma [guscio|tunnel|compose|tutto]", "spegne. Il cluster resta su: e' il core caldo"),
-            ("procione riavvia <motore|ingestion|ml|guscio>", "rollout + tunnel rifatto; il motore chiede conferma"),
+            ("procione ferma [guscio|tunnel|cluster|docker|db|supervisore|tutto]", "spegne. `tutto` lascia su il cluster: e' il core caldo"),
+            ("procione riavvia <motore|ingestion|ml|guscio|cluster|db|supervisore>", "rollout + tunnel rifatto; il motore chiede conferma"),
+        ]);
+
+        Sezione("Cio' che sta sotto la piattaforma", [
+            ("procione docker [stato|avvia|ferma]", "Docker Desktop, con l'attesa vera del demone (al boot: minuti)"),
+            ("procione db [stato|avvia|ferma|riavvia]", "il servizio Windows di PostgreSQL. Il verdetto e' la porta, non il comando"),
+            ("procione cluster avvia|ferma|riavvia", "il nodo kind SENZA distruggerlo: riavvia, verifica il proxy, rifa' i tunnel"),
+            ("procione cluster crea|distruggi", "gli estremi: creazione una-tantum, e distruzione con conferma digitata"),
         ]);
 
         Sezione("Riparare", [
@@ -325,13 +374,11 @@ internal static class Program
             ("procione corsie avvia tutte --modalita paper", "le avvia (Live NO: si passa da /trading)"),
             ("procione veglia",              "un giro di watchdog.ps1 adesso, sotto i tuoi occhi"),
             ("procione segreti [quale]",     "i Secret del cluster: tutti (da appsettings), postgres, trading, ui"),
-            ("procione postgres",            "il guscio come lo avvia run-postgres.ps1 (ambiente Production)"),
             ("procione immagini [target]",   "build locale delle immagini e import nel nodo kind"),
             ("procione smoke",               "le cinque asserzioni end-to-end contro il cluster"),
             ("procione argocd [su|giu|installa|ripunta <rev>]", "ArgoCD sta spento di proposito: accendilo solo quando serve"),
             ("procione osservabilita su|giu","Grafana, Prometheus, Loki, Tempo"),
             ("procione apri [rotta]",        "apre la UI nel browser"),
-            ("procione cluster distruggi",   "elimina il cluster kind (chiede una conferma digitata)"),
         ]);
 
         Sezione("Tutto il resto", [
@@ -346,6 +393,8 @@ internal static class Program
     · La plancia non riscrive gli script di scripts/: li chiama. Una sola verita' operativa.
     · Le automazioni girano DENTRO la plancia, con l'output catturato: nessuna finestra PowerShell
       nasce piu' da sola. `procione attivita migra` fa il passaggio, una volta sola.
+    · Il supervisore mostra un'icona accanto all'orologio: colore = verdetto, clic destro = menu,
+      doppio clic = plancia. Le finestre le apre solo quando sei TU a scegliere una voce.
     · $env:PROCIONE_REPO forza quale repository comandare (utile lavorando dai worktree).
 """, ConsoleColor.DarkGray);
     }

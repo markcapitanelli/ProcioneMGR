@@ -62,6 +62,58 @@ internal static class Verdicts
     }
 
     /// <summary>
+    /// Se l'icona debba far comparire un fumetto, e con che titolo.
+    ///
+    /// La disciplina e' quella di <c>watchdog.ps1</c>, e per la stessa ragione: si avvisa sulle
+    /// TRANSIZIONI, mai a ripetizione. Un fumetto ogni minuto su un guasto che dura da un'ora e' il
+    /// modo piu' rapido di far spegnere le notifiche a chi le riceve — e con esse anche quelle che
+    /// contano. Per lo stesso motivo non si disturba nessuno per un passaggio fra «tutto bene» e
+    /// «qualche avviso»: quello lo dice il COLORE, che e' li' apposta.
+    ///
+    /// Si annuncia il rientro quanto il guasto: sapere che e' tornato a posto vale quanto sapere
+    /// che si e' rotto, altrimenti si resta a controllare a mano — che e' esattamente il lavoro che
+    /// l'icona esiste per togliere.
+    /// </summary>
+    /// <param name="giaAnnunciato">L'ultimo livello per cui si e' gia' detto qualcosa.</param>
+    public static (string Titolo, bool ConDettagli)? Fumetto(Level? giaAnnunciato, Level adesso)
+    {
+        if (adesso == giaAnnunciato) return null;
+        if (adesso == Level.Down) return ("ProcioneMGR: guasto", true);
+        if (giaAnnunciato == Level.Down) return ("ProcioneMGR: rientrato", adesso != Level.Ok);
+        return null;
+    }
+
+    /// <summary>
+    /// Cosa dire dopo aver provato a chiudere i tunnel.
+    ///
+    /// Il verdetto e' lo STATO DELLE PORTE, non «ho ucciso i processi che ho trovato»: la mappa
+    /// porta → PID puo' non essere leggibile, e su una macchina satura e' successo davvero. Il
+    /// difetto che questa funzione esiste per non ripetere e' del 2026-09-05: una lettura fallita
+    /// letta come «nessuno ascolta» ha prodotto un «gia' fermo» su un guscio vivo, e da li' un
+    /// rilascio annunciato e mai avvenuto.
+    ///
+    /// Due casi che sembrano uguali e non lo sono. Se le porte sono libere il lavoro E' FATTO,
+    /// anche se non si era riusciti a leggere chi le teneva: la prova e' il risultato, non il
+    /// percorso. Se invece qualcuna risponde ancora, va detto quali — e va detto separatamente su
+    /// quali non si e' nemmeno potuto guardare, perche' «non l'ho chiusa» e «non so se e' chiusa»
+    /// mandano a fare due cose diverse.
+    /// </summary>
+    /// <param name="rimaste">Porte ancora in ascolto DOPO il tentativo.</param>
+    /// <param name="incerte">Porte per cui non si e' potuto leggere il proprietario.</param>
+    public static (bool Riuscito, string Messaggio, string? Nota) ChiusuraTunnel(
+        IReadOnlyList<int> rimaste, IReadOnlyList<int> incerte)
+    {
+        if (rimaste.Count == 0)
+            return (true, "tutte le porte dei tunnel sono libere (verificato).", null);
+
+        var nota = incerte.Count == 0
+            ? null
+            : $"di {string.Join(", ", incerte)} non sono riuscito a leggere il proprietario: " +
+              "non le ho toccate, e non dichiaro chiuso cio' che non ho misurato.";
+        return (false, $"ancora in ascolto: {string.Join(", ", rimaste)}", nota);
+    }
+
+    /// <summary>
     /// Il pod a cui un tunnel punta davvero.
     ///
     /// Deve coincidere con la scelta di <c>ensure-trading-portforward.ps1</c>, che prende

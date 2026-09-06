@@ -214,12 +214,18 @@ internal static class Prefs
         catch (JsonException) { return []; }   // file corrotto: i default sono la scelta migliore
     }
 
-    /// <summary>Vero se il lavoro e' acceso: la preferenza salvata, altrimenti il default della tabella.</summary>
-    public static bool IsEnabled(Job job, IReadOnlyDictionary<string, bool>? salvate = null)
-    {
-        var mappa = salvate ?? Read();
-        return mappa is not null && mappa.TryGetValue(job.Name, out var v) ? v : job.EnabledByDefault;
-    }
+    /// <summary>
+    /// Vero se il lavoro e' acceso: la preferenza salvata, altrimenti il default della tabella.
+    ///
+    /// La mappa e' un parametro OBBLIGATORIO e non nullabile, ed e' una scelta. Prima si accettava
+    /// <c>null</c> e si ripiegava su <see cref="Read"/>: quando quella lettura falliva — file
+    /// occupato dalla scrittura di un altro processo — si tornava ai DEFAULT, cioe' esattamente
+    /// cio' che il commento di <see cref="Read"/> dichiara di voler evitare. Un lavoro spento a
+    /// mano risultava acceso, in silenzio, e il quadro lo mostrava come tale. Adesso chi non ha
+    /// una mappa buona non puo' chiamare questa funzione: deve dire «non lo so».
+    /// </summary>
+    public static bool IsEnabled(Job job, IReadOnlyDictionary<string, bool> salvate)
+        => salvate.TryGetValue(job.Name, out var v) ? v : job.EnabledByDefault;
 
     public static bool Set(string nome, bool acceso)
     {
