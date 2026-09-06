@@ -115,7 +115,8 @@ Trading isolato in **corsie** (lane) indipendenti via keyed DI — 8 attive, tut
 | Errore | Conseguenza |
 |---|---|
 | Saltare `dotnet ef database update` | database senza tabelle; l'app **non** applica migrazioni all'avvio |
-| Dimenticare `@attribute [Authorize]` su una pagina nuova | pagina **pubblica**: non c'è fallback policy che ti salvi |
+| Dimenticare `@attribute [Authorize]` su una pagina nuova | pagina **pubblica**: non c'è fallback policy che ti salvi. Dal 2026-09-06 `AutorizzazioneDellePagineTests` te lo dice, ma solo quando gira la suite |
+| Mettere `[Authorize]` **nudo** perché «tanto è protetta» | aperta a **qualunque account**, ruolo `User` compreso. La domanda giusta (R21) non è cosa la pagina mostra ma **dove finisce ciò che scrive**: `/settings/exchanges` sembrava per-utente e alimentava il pool con cui il motore firma gli ordini |
 | Lanciare `run-postgres.ps1` col cluster giù | lo script muore prima di `dotnet run` (R2) |
 | Aspettarsi che `appsettings.json` committato descriva la realtà | è gitignorato; quello versionato dice 3 corsie, l'istanza ne ha 8 |
 | Modificare `LaneCount` in un posto solo | guscio e core divergono; `LaneCountCoherenceProbe` se ne accorge **solo se il core risponde** |
@@ -171,7 +172,8 @@ Trading isolato in **corsie** (lane) indipendenti via keyed DI — 8 attive, tut
 2. 🔴 **R2 — riparare `run-postgres.ps1`**: poche righe, sblocca l'avvio dopo ogni riavvio.
 3. 🔴 **R3 — allineare il conteggio dei test nel README.**
 4. 🟡 R5 — allarme sulle fonti AltData morte (ForexFactory 403, FXStreet-CentralBanks 404).
-5. 🟡 R4 — test che impedisca pagine senza `[Authorize]`.
+5. 🟡 R4 — ~~test che impedisca pagine senza `[Authorize]`~~: fatto il 2026-09-06
+   (`AutorizzazioneDellePagineTests`, rilievo R21). Resta senza `FallbackPolicy`.
 6. 🟡 R6 — estrarre `AutonomyPageService` da `Autonomy.razor` (107,6 KB).
 
 Roadmap di prodotto: `docs/ROADMAP.md` e i PRD in `docs/PRD-*.md`.

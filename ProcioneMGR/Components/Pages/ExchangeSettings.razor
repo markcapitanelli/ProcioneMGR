@@ -7,7 +7,16 @@
 @using ProcioneMGR.Data
 @using ProcioneMGR.Services.Exchanges
 @using ProcioneMGR.Services.Security
-@attribute [Authorize]
+@* [R21 2026-09-06] Admin, non «qualunque autenticato». Questa pagina non amministra una cassetta
+   privata: alimenta il POOL con cui il MOTORE firma gli ordini. ExchangeCredentialReader
+   .FindForTradingAsync sceglie per (exchange, testnet) senza guardare l'utente — piattaforma a
+   operatore singolo, decisione confermata dal proprietario oggi — quindi una riga inserita qui da
+   chiunque diventa una chiave con cui la piattaforma può operare, e la casella Testnet è libera:
+   non spuntarla salva una credenziale LIVE. Il filtro per utente c'era in lettura e cancellazione,
+   cioè nella vetrina, e NON nel percorso di firma: l'isolamento apparente era la parte peggiore.
+   Il confine vero è qui sulla porta. Anche «Ri-cifra ora» (ReEncryptAllAsync) tocca TUTTE le righe
+   della tabella, non solo le proprie: coerente con un pool solo, sbagliato in mano a chiunque. *@
+@attribute [Authorize(Roles = AppRoles.Admin)]
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject IExchangeClientFactory ExchangeFactory
@@ -17,11 +26,20 @@
 @inject IMasterKeyRotationService KeyRotation
 @inject AuthenticationStateProvider AuthProvider
 
-<PageTitle>Le mie credenziali Exchange</PageTitle>
+<PageTitle>Credenziali Exchange della piattaforma</PageTitle>
 
 <h1>Credenziali Exchange</h1>
 
 <GuidaPanel Title="Credenziali Exchange — come collegare il tuo account reale a un exchange">
+    @* [R21 2026-09-06] Dichiarato, non sottinteso: il pool è UNO per progetto. *@
+    <div class="alert alert-secondary py-2">
+        <strong>Queste chiavi sono della piattaforma, non del tuo account.</strong> ProcioneMGR è a
+        <em>operatore singolo</em>: il motore, quando deve firmare un ordine, cerca la credenziale
+        per <code>(exchange, testnet/live)</code> e prende la prima utilizzabile — <strong>senza
+        guardare chi l'ha inserita</strong>. L'elenco qui sotto mostra le righe salvate con il tuo
+        account, ma il pool è comune: per questo la pagina è riservata al ruolo <strong>Admin</strong>
+        e il pulsante «Ri-cifra ora» agisce su tutte le righe della tabella.
+    </div>
     <p>
         Per il <strong>backtest</strong> (simulazione sul passato) e la modalità <strong>Paper</strong>
         del trading live non servono credenziali: bastano i dati di mercato pubblici. Le chiavi

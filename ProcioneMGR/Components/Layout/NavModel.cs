@@ -58,8 +58,10 @@ public static class NavModel
         [
             new NavItem("", "Home", "bi-house-door-fill",
                 "Punto di partenza: statistiche, alert e workflow guidato.", Match: true),
+            // [R21 2026-09-06] Manager+Admin come la pagina: «scarica storico» scrive sulle serie
+            // condivise. Un collegamento visibile a chi riceverebbe un rifiuto è una bugia del menù.
             new NavItem("dashboard", "Dashboard", "bi-bar-chart-line-fill",
-                "Grafici OHLCV e indicatori tecnici one-off."),
+                "Grafici OHLCV e indicatori tecnici one-off.", ManagerAndAdmin),
         ]),
 
         // 📊 DATI & MONITORAGGIO — la materia prima e il suo stato di salute.
@@ -137,8 +139,9 @@ public static class NavModel
         // ⚙️ CONFIGURAZIONE — impostazioni e amministrazione, collassabile e role-based.
         new NavSection("config", "Configurazione", "#94a3b8", Collapsible: true,
         [
+            // [R21 2026-09-06] Admin come la pagina: il pool di chiavi con cui il motore firma.
             new NavItem("settings/exchanges", "Credenziali Exchange", "bi-key-fill",
-                "API key degli exchange, salvate crittate."),
+                "API key degli exchange, salvate crittate.", AdminOnly),
             new NavItem("admin/ai-supervisor", "Supervisione AI", "bi-robot",
                 "Advisory layer Claude sulla pipeline (solo consultivo).", ManagerAndAdmin),
             new NavItem("admin/autonomy", "Autonomia", "bi-toggles",

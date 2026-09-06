@@ -6,6 +6,7 @@
 @using Microsoft.AspNetCore.Identity
 @using Microsoft.AspNetCore.WebUtilities
 @using ProcioneMGR.Data
+@using ProcioneMGR.Services.Security
 
 @inject UserManager<ApplicationUser> UserManager
 @inject IUserStore<ApplicationUser> UserStore
@@ -14,11 +15,26 @@
 @inject ILogger<Register> Logger
 @inject NavigationManager NavigationManager
 @inject IdentityRedirectManager RedirectManager
+@inject IRegistrationGate RegistrationGate
 
 <PageTitle>Register</PageTitle>
 
 <h1>Register</h1>
 
+@* [R22 2026-09-06] La registrazione libera è chiusa per default: prima era aperta a chiunque
+   raggiungesse l'app, e il nuovo account riceveva il ruolo User — abbastanza per ogni pagina
+   protetta dal solo [Authorize] nudo. Il modulo NON si disegna nemmeno quando è chiusa, e il
+   POST è comunque ricontrollato in RegisterUser: nascondere un modulo non è chiudere una porta. *@
+@if (_gate is { Allowed: false })
+{
+    <div class="alert alert-warning" role="alert">
+        <div class="fw-bold">Registrazione chiusa su questa istanza.</div>
+        <div class="small mt-1">@_gate.Reason</div>
+        <div class="small mt-2"><a href="Account/Login">Torna al login</a></div>
+    </div>
+}
+else
+{
 <div class="row">
     <div class="col-lg-6">
         <StatusMessage Message="@Message" />
@@ -53,9 +69,11 @@
         </section>
     </div>
 </div>
+}
 
 @code {
     private IEnumerable<IdentityError>? identityErrors;
+    private RegistrationDecision? _gate;
 
     [SupplyParameterFromForm]
     private InputModel Input { get; set; } = default!;
@@ -65,13 +83,24 @@
 
     private string? Message => identityErrors is null ? null : $"Error: {string.Join(", ", identityErrors.Select(error => error.Description))}";
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Input ??= new();
+        _gate = await RegistrationGate.EvaluateAsync();
     }
 
     public async Task RegisterUser(EditContext editContext)
     {
+        // [R22] Ricontrollo lato server: il modulo nascosto non impedisce un POST costruito a mano.
+        var gate = await RegistrationGate.EvaluateAsync();
+        if (!gate.Allowed)
+        {
+            _gate = gate;
+            Logger.LogWarning("Registrazione rifiutata (chiusa su questa istanza): tentativo di creare un account.");
+            identityErrors = [new IdentityError { Code = "RegistrationClosed", Description = gate.Reason }];
+            return;
+        }
+
         var user = CreateUser();
 
         await UserStore.SetUserNameAsync(user, Input.Email, CancellationToken.None);

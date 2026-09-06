@@ -4,7 +4,9 @@
 @using Microsoft.AspNetCore.Authentication
 @using Microsoft.AspNetCore.Identity
 @using ProcioneMGR.Data
+@using ProcioneMGR.Services.Security
 
+@inject IRegistrationGate RegistrationGate
 @inject UserManager<ApplicationUser> UserManager
 @inject SignInManager<ApplicationUser> SignInManager
 @inject ILogger<Login> Logger
@@ -52,9 +54,15 @@
                     <p>
                         <a href="Account/ForgotPassword">Forgot your password?</a>
                     </p>
-                    <p>
-                        <a href="@(NavigationManager.GetUriWithQueryParameters("Account/Register", new Dictionary<string, object?> { ["ReturnUrl"] = ReturnUrl }))">Register as a new user</a>
-                    </p>
+                    @* [R22 2026-09-06] Il collegamento compare solo se la registrazione è davvero
+                       aperta: invitare a una porta che rifiuta è la stessa bugia di un valore
+                       vecchio mostrato come attuale. *@
+                    @if (_registrationOpen)
+                    {
+                        <p>
+                            <a href="@(NavigationManager.GetUriWithQueryParameters("Account/Register", new Dictionary<string, object?> { ["ReturnUrl"] = ReturnUrl }))">Register as a new user</a>
+                        </p>
+                    }
                     <p>
                         <a href="Account/ResendEmailConfirmation">Resend email confirmation</a>
                     </p>
@@ -74,6 +82,7 @@
 @code {
     private string? errorMessage;
     private EditContext editContext = default!;
+    private bool _registrationOpen;
 
     [CascadingParameter]
     private HttpContext HttpContext { get; set; } = default!;
@@ -89,6 +98,8 @@
         Input ??= new();
 
         editContext = new EditContext(Input);
+
+        _registrationOpen = (await RegistrationGate.EvaluateAsync()).Allowed;
 
         if (HttpMethods.IsGet(HttpContext.Request.Method))
         {

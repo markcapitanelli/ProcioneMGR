@@ -7,7 +7,11 @@
 @using ProcioneMGR.Services.Indicators
 @using ProcioneMGR.Services.Ingestion
 @using ProcioneMGR.Services.Trading
-@attribute [Authorize]
+@* [R21 2026-09-06] Non è una pagina di sola lettura: «Scarica storico» chiama
+   IOhlcvIngestionService.IngestHistoricalDataAsync, che SCRIVE sulle serie OHLCV condivise da
+   tutte le corsie e consuma il rate-limit dell'exchange. Con [Authorize] nudo quella scrittura
+   era in mano a chiunque avesse un account. Admin+Manager come le altre pagine operative. *@
+@attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 @implements IDisposable
 
 @inject IOhlcvIngestionService Ingestion

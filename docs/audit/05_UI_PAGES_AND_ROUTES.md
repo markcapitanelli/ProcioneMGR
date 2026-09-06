@@ -12,7 +12,7 @@ La colonna "Protezione" è estratta dagli `@attribute [Authorize…]` dei `.razo
 | Route | File | Protezione | Verificata |
 |---|---|---|---|
 | `/` | `Home.razor` | **pubblica** | 200 |
-| `/dashboard` | `Dashboard.razor` | `[Authorize]` | 302 → login |
+| `/dashboard` | `Dashboard.razor` | Admin, Manager *(dal 2026-09-06, R21)* | 302 → login |
 | `/market/watchlist` | `Watchlist.razor` | Admin, Manager | 302 → login |
 | `/market-analysis` | `MarketAnalysis.razor` | `[Authorize]` | 302 → login |
 | `/market/bars` | `InformationBars.razor` | Admin, Manager | 302 → login |
@@ -37,7 +37,7 @@ La colonna "Protezione" è estratta dagli `@attribute [Authorize…]` dei `.razo
 | `/trading` | `Trading.razor` | Admin, Manager | 302 → login |
 | `/bot` | `Bot.razor` | Admin, Manager | 302 → login |
 | `/campaign` | `Campaign.razor` | Admin, Manager | 302 → login |
-| `/settings/exchanges` | `ExchangeSettings.razor` | `[Authorize]` | 302 → login |
+| `/settings/exchanges` | `ExchangeSettings.razor` | **Admin** *(dal 2026-09-06, R21)* | 302 → login |
 | `/admin/ai-supervisor` | `Admin/AiSupervisor.razor` | Admin, Manager | 302 → login |
 | `/admin/autonomy` | `Admin/Autonomy.razor` | **Admin** | 302 → login |
 | `/admin/users` | `AdminUsers.razor` | **Admin** | 302 → login |
@@ -64,22 +64,33 @@ RenamePasskey/{Id}). Sono lo scaffolding standard ASP.NET Core Identity.
 Tre livelli, coerenti con la sensibilità dell'operazione:
 
 - **`[Authorize]` semplice** — pagine che agiscono sui *propri* dati o sono di sola consultazione:
-  `/dashboard`, `/backtest`, `/market-analysis`, `/strategies`, `/settings/exchanges`.
-- **Admin + Manager** — tutto ciò che tocca ricerca pesante o trading.
-- **Admin soltanto** — gestione utenti, backup, autonomia, protezioni.
+  `/backtest`, `/market-analysis`, `/strategies`.
+- **Admin + Manager** — tutto ciò che tocca ricerca pesante, trading, o **scrive su dati
+  condivisi** (per questo `/dashboard` è salita qui: il suo «scarica storico» scrive sulle serie
+  OHLCV di tutte le corsie).
+- **Admin soltanto** — gestione utenti, backup, autonomia, protezioni, **credenziali exchange**.
 
-**`/settings/exchanges` con `[Authorize]` semplice non è un difetto**, anche se maneggia chiavi API:
-`ExchangeCredential` ha una FK `UserId`
-([ExchangeCredential.cs:25](../../ProcioneMGR/Data/ExchangeCredential.cs#L25)) e la pagina carica
-esclusivamente `CredentialReader.LoadForUserAsync(userId)`
-([ExchangeSettings.razor:245](../../ProcioneMGR/Components/Pages/ExchangeSettings.razor#L245));
-la cancellazione è vincolata con `.Where(c => c.Id == id && c.UserId == userId)`
-([riga 287](../../ProcioneMGR/Components/Pages/ExchangeSettings.razor#L287)). Ogni utente vede e
-tocca solo le proprie credenziali.
+> ### Correzione del 2026-09-06 — [R21](09_RISKS_AND_TECH_DEBT.md#r21)
+>
+> Questa nota diceva: «**`/settings/exchanges` con `[Authorize]` semplice non è un difetto**, anche
+> se maneggia chiavi API», e lo argomentava con la FK `UserId` di `ExchangeCredential`, con
+> `LoadForUserAsync(userId)` e con la cancellazione vincolata a `UserId`. Le tre citazioni erano
+> **vere**, e la conclusione **sbagliata**: guardavano tutte la *vetrina*. Il percorso che conta è
+> `ExchangeCredentialReader.FindForTradingAsync`, che dà al motore la chiave con cui **firma gli
+> ordini** e sceglie per `(ExchangeName, IsTestnet)` **senza filtro utente**. Un utente qualunque
+> poteva quindi inserire una credenziale che il motore avrebbe usato — e la casella Testnet è
+> libera, quindi anche una credenziale **Live**.
+>
+> È l'errore di metodo da ricordare: per rispondere a «questa pagina è protetta abbastanza?» non
+> basta guardare cosa la pagina *mostra*, bisogna seguire **dove finisce ciò che la pagina
+> scrive**. Il pool di credenziali è uno per progetto — deciso col proprietario, ora dichiarato
+> nella Guida della pagina e accanto a `FindForTradingAsync` — e il confine è il ruolo **Admin**.
 
 Resta il punto strutturale già segnalato in [02](02_ARCHITECTURE.md): **non c'è fallback policy
 globale**, quindi la protezione dipende dalla disciplina di ricordare l'attributo su ogni pagina
-nuova. Oggi lo stato è pulito su tutte e 34.
+nuova. Dal 2026-09-06 la disciplina ha un guardiano — `AutorizzazioneDellePagineTests` pretende per
+ogni pagina con rotta una decisione dichiarata (un ruolo, o un inventario con la ragione) — ma il
+guardiano parla quando gira la suite, non quando si scrive la pagina.
 
 ---
 

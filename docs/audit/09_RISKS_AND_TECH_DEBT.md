@@ -167,6 +167,13 @@ segnala — né compilatore, né test, né CI.
 sulle tre pubbliche, oppure un test che enumeri i `.razor` con `@page` e fallisca se ne trova uno
 senza attributo e non in whitelist. La seconda è meno invasiva e documenta l'intenzione.
 
+> **Aggiornamento 2026-09-06 ([R21](#r21)).** La seconda strada è stata costruita:
+> `AutorizzazioneDellePagineTests` enumera le pagine con rotta e pretende per ognuna una decisione
+> dichiarata — un ruolo, o un inventario con la ragione. Sorveglia anche il caso che questo rilievo
+> non guardava: l'`[Authorize]` **nudo**, che non è pubblico ma è aperto a qualunque account. La
+> `FallbackPolicy` resta **non implementata**: una pagina nuova nasce ancora pubblica fino al primo
+> giro di suite.
+
 ### R5 — Due fonti di dati alternativi sono rotte (rilievo corretto) {#r5}
 
 - `ForexFactory` → **403 Forbidden** (`https://www.forexfactory.com/calendar`)
@@ -292,6 +299,102 @@ davvero, la strada è invalidare il DSR al ritiro per drift — decisione separa
 
 ---
 
+### R21 — L'isolamento delle credenziali exchange esisteva solo nella vetrina (corretto 2026-09-06) {#r21}
+
+**Il difetto, in due pezzi che si sommavano.** Cinque pagine avevano `@attribute [Authorize]`
+**nudo**, cioè aperte a qualunque utente autenticato: `Backtest`, `Dashboard`, `ExchangeSettings`,
+`MarketAnalysis`, `Strategies`. Su tre era una scelta (sono le pagine del ruolo `User`). Sulla più
+delicata, `/settings/exchanges`, no: lettura e cancellazione delle credenziali sono filtrate per
+`UserId`, ma il percorso che conta — `ExchangeCredentialReader.FindForTradingAsync`, quello che dà
+al motore la chiave con cui **firma gli ordini** — seleziona per `(ExchangeName, IsTestnet)` senza
+alcun filtro utente, ordina per `Id` e prende la prima riga decifrabile.
+
+Un utente qualsiasi poteva quindi **inserire** una credenziale che il motore avrebbe usato per
+firmare, e la casella Testnet è libera: non spuntarla salva una credenziale **Live**. Il pulsante
+«Ri-cifra ora» chiama `MasterKeyRotationService.ReEncryptAllAsync()`, che opera su **tutte** le
+righe della tabella, di chiunque siano.
+
+**È la forma di difetto che il progetto chiama «controlli che rassicurano a prescindere dalla
+realtà»** (Filone E): l'isolamento per utente c'era nella vetrina e non nel percorso di firma —
+e l'audit stesso, in questo documento, elencava «credenziali exchange correttamente isolate per
+utente» fra le cose fatte bene.
+
+**Quanto era esposto, misurato sul database vivo il 2026-09-06.** Due utenti, **entrambi Admin**;
+tre credenziali, tutte dello stesso utente: Bitget testnet, Bitget live, Binance live. La
+combinazione `(Binance, testnet)` era **vuota** — lì una riga inserita da un estraneo sarebbe
+diventata subito *la* credenziale. Sulle altre tre l'ordinamento per `Id` l'avrebbe messa in coda,
+ma la preferenza per la prima riga **decifrabile** ribalta l'ordine appena le righe del proprietario
+diventano illeggibili (un cambio di master key basta). Il moltiplicatore era R22: registrazione
+aperta, quindi «qualunque utente autenticato» voleva dire «chiunque raggiunga l'indirizzo».
+
+**La decisione, presa col proprietario il 2026-09-06.** Due strade che si escludevano:
+
+1. alzare `/settings/exchanges` al ruolo **Admin** e dichiarare che il pool di credenziali è
+   **condiviso per progetto**;
+2. filtrare davvero per utente anche in `FindForTradingAsync`.
+
+Scelta la **prima**. La seconda cambia la semantica del motore, che è un servizio di fondo e non ha
+un utente: avrebbe richiesto di eleggere un «utente operatore» in configurazione, cioè uno stato che
+può divergere dalla tabella e che, quando diverge, produce un motore silenziosamente senza
+credenziali e corsie ferme — un modo nuovo di rompersi in cambio di un isolamento che su una
+piattaforma a operatore singolo non serve a nessuno. E non chiuderebbe nemmeno il buco da sola: un
+`User` continuerebbe a poter scrivere righe nel pool.
+
+**Cosa è stato fatto.**
+
+- `/settings/exchanges` → `[Authorize(Roles = AppRoles.Admin)]`; la Guida della pagina **dichiara**
+  che il pool è uno per progetto e che il motore non guarda chi ha inserito la riga.
+- `/dashboard` → `[Authorize(Roles = Admin + Manager)]`: non è una pagina di sola lettura, il
+  pulsante «scarica storico» chiama `IngestHistoricalDataAsync`, che **scrive** sulle serie OHLCV
+  condivise e consuma il rate-limit dell'exchange.
+- La decisione è scritta accanto al codice che la incarna: commento su `FindForTradingAsync` (con
+  l'avvertenza per chi un giorno volesse aggiungere il filtro) e test
+  `FindForTrading_VedeAncheLaRigaDiUnAltroUtente_IlPoolEUnoPerProgetto`, che **pinna l'asimmetria**
+  fra vetrina e percorso di firma invece di lasciarla implicita.
+- Nuovo guardiano `AutorizzazioneDellePagineTests`: ogni pagina con rotta sta in uno di tre stati
+  dichiarati — ha un ruolo, è nell'inventario `AutorizzateSenzaRuolo` con la sua ragione, o è
+  nell'inventario delle pubbliche con la sua ragione. Le voci morte fanno fallire la suite. È il
+  rimedio che **R4 proponeva nel 2026-08-04 e che non era mai stato costruito**.
+- `/admin/users` descriveva i ruoli con l'elenco vecchio delle pagine: aggiornato, altrimenti la
+  pagina che *spiega* i permessi sarebbe diventata il prossimo controllo che rassicura a prescindere.
+
+**Cosa resta aperto, dichiarato.** R4 in senso stretto: non esiste ancora una `FallbackPolicy`, e
+una pagina nuova nasce comunque pubblica finché la suite non gira. E il ruolo `User`: dopo questa
+revisione apre quattro pagine (Home, Backtest, Analisi della serie, Le mie strategie) e nient'altro
+— su una piattaforma a operatore singolo vale la pena chiedersi se serva ancora.
+
+---
+
+### R22 — La registrazione era aperta a chiunque (chiuso 2026-09-06) {#r22}
+
+**Il difetto.** `/Account/Register` non aveva né attributo né interruttore: chiunque raggiungesse
+l'app poteva crearsi un account, e il nuovo account riceveva il ruolo `User` (la regola «il primo
+utente diventa Admin, tutti gli altri User» sta in `Register.razor`). Finché la piattaforma girava
+su `localhost` la cosa non aveva conseguenze — ed è per questo che nessuno l'aveva mai trattata come
+un rischio. Con l'esposizione preparata il 2026-09-05 diventa la porta d'ingresso a ogni pagina
+protetta dal solo `[Authorize]` nudo, cioè il moltiplicatore di R21.
+
+**Cosa è stato fatto.** Chiave `Registration:AllowSelfRegistration`, **default `false`**: la sezione
+può mancare del tutto dall'`appsettings.json` vivo e vince il default del POCO — fail-closed, una
+configurazione dimenticata non riapre la porta. La manopola ha il suo pannello in `/admin/users`
+(mandato del 2026-08-09: nessuna configurazione senza UI) e il pannello mostra lo stato **in vigore
+nel processo**, non solo quello salvato su file.
+
+L'**eccezione di primo accesso** non è una chiave ma un fatto: su un database senza nessun utente la
+registrazione resta consentita, perché è l'unico modo di creare il primo Admin — e senza un Admin
+nessuno potrebbe aprire il pannello. Metterla in configurazione avrebbe creato una seconda verità da
+tenere allineata al contenuto della tabella utenti.
+
+Il cancello lo attraversano **entrambe** le porte che creano un account: `Register.razor` (modulo
+nascosto *e* POST ricontrollato — nascondere un modulo non è chiudere una porta) ed
+`ExternalLogin.razor`, oggi irraggiungibile perché nessun provider esterno è registrato in
+`Program.cs`, ma che è l'unica altra chiamata a `UserManager.CreateAsync` e per giunta non assegna
+alcun ruolo: lasciarla fuori avrebbe significato che accendere un provider domani riapre la
+registrazione in silenzio. Menù, Home e pagina di login non mostrano più l'invito quando la porta è
+chiusa.
+
+---
+
 ## 🟢 Priorità BASSA
 
 ### R10 — Pagine Identity non tradotte
@@ -350,8 +453,16 @@ Cose **fatte bene**, e sono parecchie:
 - Cinque barriere indipendenti verso Live, con `SafetyChecker` **statico e puro** — non
   sostituibile via DI, quindi non aggirabile per configurazione.
 - Layer AI strutturalmente incapace di eseguire: nessun servizio di esecuzione gli è iniettato.
-- Autorizzazione a tre livelli, verificata 28/28 sul campo.
-- Credenziali exchange correttamente isolate per utente.
+- Autorizzazione a tre livelli, verificata 28/28 sul campo — dove «protetta» però voleva dire
+  «richiede il login», non «richiede il ruolo giusto»: cinque pagine avevano `[Authorize]` nudo, e
+  la sonda che contava i redirect non poteva vedere la differenza (R21).
+- ~~Credenziali exchange correttamente isolate per utente.~~ **Falso, corretto il 2026-09-06
+  ([R21](#r21)).** L'isolamento per `UserId` valeva per la lettura e la cancellazione — la vetrina —
+  e **non** per `FindForTradingAsync`, cioè il percorso con cui il motore sceglie la chiave per
+  firmare gli ordini. Questa riga è la prova che la classe di difetto del Filone E colpisce anche
+  chi la sta cercando: l'audit ha guardato la pagina, ha visto due query filtrate, e ha scritto
+  «isolate». Il pool è **uno per progetto**, e ora è dichiarato tale sia nella Guida della pagina
+  sia accanto al codice.
 
 Il quadro è quello di un progetto che alla sicurezza ci ha pensato sul serio. Il che rende **R1**
 tanto più doloroso: tutta questa architettura protegge un segreto che è stato pubblicato su
@@ -390,4 +501,6 @@ dotnet list package --vulnerable --include-transitive
 | R8 | Tre CLI fuori dalla soluzione | 🟡 MEDIA |
 | R9 | Query EF senza `OrderBy` | 🟡 MEDIA |
 | R20 | `Retired` senza uscita: un ritiro (anche automatico) non si annullava da nessuna UI | ✅ **CORRETTO 2026-08-19** |
+| R21 | Credenziali exchange: isolamento per utente solo nella vetrina, non nel percorso di firma; `/settings/exchanges` aperta a qualunque autenticato | ✅ **CORRETTO 2026-09-06** (Admin + pool dichiarato condiviso, guardiano sulle pagine) |
+| R22 | Registrazione libera aperta a chiunque raggiungesse l'app (nuovo account = ruolo `User`) | ✅ **CHIUSO 2026-09-06** (`Registration:AllowSelfRegistration`, default `false`) |
 | R10–R14 | UX, i18n, linting | 🟢 BASSA |

@@ -5,7 +5,7 @@
 | **File sorgente** | [`ProcioneMGR/Components/Pages/Dashboard.razor`](../../ProcioneMGR/Components/Pages/Dashboard.razor) (~385 righe) |
 | **Route** | `/dashboard` |
 | **Sezione navigazione** | Overview |
-| **Accesso** | `[Authorize]` — qualsiasi utente autenticato; il banner promozioni è solo Admin/Manager |
+| **Accesso** | `[Authorize(Roles = Admin, Manager)]` — dal 2026-09-06 ([R21](../audit/09_RISKS_AND_TECH_DEBT.md#r21)): «scarica storico» **scrive** sulle serie OHLCV condivise e consuma il rate-limit dell'exchange |
 | **Render mode** | `InteractiveServer`, implementa `IDisposable` |
 
 ## A cosa serve

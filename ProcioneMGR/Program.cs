@@ -84,6 +84,15 @@ builder.Services.AddSingleton<IMasterKeyStatus>(sp => (AesGcmEncryptionService)s
 builder.Services.AddSingleton<IMasterKeyRing>(sp => (AesGcmEncryptionService)sp.GetRequiredService<IEncryptionService>());
 builder.Services.AddSingleton<IMasterKeyRotationService, MasterKeyRotationService>();
 
+// [R22 2026-09-06] Chi può crearsi un account. La sezione può mancare dall'appsettings vivo: in
+// quel caso vince il default del POCO, che è CHIUSA — fail-closed, una configurazione dimenticata
+// non riapre la porta. L'eccezione di primo accesso (database senza utenti) sta in
+// RegistrationPolicy, non qui: è un fatto della tabella utenti, non una manopola.
+builder.Services.Configure<ProcioneMGR.Services.Security.RegistrationOptions>(
+    builder.Configuration.GetSection(ProcioneMGR.Services.Security.RegistrationOptions.SectionName));
+builder.Services.AddSingleton<ProcioneMGR.Services.Security.IRegistrationGate,
+    ProcioneMGR.Services.Security.RegistrationGate>();
+
 // --- Database: PostgreSQL (unico provider) ---
 // Le migrazioni vivono nell'assembly ProcioneMGR.Migrations.Postgres e si applicano come passo
 // separato (`dotnet ef database update`), non a runtime: l'app NON referenzia quell'assembly per
