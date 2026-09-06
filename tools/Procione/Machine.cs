@@ -23,20 +23,31 @@ internal static class Machine
     //  Docker Desktop
     // =============================================================================================
 
-    /// <summary>Cosa dice Docker di se': il demone risponde? e Docker Desktop com'e' messo?</summary>
-    private static (bool DemoneVivo, string Dettaglio) StatoDocker()
+    /// <summary>
+    /// Cosa dice Docker di se': il demone risponde? e Docker Desktop com'e' messo?
+    ///
+    /// <paramref name="Ignoto"/> separa «non ha risposto entro il tetto» da «ha risposto che non
+    /// c'e'». Docker davvero fermo risponde SUBITO con un errore; un tetto sforato, su questa
+    /// macchina, vuol dire quasi sempre memoria esaurita — e chiamarlo guasto e' cio' che ha
+    /// prodotto gli allarmi falsi del 2026-09-06.
+    /// </summary>
+    private static (bool DemoneVivo, bool Ignoto, string Dettaglio) StatoDocker()
     {
         // Il verdetto e' `docker info`, cioe' il DEMONE che risponde: `docker desktop status` puo'
         // dire «running» mentre il motore Linux non e' ancora salito, ed e' proprio la finestra in
         // cui tutto il resto fallisce senza spiegazioni.
         var info = Proc.Capture("docker", ["info", "--format", "{{.ServerVersion}}"], 20000);
-        if (info.Ok && info.Out.Length > 0) return (true, $"demone pronto (server {info.Out})");
+        if (info.Ok && info.Out.Length > 0) return (true, false, $"demone pronto (server {info.Out})");
+
+        if (info.Code == Proc.TimedOut)
+            return (false, true, "non ha risposto entro 20s: NON so se e' vivo (macchina satura?)");
 
         var desktop = Proc.Capture("docker", ["desktop", "status"], 15000);
         var riga = desktop.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries)
                               .FirstOrDefault(r => r.TrimStart().StartsWith("Status", StringComparison.OrdinalIgnoreCase));
         var stato = riga?.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault();
-        return (false, stato is null ? "il demone non risponde" : $"il demone non risponde (Docker Desktop: {stato})");
+        return (false, false,
+                stato is null ? "il demone non risponde" : $"il demone non risponde (Docker Desktop: {stato})");
     }
 
     public static int Docker(string? sub, bool si)
@@ -45,10 +56,11 @@ internal static class Machine
         {
             case null or "stato" or "status":
             {
-                var (vivo, dettaglio) = StatoDocker();
-                if (vivo) Ui.Good($"Docker: {dettaglio}");
-                else Ui.Error($"Docker: {dettaglio}");
-                return vivo ? 0 : 2;
+                var (vivo, ignoto, dettaglio) = StatoDocker();
+                if (vivo) { Ui.Good($"Docker: {dettaglio}"); return 0; }
+                if (ignoto) { Ui.Warn($"Docker: {dettaglio}"); return 1; }
+                Ui.Error($"Docker: {dettaglio}");
+                return 2;
             }
 
             case "avvia" or "su" or "start":
@@ -93,7 +105,10 @@ internal static class Machine
                 var r = Proc.Capture("docker", ["desktop", "stop"], 180000);
                 if (!r.Ok && r.Text.Length > 0) Ui.Info(r.FirstLine);
 
-                if (Attendi(() => !StatoDocker().DemoneVivo, 120))
+                // Fermo davvero, non «non ha risposto»: un tetto sforato mentre Docker si spegne
+                // direbbe «fermo» in anticipo, e il comando uscirebbe con successo su un demone
+                // che sta ancora chiudendo.
+                if (Attendi(() => { var s = StatoDocker(); return !s.DemoneVivo && !s.Ignoto; }, 120))
                 {
                     Ui.Good("Docker fermo (verificato).");
                     return 0;
@@ -134,21 +149,52 @@ internal static class Machine
     /// del nome (`postgresql-x64-18`), e un aggiornamento maggiore lo cambierebbe lasciando la
     /// plancia a cercare un servizio che non esiste piu' — e a dichiararlo assente.
     /// </summary>
-    private static (string Nome, int Stato, string Avvio)? Servizio()
+    /// <summary>Com'e' andata l'interrogazione del servizio: sono tre esiti, non due.</summary>
+    private enum Lettura
+    {
+        /// Il servizio c'e' e lo si e' letto.
+        Riuscita,
+
+        /// La domanda non ha avuto risposta (PowerShell scaduto o fallito). NON vuol dire assente.
+        Fallita,
+
+        /// La risposta e' arrivata, e dice che nessun servizio 'postgresql*' esiste.
+        Assente,
+    }
+
+    private static (Lettura Esito, string Nome, int Stato, string Avvio) Servizio()
     {
         var r = Proc.Ps(
             "$s = Get-Service -Name 'postgresql*' -ErrorAction SilentlyContinue | Select-Object -First 1; " +
             "if ($s) { $s.Name + '|' + [int]$s.Status + '|' + [string]$s.StartType }", 20000);
-        if (!r.Ok) return null;
+        // [2026-09-06] «Non ho potuto chiedere» e «ho chiesto e non c'e'» portano a due messaggi
+        // opposti: il primo dice di riprovare, il secondo di installare Postgres. Confonderli e'
+        // lo stesso difetto che il quadro ha appena pagato con i container di Docker.
+        if (!r.Ok) return (Lettura.Fallita, "", 0, "");
+
         var c = r.Out.Trim().Split('|');
-        if (c.Length < 2 || c[0].Length == 0 || !int.TryParse(c[1], out var stato)) return null;
-        return (c[0], stato, c.Length > 2 ? c[2] : "");
+        if (c.Length < 2 || c[0].Length == 0 || !int.TryParse(c[1], out var stato))
+            return (Lettura.Assente, "", 0, "");
+        return (Lettura.Riuscita, c[0], stato, c.Length > 2 ? c[2] : "");
     }
 
     public static int Database(string? sub, bool si)
     {
-        var servizio = Servizio();
-        if (servizio is null && sub is not ("avvia" or "su" or "start"))
+        var (esito, nomeServizio, statoServizio, avvioServizio) = Servizio();
+
+        if (esito == Lettura.Fallita)
+        {
+            // Il verdetto della PORTA vale comunque, ed e' quello che conta davvero: si dice cio'
+            // che si sa, e si dichiara ignoto cio' che non si e' potuto chiedere.
+            var risponde = Net.ListeningPorts().Contains(Platform.PostgresPort);
+            Ui.Warn($"non sono riuscito a interrogare il servizio (macchina satura?): NON so in che stato sia.");
+            Ui.Info(risponde
+                ? $"la porta {Platform.PostgresPort} pero' accetta connessioni: il database sta rispondendo."
+                : $"e la porta {Platform.PostgresPort} non risponde: guarda services.msc.");
+            return risponde ? 1 : 2;
+        }
+
+        if (esito == Lettura.Assente && sub is not ("avvia" or "su" or "start"))
         {
             Ui.Error($"nessun servizio 'postgresql*' su questa macchina (atteso: {Platform.PostgresService}).");
             Ui.Info("sull'assetto Docker Compose il database e' un container: `procione log compose`.");
@@ -159,7 +205,7 @@ internal static class Machine
         {
             case null or "stato" or "status":
             {
-                var (nome, stato, avvio) = servizio!.Value;
+                var (nome, stato, avvio) = (nomeServizio, statoServizio, avvioServizio);
                 var porta = Net.ListeningPorts().Contains(Platform.PostgresPort);
                 var descr = $"{nome}: {DescriviStato(stato)}, avvio {avvio.ToLowerInvariant()}";
                 // Servizio «in esecuzione» e porta chiusa e' un guasto vero e non teorico: succede
@@ -172,8 +218,8 @@ internal static class Machine
 
             case "avvia" or "su" or "start":
             {
-                var nome = servizio?.Nome ?? Platform.PostgresService;
-                if (servizio is { Stato: 4 } && Net.ListeningPorts().Contains(Platform.PostgresPort))
+                var nome = esito == Lettura.Riuscita ? nomeServizio : Platform.PostgresService;
+                if (statoServizio == 4 && Net.ListeningPorts().Contains(Platform.PostgresPort))
                 {
                     Ui.Good("PostgreSQL e' gia' in esecuzione.");
                     return 0;
@@ -195,7 +241,7 @@ internal static class Machine
 
             case "ferma" or "giu" or "stop":
             {
-                var (nome, _, _) = servizio!.Value;
+                var nome = nomeServizio;
                 Ui.Warn("PostgreSQL e' il database della piattaforma: fermarlo mentre il motore opera");
                 Ui.Info("interrompe scritture in corso (trade, candele, ledger). Ferma prima guscio e motore.");
                 if (!si && !Ui.ConfirmWord($"Fermare «{nome}»?", "ferma")) { Ui.Info("annullato."); return 1; }

@@ -32,6 +32,30 @@ internal static class Actions
     /// La regola c'era gia' scritta nei documenti. Non era applicata da nessuna parte: bastava
     /// lanciare la plancia dal posto sbagliato.
     /// </summary>
+    /// <summary>
+    /// Docker non ha detto quali container ci sono: il guardrail della regola 2 NON puo' decidere.
+    ///
+    /// [2026-09-06] Prima una lettura fallita rendeva «kind spento e Compose spento», e da li' ogni
+    /// guardiano concludeva «nessun conflitto, procedi». Un guardiano che nel dubbio dice di si'
+    /// fallisce APERTO, che e' l'opposto della politica del progetto: fail-closed sulla sicurezza.
+    /// L'unico invariante che protegge — un solo scrittore — non ammette un «probabilmente».
+    /// </summary>
+    /// <returns>true se il comando va rifiutato.</returns>
+    private static bool AssettoIgnoto(bool noto, bool forza)
+    {
+        if (noto) return false;
+        if (forza)
+        {
+            Ui.Warn("non so quale assetto sia attivo (docker non ha risposto): procedo per --forza.");
+            return false;
+        }
+        Ui.Error("non so quale assetto sia attivo: `docker ps` non ha risposto.");
+        Ui.Info("non posso garantire la regola 2 (un solo scrittore) senza sapere cosa gira, e nel");
+        Ui.Info("dubbio non procedo. Di norma e' la macchina satura: riprova fra un minuto.");
+        Ui.Info("`procione docker stato` per capire come sta, `--forza` per procedere lo stesso.");
+        return true;
+    }
+
     /// <returns>true se il comando va rifiutato.</returns>
     private static bool GuscioDaWorktree(bool forza)
     {
@@ -60,7 +84,8 @@ internal static class Actions
         // Il bring-up avvia anche il guscio: vale lo stesso divieto.
         if (GuscioDaWorktree(forza)) return 2;
 
-        var (kind, compose) = Probes.LayoutQuick();
+        var (noto, kind, compose) = Probes.LayoutQuick();
+        if (AssettoIgnoto(noto, forza)) return 2;
         if (compose && !forza)
         {
             Ui.Error("l'assetto Docker Compose e' attivo: il bring-up kind aprirebbe un SECONDO guscio sulla 5199.");
@@ -84,7 +109,8 @@ internal static class Actions
             Ui.Info("`procione ferma guscio` per chiudere quello attuale, poi riprova.");
             return 2;
         }
-        var (_, compose) = Probes.LayoutQuick();
+        var (noto, _, compose) = Probes.LayoutQuick();
+        if (AssettoIgnoto(noto, forza)) return 2;
         if (compose && !forza)
         {
             Ui.Error("il guscio gira gia' come container Compose: un secondo guscio violerebbe la regola 2.");
@@ -138,7 +164,8 @@ internal static class Actions
 
     public static int UpCompose(bool conMotore, bool forza)
     {
-        var (kind, _) = Probes.LayoutQuick();
+        var (noto, kind, _) = Probes.LayoutQuick();
+        if (AssettoIgnoto(noto, forza)) return 2;
         if (kind && !forza)
         {
             Ui.Error("il cluster kind e' attivo: accendere Compose adesso mette due assetti sullo stesso dominio.");
@@ -892,7 +919,8 @@ internal static class Actions
     {
         if (GuscioDaWorktree(forza: false)) return 2;
 
-        var (kind, _) = Probes.LayoutQuick();
+        var (noto, kind, _) = Probes.LayoutQuick();
+        if (AssettoIgnoto(noto, forza: false)) return 2;
         if (!kind)
         {
             Ui.Warn("il cluster kind non e' in esecuzione: run-postgres.ps1 muore appena interroga kubectl.");

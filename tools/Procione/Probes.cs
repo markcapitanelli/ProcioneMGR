@@ -61,15 +61,21 @@ internal static class Probes
         var listening = ListeningPorts();
 
         // --- Docker ------------------------------------------------------------------------------
-        var docker = await Proc.CaptureAsync("docker", ["info", "--format", "{{.ServerVersion}}"], 20000);
+        const int TettoDocker = 20;
+        var docker = await Proc.CaptureAsync("docker", ["info", "--format", "{{.ServerVersion}}"], TettoDocker * 1000);
         var dockerOk = docker.Ok && docker.Out.Length > 0;
-        checks.Add(dockerOk
-            ? new Check("fondamenta", "Docker", Level.Ok, $"demone pronto (server {docker.Out})")
-            : new Check("fondamenta", "Docker", Level.Down,
-                docker.Code == Proc.Failed ? "eseguibile 'docker' non nel PATH" : Explain(docker),
-                "avvia Docker Desktop (al boot impiega minuti); senza, tutto il resto e' inutile"));
 
-        List<Container> containers = dockerOk ? await ContainersAsync() : [];
+        // Il giudizio sta in Verdicts, dove si prova senza un Docker: «timeout ≠ giu'» e' la regola
+        // che il 2026-09-06 e' costata una notte di allarmi falsi, e va tenuta ferma da un test.
+        checks.Add(Verdicts.Docker(dockerOk, docker.Out, docker.Code, Explain(docker), TettoDocker));
+
+        // L'ESITO della lettura, non solo il suo output. Una lista vuota da un `docker ps` che non
+        // ha risposto e' indistinguibile da «non c'e' nessun container» — ed e' esattamente cosi'
+        // che il quadro ha affermato «il cluster non esiste» e «kind-apiproxy assente» su una
+        // macchina dove entrambi giravano benissimo. Stessa disciplina gia' applicata ai pod.
+        var (containerNoti, containers) = dockerOk
+            ? await ContainersAsync()
+            : (false, new List<Container>());
 
         var composeUi = containers.FirstOrDefault(c =>
             c.Project == Platform.ComposeProject && c.Service == "ui" && c.State == "running");
@@ -77,7 +83,9 @@ internal static class Probes
         var kindUp = kindNode is { State: "running" };
         var composeUp = composeUi is not null;
 
-        var layout = Verdicts.Which(dockerOk, kindUp, composeUp);
+        // Senza la lista dei container l'assetto non e' deducibile: dirlo «nessuno» significherebbe
+        // dichiarare spenta una piattaforma che sta girando.
+        var layout = containerNoti ? Verdicts.Which(dockerOk, kindUp, composeUp) : Layout.Unknown;
 
         checks.Add(layout switch
         {
@@ -138,7 +146,16 @@ internal static class Probes
         // =========================================================================================
         //  Cluster
         // =========================================================================================
-        if (kindNode is null && composeUp)
+        if (!containerNoti)
+        {
+            // UNA riga sola, e nessuna deduzione. Tre righe che ripetono lo stesso «non l'ho
+            // misurato» sono tre allarmi per un guasto solo — e qui sarebbero peggio che inutili,
+            // perche' direbbero «il cluster non esiste» mentre gira. Il perche' sta gia' nella riga
+            // di Docker, dove si legge una volta.
+            checks.Add(new Check("cluster kind", "Cluster", Level.NotApplicable,
+                "indeterminabile: Docker non ha elencato i container"));
+        }
+        else if (kindNode is null && composeUp)
         {
             checks.Add(new Check("cluster kind", "Cluster", Level.NotApplicable,
                 "non presente: la piattaforma gira su Docker Compose"));
@@ -156,13 +173,25 @@ internal static class Probes
                     $"docker start {Platform.KindNodeContainer}"));
             else
             {
-                var stato = Parsing.NodeStatus((await tNodes).Out);
+                var rNodes = await tNodes;
+                var stato = Parsing.NodeStatus(rNodes.Out);
                 checks.Add(stato == "Ready"
                     ? new Check("cluster kind", "Nodo", Level.Ok,
                         $"Ready — container su da {Parsing.ContainerUptime(kindNode.Status)}")
-                    : new Check("cluster kind", "Nodo", Level.Down,
-                        stato is not null ? $"stato '{stato}'" : $"kubectl non risponde ({Explain(await tNodes)})",
-                        "`procione ripara proxy` se e' l'API server a non rispondere"));
+                    : stato is not null
+                        ? new Check("cluster kind", "Nodo", Level.Down, $"stato '{stato}'",
+                            "`procione ripara proxy` se e' l'API server a non rispondere")
+                    // Stessa regola di Docker: kubectl che NON TORNA entro il tetto di processo e'
+                    // «non misurato», non «nodo giu'». Un API server davvero irraggiungibile fa
+                    // uscire kubectl con un errore ben prima (--request-timeout=8s), e quello resta
+                    // un guasto: qui si distingue il silenzio dal rifiuto.
+                    : rNodes.Code == Proc.TimedOut
+                        ? new Check("cluster kind", "Nodo", Level.Warn,
+                            $"stato ignoto: kubectl non e' tornato in tempo ({Explain(rNodes)})",
+                            "di norma e' la macchina satura; se insiste, `procione ripara proxy`")
+                        : new Check("cluster kind", "Nodo", Level.Down,
+                            $"kubectl non risponde ({Explain(rNodes)})",
+                            "`procione ripara proxy` se e' l'API server a non rispondere"));
             }
 
             // --- Proxy dell'API server ---
@@ -182,9 +211,15 @@ internal static class Probes
                     "`procione ripara proxy` (lo ricrea puntando al NOME DNS del nodo, mai all'IP)"));
 
             // --- Contesto kubectl ---
-            var server = Parsing.KubeServer((await tKubeconfig).Out, Platform.KubeContext);
+            var rKubeconfig = await tKubeconfig;
+            var server = Parsing.KubeServer(rKubeconfig.Out, Platform.KubeContext);
             var atteso = $"https://127.0.0.1:{Platform.ApiProxyPort}";
-            checks.Add(server is null
+            checks.Add(!rKubeconfig.Ok
+                // `kubectl config view` non ha risposto: il kubeconfig puo' essere perfetto. Dire
+                // «cluster assente» manderebbe a riscrivere una configurazione che non ha nulla.
+                ? new Check("cluster kind", "Contesto", Level.NotApplicable,
+                    $"indeterminabile: kubectl non ha letto il kubeconfig ({Explain(rKubeconfig)})")
+                : server is null
                 ? new Check("cluster kind", "Contesto", Level.Warn,
                     $"cluster '{Platform.KubeContext}' assente dal kubeconfig", "`procione ripara contesto`")
                 : server == atteso
@@ -237,7 +272,14 @@ internal static class Probes
         // =========================================================================================
         //  Tunnel (port-forward)
         // =========================================================================================
-        if (layout == Layout.Compose)
+        if (!containerNoti)
+        {
+            // Senza sapere se il cluster c'e', «porte in ascolto ma il cluster e' giu'» sarebbe un
+            // altro fatto mai misurato: i tunnel possono essere perfettamente sani.
+            checks.Add(new Check("tunnel", "Port-forward", Level.NotApplicable,
+                "indeterminabili: non so se il cluster c'e' (Docker non ha risposto)"));
+        }
+        else if (layout == Layout.Compose)
         {
             checks.Add(new Check("tunnel", "Port-forward", Level.NotApplicable,
                 "non previsti: su Compose i servizi si parlano sulla rete del progetto"));
@@ -601,21 +643,35 @@ internal static class Probes
     /// <summary>
     /// Solo la domanda «quale assetto e' vivo?», per i guardrail delle azioni: una chiamata a
     /// docker invece della rilevazione completa, perche' rifiutare un comando dev'essere immediato.
+    ///
+    /// <paramref name="Noto"/> non e' pedanteria burocratica: senza, una lettura fallita rendeva
+    /// «kind spento E Compose spento», e i guardrail della regola 2 concludevano «nessun conflitto,
+    /// procedi». Un guardiano che in caso di dubbio dice di si' e' un guardiano che fallisce
+    /// APERTO — l'opposto della politica del progetto sulla sicurezza.
     /// </summary>
-    public static (bool Kind, bool Compose) LayoutQuick()
+    public static (bool Noto, bool Kind, bool Compose) LayoutQuick()
     {
-        var c = ContainersAsync().GetAwaiter().GetResult();
-        return (c.Any(x => x.Name == Platform.KindNodeContainer && x.State == "running"),
+        var (ok, c) = ContainersAsync().GetAwaiter().GetResult();
+        return (ok,
+                c.Any(x => x.Name == Platform.KindNodeContainer && x.State == "running"),
                 c.Any(x => x.Project == Platform.ComposeProject && x.Service == "ui" && x.State == "running"));
     }
 
-    private static async Task<List<Container>> ContainersAsync()
+    /// <summary>
+    /// I container, e — separatamente — se la lettura e' RIUSCITA.
+    ///
+    /// I due fatti vanno tenuti distinti. Scartare l'esito e restituire la sola lista significa che
+    /// «docker non ha risposto» diventa «non esiste nessun container», e da li' il quadro afferma
+    /// che il cluster non esiste e che il proxy e' assente — due cose false, dette in rosso, con un
+    /// fumetto che le annuncia. E' successo davvero il 2026-09-06.
+    /// </summary>
+    private static async Task<(bool Ok, List<Container> Lista)> ContainersAsync()
     {
         // `docker ps -a`: anche i fermi. Un container che ESISTE ma e' fermo e' una diagnosi
         // diversa da un container che non c'e', e i due rimedi non si somigliano.
         const string formato = "{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.docker.compose.service\"}}";
         var r = await Proc.CaptureAsync("docker", ["ps", "-a", "--format", formato], 15000);
-        return Parsing.Containers(r.Out);
+        return (r.Ok, Parsing.Containers(r.Out));
     }
 
     private static string? ReadMarker(string path)
@@ -659,15 +715,29 @@ internal static class Probes
         }
     }
 
+    /// <summary>
+    /// Una connessione TCP riesce?
+    ///
+    /// [2026-09-06] Si RIPROVA una volta prima di dire di no. Una connessione a localhost costa
+    /// normalmente meno di un millisecondo, e tre secondi sono gia' mille volte tanto — ma con la
+    /// memoria esaurita anche un thread che deve solo aprire un socket puo' non essere schedulato
+    /// in tempo. Il prezzo di un secondo tentativo e' nullo quando la porta risponde (il primo
+    /// riesce subito) e si paga solo quando si stava per dichiarare un guasto: esattamente il
+    /// momento in cui vale la pena essere sicuri.
+    /// </summary>
     private static async Task<bool> TcpAsync(string host, int port, int timeoutMs = 3000)
     {
-        try
+        for (var tentativo = 0; tentativo < 2; tentativo++)
         {
-            using var c = new TcpClient();
-            await c.ConnectAsync(host, port).WaitAsync(TimeSpan.FromMilliseconds(timeoutMs));
-            return c.Connected;
+            try
+            {
+                using var c = new TcpClient();
+                await c.ConnectAsync(host, port).WaitAsync(TimeSpan.FromMilliseconds(timeoutMs));
+                if (c.Connected) return true;
+            }
+            catch { /* rifiutata o scaduta: si riprova una volta, poi e' un no */ }
         }
-        catch { return false; }
+        return false;
     }
 
     private static string RootMessage(Exception ex)

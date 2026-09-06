@@ -118,12 +118,19 @@ internal sealed class Supervisor : IDisposable
     //  Ciclo
     // =============================================================================================
 
+    /// <summary>
     /// Ogni quanto il supervisore rileva lo stato della piattaforma PER L'ICONA. Non e' la veglia
-    /// (quella e' un lavoro, ogni 5′ e con le sue notifiche): e' solo il colore del pallino accanto
-    /// all'orologio. Un minuto e' il compromesso fra «dice la verita'» e il costo — una rilevazione
-    /// completa fa nascere una decina di processi figli, e su questa macchina la saturazione e' un
-    /// problema ricorrente, non teorico.
-    private static readonly TimeSpan PassoRilevazione = TimeSpan.FromSeconds(60);
+    /// (quella e' un lavoro, ogni 5′ e con le sue notifiche): e' solo il colore del pallino.
+    ///
+    /// [2026-09-06] Da 60 a 180 secondi. Una rilevazione completa fa nascere una quindicina di
+    /// processi figli (docker, kubectl, powershell, git); a un minuto significa quindici processi
+    /// al minuto per sempre, su una macchina che sta cronicamente sotto il mezzo giga libero. Il
+    /// rischio non e' teorico ed e' particolarmente ingrato: l'indicatore che, misurando troppo
+    /// spesso, contribuisce a produrre il rallentamento che poi segnala. Tre minuti restano ben
+    /// dentro il ritmo della veglia (5′), e l'ora dell'ultima lettura e' scritta nella descrizione
+    /// dell'icona — non si spaccia mai un dato vecchio per attuale.
+    /// </summary>
+    private static readonly TimeSpan PassoRilevazione = TimeSpan.FromSeconds(180);
 
     /// <param name="conIcona">
     /// Accendi l'icona nell'area di notifica. E' il senso del supervisore residente: senza, gira
