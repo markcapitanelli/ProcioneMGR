@@ -370,7 +370,11 @@ internal static class Probes
         foreach (var job in Jobs.All)
             checks.Add(Verdicts.Job(job, supervisore?.Jobs.FirstOrDefault(j => j.Name == job.Name),
                                     vivo, adesso, copertoDaTask: daTask.Contains(job.Name),
-                                    acceso: Prefs.IsEnabled(job, accesi)));
+                                    // Preferenze illeggibili in questo istante: si passa null, e il
+                                    // verdetto ripiega sullo stato che il SUPERVISORE dichiara —
+                                    // che e' la fonte giusta. Ripiegare sui default direbbe
+                                    // «acceso» su un lavoro spento a mano.
+                                    acceso: accesi is null ? null : Prefs.IsEnabled(job, accesi)));
 
         // =========================================================================================
         //  Automazioni di Windows
@@ -637,11 +641,8 @@ internal static class Probes
         catch { return (0, null, 0); }
     }
 
-    public static HashSet<int> ListeningPorts()
-    {
-        try { return IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Select(e => e.Port).ToHashSet(); }
-        catch { return []; }
-    }
+    /// <summary>Le porte in ascolto. Una sola implementazione, in <see cref="Net"/>.</summary>
+    public static HashSet<int> ListeningPorts() => Net.ListeningPorts();
 
     private static async Task<(bool Ok, int Status, string Body, string Error)> GetAsync(HttpClient c, string url)
     {

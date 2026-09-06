@@ -17,6 +17,56 @@ uno script.
 
 ---
 
+## Sempre visibile: l'icona accanto all'orologio
+
+*Aggiunta il 2026-09-06, su richiesta del proprietario: «deve essere sempre visibile e gestibile».*
+
+Il supervisore è **headless per costruzione** — l'output dei lavori è catturato apposta, perché
+fino al 23 agosto le automazioni aprivano una finestra PowerShell 288 volte al giorno. Quella
+scelta era giusta e resta, ma col tempo se n'è visto il prezzo: l'amministratore non aveva più
+**nessuna presenza permanente**. Per sapere se il server era in piedi doveva ricordarsi di aprire
+una console.
+
+Adesso il supervisore mostra un'icona nell'area di notifica:
+
+| | |
+|---|---|
+| **colore** | il verdetto peggiore del quadro: verde in ordine, ambra avvisi, rosso guasti, grigio non ancora misurato |
+| **passaggio del mouse** | il riassunto e l'ora dell'ultima rilevazione |
+| **doppio clic** | apre la plancia interattiva |
+| **clic destro** | il menù: stato, porte, guscio su/giù, bring-up, le tre riparazioni, i lavori, il log, il dottore |
+| **fumetto** | solo sulle **transizioni** — quando si rompe e quando rientra, mai a ripetizione |
+
+La rilevazione per l'icona gira **ogni 60 secondi**, dentro lo stesso ciclo dei lavori: così non
+può sovrapporsi a un `pg_dump` né competere con ciò che conta.
+
+**Non riapre il problema del 23 agosto.** Le finestre le apre solo quando sei *tu* a scegliere una
+voce del menù, e restano aperte (`cmd /k`) perché metà di quei comandi serve proprio a leggere ciò
+che dicono. Niente nasce da solo, niente ruba il fuoco.
+
+Tre dettagli che sembrano piccoli e non lo sono:
+
+- **Explorer riparte** (crash, aggiornamento) e l'area di notifica è nuova: senza gestire il
+  messaggio `TaskbarCreated` l'icona sparirebbe fino al riavvio, e nessuno collegherebbe le due
+  cose. Qui si riattacca da sola.
+- **Al logon l'area di notifica non esiste ancora** quando l'attività pianificata fa partire il
+  supervisore: `NIM_ADD` fallisce, e senza ritentare (dieci volte, un secondo l'una) l'icona non
+  comparirebbe mai proprio nel caso normale.
+- **Niente WinForms**, di proposito: `UseWindowsForms` porterebbe il progetto a `net10.0-windows`,
+  e la suite che ne prova la logica pura è `net10.0` — la plancia diventerebbe non provabile per
+  un'icona. Si usano le stesse P/Invoke già in uso per `--muto`.
+
+```bash
+procione icona            # prova isolata: la mostra e DICE se la shell l'ha accettata
+procione servizio --senza-icona   # il supervisore senza
+```
+
+`procione icona` non tocca il supervisore residente e non esegue nessun lavoro: è la risposta a
+«l'icona non compare», che altrimenti richiederebbe di fermare le automazioni della macchina per
+guardare un pallino.
+
+---
+
 ## Le automazioni girano qui dentro
 
 *Aggiunto il 2026-08-23, su richiesta del proprietario: «vedere una finestra PowerShell che si
@@ -52,11 +102,20 @@ procione attivita migra     # da tre meccanismi a uno. Si fa una volta.
 | `veglia` | `watchdog.ps1` — guscio, motore, Postgres, freschezza dei backup | ogni 5 minuti | sì |
 | `backup` | `db-backup.ps1 -KeepDays 14` | ogni giorno alle 03:30 | sì |
 | `avvio` | `bringup.ps1` | all'accensione del supervisore | **no** |
+| `piani` | `sync-piani.ps1` — guscio e plancia allineati a master, in finestra di quiete | ogni 20 minuti | sì |
+| `deploy` | `deploy-trading.ps1 -IfNewCommit` — build locale + import + apply del motore | ogni 30 minuti | sì |
 
 `avvio` nasce spento perché dura minuti e tocca cluster e tunnel: non è ciò che ci si aspetta
 aprendo una console per guardare uno stato. La migrazione lo **accende** se toglie un bring-up al
 logon che c'era già — togliere qualcosa che funzionava senza rimpiazzarlo sarebbe un peggioramento
 travestito da pulizia.
+
+`piani` e `deploy` sono nati dopo (K2/K3, e la decisione del 2026-08-25 sul sync automatico del
+motore) e sono le due automazioni che **aggiornano il repository e schierano codice da sole**: sono
+anche le due che la prima stesura di questo documento non elencava. Un elenco delle automazioni che
+si legge come completo e non lo è nasconde proprio quelle che contano di più — da oggi
+`PlanciaGovernoTests.La_documentazione_elenca_TUTTI_i_lavori` fa fallire la suite se questa tabella
+resta indietro rispetto alla tabella di `Jobs.All`.
 
 ```bash
 procione servizio                      # accendi il supervisore adesso, qui
@@ -191,13 +250,51 @@ almeno un guasto.
 ```bash
 procione avvia                    # bring-up completo (scripts/bringup.ps1)
 procione avvia guscio             # solo il guscio, come il profilo procione-main
-procione avvia cluster            # crea il cluster kind (prerequisito una-tantum)
+procione avvia guscio --produzione # come run-postgres.ps1: ambiente Production, tunnel garantiti
 procione avvia compose --motore   # assetto Docker Compose, col profilo engine
-procione ferma guscio|tunnel|compose|tutto
-procione riavvia motore|ingestion|ml|guscio
+procione ferma guscio|tunnel|compose|supervisore|tutto
+procione riavvia motore|ingestion|ml|guscio|cluster|db|supervisore
 ```
 
 `ferma tutto` **non** spegne il cluster: quello è il core caldo, opera da solo anche senza guscio.
+
+### Ciò che sta sotto: Docker, il database, il cluster
+
+*Aggiunti il 2026-09-06.* Fino a quel giorno la plancia sapeva soltanto **dire** che questi tre
+erano giù, e i rimedi che stampava mandavano fuori da sé: «avvia Docker Desktop», «services.msc →
+postgresql-x64-18», «docker start procionemgr-dev-control-plane». Un pannello di comando che per le
+tre cose più basilari rimanda altrove è un cartello, non un pannello.
+
+```bash
+procione docker [stato|avvia|ferma]      # Docker Desktop
+procione db     [stato|avvia|ferma|riavvia]   # il servizio Windows di PostgreSQL
+procione cluster [avvia|ferma|riavvia]   # il nodo kind, senza distruggerlo
+procione cluster crea|distruggi          # gli estremi, come prima
+procione porte                           # chi occupa le porte della piattaforma
+```
+
+Tre note che spiegano perché non sono banali *wrapper*:
+
+- **`cluster avvia` non è `docker start`.** Al riavvio Docker riassegna gli indirizzi della rete
+  kind, quindi il proxy dell'API server può restare a inoltrare verso un IP che non esiste più
+  (2026-08-04 e 2026-08-11: un'ora di TLS handshake timeout con tutto «running») e i port-forward
+  puntano a pod ripartiti. Il comando fa i tre passi nell'ordine giusto e **verifica ognuno**:
+  avvia il nodo, aspetta che `/livez` risponda *attraverso* il proxy, e se non risponde lo rifà;
+  poi rifà i tunnel.
+- **Lo stato di un servizio si legge nei NUMERI**, mai nella parola: `Get-Service` e `sc query`
+  stampano testo localizzato. È la stessa trappola già pagata leggendo `schtasks /Query /V` su una
+  macchina in italiano.
+- **Il verdetto è la porta, non il comando.** `db avvia` non dichiara riuscito perché
+  `Start-Service` non ha lanciato: aspetta che la 5432 accetti connessioni. Un servizio «in
+  esecuzione» che non ascolta è un caso reale — Postgres che parte e muore sul recupero.
+
+Tutti e tre gli **arresti** chiedono conferma, e `db ferma` una conferma *digitata*: fermare uno
+qualunque di questi tre pezzi ferma il motore, che ha posizioni aperte.
+
+> **`procione postgres` ora significa il database.** Fino al 2026-09-06 avviava invece il *guscio*
+> (`run-postgres.ps1`, ambiente Production): un comando che fa una cosa diversa dal proprio nome è
+> una trappola, e per giunta la cosa diversa era la più invasiva delle due. Quella funzione resta,
+> dietro un flag esplicito: `procione avvia guscio --produzione`.
 
 ### Riparare
 
@@ -293,6 +390,9 @@ di registrare qualcosa che morirà.
 |---|---|
 | `Platform.cs` | nomi, porte e percorsi: nessuno inventato qui, tutti già presenti in `scripts/` o `infra/k8s/` |
 | `Proc.cs` | esecuzione di processi esterni, con timeout e senza eccezioni che escano |
+| `Net.cs` | chi ascolta su quale porta, chiesto al sistema **dentro** il processo |
+| `Machine.cs` | ciò che sta sotto: Docker Desktop, il servizio PostgreSQL, l'accensione del cluster |
+| `Tray.cs` | l'icona nell'area di notifica: colore, menù, fumetti |
 | `Probes.cs` | le sonde, tutte in sola lettura e tutte in parallelo |
 | `Parsing.cs` | traduzione da testo degli strumenti a dati — **funzioni pure** |
 | `Verdicts.cs` | i verdetti che richiedono un ragionamento — **funzioni pure** |
@@ -307,6 +407,45 @@ di registrare qualcosa che morirà.
 `Parsing` e `Verdicts` stanno a parte perché sono il punto in cui una plancia può mentire in
 silenzio: sono provati contro casi noti in `ProcioneMGR.Tests/ProcioneConsoleTests.cs`, incluso il
 caso sano — che deve restare muto.
+
+## Cosa ha trovato la revisione del 2026-09-06
+
+Lettura riga per riga dei sedici file della plancia. Quattro difetti, tutti della stessa famiglia —
+**una domanda a cui non si è potuto rispondere, letta come una risposta rassicurante** — che è la
+famiglia che questo progetto paga da sempre.
+
+**1. `procione ferma tunnel` andava in crash proprio sulla macchina satura.** `OwningPids` può
+restituire `null` («non lo so»), e la riga `porte.SelectMany(OwningPids)` lo passava a `SelectMany`,
+che su `null` lancia `NullReferenceException`. **Il compilatore lo diceva già** — `CS8621` a
+`Actions.cs:193`, in un progetto che per il resto compila con zero avvisi. La lezione era stata
+imparata su `ferma guscio` il 2026-09-05 e non era stata portata al gemello, che è il modo tipico in
+cui una correzione resta a metà.
+
+La correzione va alla radice invece che al sintomo: la mappa porta → PID non passa più da un
+`Get-NetTCPConnection` in un processo figlio, ma da `GetExtendedTcpTable` **dentro** questo
+processo. Era proprio quel figlio a non rispondere in tempo sulla macchina satura, ed è la sua lista
+vuota ad aver prodotto il rilascio finto delle 00:54. Una chiamata di libreria non ha un tetto da
+sforare e non compete per la memoria: sulla macchina più carica risponde come su quella scarica.
+
+**2. Le preferenze illeggibili riaccendevano i lavori spenti a mano.** `Prefs.Read()` distingue
+correttamente «nessuna preferenza» da «non sono riuscito a leggerla» — e il commento sopra spiega
+perché è vitale. Poi `IsEnabled` buttava via la distinzione: mappa nulla ⇒ default della tabella
+⇒ un lavoro spento a mano risultava **acceso**, in silenzio, e il rimedio suggerito dal quadro era
+il comando che l'operatore aveva appena eseguito. Ora la mappa è un parametro obbligatorio: chi non
+ne ha una buona deve dire «non lo so», e il verdetto crede allo stato che dichiara il *supervisore*
+— che è la fonte giusta, perché è lui a eseguirli.
+
+**3. Il documento elencava tre lavori su cinque.** Mancavano `piani` e `deploy`, cioè le due
+automazioni che aggiornano il repository e schierano codice da sole. Un elenco che si legge come
+completo e non lo è nasconde proprio quelle che contano. Adesso c'è un test che fa fallire la suite
+quando la tabella qui sopra resta indietro rispetto a `Jobs.All`.
+
+**4. I tre pezzi sotto la piattaforma non si potevano governare.** Docker Desktop, il servizio
+PostgreSQL e l'accensione del cluster: la plancia sapeva dire che erano giù e mandava altrove a
+sistemarli. Vedi *Ciò che sta sotto*.
+
+Più due pulizie: un ramo morto in `Supervisor.EseguiAsync` (`if (ct.IsCancellationRequested) return
+r.Ok; return r.Ok;`) e `Probes.ListeningPorts` che duplicava una lettura ora unica in `Net`.
 
 ## Verifica (i quattro livelli di `docs/STANDARD-VERIFICA.md`)
 

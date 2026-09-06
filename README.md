@@ -373,6 +373,22 @@ procione lavoro           # cadenza, ultimo esito, prossima scadenza di ogni aut
 procione log supervisore  # il log che prima non esisteva
 ```
 
+**Ed è sempre visibile.** Il supervisore headless aveva un prezzo: nessuna presenza permanente, e
+per sapere se il server era in piedi bisognava ricordarsi di aprire una console. Dal 2026-09-06
+mostra un'**icona nell'area di notifica** — colore secondo il verdetto peggiore, riassunto al
+passaggio del mouse, menù col clic destro (stato, porte, guscio su/giù, bring-up, riparazioni,
+lavori, log), plancia col doppio clic, e un fumetto **solo sulle transizioni**. Le finestre le apre
+solo quando sei tu a scegliere una voce: il problema del 23 agosto non torna.
+
+Governa anche ciò che sta **sotto** la piattaforma, che prima si poteva solo constatare:
+
+```bash
+procione docker [stato|avvia|ferma]        # Docker Desktop
+procione db     [stato|avvia|ferma|riavvia] # il servizio Windows di PostgreSQL
+procione cluster avvia|ferma|riavvia       # il nodo kind senza distruggerlo
+procione porte                             # chi occupa le porte della piattaforma
+```
+
 Il principio è che **il verdetto è la risposta, non lo stato dichiarato**: il proxy dell'API server
 si giudica interrogando `/livez` *attraverso* di esso, un port-forward si giudica confrontando il
 pod che serviva con quello vivo adesso, il motore si interroga sulla porta health e mai sulla gRPC.

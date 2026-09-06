@@ -44,6 +44,10 @@ internal sealed class Supervisor : IDisposable
     private Dictionary<string, bool> _accesi = [];
     private bool _muto;
 
+    /// L'ultima rilevazione, quella che l'icona mostra. Vive qui e non nell'icona perche' e' il
+    /// ciclo a produrla: l'icona la legge e basta.
+    private Snapshot? _quadro;
+
     /// <summary>Il lavoro in corso adesso, se ce n'e' uno: serve a chi deve aspettarlo sapendo cosa.</summary>
     public (string Nome, TimeSpan Tetto)? InCorso { get; private set; }
 
@@ -114,7 +118,18 @@ internal sealed class Supervisor : IDisposable
     //  Ciclo
     // =============================================================================================
 
-    public async Task RunAsync(bool muto, CancellationToken esterno = default)
+    /// Ogni quanto il supervisore rileva lo stato della piattaforma PER L'ICONA. Non e' la veglia
+    /// (quella e' un lavoro, ogni 5′ e con le sue notifiche): e' solo il colore del pallino accanto
+    /// all'orologio. Un minuto e' il compromesso fra «dice la verita'» e il costo — una rilevazione
+    /// completa fa nascere una decina di processi figli, e su questa macchina la saturazione e' un
+    /// problema ricorrente, non teorico.
+    private static readonly TimeSpan PassoRilevazione = TimeSpan.FromSeconds(60);
+
+    /// <param name="conIcona">
+    /// Accendi l'icona nell'area di notifica. E' il senso del supervisore residente: senza, gira
+    /// invisibile e l'amministratore non ha nessuna presenza permanente da guardare.
+    /// </param>
+    public async Task RunAsync(bool muto, CancellationToken esterno = default, bool conIcona = false)
     {
         _muto = muto;
 
@@ -133,6 +148,15 @@ internal sealed class Supervisor : IDisposable
         foreach (var j in Jobs.All)
             Log($"  · {j.Name,-8} {j.When.Describe(),-24} {(Stato(j).Enabled ? j.What : "SPENTO — " + j.What)}");
         Battito();
+
+        // L'icona nell'area di notifica. Se non si puo' accendere (sessione senza desktop, area
+        // di notifica assente) si prosegue senza: vegliare resta il lavoro vero, mostrarlo e' un
+        // di piu'. Il menu «esci» passa dallo stesso segnale con nome di `procione servizio ferma`,
+        // cosi' l'uscita e' quella ordinata — con lo stato salvato e il battito azzerato.
+        using var tray = conIcona ? Tray.Start(() => _quadro, () => RequestStop()) : null;
+        if (conIcona && tray is null) Log("area di notifica non disponibile: nessuna icona.", ConsoleColor.Yellow);
+        else if (tray is not null) LogQuandoAttaccata(tray);
+        var prossimaRilevazione = DateTimeOffset.MinValue;
 
         try
         {
@@ -153,6 +177,19 @@ internal sealed class Supervisor : IDisposable
                     if (!st.Enabled) continue;
                     if (!job.When.IsDue(st.LastRun, DateTimeOffset.Now)) continue;
                     await EseguiAsync(job, st, ct);
+                }
+
+                // La rilevazione per l'icona sta DOPO i lavori e dentro lo stesso ciclo: cosi' non
+                // puo' sovrapporsi a un pg_dump ne' competere per la macchina con cio' che conta.
+                if (tray is not null && DateTimeOffset.Now >= prossimaRilevazione && !ct.IsCancellationRequested)
+                {
+                    try
+                    {
+                        _quadro = await Probes.RunAsync();
+                        tray.Update(_quadro);
+                    }
+                    catch (Exception ex) { LogSolaTraccia($"rilevazione per l'icona fallita: {ex.Message.Trim()}"); }
+                    prossimaRilevazione = DateTimeOffset.Now.Add(PassoRilevazione);
                 }
 
                 Battito();
@@ -210,7 +247,6 @@ internal sealed class Supervisor : IDisposable
         if (r.Ok) Log($"● {job.Name}: riuscito in {Ui.Age(fine - inizio)} — {st.LastSummary}", ConsoleColor.Green);
         else Log($"✖ {job.Name}: {Diagnosi(r.Code)} dopo {Ui.Age(fine - inizio)} — {st.LastSummary}", ConsoleColor.Red);
 
-        if (ct.IsCancellationRequested) return r.Ok;
         return r.Ok;
     }
 
@@ -284,7 +320,10 @@ internal sealed class Supervisor : IDisposable
         var st = _stati.FirstOrDefault(s => s.Name == nome);
         if (st is not null) return st;
         var job = Jobs.Find(nome);
-        st = new JobState { Name = nome, Enabled = job is null || Prefs.IsEnabled(job) };
+        // Le preferenze si leggono dalla mappa che il ciclo tiene aggiornata, non da una lettura
+        // nuova: una lettura fallita qui ricadrebbe sui default e riaccenderebbe, in silenzio, un
+        // lavoro spento a mano.
+        st = new JobState { Name = nome, Enabled = job is null || Prefs.IsEnabled(job, _accesi) };
         _stati.Add(st);
         return st;
     }
@@ -292,7 +331,15 @@ internal sealed class Supervisor : IDisposable
     private void Carica()
     {
         var precedente = ReadState();
+        // All'avvio non c'e' nessuna «ultima mappa buona» su cui ripiegare: se il file non si legge
+        // si parte dai default, ma lo si DICE — un lavoro spento a mano che torna acceso in
+        // silenzio e' il difetto; annunciarlo lo rende una cosa che si vede nel log.
         var accesi = Prefs.Read();
+        if (accesi is null)
+            Log("preferenze dei lavori non leggibili all'avvio: uso i default, rileggo al primo giro.",
+                ConsoleColor.Yellow);
+        _accesi = accesi ?? [];
+        accesi = _accesi;
         foreach (var job in Jobs.All)
         {
             var salvato = precedente?.Jobs.FirstOrDefault(j => j.Name == job.Name);
@@ -375,6 +422,23 @@ internal sealed class Supervisor : IDisposable
         }
         catch { return null; }
     }
+
+    /// <summary>
+    /// Annota nel log se l'icona si e' davvero attaccata all'area di notifica.
+    ///
+    /// Non blocca il ciclo: l'attesa vive in un compito a parte, perche' al logon l'area di
+    /// notifica puo' non esistere ancora per una decina di secondi, e nel frattempo il supervisore
+    /// deve gia' vegliare. Il verdetto e' la RISPOSTA della shell, non il fatto di averci provato.
+    /// </summary>
+    private void LogQuandoAttaccata(Tray tray) => _ = Task.Run(async () =>
+    {
+        for (var i = 0; i < 15; i++)
+        {
+            if (tray.Attaccata) { LogSolaTraccia("icona nell'area di notifica: attiva."); return; }
+            await Task.Delay(1000);
+        }
+        LogSolaTraccia("icona nell'area di notifica: NON attaccata (la shell l'ha rifiutata).");
+    });
 
     private void Battito(bool spento = false) => Salva(spento);
 

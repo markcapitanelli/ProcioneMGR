@@ -187,6 +187,34 @@ internal static class Platform
     public static string AppSettings => Path.Combine(RepoRoot, "ProcioneMGR", "appsettings.json");
     public static string ShellProject => Path.Combine(RepoRoot, "ProcioneMGR", "ProcioneMGR.csproj");
 
+    // --- I due pezzi che stanno SOTTO la piattaforma ---------------------------------------------
+    // Non sono suoi: sono di Windows e di Docker. Ma senza di loro non parte niente, e finora
+    // l'unico modo di governarli dalla plancia era leggere un rimedio che diceva di uscirne
+    // («services.msc», «docker start ...»). Un pannello di comando che, per le due cose piu'
+    // basilari, manda altrove non e' un pannello di comando.
+
+    /// Il servizio Windows di PostgreSQL. Il nome vero si cerca a runtime (`postgresql*`): questo
+    /// e' quello atteso, e serve solo per i messaggi quando la ricerca non trova niente.
+    public const string PostgresService = "postgresql-x64-18";
+
+    /// Docker Desktop. Dalla 4.37 la CLI ha `docker desktop start|stop|status`, che e' la via
+    /// pulita; l'eseguibile resta il ripiego per le versioni che non ce l'hanno.
+    public static string DockerDesktopExe => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+        "Docker", "Docker", "Docker Desktop.exe");
+
+    /// <summary>Le porte che compongono la piattaforma, con il nome di chi dovrebbe ascoltarci.</summary>
+    public static readonly (int Porta, string Chi)[] KnownPorts =
+    [
+        (ShellPort,        "guscio (UI)"),
+        (PostgresPort,     "PostgreSQL"),
+        (ApiProxyPort,     "proxy API del cluster"),
+        (IngestionPort,    "tunnel ingestion"),
+        (EngineGrpcPort,   "tunnel motore (gRPC)"),
+        (EngineHealthPort, "tunnel motore (health)"),
+        (GrafanaPort,      "Grafana"),
+    ];
+
     /// Il token del bot Telegram vive in un solo posto, lo stesso che usa .claude/launch.json.
     public static string TelegramTokenFile =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".procione", "telegram.token");

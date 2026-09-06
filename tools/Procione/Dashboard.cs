@@ -37,7 +37,10 @@ internal static class Dashboard
         // esteso in `procione log supervisore`.
         var supervisore = soloLettura ? null : Supervisor.TryAcquire();
         using var cts = new CancellationTokenSource();
-        var ciclo = supervisore?.RunAsync(muto: true, cts.Token);
+        // Anche qui l'icona: chiudere questa finestra non deve far sparire l'unica presenza
+        // permanente. Se il supervisore e' gia' residente altrove l'icona e' gia' la sua, e qui
+        // non nasce nulla — l'esclusione garantisce che di supervisori ce ne sia uno solo.
+        var ciclo = supervisore?.RunAsync(muto: true, cts.Token, conIcona: true);
 
         try
         {
