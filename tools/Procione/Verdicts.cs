@@ -21,8 +21,22 @@ internal static class Verdicts
     /// vivo adesso — nessuna inferenza sul comportamento della rete.
     /// </summary>
     /// <param name="marcatore">Contenuto del file marcatore, gia' normalizzato (<see cref="Parsing.Marker"/>).</param>
+    /// <param name="servizioRisponde">
+    /// Il servizio risponde ATTRAVERSO questo tunnel? <c>null</c> se non lo si e' chiesto.
+    ///
+    /// [2026-09-07] È la terza cosa che «non basta», dopo la porta in ascolto e il pod giusto.
+    /// Misurato: <c>/health</c> del motore rispondeva in 0,03–0,20 s tre volte su cinque e si
+    /// piantava per venti secondi le altre due, con il marcatore che combaciava perfettamente —
+    /// il pod non era cambiato, ma lo stream sotto si era guastato. Rifatto il tunnel: 8 su 8 in
+    /// 0,03 s. Il marcatore risponde a «punta al pod giusto?», non a «trasporta ancora?».
+    ///
+    /// E la differenza si sente nel RIMEDIO: <c>ripara tunnel</c> non fa nulla in questo caso —
+    /// lo script vede il marcatore combaciare e dichiara «gia' attivo». Serve richiuderlo e
+    /// riaprirlo, ed e' quello che la riga deve dire.
+    /// </param>
     public static Check Tunnel(string nome, IReadOnlyList<int> porte, string? marcatore, Pod? podVivo,
-                               ISet<int> inAscolto, bool clusterSu, string serve)
+                               ISet<int> inAscolto, bool clusterSu, string serve,
+                               bool? servizioRisponde = null)
     {
         var quante = porte.Count(inAscolto.Contains);
         var elenco = string.Join("+", porte);
@@ -57,6 +71,15 @@ internal static class Verdicts
         if (marcatore != podVivo.Identity)
             return new Check("tunnel", nome, Level.Down,
                 $"STANTIO: serviva {marcatore}, ora c'e' {podVivo.Identity}", "`procione ripara tunnel`");
+
+        // Tutto in regola sulla carta — porte aperte, pod giusto — e il servizio non risponde
+        // lo stesso: lo stream sotto si e' guastato. Senza questa riga il quadro si contraddiceva,
+        // dicendo «tunnel sano» e «motore giu'» a due righe di distanza, e mandava a eseguire un
+        // comando che in questo caso non tocca niente.
+        if (servizioRisponde == false)
+            return new Check("tunnel", nome, Level.Down,
+                $"APERTO ma NON TRASPORTA: {elenco} → {podVivo.Name}, eppure il servizio non risponde",
+                "`procione ripara tunnel --rifai` (lo richiude e riapre: `ripara` da solo lo trova «gia' attivo»)");
 
         return new Check("tunnel", nome, Level.Ok, $"{elenco} → {podVivo.Name} (riavvii {podVivo.Restarts})");
     }

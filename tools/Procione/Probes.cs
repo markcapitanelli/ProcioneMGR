@@ -289,15 +289,23 @@ internal static class Probes
             // `kindUp && podsNoti` e non il solo `kindUp`: senza l'elenco dei pod il confronto col
             // marcatore non si puo' fare, e dedurre «nessun pod Running a cui puntare» da una
             // risposta mai arrivata sposterebbe l'attenzione dal guasto vero (l'API server).
+            // Il servizio risponde ATTRAVERSO il tunnel: e' la sonda che vede lo stream guasto,
+            // che il marcatore non puo' vedere. Le richieste sono gia' partite: qui si aspetta
+            // soltanto il loro esito, non si aggiunge un giro.
+            var motoreVivo = (await tEngine).Ok;
+            var ingestVivo = (await tIngest).Ok;
+
             checks.Add(Verdicts.Tunnel("motore", [Platform.EngineGrpcPort, Platform.EngineHealthPort],
                 ReadMarker(Platform.TradingTunnelMarker),
                 Verdicts.TunnelPod(pods, Platform.TradingNamespace),
-                listening, kindUp && podsNoti, "/trading e il comando del motore via gRPC"));
+                listening, kindUp && podsNoti, "/trading e il comando del motore via gRPC",
+                servizioRisponde: motoreVivo));
 
             checks.Add(Verdicts.Tunnel("ingestion", [Platform.IngestionPort],
                 ReadMarker(Platform.IngestionTunnelMarker),
                 Verdicts.TunnelPod(pods, Platform.IngestionNamespace),
-                listening, kindUp && podsNoti, "il pulsante «Sync now» di /market/watchlist"));
+                listening, kindUp && podsNoti, "il pulsante «Sync now» di /market/watchlist",
+                servizioRisponde: ingestVivo));
         }
 
         // =========================================================================================
@@ -343,7 +351,9 @@ internal static class Probes
                 ? new Check("in ascolto", "Motore", Level.Ok, $"/health 200 su :{Platform.EngineHealthPort} (porta health, non la gRPC)")
                 : new Check("in ascolto", "Motore", Level.Down,
                     $"/health non risponde su :{Platform.EngineHealthPort} ({engine.Error})",
-                    "quasi sempre e' il tunnel: `procione ripara tunnel`"));
+                    // NON `ripara tunnel` da solo: se il marcatore combacia lo script dichiara
+                    // «gia' attivo» e non tocca niente — cioe' il rimedio suggerito non rimedia.
+                    "quasi sempre e' il tunnel: `procione ripara tunnel --rifai`"));
         }
 
         var ingest = await tIngest;
@@ -354,7 +364,7 @@ internal static class Probes
                 ? new Check("in ascolto", "Ingestion", Level.Ok, $"/health 200 — {Parsing.HeartbeatAge(ingest.Body)}")
                 : new Check("in ascolto", "Ingestion", Level.Warn,
                     $"/health non risponde su :{Platform.IngestionPort} ({ingest.Error}) — «Sync now» fallira'",
-                    "`procione ripara tunnel`"));
+                    "`procione ripara tunnel --rifai`"));
 
         var pgOk = await tPostgres;
         if (layout == Layout.Compose)
@@ -700,18 +710,62 @@ internal static class Probes
     /// <summary>Le porte in ascolto. Una sola implementazione, in <see cref="Net"/>.</summary>
     public static HashSet<int> ListeningPorts() => Net.ListeningPorts();
 
+    /// <summary>
+    /// Una GET, con UN secondo tentativo breve se la prima si e' piantata.
+    ///
+    /// [2026-09-07] Misurato sul motore attraverso un port-forward degradato: <c>/health</c>
+    /// rispondeva in 0,03–0,20 s tre volte su cinque, e le altre due si piantava per i 20 secondi
+    /// interi del tetto. Con una sola misura il quadro dichiarava «Motore giu'» il 40% delle volte,
+    /// su un motore che stava operando — ed e' una delle vie per cui arrivavano i fumetti di guasto.
+    ///
+    /// Il secondo tentativo ha un tetto CORTO di proposito: un servizio sano risponde in
+    /// centesimi di secondo, quindi otto secondi bastano e avanzano a distinguere «era un colpo di
+    /// vento» da «e' davvero giu'», senza raddoppiare l'attesa di una rilevazione.
+    ///
+    /// Non si riprova su una porta CHIUSA: quel rifiuto arriva subito ed e' definitivo. Riprovare
+    /// li' sarebbe solo lentezza, e il caso «il guscio non c'e'» deve restare istantaneo.
+    /// </summary>
     private static async Task<(bool Ok, int Status, string Body, string Error)> GetAsync(HttpClient c, string url)
+    {
+        var primo = await TentaGetAsync(c, url, null);
+        if (primo.Ok || !primo.Sospeso) return (primo.Ok, primo.Status, primo.Body, primo.Error);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var secondo = await TentaGetAsync(c, url, cts.Token);
+        return secondo.Ok
+            ? (secondo.Ok, secondo.Status, secondo.Body, secondo.Error)
+            // Fallito due volte: si riporta il motivo del PRIMO, che e' quello col tetto pieno e
+            // quindi il piu' significativo — «8 secondi» direbbe meno di «venti».
+            : (false, secondo.Status, secondo.Body, primo.Error);
+    }
+
+    /// <param name="Sospeso">
+    /// La richiesta e' rimasta appesa (tetto scaduto o annullata), invece di ricevere un rifiuto
+    /// netto. E' l'unico caso in cui vale la pena riprovare.
+    /// </param>
+    private static async Task<(bool Ok, int Status, string Body, string Error, bool Sospeso)>
+        TentaGetAsync(HttpClient c, string url, CancellationToken? ct)
     {
         try
         {
-            using var r = await c.GetAsync(url);
+            using var r = ct is { } t ? await c.GetAsync(url, t) : await c.GetAsync(url);
             var body = await r.Content.ReadAsStringAsync();
             return ((int)r.StatusCode == 200, (int)r.StatusCode, body.Trim(),
-                    (int)r.StatusCode == 200 ? "" : $"HTTP {(int)r.StatusCode}");
+                    (int)r.StatusCode == 200 ? "" : $"HTTP {(int)r.StatusCode}", false);
+        }
+        catch (TaskCanceledException ex)
+        {
+            // HttpClient segnala il tetto scaduto come annullamento: e' il caso «appeso».
+            return (false, 0, "", RootMessage(ex), true);
+        }
+        catch (OperationCanceledException ex)
+        {
+            return (false, 0, "", RootMessage(ex), true);
         }
         catch (Exception ex)
         {
-            return (false, 0, "", RootMessage(ex));
+            // Connessione rifiutata, DNS, TLS: risposte nette. Non si riprova.
+            return (false, 0, "", RootMessage(ex), false);
         }
     }
 

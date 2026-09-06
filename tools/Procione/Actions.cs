@@ -340,9 +340,31 @@ internal static class Actions
         return r.Ok ? 0 : 2;
     }
 
-    public static int RepairTunnels()
+    /// <summary>
+    /// Rimette i tunnel. Con <paramref name="rifai"/> li richiude PRIMA di riaprirli.
+    ///
+    /// [2026-09-07] Il motivo per cui `--rifai` esiste. <c>ensure-trading-portforward.ps1</c>
+    /// decide se il tunnel e' buono confrontando il pod servito (nome + riavvii) con quello vivo:
+    /// se combaciano dice «gia' attivo» e non tocca nulla. È la regola giusta per il caso che lo
+    /// script conosce — il pod sostituito — ma e' cieca a un guasto diverso e reale: lo stream
+    /// sotto che si degrada mentre il pod resta lo stesso.
+    ///
+    /// Misurato quel giorno: <c>/health</c> del motore rispondeva in 0,03–0,20 s tre volte su
+    /// cinque e si piantava per venti secondi le altre due, con il marcatore perfettamente
+    /// allineato. Richiuso e riaperto il tunnel: otto prove su otto in 0,03 s. Senza questo
+    /// comando, la riga del quadro mandava a eseguire una riparazione che non riparava.
+    /// </summary>
+    public static int RepairTunnels(bool rifai = false)
     {
-        Ui.Title("Riparazione dei tunnel (scripts/ensure-trading-portforward.ps1)");
+        if (rifai)
+        {
+            Ui.Title("Rifacimento dei tunnel");
+            Ui.Info("li richiudo prima di riaprirli: con il marcatore allineato lo script li");
+            Ui.Info("lascerebbe com'erano, e uno stream guasto resterebbe guasto.");
+            DownTunnels();
+        }
+        else Ui.Title("Riparazione dei tunnel (scripts/ensure-trading-portforward.ps1)");
+
         return Proc.Script("ensure-trading-portforward.ps1");
     }
 
