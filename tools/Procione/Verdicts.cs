@@ -62,6 +62,57 @@ internal static class Verdicts
     }
 
     /// <summary>
+    /// Com'e' messo Docker. Tre esiti, non due — ed e' la distinzione che il 2026-09-06 e' costata
+    /// una notte di allarmi falsi.
+    ///
+    /// <para>Docker davvero fermo risponde <b>subito</b> con un errore («error during connect»).
+    /// Se invece non risponde entro il tetto, non lo si e' misurato: su questa macchina
+    /// <c>docker info</c> sta di norma fra 0,7 e 2,9 secondi, ma con la memoria quasi esaurita
+    /// sfora i venti. Chiamarlo «giu'» faceva partire un fumetto di guasto e, qualche minuto dopo,
+    /// uno di rientro — su una piattaforma che non aveva mai smesso di funzionare.</para>
+    ///
+    /// <para>E il danno non finiva qui: da «Docker giu'» discendeva una lista di container vuota,
+    /// e da quella il quadro affermava «il cluster non esiste» e «kind-apiproxy assente». Due cose
+    /// false, dette in rosso. Un'assenza di risposta non e' una risposta.</para>
+    /// </summary>
+    public static Check Docker(bool ok, string versione, int codice, string diagnosi, int tettoSecondi)
+    {
+        if (ok) return new Check("fondamenta", "Docker", Level.Ok, $"demone pronto (server {versione})");
+
+        if (codice == Proc.TimedOut)
+            return new Check("fondamenta", "Docker", Level.Warn,
+                $"non ha risposto entro {tettoSecondi}s: NON so se e' vivo (macchina satura?)",
+                "`procione docker stato` fra un minuto; se insiste, `procione docker avvia`");
+
+        return new Check("fondamenta", "Docker", Level.Down,
+            codice == Proc.Failed ? "eseguibile 'docker' non nel PATH" : diagnosi,
+            "avvia Docker Desktop (al boot impiega minuti); senza, tutto il resto e' inutile");
+    }
+
+    /// <summary>
+    /// Quante rilevazioni consecutive servono prima di ANNUNCIARE un guasto.
+    ///
+    /// Due, non una. Il colore dell'icona cambia subito — e' l'ultima cosa letta, ed e' onesto
+    /// mostrarla — ma il fumetto interrompe l'utente, e per interromperlo serve piu' di una
+    /// misura. Su questa macchina la memoria e' cronicamente al limite e una sonda ogni tanto
+    /// sfora il proprio tetto: il 2026-09-06 questo ha prodotto «guasto» e, tre minuti dopo,
+    /// «rientrato», su una piattaforma che non aveva mai smesso di funzionare.
+    /// </summary>
+    public const int ConfermeRichieste = 2;
+
+    /// <summary>
+    /// Il livello su cui ANNUNCIARE, che non e' sempre quello appena letto.
+    ///
+    /// Un guasto visto una volta sola resta «da confermare»: si tratta come un avviso, che non fa
+    /// comparire nessun fumetto. Se alla rilevazione dopo c'e' ancora, si annuncia; se e' sparito,
+    /// non se ne parla piu' — ed e' giusto cosi', perche' non e' mai stato un guasto.
+    /// </summary>
+    /// <param name="letto">Il verdetto peggiore dell'ultima rilevazione.</param>
+    /// <param name="downDiFila">Quante rilevazioni consecutive hanno dato <see cref="Level.Down"/>.</param>
+    public static Level LivelloConfermato(Level letto, int downDiFila, int confermeRichieste = ConfermeRichieste)
+        => letto == Level.Down && downDiFila < confermeRichieste ? Level.Warn : letto;
+
+    /// <summary>
     /// Se l'icona debba far comparire un fumetto, e con che titolo.
     ///
     /// La disciplina e' quella di <c>watchdog.ps1</c>, e per la stessa ragione: si avvisa sulle

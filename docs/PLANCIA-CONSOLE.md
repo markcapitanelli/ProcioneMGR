@@ -35,10 +35,18 @@ Adesso il supervisore mostra un'icona nell'area di notifica:
 | **passaggio del mouse** | il riassunto e l'ora dell'ultima rilevazione |
 | **doppio clic** | apre la plancia interattiva |
 | **clic destro** | il menù: stato, porte, guscio su/giù, bring-up, le tre riparazioni, i lavori, il log, il dottore |
-| **fumetto** | solo sulle **transizioni** — quando si rompe e quando rientra, mai a ripetizione |
+| **fumetto** | solo sulle **transizioni** — quando si rompe e quando rientra, mai a ripetizione — e solo dopo **due rilevazioni concordi** |
 
-La rilevazione per l'icona gira **ogni 60 secondi**, dentro lo stesso ciclo dei lavori: così non
-può sovrapporsi a un `pg_dump` né competere con ciò che conta.
+La rilevazione per l'icona gira **ogni 3 minuti**, dentro lo stesso ciclo dei lavori: così non può
+sovrapporsi a un `pg_dump` né competere con ciò che conta.
+
+> **Perché 3 minuti e non 1.** Una rilevazione completa fa nascere una quindicina di processi
+> (docker, kubectl, powershell, git) e costa, misurata su questa macchina, **6,6–11,8 secondi**. A
+> un minuto significava un ciclo di lavoro continuo fra l'11% e il 20%, per sempre, su una macchina
+> che sta cronicamente sotto il mezzo giga libero: l'indicatore contribuiva a produrre il
+> rallentamento che poi segnalava. A tre minuti scende al 4–6%, resta dentro il ritmo della veglia
+> (5′), e l'ora dell'ultima lettura è scritta nella descrizione dell'icona — non si spaccia mai un
+> dato vecchio per attuale.
 
 **Non riapre il problema del 23 agosto.** Le finestre le apre solo quando sei *tu* a scegliere una
 voce del menù, e restano aperte (`cmd /k`) perché metà di quei comandi serve proprio a leggere ciò
@@ -446,6 +454,52 @@ sistemarli. Vedi *Ciò che sta sotto*.
 
 Più due pulizie: un ramo morto in `Supervisor.EseguiAsync` (`if (ct.IsCancellationRequested) return
 r.Ok; return r.Ok;`) e `Probes.ListeningPorts` che duplicava una lettura ora unica in `Net`.
+
+## Gli allarmi falsi della prima sera (2026-09-06)
+
+L'icona è durata poche ore prima di mandare il suo primo messaggio sbagliato:
+
+> **ProcioneMGR: guasto** · Docker: nessuna risposta entro 20s · Nodo: container
+> `procionemgr-dev-control-plane` **assente: il cluster non esiste** · Proxy API: container
+> `kind-apiproxy` **assente**
+
+…e tre minuti dopo «rientrato, tutti i controlli sono tornati in ordine». La piattaforma non aveva
+mai smesso di funzionare. Un difetto solo, con **tre errori sovrapposti**, tutti della stessa
+famiglia — un'assenza di risposta letta come una risposta.
+
+**1. Un timeout non è un guasto.** `docker info` su questa macchina sta fra 0,7 e 2,9 secondi, ma
+con la memoria quasi esaurita sfora i venti. Docker *davvero* fermo risponde **subito** con un
+errore: se non risponde entro il tetto, non lo si è misurato. Ora il timeout è un **avviso** che
+dice «NON so se è vivo», e gli avvisi non fanno comparire fumetti.
+
+**2. Una lista vuota non è «non esiste niente».** Da «Docker giù» discendeva `containers = []`, e da
+quella lista il quadro affermava che il cluster non esiste e che il proxy è assente. Due cose false,
+dette in rosso. `ContainersAsync` restituisce ora anche **se la lettura è riuscita**, e quando non lo
+è il quadro dice una riga sola — *indeterminabile* — invece di dedurre tre assenze. È la stessa
+disciplina già applicata ai pod (`podsNoti`), che non era stata portata ai container.
+
+La stessa correzione è stata estesa a tutti i punti dove la lettura poteva fallire in silenzio: il
+kubeconfig (`kubectl config view` che non risponde non significa «cluster assente dal kubeconfig»),
+il servizio PostgreSQL (`Get-Service` che non risponde non significa «servizio non installato»), il
+nodo kind (`kubectl` che non torna in tempo non significa «nodo giù» — un API server davvero
+irraggiungibile fa uscire kubectl con un errore molto prima), e la sonda TCP di Postgres, che ora
+**riprova una volta** prima di dichiarare un guasto.
+
+**3. Un guardiano che nel dubbio dice di sì fallisce aperto.** `LayoutQuick` rendeva «kind spento e
+Compose spento» quando la lettura falliva, e i guardrail della regola 2 concludevano «nessun
+conflitto, procedi». Ora restituisce anche `Noto`, e senza quello **rifiuta** — con `--forza` per
+chi sa cosa sta facendo. Fail-closed sulla sicurezza, come ovunque nel progetto.
+
+**4. Il fumetto vuole una conferma.** Il colore dell'icona segue l'ultima lettura, sempre: è il dato
+più fresco che si ha, ed è onesto mostrarlo. L'annuncio no — quello **interrompe**, e per
+interrompere serve più di una misura. Un guasto visto una volta sola vale come avviso; se alla
+rilevazione dopo c'è ancora, si annuncia. Se è sparito, non se ne parla più: non è mai stato un
+guasto.
+
+I test in `PlanciaAllarmiFalsiTests` riproducono la sequenza esatta che ha disturbato il
+proprietario (sano → una rilevazione storta → sano) e pretendono **zero fumetti**; e il loro
+complemento indispensabile pretende che un guasto vero, che dura venti rilevazioni, ne produca
+**esattamente uno**, più uno al rientro.
 
 ## Verifica (i quattro livelli di `docs/STANDARD-VERIFICA.md`)
 

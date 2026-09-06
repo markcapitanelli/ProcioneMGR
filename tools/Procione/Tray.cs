@@ -173,6 +173,9 @@ internal sealed class Tray : IDisposable
     private IntPtr _icona;
     private Level _livello = Level.NotApplicable;
     private Level? _livelloAnnunciato;
+
+    /// Rilevazioni consecutive che hanno dato «guasto». Serve alla conferma prima del fumetto.
+    private int _downDiFila;
     private string _tip = "ProcioneMGR — rilevazione in corso";
     private string? _fumettoTitolo;
     private string? _fumettoTesto;
@@ -479,19 +482,24 @@ internal sealed class Tray : IDisposable
             ? "ProcioneMGR — nessuna rilevazione"
             : $"ProcioneMGR — {Riassunto(quadro)}\n{quadro.Taken:HH:mm:ss}  ({Ui.Describe(quadro.Layout)})";
 
-        if (quadro is not null && livello != _livelloAnnunciato)
+        // Il COLORE segue l'ultima lettura, sempre: e' il dato piu' fresco che si ha.
+        // L'ANNUNCIO no — quello interrompe, e per interrompere serve una conferma.
+        _downDiFila = livello == Level.Down ? _downDiFila + 1 : 0;
+        var confermato = Verdicts.LivelloConfermato(livello, _downDiFila);
+
+        if (quadro is not null && confermato != _livelloAnnunciato)
         {
             // La decisione «annunciare o no» sta in Verdicts, dove si puo' provare contro il caso
             // che conta di piu': lo stato che NON cambia, e che deve restare muto.
-            var fumetto = Verdicts.Fumetto(_livelloAnnunciato, livello);
+            var fumetto = Verdicts.Fumetto(_livelloAnnunciato, confermato);
             if (fumetto is not null)
             {
                 var (titolo, dettagli) = fumetto.Value;
                 Annuncia(titolo, dettagli
-                    ? PrimeRighe(quadro, livello == Level.Down ? Level.Down : Level.Warn)
+                    ? PrimeRighe(quadro, confermato == Level.Down ? Level.Down : Level.Warn)
                     : "tutti i controlli sono tornati in ordine.");
             }
-            _livelloAnnunciato = livello;
+            _livelloAnnunciato = confermato;
         }
 
         _livello = livello;
