@@ -5,10 +5,17 @@
 | **File sorgente** | [`ProcioneMGR/Components/Pages/ExchangeSettings.razor`](../../ProcioneMGR/Components/Pages/ExchangeSettings.razor) (~380 righe) |
 | **Route** | `/settings/exchanges` |
 | **Sezione navigazione** | Configurazione |
-| **Accesso** | `[Authorize]` — ogni utente gestisce le proprie credenziali |
+| **Accesso** | `[Authorize(Roles = Admin)]` — dal 2026-09-06 ([R21](../audit/09_RISKS_AND_TECH_DEBT.md#r21)): **non** è la cassetta privata di un utente, è il pool con cui il motore firma |
 | **Render mode** | `InteractiveServer` |
 
 ## A cosa serve
+
+> **Il pool è uno per progetto (R21, 2026-09-06).** L'elenco mostra le righe salvate con il proprio
+> account, ma quando il motore deve firmare un ordine chiama
+> `ExchangeCredentialReader.FindForTradingAsync(exchange, testnet)`, che sceglie la prima riga
+> utilizzabile **senza guardare chi l'ha inserita**. Il filtro per `UserId` esiste solo in lettura e
+> cancellazione: era un isolamento apparente, e per questo la pagina è ora riservata ad **Admin**.
+> Anche «Ri-cifra ora» (`ReEncryptAllAsync`) agisce su tutte le righe della tabella.
 
 Salva le **chiavi API degli exchange** (Binance/Bitget), necessarie solo per Testnet e Live
 — backtest e Paper usano dati pubblici. Le chiavi sono **cifrate nel database

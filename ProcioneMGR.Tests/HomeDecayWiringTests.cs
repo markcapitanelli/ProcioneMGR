@@ -110,6 +110,12 @@ public sealed class HomeDecayWiringTests : BunitContext
         // nella Home e non registrata qui fa cadere OGNI render test con un errore di DI, che è
         // rumore — non il difetto che questi test sorvegliano.
         Services.AddSingleton<ProcioneMGR.Services.Health.HeartbeatBoardProbe>();
+        // [R22 — superficie UI] La Home chiede al cancello se mostrare il pulsante «Registrati»
+        // agli anonimi. Stesso passo delle sonde qui sopra: non registrarlo farebbe cadere ogni
+        // render con un errore di DI, che è rumore rispetto al difetto sorvegliato qui.
+        Services.AddSingleton(new ProcioneMGR.Services.Security.RegistrationOptions().AsMonitor());
+        Services.AddSingleton<ProcioneMGR.Services.Security.IRegistrationGate,
+            ProcioneMGR.Services.Security.RegistrationGate>();
 
         var managers = new Dictionary<int, FakeEnsembleManager>();
         foreach (var lane in lanes)

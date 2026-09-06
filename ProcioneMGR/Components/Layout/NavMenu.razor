@@ -2,8 +2,10 @@
 @implements IDisposable
 @using System.Security.Claims
 @using System.Text.Json
+@using ProcioneMGR.Services.Security
 @inject NavigationManager NavigationManager
 @inject IJSRuntime JS
+@inject IRegistrationGate RegistrationGate
 
 <div class="top-row ps-3 navbar navbar-dark">
     <div class="container-fluid">
@@ -80,11 +82,15 @@
                 </div>
             </Authorized>
             <NotAuthorized>
-                <div class="nav-item px-3">
-                    <NavLink class="nav-link" href="Account/Register">
-                        <i class="bi bi-person-plus-fill"></i> Registrati
-                    </NavLink>
-                </div>
+                @* [R22 2026-09-06] La voce compare solo se la registrazione è aperta davvero. *@
+                @if (_registrationOpen)
+                {
+                    <div class="nav-item px-3">
+                        <NavLink class="nav-link" href="Account/Register">
+                            <i class="bi bi-person-plus-fill"></i> Registrati
+                        </NavLink>
+                    </div>
+                }
                 <div class="nav-item px-3">
                     <NavLink class="nav-link" href="Account/Login">
                         <i class="bi bi-box-arrow-in-right"></i> Login
@@ -100,12 +106,15 @@
 
     private string? currentUrl;
     private bool _stateLoaded;
+    private bool _registrationOpen;
 
     // Stato aperto/chiuso dei soli blocchi collassabili. Default: chiusi.
     private readonly Dictionary<string, bool> _open = new();
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        _registrationOpen = (await RegistrationGate.EvaluateAsync()).Allowed;
+
         currentUrl = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
 
         foreach (var key in NavModel.CollapsibleKeys)

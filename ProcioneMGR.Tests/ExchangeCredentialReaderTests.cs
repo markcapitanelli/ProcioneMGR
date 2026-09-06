@@ -67,6 +67,9 @@ public sealed class ExchangeCredentialReaderTests : IAsyncDisposable
         {
             await db.Database.EnsureCreatedAsync();
             db.Users.Add(new ApplicationUser { Id = "u1", UserName = "t", Email = "t@t.io" });
+            // [R21] Un secondo utente serve a esercitare la semantica del POOL CONDIVISO: il
+            // percorso di firma non guarda chi ha inserito la riga (vedi il test in fondo).
+            db.Users.Add(new ApplicationUser { Id = "u2", UserName = "altro", Email = "altro@t.io" });
             await db.SaveChangesAsync();
         }
         return dbFactory;
@@ -75,13 +78,13 @@ public sealed class ExchangeCredentialReaderTests : IAsyncDisposable
     /// <summary>Inserisce una riga col ciphertext così com'è (o plaintext corrotto, per il caso base64 invalido).</summary>
     private static async Task SeedRawAsync(IDbContextFactory<ApplicationDbContext> dbFactory,
         ExchangeName exchange, bool testnet, string label, string apiKeyStored, string apiSecretStored,
-        string? passphraseStored, DateTime createdAt)
+        string? passphraseStored, DateTime createdAt, string userId = "u1")
     {
         await using var db = await dbFactory.CreateDbContextAsync();
         await db.Database.ExecuteSqlInterpolatedAsync($@"
             INSERT INTO ""ExchangeCredentials""
                 (""UserId"", ""ExchangeName"", ""Label"", ""ApiKey"", ""ApiSecret"", ""Passphrase"", ""IsTestnet"", ""CreatedAt"")
-            VALUES ('u1', {exchange.ToString()}, {label}, {apiKeyStored}, {apiSecretStored},
+            VALUES ({userId}, {exchange.ToString()}, {label}, {apiKeyStored}, {apiSecretStored},
                     CAST({passphraseStored} AS text), {testnet}, {createdAt})");
     }
 
@@ -217,6 +220,42 @@ public sealed class ExchangeCredentialReaderTests : IAsyncDisposable
         var reader = new ExchangeCredentialReader(dbFactory, currentAes, NullLogger<ExchangeCredentialReader>.Instance);
 
         Assert.Null(await reader.FindForTradingAsync(ExchangeName.Binance, testnet: true));
+    }
+
+    /// <summary>
+    /// [R21, 2026-09-06] LA DECISIONE, MESSA PER ISCRITTO IN UN TEST: il pool di credenziali è UNO
+    /// per progetto. <c>FindForTradingAsync</c> restituisce la riga anche se l'ha inserita un altro
+    /// utente, mentre <c>LoadForUserAsync</c> — la vetrina di /settings/exchanges — non la mostra.
+    ///
+    /// <para>Questa asimmetria era il difetto: sembrava esserci un isolamento per utente che nel
+    /// percorso di firma non c'è mai stato. La strada scelta dal proprietario non è aggiungere il
+    /// filtro qui — il motore è un servizio di fondo e non ha un utente, eleggerne uno in
+    /// configurazione creerebbe uno stato che diverge e ferma le corsie in silenzio — ma alzare
+    /// <c>/settings/exchanges</c> al ruolo Admin. Se un giorno questo test diventasse rosso perché
+    /// qualcuno ha aggiunto il filtro, la domanda da farsi PRIMA di aggiornarlo è: chi possiede le
+    /// corsie? Finché non c'è una risposta, il filtro sposta il difetto invece di chiuderlo.</para>
+    /// </summary>
+    [Fact]
+    public async Task FindForTrading_VedeAncheLaRigaDiUnAltroUtente_IlPoolEUnoPerProgetto()
+    {
+        var dbFactory = await BuildDbAsync();
+        var currentAes = BuildAes(RandomKey());
+
+        await SeedRawAsync(dbFactory, ExchangeName.Bitget, testnet: false, "Di un altro account",
+            currentAes.Encrypt("chiave-altrui"), currentAes.Encrypt("segreto-altrui"), currentAes.Encrypt("p"),
+            DateTime.UtcNow, userId: "u2");
+
+        var reader = new ExchangeCredentialReader(dbFactory, currentAes, NullLogger<ExchangeCredentialReader>.Instance);
+
+        // Il percorso di firma la trova...
+        var found = await reader.FindForTradingAsync(ExchangeName.Bitget, testnet: false);
+        Assert.NotNull(found);
+        Assert.Equal("Di un altro account", found.Label);
+        Assert.Equal("chiave-altrui", found.ApiKey);
+
+        // ...la vetrina dell'utente u1, no. È l'asimmetria che rende il ruolo Admin sulla pagina
+        // l'unico confine reale.
+        Assert.Empty(await reader.LoadForUserAsync("u1"));
     }
 
     public async ValueTask DisposeAsync()

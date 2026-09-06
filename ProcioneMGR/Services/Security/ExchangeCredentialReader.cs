@@ -44,6 +44,20 @@ public interface IExchangeCredentialReader
     /// PREFERISCE una riga decifrabile se ne esiste una (caso tipico: credenziali reinserite dopo
     /// un cambio di master key, con la vecchia riga ancora in tabella); se esistono solo righe
     /// indecifrabili restituisce la prima, flaggata; null se non ce n'è nessuna.
+    ///
+    /// <para><b>DECISIONE R21 (2026-09-06): il pool è UNO per progetto, e resta così.</b> Il filtro
+    /// per <c>UserId</c> qui NON manca per svista: il motore è un servizio di fondo e non ha un
+    /// utente. Filtrare avrebbe richiesto di eleggere un «utente operatore» in configurazione —
+    /// cioè uno stato che può divergere dalla tabella e che, quando diverge, produce un motore
+    /// silenziosamente senza credenziali e corsie ferme. Il proprietario ha scelto l'altra strada:
+    /// il confine è il <b>ruolo Admin sulla porta di /settings/exchanges</b>, non un filtro qui.</para>
+    ///
+    /// <para>Perché la scelta contava: fino al 2026-09-06 la pagina aveva <c>[Authorize]</c> nudo e
+    /// la registrazione era aperta, quindi chiunque poteva inserire una riga che questo metodo
+    /// avrebbe potuto restituire al motore per firmare ordini — l'isolamento per utente esisteva
+    /// solo in lettura e cancellazione, cioè nella vetrina. Se un giorno servisse davvero
+    /// separare gli operatori, la modifica va fatta <b>insieme</b> a chi decide quale utente
+    /// possiede le corsie: cambiarla qui da sola sposta il difetto, non lo chiude.</para>
     /// </summary>
     Task<DecryptedExchangeCredential?> FindForTradingAsync(ExchangeName exchange, bool testnet, CancellationToken ct = default);
 

@@ -7,6 +7,7 @@
 @using Microsoft.AspNetCore.Identity
 @using Microsoft.AspNetCore.WebUtilities
 @using ProcioneMGR.Data
+@using ProcioneMGR.Services.Security
 
 @inject SignInManager<ApplicationUser> SignInManager
 @inject UserManager<ApplicationUser> UserManager
@@ -15,6 +16,7 @@
 @inject NavigationManager NavigationManager
 @inject IdentityRedirectManager RedirectManager
 @inject ILogger<ExternalLogin> Logger
+@inject IRegistrationGate RegistrationGate
 
 <PageTitle>Register</PageTitle>
 
@@ -142,6 +144,19 @@
         if (externalLoginInfo is null)
         {
             RedirectManager.RedirectToWithStatus("Account/Login", "Error loading external login information during confirmation.", HttpContext);
+            return;
+        }
+
+        // [R22 2026-09-06] Anche questa è una creazione di account, e passa dallo stesso cancello di
+        // /Account/Register. Oggi il percorso è irraggiungibile — in Program.cs non è registrato
+        // nessun provider esterno, solo AddIdentityCookies — ma è l'unica altra porta che chiama
+        // UserManager.CreateAsync, e per giunta senza assegnare alcun ruolo: lasciarla fuori
+        // significherebbe che accendere un provider domani riapre la registrazione in silenzio.
+        var gate = await RegistrationGate.EvaluateAsync();
+        if (!gate.Allowed)
+        {
+            Logger.LogWarning("Registrazione da provider esterno rifiutata: chiusa su questa istanza.");
+            RedirectManager.RedirectToWithStatus("Account/Login", gate.Reason, HttpContext);
             return;
         }
 

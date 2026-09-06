@@ -81,6 +81,13 @@ public sealed class ConfigurationUiCoverageTests
         // stesso silenzio se si fosse fermato davvero.
         ["Backup"] = "Components/Pages/Admin/Backup.razor",
 
+        // --- /admin/users: chi può entrare ---
+        // [R22 2026-09-06] La registrazione libera era aperta a chiunque raggiungesse l'app, senza
+        // nessun interruttore: l'unico modo di chiuderla sarebbe stato ricompilare. Ora è una
+        // manopola, e sta accanto all'elenco degli utenti perché è lì che si guarda quando ci si
+        // chiede chi ha accesso.
+        ["Registration"] = "Components/Pages/AdminUsers.razor",
+
         // --- pagine operative ---
         ["Trading:Safety"] = "Components/Pages/Trading.razor",
         ["Execution"] = "Components/Pages/ExecutionLab.razor",

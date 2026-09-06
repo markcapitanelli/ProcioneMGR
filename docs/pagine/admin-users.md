@@ -14,12 +14,34 @@ Gestisce **utenti e ruoli**. Il modello a tre ruoli con permessi crescenti (dal 
 
 | Ruolo | Permessi |
 |---|---|
-| **User** | Accesso base: Dashboard, Backtest, le proprie strategie e credenziali |
-| **Manager** | In più: Watchlist, Optimization, Discovery, Ensemble, ML Lab e tutte le pagine di analisi avanzata |
-| **Admin** | In più: questa pagina, Autonomia, Backup e le impostazioni di sicurezza del trading live |
+| **User** | Accesso base: Home, Backtest, Analisi della serie, le proprie strategie |
+| **Manager** | In più: Dashboard, Watchlist, Optimization, Discovery, Ensemble, ML Lab e tutte le pagine di analisi avanzata |
+| **Admin** | In più: questa pagina, Autonomia, Protezioni, Backup, **Credenziali Exchange** e le impostazioni di sicurezza del trading live |
+
+> **Cambiato il 2026-09-06 ([R21](../audit/09_RISKS_AND_TECH_DEBT.md#r21)).** Dashboard e Credenziali
+> Exchange non sono più di livello `User`: la prima *scrive* sulle serie di mercato condivise, la
+> seconda alimenta il pool di chiavi con cui il motore firma gli ordini — un pool solo, comune al
+> progetto, non una cassetta privata per utente.
 
 Regola di bootstrap: **il primo utente registrato diventa Admin automaticamente**; tutti
 gli altri partono come User.
+
+## Registrazione di nuovi account (R22, 2026-09-06)
+
+Il pannello in cima alla pagina governa `Registration:AllowSelfRegistration`, **default `false`**:
+la registrazione libera da `/Account/Register` è **chiusa**. Fino al 2026-09-06 era aperta a chiunque
+raggiungesse l'app, e ogni nuovo account otteneva il ruolo `User` — innocuo su `localhost`, la porta
+d'ingresso su un'istanza esposta.
+
+- Con la manopola **chiusa**: il modulo di registrazione non si disegna, e un POST costruito a mano
+  viene comunque rifiutato (il ricontrollo è lato server). Menù, Home e pagina di login non mostrano
+  più l'invito a registrarsi.
+- Con la manopola **aperta**: chiunque può registrarsi e ottiene il ruolo `User`. Aprila per il tempo
+  necessario a far registrare la persona, poi richiudila — il badge nell'intestazione del pannello
+  dice sempre quale dei due stati è in vigore *nel processo*, non solo nel file.
+- **Eccezione di primo accesso**: su un database senza nessun utente la registrazione è consentita a
+  prescindere dalla manopola. È l'unico modo di creare il primo Admin, e senza un Admin questo
+  pannello non sarebbe raggiungibile.
 
 ## Struttura della pagina
 

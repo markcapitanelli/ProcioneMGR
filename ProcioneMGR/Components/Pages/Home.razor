@@ -28,6 +28,7 @@
 @inject ProcioneMGR.Services.Sentiment.SentimentHeritageSnapshot HeritageSnapshot
 @inject ProcioneMGR.Services.Health.ResearchLivenessProbe ResearchProbe
 @inject ProcioneMGR.Services.Health.HeartbeatBoardProbe BattitiProbe
+@inject ProcioneMGR.Services.Security.IRegistrationGate RegistrationGate
 
 <PageTitle>ProcioneMGR</PageTitle>
 
@@ -459,7 +460,12 @@
                 all'operatività reale, un passo alla volta.
             </p>
             <a class="btn btn-primary btn-lg me-2" href="Account/Login"><i class="bi bi-box-arrow-in-right me-1"></i> Login</a>
-            <a class="btn btn-outline-secondary btn-lg" href="Account/Register">Registrati</a>
+            @* [R22 2026-09-06] Nessun invito a registrarsi se la registrazione è chiusa: la
+               vetrina è la prima cosa che vede chi arriva da fuori. *@
+            @if (_registrationOpen)
+            {
+                <a class="btn btn-outline-secondary btn-lg" href="Account/Register">Registrati</a>
+            }
         </div>
     </NotAuthorized>
 </AuthorizeView>
@@ -467,6 +473,7 @@
 @code {
     private string? _displayName;
     private HomeStats? _stats;
+    private bool _registrationOpen;
 
     /// <summary>Un alert di decadimento con la corsia a cui appartiene: senza, otto corsie che
     /// eseguono strategie omonime darebbero righe indistinguibili.</summary>
@@ -619,6 +626,10 @@
 
     protected override async Task OnInitializedAsync()
     {
+        // [R22] PRIMA dell'uscita anticipata: il pulsante «Registrati» sta proprio nel ramo
+        // anonimo, l'unico che non arriverebbe mai qui sotto.
+        _registrationOpen = (await RegistrationGate.EvaluateAsync()).Allowed;
+
         var state = await AuthProvider.GetAuthenticationStateAsync();
         if (state.User.Identity?.IsAuthenticated != true)
         {

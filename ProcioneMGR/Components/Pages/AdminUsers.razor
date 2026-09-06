@@ -2,10 +2,16 @@
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Identity
+@using Microsoft.Extensions.Options
 @using ProcioneMGR.Data
+@using ProcioneMGR.Services.Config
+@using ProcioneMGR.Services.Security
 @attribute [Authorize(Roles = AppRoles.Admin)]
 
 @inject UserManager<ApplicationUser> UserManager
+@inject IOptionsMonitor<RegistrationOptions> RegOptions
+@inject IRegistrationGate RegistrationGate
+@inject IAppConfigWriter ConfigWriter
 
 <PageTitle>Gestione Utenti</PageTitle>
 
@@ -19,25 +25,35 @@
     <dl class="row">
         <dt class="col-sm-3">User</dt>
         <dd class="col-sm-9">
-            Le sei pagine che non muovono e non configurano niente: Home, Dashboard,
-            Analisi della serie, Backtest, Le mie strategie e le proprie credenziali exchange.
-            Può <em>simulare</em> quanto vuole; non può vedere né toccare le corsie.
+            Le quattro pagine che non muovono e non configurano niente: Home, Analisi della serie,
+            Backtest e Le mie strategie. Può <em>simulare</em> quanto vuole; non può vedere né
+            toccare le corsie.
         </dd>
         <dt class="col-sm-3">Manager</dt>
         <dd class="col-sm-9">
-            In più: tutta la ricerca e l'operatività — Watchlist, Optimization, Discovery,
-            Pipeline, Ensemble, ML Lab, Registry, Archivio candidati, Campagne, Metriche,
-            Supervisione AI, Modalità semplice e <strong>Trading</strong>, quindi avvio e arresto
-            delle corsie. Il pannello delle soglie di sicurezza dentro <em>Trading</em> resta però
-            di sola lettura: quello è Admin.
+            In più: tutta la ricerca e l'operatività — Dashboard, Watchlist, Optimization,
+            Discovery, Pipeline, Ensemble, ML Lab, Registry, Archivio candidati, Campagne,
+            Metriche, Supervisione AI, Modalità semplice e <strong>Trading</strong>, quindi avvio e
+            arresto delle corsie. Il pannello delle soglie di sicurezza dentro <em>Trading</em>
+            resta però di sola lettura: quello è Admin.
         </dd>
         <dt class="col-sm-3">Admin</dt>
         <dd class="col-sm-9">
-            In più le quattro pagine che cambiano le regole del gioco: questa,
-            <a href="admin/autonomy">Autonomia</a>, <a href="admin/protections">Protezioni</a> e
-            <a href="admin/backup">Backup</a> — più le soglie di sicurezza in Trading.
+            In più le pagine che cambiano le regole del gioco: questa,
+            <a href="admin/autonomy">Autonomia</a>, <a href="admin/protections">Protezioni</a>,
+            <a href="admin/backup">Backup</a> e <a href="settings/exchanges">Credenziali
+            Exchange</a> — più le soglie di sicurezza in Trading.
         </dd>
     </dl>
+    @* [R21 2026-09-06] Dashboard è salita a Manager perché il suo «scarica storico» scrive sulle
+       serie OHLCV condivise; le credenziali exchange sono salite ad Admin perché il pool è UNO per
+       progetto e chi ci scrive dentro decide con quali chiavi il motore firma gli ordini. *@
+    <p class="small text-muted mb-0">
+        Perché Dashboard e Credenziali Exchange non sono più di livello User: la prima <em>scrive</em>
+        sulle serie di mercato condivise (il pulsante «scarica storico»), la seconda alimenta il
+        pool di chiavi con cui il motore firma gli ordini — un pool solo, comune al progetto, non
+        una cassetta privata per utente. Rilievo R21 del 2026-09-06.
+    </p>
     <dl class="row mb-0">
         <dt class="col-sm-3">Ruolo attuale</dt>
         <dd class="col-sm-9">I permessi che l'utente ha in questo momento.</dd>
@@ -49,6 +65,63 @@
         </dd>
     </dl>
 </GuidaPanel>
+
+@* [R22 2026-09-06] Registrazione di nuovi account. Prima /Account/Register era aperta a chiunque
+   raggiungesse l'app e il nuovo account nasceva con ruolo User: finché si girava su localhost non
+   aveva conseguenze, con l'esposizione è la porta d'ingresso. Il pannello mostra lo stato IN
+   VIGORE nel processo, non solo quello salvato su file. *@
+<div class="card mb-4" style="max-width: 820px;">
+    <div class="card-header d-flex align-items-center gap-2">
+        <span>Registrazione di nuovi account</span>
+        @if (RegOptions.CurrentValue.AllowSelfRegistration)
+        {
+            <span class="badge bg-warning text-dark">APERTA a chiunque</span>
+        }
+        else
+        {
+            <span class="badge bg-success">CHIUSA</span>
+        }
+    </div>
+    <div class="card-body">
+        <p class="small text-muted">
+            Chiave <code>Registration:AllowSelfRegistration</code>. Con la registrazione
+            <strong>aperta</strong>, chiunque raggiunga l'indirizzo della piattaforma può crearsi un
+            account e ottiene il ruolo <strong>User</strong>: gli bastano per Backtest, Analisi
+            della serie e Le mie strategie. Tenerla <strong>chiusa</strong> è il default, e la
+            scelta giusta su un'istanza esposta: aprila solo per il tempo necessario a far
+            registrare la persona, poi richiudila.
+        </p>
+        <p class="small text-muted">
+            <strong>Eccezione di primo accesso:</strong> se il database non ha ancora nessun utente
+            la registrazione è consentita comunque — è l'unico modo di creare il primo Admin, e
+            senza un Admin questo pannello non sarebbe raggiungibile da nessuno.
+        </p>
+
+        <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="allowSelfRegistration"
+                   @bind="_allowSelfRegistration" />
+            <label class="form-check-label" for="allowSelfRegistration">
+                Consenti a chiunque di registrarsi (<code>AllowSelfRegistration</code>)
+            </label>
+        </div>
+
+        <button class="btn btn-sm btn-primary" @onclick="SaveRegistrationAsync" disabled="@_savingRegistration">
+            @(_savingRegistration ? "Salvataggio…" : "Salva")
+        </button>
+
+        @if (_registrationMessage is not null)
+        {
+            <div class="alert @(_registrationError ? "alert-danger" : "alert-success") mt-3 mb-0 py-2 small">
+                @_registrationMessage
+            </div>
+        }
+
+        <div class="small text-muted mt-3">
+            Stato in vigore adesso, come lo vede chi arriva su <code>/Account/Register</code>:
+            <em>@(_gateReason ?? "—")</em>
+        </div>
+    </div>
+</div>
 
 @if (rows is null)
 {
@@ -110,6 +183,13 @@ else
     private List<UserRow>? rows;
     private string? message;
 
+    // [R22] Manopola della registrazione: forma del modulo, stato in vigore e messaggio di esito.
+    private bool _allowSelfRegistration;
+    private bool _savingRegistration;
+    private bool _registrationError;
+    private string? _registrationMessage;
+    private string? _gateReason;
+
     private sealed class UserRow
     {
         public required string Id { get; init; }
@@ -117,7 +197,59 @@ else
         public List<string> Roles { get; set; } = [];
     }
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        _allowSelfRegistration = RegOptions.CurrentValue.AllowSelfRegistration;
+        _gateReason = (await RegistrationGate.EvaluateAsync()).Reason;
+        await LoadAsync();
+    }
+
+    /// <summary>
+    /// [R22] Scrive <c>Registration:AllowSelfRegistration</c> e ASPETTA che il monitor l'abbia
+    /// recepita: dire «salvato» mentre nel processo vige ancora il valore di prima sarebbe un
+    /// controllo che rassicura a prescindere dalla realtà, e qui la realtà è chi può entrare.
+    /// </summary>
+    private async Task SaveRegistrationAsync()
+    {
+        _savingRegistration = true;
+        _registrationMessage = null;
+        try
+        {
+            await ConfigWriter.SaveSectionAsync(RegistrationOptions.SectionName,
+                new RegistrationOptions { AllowSelfRegistration = _allowSelfRegistration });
+
+            var applied = await WaitForRegistrationReloadAsync();
+            _gateReason = (await RegistrationGate.EvaluateAsync()).Reason;
+
+            _registrationError = !applied;
+            _registrationMessage = applied
+                ? (_allowSelfRegistration
+                    ? "Registrazione APERTA e già in vigore. Richiudila appena la persona si è registrata."
+                    : "Registrazione CHIUSA e già in vigore.")
+                : "Salvata in appsettings.json, ma nel processo vige ancora il valore precedente: "
+                  + "ricarica la pagina fra qualche secondo prima di considerarla applicata.";
+        }
+        catch (Exception ex)
+        {
+            _registrationError = true;
+            _registrationMessage = $"Salvataggio fallito: {ex.Message}";
+        }
+        finally
+        {
+            _savingRegistration = false;
+        }
+    }
+
+    /// <summary>Il monitor rilegge il file con ~1s di ritardo (reloadOnChange): si attende fino a 3s.</summary>
+    private async Task<bool> WaitForRegistrationReloadAsync()
+    {
+        for (var i = 0; i < 15; i++)
+        {
+            if (RegOptions.CurrentValue.AllowSelfRegistration == _allowSelfRegistration) return true;
+            await Task.Delay(200);
+        }
+        return false;
+    }
 
     private async Task LoadAsync()
     {
