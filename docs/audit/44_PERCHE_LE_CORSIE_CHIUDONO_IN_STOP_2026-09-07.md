@@ -140,6 +140,38 @@ l'interruttore del guardiano in `/admin/protections`, scheda «Diagnosi del brac
 
 ---
 
+## 4-bis. Lo stato vero: **nessuna corsia è oggi giudicabile**
+
+Uscite a barriera sul simbolo su cui la corsia opera adesso, e quante di quelle si possono davvero
+datare (hanno un'ora di parete, e il ritardo di scrittura sta sotto tre barre più mezz'ora):
+
+| Corsia | Serie | Uscite a barriera | Databili e vive |
+|---|---|---|---|
+| 0 | ADA/USDT 5m | 5 | **0** |
+| 1 | XLM/USDT 1h | 13 | **0** |
+| 2 | ADA/USDT 4h | 17 | **0** |
+| 3 | AAVE/USDT 4h | 2 | **0** |
+| 4 | XLM/USDT 4h | 0 | **0** |
+| 5 | UNI/USDT 4h | 9 | **0** |
+| 6 | DOGE/USDT 15m | 2 | **2** |
+| 7 | TRX/USDT 4h | 1 | **0** |
+
+Due uscite databili in tutta la piattaforma, contro le venti che servono per una sola corsia. Il
+verdetto di ogni corsia è quindi **non giudicabile**, ed è la risposta corretta: le 119 uscite in
+stop di cui si parlava sono in larghissima parte righe che non si possono datare, e attribuire loro
+una percentuale sarebbe inventare una misura.
+
+Questo non toglie valore al confronto: il **nominale** si calcola comunque, perché ha bisogno solo
+di candele, e resta il denominatore che rende «troppi stop» una frase falsificabile. Ma dice a che
+punto siamo davvero: la piattaforma **non ha ancora osservato sé stessa** abbastanza da poter
+giudicare una corsia.
+
+Le due uscite databili della corsia 6 esistono perché `RecordedAtUtc` è nata il 2026-09-01 (K41):
+tutto ciò che è avvenuto prima non è databile e non lo diventerà. Aspettare non risolve il passato —
+servono uscite nuove.
+
+---
+
 ## 5. Quanto tempo serve prima di poter dire qualcosa sui soldi
 
 Al ritmo di operazioni dichiarato dalle gambe, ogni corsia impiega **da 7 a 18 mesi** ad accumulare
