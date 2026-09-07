@@ -42,6 +42,7 @@
 | 41 | [41_GOVERNO_DELLA_CACCIA_2026-09-03.md](41_GOVERNO_DELLA_CACCIA_2026-09-03.md) | K58 copertura, K59 tetto in ore, K60 proponitore |
 | 42 | [42_REVISIONE_FILONE_K_2026-09-03.md](42_REVISIONE_FILONE_K_2026-09-03.md) | **revisione completa del filone**: 14 segnalazioni alte, tre difetti dal vivo, correzioni applicate |
 | 43 | [43_REVISIONE_COMPLETA_2026-09-05.md](43_REVISIONE_COMPLETA_2026-09-05.md) | **revisione completa della piattaforma e presa in carico operativa**: barriere verificate, 6 correzioni alla flotta/promozione (PR #139), il carry senza misure, la macchina che si spegne, corsie 0 e 1 rischierate |
+| 44 | [44_PERCHE_LE_CORSIE_CHIUDONO_IN_STOP_2026-09-07.md](44_PERCHE_LE_CORSIE_CHIUDONO_IN_STOP_2026-09-07.md) | **le corsie accese che non decidevano** (buffer solo in memoria, PR #147) e **perché tante uscite in stop**: è l'aritmetica del bracket, non guasti né segnale; il misuratore, i quattro verdetti, il guardiano che parla ai cambiamenti |
 
 ## Secondo passaggio — 2026-08-04, sera
 

@@ -167,3 +167,23 @@ corsia e viene scartato (`ProtectiveExitShadowReplayGuard`). Le righe scritte pr
 particolare le 14 del 23/08 18:05-18:07 e del 31/08 20:24-20:25 con costi fra 700 e 2.000 bps e
 anticipo zero — sono replay, non crolli con gap: il pannello le mostra ancora, vanno lette così.
 Dettaglio in `docs/audit/42_REVISIONE_FILONE_K_2026-09-03.md` §10.3.
+
+## Diagnosi del bracket (2026-09-07)
+
+Scheda 5-bis. Manopole di `Trading:BracketDiagnosis` e interruttore del guardiano che rimisura tutte
+le corsie ogni 24 ore e **parla solo ai cambiamenti** di verdetto: quando una corsia esce dal
+previsto, e quando per la prima volta accumula abbastanza uscite per essere giudicata. Il silenzio è
+l'esito normale, ed è deliberato: un avviso che suona a ogni giro diventa rumore.
+
+| Chiave | Default | Nota |
+|---|---|---|
+| `Enabled` | `true` | diagnostica pura, non tocca niente: spegnerla è la scelta da motivare |
+| `CheckIntervalHours` | 24 | le uscite arrivano poche al mese; misurare più spesso aggiunge carico, non informazione |
+| `MinBarrierExits` | 20 | **abbassarla non rende severo il giudizio, lo rende rumoroso** |
+| `AllowedDeviationPoints` | 15 | con venti uscite l'errore campionario ne vale già otto |
+| `MaxCandles` | 5000 | 17 giorni a 5m, quasi tre anni a 4h |
+| `RoundTripCostPercent` | 0,20 | solo per il valore atteso; non influenza conteggi né verdetto |
+
+La tabella per corsia sta in `/trading`. Il servizio **non scrive nulla**: né configurazioni di
+corsia né parametri di rischio, e la scansione delle geometrie alternative produce numeri da
+guardare, non da applicare.
