@@ -241,3 +241,55 @@ Le tre di maggior peso, tutte fuori dalla pagina:
   (`TradingEngineState.LastCandleUtc`), e il worker alimenta la serie **della sessione** invece di
   quella della configurazione viva — che poteva essere riscritta sotto una corsia in esecuzione,
   consegnando le candele di un altro strumento a un motore con posizioni aperte.
+
+## [2026-09-07] Il battito diceva «consegnato», non «deciso»
+
+Il buffer delle candele di `TradingEngine` vive **solo in memoria** e lo riempie unicamente
+`ProcessCandleAsync`. Dopo ogni riavvio del processo la corsia riprendeva dal segnalibro, marcava a
+mercato e onorava gli stop, ma il `if (closes.Count >= 5)` le impediva di interrogare **una sola
+strategia** finché non aveva accumulato barre nuove — e cinque non bastano: gli indicatori veri ne
+vogliono 14 (Supertrend), circa 29 (MacdTrend), 60 (GridMeanReversion con ancora a 60). Su una
+corsia a 4 ore sono dieci giorni di processo vivo senza interruzioni, mentre il pod si rischiera a
+ogni merge.
+
+Misurato il 2026-09-06: **sei corsie su otto** con 1-4 barre in memoria contro le cinque del
+cancello, **zero ordini di flotta in quaranta ore**, le corsie 2-3-4-5 senza un solo `TradeRecord`
+da 14, 7, 5 e 14 giorni. Tutte e otto verdi ovunque, e non per caso: i chip e la Home leggono
+`IsRunning`, il battito dell'header contava le candele **consegnate**, e la sonda E6 misura lo
+stesso campo — che si chiama «ultima candela valutata» ma è scritto **prima** del cancello.
+
+Dalla correzione (PR #147) il buffer si ricostruisce dall'archivio all'avvio fermandosi al
+segnalibro, il motore espone `BufferedBars` e `LastStrategyEvaluationUtc` (**decisione**, non
+consegna), l'header mostra un badge giallo «STRATEGIE NON VALUTATE (n barre in memoria, ne servono
+5)» finché la corsia non ha deciso almeno una volta, e `LaneInvariantWatchdog` grida se una corsia
+accesa non decide dopo la grazia del timeframe.
+
+## [2026-09-07] Pannello «Perché le corsie chiudono in stop»
+
+Sopra il pannello del ritardo delle uscite. Risponde con un **denominatore** a una domanda che
+altrimenti non è falsificabile: quanti stop produce da sola la geometria del bracket, senza che
+nessuno abbia sbagliato niente.
+
+Il bottone «Misura tutte le corsie» fa correre stop contro target sulle candele vere di ogni corsia,
+su entrate prese a **ogni** barra e su **entrambi** i lati, riusando
+`ProtectiveExitEvaluator.EvaluateStopAndTarget` — la funzione d'uscita del motore, non una sua
+copia. Con un target 2,7-4,2 volte più lontano dello stop le otto corsie danno fra l'85% e il 94% di
+uscite in stop; l'osservato in esercizio è l'85% (119 contro 21), cioè **il numero nominale**.
+
+Quattro verdetti, tutti stati del mondo:
+
+| Verdetto | Significato |
+|---|---|
+| non misurabile | gamba senza protezioni o serie troppo corta, col motivo scritto |
+| non giudicabile | meno di 20 uscite vive: si dice quante mancano e in quanti mesi |
+| come previsto | l'osservato coincide col nominale: non c'è altra causa da cercare |
+| scarto dal previsto | oltre 15 punti, e il testo dice da che parte pende |
+
+Sotto la tabella, le **geometrie alternative** sulla serie della corsia selezionata: lo stop resta
+quello della gamba e varia solo la distanza del target. Nessuna riga si può applicare da qui, ed è
+voluto — il pannello non scrive né configurazioni né parametri di rischio. Il valore atteso mostrato
+comprende le finestre che **non toccano nessuna barriera** (il 51-90% del totale): escluderle
+porterebbe il numero da −0,2% a −1,4% e farebbe sembrare rovinoso qualunque bracket.
+
+Soglie e interruttore del guardiano periodico: `/admin/protections`, scheda «Diagnosi del bracket».
+Dettaglio in `docs/audit/44_PERCHE_LE_CORSIE_CHIUDONO_IN_STOP_2026-09-07.md`.

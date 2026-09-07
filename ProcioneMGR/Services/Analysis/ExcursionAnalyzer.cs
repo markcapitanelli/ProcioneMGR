@@ -137,7 +137,8 @@ public sealed class ExcursionAnalyzer
     /// è il regime dell'ultima candela, per l'uso adattivo.
     /// </summary>
     internal RegimeConditionedBracket SuggestHorizonBracket(
-        IReadOnlyList<OhlcvData> candles, OrderSide side, int horizon = 10, decimal percentile = 0.95m, int atrPeriod = 14)
+        IReadOnlyList<OhlcvData> candles, OrderSide side, int horizon = 10, decimal percentile = 0.95m, int atrPeriod = 14,
+        bool winnersOnly = true)
     {
         ArgumentNullException.ThrowIfNull(candles);
         if (horizon < 1) throw new ArgumentOutOfRangeException(nameof(horizon));
@@ -150,11 +151,11 @@ public sealed class ExcursionAnalyzer
         var byRegime = new Dictionary<VolatilityRegime, HorizonExcursion>();
         foreach (var reg in (ReadOnlySpan<VolatilityRegime>)[VolatilityRegime.Low, VolatilityRegime.Normal, VolatilityRegime.High])
         {
-            byRegime[reg] = Aggregate(samples.Where(s => Classify(s.EntryAtrPercent, lo, hi) == reg), horizon, percentile);
+            byRegime[reg] = Aggregate(samples.Where(s => Classify(s.EntryAtrPercent, lo, hi) == reg), horizon, percentile, winnersOnly);
         }
 
         var current = candles.Count > atrPeriod && atrPct[^1] > 0m ? Classify(atrPct[^1], lo, hi) : VolatilityRegime.Normal;
-        return new RegimeConditionedBracket(side, horizon, percentile, byRegime, Aggregate(samples, horizon, percentile), current);
+        return new RegimeConditionedBracket(side, horizon, percentile, byRegime, Aggregate(samples, horizon, percentile, winnersOnly), current);
     }
 
     /// <summary>
@@ -164,9 +165,9 @@ public sealed class ExcursionAnalyzer
     /// </summary>
     public RiskBracket SuggestAdaptiveBracket(
         IReadOnlyList<OhlcvData> candles, OrderSide side, int horizon = 10, decimal percentile = 0.95m,
-        int atrPeriod = 14, int minRegimeSamples = 30)
+        int atrPeriod = 14, int minRegimeSamples = 30, bool winnersOnly = true)
     {
-        var b = SuggestHorizonBracket(candles, side, horizon, percentile, atrPeriod);
+        var b = SuggestHorizonBracket(candles, side, horizon, percentile, atrPeriod, winnersOnly);
         var chosen = b.ByRegime.TryGetValue(b.CurrentRegime, out var r) && r.Samples >= minRegimeSamples ? r : b.Overall;
         if (chosen.Samples == 0) chosen = b.Overall;
         return new RiskBracket(chosen.StopPercentile, chosen.TakeProfitPercentile);
@@ -213,14 +214,47 @@ public sealed class ExcursionAnalyzer
         return samples;
     }
 
-    /// <summary>Percentili di MAE (→SL) e MFE (→TP) sui SOLI trade vincenti del sottoinsieme.</summary>
-    private static HorizonExcursion Aggregate(IEnumerable<HorizonSample> samples, int horizon, decimal percentile)
+    /// <summary>
+    /// Percentili di MAE (→SL) e MFE (→TP), per default sui SOLI trade vincenti del sottoinsieme.
+    ///
+    /// <para><b>[2026-09-07] Che cosa fa davvero questo filtro, misurato.</b> Il filtro sui vincenti
+    /// è l'unica ragione per cui il take profit schierato è 2,5-4,2 volte lo stop. Non è una
+    /// proprietà del mercato: è un artefatto di selezione, e lo si dimostra per identità aritmetica.
+    /// Per un long l'escursione avversa è il drawdown e la favorevole è il runup; per uno short i due
+    /// ruoli si scambiano (righe 197-207). Quindi, sulle STESSE candele, la distribuzione della MAE
+    /// dei long è la distribuzione della MFE degli short e viceversa — e siccome
+    /// <c>AutoBracket.ComputeAsync</c> media i due lati, senza questo filtro stop e take pescano
+    /// dalla stessa coppia di code e vengono <b>identici al centesimo</b>. Col filtro le due
+    /// popolazioni divergono: fra i vincitori il runup è grande per costruzione e il drawdown è
+    /// piccolo, quindi allo stesso percentile il take esce sistematicamente più lontano.</para>
+    ///
+    /// <para><b>Perché conta.</b> Un take tre volte più lontano dello stop viene toccato 5-13 volte
+    /// meno spesso nello stesso orizzonte: il rapporto 119 stop contro 21 target osservato in
+    /// esercizio è la conseguenza aritmetica di questa calibrazione, su entrate qualunque. Non è
+    /// sfortuna, non è il segnale, non è l'infrastruttura (0 stop su 82 entro un'ora da un crash o un
+    /// rilascio).</para>
+    ///
+    /// <para><b>E perché il default NON cambia.</b> Calcolato onestamente — contando anche il 51-90%
+    /// di operazioni che non toccano nessuna barriera — il valore atteso per operazione su entrate
+    /// qualunque vale <b>meno la commissione e nient'altro</b>, con o senza filtro: -0,197% contro
+    /// -0,200%. La geometria del bracket redistribuisce la forma dell'esito (quante volte si vince
+    /// contro quanto si vince), non la media. Togliere il filtro non farebbe guadagnare la
+    /// piattaforma: renderebbe solo il rapporto stop/target simmetrico. È una decisione del
+    /// proprietario, non una correzione ovvia, e per questo <paramref name="winnersOnly"/> nasce
+    /// <c>true</c> — il comportamento resta quello schierato.</para>
+    /// </summary>
+    /// <param name="winnersOnly">
+    /// <c>true</c> (default, comportamento storico) = percentili sui soli campioni che chiudono in
+    /// profitto all'orizzonte. <c>false</c> = tutti i campioni; serve alla diagnosi e al test che
+    /// inchioda l'identità, non al percorso di schieramento.
+    /// </param>
+    private static HorizonExcursion Aggregate(IEnumerable<HorizonSample> samples, int horizon, decimal percentile, bool winnersOnly = true)
     {
         var mae = new List<decimal>();
         var mfe = new List<decimal>();
         foreach (var s in samples)
         {
-            if (!s.FavorableOutcome) continue;
+            if (winnersOnly && !s.FavorableOutcome) continue;
             mae.Add(s.Adverse);
             mfe.Add(s.Favorable);
         }
