@@ -372,6 +372,16 @@ builder.Services.AddSingleton<ProcioneMGR.Services.Analysis.GapLapAnalyzer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Analysis.ExcursionAnalyzer>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Analysis.CyclicalAnalyzer>();
 
+// [2026-09-07] Diagnosi del bracket per corsia: quanti stop la sola geometria produce, quanti
+// ne sono arrivati davvero, e lo scarto fra i due. Scoped: legge la configurazione keyed delle
+// corsie tramite IServiceProvider, e una configurazione va riletta a ogni richiesta.
+builder.Services.Configure<ProcioneMGR.Services.Analysis.BracketDiagnosisOptions>(
+    builder.Configuration.GetSection(ProcioneMGR.Services.Analysis.BracketDiagnosisOptions.SectionName));
+builder.Services.AddScoped<ProcioneMGR.Services.Analysis.BracketDiagnosisService>();
+// Il guardiano periodico: parla ai CAMBIAMENTI di verdetto, tace sul resto. Senza di lui la
+// diagnosi sarebbe il sesto meccanismo di questa piattaforma che misura bene e non dice niente.
+builder.Services.AddHostedService<ProcioneMGR.Services.Analysis.BracketDiagnosisWorker>();
+
 // --- Analisi tecnica classica (candlestick, S/R, pattern, volume - McAllen) ---
 builder.Services.AddSingleton<ProcioneMGR.Services.Analysis.CandlestickPatternDetector>();
 builder.Services.AddSingleton<ProcioneMGR.Services.Analysis.SupportResistanceAnalyzer>();

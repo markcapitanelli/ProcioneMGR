@@ -203,6 +203,15 @@ public class AuditBlazorUiTests : BunitContext
         Services.AddSingleton<Microsoft.EntityFrameworkCore.IDbContextFactory<ApplicationDbContext>>(new ThrowingDbFactory());
         Services.AddSingleton<ProtectiveExitLagAnalyzer>();
         Services.AddScoped<ProtectiveExitDiagnosticsService>();
+        // [2026-09-07] Diagnosi del bracket. Stessa idea del pannello del ritardo: la factory di
+        // DbContext lancia, quindi ogni render prova anche che una diagnostica rotta non porti giu'
+        // la pagina da cui si comanda il motore. Il pannello e' a richiesta (un bottone), quindi al
+        // render il servizio non viene nemmeno chiamato: qui basta che sia RISOLVIBILE, ed e' il
+        // difetto che questi quindici test hanno colto appena il campo @inject e' comparso.
+        Services.AddSingleton<Microsoft.Extensions.Options.IOptionsMonitor<ProcioneMGR.Services.Analysis.BracketDiagnosisOptions>>(
+            new Infrastructure.StaticOptionsMonitor<ProcioneMGR.Services.Analysis.BracketDiagnosisOptions>(
+                new ProcioneMGR.Services.Analysis.BracketDiagnosisOptions()));
+        Services.AddScoped<ProcioneMGR.Services.Analysis.BracketDiagnosisService>();
         return (store, engines);
     }
 

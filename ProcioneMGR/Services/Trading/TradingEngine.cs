@@ -120,6 +120,19 @@ public sealed class TradingEngine(
     private readonly List<EquityPoint> _equity = new();
     /// <summary>[E6] Apertura dell'ultima candela valutata in QUESTO avvio (null = nessuna): il battito dietro lo status.</summary>
     private DateTime? _lastProcessedCandleUtc;
+
+    /// <summary>
+    /// [2026-09-06] Apertura dell'ultima candela su cui le STRATEGIE sono state davvero interrogate,
+    /// cioè quella che ha superato il cancello <c>closes.Count &gt;= 5</c>. <c>null</c> = in questo
+    /// avvio nessuna.
+    ///
+    /// <para>Esiste perché la divergenza fra questo campo e <see cref="_lastProcessedCandleUtc"/> È
+    /// la firma del guasto invisibile: una corsia che riceve candele (battito verde, «0 barre
+    /// indietro») e non decide niente. Il 2026-09-06 sei corsie su otto erano in questo stato e
+    /// nessuna superficie poteva dirlo, perché tutte misuravano la consegna e nessuna la decisione.
+    /// Un battito che conta ciò che arriva non è un battito su ciò che si fa.</para>
+    /// </summary>
+    private DateTime? _lastStrategyEvaluationUtc;
     private List<EnsembleStrategy> _active = new();
     private bool _loaded;
     private TradingCredentials? _creds;   // valorizzate in Testnet/Live
@@ -180,10 +193,78 @@ public sealed class TradingEngine(
         {
             await RestoreActiveLegsAsync(ct);
             await RestoreExchangeContextAsync(ct);
+            await SeedCandleBufferAsync(db, ct);
         }
 
-        logger.LogInformation("TradingEngine: stato ripristinato dal DB (running={Run}, emergency={Emg}, posizioni={N}, gambe={G}).",
-            _state.IsRunning, _state.IsEmergencyStopped, _positions.Count, _active.Count);
+        logger.LogInformation("TradingEngine: stato ripristinato dal DB (running={Run}, emergency={Emg}, posizioni={N}, gambe={G}, barre={B}).",
+            _state.IsRunning, _state.IsEmergencyStopped, _positions.Count, _active.Count, _buffer.Count);
+    }
+
+    /// <summary>
+    /// [2026-09-06] <b>LE BARRE DELLA SESSIONE, che questa strada non restaurava.</b> È il difetto
+    /// D1 un piano più sotto: quello restaurava <c>_active</c>, questo restaura <c>_buffer</c>.
+    ///
+    /// <para><b>Il fatto.</b> <c>_buffer</c> vive solo in memoria e lo riempie unicamente
+    /// <c>ProcessCandleAsync</c>. Dopo un riavvio del PROCESSO la corsia riprende dal segnalibro,
+    /// marca a mercato e onora gli stop — <c>ApplyProtectiveExitsAsync</c> sta PRIMA del cancello —
+    /// ma il <c>if (closes.Count &gt;= 5)</c> le impedisce di valutare una sola strategia finché non
+    /// ha accumulato barre NUOVE. E cinque non bastano: gli indicatori delle gambe vere ne vogliono
+    /// 14 (Supertrend), ~29 (MacdTrend), 60 (GridMeanReversion con ancora 60). Su una corsia a 4 ore
+    /// sono <b>dieci giorni di processo vivo senza interruzioni</b>, e il pod si rischiera a ogni
+    /// merge.</para>
+    ///
+    /// <para><b>Misurato il 2026-09-06.</b> Sei corsie su otto con 1-4 barre in memoria contro le 5
+    /// del cancello; zero ordini in tutta la flotta da quaranta ore; le corsie 2, 3, 4 e 5 senza
+    /// nemmeno un TradeRecord da 14, 7, 5 e 14 giorni. Tutte e otto verdi su ogni superficie: i chip
+    /// e la Home leggono <c>IsRunning</c>, il battito di <c>/trading</c> conta le candele
+    /// CONSEGNATE, e il watchdog E6 misura la stessa cosa. Una corsia accesa che non decide niente
+    /// era invisibile per costruzione.</para>
+    ///
+    /// <para><b>Perché ci si ferma al SEGNALIBRO e non a «adesso».</b> Le candele arrivate mentre il
+    /// processo era giù devono ancora passare da <c>ProcessCandleAsync</c>: è l'unico posto dove uno
+    /// stop rimasto indietro può scattare. Riempire fino a ora sposterebbe in avanti la frontiera
+    /// anti-replay (<c>_buffer[^1].TimestampUtc</c>) e quelle uscite andrebbero perse in silenzio —
+    /// si scambierebbe un difetto muto con uno peggiore. Con questo taglio la frontiera resta
+    /// esattamente il segnalibro, cioè quella di prima.</para>
+    ///
+    /// <para><b>Senza segnalibro non si semina.</b> Una corsia in corsa senza <c>LastCandleUtc</c> è
+    /// precedente al 2026-08-17: è lo stesso caso in cui <c>TradingWorker</c> decide di non
+    /// rigiocare nulla, e inventare qui una finestra sarebbe una seconda politica sulla stessa
+    /// domanda. Si dichiara e si prosegue come prima.</para>
+    /// </summary>
+    private async Task SeedCandleBufferAsync(ApplicationDbContext db, CancellationToken ct)
+    {
+        if (_buffer.Count > 0) return;
+        if (string.IsNullOrWhiteSpace(_state.Symbol) || string.IsNullOrWhiteSpace(_state.Timeframe)) return;
+
+        if (_state.LastCandleUtc is not DateTime segnalibro)
+        {
+            logger.LogInformation(
+                "Corsia {Lane}: nessun segnalibro, buffer non pre-riempito — le strategie si riscaldano sulle candele nuove, come prima del 2026-09-06.",
+                laneId);
+            return;
+        }
+
+        var recenti = await db.OhlcvData.AsNoTracking()
+            .Where(c => c.Symbol == _state.Symbol && c.Timeframe == _state.Timeframe && c.TimestampUtc <= segnalibro)
+            .OrderByDescending(c => c.TimestampUtc)
+            .Take(BufferSize)
+            .ToListAsync(ct);
+
+        if (recenti.Count == 0)
+        {
+            logger.LogWarning(
+                "Corsia {Lane}: nessuna candela {Sym} {Tf} fino al segnalibro {Bookmark:u} — la corsia riparte senza storia e non valuterà strategie finché non ne arrivano almeno 5.",
+                laneId, _state.Symbol, _state.Timeframe, segnalibro);
+            return;
+        }
+
+        recenti.Reverse();   // cronologico crescente: il buffer è ordinato, e [^1] è la frontiera
+        _buffer.AddRange(recenti);
+
+        logger.LogInformation(
+            "Corsia {Lane}: buffer pre-riempito con {N} barre {Sym} {Tf} da {Da:u} a {A:u} — le strategie sono calde dalla prima candela nuova.",
+            laneId, _buffer.Count, _state.Symbol, _state.Timeframe, _buffer[0].TimestampUtc, _buffer[^1].TimestampUtc);
     }
 
     /// <summary>Le gambe congelate dalla sessione, in JSON. Vedi <see cref="TradingEngineState.ActiveStrategiesJson"/>.</summary>
@@ -664,6 +745,9 @@ public sealed class TradingEngine(
             var closes = _buffer.Select(c => c.Close).ToList();
             if (closes.Count >= 5)
             {
+                // [2026-09-06] Il battito della DECISIONE, non della consegna: si scrive qui dentro,
+                // dopo il cancello, perché è qui che le strategie vengono davvero interrogate.
+                _lastStrategyEvaluationUtc = ts;
                 // [Fase 4] Regime corrente della corsia, classificato UNA volta per candela e non
                 // per strategia: è una proprietà del mercato, non della strategia, e ricalcolarlo
                 // N volte darebbe lo stesso numero pagandolo N volte.
@@ -1584,6 +1668,11 @@ public sealed class TradingEngine(
                 Timeframe = _state.Timeframe,
                 LastProcessedCandleUtc = _lastProcessedCandleUtc,
                 LastCandleUtc = _state.LastCandleUtc,
+                // [2026-09-06] I due numeri che rendono visibile «accesa ma non decide»: quante barre
+                // ha in memoria (sotto le 5 le strategie non vengono nemmeno interrogate) e su quale
+                // candela sono state interrogate l'ultima volta in questo avvio.
+                BufferedBars = _buffer.Count,
+                LastStrategyEvaluationUtc = _lastStrategyEvaluationUtc,
                 // [I13a] Le gambe che questo motore sta DAVVERO eseguendo: `_active` è la
                 // fotografia presa all'avvio, e a corsia ferma è vuota. È il fatto contro cui
                 // confrontare la configurazione — che può essere cambiata nel frattempo senza che

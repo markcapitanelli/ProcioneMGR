@@ -4,6 +4,7 @@
 @using ProcioneMGR.Services.Backtesting
 @using ProcioneMGR.Services.Indicators
 @using ProcioneMGR.Services.Trading
+@using ProcioneMGR.Services.Analysis
 @attribute [Authorize(Roles = AppRoles.Admin + "," + AppRoles.Manager)]
 @implements IDisposable
 
@@ -13,6 +14,7 @@
 @inject ILogger<Trading> Logger
 @inject ILaneDirectory LaneDirectory
 @inject ProtectiveExitDiagnosticsService Diagnostics
+@inject ProcioneMGR.Services.Analysis.BracketDiagnosisService BracketDiagnosis
 
 <PageTitle>Trading</PageTitle>
 <h1>Trading
@@ -1191,6 +1193,197 @@
 
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
+        <span>🎯 Perché le corsie chiudono in stop — previsto contro osservato</span>
+        <small class="text-muted">tutte le corsie, non solo questa</small>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-secondary py-2 small">
+            <strong>La domanda che questo pannello rende falsificabile.</strong>
+            «Troppe operazioni chiudono in stop» non è verificabile finché manca il
+            <strong>denominatore</strong>: quanti stop produce da sola la geometria del bracket, senza che
+            nessuno abbia sbagliato niente. Qui il denominatore si ricalcola dalle candele vere della corsia,
+            facendo correre lo stop contro il target su entrate prese a <em>ogni</em> barra e su entrambi i
+            lati, con la <strong>stessa funzione d'uscita del motore</strong> — non una sua copia.
+            <br />
+            Un target 3 volte più lontano dello stop viene toccato molto meno spesso: l'85-94% di uscite in
+            stop è il <strong>numero nominale</strong> di quel rapporto, non un guasto. Le tre ipotesi
+            alternative sono già state misurate e scartate il 2026-09-06: zero stop su 82 entro un'ora da un
+            riavvio o da un rilascio (contro un 9,9% atteso per caso), zero su 119 con un buco di candele
+            nelle tre barre precedenti, prezzo d'uscita dentro la barra 119 volte su 119.
+        </div>
+
+        <div class="d-flex align-items-center gap-2 mb-3">
+            <button class="btn btn-outline-primary btn-sm" @onclick="DiagnoseBracketsAsync" disabled="@_diagBusy">
+                @(_diagBusy ? "Misura in corso…" : "Misura tutte le corsie")
+            </button>
+            <small class="text-muted">read-only: legge candele e storico, non scrive né configurazioni né parametri di rischio</small>
+        </div>
+
+        @if (_diagError is not null)
+        {
+            <div class="alert alert-warning py-2 small">@_diagError</div>
+        }
+
+        @if (_diagnosi is not null)
+        {
+            <div class="table-responsive mb-3">
+                <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Corsia</th>
+                            <th>Serie</th>
+                            <th class="text-end">Geometria</th>
+                            <th class="text-end">Stop previsti</th>
+                            <th class="text-end">Stop osservati</th>
+                            <th class="text-end">Scarto</th>
+                            <th>Verdetto</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var d in _diagnosi)
+                        {
+                            <tr>
+                                <td>
+                                    <strong>@d.LaneId</strong>
+                                    @if (!d.IsRunning)
+                                    {
+                                        <span class="badge text-bg-secondary ms-1">ferma</span>
+                                    }
+                                </td>
+                                <td class="small"><code>@d.Symbol</code> @d.Timeframe</td>
+                                <td class="text-end small">
+                                    @if (d.Nominale is { Misurabile: true } n)
+                                    {
+                                        @($"{n.StopPercent:0.##}% / {n.TakePercent:0.##}%")
+                                        <div class="text-muted">rapporto @n.RewardToRisk.ToString("0.##")</div>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                </td>
+                                <td class="text-end">
+                                    @if (d.Nominale is { Misurabile: true } np)
+                                    {
+                                        @($"{np.StopSharePercent:0.#}%")
+                                        <div class="text-muted small">su @np.HorizonBars barre</div>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                </td>
+                                <td class="text-end">
+                                    @if (d.Osservato is { UsciteABarriera: > 0 } o)
+                                    {
+                                        @($"{o.StopSharePercent:0.#}%")
+                                        <div class="text-muted small">@o.Stop stop / @o.Take target</div>
+                                        @if (o.UsciteABarrieraNonDatabili > 0)
+                                        {
+                                            <div class="text-warning small">+@o.UsciteABarrieraNonDatabili non databili</div>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">nessuna uscita a barriera</span>
+                                    }
+                                </td>
+                                <td class="text-end">
+                                    @if (d.Nominale is { Misurabile: true } ns && d.Osservato is { UsciteABarriera: > 0 } os
+                                         && d.Verdetto != VerdettoBracket.NonGiudicabile)
+                                    {
+                                        var scarto = os.StopSharePercent - ns.StopSharePercent;
+                                        <span class="@(Math.Abs(scarto) <= BracketDiagnosis.Soglie.AllowedDeviationPoints ? "text-success" : "text-danger fw-bold")">
+                                            @scarto.ToString("+0.#;-0.#;0")pp
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="badge @VerdettoClasse(d.Verdetto)">@VerdettoTesto(d.Verdetto)</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td colspan="7" class="small text-muted pt-0">
+                                    @d.Racconto
+                                    @if (d.Osservato is not null)
+                                    {
+                                        <div class="mt-1">@d.Osservato.Scarti</div>
+                                    }
+                                    @if (d.Nominale is { Misurabile: true, AmbiguousBars: > 0 } amb)
+                                    {
+                                        <div class="mt-1">
+                                            @amb.AmbiguousBars stop previsti (@amb.AmbiguousSharePercent.ToString("0.#")%) nascono da barre
+                                            che avevano toccato anche il target: dentro la barra l'ordine dei tocchi non si osserva e il
+                                            motore assegna l'esito peggiore. Dove questa quota è alta, il valore atteso qui sotto è
+                                            sistematicamente più pessimista del vero.
+                                        </div>
+                                    }
+                                    @if (d.Leva is string leva)
+                                    {
+                                        <div class="mt-1 fst-italic">@leva</div>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (_diagDettaglio is not null && _diagDettaglio.Alternative.Count > 0)
+            {
+                <h6>Geometrie alternative sulla serie della corsia @_diagDettaglio.LaneId</h6>
+                <p class="small text-muted">
+                    Lo stop resta quello della gamba; varia solo la distanza del target. Le entrate sono prese a
+                    ogni barra e <strong>non hanno segnale</strong>: questa tabella dice cosa fa la geometria da
+                    sola, non quanto rende la strategia. Nessuna riga si può applicare da qui, ed è voluto.
+                </p>
+                <table class="table table-sm" style="max-width:52rem">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="text-end">Rapporto</th>
+                            <th class="text-end">Target</th>
+                            <th class="text-end">Stop primi</th>
+                            <th class="text-end">Target primi</th>
+                            <th class="text-end">Quota stop</th>
+                            <th class="text-end">Nessuna barriera</th>
+                            <th class="text-end">Valore atteso</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in _diagDettaglio.Alternative.Where(x => x.Misurabile))
+                        {
+                            var corrente = _diagDettaglio.Nominale is not null
+                                && Math.Abs(a.TakePercent - _diagDettaglio.Nominale.TakePercent) < 0.01m;
+                            <tr class="@(corrente ? "table-primary" : "")">
+                                <td class="text-end">@a.RewardToRisk.ToString("0.##")@(corrente ? " ← attuale" : "")</td>
+                                <td class="text-end">@a.TakePercent.ToString("0.##")%</td>
+                                <td class="text-end">@a.StopFirst.ToString("N0")</td>
+                                <td class="text-end">@a.TakeFirst.ToString("N0")</td>
+                                <td class="text-end">@a.StopSharePercent.ToString("0.#")%</td>
+                                <td class="text-end">@a.NeitherSharePercent.ToString("0.#")%</td>
+                                <td class="text-end @(a.ExpectedValuePercent >= 0m ? "text-success" : "text-danger")">
+                                    @a.ExpectedValuePercent.ToString("+0.###;-0.###;0")%
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <div class="small text-muted">
+                    Il valore atteso comprende le finestre che <strong>non toccano nessuna barriera</strong>, che
+                    sono la maggioranza. Escluderle farebbe sembrare rovinoso qualunque bracket: è la stessa
+                    trappola da sopravvivenza che, sul lato della calibrazione, ha prodotto il rapporto 1:3.
+                </div>
+            }
+        }
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
         <span>🕯️ Ritardo delle uscite protettive — corsia @_laneId</span>
         <small class="text-muted">il feed osserva, le candele decidono</small>
     </div>
@@ -1649,6 +1842,60 @@
         }
     }
 
+    // ── Diagnosi del bracket: previsto contro osservato, su tutte le corsie ────────────────
+    private IReadOnlyList<ProcioneMGR.Services.Analysis.DiagnosiCorsia>? _diagnosi;
+    private ProcioneMGR.Services.Analysis.DiagnosiCorsia? _diagDettaglio;
+    private bool _diagBusy;
+    private string? _diagError;
+
+    /// <summary>
+    /// Misura tutte le corsie. Il dettaglio delle geometrie alternative si mostra per la corsia
+    /// SELEZIONATA se è misurabile, altrimenti per la prima che lo è: una tabella per ogni corsia
+    /// sarebbe illeggibile, e non mostrarne nessuna nasconderebbe la parte che risponde a «come si
+    /// migliora».
+    /// </summary>
+    private async Task DiagnoseBracketsAsync()
+    {
+        _diagBusy = true;
+        _diagnosi = null;
+        _diagDettaglio = null;
+        _diagError = null;
+        StateHasChanged();
+        try
+        {
+            var esiti = await BracketDiagnosis.DiagnoseAllAsync();
+            _diagnosi = esiti;
+            _diagDettaglio = esiti.FirstOrDefault(d => d.LaneId == _laneId && d.Alternative.Count > 0)
+                ?? esiti.FirstOrDefault(d => d.Alternative.Count > 0);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Diagnosi del bracket fallita.");
+            _diagError = $"Misura non riuscita: {ex.Message}";
+        }
+        finally
+        {
+            _diagBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string VerdettoClasse(ProcioneMGR.Services.Analysis.VerdettoBracket v) => v switch
+    {
+        ProcioneMGR.Services.Analysis.VerdettoBracket.ComePrevisto => "text-bg-success",
+        ProcioneMGR.Services.Analysis.VerdettoBracket.ScartoDalPrevisto => "text-bg-danger",
+        ProcioneMGR.Services.Analysis.VerdettoBracket.NonGiudicabile => "text-bg-warning",
+        _ => "text-bg-secondary",
+    };
+
+    private static string VerdettoTesto(ProcioneMGR.Services.Analysis.VerdettoBracket v) => v switch
+    {
+        ProcioneMGR.Services.Analysis.VerdettoBracket.ComePrevisto => "come previsto",
+        ProcioneMGR.Services.Analysis.VerdettoBracket.ScartoDalPrevisto => "scarto dal previsto",
+        ProcioneMGR.Services.Analysis.VerdettoBracket.NonGiudicabile => "non giudicabile",
+        _ => "non misurabile",
+    };
+
     private async Task MeasureLagAsync()
     {
         _lagBusy = true;
@@ -1804,6 +2051,19 @@
         {
             return ("bg-warning text-dark", $"{text} · NON chiusa");
         }
+
+        // [2026-09-06] CONSEGNA CONTRO DECISIONE. Il campo qui sopra si chiama «ultima candela
+        // valutata» ma il motore lo scrive PRIMA del cancello `closes.Count >= 5`: misura ciò che
+        // ARRIVA. Il 2026-09-06 sei corsie su otto ricevevano candele con 1-4 barre in memoria, non
+        // interrogavano una sola strategia e questo badge era verde a «0 barre indietro» su tutte —
+        // mentre in quaranta ore la flotta non piazzava un ordine. Il buffer ora si ricostruisce
+        // dall'archivio al riavvio, ma la divergenza resta il sintomo da mostrare: se ricompare,
+        // qui si legge invece di essere dedotta mesi dopo dai TradeRecord che non ci sono.
+        if (s.LastStrategyEvaluationUtc is null)
+        {
+            return ("bg-warning text-dark", $"{text} · STRATEGIE NON VALUTATE ({s.BufferedBars} barre in memoria, ne servono 5)");
+        }
+
         return stale ? ("bg-danger", text) : ("bg-success-subtle text-dark border", text);
     }
 

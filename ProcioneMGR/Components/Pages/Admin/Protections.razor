@@ -446,6 +446,65 @@ else if (_remoteTrading)
     </div>
 </div>
 
+@* ======================= 5-bis. Diagnosi del bracket ======================= *@
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between">
+        <span><i class="bi bi-bullseye me-1"></i>Diagnosi del bracket — previsto contro osservato</span>
+        <span>@StateBadge(_bracket.Enabled)</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Risponde a «perché tante operazioni chiudono in stop» con un <strong>denominatore</strong>:
+            quanti stop produce da sola la geometria del bracket, facendo correre stop contro target sulle
+            candele vere della corsia, su entrate prese a ogni barra e su entrambi i lati, con la stessa
+            funzione d'uscita del motore. Un target 3 volte più lontano dello stop dà l'85-94% di uscite in
+            stop <em>senza che nessuno abbia sbagliato niente</em>. La tabella per corsia sta in
+            <a href="trading">/trading</a>; qui ci sono le soglie e il guardiano.
+        </p>
+        <p class="text-muted small mb-3">
+            <strong>Non scrive niente</strong>: né configurazioni di corsia né parametri di rischio. Il
+            guardiano parla solo ai <strong>cambiamenti</strong> di verdetto — quando una corsia esce dal
+            previsto, e quando per la prima volta accumula abbastanza uscite per essere giudicata. Il
+            silenzio è l'esito normale.
+        </p>
+        <div class="row g-3 align-items-end">
+            <div class="col-auto form-check form-switch ms-2">
+                <input class="form-check-input" type="checkbox" id="bd_en" @bind="_bracket.Enabled" />
+                <label class="form-check-label" for="bd_en">Guardiano attivo @Hot()</label>
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Misura ogni (h) @Restart()</label>
+                <input type="number" class="form-control" @bind="_bracket.CheckIntervalHours" min="1" max="168" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Uscite minime per giudicare @Hot()</label>
+                <input type="number" class="form-control" @bind="_bracket.MinBarrierExits" min="1" style="width: 9rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Scarto ammesso (pp) @Hot()</label>
+                <input type="number" step="1" class="form-control" @bind="_bracket.AllowedDeviationPoints" min="0" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Candele lette @Hot()</label>
+                <input type="number" step="500" class="form-control" @bind="_bracket.MaxCandles" min="100" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Costo A/R (pp) @Hot()</label>
+                <input type="number" step="0.01" class="form-control" @bind="_bracket.RoundTripCostPercent" min="0" style="width: 8rem;" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" @onclick="SaveBracketAsync" disabled="@_busy">Salva</button>
+            </div>
+        </div>
+        <div class="alert alert-warning py-2 small mt-3 mb-0">
+            <strong>Abbassare «uscite minime» non rende il giudizio più severo: lo rende rumoroso.</strong>
+            Con dieci uscite l'errore campionario su una proporzione dell'85% vale dodici punti percentuali,
+            quasi quanto lo scarto ammesso: il guardiano comincerebbe ad allarmare sul caso. È lo stesso
+            errore già pagato abbassando la soglia di holdout nel governo della flotta.
+        </div>
+    </div>
+</div>
+
 @* ============================ 6. Attestazioni exchange ============================ *@
 @* [Fase 3] Un'attestazione non è una preferenza: è la registrazione di una verifica fatta a mano
    contro l'exchange reale. Sta qui perché filtra un percorso d'ordine, come tutto il resto della
@@ -488,6 +547,7 @@ else if (_remoteTrading)
     private CorrelatedExposureOptions _correlated = new();
     private RegimeRoutingOptions _routing = new();
     private LaneInvariantOptions _invariants = new();
+    private ProcioneMGR.Services.Analysis.BracketDiagnosisOptions _bracket = new();
     private ProcioneMGR.Services.Exchanges.BitgetAttestationOptions _bitget = new();
 
     // I TimeSpan si editano in unità intere: un campo "00:06:00" da digitare a mano è un invito
@@ -520,6 +580,8 @@ else if (_remoteTrading)
         _correlated = _snapshot.Bind<CorrelatedExposureOptions>("Trading:CorrelatedExposure");
         _routing = _snapshot.Bind<RegimeRoutingOptions>("Trading:RegimeRouting");
         _invariants = _snapshot.Bind<LaneInvariantOptions>("Trading:LaneInvariants");
+        _bracket = _snapshot.Bind<ProcioneMGR.Services.Analysis.BracketDiagnosisOptions>(
+            ProcioneMGR.Services.Analysis.BracketDiagnosisOptions.SectionName);
         _bitget = _snapshot.Bind<ProcioneMGR.Services.Exchanges.BitgetAttestationOptions>("Trading:Bitget");
 
         _correlatedCacheHours = Math.Max(1, (int)_correlated.CacheTtl.TotalHours);
@@ -543,6 +605,10 @@ else if (_remoteTrading)
     // @onclick delimitato da apici singoli.
     private Task SaveShadowAsync()
         => SaveAsync("Trading:ProtectiveExitShadow", _shadow, "Sentinella d'ombra");
+
+    private Task SaveBracketAsync()
+        => SaveAsync(ProcioneMGR.Services.Analysis.BracketDiagnosisOptions.SectionName, _bracket,
+            "Diagnosi del bracket");
 
     private Task SaveCorrelatedAsync()
     {

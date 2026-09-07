@@ -73,6 +73,9 @@ public sealed class ConfigurationUiCoverageTests
         ["Trading:CorrelatedExposure"] = "Components/Pages/Admin/Protections.razor",
         ["Trading:RegimeRouting"] = "Components/Pages/Admin/Protections.razor",
         ["Trading:LaneInvariants"] = "Components/Pages/Admin/Protections.razor",
+        // [2026-09-07] Diagnosi del bracket: soglie e guardiano periodico. La tabella per corsia
+        // sta in /trading, ma le manopole stanno qui insieme alle altre protezioni.
+        ["Trading:BracketDiagnosis"] = "Components/Pages/Admin/Protections.razor",
 
         // --- /admin/backup: dove finiscono le copie del database ---
         // [2026-08-23] La destinazione del backup notturno viveva SOLO dentro db-backup.ps1, come
