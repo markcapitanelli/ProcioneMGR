@@ -578,7 +578,14 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         Assert.Single(notifier.Sent);
 
         // Recupero: battito fresco → nessun allarme nuovo, e l'allarme si RIARMA.
-        engines[0].StatusToReturn = new TradingEngineStatus { IsRunning = true, Timeframe = "1h", LastProcessedCandleUtc = DateTime.UtcNow };
+        // [2026-09-06] Una corsia sana non riceve soltanto candele: le VALUTA. Da quando il watchdog
+        // distingue la consegna dalla decisione, una fotografia che dichiara solo la prima descrive
+        // il guasto «accesa ma non decide», non il recupero.
+        engines[0].StatusToReturn = new TradingEngineStatus
+        {
+            IsRunning = true, Timeframe = "1h",
+            LastProcessedCandleUtc = DateTime.UtcNow, LastStrategyEvaluationUtc = DateTime.UtcNow, BufferedBars = 400,
+        };
         await watchdog.TickAsync(CancellationToken.None);
         Assert.Single(notifier.Sent);
 
@@ -742,5 +749,130 @@ public sealed class LaneInvariantWatchdogTests : IAsyncDisposable
         await watchdog.TickAsync(CancellationToken.None);
 
         Assert.Equal(2, notifier.Sent.Count(s => s.Title.Contains("ferma con posizioni aperte")));
+    }
+
+    // ---------------------------------------------------------------- [2026-09-06] consegna vs decisione
+
+    /// <summary>
+    /// <b>Il digiuno che il battito non sapeva vedere.</b> Le candele arrivano regolarmente — battito
+    /// FRESCO, zero barre indietro, verde ovunque — ma nessuna strategia viene interrogata perche' il
+    /// buffer e' ripartito vuoto dopo il rischieramento del pod. Il 2026-09-06 sei corsie su otto
+    /// erano cosi', con zero ordini in tutta la flotta da quaranta ore e nessun allarme.
+    /// </summary>
+    [Fact]
+    public async Task Tick_CandeleFrescheMaNessunaStrategiaInterrogata_ALLERTA_UnaVoltaSola()
+    {
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+        watchdog.StartedAtUtc = DateTime.UtcNow.AddDays(-1);   // oltre la grazia dall'avvio
+        engines[0].StatusToReturn = new TradingEngineStatus
+        {
+            IsRunning = true,
+            Timeframe = "1h",
+            Symbol = "BTC/USDT",
+            LastProcessedCandleUtc = DateTime.UtcNow.AddMinutes(-5),   // fresco: le candele ARRIVANO
+            LastStrategyEvaluationUtc = null,                          // ma nessuna decisione
+            BufferedBars = 3,
+        };
+
+        await watchdog.TickAsync(CancellationToken.None);
+        var alert = Assert.Single(notifier.Sent);
+        Assert.Equal(ProcioneMGR.Services.Notifications.NotificationSeverity.Critical, alert.Severity);
+        Assert.Contains("non decide", alert.Title, StringComparison.Ordinal);
+
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Single(notifier.Sent);   // una per transizione, non una per tick
+
+        // Nessuna quarantena e nessuno stop: la corsia non e' corrotta, e fermarla toglierebbe
+        // anche le uscite protettive, che sono l'unica cosa che sta ancora funzionando.
+        await using var check = await dbFactory.CreateDbContextAsync();
+        Assert.Empty(await check.LaneQuarantines.AsNoTracking().ToListAsync());
+        Assert.Equal(0, engines[0].StopCalls);
+    }
+
+    /// <summary>Appena una strategia viene interrogata l'allarme tace e si riarma.</summary>
+    [Fact]
+    public async Task Tick_QuandoLeStrategieTornanoAdEssereInterrogate_SILENZIO_ERiarmo()
+    {
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+        watchdog.StartedAtUtc = DateTime.UtcNow.AddDays(-1);
+
+        engines[0].StatusToReturn = new TradingEngineStatus
+        {
+            IsRunning = true, Timeframe = "1h", Symbol = "BTC/USDT",
+            LastProcessedCandleUtc = DateTime.UtcNow.AddMinutes(-5), LastStrategyEvaluationUtc = null, BufferedBars = 3,
+        };
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Single(notifier.Sent);
+
+        // Il buffer si e' riempito: le strategie vengono interrogate.
+        engines[0].StatusToReturn = new TradingEngineStatus
+        {
+            IsRunning = true, Timeframe = "1h", Symbol = "BTC/USDT",
+            LastProcessedCandleUtc = DateTime.UtcNow.AddMinutes(-5),
+            LastStrategyEvaluationUtc = DateTime.UtcNow.AddMinutes(-5), BufferedBars = 400,
+        };
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Single(notifier.Sent);   // nessun allarme nuovo
+
+        // E se ricapita, lo dice di nuovo: il flag si e' riarmato.
+        engines[0].StatusToReturn = new TradingEngineStatus
+        {
+            IsRunning = true, Timeframe = "1h", Symbol = "BTC/USDT",
+            LastProcessedCandleUtc = DateTime.UtcNow.AddMinutes(-5), LastStrategyEvaluationUtc = null, BufferedBars = 2,
+        };
+        await watchdog.TickAsync(CancellationToken.None);
+        Assert.Equal(2, notifier.Sent.Count);
+    }
+
+    /// <summary>
+    /// Subito dopo un riavvio «non ha ancora deciso» e' l'attesa normale, non un guasto: la grazia
+    /// dall'avvio del processo copre una barra piena piu' la tolleranza. Senza, ogni rischieramento
+    /// del pod produrrebbe otto critici.
+    /// </summary>
+    [Fact]
+    public async Task Tick_SubitoDopoIlRiavvio_NessunAllarme()
+    {
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+        watchdog.StartedAtUtc = DateTime.UtcNow;   // dentro la grazia (BuildAsync la mette a -7 giorni)
+        engines[0].StatusToReturn = new TradingEngineStatus
+        {
+            IsRunning = true, Timeframe = "1h", Symbol = "BTC/USDT",
+            LastProcessedCandleUtc = DateTime.UtcNow.AddMinutes(-5), LastStrategyEvaluationUtc = null, BufferedBars = 1,
+        };
+
+        await watchdog.TickAsync(CancellationToken.None);
+
+        Assert.Empty(notifier.Sent);
+    }
+
+    /// <summary>
+    /// Se le candele NON arrivano, la diagnosi giusta e' il digiuno del feed e la dice l'altro
+    /// controllo: due allarmi per la stessa situazione logorano quelli veri.
+    /// </summary>
+    [Fact]
+    public async Task Tick_BattitoSTANTIO_UnSoloAllarme_QuelloDelDigiuno()
+    {
+        var notifier = new RecordingNotifier();
+        var (watchdog, dbFactory, _, engines) = await BuildAsync(notifier: notifier);
+        await SeedStateAsync(dbFactory, HealthyRunningState(0));
+        watchdog.StartedAtUtc = DateTime.UtcNow.AddDays(-1);
+        engines[0].StatusToReturn = new TradingEngineStatus
+        {
+            IsRunning = true, Timeframe = "1h", Symbol = "BTC/USDT",
+            LastProcessedCandleUtc = DateTime.UtcNow.AddHours(-10),   // stantio E fermo
+            LastStrategyEvaluationUtc = null, BufferedBars = 0,
+        };
+
+        await watchdog.TickAsync(CancellationToken.None);
+        await watchdog.TickAsync(CancellationToken.None);
+
+        var alert = Assert.Single(notifier.Sent);
+        Assert.Contains("affamata", alert.Title, StringComparison.OrdinalIgnoreCase);
     }
 }

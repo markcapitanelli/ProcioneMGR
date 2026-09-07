@@ -159,6 +159,21 @@ message GetLaneStatusResponse {
   // mostrava la gamba spenta mentre il motore continuava a operarla. Questo campo e' il FATTO
   // contro cui confrontare la configurazione; vuoto = corsia ferma, o motore precedente a I13a.
   repeated string running_strategy_ids = 25;
+  // [2026-09-06] I DUE NUMERI CHE RENDONO VISIBILE «ACCESA MA NON DECIDE».
+  //
+  // Il campo 23 si chiama "candela valutata" e il commento sopra lo dichiara tale, ma il motore lo
+  // scrive PRIMA del cancello `closes.Count >= 5`: misura la CONSEGNA, non la decisione. E' per
+  // questo che il battito E6 non poteva vedere il guasto del 2026-09-06 — sei corsie su otto
+  // ricevevano candele con 1-4 barre in memoria, non interrogavano una sola strategia, e ogni
+  // superficie le dava per attive e a zero barre di ritardo.
+  //
+  // buffered_bars e' il FATTO (quante barre ha in memoria adesso: sotto 5 nessuna strategia viene
+  // interrogata, e gli indicatori veri ne vogliono 14-60); last_strategy_evaluation_utc e'
+  // l'ultima candela su cui le strategie sono state DAVVERO interrogate in questo avvio. La
+  // divergenza fra questo e il campo 23 e' la firma del guasto. Assenti = motore precedente a
+  // questa revisione, e vanno letti come "non misurato", mai come zero.
+  int32 buffered_bars = 26;
+  google.protobuf.Timestamp last_strategy_evaluation_utc = 27;
 }
 
 // --- Posizioni -------------------------------------------------------------------------------

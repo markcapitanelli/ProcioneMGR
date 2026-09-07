@@ -1804,6 +1804,19 @@
         {
             return ("bg-warning text-dark", $"{text} · NON chiusa");
         }
+
+        // [2026-09-06] CONSEGNA CONTRO DECISIONE. Il campo qui sopra si chiama «ultima candela
+        // valutata» ma il motore lo scrive PRIMA del cancello `closes.Count >= 5`: misura ciò che
+        // ARRIVA. Il 2026-09-06 sei corsie su otto ricevevano candele con 1-4 barre in memoria, non
+        // interrogavano una sola strategia e questo badge era verde a «0 barre indietro» su tutte —
+        // mentre in quaranta ore la flotta non piazzava un ordine. Il buffer ora si ricostruisce
+        // dall'archivio al riavvio, ma la divergenza resta il sintomo da mostrare: se ricompare,
+        // qui si legge invece di essere dedotta mesi dopo dai TradeRecord che non ci sono.
+        if (s.LastStrategyEvaluationUtc is null)
+        {
+            return ("bg-warning text-dark", $"{text} · STRATEGIE NON VALUTATE ({s.BufferedBars} barre in memoria, ne servono 5)");
+        }
+
         return stale ? ("bg-danger", text) : ("bg-success-subtle text-dark border", text);
     }
 

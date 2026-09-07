@@ -75,6 +75,25 @@ public class TradingEngineStatus
 
     public int TotalTrades { get; set; }
 
+    /// <summary>
+    /// [2026-09-06] Quante barre ha in memoria il motore per questa corsia. Sotto le 5 le strategie
+    /// non vengono interrogate affatto (il cancello di <c>ProcessCandleAsync</c>), e gli indicatori
+    /// delle gambe vere ne vogliono molte di più: 14 per Supertrend, ~29 per MacdTrend, 60 per
+    /// GridMeanReversion con ancora 60. È il numero che mancava il 2026-09-06, quando sei corsie su
+    /// otto ricevevano candele senza valutare nulla e ogni superficie le dava per attive.
+    /// </summary>
+    public int BufferedBars { get; set; }
+
+    /// <summary>
+    /// [2026-09-06] Apertura dell'ultima candela su cui le STRATEGIE sono state davvero interrogate
+    /// in questo avvio. <c>null</c> = nessuna.
+    ///
+    /// <para>Da leggere INSIEME a <see cref="LastProcessedCandleUtc"/>, che dice invece qual è
+    /// l'ultima candela CONSEGNATA: quando i due divergono la corsia sta ricevendo dati e non sta
+    /// decidendo niente — ed è esattamente lo stato che nessun battito sapeva mostrare.</para>
+    /// </summary>
+    public DateTime? LastStrategyEvaluationUtc { get; set; }
+
     /// <summary>Numero di posizioni attualmente aperte (per il safety check MaxOpenPositions).</summary>
     public int OpenPositionCount { get; set; }
 
