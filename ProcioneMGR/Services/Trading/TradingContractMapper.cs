@@ -115,6 +115,10 @@ public static class TradingContractMapper
         LastCandleUtc = ToProtoNullable(s.LastCandleUtc),
         // [I13a] Le gambe che il motore sta davvero eseguendo: il fatto, non la configurazione.
         RunningStrategyIds = { s.RunningStrategyIds },
+        // [2026-09-06] Consegna contro decisione: il campo qui sopra misura la prima, questi due la
+        // seconda. La loro divergenza e' la firma di «accesa ma non decide».
+        BufferedBars = s.BufferedBars,
+        LastStrategyEvaluationUtc = ToProtoNullable(s.LastStrategyEvaluationUtc),
     };
 
     public static TradingEngineStatus FromProto(Proto.GetLaneStatusResponse r) => new()
@@ -143,6 +147,8 @@ public static class TradingContractMapper
         LastProcessedCandleUtc = FromProtoNullable(r.LastProcessedCandleUtc),
         LastCandleUtc = FromProtoNullable(r.LastCandleUtc),
         RunningStrategyIds = [.. r.RunningStrategyIds],
+        BufferedBars = r.BufferedBars,
+        LastStrategyEvaluationUtc = FromProtoNullable(r.LastStrategyEvaluationUtc),
     };
 
     // ------------------------------------------------------------------------- posizioni

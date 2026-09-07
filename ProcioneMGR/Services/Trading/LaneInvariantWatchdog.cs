@@ -71,6 +71,7 @@ public sealed class LaneInvariantWatchdog(
             {
                 _lastSeenHeartbeat.Remove(laneId);
                 _starvationAlerted.Remove(laneId);
+                _noEvaluationAlerted.Remove(laneId);
                 continue;
             }
 
@@ -200,6 +201,66 @@ public sealed class LaneInvariantWatchdog(
     private readonly HashSet<int> _starvationAlerted = [];
 
     /// <summary>
+    /// [2026-09-06] Anti-raffica dell'allarme «accesa ma non decide»: una volta per transizione, come
+    /// per il digiuno. Si riarma appena la corsia interroga una strategia.
+    /// </summary>
+    private readonly HashSet<int> _noEvaluationAlerted = [];
+
+    /// <summary>
+    /// [2026-09-06] <b>CONSEGNA CONTRO DECISIONE: il digiuno che questo watchdog non sapeva vedere.</b>
+    ///
+    /// <para>Il battito di <see cref="CheckEvaluationHeartbeatAsync"/> misura le candele CONSEGNATE:
+    /// <c>LastProcessedCandleUtc</c> è scritto prima del cancello <c>closes.Count &gt;= 5</c>, e il
+    /// ripiego sul segnalibro persistito lo rende ancora più ottimista. Una corsia che riceve candele
+    /// senza interrogare una sola strategia ha quindi un battito <b>fresco</b>, e quel controllo tace
+    /// per costruzione. Il 2026-09-06 sei corsie su otto erano esattamente lì — buffer ripartito
+    /// vuoto a ogni rischieramento del pod, 1-4 barre in memoria, zero ordini in tutta la flotta in
+    /// quaranta ore — e nessun allarme, da nessuna parte.</para>
+    ///
+    /// <para><b>Perché solo a battito FRESCO.</b> Se le candele non arrivano il digiuno è già detto
+    /// dall'altro controllo, e con la diagnosi giusta (il feed). Due allarmi per la stessa situazione
+    /// logorano quelli veri: qui si parla solo del caso che l'altro non copre — i dati ci sono, le
+    /// decisioni no.</para>
+    ///
+    /// <para><b>Limite dichiarato.</b> Se il cancello è superato ma l'indicatore della gamba non è
+    /// ancora caldo (14 barre per Supertrend, ~29 per MacdTrend, 60 per GridMeanReversion) le
+    /// strategie vengono interrogate e rispondono Hold: questo controllo non lo vede. È per questo
+    /// che la correzione vera è il pre-riempimento del buffer al ripristino, non l'allarme.</para>
+    /// </summary>
+    private async Task CheckStrategiesAreEvaluatedAsync(int laneId, string timeframe, TradingEngineStatus status, CancellationToken ct)
+    {
+        if (status.LastStrategyEvaluationUtc is not null)
+        {
+            _noEvaluationAlerted.Remove(laneId);
+            return;
+        }
+
+        // Nessuna candela consegnata: non c'è ancora nulla su cui decidere, e lo dice l'altro controllo.
+        if (status.LastProcessedCandleUtc is null) return;
+
+        // Stessa grazia del digiuno: fra un riavvio e la chiusura della barra successiva «non ha
+        // ancora deciso» è l'attesa normale, non un guasto.
+        if (DateTime.UtcNow - StartedAtUtc < GraceAfterStart(timeframe)) return;
+
+        if (!_noEvaluationAlerted.Add(laneId)) return;
+
+        logger.LogCritical(
+            "CORSIA {Lane} ACCESA MA NON DECIDE: le candele arrivano (ultima {Ultima:yyyy-MM-dd HH:mm} UTC) ma NESSUNA "
+            + "strategia è stata interrogata da questo avvio — {Barre} barre in memoria, ne servono almeno 5 e gli "
+            + "indicatori delle gambe anche 60. Stop e target continuano a scattare; ingressi e uscite su segnale no.",
+            laneId, status.LastProcessedCandleUtc, status.BufferedBars);
+
+        if (notifier is not null)
+        {
+            await notifier.NotifyAsync(Notifications.NotificationSeverity.Critical,
+                $"Corsia {laneId}: accesa ma non decide",
+                $"Le candele arrivano ({status.Symbol} {timeframe}, ultima {status.LastProcessedCandleUtc:dd/MM HH:mm} UTC) "
+                + $"ma nessuna strategia è stata interrogata da questo avvio: {status.BufferedBars} barre in memoria. "
+                + "Gli stop restano attivi, gli ingressi no.", ct);
+        }
+    }
+
+    /// <summary>
     /// [E6] Una corsia <c>running</c> il cui motore non valuta candele è una corsia i cui stop e
     /// trailing non li guarda nessuno — e ogni superficie la mostra verde, perché <c>IsRunning</c>
     /// è un flag d'intento, non una prova di attività (è l'«OK: 1 candele» di B2.a, sul motore).
@@ -214,9 +275,10 @@ public sealed class LaneInvariantWatchdog(
     private async Task CheckEvaluationHeartbeatAsync(int laneId, string timeframe, CancellationToken ct)
     {
         DateTime? heartbeat;
+        TradingEngineStatus status;
         try
         {
-            var status = await serviceProvider.GetRequiredKeyedService<ITradingEngine>(laneId).GetStatusAsync(ct);
+            status = await serviceProvider.GetRequiredKeyedService<ITradingEngine>(laneId).GetStatusAsync(ct);
             // [2026-08-17] Il battito di QUESTO avvio, e in sua assenza il segnalibro PERSISTITO
             // della sessione. Da quando il feed non rigioca più il passato dopo un riavvio, una
             // corsia legittimamente non valuta NULLA fra il riavvio e la chiusura della barra
@@ -240,6 +302,7 @@ public sealed class LaneInvariantWatchdog(
         if (!Ingestion.SeriesFreshness.IsStale(timeframe, heartbeat, DateTime.UtcNow))
         {
             _starvationAlerted.Remove(laneId);
+            await CheckStrategiesAreEvaluatedAsync(laneId, timeframe, status, ct);
             return;
         }
         if (hadPrevious && heartbeat != previous)
