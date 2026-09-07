@@ -210,6 +210,7 @@ la differenza:
 | `kind-apiproxy` è `running` | il socat inoltra all'IP che il nodo aveva **prima** del riavvio di Docker (2026-08-04 e 2026-08-11: un'ora di TLS handshake timeout con tutto verde) | interroga `https://127.0.0.1:16443/livez` **attraverso** il proxy |
 | la porta 18092 è in ascolto | il pod è stato sostituito, o il container è ripartito dentro lo stesso pod: il tunnel è morto e la porta resta in ascolto | confronta il marcatore lasciato da `ensure-trading-portforward.ps1` con l'identità **nome + conteggio riavvii** del pod vivo adesso |
 | il motore risponde su 18092 | la 18092 è gRPC h2c: a un GET HTTP/1.x risponde **400 sempre**, il che rende il controllo strutturalmente incapace di dire «sano» (il watchdog ci ha creduto per mesi) | interroga la porta **health** 18093 |
+| il marcatore del tunnel combacia | il pod è quello giusto, ma lo **stream sotto** si è degradato: misurato il 2026-09-07, `/health` del motore rispondeva 3 volte su 5 e si piantava per 20 s le altre 2, con marcatore allineato. Rifatto il tunnel: 8 su 8 in 0,03 s | chiede al **servizio** di rispondere *attraverso* il tunnel, e se tace lo dichiara «aperto ma non trasporta» |
 
 Corollario, applicato ovunque: **ciò che non è previsto in questo assetto non è un guasto.** I
 tunnel kubectl sull'assetto Compose sono grigi, non rossi — un rosso che sta sempre acceso è un
@@ -500,6 +501,35 @@ I test in `PlanciaAllarmiFalsiTests` riproducono la sequenza esatta che ha distu
 proprietario (sano → una rilevazione storta → sano) e pretendono **zero fumetti**; e il loro
 complemento indispensabile pretende che un guasto vero, che dura venti rilevazioni, ne produca
 **esattamente uno**, più uno al rientro.
+
+## Il terzo modo in cui un tunnel muore (2026-09-07)
+
+La plancia sapeva già che **la porta in ascolto non basta** — il pod può essere stato sostituito — e
+confrontava quindi il pod servito con quello vivo. Restava scoperto un terzo modo, e si è
+manifestato subito dopo un aggiornamento: **lo stream sotto al port-forward si degrada mentre il pod
+resta esattamente lo stesso**.
+
+Misura, sul motore, con il marcatore perfettamente allineato:
+
+| | esito |
+|---|---|
+| prima, 5 prove su `/health` | **3 risposte in 0,03–0,20 s, 2 blocchi da 20 secondi interi** |
+| dopo aver richiuso e riaperto il tunnel, 8 prove | **8 su 8 in 0,03 s** |
+
+Due conseguenze, ed entrambe erano difetti:
+
+1. **Il quadro si contraddiceva a due righe di distanza**: «tunnel sano» e «motore giù». Ora la
+   sonda del servizio entra nel verdetto del tunnel, che diventa *«APERTO ma NON TRASPORTA»*.
+2. **Il rimedio suggerito non rimediava.** `procione ripara tunnel` chiama
+   `ensure-trading-portforward.ps1`, che vede il marcatore combaciare e dichiara «già attivo»:
+   non tocca niente. Serve richiuderlo e riaprirlo — da qui
+   **`procione ripara tunnel --rifai`**, che è ciò che la riga adesso consiglia.
+
+E poiché un blocco isolato non deve diventare un verdetto, la sonda HTTP **riprova una volta** con
+un tetto corto (8 s): un servizio sano risponde in centesimi di secondo, quindi il secondo
+tentativo distingue «era un colpo di vento» da «è davvero giù» senza raddoppiare l'attesa. Non si
+riprova su una porta *chiusa*: quel rifiuto è immediato e definitivo, e il caso «il guscio non c'è»
+deve restare istantaneo.
 
 ## Verifica (i quattro livelli di `docs/STANDARD-VERIFICA.md`)
 

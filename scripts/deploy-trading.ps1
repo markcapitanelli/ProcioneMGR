@@ -62,7 +62,31 @@ try {
         # avanzare master, e confrontare gli sha creerebbe un loop — deploy, pin, master avanza,
         # nuovo deploy, ogni 30 minuti per sempre (trovato al primo giro vero, 2026-08-25). La
         # domanda giusta e': da quando abbiamo promosso, e' cambiato QUALCOSA OLTRE al pin?
-        git diff --quiet $pinnedSha origin/master -- . ':(exclude)infra/k8s/trading/kustomization.yaml'
+        #
+        # [2026-09-07] E «qualcosa» va ristretto a cio' che PUO' ENTRARE NELL'IMMAGINE. Il
+        # Dockerfile copia percorsi ESPLICITI (i sei progetti piu' tools/DbBackup e
+        # tools/StrategyHunter): documentazione, test e la plancia non ci arrivano mai. Con il
+        # confronto su tutto l'albero, tre PR che toccavano SOLO tools/Procione hanno fatto
+        # ricostruire l'immagine del motore da zero — 25 minuti di build su una macchina a 0,4 GB
+        # liberi, uccisa dal tetto del lavoro, e ritentata ogni 30 minuti. Un ciclo che satura la
+        # macchina per venticinque minuti su trenta, non finisce mai, e per giunta AFFAMA l'API
+        # server: le sonde della plancia hanno cominciato a scadere e a mandare falsi allarmi. La
+        # ricostruzione era inutile in partenza: il binario del motore sarebbe stato identico.
+        #
+        # L'elenco e' di ESCLUSIONI e non di inclusioni, ed e' la direzione giusta dell'errore: un
+        # percorso nuovo e irrilevante fa al massimo una ricostruzione di troppo, mentre un
+        # percorso rilevante dimenticato da un elenco di inclusioni lascerebbe il motore indietro
+        # in silenzio. Nel dubbio si schiera.
+        $fuoriDallImmagine = @(
+            ':(exclude)infra/k8s/trading/kustomization.yaml'   # il pin, che scriviamo noi
+            ':(exclude)tools/Procione'                         # la plancia: il Dockerfile non la copia
+            ':(exclude)ProcioneMGR.Tests'                      # i test non finiscono in nessuna immagine
+            ':(exclude)docs'
+            ':(exclude)*.md'
+            ':(exclude).claude'
+            ':(exclude).github'
+        )
+        git diff --quiet $pinnedSha origin/master -- . @fuoriDallImmagine
         if ($LASTEXITCODE -eq 0) {
             # Un giro PRECEDENTE puo' essere morto fra il bump del pin e il commit (successo il
             # 2026-08-26: apply fallito sotto la pressione della build). Il pin sporco va raccolto

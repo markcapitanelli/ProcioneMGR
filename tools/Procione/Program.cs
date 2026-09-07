@@ -50,6 +50,7 @@ internal static class Program
         var conMotore = Flag(args, "--motore", "--engine");
         var conVolumi = Flag(args, "-v", "--volumi");
         var produzione = Flag(args, "--produzione", "--production");
+        var rifai = Flag(args, "--rifai", "--recreate");
         var righe = int.TryParse(Opt(args, "-n") ?? Opt(args, "--righe"), out var n) ? n : 80;
         var ogni = int.TryParse(Opt(args, "--ogni") ?? Opt(args, "--every"), out var o) ? o : (int?)null;
 
@@ -115,7 +116,7 @@ internal static class Program
                 {
                     "tutto" or "all" => Actions.RepairAll(),
                     "proxy" => Actions.RepairProxy(),
-                    "tunnel" or "tunnels" => Actions.RepairTunnels(),
+                    "tunnel" or "tunnels" => Actions.RepairTunnels(rifai),
                     "contesto" or "context" => Actions.RepairContext(),
                     var altro => Sconosciuto(altro, "tutto, proxy, tunnel, contesto"),
                 };
@@ -365,6 +366,7 @@ internal static class Program
             ("procione ripara",         "rilancia il bring-up: idempotente, sistema quel che trova rotto"),
             ("procione ripara proxy",   "ricrea kind-apiproxy verso il NOME del nodo e VERIFICA che l'API risponda"),
             ("procione ripara tunnel",  "rifa' i port-forward 18080/18092/18093 se sono stantii"),
+            ("procione ripara tunnel --rifai", "li richiude e riapre: serve quando il tunnel e' aperto ma non trasporta"),
             ("procione ripara contesto","riporta kubectl sul proxy 127.0.0.1:16443"),
         ]);
 
