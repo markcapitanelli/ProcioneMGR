@@ -161,11 +161,22 @@ internal static class Jobs
         // Il freno che resta: -IfNewCommit agisce SOLO quando master e' avanzato, cioe' dopo
         // una merge (un atto umano); a parita' di commit il giro costa un git fetch. ArgoCD
         // non puo' farlo al posto nostro: non raggiunge il repo privato dal 2026-08-05.
+        // [2026-09-07] Il tetto passa da 25 a 45 minuti, per la stessa ragione — e con la stessa
+        // aritmetica — con cui quello di `avvio` era passato da 15 a 30. Misurato sul log del
+        // supervisore, i deploy RIUSCITI stanno fra 15 e 19 minuti (15m, 7m, 17m, 19m, 19m, 16m);
+        // il tetto era a 25, cioe' sei minuti di margine su una mediana di 19. Sono gia' scaduti
+        // quattro giri: 26m il 05/09, 25m il 05/09, e due il 07/09.
+        //
+        // E lo scadere non e' innocuo. La build muore a meta', il giro riparte trenta minuti dopo,
+        // e la macchina resta occupata venticinque minuti su trenta senza mai finire: un'automazione
+        // che non puo' riuscire e continua a provarci al prezzo della disponibilita'. Nella notte
+        // del 06/09 quel ciclo ha affamato il control plane del cluster fino a portarlo NotReady.
+        // Un tetto tarato sul caso buono trasforma una lentezza in un'indisponibilita'.
         new("deploy",
             "sync automatico del motore: master avanzato -> build locale + import + apply",
             Schedule.Ogni(TimeSpan.FromMinutes(30)),
             "deploy-trading.ps1", ["-IfNewCommit"],
-            TimeSpan.FromMinutes(25)),
+            TimeSpan.FromMinutes(45)),
     ];
 
     public static Job? Find(string nome) =>

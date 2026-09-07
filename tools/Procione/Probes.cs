@@ -512,21 +512,33 @@ internal static class Probes
             ? immagineMotore.Out.Split([' ', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries).Distinct().ToArray()
             : [];
 
+        // Ogni piano ha i SUOI percorsi irrilevanti: la plancia non entra nel guscio ne'
+        // nell'immagine del motore, e documentazione e test non entrano in nulla. Senza questo,
+        // una PR che tocca solo la plancia marcava «indietro» anche gli altri due — un avviso che
+        // nessun deploy poteva spegnere, perche' l'immagine sarebbe stata identica.
+        string[] senzaPlancia = [.. Revisions.FuoriDaOgniBinario, .. Revisions.SoloLaPlancia];
+
         var piani = new[]
         {
             new Piano("guscio", Revisions.DaCorpoHealth(corpoHealthGuscio), "/health del processo vivo",
                 string.IsNullOrWhiteSpace(corpoHealthGuscio)
                     ? "il guscio non risponde"
-                    : "/health non porta il campo, quindi il guscio e' precedente a K1"),
+                    : "/health non porta il campo, quindi il guscio e' precedente a K1",
+                senzaPlancia),
+            // La plancia SI': per lei tools/Procione e' l'unica cosa che conta. Il resto del
+            // codice le e' indifferente, ma qui si resta prudenti e si escludono solo
+            // documentazione e test — al massimo una ricompilazione di troppo, che costa 7 secondi.
             new Piano("plancia", Revisions.Propria, "attributo di assembly di questo eseguibile",
-                "l'eseguibile non porta il timbro del SDK"),
+                "l'eseguibile non porta il timbro del SDK",
+                Revisions.FuoriDaOgniBinario),
             new Piano("motore", immagini.Length == 1 ? Revisions.DaTagImmagine(immagini[0]) : null,
                 "tag dell'immagine del pod in esecuzione",
                 immagini.Length == 0
                     ? "nessun pod nel namespace del motore, o kubectl non risponde"
                     : immagini.Length > 1
                         ? $"{immagini.Length} immagini diverse insieme: rollout in corso"
-                        : "il tag non e' nella forma local-<sha>"),
+                        : "il tag non e' nella forma local-<sha>",
+                senzaPlancia),
         };
 
         var righe = await Task.WhenAll(piani.Select(async p =>
@@ -553,7 +565,11 @@ internal static class Probes
             bool? diverso = null;
             if (indietro is not null)
             {
-                var diff = await GitAsync(repo, ["diff", "--quiet", p.Sha, "HEAD", "--", ".", $":(exclude){Revisions.FilePin}"]);
+                // Stesso cancello di deploy-trading.ps1, con le stesse esclusioni: se le due
+                // risposte divergessero, il quadro chiederebbe un deploy che il deploy rifiuta.
+                var esclusi = new List<string> { $":(exclude){Revisions.FilePin}" };
+                esclusi.AddRange((p.Irrilevanti ?? []).Select(x => $":(exclude){x}"));
+                var diff = await GitAsync(repo, ["diff", "--quiet", p.Sha, "HEAD", "--", ".", .. esclusi]);
                 // git diff --quiet: 0 = identico, 1 = differisce, altro = errore. Un errore NON e'
                 // «identico»: resta null e la riga lo dichiara.
                 diverso = diff.Code switch { 0 => false, 1 => true, _ => null };

@@ -8,7 +8,18 @@ namespace Procione;
 /// <param name="Sha">Lo sha della revisione VIVA, o <c>null</c> se non e' stato possibile leggerlo.</param>
 /// <param name="Fonte">Da dove viene il numero: si stampa, perche' tre piani hanno tre sorgenti diverse.</param>
 /// <param name="Perche">Quando <paramref name="Sha"/> e' null: perche' non si sa. Mai lasciarlo implicito.</param>
-internal sealed record Piano(string Nome, string? Sha, string Fonte, string? Perche = null);
+/// <param name="Irrilevanti">
+/// Percorsi che NON possono finire in questo piano, e che quindi non lo rendono stantio.
+///
+/// [2026-09-07] Senza questa distinzione il quadro mostrava «motore INDIETRO di 2 commit» dopo tre
+/// PR che toccavano soltanto <c>tools/Procione</c> — codice che nel pod del motore non arriva mai.
+/// Peggio: quell'avviso non poteva rientrare, perche' il deploy (giustamente corretto lo stesso
+/// giorno) si rifiuta di ricostruire un'immagine identica. Un allarme che non puo' spegnersi si
+/// smette di leggere, e si porta dietro anche quelli veri — e' la lezione gia' pagata con
+/// <c>LiquidationsMinStartUtc</c>.
+/// </param>
+internal sealed record Piano(string Nome, string? Sha, string Fonte, string? Perche = null,
+                             string[]? Irrilevanti = null);
 
 /// <summary>
 /// [K1, PRD autonomia-piena 2026-08-31] <b>Chi sta girando da quale revisione.</b>
@@ -37,6 +48,20 @@ internal static class Revisions
 {
     /// <summary>Il file che l'automazione del deploy scrive da sola: non e' codice, e' un marcatore.</summary>
     public const string FilePin = "infra/k8s/trading/kustomization.yaml";
+
+    /// <summary>
+    /// Cio' che non entra in NESSUN binario: documentazione, test, configurazione degli strumenti.
+    /// Un cambiamento qui non rende stantio nulla.
+    /// </summary>
+    public static readonly string[] FuoriDaOgniBinario =
+        ["ProcioneMGR.Tests", "docs", "*.md", ".claude", ".github"];
+
+    /// <summary>
+    /// La plancia. Ne' il guscio ne' l'immagine del motore la contengono: il Dockerfile copia
+    /// percorsi espliciti (i sei progetti piu' tools/DbBackup e tools/StrategyHunter), e
+    /// ProcioneMGR.csproj non la referenzia. E' irrilevante per tutti tranne che per se stessa.
+    /// </summary>
+    public static readonly string[] SoloLaPlancia = ["tools/Procione"];
 
     /// <summary>La revisione di QUESTO eseguibile (la plancia), dal timbro che il SDK .NET mette da se'.</summary>
     public static string? Propria { get; } = DaInformationalVersion(

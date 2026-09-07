@@ -469,7 +469,10 @@ internal static class Verdicts
 
         if (contenutoDiverso == false)
             return new Check("revisioni", piano.Nome, Level.Ok, indietro > 0
-                ? $"{corta} — allineata nel contenuto ({indietro} commit di scarto, solo il pin del deploy)"
+                // «nel contenuto» e non «a HEAD»: i commit di scarto ci sono, ma nessuno di loro
+                // tocca il binario di questo piano — il pin del deploy, la documentazione, i test,
+                // o la plancia per chi non la contiene. Ricostruirlo darebbe lo stesso binario.
+                ? $"{corta} — allineata nel contenuto ({indietro} commit di scarto, nessuno tocca il suo binario)"
                 : $"{corta} — allineata a HEAD");
 
         // Le due direzioni sono guasti DIVERSI e la prima stesura le confondeva: la prova dal vivo
